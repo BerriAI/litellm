@@ -1,6 +1,7 @@
 #### What this tests ####
 #    This tests litellm.token_counter.token_counter() function
 import asyncio
+import base64
 import importlib
 import threading
 import time
@@ -25,6 +26,8 @@ from litellm.litellm_core_utils.token_counter import (
     _get_exact_count_function,
     _get_extrapolating_count_function,
     _get_tiktoken_count_function,
+    calculate_img_tokens,
+    high_detail_image_token_upper_bound,
     offload_token_count,
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
@@ -1558,3 +1561,18 @@ def test_openai_file_block_without_inline_bytes_counts_what_it_carries():
     assert _count_user_content([prompt, named]) == _count_user_content(
         [prompt, {"type": "text", "text": "report.pdf"}]
     )
+
+
+def _png_data_url(width: int, height: int) -> str:
+    ihdr = b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + width.to_bytes(4, "big") + height.to_bytes(4, "big")
+    return "data:image/png;base64," + base64.b64encode(ihdr + b"\x08\x06\x00\x00\x00").decode()
+
+
+@pytest.mark.parametrize(("width", "height"), [(1, 1), (768, 768), (2000, 768), (768, 2000), (4096, 4096), (8000, 3072)])
+def test_high_detail_image_token_upper_bound_covers_every_image_size(width: int, height: int) -> None:
+    assert calculate_img_tokens(_png_data_url(width, height), mode="high") <= high_detail_image_token_upper_bound()
+
+
+def test_high_detail_image_token_upper_bound_is_reached_by_the_largest_high_res_image() -> None:
+    assert calculate_img_tokens(_png_data_url(2000, 768), mode="high") == high_detail_image_token_upper_bound()
+    assert calculate_img_tokens(_png_data_url(1, 1), mode="high") < high_detail_image_token_upper_bound()

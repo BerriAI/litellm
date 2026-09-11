@@ -89,7 +89,7 @@ class TestConfigureClaudeWithAVirtualKey:
         assert "Starting model: claude-auto" in result.output
         assert "1 of the proxy's 2 models" in result.output
         assert "lite unconfigure claude" in result.output
-        assert len(responses.calls) == 1
+        assert [call.request.headers.get("x-gateway-client") for call in responses.calls] == ["claude-code"]
 
     @responses.activate
     def test_takes_the_key_from_the_global_option_and_keeps_claude_codes_default(self, runner, paths):
@@ -358,3 +358,74 @@ class TestUnconfigureClaude:
         result = runner.invoke(cli, ["unconfigure", "claude"])
         assert result.exit_code != 0
         assert "nothing to undo" in result.output
+
+
+class TestClaudeCodeView:
+    VIEW = {"anthropic-version": "2023-06-01", "x-gateway-client": "claude-code"}
+
+    def _mock(self, rows):
+        responses.get(
+            f"{PROXY}/v1/models",
+            json={"data": rows},
+            match=[responses.matchers.header_matcher({"Authorization": f"Bearer {VALID_KEY}", **self.VIEW})],
+        )
+
+    @responses.activate
+    @pytest.mark.parametrize(
+        "model, pinned",
+        [
+            ("literal-claude-router-source", "emitted-literal"),
+            ("marked-sibling", "emitted-marked[1m]"),
+            ("emitted-collision", "emitted-source-priority"),
+            ("emitted-only", "emitted-only"),
+        ],
+    )
+    def test_pins_source_identity_before_emitted_id(self, runner, paths, model, pinned):
+        self._mock(
+            [
+                {"id": "emitted-collision", "source_model": "other-source"},
+                {"id": "emitted-source-priority", "source_model": "emitted-collision"},
+                {"id": "emitted-marked[1m]", "source_model": "marked-sibling"},
+                {"id": "emitted-literal", "source_model": "literal-claude-router-source"},
+                {"id": "emitted-only"},
+            ]
+        )
+        settings_path, _ = paths
+        result = _configure(runner, "--api-key", VALID_KEY, "--model", model)
+        assert result.exit_code == 0, result.output
+        assert json.loads(settings_path.read_text())["model"] == pinned
+        assert f"Starting model: {pinned}" in result.output
+        assert len(responses.calls) == 1
+
+    @responses.activate
+    def test_refuses_unknown_short_suffix(self, runner, paths):
+        self._mock([{"id": "emitted-router-source", "source_model": "literal-router-source"}])
+        settings_path, _ = paths
+        result = _configure(runner, "--api-key", VALID_KEY, "--model", "source")
+        assert result.exit_code != 0
+        assert "'source' is not served" in result.output
+        assert not settings_path.exists()
+
+    @responses.activate
+    def test_interactive_picker_uses_source_names(self, paths):
+        self._mock([{"id": "emitted", "source_model": "source"}])
+        settings_path, _ = paths
+        asked = {}
+        ctx = click.Context(
+            configure_group, obj={"base_url": PROXY, "api_key": VALID_KEY, "api_key_from_token_file": False}
+        )
+
+        def pick_model(listed):
+            asked["listed"] = tuple(listed)
+            return "source"
+
+        interactive_configure(ctx, pick_targets=lambda: ("claude",), pick_model=pick_model)
+        assert asked["listed"] == ("source",)
+        assert json.loads(settings_path.read_text())["model"] == "emitted"
+
+    @responses.activate
+    def test_counts_what_an_older_proxy_lets_the_picker_show(self, runner, paths):
+        _mock_models()
+        result = _configure(runner, "--api-key", VALID_KEY)
+        assert result.exit_code == 0, result.output
+        assert "/model will list 1 of the proxy's 2 models: Claude Code shows only ids containing" in result.output

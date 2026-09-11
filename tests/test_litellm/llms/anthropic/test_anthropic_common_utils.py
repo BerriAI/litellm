@@ -2267,3 +2267,25 @@ def test_create_anthropic_model_list_response_empty():
     assert response["has_more"] is False
     assert response["first_id"] is None
     assert response["last_id"] is None
+
+
+def test_create_anthropic_model_list_response_lists_ids_as_told():
+    """listed_ids renames an entry for the caller while display_name and every other field stay keyed to the served
+    id, and the envelope's first/last ids follow the renamed entries."""
+    from litellm.llms.anthropic.common_utils import (
+        create_anthropic_model_list_response,
+    )
+
+    response = create_anthropic_model_list_response(
+        [
+            {"id": "gpt-4o", "object": "model", "created": 0, "owned_by": "openai", "max_input_tokens": 1000000},
+            {"id": "claude-haiku-4-5", "object": "model", "created": 0, "owned_by": "openai"},
+        ],
+        display_names={"gpt-4o": "GPT 4o"},
+        listed_ids={"gpt-4o": "claude-router-gpt-4o[1m]"},
+    )
+
+    gpt, haiku = response["data"]
+    assert (gpt["id"], gpt["display_name"], gpt["max_input_tokens"]) == ("claude-router-gpt-4o[1m]", "GPT 4o", 1000000)
+    assert (haiku["id"], haiku["display_name"]) == ("claude-haiku-4-5", "claude-haiku-4-5")
+    assert (response["first_id"], response["last_id"]) == ("claude-router-gpt-4o[1m]", "claude-haiku-4-5")

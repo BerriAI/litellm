@@ -16,7 +16,16 @@ import threading
 import time
 import traceback
 import warnings
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Collection, Mapping, MutableMapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Collection,
+    Mapping,
+    MutableMapping,
+    Sequence,
+)
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType, UnionType
@@ -51,6 +60,7 @@ from litellm.constants import (
     AIOHTTP_NEEDS_CLEANUP_CLOSED,
     AIOHTTP_TTL_DNS_CACHE,
     AUDIO_SPEECH_CHUNK_SIZE,
+    BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME,
     BASE_MCP_ROUTE,
     DAILY_TAG_SPEND_BATCH_MULTIPLIER,
     DEFAULT_MAX_RECURSE_DEPTH,
@@ -151,6 +161,7 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
 
     from litellm.integrations.opentelemetry import OpenTelemetry
+    from litellm.proxy.health_check_utils.shared_health_check_manager import SharedHealthCheckManager
 
     Span = _Span | Any
 else:
@@ -233,7 +244,7 @@ def generate_feedback_box():
 import contextlib
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from functools import lru_cache
+from functools import lru_cache, partial
 
 import litellm
 import litellm._redis
@@ -268,7 +279,7 @@ from litellm.constants import (
     WEEKLY_SPEND_REPORT_JOB_ID,
 )
 from litellm.exceptions import RejectedRequestError
-from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.agentic_loop_settings import (
@@ -366,8 +377,11 @@ from litellm.proxy.common_utils.load_config_utils import (
 )
 from litellm.proxy.common_utils.model_deprecation import collect_model_deprecations
 from litellm.proxy.common_utils.model_listing_utils import (
+    ClaudeCodeRoutingNames,
     TeamModelNameTranslator,
+    claude_code_view_ids,
     configured_display_names,
+    is_claude_code_client,
 )
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
@@ -412,6 +426,7 @@ from litellm.proxy.config_resolvers.alerting import (
 )
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
     SPEND_LOG_CLEANUP_BOUND_SETTINGS,
     SpendLogCleanup,
@@ -454,7 +469,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 from litellm.proxy.hooks.prompt_injection_detection import (
     _OPTIONAL_PromptInjectionDetection,
 )
-from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger, run_spend_event
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.list_api.common import (
     PROBLEM_TYPE_BASE,
@@ -576,6 +591,11 @@ from litellm.proxy.plugin_routes import (
 )
 from litellm.proxy.plugin_routes import (
     router as plugin_router,
+)
+from litellm.proxy.spend_tracking.spend_event_producer import (
+    CollectorSettings,
+    SpendEventProducer,
+    build_spend_event_producer,
 )
 from litellm.types.proxy.management_endpoints.management_v1 import ProblemDetail
 
@@ -926,6 +946,17 @@ def cleanup_router_config_variables():
     health_check_concurrency = None
     prisma_client = None
     heuristic_v1_tuning_baselines = None
+
+
+async def flush_spend_counters_on_shutdown() -> None:
+    if prisma_client is None:
+        return
+    try:
+        await proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler(
+            prisma_client=prisma_client, n_retry_times=3, proxy_logging_obj=proxy_logging_obj
+        )
+    except Exception as e:  # noqa: BLE001  # shutdown must continue even if the commit fails
+        verbose_proxy_logger.exception("Error flushing spend counters on shutdown: %s", e)
 
 
 async def _flush_spend_logs_queue_on_shutdown() -> None:
@@ -1362,6 +1393,10 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             await prisma_client.stop_db_health_watchdog_task()
         except Exception as e:
             verbose_proxy_logger.error("Error stopping DB health watchdog task: %s", e)
+
+    await _drain_spend_event_producer_on_shutdown()
+
+    await flush_spend_counters_on_shutdown()
 
     await _flush_spend_logs_queue_on_shutdown()
 
@@ -2442,14 +2477,25 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
         )
 
 
+spend_event_producer: SpendEventProducer | None = None
+
+
 def cost_tracking():
-    global prisma_client
+    global prisma_client, spend_event_producer
     if prisma_client is not None:
         from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
-        litellm.logging_callback_manager.add_litellm_callback(_ProxyDBLogger())
-        litellm.logging_callback_manager.add_litellm_async_success_callback(_ProxyDBLogger())
+        spend_event_producer = build_spend_event_producer(CollectorSettings(), fallback=run_spend_event)
+        litellm.logging_callback_manager.add_litellm_callback(_ProxyDBLogger(spend_event_producer))
+        litellm.logging_callback_manager.add_litellm_async_success_callback(_ProxyDBLogger(spend_event_producer))
         litellm.logging_callback_manager.add_litellm_callback(ShadowEvalLogger())
+
+
+async def _drain_spend_event_producer_on_shutdown() -> None:
+    if spend_event_producer is None:
+        return
+    await spend_event_producer.close(drain_timeout=CollectorSettings().drain_timeout_seconds)
+    verbose_proxy_logger.info("collector: producer drained on shutdown. stats=%s", spend_event_producer.stats())
 
 
 # Bounds authoritative DB re-reads when enforcing a budget against a
@@ -3744,13 +3790,50 @@ async def _run_direct_health_check_with_instrumentation(
     raise AssertionError("perform_health_check rejected every optional argument")
 
 
+async def _window_gated_health_check_db_save(
+    save: Callable[[], Awaitable[bool]],
+    pod_lock_manager: PodLockManager | None,
+    lock_ttl: int | None,
+) -> None:
+    """
+    Persist at most once per window fleet-wide. A completed save keeps the lock as the
+    "this window's save is done" marker, so it is deliberately never released and expires
+    with the interval. A save that reports failure or is cancelled releases the lock so
+    another pod's cycle in the same window can retry, instead of the fleet going a whole
+    window without a write.
+    """
+    if pod_lock_manager is None or pod_lock_manager.redis_cache is None:
+        await save()
+        return
+    acquired: Final = await pod_lock_manager.acquire_lock(
+        cronjob_id=BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME,
+        ttl=lock_ttl,
+        allow_reentrant=False,
+    )
+    if not acquired:
+        verbose_proxy_logger.debug("background_health_check_db_save_skipped another pod persisted this window")
+        return
+    try:
+        persisted: Final = await save()
+    except BaseException:
+        await pod_lock_manager.release_lock(cronjob_id=BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME)
+        raise
+    if not persisted:
+        verbose_proxy_logger.warning(
+            "background_health_check_db_save_incomplete released the window lock so another pod can retry"
+        )
+        await pod_lock_manager.release_lock(cronjob_id=BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME)
+
+
 def _schedule_background_health_check_db_save(
-    prisma_client,
-    shared_health_manager,
+    prisma_client: PrismaClient | None,
+    shared_health_manager: "SharedHealthCheckManager | None",
     model_list: list,
     healthy_endpoints: list,
     unhealthy_endpoints: list,
-):
+    pod_lock_manager: PodLockManager | None = None,
+    lock_ttl: int | None = None,
+) -> None:
     """Fire-and-forget: persist health check results to DB if prisma is available."""
     if prisma_client is None:
         return
@@ -3762,16 +3845,16 @@ def _schedule_background_health_check_db_save(
 
     checked_by: Final = shared_health_manager.pod_id if shared_health_manager is not None else "background_health_check"
     start_time: Final = time_module.time()
-    asyncio.create_task(
-        _save_background_health_checks_to_db(
-            prisma_client,
-            model_list,
-            healthy_endpoints,
-            unhealthy_endpoints,
-            start_time,
-            checked_by=checked_by,
-        )
+    save: Final = partial(
+        _save_background_health_checks_to_db,
+        prisma_client,
+        model_list,
+        healthy_endpoints,
+        unhealthy_endpoints,
+        start_time,
+        checked_by=checked_by,
     )
+    asyncio.create_task(_window_gated_health_check_db_save(save, pod_lock_manager, lock_ttl))
 
 
 def _get_endpoint_exception_status(endpoint: dict, exceptions: dict) -> int:
@@ -4078,6 +4161,8 @@ async def _run_background_health_check():
             _llm_model_list,
             healthy_endpoints,
             unhealthy_endpoints,
+            pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
+            lock_ttl=health_check_interval,
         )
 
         # Write health state to router cache for health-check-driven routing
@@ -4903,7 +4988,9 @@ class ProxyConfig:
         if not isinstance(raw_params, dict):
             raise ValueError("general_settings.coordination_redis must be a mapping of Redis connection params")
 
-        coordination_params: Final = CoordinationRedisParams(**_resolve_coordination_redis_env_refs(raw_params))
+        coordination_params: Final = CoordinationRedisParams.model_validate(
+            _resolve_coordination_redis_env_refs(raw_params)
+        )
         if not coordination_params.has_connection_target():
             raise ValueError(
                 "general_settings.coordination_redis needs a connection target: "
@@ -6638,6 +6725,14 @@ class ProxyConfig:
         if isinstance(parsed, dict) and parsed:
             return parsed
         return None
+
+    async def get_hierarchical_router_settings(
+        self,
+        user_api_key_dict: UserAPIKeyAuth | None,
+        prisma_client: PrismaClient | None,
+        proxy_logging_obj: ProxyLogging | None = None,
+    ) -> dict | None:
+        return await self._get_hierarchical_router_settings(user_api_key_dict, prisma_client, proxy_logging_obj)
 
     async def _get_hierarchical_router_settings(
         self,
@@ -8632,6 +8727,7 @@ _STREAM_KEEPALIVE: Final = object()
 _KEEPALIVE_MIN_SECONDS: Final = 1.0
 _KEEPALIVE_MAX_SECONDS: Final = 300.0
 _EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
+_EMPTY_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 async def _iter_with_keepalive(
@@ -9222,7 +9318,9 @@ class ProxyStartupEvent:
         if persisted is None:
             return None
 
-        coordination_params: Final = CoordinationRedisParams(**_resolve_coordination_redis_env_refs(persisted))
+        coordination_params: Final = CoordinationRedisParams.model_validate(
+            _resolve_coordination_redis_env_refs(persisted)
+        )
         if not coordination_params.has_connection_target():
             verbose_proxy_logger.warning(
                 "coordination_redis saved in the database names no connection target; ignoring it."
@@ -10469,6 +10567,24 @@ async def model_list(
     wants_anthropic_format: Final = (
         http_request is not None and http_request.headers.get("anthropic-version") is not None
     )
+    client_headers: Final[Mapping[str, str]] = http_request.headers if http_request is not None else _EMPTY_HEADERS
+    view_router_settings: Final = (
+        await proxy_config.get_hierarchical_router_settings(user_api_key_dict, prisma_client, proxy_logging_obj)
+        if wants_anthropic_format and is_claude_code_client(client_headers)
+        else None
+    )
+    view_aliases: Final = (
+        view_router_settings.get("model_group_alias") if isinstance(view_router_settings, Mapping) else None
+    )
+    routing_names: Final = ClaudeCodeRoutingNames(
+        llm_router,
+        team_id or user_api_key_dict.team_id,
+        (
+            user_api_key_dict.aliases,
+            user_api_key_dict.team_model_aliases,
+            view_aliases,
+        ),
+    )
 
     # Validate scope parameter if provided
     if scope is not None and scope != "expand":
@@ -10555,6 +10671,11 @@ async def model_list(
             return create_anthropic_model_list_response(
                 admin_listing,
                 display_names=configured_display_names(admin_entries, llm_router),
+                listed_ids=claude_code_view_ids(
+                    admin_listing,
+                    client_headers,
+                    routing_names,
+                ),
             )
 
         return dict(
@@ -10603,6 +10724,11 @@ async def model_list(
         return create_anthropic_model_list_response(
             listing,
             display_names=configured_display_names(entries, llm_router),
+            listed_ids=claude_code_view_ids(
+                listing,
+                client_headers,
+                routing_names,
+            ),
         )
 
     return dict(
@@ -17655,6 +17781,66 @@ async def delete_callback(
         )
 
 
+def _normalize_callback_alias(callback_name: str) -> str:
+    callback_aliases: Final = (
+        ("opentelemetry", "otel"),
+        ("s3_v2", "s3"),
+        ("aws_sqs", "sqs"),
+        ("custom_callback_api", "generic_api"),
+    )
+    return next(
+        (canonical_name for alias, canonical_name in callback_aliases if alias == callback_name),
+        callback_name,
+    )
+
+
+def _callback_module_name(callback: CustomLogger | Callable[..., object]) -> str:
+    if inspect.ismethod(callback):
+        return callback.__func__.__module__
+    if inspect.isfunction(callback):
+        return callback.__module__
+    return type(callback).__module__
+
+
+def _is_litellm_internal_callback(callback_name: str, callback: CustomLogger | Callable[..., object]) -> bool:
+    from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
+
+    module_owner: Final = _callback_module_name(callback).partition(".")[0]
+    is_registered_integration: Final = callback_name in CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE
+    return not is_registered_integration and module_owner in ("litellm", "litellm_enterprise")
+
+
+def _is_instance_of_configured_callback(
+    callback_name: str, callback: CustomLogger | Callable[..., object], configured_classes: tuple[type, ...]
+) -> bool:
+    """Self-naming OTel-family instances (`arize`, `weave_otel`) match by name, so a configured `logfire` (a bare
+    `OpenTelemetry`) does not hide YAML-configured siblings of the same class."""
+    from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
+
+    class_derived_name: Final = CustomLoggerRegistry.get_callback_str_from_class_type(type(callback))
+    return isinstance(callback, configured_classes) and callback_name in (class_derived_name, type(callback).__name__)
+
+
+def _hidden_runtime_callback_names(configured_callback_names: frozenset[str]) -> frozenset[str]:
+    from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
+
+    configured_classes: Final = tuple(
+        CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE[name]
+        for name in configured_callback_names
+        if name in CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE
+    )
+    configured_modules: Final = frozenset(name.rsplit(".", 1)[0] for name in configured_callback_names if "." in name)
+    internal_callback_names: Final = frozenset({"cache", "vector_store_pre_call_hook"})
+    return internal_callback_names | frozenset(
+        callback_name
+        for callback_name, callback in litellm.logging_callback_manager.get_callback_objects()
+        if isinstance(callback, CustomGuardrail)
+        or _is_litellm_internal_callback(callback_name, callback)
+        or _is_instance_of_configured_callback(callback_name, callback, configured_classes)
+        or _callback_module_name(callback) in configured_modules
+    )
+
+
 @router.get(
     "/get/config/callbacks",
     tags=["config.yaml"],
@@ -17687,10 +17873,10 @@ async def get_config(
         # Normalize string callbacks to lists
         def normalize_callback(callback):
             if isinstance(callback, str):
-                return [callback]
-            elif callback is None:
-                return []
-            return callback
+                return (callback,)
+            if callback is None:
+                return ()
+            return tuple(callback) if isinstance(callback, (list, dict)) else ()
 
         _success_callbacks = normalize_callback(_success_callbacks)
         _failure_callbacks = normalize_callback(_failure_callbacks)
@@ -17720,6 +17906,30 @@ async def get_config(
 
         for _callback in _success_and_failure_callbacks:
             _data_to_return.append(process_callback(_callback, "success_and_failure", environment_variables))
+
+        configured_callback_names: Final = frozenset(
+            _normalize_callback_alias(callback)
+            for callback in (_success_callbacks + _failure_callbacks + _success_and_failure_callbacks)
+        )
+        runtime_callbacks_by_type: Final = litellm.logging_callback_manager.get_callbacks_by_type()
+        hidden_callback_names: Final = _hidden_runtime_callback_names(configured_callback_names)
+        runtime_callback_rows: Final = tuple(
+            (_normalize_callback_alias(callback_name), callback_type)
+            for callback_type, callback_names in (
+                ("success", runtime_callbacks_by_type["success"]),
+                ("failure", runtime_callbacks_by_type["failure"]),
+                ("success_and_failure", runtime_callbacks_by_type["success_and_failure"]),
+            )
+            for callback_name in callback_names
+            if callback_name not in hidden_callback_names
+        )
+        runtime_only_rows: Final = sorted(
+            frozenset(row for row in runtime_callback_rows if row[0] not in configured_callback_names)
+        )
+        _data_to_return.extend(
+            dict(process_callback(callback_name, callback_type, environment_variables), read_only=True)
+            for callback_name, callback_type in runtime_only_rows
+        )
 
         _data_to_return = _apply_callback_role_gate(_data_to_return, is_full_admin)
 

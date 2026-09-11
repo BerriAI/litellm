@@ -19,7 +19,7 @@ import random
 import sys
 import time
 import traceback
-from collections.abc import AsyncIterator, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Mapping, Sequence
 from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
@@ -827,6 +827,35 @@ async def _sleep_for_timeout_async(timeout: float | str | httpx.Timeout):
         await asyncio.sleep(timeout.connect)
 
 
+class _AdmissionReservation(BaseModel):
+    input_tokens: int | None = None
+
+
+class _AdmissionMetadata(BaseModel):
+    user_api_key_budget_reservation: _AdmissionReservation | None = None
+
+
+def admission_input_tokens(kwargs: Mapping[str, object]) -> int | None:
+    reservations: Final = (
+        _AdmissionMetadata.model_validate(kwargs.get(key) or {}).user_api_key_budget_reservation
+        for key in ("litellm_metadata", "metadata")
+    )
+    return next(
+        (
+            reservation.input_tokens
+            for reservation in reservations
+            if reservation and reservation.input_tokens is not None
+        ),
+        None,
+    )
+
+
+def admitted_prompt_token_counter(prompt_tokens: int | None) -> Callable[[], int] | None:
+    if prompt_tokens is None:
+        return None
+    return lambda: prompt_tokens
+
+
 def mock_completion(
     model: str,
     messages: list,
@@ -838,6 +867,7 @@ def mock_completion(
     logging=None,
     custom_llm_provider=None,
     timeout: float | str | httpx.Timeout | None = None,
+    prompt_tokens: int | None = None,
     **kwargs,
 ):
     """
@@ -911,23 +941,26 @@ def mock_completion(
 
         if stream is True:
             model_response = ModelResponseStream()
+            count_prompt_tokens: Final = admitted_prompt_token_counter(prompt_tokens)
             # don't try to access stream object,
             if kwargs.get("acompletion", False) is True:
                 return CustomStreamWrapper(
                     completion_stream=async_mock_completion_streaming_obj(
-                        model_response, mock_response=mock_response, model=model, n=n
+                        model_response, mock_response=mock_response, model=model, n=n, prompt_tokens=prompt_tokens
                     ),
                     model=model,
                     custom_llm_provider="openai",
                     logging_obj=logging,
+                    count_prompt_tokens=count_prompt_tokens,
                 )
             return CustomStreamWrapper(
                 completion_stream=mock_completion_streaming_obj(
-                    model_response, mock_response=mock_response, model=model, n=n
+                    model_response, mock_response=mock_response, model=model, n=n, prompt_tokens=prompt_tokens
                 ),
                 model=model,
                 custom_llm_provider="openai",
                 logging_obj=logging,
+                count_prompt_tokens=count_prompt_tokens,
             )
         if isinstance(mock_response, litellm.MockException):
             raise mock_response
@@ -953,13 +986,16 @@ def mock_completion(
                 ChatCompletionMessageToolCall(**tool_call) for tool_call in mock_tool_calls
             ]
 
+        usage_prompt_tokens: Final = (
+            prompt_tokens if prompt_tokens is not None else DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT
+        )
         setattr(
             model_response,
             "usage",
             Usage(
-                prompt_tokens=DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
+                prompt_tokens=usage_prompt_tokens,
                 completion_tokens=DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
-                total_tokens=DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT + DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
+                total_tokens=usage_prompt_tokens + DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
             ),
         )
 
@@ -5550,6 +5586,9 @@ def completion(
                 custom_llm_provider=custom_llm_provider,
                 mock_timeout=mock_timeout,
                 timeout=timeout,
+                prompt_tokens=admission_input_tokens(
+                    cast(Mapping[str, object], kwargs)  # cast-ok: completion's **kwargs is untyped
+                ),
             )
 
         ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
@@ -8595,7 +8634,7 @@ def config_completion(**kwargs):
         )
 
 
-def stream_chunk_builder_text_completion(chunks: list, messages: list | None = None) -> TextCompletionResponse:
+def stream_chunk_builder_text_completion(chunks: list, messages: Sequence | None = None) -> TextCompletionResponse:
     id: Final = chunks[0]["id"]
     object: Final = chunks[0]["object"]
     created: Final = chunks[0]["created"]
@@ -8712,10 +8751,11 @@ def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_o
 
 def stream_chunk_builder(
     chunks: list,
-    messages: list | None = None,
+    messages: Sequence | None = None,
     start_time=None,
     end_time=None,
     logging_obj: Optional["Logging"] = None,
+    count_prompt_tokens: Callable[[], int] | None = None,
 ) -> ModelResponse | TextCompletionResponse | None:
     try:
         if chunks is None:
@@ -8789,6 +8829,7 @@ def stream_chunk_builder(
                 completion_output=completion_output,
                 messages=messages,
                 reasoning_tokens=0,
+                count_prompt_tokens=count_prompt_tokens,
             )
             setattr(response, "usage", usage)
 
@@ -8966,6 +9007,7 @@ def stream_chunk_builder(
             completion_output=completion_output,
             messages=messages,
             reasoning_tokens=reasoning_tokens,
+            count_prompt_tokens=count_prompt_tokens,
         )
 
         setattr(response, "usage", usage)

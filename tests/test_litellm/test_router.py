@@ -19,6 +19,8 @@ import respx
 
 
 import litellm
+from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import _redis_circuit_breaker_guard
 from litellm import Router
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -42,7 +44,7 @@ from litellm.router import (
     _is_retriable_anthropic_status,
 )
 from litellm.router_strategy import simple_shuffle
-from litellm.types.router import DeploymentTypedDict, RetryPolicy
+from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo, RetryPolicy
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -5049,6 +5051,41 @@ def test_get_deployment_model_info_base_model_merge_priority():
     print("✓ Base model merge priority test passed!")
 
 
+@pytest.mark.parametrize(
+    "model, litellm_params, endpoint, expected",
+    [
+        (
+            "gpt",
+            {"model": "azure_ai/gpt-5.4-mini", "api_base": "https://my-resource.services.ai.azure.com", "api_key": "key"},
+            "gpt/openai/deployments/gpt-5.4-mini/chat/completions",
+            "gpt-5.4-mini/openai/deployments/gpt-5.4-mini/chat/completions",
+        ),
+        (
+            "aws/anthropic/bedrock-claude",
+            {"model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"},
+            "/model/aws/anthropic/bedrock-claude/invoke",
+            "/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke",
+        ),
+        (
+            "my-gemini",
+            {"model": "gemini/gemini-3.1-pro-preview", "api_key": "key"},
+            "v1beta/models/my-gemini:streamGenerateContent",
+            "v1beta/models/gemini-3.1-pro-preview:streamGenerateContent",
+        ),
+    ],
+)
+def test_add_deployment_model_to_endpoint_rewrites_the_model_group_only_as_whole_path_segments(
+    model, litellm_params, endpoint, expected
+):
+    router = litellm.Router(model_list=[{"model_name": model, "litellm_params": litellm_params}])
+
+    result = router._add_deployment_model_to_endpoint_for_llm_passthrough_route(
+        kwargs={"endpoint": endpoint}, model=model, model_name=litellm_params["model"]
+    )
+
+    assert result["endpoint"] == expected
+
+
 def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
     """
     Test that _add_deployment_model_to_endpoint_for_llm_passthrough_route correctly strips bedrock provider prefix
@@ -8171,6 +8208,204 @@ def test_get_configured_token_limits_coerces_numeric_strings():
     )
 
     assert router.get_configured_token_limits("quoted-limits-model") == (32000, 8000)
+
+
+def test_get_model_listing_info_prefers_base_model_over_litellm_params_model():
+    """The cost-map key comes from base_model when set, so a deployment pointing at an
+    opaque backend name still resolves the real catalog entry."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude-opus-5",
+                "litellm_params": {"model": "bedrock/eu.anthropic.claude-opus-5"},
+                "model_info": {"base_model": "eu.anthropic.claude-opus-5"},
+            }
+        ]
+    )
+
+    info = router.get_model_listing_info("bedrock-claude-opus-5")
+    assert info is not None
+    assert info.cost_map_keys == ("eu.anthropic.claude-opus-5",)
+
+
+def test_get_model_listing_info_falls_back_to_litellm_params_model():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude-opus-5",
+                "litellm_params": {"model": "bedrock/eu.anthropic.claude-opus-5"},
+            }
+        ]
+    )
+
+    info = router.get_model_listing_info("bedrock-claude-opus-5")
+    assert info is not None
+    assert info.cost_map_keys == ("bedrock/eu.anthropic.claude-opus-5",)
+
+
+def test_get_model_listing_info_ignores_blank_base_model():
+    """A base_model set to an empty string is absent, not a cost-map key."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude-opus-5",
+                "litellm_params": {"model": "bedrock/eu.anthropic.claude-opus-5"},
+                "model_info": {"base_model": ""},
+            }
+        ]
+    )
+
+    info = router.get_model_listing_info("bedrock-claude-opus-5")
+    assert info is not None
+    assert info.cost_map_keys == ("bedrock/eu.anthropic.claude-opus-5",)
+
+
+def test_get_model_listing_info_returns_none_for_unknown_name():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "no-limits-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+            }
+        ]
+    )
+
+    assert router.get_model_listing_info("not-a-real-model") is None
+
+
+def test_get_model_listing_info_carries_configured_limits():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-custom-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"max_input_tokens": 32000, "max_output_tokens": 8000},
+            }
+        ]
+    )
+
+    info = router.get_model_listing_info("my-custom-model")
+    assert info is not None
+    assert (info.max_input_tokens, info.max_output_tokens) == (32000, 8000)
+
+
+def test_widest_configured_limit_ignores_absent_and_malformed_values():
+    model_infos = (
+        {"max_input_tokens": 32000},
+        {},
+        {"max_input_tokens": "not-a-number"},
+        {"max_input_tokens": "128000"},
+        {"max_output_tokens": 4096},
+    )
+
+    assert litellm.Router._widest_configured_limit(model_infos, "max_input_tokens") == 128000
+    assert litellm.Router._widest_configured_limit(model_infos, "max_output_tokens") == 4096
+    assert litellm.Router._widest_configured_limit((), "max_input_tokens") is None
+
+
+def test_get_model_listing_info_dedupes_interchangeable_deployments():
+    """The ordinary group is N deployments of one model, so it yields exactly one key."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-a"},
+            },
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-b"},
+            },
+        ]
+    )
+
+    info = router.get_model_listing_info("gpt-4o")
+    assert info is not None
+    assert info.cost_map_keys == ("openai/gpt-4o",)
+
+
+def test_get_model_listing_info_collects_every_model_in_a_mixed_group():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "house-claude",
+                "litellm_params": {"model": "anthropic/claude-3-haiku-20240307"},
+            },
+            {
+                "model_name": "house-claude",
+                "litellm_params": {"model": "bedrock/eu.anthropic.claude-opus-5"},
+            },
+        ]
+    )
+
+    info = router.get_model_listing_info("house-claude")
+    assert info is not None
+    assert info.cost_map_keys == (
+        "anthropic/claude-3-haiku-20240307",
+        "bedrock/eu.anthropic.claude-opus-5",
+    )
+
+
+def test_get_model_listing_info_reports_widest_configured_limits_in_a_mixed_group():
+    """Matches how get_model_group_info aggregates for the Admin UI, so the two agree."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "house-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"max_input_tokens": 32000, "max_output_tokens": 4096},
+            },
+            {
+                "model_name": "house-model",
+                "litellm_params": {"model": "openai/another-unmapped-model"},
+                "model_info": {"max_input_tokens": 128000, "max_output_tokens": 16384},
+            },
+        ]
+    )
+
+    info = router.get_model_listing_info("house-model")
+    assert info is not None
+    assert (info.max_input_tokens, info.max_output_tokens) == (128000, 16384)
+
+
+def test_get_model_listing_info_reads_base_model_from_litellm_params():
+    """base_model resolution mirrors get_router_model_info, which also accepts it there."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "azure-deployment",
+                "litellm_params": {
+                    "model": "azure/my-azure-deployment-name",
+                    "base_model": "azure/gpt-4o",
+                    "api_key": "sk-a",
+                    "api_base": "https://example.openai.azure.com",
+                },
+            }
+        ]
+    )
+
+    info = router.get_model_listing_info("azure-deployment")
+    assert info is not None
+    assert info.cost_map_keys == ("azure/gpt-4o",)
+
+
+def test_get_model_listing_info_skips_wildcard_pattern_matching():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock/*",
+                "litellm_params": {"model": "bedrock/*"},
+                "model_info": {"max_input_tokens": 12345},
+            }
+        ]
+    )
+
+    with patch.object(
+        router.pattern_router, "route", side_effect=AssertionError("pattern route called")
+    ):
+        assert (
+            router.get_model_listing_info("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0")
+            is None
+        )
 
 
 def test_get_configured_mode_reads_deployment_model_info():
@@ -14138,6 +14373,49 @@ async def test_router_retry_policy_controls_upstream_attempt_count(
 
 
 @pytest.mark.asyncio
+async def test_generic_call_keeps_the_deployment_name_of_an_azure_ai_model_on_an_azure_openai_host(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "aoai-gpt",
+                "litellm_params": {
+                    "model": "azure_ai/gpt-5.4-mini",
+                    "api_base": "https://my-resource.openai.azure.com",
+                    "api_key": "deployment-key",
+                },
+            }
+        ]
+    )
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream = respx_mock.post(host="my-resource.openai.azure.com", path__regex=r"^/openai/.*responses$").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "resp_1",
+                    "object": "response",
+                    "created_at": 1,
+                    "status": "completed",
+                    "model": "gpt-5.4-mini",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_1",
+                            "role": "assistant",
+                            "status": "completed",
+                            "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+                        }
+                    ],
+                },
+            )
+        )
+        await router.aresponses(model="aoai-gpt", input="hi")
+
+    assert json.loads(upstream.calls.last.request.content)["model"] == "gpt-5.4-mini"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "retry_policy,upstream_error",
     [
@@ -15062,3 +15340,53 @@ def test_deployment_ids_stringifies_ids_and_skips_entries_without_a_model_info_i
         {"no_model_info": True},
     )
     assert Router._deployment_ids(deployments) == frozenset({"a", "2"})
+
+
+def test_cached_model_info_lookups_match_uncached_and_reset_on_model_list_change():
+    def deployment(max_output_tokens: int) -> Deployment:
+        return Deployment(
+            model_name="grp",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o", api_key="sk-a"),
+            model_info=ModelInfo(id="dep-a", max_output_tokens=max_output_tokens),
+        )
+
+    router = Router(model_list=[deployment(100).model_dump()])
+
+    assert router.cached_model_group_info("grp") == router.get_model_group_info("grp")
+    first = router.cached_deployment_model_info("dep-a", "openai/gpt-4o")
+    assert first == router.get_deployment_model_info(model_id="dep-a", model_name="openai/gpt-4o")
+    assert router.cached_deployment_model_info("dep-a", "openai/gpt-4o") is first
+
+    router.upsert_deployment(deployment(200))
+
+    assert router.cached_deployment_model_info("dep-a", "openai/gpt-4o")["max_output_tokens"] == 200
+    assert router.cached_model_group_info("grp").max_output_tokens == 200
+
+
+class _OpenBreakerRedis:
+    def __init__(self) -> None:
+        from litellm.caching.redis_cache import RedisCircuitBreaker
+
+        self._circuit_breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
+        for _ in range(3):
+            self._circuit_breaker.record_failure()
+
+    @_redis_circuit_breaker_guard
+    async def async_get_cache(self, key, **kwargs):
+        raise AssertionError("never reached")
+
+
+@pytest.mark.asyncio
+async def test_an_open_circuit_breaker_skips_the_session_binding_without_a_warning(caplog):
+    router = litellm.Router(
+        model_list=[{"model_name": "haiku", "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "k"}}]
+    )
+    router._claude_code_session_router_cache = DualCache(redis_cache=_OpenBreakerRedis())  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    caplog.clear()
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Router"):
+        binding = await router._get_claude_code_session_router_binding("quiet-session")
+
+    assert binding is None
+    assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
+    assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
