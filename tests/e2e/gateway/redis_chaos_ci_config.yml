@@ -5,17 +5,14 @@ general_settings:
 litellm_settings:
   callbacks: ["prometheus"]
   require_auth_for_metrics_endpoint: false
+  enable_redis_auth_cache: true
   cache: true
   cache_params:
     type: redis
     host: 127.0.0.1
     port: 6379
-    socket_timeout: 0.001
+    socket_timeout: 0.1
 
 router_settings:
-  num_retries: 1
-  fallbacks:
-    - redis-timeout-primary:
-        - redis-timeout-backup
-    - redis-timeout-embed-primary:
-        - redis-timeout-embed-backup
+  num_retries: 2
+  disable_cooldowns: true

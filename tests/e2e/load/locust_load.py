@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import csv
+import os
+import subprocess
+import sys
+import tempfile
 from dataclasses import dataclass
 from itertools import accumulate
 from pathlib import Path
+from typing import Final
 
 from pydantic import BaseModel, TypeAdapter
 
+_LOCUSTFILE = Path(__file__).with_name("locustfile.py")
+_CSV_PREFIX = "locust"
 _GENERATOR_SATURATION_MARKER = "CPU usage above"
 _MAX_REPORTED_ERRORS = 5
 
@@ -34,7 +41,9 @@ class LoadResult:
     requests: int
     failures: int
     requests_per_second: float
-    median_response_seconds: float
+    p50_seconds: float
+    p90_seconds: float
+    p99_seconds: float
     errors: tuple[LoadError, ...]
     generator_warnings: tuple[str, ...]
 
@@ -53,18 +62,24 @@ class LoadResult:
             lines.append("locust recorded no error breakdown")
         return "; ".join((*lines, *self.generator_warnings))
 
+    def latency_summary(self) -> str:
+        return f"p50 {self.p50_seconds:.3f}s, p90 {self.p90_seconds:.3f}s, p99 {self.p99_seconds:.3f}s"
 
-def median_seconds(entries: list[LocustStatEntry]) -> float:
-    samples = sorted(
-        (milliseconds, count) for entry in entries for milliseconds, count in entry.response_times.items()
-    )
+
+def percentile_seconds(entries: list[LocustStatEntry], fraction: float) -> float:
+    """The response time at `fraction` of the merged histograms, in seconds.
+
+    Locust buckets response times by millisecond, so this reads the first bucket whose
+    running count reaches the rank, the same lower-sample convention locust's own
+    percentiles use.
+    """
+    samples = sorted((milliseconds, count) for entry in entries for milliseconds, count in entry.response_times.items())
     total = sum(count for _, count in samples)
     if total == 0:
         return 0.0
     running = accumulate(count for _, count in samples)
-    return next(
-        milliseconds for (milliseconds, _), seen in zip(samples, running) if seen >= total / 2
-    ) / 1000.0
+    rank: Final = total * fraction
+    return next(milliseconds for (milliseconds, _), seen in zip(samples, running) if seen >= rank) / 1000.0
 
 
 def aggregate_stats(
@@ -79,7 +94,9 @@ def aggregate_stats(
             requests=requests,
             failures=failures,
             requests_per_second=0.0,
-            median_response_seconds=0.0,
+            p50_seconds=0.0,
+            p90_seconds=0.0,
+            p99_seconds=0.0,
             errors=errors,
             generator_warnings=generator_warnings,
         )
@@ -88,7 +105,9 @@ def aggregate_stats(
         requests=requests,
         failures=failures,
         requests_per_second=requests / elapsed if elapsed > 0 else 0.0,
-        median_response_seconds=median_seconds(entries),
+        p50_seconds=percentile_seconds(entries, 0.5),
+        p90_seconds=percentile_seconds(entries, 0.9),
+        p99_seconds=percentile_seconds(entries, 0.99),
         errors=errors,
         generator_warnings=generator_warnings,
     )
@@ -121,3 +140,67 @@ def read_generator_warnings(stderr: str) -> tuple[str, ...]:
         if _GENERATOR_SATURATION_MARKER in line
     )
     return tuple(dict.fromkeys(saturated))
+
+
+def run_chat_load(
+    *,
+    base_url: str,
+    api_keys: tuple[str, ...],
+    model: str,
+    users: int,
+    spawn_rate: float,
+    duration_seconds: float,
+) -> LoadResult:
+    """Drive /chat/completions from headless locust and aggregate what it reported.
+
+    Each simulated user picks one of `api_keys`, so auth and budget lookups spread over a
+    pool of virtual keys instead of keeping one key's cache entry permanently warm.
+    """
+    with tempfile.TemporaryDirectory(prefix="e2e-load-") as report_dir:
+        csv_prefix = Path(report_dir) / _CSV_PREFIX
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "locust",
+                "--headless",
+                "--json",
+                "--csv",
+                str(csv_prefix),
+                "--locustfile",
+                str(_LOCUSTFILE),
+                "--host",
+                base_url,
+                "--users",
+                str(users),
+                "--spawn-rate",
+                str(spawn_rate),
+                "--run-time",
+                f"{int(duration_seconds)}s",
+                "--exit-code-on-error",
+                "0",
+            ],
+            env={**os.environ, "LOAD_API_KEYS": ",".join(api_keys), "LOAD_MODEL": model},
+            capture_output=True,
+            text=True,
+            timeout=duration_seconds + 120,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"locust exited {completed.returncode} before it could report throughput "
+                f"(a startup failure, not request failures, which are folded into the JSON summary via "
+                f"--exit-code-on-error 0):\n{completed.stderr}"
+            )
+        try:
+            entries = _STATS_ADAPTER.validate_json(completed.stdout)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"locust exited 0 but did not print a parseable --json throughput summary on stdout; "
+                f"got stdout={completed.stdout!r}, stderr={completed.stderr!r}"
+            ) from exc
+        return aggregate_stats(
+            entries,
+            read_errors(csv_prefix.with_name(f"{_CSV_PREFIX}_failures.csv")),
+            read_generator_warnings(completed.stderr),
+        )

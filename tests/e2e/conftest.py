@@ -60,8 +60,8 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
-        "redis_timeout: needs a proxy booted from gateway/redis_timeout_ci_config.yml whose Redis times out on every "
-        "command; deselected unless E2E_REDIS_TIMEOUT is set",
+        "redis_chaos: load test that pauses the proxy's Redis writes mid-run; needs a proxy booted from "
+        "gateway/redis_chaos_ci_config.yml on the same host, and is deselected unless E2E_REDIS_CHAOS is set",
     )
 
 
