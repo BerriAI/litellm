@@ -1,13 +1,19 @@
+import asyncio
 import contextvars
 import datetime
+import weakref
 from collections.abc import Callable, Coroutine
 from concurrent.futures import Future
+from importlib import import_module
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import litellm
 from litellm.litellm_core_utils.call_completion import CallCompletion, PythonCompletion
+from litellm.llms.base_llm.ocr.transformation import OCRResponse
+from litellm.rust_bridge import ocr as rust_ocr_bridge
 from litellm.utils import client
 
 
@@ -152,22 +158,29 @@ async def test_python_completion_retains_deferred_success_arguments(monkeypatch:
     logging_obj: Final = MagicMock()
     logging_obj._defer_async_logging = True
     logging_obj.async_success_handler = AsyncMock()
-    completion: Final = PythonCompletion(
-        logging_obj,
-        RecordingExecutor(),
-        async_call=True,
-        internal_call=False,
-        completion_with_fallbacks=False,
+    completion: Final = CallCompletion(
+        PythonCompletion(
+            logging_obj,
+            RecordingExecutor(),
+            async_call=True,
+            internal_call=False,
+            completion_with_fallbacks=False,
+        )
     )
+    worker: Final = MagicMock()
+    monkeypatch.setattr("litellm.litellm_core_utils.logging_worker.GLOBAL_LOGGING_WORKER", worker)
     scheduled: Final[list[Coroutine[object, object, None]]] = []
     monkeypatch.setattr("asyncio.create_task", scheduled.append)
     now: Final = datetime.datetime.now(datetime.timezone.utc)
 
     completion.success(response, now, now)
+    completion.release()
 
     logging_obj._enqueue_deferred_logging()
     assert len(scheduled) == 1
-    scheduled[0].close()
+    await scheduled[0]
+    await worker.ensure_initialized_and_enqueue.call_args.kwargs["async_coroutine"]
+    logging_obj.async_success_handler.assert_awaited_once_with(result=response, start_time=now, end_time=now)
 
 
 @pytest.mark.asyncio
@@ -265,3 +278,105 @@ async def test_async_ocr_wrapper_retains_completion_until_metadata_finishes(
     assert caught.value is metadata_error
     assert native_completion.successes == [response]
     assert native_completion.failures == [metadata_error, metadata_error]
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_ocr_completion_stays_separate_from_marshaled_provider_options(
+    monkeypatch: pytest.MonkeyPatch, asynchronous: bool
+) -> None:
+    native_completion: Final = RecordingCompletion()
+    response: Final = OCRResponse(model="mistral-ocr-latest", pages=[])
+    metadata: Final = {"request": "shared"}
+    pages: Final = [0, 2]
+
+    def run(
+        request: rust_ocr_bridge.LiteLLMOcrRequest,
+        resolve_secret: Callable[[str], str | None],
+        convert_file_document: Callable[[dict[str, object]], dict[str, str]],
+    ) -> OCRResponse:
+        assert request.kwargs["metadata"] is metadata
+        assert "_litellm_call_completion" not in request.kwargs
+        marshalled: Final = rust_ocr_bridge._marshal(request, resolve_secret, convert_file_document)
+        assert "_litellm_call_completion" not in marshalled.kwargs
+        assert marshalled.kwargs["pages"] is pages
+        assert marshalled.call_completion is request.call_completion
+        assert marshalled.call_completion is not None
+        assert marshalled.call_completion.attach(native_completion)
+        return response
+
+    async def arun(
+        request: rust_ocr_bridge.LiteLLMOcrRequest,
+        resolve_secret: Callable[[str], str | None],
+        convert_file_document: Callable[[dict[str, object]], dict[str, str]],
+    ) -> OCRResponse:
+        return run(request, resolve_secret, convert_file_document)
+
+    monkeypatch.setattr(import_module("litellm.ocr.main"), "rust_enabled", lambda: True)
+    monkeypatch.setattr(rust_ocr_bridge, "run", run)
+    monkeypatch.setattr(rust_ocr_bridge, "arun", arun)
+    arguments: Final = {
+        "model": "mistral/mistral-ocr-latest",
+        "document": {"type": "document_url", "document_url": "https://example.com/doc.pdf"},
+        "api_key": "test-key",
+        "metadata": metadata,
+        "pages": pages,
+    }
+
+    result: Final = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
+
+    assert result is response
+    assert native_completion.successes == [response]
+    assert native_completion.failures == []
+    assert arguments["metadata"] is metadata
+    assert "_litellm_call_completion" not in arguments
+
+
+@pytest.mark.parametrize(
+    ("asynchronous", "exit_path"),
+    [(False, "success"), (True, "success"), (False, "callback_error"), (True, "callback_error"), (True, "cancelled")],
+)
+@pytest.mark.asyncio
+async def test_wrapper_releases_completion_resources_on_every_exit(
+    monkeypatch: pytest.MonkeyPatch, asynchronous: bool, exit_path: str
+) -> None:
+    retained: Final[list[tuple[CallCompletion, weakref.ReferenceType[object]]]] = []
+    callback_error: Final = RuntimeError("failure callback failed")
+    implementation: Final = MagicMock(spec=RecordingCompletion)
+    implementation.failure.side_effect = callback_error
+    implementation.async_failure = AsyncMock()
+    response: Final = object()
+
+    def ocr(*, _litellm_call_completion: CallCompletion, **kwargs: object) -> object:
+        retained.append((_litellm_call_completion, weakref.ref(_litellm_call_completion.python_implementation)))
+        assert _litellm_call_completion.attach(implementation)
+        if exit_path == "cancelled":
+            raise asyncio.CancelledError
+        if exit_path == "callback_error":
+            raise ValueError("provider failed")
+        return response
+
+    async def aocr(*, _litellm_call_completion: CallCompletion, **kwargs: object) -> object:
+        return ocr(_litellm_call_completion=_litellm_call_completion, **kwargs)
+
+    monkeypatch.setattr("litellm.utils.function_setup", MagicMock(return_value=(MagicMock(), {})))
+    monkeypatch.setattr("litellm.utils.load_credentials_from_list", MagicMock())
+    wrapped: Final = client(aocr if asynchronous else ocr)
+
+    if exit_path == "success":
+        result: Final = await wrapped() if asynchronous else wrapped()
+        assert result is response
+        assert implementation.success.call_args.args[0] is response
+    elif exit_path == "cancelled":
+        with pytest.raises(asyncio.CancelledError):
+            await wrapped()
+        implementation.success.assert_not_called()
+        implementation.failure.assert_not_called()
+    else:
+        with pytest.raises(RuntimeError, match="failure callback failed") as caught:
+            await wrapped() if asynchronous else wrapped()
+        assert caught.value is callback_error
+        implementation.async_failure.assert_not_called()
+
+    assert len(retained) == 1
+    assert retained[0][1]() is None
