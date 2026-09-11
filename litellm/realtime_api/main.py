@@ -411,7 +411,7 @@ async def _arealtime(
         ProviderConfigManager.get_provider_realtime_handler(
             LlmProviders(_custom_llm_provider), litellm_params, websocket.headers, headers
         )
-        if _custom_llm_provider in LlmProviders._member_map_.values()
+        if _custom_llm_provider == LlmProviders.CHATGPT
         else None
     )
     if provider_handler is not None:
