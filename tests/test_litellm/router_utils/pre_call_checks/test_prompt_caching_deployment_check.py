@@ -61,6 +61,27 @@ def _messages(word_count: int) -> List[AllMessageValues]:
     )
 
 
+@pytest.mark.asyncio
+async def test_system_parameter_is_part_of_prompt_cache_affinity():
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6")
+    messages = _messages(word_count=5000)
+    system = [{"type": "text", "text": "system", "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+    cached_messages = PromptCachingCache.prepend_system_prompt(messages, system)
+
+    await PromptCachingCache(cache=cache).async_add_model_id("dep-2", cached_messages, None)
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=messages,
+        request_kwargs={"system": system},
+    )
+
+    assert filtered == [deployments[1]]
+
+
 @pytest.mark.parametrize(
     ("ttl", "expected_affinity_ttl"),
     ((None, 300), ("5m", 300), ("1h", 3600)),

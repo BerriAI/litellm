@@ -140,6 +140,18 @@ class PromptCachingCache:
         return cacheable_prefix
 
     @staticmethod
+    def prepend_system_prompt(
+        messages: list[AllMessageValues],
+        system: object | None,
+    ) -> list[AllMessageValues]:
+        if system is None:
+            return messages
+        return cast(
+            list[AllMessageValues],
+            [{"role": "system", "content": system}, *messages],
+        )
+
+    @staticmethod
     def get_prompt_caching_ttl(
         messages: list[AllMessageValues] | None,
         tools: list[ChatCompletionToolParam] | None = None,
