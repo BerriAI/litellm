@@ -4136,6 +4136,7 @@ export interface paths {
          *
          *     Returns:
          *     - worker_pid: Process ID
+         *     - hostname: Host (the pod on Kubernetes) the worker runs on
          *     - status: Overall health based on memory usage
          *     - memory: Process memory usage and RAM info
          *     - caches: Cache item counts and descriptions

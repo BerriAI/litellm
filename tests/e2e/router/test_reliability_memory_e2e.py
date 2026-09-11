@@ -79,15 +79,19 @@ class FailedCall:
     call_id: str | None
 
 
+WorkerKey = tuple[str, str | None, int]
+
+
 @dataclass(frozen=True, slots=True)
 class RssReading:
     replica: str
+    hostname: str | None
     worker_pid: int
     ram_usage_mb: float
 
     @property
-    def worker(self) -> tuple[str, int]:
-        return (self.replica, self.worker_pid)
+    def worker(self) -> WorkerKey:
+        return (self.replica, self.hostname, self.worker_pid)
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,14 +139,14 @@ def _fail_many(proxy: ProxyClient, key: str, model: str, override: RouterSetting
 def _read_rss_everywhere_after_pause(proxy: ProxyClient) -> tuple[RssReading, ...]:
     time.sleep(MEMORY_RSS_SAMPLE_INTERVAL_SECONDS)
     return tuple(
-        RssReading(replica, body.worker_pid, body.memory.ram_usage_mb)
+        RssReading(replica, body.hostname, body.worker_pid, body.memory.ram_usage_mb)
         for replica, result in proxy.memory_summary_everywhere().items()
         for body in (unwrap(result),)
         if body.memory.ram_usage_mb is not None
     )
 
 
-def _settled_rss_per_worker(proxy: ProxyClient) -> Mapping[tuple[str, int], RssReading]:
+def _settled_rss_per_worker(proxy: ProxyClient) -> Mapping[WorkerKey, RssReading]:
     readings: Final = tuple(
         reading for _ in range(MEMORY_RSS_SETTLE_SAMPLES) for reading in _read_rss_everywhere_after_pause(proxy)
     )
@@ -156,7 +160,7 @@ def _settled_rss_per_worker(proxy: ProxyClient) -> Mapping[tuple[str, int], RssR
 
 
 def _heaviest_worker_growth(
-    warm: Mapping[tuple[str, int], RssReading], after: Mapping[tuple[str, int], RssReading]
+    warm: Mapping[WorkerKey, RssReading], after: Mapping[WorkerKey, RssReading]
 ) -> WorkerGrowth:
     growths: Final = tuple(WorkerGrowth(warm[worker], after[worker]) for worker in warm.keys() & after.keys())
     assert growths, (
@@ -232,8 +236,9 @@ def test_failing_requests_do_not_grow_rss_or_stored_request(
     assert heaviest.growth_mb <= MEMORY_RSS_BUDGET_MB, (
         f"proxy RSS grew {heaviest.growth_mb:.1f} MB over a second batch of {MEMORY_REQUESTS_PER_PHASE} failing "
         f"requests ({MEMORY_RETRIES_PER_REQUEST} retries each plus a fallback) after an identical warmup batch, "
-        f"past the {MEMORY_RSS_BUDGET_MB:.0f} MB budget: worker pid {heaviest.warm.worker_pid} at "
-        f"{heaviest.warm.replica} settled at {heaviest.warm.ram_usage_mb:.1f} MB warm and "
+        f"past the {MEMORY_RSS_BUDGET_MB:.0f} MB budget: worker pid {heaviest.warm.worker_pid} on "
+        f"{heaviest.warm.hostname or 'an unnamed host'} behind {heaviest.warm.replica} settled at "
+        f"{heaviest.warm.ram_usage_mb:.1f} MB warm and "
         f"{heaviest.after.ram_usage_mb:.1f} MB after; failing requests are leaking memory the way the "
         f"v1.100.0 retry breadcrumbs did"
     )
