@@ -1,6 +1,7 @@
 import asyncio
 import copy
 from typing import List, cast
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -58,6 +59,46 @@ def _messages(word_count: int) -> List[AllMessageValues]:
             }
         ],
     )
+
+
+@pytest.mark.parametrize(
+    ("ttl", "expected_affinity_ttl"),
+    ((None, 300), ("5m", 300), ("1h", 3600)),
+)
+def test_prompt_caching_affinity_ttl_matches_cache_control(ttl: str | None, expected_affinity_ttl: int):
+    cache_control: dict[str, str] = {"type": "ephemeral", **({"ttl": ttl} if ttl is not None else {})}
+    messages = cast(
+        List[AllMessageValues],
+        [{"role": "system", "content": [{"type": "text", "text": "cached", "cache_control": cache_control}]}],
+    )
+
+    assert PromptCachingCache.get_prompt_caching_ttl(messages) == expected_affinity_ttl
+
+
+@pytest.mark.asyncio
+async def test_async_add_model_id_uses_one_hour_affinity_ttl():
+    cache = DualCache()
+    async_set_cache = AsyncMock()
+    cache.async_set_cache = async_set_cache
+    messages = cast(
+        List[AllMessageValues],
+        [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "cached",
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    }
+                ],
+            }
+        ],
+    )
+
+    await PromptCachingCache(cache=cache).async_add_model_id("dep-1", messages, None)
+
+    assert async_set_cache.call_args.kwargs["ttl"] == 3600
 
 
 def test_get_min_token_count_for_deployments_takes_min_across_mixed_group():

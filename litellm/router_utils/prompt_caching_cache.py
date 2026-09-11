@@ -140,6 +140,27 @@ class PromptCachingCache:
         return cacheable_prefix
 
     @staticmethod
+    def get_prompt_caching_ttl(messages: list[AllMessageValues] | None) -> int:
+        if messages is None:
+            return 300
+
+        cacheable_prefix: Final = PromptCachingCache.extract_cacheable_prefix(messages)
+        cache_control_ttls: Final = tuple(
+            cache_control.get("ttl")
+            for message in cacheable_prefix
+            for cache_control in (
+                message.get("cache_control"),
+                *(
+                    content_block.get("cache_control")
+                    for content_block in (message.get("content") if isinstance(message.get("content"), list) else ())
+                    if isinstance(content_block, dict)
+                ),
+            )
+            if isinstance(cache_control, dict) and cache_control.get("type") == "ephemeral"
+        )
+        return 3600 if "1h" in cache_control_ttls else 300
+
+    @staticmethod
     def get_prompt_caching_cache_key(
         messages: list[AllMessageValues] | None,
         tools: list[ChatCompletionToolParam] | None,
@@ -189,7 +210,11 @@ class PromptCachingCache:
         if cache_key is None:
             return
 
-        self.cache.set_cache(cache_key, PromptCachingCacheValue(model_id=model_id), ttl=300)
+        self.cache.set_cache(
+            cache_key,
+            PromptCachingCacheValue(model_id=model_id),
+            ttl=PromptCachingCache.get_prompt_caching_ttl(messages),
+        )
         return
 
     async def async_add_model_id(
@@ -209,7 +234,7 @@ class PromptCachingCache:
         await self.cache.async_set_cache(
             cache_key,
             PromptCachingCacheValue(model_id=model_id),
-            ttl=300,  # store for 5 minutes
+            ttl=PromptCachingCache.get_prompt_caching_ttl(messages),
         )
         return
 
