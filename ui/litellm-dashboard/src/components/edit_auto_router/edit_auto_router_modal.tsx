@@ -14,7 +14,7 @@ import ModelChoiceCombobox, { type ModelChoice } from "../add_model/ModelChoiceC
 import { modelAvailableCall, modelPatchUpdateCall, validateAutoRouterConfig } from "../networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "../add_model/RouterConfigBuilder";
-import { hydrateTierModelParams, normalizeTierModels } from "../add_model/complexity_router_tiers";
+import { hydrateTierModelParams } from "../add_model/complexity_router_tiers";
 import {
   type ActiveTierSet,
   CUSTOM_TIER_OMITTED_KEYS,
@@ -34,6 +34,7 @@ import {
   getSemanticConfigError,
   getPlanModeTierError,
   getTierLabelsError,
+  hydrateBuiltInTiers,
   hydrateCustomTierSet,
   hydratePlanModeMinTier,
   hydrateTierLabels,
@@ -41,7 +42,14 @@ import {
 } from "../add_model/build_complexity_router_config";
 import { KeywordTierRule } from "../add_model/KeywordTierRules";
 import { DEFAULT_MATCH_THRESHOLD } from "../add_model/SemanticKeywordMatching";
+import {
+  type AutoRouterCompressionState,
+  buildAutoRouterCompressionParams,
+  DEFAULT_AUTO_ROUTER_COMPRESSION,
+  hydrateAutoRouterCompression,
+} from "../add_model/buildAutoRouterCompression";
 import { hydrateKeywordTierRules } from "../add_model/complexity_router_keywords";
+import { customDimensionsError, hydrateCustomDimensions } from "../add_model/custom_dimensions";
 import {
   hydrateDimensionWeights,
   hydrateReasoningOverrideMinScore,
@@ -55,6 +63,7 @@ import ComplexityRouterConfig, {
   ClassifierType,
   ComplexityRouterConfigValue,
   ComplexityTiers,
+  heuristicScoringRole,
   DEFAULT_ADAPTIVE_WEIGHTS,
   DEFAULT_SESSION_AFFINITY,
   DEFAULT_DEPLOYMENT_AFFINITY,
@@ -85,10 +94,12 @@ interface EditAutoRouterModalProps {
  * hydrators validate themselves stay `unknown`; the ones assigned straight through carry their type. */
 export interface StoredComplexityRouterConfig {
   tiers?: Partial<Record<keyof ComplexityTiers, unknown>>;
+  enable_non_reasoning_tier?: boolean;
   tier_model_configs?: unknown;
   default_model?: string | null;
   plan_mode_min_tier?: unknown;
   classification_prompt?: unknown;
+  classification_examples?: unknown;
   heuristic_first_max_tier?: unknown;
   hybrid_boundary_margin?: unknown;
   tier_labels?: unknown;
@@ -102,6 +113,7 @@ export interface StoredComplexityRouterConfig {
   tier_boundaries?: unknown;
   token_thresholds?: unknown;
   dimension_weights?: unknown;
+  custom_dimensions?: unknown;
   reasoning_override_min_score?: unknown;
   session_affinity?: unknown;
   session_affinity_ttl_seconds?: unknown;
@@ -115,6 +127,9 @@ export interface StoredComplexityRouterConfig {
   return_raw_model_name?: boolean;
   enable_context_window_escalation?: unknown;
   context_window_escalation_buffer?: unknown;
+  stall_escalation_enabled?: unknown;
+  stall_escalation_window?: unknown;
+  stall_escalation_repeat_threshold?: unknown;
 }
 
 /**
@@ -125,18 +140,14 @@ export const hydrateComplexityRouterConfig = (
   parsedConfig: StoredComplexityRouterConfig,
   complexityRouterDefaultModel: string | null | undefined,
 ): ComplexityRouterConfigValue => {
-  const hydratedTiers: ComplexityTiers = {
-    SIMPLE: normalizeTierModels(parsedConfig.tiers?.SIMPLE),
-    MEDIUM: normalizeTierModels(parsedConfig.tiers?.MEDIUM),
-    COMPLEX: normalizeTierModels(parsedConfig.tiers?.COMPLEX),
-    REASONING: normalizeTierModels(parsedConfig.tiers?.REASONING),
-  };
-
+  const builtIn = hydrateBuiltInTiers(parsedConfig.tiers, parsedConfig.enable_non_reasoning_tier);
+  const { tiers: hydratedTiers, enable_non_reasoning_tier } = builtIn;
   const custom_tier_set = hydrateCustomTierSet(parsedConfig);
-  const activeTiers = { tiers: hydratedTiers, custom_tier_set };
+  const activeTiers = { ...builtIn, custom_tier_set };
 
   return {
     tiers: hydratedTiers,
+    enable_non_reasoning_tier,
     custom_tier_set,
     tier_model_params: tierParamsByRowId(
       hydrateTierModelParams(parsedConfig.tiers, parsedConfig.tier_model_configs),
@@ -167,6 +178,10 @@ export const hydrateComplexityRouterConfig = (
       typeof parsedConfig.classification_prompt === "string" && parsedConfig.classification_prompt.trim() !== ""
         ? parsedConfig.classification_prompt
         : undefined,
+    classification_examples:
+      typeof parsedConfig.classification_examples === "string" && parsedConfig.classification_examples.trim() !== ""
+        ? parsedConfig.classification_examples
+        : undefined,
     heuristic_first_max_tier:
       typeof parsedConfig.heuristic_first_max_tier === "string" && parsedConfig.heuristic_first_max_tier.trim() !== ""
         ? parsedConfig.heuristic_first_max_tier
@@ -180,6 +195,7 @@ export const hydrateComplexityRouterConfig = (
     tier_boundaries: hydrateTierBoundaries(parsedConfig.tier_boundaries),
     token_thresholds: hydrateTokenThresholds(parsedConfig.token_thresholds),
     dimension_weights: hydrateDimensionWeights(parsedConfig.dimension_weights),
+    custom_dimensions: hydrateCustomDimensions(parsedConfig.custom_dimensions),
     reasoning_override_min_score: hydrateReasoningOverrideMinScore(parsedConfig.reasoning_override_min_score),
     session_affinity:
       typeof parsedConfig.session_affinity === "boolean" ? parsedConfig.session_affinity : DEFAULT_SESSION_AFFINITY,
@@ -208,11 +224,19 @@ export const hydrateComplexityRouterConfig = (
       typeof parsedConfig.context_window_escalation_buffer === "number"
         ? parsedConfig.context_window_escalation_buffer
         : undefined,
+    stall_escalation_enabled: parsedConfig.stall_escalation_enabled === true || undefined,
+    stall_escalation_window:
+      typeof parsedConfig.stall_escalation_window === "number" ? parsedConfig.stall_escalation_window : undefined,
+    stall_escalation_repeat_threshold:
+      typeof parsedConfig.stall_escalation_repeat_threshold === "number"
+        ? parsedConfig.stall_escalation_repeat_threshold
+        : undefined,
   };
 };
 
 export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "tiers",
+  "enable_non_reasoning_tier",
   "tier_definitions",
   "fallback_tier",
   "tier_model_configs",
@@ -226,6 +250,7 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "classifier_context_include_assistant_turns",
   "classifier_fallback",
   "classification_prompt",
+  "classification_examples",
   "heuristic_first_max_tier",
   "hybrid_boundary_margin",
   "classification_mode",
@@ -242,9 +267,13 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "tier_boundaries",
   "token_thresholds",
   "dimension_weights",
+  "custom_dimensions",
   "reasoning_override_min_score",
   "enable_context_window_escalation",
   "context_window_escalation_buffer",
+  "stall_escalation_enabled",
+  "stall_escalation_window",
+  "stall_escalation_repeat_threshold",
 ]);
 
 // Managed only when the caller passes the corresponding state. A caller that does not render
@@ -291,8 +320,8 @@ export interface KeywordMatchingState {
 }
 
 // A custom save drops the stored keys an edited tier set forbids. classification_prompt needs no
-// entry here: it is a managed key, so a built-in save already drops it through isManaged and the
-// built-in branch of the builder never re-emits it.
+// entry here: it is a managed key, so every save rewrites it from form state and the builder
+// re-emits it on both branches only when the form still holds one.
 const customTierDroppedKeys = (value: ComplexityRouterConfigValue): readonly string[] =>
   value.custom_tier_set ? CUSTOM_TIER_OMITTED_KEYS : [];
 
@@ -314,10 +343,12 @@ export const buildUpdatedComplexityRouterConfig = (
 
   const builderParams: BuildComplexityRouterConfigParams = {
     tiers: value.tiers,
+    enableNonReasoningTier: value.enable_non_reasoning_tier,
     customTierSet: value.custom_tier_set,
     defaultModel: value.default_model,
     planModeMinTier: value.plan_mode_min_tier,
     classificationPrompt: value.classification_prompt,
+    classificationExamples: value.classification_examples,
     heuristicFirstMaxTier: value.heuristic_first_max_tier,
     hybridBoundaryMargin: value.hybrid_boundary_margin,
     classificationMode: value.classification_mode,
@@ -347,10 +378,14 @@ export const buildUpdatedComplexityRouterConfig = (
     tierBoundaries: value.tier_boundaries,
     tokenThresholds: value.token_thresholds,
     dimensionWeights: value.dimension_weights,
+    customDimensions: value.custom_dimensions,
     reasoningOverrideMinScore: value.reasoning_override_min_score,
     tierModelParams: value.tier_model_params,
     enableContextWindowEscalation: value.enable_context_window_escalation,
     contextWindowEscalationBuffer: value.context_window_escalation_buffer,
+    stallEscalationEnabled: value.stall_escalation_enabled,
+    stallEscalationWindow: value.stall_escalation_window,
+    stallEscalationRepeatThreshold: value.stall_escalation_repeat_threshold,
   };
   const built = buildComplexityRouterConfig(builderParams);
 
@@ -424,6 +459,9 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   const [semanticMatchingEnabled, setSemanticMatchingEnabled] = useState<boolean>(false);
   const [embeddingModel, setEmbeddingModel] = useState<string | undefined>(undefined);
   const [matchThreshold, setMatchThreshold] = useState<number>(DEFAULT_MATCH_THRESHOLD);
+  const [autoRouterCompression, setAutoRouterCompression] = useState<AutoRouterCompressionState>(
+    DEFAULT_AUTO_ROUTER_COMPRESSION,
+  );
   const [complexityRouterConfig, setComplexityRouterConfig] = useState<ComplexityRouterConfigValue>({
     tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
     classifier_type: "heuristic",
@@ -449,7 +487,10 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
             : null) ?? getTierLabelsError(complexityRouterConfig.tier_labels)) ??
       getPlanModeTierError(complexityRouterConfig.plan_mode_min_tier, activeTierRows(complexityRouterConfig)) ??
       getKeywordTierRulesError(keywordTierRules, activeTierRows(complexityRouterConfig)) ??
-      getClassifierModelError(complexityRouterConfig);
+      getClassifierModelError(complexityRouterConfig) ??
+      (heuristicScoringRole(complexityRouterConfig) === "decides"
+        ? customDimensionsError(complexityRouterConfig.custom_dimensions)
+        : null);
 
   useEffect(() => {
     if (isVisible && modelData) {
@@ -516,6 +557,12 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         setMatchThreshold(
           typeof parsedConfig.match_threshold === "number" ? parsedConfig.match_threshold : DEFAULT_MATCH_THRESHOLD,
         );
+        setAutoRouterCompression(
+          hydrateAutoRouterCompression({
+            auto_router_routing_compression: modelData.litellm_params?.auto_router_routing_compression,
+            auto_router_model_compression: modelData.litellm_params?.auto_router_model_compression,
+          }),
+        );
 
         form.reset({
           ...EMPTY_FORM_VALUES,
@@ -563,7 +610,11 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         toast.fromError(tierSetError);
         return;
       }
-      const classifierError = getClassifierModelError(complexityRouterConfig);
+      const classifierError =
+        getClassifierModelError(complexityRouterConfig) ??
+        (heuristicScoringRole(complexityRouterConfig) === "decides"
+          ? customDimensionsError(complexityRouterConfig.custom_dimensions)
+          : null);
       if (classifierError) {
         setShowValidationErrors(true);
         toast.fromError(classifierError);
@@ -628,6 +679,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         ...modelData.litellm_params,
         complexity_router_config: updatedConfig,
         complexity_router_default_model: defaultModel,
+        ...buildAutoRouterCompressionParams(autoRouterCompression),
       };
       const updatedModelInfo = {
         ...modelData.model_info,
@@ -749,6 +801,8 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
                     onMatchThresholdChange={setMatchThreshold}
                     escalationKeywords={escalationKeywords}
                     onEscalationKeywordsChange={setEscalationKeywords}
+                    autoRouterCompression={autoRouterCompression}
+                    onAutoRouterCompressionChange={setAutoRouterCompression}
                   />
                 </div>
               ) : (
