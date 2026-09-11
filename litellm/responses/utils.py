@@ -1,6 +1,7 @@
 import base64
 import re
 from collections.abc import Iterable, Mapping, Sequence
+from functools import reduce
 from typing import Any, Final, Optional, TypeVar, Union, cast, get_type_hints, overload
 
 from pydantic import BaseModel
@@ -8,6 +9,7 @@ from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped wire pay
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -27,6 +29,11 @@ from litellm.types.utils import (
     Usage,
     text_tokens_without_nested_reasoning,
 )
+
+
+def _apply_nested_drop_params(params: dict[str, Any], additional_drop_params: list[str] | None) -> dict[str, Any]:
+    nested_paths: Final = tuple(path for path in additional_drop_params or () if is_nested_path(path))
+    return reduce(lambda acc, path: delete_nested_value(acc, path), nested_paths, params)
 
 
 def _output_token_detail(details: object, field: str) -> int | None:
@@ -265,13 +272,16 @@ class ResponsesAPIRequestUtils:
         special_params: Final[dict[str, object]] = params.pop("kwargs", {})
 
         additional_drop_params: Final[list[str] | None] = params.pop("additional_drop_params", None)
-        non_default_params: Final = PreProcessNonDefaultParams.base_pre_process_non_default_params(
-            passed_params=params,
-            special_params=special_params,
-            custom_llm_provider=custom_llm_provider,
-            additional_drop_params=additional_drop_params,
-            default_param_values={k: None for k in valid_keys},
-            additional_endpoint_specific_params=["input"],
+        non_default_params: Final = _apply_nested_drop_params(
+            PreProcessNonDefaultParams.base_pre_process_non_default_params(
+                passed_params=params,
+                special_params=special_params,
+                custom_llm_provider=custom_llm_provider,
+                additional_drop_params=additional_drop_params,
+                default_param_values={k: None for k in valid_keys},
+                additional_endpoint_specific_params=["input"],
+            ),
+            additional_drop_params,
         )
 
         # decode previous_response_id if it's a litellm encoded id
