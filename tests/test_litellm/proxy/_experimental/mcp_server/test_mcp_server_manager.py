@@ -6508,7 +6508,6 @@ class TestMCPServerManager:
     @pytest.mark.parametrize("add_prefix", [True, False])
     async def test_openapi_listing_records_tool_metadata_for_pre_call_hooks(self, add_prefix):
         from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
-        from litellm.types.mcp_server.tool_registry import MCPTool as RegistryTool
 
         server = MCPServer(
             server_id="petstore-id",
@@ -6519,14 +6518,15 @@ class TestMCPServerManager:
             spec_path="https://example.com/petstore.yaml",
         )
         schema = {"type": "object", "properties": {"petId": {"type": "integer"}}}
-        registered = RegistryTool(
-            name="petstore-get_pet", description="Fetch a pet", input_schema=schema, handler=lambda: None
-        )
         manager = MCPServerManager()
         manager._create_mcp_client = AsyncMock(return_value=AsyncMock())
-
-        with patch.dict(global_mcp_tool_registry.tools, {"petstore-get_pet": registered}, clear=True):
+        global_mcp_tool_registry.register_tool(
+            name="petstore-get_pet", description="Fetch a pet", input_schema=schema, handler=lambda: None
+        )
+        try:
             listed = await manager._get_tools_from_server(server=server, add_prefix=add_prefix)
+        finally:
+            global_mcp_tool_registry.unregister_tools_with_prefix("petstore-")
 
         assert [t.name for t in listed] == ["petstore-get_pet" if add_prefix else "get_pet"]
         for spelling in ("get_pet", "petstore-get_pet"):

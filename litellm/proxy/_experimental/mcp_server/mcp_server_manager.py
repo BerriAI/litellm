@@ -1779,7 +1779,7 @@ class MCPServerManager:
             "gmail_send_email": "zapier_mcp_server",
         }
         """
-        self._listed_tools_by_server_id: dict[str, dict[str, MCPTool]] = {}
+        self._listed_tools_by_server_id: dict[str, Mapping[str, MCPTool]] = {}  # mutable-ok: refreshed per tools/list
         self._upstream_initialize_instructions_by_server_id: dict[str, str] = {}
         # Per-server monotonic timestamp of last upstream prefetch attempt (success,
         # empty result, or failure). Used to throttle re-probes for servers that do
@@ -4244,7 +4244,7 @@ class MCPServerManager:
                 # time producing "test_petstore-test_petstore-getinventory".
                 prefix: Final = get_server_prefix(server)
                 sep: Final = MCP_TOOL_PREFIX_SEPARATOR
-                bare_tools: Final = [
+                bare_tools: Final = [  # mutable-ok: returned through the list[MCPTool] listing contract
                     (
                         t.model_copy(update={"name": t.name[len(prefix) + len(sep) :]})
                         if t.name.startswith(f"{prefix}{sep}")
@@ -4252,7 +4252,7 @@ class MCPServerManager:
                     )
                     for t in tools
                 ]
-                self._listed_tools_by_server_id[server.server_id] = {t.name: t for t in bare_tools}
+                self._listed_tools_by_server_id[server.server_id] = MappingProxyType({t.name: t for t in bare_tools})
                 return tools if add_prefix else bare_tools
             else:
                 tools = await self._fetch_tools_with_timeout(client, server.name)
@@ -5134,7 +5134,7 @@ class MCPServerManager:
             for spelling in iter_known_tool_name_spellings(original_name, server):
                 self.tool_name_to_mcp_server_name_mapping[spelling] = prefix
 
-        self._listed_tools_by_server_id[server.server_id] = {tool.name: tool for tool in tools}
+        self._listed_tools_by_server_id[server.server_id] = MappingProxyType({tool.name: tool for tool in tools})
         verbose_logger.info("Successfully fetched %s tools from server %s", len(prefixed_tools), server.name)
         return prefixed_tools
 

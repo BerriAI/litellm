@@ -61,6 +61,10 @@ ENTRA_ISSUER_TEMPLATE: Final = "https://login.microsoftonline.com/{tenant_id}/v2
 EVALUATE_PATH: Final = "/agents/tool-evaluation/evaluate"
 MCP_SESSION_ID_HEADER: Final = "mcp-session-id"
 DEFENDER_STATUS_EVALUATED: Final = "Evaluated"
+GATEWAY_SCOPE_TEMPLATE: Final = "api://{client_id}/access_as_user"
+_GATEWAY_OWNED_TOKEN_ERRORS: Final = frozenset(
+    {"invalid_client", "unauthorized_client", "invalid_scope", "invalid_resource"}
+)
 _MCP_CALL_TYPES: Final[tuple[str, ...]] = ("mcp_call", "call_mcp_tool")
 _TOOL_INPUT_SCHEMA_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OBO_CACHE_MAX_ENTRIES: Final = 1000
@@ -227,6 +231,15 @@ class Agent365Guardrail(CustomGuardrail):
                     data=data,
                     tool_name=tool_name,
                     reason=f"the Entra agent identity token request was rejected ({exc.error_code}: {exc.description})",
+                )
+            if exc.error_code in _GATEWAY_OWNED_TOKEN_ERRORS:
+                return self._handle_unavailable(
+                    data=data,
+                    tool_name=tool_name,
+                    reason=(
+                        f"Entra rejected the gateway's own Agent 365 credentials ({exc.error_code}); "
+                        "check the guardrail's client_id, client_secret and resource_app_id"
+                    ),
                 )
             self._handle_caller_fault(
                 data=data,
@@ -730,24 +743,43 @@ def _applies_to_caller(guardrail: Agent365Guardrail, user_api_key_auth: "UserAPI
     return guardrail.should_run_guardrail(data=probe, event_type=GuardrailEventHooks.pre_mcp_call)
 
 
-def agent_365_authorization_servers(server: MCPServer, user_api_key_auth: "UserAPIKeyAuth | None") -> tuple[str, ...]:
-    """Entra issuers an MCP client signs in with before calling ``server`` through an Agent 365 guardrail.
-
-    Empty unless the admin advertised the server's ``scopes`` (the audience the client requests), the gateway
-    would otherwise own sign-in for the server, and an On-Behalf-Of Agent 365 guardrail applies: every registered
-    one for the anonymous discovery fetch, otherwise those the caller's key, team, or policies select. Agent
-    identity guardrails never read the caller's bearer, so they neither advertise nor challenge.
-    """
-    if not server.scopes or server.auth_type == MCPAuth.oauth2 or not server.advertises_gateway_authorization_server:
+def _applicable_guardrails(
+    server: MCPServer, user_api_key_auth: "UserAPIKeyAuth | None"
+) -> tuple[Agent365Guardrail, ...]:
+    """On-Behalf-Of Agent 365 guardrails that gate ``server`` for this caller: every registered one for the
+    anonymous discovery fetch, otherwise those the caller's key, team, or policies select. Empty when the
+    gateway does not own sign-in for the server. Agent identity guardrails never read the caller's bearer, so
+    they neither advertise nor challenge."""
+    if server.auth_type == MCPAuth.oauth2 or not server.advertises_gateway_authorization_server:
         return ()
     registered: Final = tuple(
         callback
         for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(Agent365Guardrail)
         if isinstance(callback, Agent365Guardrail) and callback.agent_identity is None
     )
-    applicable: Final = (
-        registered
-        if user_api_key_auth is None
-        else tuple(g for g in registered if _applies_to_caller(g, user_api_key_auth))
+    if user_api_key_auth is None:
+        return registered
+    return tuple(g for g in registered if _applies_to_caller(g, user_api_key_auth))
+
+
+def agent_365_authorization_servers(server: MCPServer, user_api_key_auth: "UserAPIKeyAuth | None") -> tuple[str, ...]:
+    """Entra issuers an MCP client signs in with before calling ``server`` through an Agent 365 guardrail."""
+    return tuple(
+        dict.fromkeys(
+            ENTRA_ISSUER_TEMPLATE.format(tenant_id=g.tenant_id)
+            for g in _applicable_guardrails(server, user_api_key_auth)
+        )
     )
-    return tuple(dict.fromkeys(ENTRA_ISSUER_TEMPLATE.format(tenant_id=g.tenant_id) for g in applicable))
+
+
+def agent_365_scopes_supported(server: MCPServer, user_api_key_auth: "UserAPIKeyAuth | None") -> tuple[str, ...]:
+    """Scopes the client requests from Entra for ``server``: the admin's ``scopes`` when set, otherwise the
+    ``access_as_user`` scope of each gating guardrail's gateway app registration (``api://<client_id>``)."""
+    if server.scopes:
+        return tuple(server.scopes)
+    return tuple(
+        dict.fromkeys(
+            GATEWAY_SCOPE_TEMPLATE.format(client_id=g.client_id)
+            for g in _applicable_guardrails(server, user_api_key_auth)
+        )
+    )
