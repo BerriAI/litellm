@@ -10,7 +10,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import time
-from typing import Final
 
 import httpx
 from openai._legacy_response import HttpxBinaryResponseContent
