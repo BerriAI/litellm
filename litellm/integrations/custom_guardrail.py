@@ -1463,7 +1463,9 @@ def _sync_guardrail_info_to_logging_obj(request_data: dict, logging_obj: object)
     _append_slg_to_litellm_params(mcd.get("litellm_params"), entries)
 
 
-_PRE_CALL_CONTENT_KEYS: Final = frozenset({"messages", "input", "prompt", "system", "instructions", "tools"})
+_PRE_CALL_CONTENT_KEYS: Final = frozenset(
+    {"messages", "input", "prompt", "system", "instructions", "tools", "functions", "function_call", "tool_choice"}
+)
 
 
 def _original_inputs_for(

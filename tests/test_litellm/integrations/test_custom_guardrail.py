@@ -2935,3 +2935,25 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
 
         assert result == "REWRITTEN_PROMPT"
         assert self._logged_response(data) == "mask"
+
+    @pytest.mark.asyncio
+    async def test_pre_call_hook_removing_legacy_functions_in_place_logs_mask(self):
+        class FunctionStrippingGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def async_pre_call_hook(
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: object,
+                data: dict[str, object],
+                call_type: str,
+            ) -> dict[str, object]:
+                data["functions"] = []
+                data["function_call"] = "none"
+                return data
+
+        data = {**self._request(), "functions": [{"name": "delete_db"}], "function_call": "auto"}
+        await FunctionStrippingGuardrail(guardrail_name="g").async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="acompletion"
+        )
+
+        assert self._logged_response(data) == "mask"
