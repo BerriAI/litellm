@@ -414,7 +414,10 @@ def safe_upstream_url(url: httpx.URL) -> str:
 
 
 def _sensitive_field(key: str) -> bool:
-    return key.lower() in ("code", "cookie", "client_assertion") or _LOG_MASKER.is_sensitive_key(key)
+    normalized: Final = re.sub(r"[^a-z0-9]", "", key.casefold())
+    return normalized in ("code", "clientassertion") or any(
+        pattern in normalized for pattern in _LOG_MASKER.sensitive_patterns
+    )
 
 
 def _redact_object(

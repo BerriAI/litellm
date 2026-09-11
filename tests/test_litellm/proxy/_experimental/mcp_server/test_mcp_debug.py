@@ -578,3 +578,16 @@ def test_deep_request_omits_response_when_credentials_cannot_be_inspected():
     assert detail is not None and "HTTP 401" in detail
     assert "response body: (omitted: request credentials unavailable)" in detail
     assert "nested-credential" not in detail
+
+
+@pytest.mark.parametrize("field", ["accessToken", "refreshToken", "clientSecret", "apikey", "CLIENTASSERTION", "cost_token"])
+@pytest.mark.parametrize("encoding", ["json", "form"])
+def test_compact_credential_fields_and_reflected_values_are_redacted(field, encoding):
+    secret = "generic-private-value"
+    fields = {field: secret}
+    request = httpx.Request("POST", "https://upstream/token", json=fields if encoding == "json" else None,
+        data=fields if encoding == "form" else None)
+    response = httpx.Response(401, request=request, json={field: secret, "error": "invalid_client", "detail": "Rejected " + secret})
+    detail = describe_upstream_http_failure(httpx.HTTPStatusError("failed", request=request, response=response))
+    assert detail is not None and "invalid_client" in detail
+    assert "REDACTED" in detail and secret not in detail
