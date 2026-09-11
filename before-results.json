@@ -1,5 +1,5 @@
 {
-  "commit": "dca71e214bb04d24ee975d382cdce3d0f2bfb32a",
+  "commit": "7419a536ad6857165b28b9b545a62d5916f696d2",
   "base": "http://127.0.0.1:47449",
   "registration": [
     {
@@ -23,7 +23,7 @@
         "application_type": "native"
       },
       "response": {
-        "client_id_issued_at": 1789093169,
+        "client_id_issued_at": 1789094434,
         "redirect_uris": [
           "https://insiders.vscode.dev/redirect",
           "https://vscode.dev/redirect"
@@ -61,7 +61,7 @@
         "application_type": "native"
       },
       "response": {
-        "client_id_issued_at": 1789093169,
+        "client_id_issued_at": 1789094434,
         "redirect_uris": [
           "https://insiders.vscode.dev/redirect",
           "https://vscode.dev/redirect",
@@ -143,7 +143,7 @@
       "flow_cookie_stored": true,
       "cookie_names": [
         "token",
-        "mcp_connect_flow_AN4K-mJVTejcob0wdl6Olsrgn1B2APn5"
+        "mcp_connect_flow_qFAHBDu2Zy5eaE0xyWlENCwNKr9Rc5Rg"
       ],
       "wrong_pkce_status": 400,
       "token_status": 200,

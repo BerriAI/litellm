@@ -1,0 +1,46 @@
+{
+  "before": "7419a536ad6857165b28b9b545a62d5916f696d2",
+  "after": "86c5cd736b7ac60c661a7a55e0656bfa0aea180b",
+  "cases": [
+    {
+      "minted_by": "before",
+      "uri_count": 1,
+      "registration_status": 201,
+      "opened_by_before": true,
+      "opened_by_after": true
+    },
+    {
+      "minted_by": "before",
+      "uri_count": 3,
+      "registration_status": 201,
+      "opened_by_before": true,
+      "opened_by_after": true
+    },
+    {
+      "minted_by": "before",
+      "uri_count": 4,
+      "registration_status": 400
+    },
+    {
+      "minted_by": "after",
+      "uri_count": 1,
+      "registration_status": 201,
+      "opened_by_before": true,
+      "opened_by_after": true
+    },
+    {
+      "minted_by": "after",
+      "uri_count": 3,
+      "registration_status": 201,
+      "opened_by_before": true,
+      "opened_by_after": true
+    },
+    {
+      "minted_by": "after",
+      "uri_count": 4,
+      "registration_status": 201,
+      "opened_by_before": false,
+      "opened_by_after": true
+    }
+  ]
+}
