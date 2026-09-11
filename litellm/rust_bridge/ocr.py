@@ -11,6 +11,7 @@ import httpx
 
 import litellm
 from litellm.constants import request_timeout
+from litellm.litellm_core_utils.call_completion import CallCompletion
 from litellm.llms.azure_ai.ocr.common_utils import is_azure_cohere_parse_model
 from litellm.llms.base_llm.ocr.transformation import PROVIDER_NATIVE_RESPONSE_KEY, OCRResponse
 from litellm.rust_bridge.bindings import NativeBinding, native_exception_types
@@ -52,7 +53,7 @@ class LiteLLMOcrRequest:
     custom_llm_provider: str | None
     extra_headers: dict[str, object] | None
     kwargs: Mapping[str, object]
-    call_completion: object = None
+    call_completion: CallCompletion | None = None
     input_sources: Mapping[str, str] | None = None
 
 
