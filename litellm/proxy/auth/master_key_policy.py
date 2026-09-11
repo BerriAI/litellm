@@ -7,7 +7,7 @@ INSECURE_MASTER_KEYS: Final = frozenset({"sk-1234"})
 
 InsecureMasterKeyReason = Literal["example_key", "missing"]
 
-_ALTERNATIVE_AUTH_SETTINGS: Final = ("enable_jwt_auth", "enable_oauth2_auth", "enable_oauth2_proxy_auth")
+_ALTERNATIVE_AUTH_SETTINGS: Final = ("enable_jwt_auth", "enable_oauth2_auth", "enable_oauth2_proxy_auth", "custom_auth")
 
 
 def alternative_auth_enabled(general_settings: Mapping[str, object]) -> bool:
