@@ -84,6 +84,15 @@ def test_in_memory_cache_max_size_per_item_measures_container_contents():
     assert in_memory_cache.get_cache(key="small") == small_value
 
 
+def test_in_memory_cache_accepts_small_container_with_non_json_keys():
+    in_memory_cache = InMemoryCache(max_size_per_item=1)
+    value = {("key", "key-hash"): ("job-1",)}
+
+    in_memory_cache.set_cache(key="active-jobs", value=value)
+
+    assert in_memory_cache.get_cache(key="active-jobs") == value
+
+
 def test_in_memory_cache_ttl():
     """
     Check that
