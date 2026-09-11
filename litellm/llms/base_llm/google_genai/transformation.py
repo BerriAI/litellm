@@ -1,5 +1,6 @@
 import types
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -72,6 +73,9 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         to ``config``).
         """
         return ("safetySettings", "toolConfig", "cachedContent", "labels")
+
+    def get_generate_content_logging_params(self, litellm_params: GenericLiteLLMParams) -> Mapping[str, object]:
+        return types.MappingProxyType({})
 
     @abstractmethod
     def map_generate_content_optional_params(
