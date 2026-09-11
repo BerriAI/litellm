@@ -33,6 +33,10 @@ vi.mock("@/components/EnvCredentialLoginWarningBanner", () => ({
   EnvCredentialLoginWarningBanner: () => null,
 }));
 
+vi.mock("@/components/InsecureMasterKeyWarningBanner", () => ({
+  InsecureMasterKeyWarningBanner: () => null,
+}));
+
 vi.mock("@/components/LicenseExpiryBanner", () => ({
   LicenseExpiryBanner: () => null,
 }));
