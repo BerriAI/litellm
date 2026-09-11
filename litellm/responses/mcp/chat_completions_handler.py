@@ -106,7 +106,7 @@ async def acompletion_with_mcp(
     (
         mcp_tools_with_litellm_proxy,
         other_tools,
-    ) = LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(tools)
+    ) = await LiteLLM_Proxy_MCP_Handler._split_mcp_tools(tools)
 
     if not mcp_tools_with_litellm_proxy:
         # No MCP tools, proceed with regular completion
@@ -114,6 +114,7 @@ async def acompletion_with_mcp(
             model=model,
             messages=messages,
             tools=tools,
+            _skip_mcp_handler=True,
             **kwargs,
         )
 

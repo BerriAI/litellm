@@ -518,6 +518,24 @@ describe("useKeys", () => {
     const callUrl = mockFetch.mock.calls[0][0];
     expect(callUrl).not.toContain("agent_id");
   });
+
+  it("sends the combined alias-or-ID search as the search param, separate from key_alias and key_hash", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockKeysResponse,
+    });
+
+    const { result } = renderHook(() => useKeys(1, 10, { search: "pasted-key-id" }), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    const callUrl = new URL(mockFetch.mock.calls[0][0], "http://localhost");
+    expect(callUrl.searchParams.get("search")).toBe("pasted-key-id");
+    expect(callUrl.searchParams.has("key_alias")).toBe(false);
+    expect(callUrl.searchParams.has("key_hash")).toBe(false);
+  });
 });
 
 describe("useDeletedKeys", () => {

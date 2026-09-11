@@ -1,8 +1,11 @@
 """Shadow Eval Logger: samples a shadowed key's successful LLM requests (chat completions,
 Anthropic Messages, and Responses API surfaces, each normalized to chat shape), duplicates
-each against the job's other arm in a detached task (the auto-router for a forward job, the
-fixed baseline model for a reverse one), blind-judges real vs shadow, and appends one
-``LiteLLM_ShadowEvalAttempt`` row (verdict or error) as the feature's only hot-path write.
+each through every shadow arm in one detached task (each candidate auto-router for a
+forward job, the fixed baseline model for a reverse one), blind-judges real vs each arm,
+and appends one ``LiteLLM_ShadowEvalAttempt`` row per arm (verdict or error) as the
+feature's only hot-path write. A multi-router job's arms therefore score the identical
+sampled requests against the identical real responses, which is what makes their win
+rates comparable head-to-head.
 Counts, status, and spend derive from those rows at read time, so nothing can disagree
 across pods or stop races; the hook reads active jobs through a short-TTL cache."""
 
@@ -34,6 +37,7 @@ from litellm.litellm_core_utils.llm_judge import (
 )
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.management_endpoints.auto_router_endpoints import ShadowEvalDirection
 from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN
 
@@ -57,9 +61,9 @@ _MAX_CONCURRENT_SHADOW_TASKS: Final = 16
 _MAX_JUDGE_RESPONSE_CHARS: Final = 8_000
 _MAX_JUDGE_PROMPT_CHARS: Final = 24_000
 
-# The judge answers with a small JSON object; a tighter budget truncates the JSON
-# mid-object and the attempt is lost to an error row.
-JUDGE_MAX_OUTPUT_TOKENS: Final = 1500
+# Covers the judge's reasoning tokens as well as its small JSON answer: a judge deployment
+# carrying an elevated reasoning_effort spends a tight cap before it ever answers.
+JUDGE_MAX_OUTPUT_TOKENS: Final = 4096
 
 _MAX_ERROR_CHARS: Final = 500
 
@@ -162,28 +166,91 @@ def _chat_request_from_responses(
     )
 
 
-def _chat_final_text(response_obj: object) -> str:
-    """The assistant's text, or empty when the turn carries tool calls: only text-final
-    turns produce a judgeable A/B comparison."""
+def _chat_choice(response_obj: object) -> object | None:
+    """The response's first choice, from a payload mapping or a duck-typed ModelResponse."""
     try:
-        message: Final = (
-            response_obj["choices"][0]["message"]
-            if isinstance(response_obj, Mapping)
-            else response_obj.choices[0].message  # pyright: ignore[reportAttributeAccessIssue]  # duck-typed ModelResponse
-        )
+        if isinstance(response_obj, Mapping):
+            return response_obj["choices"][0]
+        return response_obj.choices[0]  # pyright: ignore[reportAttributeAccessIssue]  # duck-typed ModelResponse
     except (AttributeError, KeyError, IndexError, TypeError):
+        return None
+
+
+def _field_reader(obj: object) -> Callable[[str], object]:
+    return obj.get if isinstance(obj, Mapping) else lambda key: getattr(obj, key, None)
+
+
+def _chat_message_reader(response_obj: object) -> Callable[[str], object] | None:
+    """Field access over the assistant message of a chat response, or None for a payload
+    with no readable message."""
+    choice: Final = _chat_choice(response_obj)
+    if choice is None:
+        return None
+    message: Final = _field_reader(choice)("message")
+    return _field_reader(message) if message is not None else None
+
+
+def _chat_final_text(response_obj: object) -> str:
+    """The turn's judgeable text: prose, or every tool call serialized alongside it as
+    `[tool call] name(arguments)` when the assistant chose to act instead of, or as well
+    as, answering directly. A tool call is a real turn, not a gap, so this is what both
+    the real arm's sampling decision and the shadow arm's reply compare against."""
+    read: Final = _chat_message_reader(response_obj)
+    if read is None:
         return ""
-    read: Final = message.get if isinstance(message, Mapping) else lambda key: getattr(message, key, None)
-    if read("tool_calls") or read("function_call"):
-        return ""
-    return extract_text_from_content(read("content"))
+    prose: Final = extract_text_from_content(read("content"))
+    if not (read("tool_calls") or read("function_call")):
+        return prose
+    serialized: Final = _serialize_tool_calls(read)
+    return f"{prose} {serialized}".strip() if prose else serialized
+
+
+def _chat_finish_reason(response_obj: object) -> str:
+    choice: Final = _chat_choice(response_obj)
+    raw: Final = _field_reader(choice)("finish_reason") if choice is not None else None
+    return str(raw) if raw else "unknown"
+
+
+_RESPONSES_TOOL_CALL_TYPES: Final = frozenset(("function_call", "custom_tool_call"))
+
+
+def _tool_calls_list(read: Callable[[str], object]) -> tuple[object, ...]:
+    calls: Final = read("tool_calls")
+    listed: Final = tuple(calls) if isinstance(calls, Sequence) and not isinstance(calls, str) else ()
+    single: Final = read("function_call")
+    return listed if listed else ((single,) if single is not None else ())
+
+
+def _tool_call_invocation(call: object) -> str:
+    """One tool call as `name(arguments)`. Custom tool calls name themselves and carry their
+    arguments under `custom` rather than `function`."""
+    read_call: Final = _field_reader(call)
+    payload: Final = read_call("function") or read_call("custom") or call
+    read_payload: Final = _field_reader(payload)
+    name: Final = read_payload("name")
+    arguments: Final = read_payload("arguments") or read_payload("input") or ""
+    return f"{name or 'unnamed'}({arguments})"
+
+
+def _serialize_tool_calls(read: Callable[[str], object]) -> str:
+    """Every tool call in a reply as text a judge built for prose can still read."""
+    return ", ".join(f"[tool call] {_tool_call_invocation(call)}" for call in _tool_calls_list(read))
+
+
+def _shadow_empty_reply_error(response_obj: object, routed_model: str) -> str:
+    """Why a shadow reply yielded no judgeable text at all: no prose, and no tool call to
+    serialize either. The stable sentence comes first and every varying part after the
+    semicolon, so grouping rows by error still yields one row per cause."""
+    detail: Final = f"finish_reason={_chat_finish_reason(response_obj)}, model={routed_model or 'unknown'}"
+    return f"shadow router returned an empty response; {detail}"
 
 
 def _responses_final_text(response_obj: object) -> str:
-    """The turn's aggregated output text, or empty when the turn carries tool calls. A
-    dict-shaped payload is validated into the owner type first, because ``output_text``
-    is a derived property rather than a serialized field, so it never exists on a dict;
-    a dict the owner type rejects is unjudgeable and skipped."""
+    """The turn's judgeable text: the aggregated output plus any tool call serialized
+    alongside it, the same way the chat surface renders one. A dict-shaped payload is
+    validated into the owner type first, because ``output_text`` is a derived property
+    rather than a serialized field, so it never exists on a dict; a dict the owner type
+    rejects is unjudgeable and skipped."""
     from litellm.types.llms.openai import ResponsesAPIResponse
 
     try:
@@ -196,11 +263,16 @@ def _responses_final_text(response_obj: object) -> str:
     if not isinstance(output, Sequence):
         return ""
     items: Final = tuple(item.model_dump() if isinstance(item, BaseModel) else item for item in output)
-    if any(
-        not isinstance(item, Mapping) or item.get("type") in ("function_call", "custom_tool_call") for item in items
-    ):
+    if any(not isinstance(item, Mapping) for item in items):
         return ""
-    return str(getattr(response, "output_text", "") or "")
+    calls: Final = tuple(
+        item for item in items if isinstance(item, Mapping) and item.get("type") in _RESPONSES_TOOL_CALL_TYPES
+    )
+    prose: Final = str(getattr(response, "output_text", "") or "")
+    if not calls:
+        return prose
+    serialized: Final = ", ".join(f"[tool call] {_tool_call_invocation(call)}" for call in calls)
+    return f"{prose} {serialized}".strip() if prose else serialized
 
 
 class _SurfaceOps:
@@ -270,8 +342,8 @@ def _judgeable_sample(
     response_obj: object,
 ) -> tuple[tuple[Mapping[str, object], ...], Mapping[str, object], str] | None:
     """The normalized chat conversation, the forwardable generation params, and the
-    judgeable final text; None when this request's shapes cannot be sampled (tool-final
-    turn, empty text, or a shape the owner transformations reject)."""
+    judgeable final text; None when this request's shapes cannot be sampled (no text and no
+    tool call to serialize, or a shape the owner transformations reject)."""
     try:
         request: Final = ops.chat_request(kwargs, model_parameters)
         items: Final = _MESSAGE_ITEMS_ADAPTER.validate_python(request.get("messages"))
@@ -303,6 +375,11 @@ _SURFACE_OPS: Final[Mapping[str, _SurfaceOps]] = MappingProxyType(
 PAIRWISE_JUDGE_SYSTEM_PROMPT: Final = """You are an impartial quality judge comparing two responses to the same conversation.
 
 The responses are labeled A and B in random order. You do not know which system produced which.
+
+A response may be prose, or a tool call shown as `[tool call] name(arguments)` if the
+assistant chose to act instead of answering directly. A tool call is not a defect: judge
+whether calling that tool was the right response to the conversation, the same as you
+would judge prose.
 
 Criteria: correctness, completeness, clarity, conciseness.
 
@@ -342,6 +419,20 @@ def _failure_detail(e: BaseException) -> str:
     return f"{type(e).__name__}{location}: {e}"
 
 
+def _judge_reply_shape(response: object) -> str:
+    """How an unparseable judge reply was shaped. The parser's own message cannot separate a
+    judge that answered with nothing from one truncated mid-object, and those want opposite
+    fixes. Shape only, never the reply text: the judge quotes the sampled turns it compares,
+    and no attempt row carries sampled content today."""
+    read: Final = _chat_message_reader(response)
+    if read is None:
+        return "unreadable judge reply"
+    content: Final = read("content")
+    served: Final = str(_field_reader(response)("model") or "unknown")
+    body: Final = f"{len(str(content))} chars" if content else "no content"
+    return f"finish_reason={_chat_finish_reason(response)}, content={body}, model={served}"
+
+
 def _call_cost(response: object) -> float:
     """Price one eval-arm call with the figure the spend pipeline bills: the router client
     stamps _hidden_params.response_cost from the deployment's own pricing, which the public
@@ -373,14 +464,37 @@ def _unmask_preference(raw_preference: str, real_is_a: bool) -> str:
     return "tie"
 
 
-def _judge_user_prompt(conversation: str, response_a: str, response_b: str) -> str:
+_MAX_JUDGE_TOOL_DEFS_CHARS: Final = 2_000
+
+
+def _tool_definitions_text(tools: object) -> str:
+    """The tools available to both arms, name and description only: enough for the judge
+    to tell whether the chosen tool, and not some other one, was the right call, without
+    forwarding parameter schemas it does not need to score that."""
+    if not isinstance(tools, Sequence) or isinstance(tools, str):
+        return ""
+    entries: Final = tuple(
+        _field_reader(t)("function") or _field_reader(t)("custom") or t for t in tools if not isinstance(t, str)
+    )
+    lines: Final = tuple(
+        f"- {_field_reader(e)('name') or 'unnamed'}: {_field_reader(e)('description') or 'no description'}"
+        for e in entries
+    )
+    if not lines:
+        return ""
+    return ("Tools available to both responses:\n" + "\n".join(lines))[:_MAX_JUDGE_TOOL_DEFS_CHARS]
+
+
+def _judge_user_prompt(conversation: str, response_a: str, response_b: str, tool_definitions: str = "") -> str:
     """The judge prompt under one total character budget: each response is capped, and
-    the conversation tail gets whatever budget the responses left over."""
+    the conversation tail gets whatever budget the responses and tool definitions left
+    over."""
     a: Final = response_a[:_MAX_JUDGE_RESPONSE_CHARS]
     b: Final = response_b[:_MAX_JUDGE_RESPONSE_CHARS]
-    conversation_budget: Final = _MAX_JUDGE_PROMPT_CHARS - len(a) - len(b)
+    prefix: Final = f"{tool_definitions}\n\n" if tool_definitions else ""
+    conversation_budget: Final = _MAX_JUDGE_PROMPT_CHARS - len(a) - len(b) - len(prefix)
     return (
-        f"Conversation:\n{conversation[-conversation_budget:]}\n\n"
+        f"{prefix}Conversation:\n{conversation[-conversation_budget:]}\n\n"
         f"Response A:\n{a}\n\n"
         f"Response B:\n{b}\n\n"
         "Which response is better?"
@@ -498,12 +612,16 @@ def _decision_classifier_cost(metadata: Mapping[str, object]) -> float:
     return float(raw) if isinstance(raw, (int, float)) else 0.0
 
 
-def _request_was_routed_by(request_metadata: Mapping[str, object], router_name: str) -> bool:
-    """Whether the router under evaluation served this request, which is what decides
-    the direction it belongs to. A forward job skips its own router's traffic, since
-    duplicating it would compare the router to itself: guaranteed ties, judge spend for
-    zero information. A reverse job samples exactly that traffic and nothing else."""
-    return _routing_decision(request_metadata).get("router_model_name") == router_name
+def _direction_admits(request_metadata: Mapping[str, object], job: "ActiveShadowEvalJob") -> bool:
+    """Whether this request belongs to the job's direction. A forward job skips traffic
+    any of its candidate routers served: duplicating a router's own request compares it
+    to itself (guaranteed ties), and judging a sibling against another candidate's live
+    response would score candidates against each other instead of against the incumbent.
+    A reverse job samples exactly its one router's traffic and nothing else."""
+    routed_by: Final = _routing_decision(request_metadata).get("router_model_name")
+    if job.direction == "reverse":
+        return routed_by == job.router_name
+    return routed_by not in job.arm_router_names
 
 
 @dataclass(frozen=True, slots=True)
@@ -546,6 +664,8 @@ class ActiveShadowEvalJob(BaseModel):
 
     id: str
     router_name: str
+    router_names: tuple[str, ...] = ()
+    models: frozenset[str] = frozenset()
     direction: ShadowEvalDirection = "forward"
     baseline_model: str | None = None
     shadow_percentage: float
@@ -567,12 +687,40 @@ class ActiveShadowEvalJob(BaseModel):
             raise ValueError("baseline_model is set for exactly the reverse jobs")
         return self
 
+    @model_validator(mode="after")
+    def _reverse_evaluates_one_router(self) -> "ActiveShadowEvalJob":
+        """A reverse row naming several routers is unsamplable (there is no one traffic
+        slice they share) and fails closed."""
+        if self.direction == "reverse" and len(self.arm_router_names) > 1:
+            raise ValueError("a reverse job evaluates exactly one router")
+        return self
+
     @property
-    def shadow_target(self) -> str:
-        """The model the duplicated arm calls: the router itself for a forward job, the
-        fixed baseline for a reverse one. Total because the validator above pins
+    def arm_router_names(self) -> tuple[str, ...]:
+        """The job's full router set; rows from before router_names existed hold it in
+        router_name alone. The one place that reading lives on the sampling side."""
+        return self.router_names or (self.router_name,)
+
+    def arm_target(self, arm_router: str) -> str:
+        """The model one duplicated arm calls: the candidate router itself for a forward
+        job, the fixed baseline for a reverse one. Total because the validator above pins
         baseline_model to reverse jobs and only those."""
-        return self.baseline_model or self.router_name
+        return self.baseline_model or arm_router
+
+
+def _canonical_group(router: "Router | None", model_group: str) -> str:
+    """A model group in the one spelling both a job's scope and a request's model compare
+    under: an alias resolves to its target so the two never fail to match on spelling."""
+    return (
+        resolve_model_group_alias(router.model_group_alias, model_group) if router is not None else None
+    ) or model_group
+
+
+def _scope_admits(router: "Router | None", job: "ActiveShadowEvalJob", model_group: str) -> bool:
+    """Whether the request's group is in the job's model scope. Both sides resolve through
+    the router's alias map at match time, so a re-pointed alias applies to the next request
+    rather than after the jobs cache rolls."""
+    return not job.models or any(_canonical_group(router, name) == model_group for name in job.models)
 
 
 def _as_active_job(record: object, attempts: int, spend: float) -> ActiveShadowEvalJob | None:
@@ -592,7 +740,13 @@ _JOBS_CACHE_KEY: Final = "shadow_eval:active_jobs"
 
 
 class ShadowEvalLogger(CustomLogger):
-    """Fires blind pairwise shadow evaluations for keys with an active shadow-eval job."""
+    """Fires blind pairwise shadow evaluations for targets with an active shadow-eval job.
+
+    A job targets a virtual key, a team, or a user; a request qualifies for a job when
+    any of its resolved identities (key hash, team id, user id) matches the job's
+    target, so team and user jobs cover JWT-authenticated traffic, which carries no
+    key hash at all. A job scoped to model groups further requires the request's
+    requested group to be one of them."""
 
     def __init__(
         self,
@@ -617,10 +771,10 @@ class ShadowEvalLogger(CustomLogger):
         # generation; the refill absorbs written rows and resets.
         self._job_starts: dict[str, int] = {}  # mutable-ok: per-generation counter
 
-    async def _active_jobs(self) -> Mapping[str, tuple[ActiveShadowEvalJob, ...]]:
-        """Active jobs by api_key_id, cache-first. A key holds at most one job per
-        direction, so the value is a collection. A DB fault returns empty without
-        caching, so sampling pauses for that request and the next one retries."""
+    async def _active_jobs(self) -> Mapping[tuple[str, str], tuple[ActiveShadowEvalJob, ...]]:
+        """Active jobs by (target_type, target_id), cache-first. A target holds at most
+        one job per direction, so the value is a collection. A DB fault returns empty
+        without caching, so sampling pauses for that request and the next one retries."""
         cached: Final = await self._jobs_cache.async_get_cache(_JOBS_CACHE_KEY)
         if cached is not None:
             return cached  # pyright: ignore[reportReturnType]  # cache stores exactly this mapping shape
@@ -652,10 +806,10 @@ class ShadowEvalLogger(CustomLogger):
                 )
                 for row in grouped or []
             }
-            by_key: Final = tuple(
+            by_target: Final = tuple(
                 sorted(
                     (
-                        (str(record.api_key_id), job)
+                        ((str(record.target_type), str(record.target_id)), job)
                         for record in records or []
                         if (job := _as_active_job(record, *attempt_stats.get(str(record.id), (0, 0.0)))) is not None
                     ),
@@ -663,7 +817,7 @@ class ShadowEvalLogger(CustomLogger):
                 )
             )
             jobs: Final = MappingProxyType(
-                {key: tuple(job for _, job in group) for key, group in groupby(by_key, key=itemgetter(0))}
+                {target: tuple(job for _, job in group) for target, group in groupby(by_target, key=itemgetter(0))}
             )
             await self._jobs_cache.async_set_cache(_JOBS_CACHE_KEY, jobs)
             self._job_starts = {}  # rebind-ok: new generation, counts absorbed into the fill
@@ -679,19 +833,24 @@ class ShadowEvalLogger(CustomLogger):
         active_jobs: Sequence[ActiveShadowEvalJob],
         request_metadata: Mapping[str, object],
         request_id: str,
+        model_group: str,
     ) -> tuple[ActiveShadowEvalJob, ...]:
         """The jobs that sample this request. A key can hold one job per direction, and a
         request routed by one job's router while bypassing the other's qualifies for both;
         each is separately budgeted, so both fire. An admitting job that loses the sampling
-        dice is counted, so results can weigh judged rows against the traffic they stand for."""
+        dice is counted, so results can weigh judged rows against the traffic they stand for.
+        A request outside a job's direction or model scope is not that job's traffic and
+        goes uncounted, so the funnel stays a fraction of the traffic the job admits."""
         eligible: list[ActiveShadowEvalJob] = []  # mutable-ok: bucketed per-job admission
         now: Final = datetime.now(timezone.utc)
+        router: Final = self._router_provider()
         for job in active_jobs:
             if (
                 now >= job.ends_at
                 or job.attempts + self._job_starts.get(job.id, 0) >= job.max_turns
                 or (job.max_budget is not None and job.spend >= job.max_budget)
-                or _request_was_routed_by(request_metadata, job.router_name) != (job.direction == "reverse")
+                or not _direction_admits(request_metadata, job)
+                or not _scope_admits(router, job, model_group)
             ):
                 continue
             if not _sample_hits(request_id, job.id, job.shadow_percentage):
@@ -720,8 +879,18 @@ class ShadowEvalLogger(CustomLogger):
             if should_redact_message_logging(dict(kwargs)):  # mutable-ok: predicate takes a plain dict
                 return
             metadata: Final = payload.get("metadata") or _EMPTY_METADATA
-            api_key_hash: Final = metadata.get("user_api_key_hash")
-            if not api_key_hash:
+            # Each identity the request resolved to is a candidate target; JWT-auth
+            # requests carry no key hash but do carry a team and user.
+            targets: Final = tuple(
+                (target_type, str(value))
+                for target_type, value in (
+                    ("key", metadata.get("user_api_key_hash")),
+                    ("team", metadata.get("user_api_key_team_id")),
+                    ("user", metadata.get("user_api_key_user_id")),
+                )
+                if value
+            )
+            if not targets:
                 return
             request_id: Final = payload.get("id") or ""
             if not request_id:
@@ -731,8 +900,12 @@ class ShadowEvalLogger(CustomLogger):
                 return  # only surfaces this table can normalize are comparable; unknown types fail closed
             if ops.wire_params and _request_mutating_guardrail_ran(request_metadata):
                 return  # the wire-body snapshot predates the rewrite; replaying it would resurrect stripped content
+            active_jobs: Final = await self._active_jobs()
             eligible: Final = self._sampled_jobs(
-                (await self._active_jobs()).get(str(api_key_hash), ()), request_metadata, request_id
+                tuple(job for target in targets for job in active_jobs.get(target, ())),
+                request_metadata,
+                request_id,
+                _canonical_group(self._router_provider(), str(payload.get("model_group") or "")),
             )
             if not eligible:
                 return
@@ -755,7 +928,10 @@ class ShadowEvalLogger(CustomLogger):
                 if self._inflight_shadow_tasks >= _MAX_CONCURRENT_SHADOW_TASKS:
                     self._record_funnel(job.id, "shed")
                     continue
-                self._job_starts[job.id] = self._job_starts.get(job.id, 0) + 1
+                # One start writes one attempt row per arm, and max_turns is a row
+                # ceiling, so admission must pre-count every arm or a multi-router
+                # job overshoots the valve N-fold within a cache generation.
+                self._job_starts[job.id] = self._job_starts.get(job.id, 0) + len(job.arm_router_names)
                 self._inflight_shadow_tasks += 1
                 asyncio.create_task(
                     self._run_shadow_eval(
@@ -794,32 +970,74 @@ class ShadowEvalLogger(CustomLogger):
         shadow_params: Mapping[str, object],
         parent_metadata: Mapping[str, object],
     ) -> None:
-        """Budget gate -> shadow call -> blind judge -> one attempt row, and every exit
-        in exactly one coverage bucket: the gates that decline to spend on an admitted
-        sample (no DB to record into, an over-budget key, an unverifiable or exhausted
-        eval budget) count it withheld, so eligible traffic still reconciles as
-        not_sampled + unjudgeable + shed + withheld + attempt rows. The prisma gate sits
-        above the dispatch so no provider spend happens without a place to record the
-        outcome, and the budget read lives here rather than in the success hook."""
+        """Budget gates once per sampled request, then every router arm in turn: shadow
+        call -> blind judge -> one attempt row stamped with the arm. The gates that
+        decline to spend on an admitted sample (no DB to record into, an over-budget key,
+        an unverifiable or exhausted eval budget) count the REQUEST withheld before any
+        arm runs, so funnel counters stay per-request and a leg's eligible traffic still
+        reconciles as not_sampled + unjudgeable + shed + withheld + sampled requests,
+        where each sampled request writes one attempt row per arm. A budget crossed
+        mid-loop lets the remaining arms overshoot by one round, the same class of
+        overshoot as the samples already in flight when the cap is crossed. The prisma
+        gate sits above the dispatch so no provider spend happens without a place to
+        record the outcome, and the budget read lives here rather than in the success
+        hook."""
         prisma: Final = self._prisma_provider()
+        if prisma is None:
+            self._record_funnel(job.id, "withheld")
+            return
+        if await _key_or_team_is_over_budget(parent_metadata):
+            self._record_funnel(job.id, "withheld")
+            return
+        if job.max_budget is not None:
+            try:
+                spend: Final = await self._read_job_spend(_job_spend_counter_key(job.id), job.spend, job.max_budget)
+            except Exception as e:  # noqa: BLE001  # unverifiable budget: skip the sample rather than spend on it
+                verbose_logger.warning("shadow_eval: budget unverifiable for %s, sample skipped: %s", job.id, e)
+                self._record_funnel(job.id, "withheld")
+                return
+            if spend >= job.max_budget:
+                self._record_funnel(job.id, "withheld")
+                return
+        for arm_router in job.arm_router_names:
+            await self._run_shadow_arm(
+                prisma=prisma,
+                job=job,
+                arm_router=arm_router,
+                request_id=request_id,
+                messages=messages,
+                real_text=real_text,
+                real_model=real_model,
+                real_cost=real_cost,
+                real_classifier_cost=real_classifier_cost,
+                real_cache_hit=real_cache_hit,
+                control_tier=control_tier,
+                shadow_params=shadow_params,
+                parent_metadata=parent_metadata,
+            )
+
+    async def _run_shadow_arm(
+        self,
+        prisma: "PrismaClient",
+        job: ActiveShadowEvalJob,
+        arm_router: str,
+        request_id: str,
+        messages: Sequence[Mapping[str, object]],
+        real_text: str,
+        real_model: str,
+        real_cost: float,
+        real_classifier_cost: float,
+        real_cache_hit: bool,
+        control_tier: str | None,
+        shadow_params: Mapping[str, object],
+        parent_metadata: Mapping[str, object],
+    ) -> None:
+        """One arm's pipeline: shadow call -> blind judge -> one attempt row, every exit
+        recording this arm's outcome, so one arm's fault never silences a sibling arm."""
         try:
-            if prisma is None:
-                self._record_funnel(job.id, "withheld")
-                return
-            if await _key_or_team_is_over_budget(parent_metadata):
-                self._record_funnel(job.id, "withheld")
-                return
-            if job.max_budget is not None:
-                try:
-                    spend: Final = await self._read_job_spend(_job_spend_counter_key(job.id), job.spend, job.max_budget)
-                except Exception as e:  # noqa: BLE001  # unverifiable budget: skip the sample rather than spend on it
-                    verbose_logger.warning("shadow_eval: budget unverifiable for %s, sample skipped: %s", job.id, e)
-                    self._record_funnel(job.id, "withheld")
-                    return
-                if spend >= job.max_budget:
-                    self._record_funnel(job.id, "withheld")
-                    return
-            shadow: Final = await self._call_router_shadow(job.shadow_target, messages, shadow_params, parent_metadata)
+            shadow: Final = await self._call_router_shadow(
+                job.arm_target(arm_router), messages, shadow_params, parent_metadata
+            )
         except Exception as e:  # noqa: BLE001  # detached task: nothing billed yet, record and never raise
             verbose_logger.debug("shadow_eval: pipeline failed for %s: %s", request_id, e)
             await self._record_attempt(
@@ -827,6 +1045,7 @@ class ShadowEvalLogger(CustomLogger):
                 job,
                 request_id,
                 control_tier,
+                router_name=arm_router,
                 outcome="error",
                 error=f"pipeline error: {e}",
                 real_cost=real_cost,
@@ -840,6 +1059,7 @@ class ShadowEvalLogger(CustomLogger):
                 job,
                 request_id,
                 control_tier,
+                router_name=arm_router,
                 outcome="error",
                 error=shadow.error,
                 shadow_cost=shadow.cost,
@@ -856,6 +1076,7 @@ class ShadowEvalLogger(CustomLogger):
                 messages=messages,
                 real_text=real_text,
                 shadow_text=shadow.text,
+                tools=shadow_params.get("tools"),
                 parent_metadata=parent_metadata,
             )
             if isinstance(verdict, _CallFailure):
@@ -864,6 +1085,7 @@ class ShadowEvalLogger(CustomLogger):
                     job,
                     request_id,
                     control_tier,
+                    router_name=arm_router,
                     outcome="error",
                     error=verdict.error,
                     shadow=shadow,
@@ -880,6 +1102,7 @@ class ShadowEvalLogger(CustomLogger):
                 job,
                 request_id,
                 control_tier,
+                router_name=arm_router,
                 outcome=verdict.preference,
                 shadow=shadow,
                 real_model=real_model,
@@ -898,6 +1121,7 @@ class ShadowEvalLogger(CustomLogger):
                 job,
                 request_id,
                 control_tier,
+                router_name=arm_router,
                 outcome="error",
                 error=f"pipeline error: {e}",
                 shadow=shadow,
@@ -915,6 +1139,7 @@ class ShadowEvalLogger(CustomLogger):
         request_id: str,
         control_tier: str | None,
         *,
+        router_name: str,
         outcome: str,
         real_cost: float,
         real_classifier_cost: float,
@@ -937,6 +1162,7 @@ class ShadowEvalLogger(CustomLogger):
                 data={  # mutable-ok: Prisma payload
                     "job_id": job.id,
                     "request_id": request_id,
+                    "router_name": router_name,
                     "outcome": outcome,
                     "tier": control_tier if job.direction == "reverse" else (shadow.tier if shadow else None),
                     "real_model": real_model or None,
@@ -989,15 +1215,18 @@ class ShadowEvalLogger(CustomLogger):
                 classifier_cost=_decision_classifier_cost(shadow_metadata),
             )
         text: Final = _chat_final_text(response)
+        routed_model: Final = str(
+            getattr(response, "model", None) or _routing_decision(shadow_metadata).get("routed_model") or ""
+        )
         if not text:
             return _CallFailure(
-                "shadow router returned an empty response",
+                _shadow_empty_reply_error(response, routed_model),
                 cost=_call_cost(response),
                 classifier_cost=_decision_classifier_cost(shadow_metadata),
             )
         return _ShadowResponse(
             text=text,
-            model=str(getattr(response, "model", None) or _routing_decision(shadow_metadata).get("routed_model") or ""),
+            model=routed_model,
             tier=_routed_tier(shadow_metadata),
             cost=_call_cost(response),
             classifier_cost=_decision_classifier_cost(shadow_metadata),
@@ -1009,9 +1238,12 @@ class ShadowEvalLogger(CustomLogger):
         messages: Sequence[Mapping[str, object]],
         real_text: str,
         shadow_text: str,
+        tools: object,
         parent_metadata: Mapping[str, object],
     ) -> "_JudgeVerdict | _CallFailure":
-        """Blind pairwise judge with A/B labels randomized to cancel position bias."""
+        """Blind pairwise judge with A/B labels randomized to cancel position bias. Both
+        arms were offered the same tools, so the judge is shown their definitions too: a
+        tool call is only assessable against what else was available to call instead."""
         real_is_a: Final = random.random() < 0.5
         response_a: Final = real_text if real_is_a else shadow_text
         response_b: Final = shadow_text if real_is_a else real_text
@@ -1026,7 +1258,7 @@ class ShadowEvalLogger(CustomLogger):
             {"role": "system", "content": PAIRWISE_JUDGE_SYSTEM_PROMPT},  # mutable-ok: SDK message
             {
                 "role": "user",
-                "content": _judge_user_prompt(conversation, response_a, response_b),
+                "content": _judge_user_prompt(conversation, response_a, response_b, _tool_definitions_text(tools)),
             },  # mutable-ok: SDK message
         ]
         try:
@@ -1048,7 +1280,9 @@ class ShadowEvalLogger(CustomLogger):
             verdict: Final = PairwiseVerdict.model_validate(parse_json_verdict(raw))
         except Exception as e:  # noqa: BLE001  # malformed verdicts become error rows
             verbose_logger.debug("shadow_eval: unparseable judge verdict: %s", e)
-            return _CallFailure(f"unparseable judge verdict: {e}", cost=_call_cost(response))
+            return _CallFailure(
+                f"unparseable judge verdict: {e}; {_judge_reply_shape(response)}", cost=_call_cost(response)
+            )
         return _JudgeVerdict(
             preference=_unmask_preference(verdict.preference, real_is_a),
             confidence=max(0.0, min(1.0, verdict.confidence)),
@@ -1056,7 +1290,7 @@ class ShadowEvalLogger(CustomLogger):
         )
 
 
-_EMPTY_JOBS: Final[Mapping[str, tuple[ActiveShadowEvalJob, ...]]] = MappingProxyType({})
+_EMPTY_JOBS: Final[Mapping[tuple[str, str], tuple[ActiveShadowEvalJob, ...]]] = MappingProxyType({})
 
 
 def _default_prisma_provider() -> "PrismaClient | None":

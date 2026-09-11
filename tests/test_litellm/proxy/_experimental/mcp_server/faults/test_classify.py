@@ -1,6 +1,9 @@
 """Classification matrix for upstream OAuth/DCR rejections: who is blamed depends only on the §5.2
 code and whose credentials the gateway presented, never on the upstream's HTTP status."""
 
+from typing import Final
+
+import pytest
 import httpx
 
 from litellm.proxy._experimental.mcp_server.faults.classify import (
@@ -12,6 +15,7 @@ from litellm.proxy._experimental.mcp_server.faults.types import (
     GatewayRejected,
     UpstreamProtocolFault,
     UpstreamReportedFault,
+    UpstreamRegistrationRefused,
 )
 
 
@@ -145,3 +149,28 @@ def test_dcr_server_error_code_is_not_blamed_on_caller():
         log_context="srv",
     )
     assert isinstance(fault, UpstreamReportedFault)
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+@pytest.mark.parametrize("body", ["Forbidden", '<html>private upstream details</html>', '{"error": ""}', '{"error": 12}'])
+def test_dcr_access_refusal_without_oauth_error(status_code: int, body: str) -> None:
+    fault: Final = classify_upstream_dcr_rejection(_response(status_code, text_body=body), log_context="srv")
+    assert isinstance(fault, UpstreamRegistrationRefused)
+    assert fault.status_code == status_code
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_dcr_access_refusal_preserves_oauth_error(status_code: int) -> None:
+    fault: Final = classify_upstream_dcr_rejection(
+        _response(status_code, json_body={"error": "invalid_redirect_uri", "error_description": "not allowed"}),
+        log_context="srv",
+    )
+    assert fault == CallerRejected(code="invalid_redirect_uri", description="not allowed")
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_token_access_refusal_remains_protocol_fault(status_code: int) -> None:
+    fault: Final = classify_upstream_token_rejection(
+        _response(status_code, text_body="Forbidden"), credential_source="gateway_stored", log_context="srv"
+    )
+    assert isinstance(fault, UpstreamProtocolFault)

@@ -30,6 +30,8 @@ pub(crate) const CHAT_COMPLETIONS_TIMEOUT_SECS: u64 = 600;
 /// Connect timeout for chat completions provider calls, in seconds.
 pub(crate) const CHAT_COMPLETIONS_CONNECT_TIMEOUT_SECS: u64 = 10;
 
+pub(crate) const AUDIO_TRANSCRIPTION_TIMEOUT_SECS: u64 = 600;
+
 /// `object` field every non-streaming chat completion response carries.
 pub const CHAT_COMPLETION_OBJECT: &str = "chat.completion";
 
@@ -39,3 +41,15 @@ pub const CHAT_COMPLETION_OBJECT: &str = "chat.completion";
 /// `litellm/litellm_core_utils/prompt_templates/factory.py`.
 pub const EMPTY_TEXT_PLACEHOLDER: &str =
     "[System: Empty message content sanitised to satisfy protocol]";
+
+pub const FUNCTION_TRACE_TARGET: &str = "litellm::function_trace";
+
+pub(crate) const MEDIA_CONNECT_TIMEOUT_SECS: u64 = 10;
+
+pub(crate) const OCR_HTTP_TIMEOUT_SECS: u64 = 600;
+pub(crate) const OCR_CONNECT_TIMEOUT_SECS: u64 = 10;
+pub(crate) const OCR_INLINE_MAX_BYTES: usize = 50 * 1024 * 1024;
+pub(crate) const OCR_DOWNLOAD_MAX_BYTES: u64 = 50 * 1024 * 1024;
+pub(crate) const OCR_MAX_FETCH_REDIRECTS: usize = 10;
+pub(crate) const AZURE_AI_OCR_PATH: &str = "/providers/mistral/azure/ocr";
+pub(crate) const MISTRAL_OCR_API_BASE: &str = "https://api.mistral.ai/v1";
