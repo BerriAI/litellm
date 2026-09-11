@@ -6854,6 +6854,45 @@ async def test_ui_view_spend_logs_group_by_session_page_past_count_cap_is_empty(
 
 
 @pytest.mark.asyncio
+async def test_ui_view_spend_logs_group_by_session_last_page_stops_at_the_capped_total(client, monkeypatch):
+    """A page size that does not divide the cap still ends the last page at the capped total it reports."""
+    cap = spend_management_endpoints.SPEND_LOGS_PAGINATION_COUNT_CAP
+    sessions = tuple((f"sess-{index:06d}", "2026-08-29 10:00:00") for index in range(cap + 50))
+    mock_prisma = _session_grouped_paginating_prisma(sessions)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "group_by_session": "true",
+                "page": cap // 7 + 1,
+                "page_size": 7,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["total"] == cap
+        assert [row["request_id"] for row in data["data"]] == [
+            f"req-sess-{index:06d}" for index in range(cap - cap % 7, cap)
+        ]
+        assert data["has_more"] is True
+        assert data["next_session_cursor"] is not None
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
 async def test_ui_view_spend_logs_group_by_session_offset_for_non_starttime_sort(
     client, monkeypatch
 ):
