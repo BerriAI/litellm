@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use crate::error::{Error, json_type_name};
 use crate::ocr::transformation::{OcrAuthStrategy, OcrProviderConfig, OcrResponseHandling};
-use crate::ocr::types::{OcrRequestData, OcrResponseData};
+use crate::ocr::types::{LiteLLMOcrResponse, OcrRequestData};
 use serde_json::{Map, Value, json};
 
 use crate::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
@@ -125,12 +125,7 @@ pub fn validate_azure_ai_environment(
     }
     non_empty(azure_ad_token)
         .map(|token| prepend_auth_header(headers, "Authorization", format!("Bearer {token}")))
-        .ok_or_else(|| {
-            Error::Auth(
-                "Missing Azure AI credentials - set AZURE_AI_API_KEY or provide azure_ad_token"
-                    .to_string(),
-            )
-        })
+        .ok_or(Error::MissingAzureAiCredentialsOrAdToken)
 }
 
 pub fn validate_document_intelligence_environment(
@@ -440,7 +435,7 @@ fn transform_document_intelligence_response(
     model: &str,
     response_json: Value,
     preserve_native_response: bool,
-) -> Result<OcrResponseData, Error> {
+) -> Result<LiteLLMOcrResponse, Error> {
     let response = response_json
         .as_object()
         .ok_or_else(|| Error::InvalidType {
@@ -488,7 +483,7 @@ fn transform_document_intelligence_response(
         })
         .collect();
 
-    Ok(OcrResponseData {
+    Ok(LiteLLMOcrResponse {
         usage_info: Some(json!({
             "pages_processed": pages.len(),
             "doc_size_bytes": null,
@@ -521,7 +516,7 @@ impl OcrProviderConfig for AzureAiOcrConfig {
         &self,
         model: &str,
         response_json: Value,
-    ) -> Result<OcrResponseData, Error> {
+    ) -> Result<LiteLLMOcrResponse, Error> {
         MISTRAL_OCR_CONFIG.transform_ocr_response(model, response_json)
     }
 
@@ -599,7 +594,7 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
         &self,
         model: &str,
         response_json: Value,
-    ) -> Result<OcrResponseData, Error> {
+    ) -> Result<LiteLLMOcrResponse, Error> {
         transform_document_intelligence_response(model, response_json, false)
     }
 
@@ -608,7 +603,7 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
         model: &str,
         response_json: Value,
         optional_params: &Map<String, Value>,
-    ) -> Result<OcrResponseData, Error> {
+    ) -> Result<LiteLLMOcrResponse, Error> {
         transform_document_intelligence_response(
             model,
             response_json,
@@ -718,7 +713,7 @@ mod tests {
         })
     }
 
-    fn assert_native_fields_preserved(response: &OcrResponseData, operation: &Value) {
+    fn assert_native_fields_preserved(response: &LiteLLMOcrResponse, operation: &Value) {
         let analyze_result = &operation["analyzeResult"];
 
         assert_eq!(response.extra_fields["content"], analyze_result["content"]);

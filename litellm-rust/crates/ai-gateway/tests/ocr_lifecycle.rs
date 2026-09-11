@@ -11,9 +11,13 @@ use litellm_ai_gateway::integrations::custom_logger::{
 use litellm_ai_gateway::integrations::types::RequestMetadata;
 use litellm_ai_gateway::ocr::{OcrRequest, ocr};
 use litellm_core::error::Error;
+#[cfg(feature = "trace-parity")]
+use litellm_core::observability::FunctionTrace;
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+#[cfg(feature = "trace-parity")]
+use tracing::instrument::WithSubscriber;
 
 async fn read_http_headers(socket: &mut TcpStream) -> String {
     let mut request = Vec::new();
@@ -233,6 +237,57 @@ fn base_ocr_request(model: &str) -> OcrRequest<'_> {
 }
 
 #[tokio::test]
+async fn azure_mistral_uses_prepared_authorization_through_gateway() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let api_base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_http_request(&mut socket).await;
+        let body = br#"{"pages":[]}"#;
+        socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        socket.write_all(body).await.unwrap();
+        request
+    });
+    let request = OcrRequest {
+        model: "mistral-ocr-2505",
+        document: json!({
+            "type":"document_url",
+            "document_url":"data:application/pdf;base64,YWJj"
+        }),
+        api_key: None,
+        api_base: Some(&api_base),
+        custom_llm_provider: Some("azure_ai"),
+        extra_headers: Some(Map::from_iter([(
+            "Authorization".into(),
+            json!("Bearer python-prepared-token"),
+        )])),
+        optional_params: Map::new(),
+        timeout: None,
+        callbacks: Vec::new(),
+        guardrails: Vec::new(),
+        request_metadata: RequestMetadata::default(),
+        litellm_call_id: None,
+    };
+
+    ocr(request).await.unwrap();
+    let sent = server.await.unwrap();
+    assert!(sent.starts_with("POST /providers/mistral/azure/ocr "));
+    assert!(
+        sent.to_ascii_lowercase()
+            .contains("authorization: bearer python-prepared-token\r\n")
+    );
+}
+
+#[tokio::test]
 async fn reducto_during_call_guardrail_blocks_before_upload() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -320,14 +375,17 @@ async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
         GuardrailEventHook::PreCall,
         GuardrailEventHook::DuringCall,
     ]));
-    let response = ocr(OcrRequest {
+    #[cfg(feature = "trace-parity")]
+    let trace = FunctionTrace::default();
+    let api_base = format!("http://{addr}");
+    let call = ocr(OcrRequest {
         model: "mistral-ocr-latest",
         document: json!({
             "type": "document_url",
             "document_url": "https://example.com/doc.pdf"
         }),
         api_key: Some("sk-test"),
-        api_base: Some(&format!("http://{addr}")),
+        api_base: Some(&api_base),
         custom_llm_provider: Some("mistral"),
         extra_headers: None,
         optional_params: Map::new(),
@@ -339,9 +397,10 @@ async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
             ..Default::default()
         },
         litellm_call_id: Some("ocr-call-1"),
-    })
-    .await
-    .expect("ocr request succeeds");
+    });
+    #[cfg(feature = "trace-parity")]
+    let call = call.with_subscriber(trace.dispatcher());
+    let response = call.await.expect("ocr request succeeds");
 
     assert_eq!(response["pages"][0]["markdown"], "ok");
     assert_eq!(
@@ -358,6 +417,16 @@ async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
             response_object: Some("ocr".to_string()),
             error_kind: None,
         }]
+    );
+    #[cfg(feature = "trace-parity")]
+    assert_eq!(
+        trace
+            .events()
+            .iter()
+            .filter(|event| event.function.ends_with("_callback"))
+            .map(|event| event.function)
+            .collect::<Vec<_>>(),
+        vec!["success_callback"]
     );
 
     let request = server.await.expect("server task completes");
@@ -388,14 +457,17 @@ async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
     });
 
     let logger = Arc::new(RecordingOcrLogger::default());
-    let err = ocr(OcrRequest {
+    #[cfg(feature = "trace-parity")]
+    let trace = FunctionTrace::default();
+    let api_base = format!("http://{addr}");
+    let call = ocr(OcrRequest {
         model: "mistral-ocr-latest",
         document: json!({
             "type": "document_url",
             "document_url": "https://example.com/doc.pdf"
         }),
         api_key: Some("sk-test"),
-        api_base: Some(&format!("http://{addr}")),
+        api_base: Some(&api_base),
         custom_llm_provider: Some("mistral"),
         extra_headers: None,
         optional_params: Map::new(),
@@ -404,9 +476,10 @@ async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
         guardrails: Vec::new(),
         request_metadata: RequestMetadata::default(),
         litellm_call_id: Some("ocr-call-2"),
-    })
-    .await
-    .expect_err("provider error propagates");
+    });
+    #[cfg(feature = "trace-parity")]
+    let call = call.with_subscriber(trace.dispatcher());
+    let err = call.await.expect_err("provider error propagates");
 
     assert!(matches!(err, Error::Http { status: 500, .. }));
     server.await.expect("server task completes");
@@ -420,6 +493,16 @@ async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
             response_object: Some("error".to_string()),
             error_kind: Some("HttpError".to_string()),
         }]
+    );
+    #[cfg(feature = "trace-parity")]
+    assert_eq!(
+        trace
+            .events()
+            .iter()
+            .filter(|event| event.function.ends_with("_callback"))
+            .map(|event| event.function)
+            .collect::<Vec<_>>(),
+        vec!["failure_callback"]
     );
 }
 

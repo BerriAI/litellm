@@ -3,10 +3,11 @@
 
 """Capability forecast contract and routing policy adapted from NVIDIA NeMo Switchyard."""
 
+import json
 from collections.abc import Mapping
 from sys import float_info
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal, NamedTuple, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, StrictFloat, TypeAdapter, model_validator
 
@@ -141,6 +142,16 @@ class CapabilityClassifierVerdict(BaseModel):
         return self.p_solve >= threshold or abs(threshold - self.p_solve) <= float_info.epsilon
 
 
+class CapabilityClassifierForecast(NamedTuple):
+    verdict: CapabilityClassifierVerdict
+    threshold: float
+    p_solve: float
+    calibration_version: str | None
+
+    def meets_routing_threshold(self) -> bool:
+        return self.p_solve >= self.threshold or abs(self.threshold - self.p_solve) <= float_info.epsilon
+
+
 _CAPABILITY_CLASSIFIER_RESPONSE_FORMAT_JSON: Final = """{
   "type": "json_schema",
   "json_schema": {
@@ -169,9 +180,26 @@ _CAPABILITY_CLASSIFIER_RESPONSE_FORMAT_JSON: Final = """{
 _RESPONSE_FORMAT_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
-def capability_classifier_response_format() -> Mapping[str, object]:
+def capability_classifier_response_format(
+    mode: Literal["json_schema", "json_object"] = "json_schema",
+) -> Mapping[str, object]:
     """Fresh copy of Switchyard's packaged strict JSON Schema wrapper."""
-    return _RESPONSE_FORMAT_ADAPTER.validate_json(_CAPABILITY_CLASSIFIER_RESPONSE_FORMAT_JSON)
+    return (
+        {"type": "json_object"}
+        if mode == "json_object"
+        else _RESPONSE_FORMAT_ADAPTER.validate_json(_CAPABILITY_CLASSIFIER_RESPONSE_FORMAT_JSON)
+    )
+
+
+def capability_classifier_system_prompt(mode: Literal["json_schema", "json_object"]) -> str:
+    if mode == "json_schema":
+        return CAPABILITY_CLASSIFIER_SYSTEM_PROMPT
+    wrapper: Final = _RESPONSE_FORMAT_ADAPTER.validate_python(capability_classifier_response_format()["json_schema"])
+    return (
+        CAPABILITY_CLASSIFIER_SYSTEM_PROMPT
+        + "\n\nReturn exactly one JSON object matching this JSON Schema:\n"
+        + json.dumps(wrapper["schema"], indent=2, sort_keys=True)
+    )
 
 
 def parse_capability_classifier_verdict(content: str) -> CapabilityClassifierVerdict:
