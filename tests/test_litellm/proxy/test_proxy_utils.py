@@ -1,5 +1,6 @@
 import datetime as real_datetime
 import smtplib
+from typing import Final
 
 import pytest
 from fastapi import HTTPException
@@ -8,7 +9,7 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 
 
@@ -2207,3 +2208,49 @@ async def test_post_call_failure_hook_redacts_traceback_before_callbacks(monkeyp
     assert recorder.received_traceback is not None
     assert provider_key not in recorder.received_traceback
     assert "REDACTED" in recorder.received_traceback
+
+
+class TestPrismaClientTokenAuthBehindThePool:
+    """Behind the in-container pool the supervisor renews the writer's database
+    token and hands the workers a loopback URL with a static password, so the
+    writer wrapper must not run its own refresh loop. The reader is not pooled
+    and keeps refreshing its own token."""
+
+    UPSTREAM: Final = "postgresql://litellm:TOKEN@db.internal:5432/litellm"
+    READER: Final = "postgresql://litellm:TOKEN@reader.internal:5432/litellm"
+
+    def _client(self, monkeypatch: pytest.MonkeyPatch, pooled: bool) -> PrismaClient:
+        from litellm.proxy.db.pgbouncer import PGBOUNCER_POOLED_ENV_VAR
+
+        monkeypatch.delenv("AZURE_POSTGRESQL_AUTH", raising=False)
+        monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "true")
+        monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+        monkeypatch.setenv("DATABASE_URL", self.UPSTREAM)
+        monkeypatch.setenv("DATABASE_URL_READ_REPLICA", self.READER)
+        if pooled:
+            monkeypatch.setenv(PGBOUNCER_POOLED_ENV_VAR, "true")
+        else:
+            monkeypatch.delenv(PGBOUNCER_POOLED_ENV_VAR, raising=False)
+        rds: Final = MagicMock()
+        rds.generate_db_auth_token.return_value = "TOKEN"
+        with patch("boto3.client", return_value=rds):
+            return PrismaClient(database_url=self.UPSTREAM, proxy_logging_obj=MagicMock(spec=ProxyLogging))
+
+    def test_a_pooled_writer_leaves_token_refresh_to_the_pooler_while_the_reader_keeps_its_own(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+        client = self._client(monkeypatch, pooled=True)
+        assert isinstance(client.db, RoutingPrismaWrapper)
+        assert client.db.writer.iam_token_db_auth is False
+        assert client.db.reader.iam_token_db_auth is True
+        assert client.token_auth is not None
+
+    def test_an_unpooled_writer_still_refreshes_its_own_token(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+        client = self._client(monkeypatch, pooled=False)
+        assert isinstance(client.db, RoutingPrismaWrapper)
+        assert client.db.writer.iam_token_db_auth is True
+        assert client.db.reader.iam_token_db_auth is True

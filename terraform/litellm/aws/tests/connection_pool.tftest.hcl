@@ -88,16 +88,20 @@ run "gateway_starts_through_the_pool_aware_launcher" {
   }
 }
 
-run "pool_with_module_created_iam_aurora_fails_at_plan" {
+run "pool_with_module_created_iam_aurora_plans_with_both_the_pool_and_iam_auth" {
   command = plan
 
   variables {
     gateway_connection_pool_enabled = true
   }
 
-  expect_failures = [
-    aws_ecs_task_definition.gateway,
-  ]
+  assert {
+    condition = alltrue([
+      length(local.gateway_pool_env) == 3,
+      contains(local.managed_db_env, { name = "IAM_TOKEN_DB_AUTH", value = "true" }),
+    ])
+    error_message = "With the module-created Aurora the gateway must get the pool env alongside IAM token auth."
+  }
 }
 
 run "pool_without_any_database_fails_at_plan" {
