@@ -1226,6 +1226,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         for chunk in all_chunks:
             yield chunk
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
