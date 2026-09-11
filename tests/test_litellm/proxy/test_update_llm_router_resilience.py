@@ -1,3 +1,5 @@
+# pyright: reportOptionalMemberAccess=false
+# pyright: reportUnnecessaryIsInstance=false
 """
 Test that _update_llm_router and _delete_deployment are resilient to
 config loading failures (e.g. database timeouts).
