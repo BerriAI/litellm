@@ -991,7 +991,9 @@ class TestAgent365AuthorizationServers:
             api_key="sk-guarded", user_id="u-2", metadata={"guardrails": ["agent-365-guard"]}
         )
         try:
-            with patch("litellm.proxy.proxy_server.premium_user", True):
+            with patch(  # test-quality-ok: key-selected guardrails read the proxy server premium global, no injection seam
+                "litellm.proxy.proxy_server.premium_user", True
+            ):
                 assert agent_365_authorization_servers(server, plain_key) == ()
                 assert agent_365_authorization_servers(server, guarded_key) == (ENTRA_ISSUER,)
                 assert agent_365_authorization_servers(server, None) == (ENTRA_ISSUER,)
