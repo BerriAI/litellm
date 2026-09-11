@@ -10834,7 +10834,7 @@ async def model_info(
         fallback_type=None,
         llm_router=llm_router,
     )
-    return {**response, "id": internal_to_public.get(resolved_model_id, model_id)}
+    return {**response, "id": internal_to_public.get(resolved_model_id, model_id)}  # mutable-ok: response id differs
 
 
 def _blocked_response_usage(original_response: object | None) -> "litellm.Usage":
