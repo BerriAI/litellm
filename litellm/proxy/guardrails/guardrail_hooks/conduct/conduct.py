@@ -38,7 +38,7 @@ try:
     from conduct_litellm_guard.guardrail import (
         ConductGuardBlocked as ConductGuardrailBlocked,
     )
-    from conduct_litellm_guard.guardrail import GuardDecision  # noqa: F401 — re-exported
+    from conduct_litellm_guard.guardrail import GuardDecision
 
     _IMPORT_ERROR: ImportError | None = None
 except ImportError as _e:
