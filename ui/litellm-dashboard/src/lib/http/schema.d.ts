@@ -2110,12 +2110,17 @@ export interface paths {
          *     - claude plugin marketplace add <url>
          *     - claude plugin install <name>@<marketplace>
          *
+         *     Without `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`
+         *     the key is authenticated and the catalog also holds the disabled plugins granted
+         *     to it through `object_permission.skills` on the key or its team.
+         *
          *     Returns:
          *         Marketplace catalog with list of available plugins and their git sources.
          *
          *     Example:
          *         ```bash
          *         claude plugin marketplace add http://localhost:4000/claude-code/marketplace.json
+         *         claude plugin marketplace add "http://localhost:4000/claude-code/marketplace.json?key=sk-..."
          *         claude plugin install my-plugin@litellm
          *         ```
          */
@@ -2152,8 +2157,8 @@ export interface paths {
          * @description Register a new plugin in the LiteLLM marketplace.
          *
          *     LiteLLM acts as a registry/discovery layer. Plugins are hosted on
-         *     GitHub/GitLab/Bitbucket. Claude Code will clone from the git source
-         *     when users install.
+         *     GitHub/GitLab/Bitbucket or as a zip archive on any https host (e.g. S3).
+         *     Claude Code clones the git source or downloads the archive when users install.
          *
          *     This endpoint is create-only and never overwrites. If a plugin with
          *     the same name already exists it returns 409 Conflict; use
@@ -2163,7 +2168,7 @@ export interface paths {
          *
          *     Parameters:
          *         - name: Plugin name (kebab-case)
-         *         - source: Git source reference (github, url, or git-subdir format)
+         *         - source: Plugin source reference (github, url, git-subdir, or archive format)
          *         - version: Semantic version (optional)
          *         - description: Plugin description (optional)
          *         - author: Author information (optional)
@@ -2229,7 +2234,7 @@ export interface paths {
          *
          *     Parameters:
          *         - plugin_name: Name of the plugin to update (path parameter)
-         *         - source: Git source reference (github, url, or git-subdir format)
+         *         - source: Plugin source reference (github, url, git-subdir, or archive format)
          *         - version: Semantic version (optional)
          *         - description: Plugin description (optional)
          *         - author: Author information (optional)
@@ -9542,26 +9547,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/openai/": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * WebSocket: openai_websocket_proxy_route
-         * @description WebSocket connection endpoint
-         */
-        get: operations["websocket_openai_websocket_proxy_route_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/openai/deployments/{model}/chat/completions": {
         parameters: {
             query?: never;
@@ -10117,26 +10102,6 @@ export interface paths {
         patch: operations["openai_proxy_route_openai__endpoint__patch"];
         trace?: never;
     };
-    "/openai_passthrough/": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * WebSocket: openai_websocket_proxy_route
-         * @description WebSocket connection endpoint
-         */
-        get: operations["websocket_openai_websocket_proxy_route_get_2"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/openai_passthrough/{endpoint}": {
         parameters: {
             query?: never;
@@ -10145,132 +10110,72 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Openai Proxy Route
-         * @description Pass-through endpoint for OpenAI API calls.
-         *
-         *     Available on both routes:
-         *     - /openai/{endpoint:path} - Standard OpenAI passthrough route
-         *     - /openai_passthrough/{endpoint:path} - Dedicated passthrough route (recommended for Responses API)
-         *
-         *     Use /openai_passthrough/* when you need guaranteed passthrough to OpenAI without conflicts
-         *     with LiteLLM's native implementations (e.g., for the Responses API at /v1/responses).
+         * Openai Passthrough Route
+         * @description Dedicated pass-through to the OpenAI API with no overlap with LiteLLM's native
+         *     implementations (e.g. the Responses API at /v1/responses).
          *
          *     Examples:
-         *         Standard route:
-         *         - /openai/v1/chat/completions
-         *         - /openai/v1/assistants
-         *         - /openai/v1/threads
-         *
-         *         Dedicated passthrough (for Responses API):
          *         - /openai_passthrough/v1/responses
          *         - /openai_passthrough/v1/responses/{response_id}
          *         - /openai_passthrough/v1/responses/{response_id}/input_items
          *
          *     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
          */
-        get: operations["openai_proxy_route_openai_passthrough__endpoint__get"];
+        get: operations["openai_passthrough_route_openai_passthrough__endpoint__get"];
         /**
-         * Openai Proxy Route
-         * @description Pass-through endpoint for OpenAI API calls.
-         *
-         *     Available on both routes:
-         *     - /openai/{endpoint:path} - Standard OpenAI passthrough route
-         *     - /openai_passthrough/{endpoint:path} - Dedicated passthrough route (recommended for Responses API)
-         *
-         *     Use /openai_passthrough/* when you need guaranteed passthrough to OpenAI without conflicts
-         *     with LiteLLM's native implementations (e.g., for the Responses API at /v1/responses).
+         * Openai Passthrough Route
+         * @description Dedicated pass-through to the OpenAI API with no overlap with LiteLLM's native
+         *     implementations (e.g. the Responses API at /v1/responses).
          *
          *     Examples:
-         *         Standard route:
-         *         - /openai/v1/chat/completions
-         *         - /openai/v1/assistants
-         *         - /openai/v1/threads
-         *
-         *         Dedicated passthrough (for Responses API):
          *         - /openai_passthrough/v1/responses
          *         - /openai_passthrough/v1/responses/{response_id}
          *         - /openai_passthrough/v1/responses/{response_id}/input_items
          *
          *     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
          */
-        put: operations["openai_proxy_route_openai_passthrough__endpoint__put"];
+        put: operations["openai_passthrough_route_openai_passthrough__endpoint__put"];
         /**
-         * Openai Proxy Route
-         * @description Pass-through endpoint for OpenAI API calls.
-         *
-         *     Available on both routes:
-         *     - /openai/{endpoint:path} - Standard OpenAI passthrough route
-         *     - /openai_passthrough/{endpoint:path} - Dedicated passthrough route (recommended for Responses API)
-         *
-         *     Use /openai_passthrough/* when you need guaranteed passthrough to OpenAI without conflicts
-         *     with LiteLLM's native implementations (e.g., for the Responses API at /v1/responses).
+         * Openai Passthrough Route
+         * @description Dedicated pass-through to the OpenAI API with no overlap with LiteLLM's native
+         *     implementations (e.g. the Responses API at /v1/responses).
          *
          *     Examples:
-         *         Standard route:
-         *         - /openai/v1/chat/completions
-         *         - /openai/v1/assistants
-         *         - /openai/v1/threads
-         *
-         *         Dedicated passthrough (for Responses API):
          *         - /openai_passthrough/v1/responses
          *         - /openai_passthrough/v1/responses/{response_id}
          *         - /openai_passthrough/v1/responses/{response_id}/input_items
          *
          *     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
          */
-        post: operations["openai_proxy_route_openai_passthrough__endpoint__post"];
+        post: operations["openai_passthrough_route_openai_passthrough__endpoint__post"];
         /**
-         * Openai Proxy Route
-         * @description Pass-through endpoint for OpenAI API calls.
-         *
-         *     Available on both routes:
-         *     - /openai/{endpoint:path} - Standard OpenAI passthrough route
-         *     - /openai_passthrough/{endpoint:path} - Dedicated passthrough route (recommended for Responses API)
-         *
-         *     Use /openai_passthrough/* when you need guaranteed passthrough to OpenAI without conflicts
-         *     with LiteLLM's native implementations (e.g., for the Responses API at /v1/responses).
+         * Openai Passthrough Route
+         * @description Dedicated pass-through to the OpenAI API with no overlap with LiteLLM's native
+         *     implementations (e.g. the Responses API at /v1/responses).
          *
          *     Examples:
-         *         Standard route:
-         *         - /openai/v1/chat/completions
-         *         - /openai/v1/assistants
-         *         - /openai/v1/threads
-         *
-         *         Dedicated passthrough (for Responses API):
          *         - /openai_passthrough/v1/responses
          *         - /openai_passthrough/v1/responses/{response_id}
          *         - /openai_passthrough/v1/responses/{response_id}/input_items
          *
          *     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
          */
-        delete: operations["openai_proxy_route_openai_passthrough__endpoint__delete"];
+        delete: operations["openai_passthrough_route_openai_passthrough__endpoint__delete"];
         options?: never;
         head?: never;
         /**
-         * Openai Proxy Route
-         * @description Pass-through endpoint for OpenAI API calls.
-         *
-         *     Available on both routes:
-         *     - /openai/{endpoint:path} - Standard OpenAI passthrough route
-         *     - /openai_passthrough/{endpoint:path} - Dedicated passthrough route (recommended for Responses API)
-         *
-         *     Use /openai_passthrough/* when you need guaranteed passthrough to OpenAI without conflicts
-         *     with LiteLLM's native implementations (e.g., for the Responses API at /v1/responses).
+         * Openai Passthrough Route
+         * @description Dedicated pass-through to the OpenAI API with no overlap with LiteLLM's native
+         *     implementations (e.g. the Responses API at /v1/responses).
          *
          *     Examples:
-         *         Standard route:
-         *         - /openai/v1/chat/completions
-         *         - /openai/v1/assistants
-         *         - /openai/v1/threads
-         *
-         *         Dedicated passthrough (for Responses API):
          *         - /openai_passthrough/v1/responses
          *         - /openai_passthrough/v1/responses/{response_id}
          *         - /openai_passthrough/v1/responses/{response_id}/input_items
          *
          *     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
          */
-        patch: operations["openai_proxy_route_openai_passthrough__endpoint__patch"];
+        patch: operations["openai_passthrough_route_openai_passthrough__endpoint__patch"];
         trace?: never;
     };
     "/organization/daily/activity": {
@@ -21886,52 +21791,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/vertex-ai/{endpoint}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Vertex Proxy Route
-         * @description Call LiteLLM proxy via Vertex AI SDK.
-         *
-         *     [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
-         */
-        get: operations["vertex_proxy_route_vertex_ai__endpoint__get_2"];
-        /**
-         * Vertex Proxy Route
-         * @description Call LiteLLM proxy via Vertex AI SDK.
-         *
-         *     [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
-         */
-        put: operations["vertex_proxy_route_vertex_ai__endpoint__put_2"];
-        /**
-         * Vertex Proxy Route
-         * @description Call LiteLLM proxy via Vertex AI SDK.
-         *
-         *     [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
-         */
-        post: operations["vertex_proxy_route_vertex_ai__endpoint__post_2"];
-        /**
-         * Vertex Proxy Route
-         * @description Call LiteLLM proxy via Vertex AI SDK.
-         *
-         *     [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
-         */
-        delete: operations["vertex_proxy_route_vertex_ai__endpoint__delete_2"];
-        options?: never;
-        head?: never;
-        /**
-         * Vertex Proxy Route
-         * @description Call LiteLLM proxy via Vertex AI SDK.
-         *
-         *     [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
-         */
-        patch: operations["vertex_proxy_route_vertex_ai__endpoint__patch_2"];
-        trace?: never;
-    };
     "/vertex_ai/discovery/{endpoint}": {
         parameters: {
             query?: never;
@@ -23712,6 +23571,15 @@ export interface components {
             routed_model_configured: boolean;
             /** @description The decision record this request would have written to its log row */
             routing_decision: components["schemas"]["StandardLoggingRoutingDecision"];
+        };
+        /** AwsSessionTag */
+        AwsSessionTag: {
+            /** Key */
+            Key: string;
+            /** Value */
+            Value: string;
+        } & {
+            [key: string]: unknown;
         };
         /** BaseLitellmParams */
         BaseLitellmParams: {
@@ -25762,6 +25630,11 @@ export interface components {
              */
             allow_cli_sso_verification_uri_complete?: boolean | null;
             /**
+             * Allow Unmanaged Response Ids
+             * @description If True, lets keys address Responses API ids that this proxy did not issue (raw provider ids, or ids issued before response-id encryption was configured). Such an id carries no owner, so no ownership check can run on it; ids this proxy did issue keep full ownership enforcement. Off by default, in which case an unrecognized response id is rejected with 403
+             */
+            allow_unmanaged_response_ids?: boolean | null;
+            /**
              * Allowed Routes
              * @description Proxy API Endpoints you want users to be able to access
              */
@@ -25880,6 +25753,11 @@ export interface components {
              * @description If True and SSO is configured (MICROSOFT_CLIENT_ID, GOOGLE_CLIENT_ID, GENERIC_CLIENT_ID, or SAML_IDP_METADATA_URL/XML), disables username/password login on /login, /v2/login, and /v3/login so SSO is the only way to reach the Admin UI. An admin locked out of the UI can still administer the proxy over the API with the master key; unset this setting and restart the proxy to restore UI username/password login. Default is False.
              */
             disable_password_login_when_sso_enabled?: boolean | null;
+            /**
+             * Disable Responses Id Security
+             * @description If True, disables ownership enforcement on Responses API ids. Keys may then retrieve, cancel, delete, and chain from any response id, including ids belonging to another user or team and ids this proxy never issued. WARNING: this removes tenant isolation on /v1/responses
+             */
+            disable_responses_id_security?: boolean | null;
             /**
              * Enable Openai Websocket Passthrough
              * @description Serve the OpenAI pass-through WebSocket route, which relays frames to OpenAI under the proxy's own provider credential without reading them. Off by default.
@@ -26139,6 +26017,11 @@ export interface components {
              * @description If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.
              */
             use_spend_logs_partitioning?: boolean | null;
+            /**
+             * User Api Key Cache Max Size
+             * @description max number of entries (virtual keys, teams, users, end users, memberships, ...) each worker keeps in its in-memory auth cache. Defaults to 200. Raise this if you have more active keys than that or auth lookups keep hitting the DB
+             */
+            user_api_key_cache_max_size?: number | null;
             /** User Header Mappings */
             user_header_mappings?: components["schemas"]["UserHeaderMapping"][] | null;
             /**
@@ -26357,6 +26240,31 @@ export interface components {
          *     independently of the response-cache backend in `litellm_settings.cache_params`.
          */
         CoordinationRedisParams: {
+            /**
+             * Aws Iam Auth
+             * @description enable AWS ElastiCache IAM authentication
+             */
+            aws_iam_auth?: boolean | string | null;
+            /**
+             * Aws Iam Cache Name
+             * @description AWS ElastiCache cache name
+             */
+            aws_iam_cache_name?: string | null;
+            /**
+             * Aws Iam Region
+             * @description AWS region for ElastiCache IAM authentication
+             */
+            aws_iam_region?: string | null;
+            /**
+             * Aws Iam Serverless
+             * @description the ElastiCache cache is serverless rather than a self-designed cluster
+             */
+            aws_iam_serverless?: boolean | string | null;
+            /**
+             * Aws Iam User Name
+             * @description AWS ElastiCache IAM user name
+             */
+            aws_iam_user_name?: string | null;
             /**
              * Host
              * @description Redis hostname
@@ -29324,6 +29232,8 @@ export interface components {
             models?: string[] | null;
             /** Search Tools */
             search_tools?: string[] | null;
+            /** Skills */
+            skills?: string[] | null;
             /** Vector Stores */
             vector_stores?: string[] | null;
         };
@@ -29377,6 +29287,8 @@ export interface components {
              * @default []
              */
             search_tools: string[] | null;
+            /** Skills */
+            skills?: string[] | null;
             /**
              * Vector Stores
              * @default []
@@ -29538,6 +29450,8 @@ export interface components {
             aws_secret_access_key?: string | null;
             /** Aws Session Name */
             aws_session_name?: string | null;
+            /** Aws Session Tags */
+            aws_session_tags?: components["schemas"]["AwsSessionTag"][] | null;
             /** Aws Session Token */
             aws_session_token?: string | null;
             /** Aws Sts Endpoint */
@@ -33627,7 +33541,7 @@ export interface components {
             name: string;
             /**
              * Source
-             * @description Git source reference
+             * @description Plugin source reference
              */
             source: {
                 [key: string]: string;
@@ -34876,7 +34790,7 @@ export interface components {
          * @description Request body for registering a plugin in the marketplace.
          *
          *     LiteLLM acts as a registry/discovery layer. Plugins are hosted on
-         *     GitHub/GitLab/Bitbucket and referenced by their git source.
+         *     GitHub/GitLab/Bitbucket or as a zip archive on any https host and referenced by their source.
          */
         RegisterPluginRequest: {
             /** @description Plugin author */
@@ -34918,10 +34832,11 @@ export interface components {
             namespace?: string | null;
             /**
              * Source
-             * @description Git source reference. Supported formats:
+             * @description Plugin source reference. Supported formats:
              *     - GitHub: {'source': 'github', 'repo': 'org/repo'}
              *     - Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}
              *     - Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}
+             *     - Zip archive on any https host (e.g. S3): {'source': 'archive', 'url': 'https://bucket.s3.amazonaws.com/plugin.zip', 'sha256': '<optional hex digest>'}
              */
             source: {
                 [key: string]: string;
@@ -35018,7 +34933,7 @@ export interface components {
             classification_prompt?: string | null;
             /**
              * Classifier Context Budget Chars
-             * @description Maximum characters of prior-turn text quoted to the LLM classifier, across the whole context window, per classification call. Turns are taken newest first and quoted whole while they fit, so a conversation small enough to quote entirely is never cut; once the budget runs out the older turns are dropped whole and only the turn straddling the boundary is truncated, into whatever space is left. The current ask and the caller's system prompt sit outside this budget and are always sent in full, as does the numbering each quoted turn carries. A budget under 120 leaves no room to quote a turn and suppresses the block; set classifier_context_window_size to 0 to turn context off deliberately. Only applies when classifier_type is 'llm'.
+             * @description Maximum characters of prior-turn text quoted to the LLM classifier, across the whole context window, per classification call. Turns are taken newest first and quoted whole while they fit, so a conversation small enough to quote entirely is never cut; once the budget runs out the older turns are dropped whole and only the turn straddling the boundary is truncated, into whatever space is left. The current ask and, except for Claude Code requests, the extracted system-role text sit outside this budget and are sent in full, as does the numbering each quoted turn carries. A budget under 120 leaves no room to quote a turn and suppresses the block; set classifier_context_window_size to 0 to turn context off deliberately. Only applies when classifier_type is 'llm'.
              * @default 8000
              */
             classifier_context_budget_chars: number;
@@ -35035,7 +34950,7 @@ export interface components {
             classifier_context_per_turn_chars?: number | null;
             /**
              * Classifier Context Window Size
-             * @description Number of prior user turns (tool output and harness reminders excluded) to include as context in the LLM classifier prompt, so a follow-up like 'now do the same for the streaming path' is classified against what it refers to. Counts turns of both roles when classifier_context_include_assistant_turns is enabled. These turns are sent to the classifier model, which may be a different deployment or provider than the routed completion model; that call already carries the current user ask and the caller's system prompt in full. Set to 0 to send neither prior turns nor any conversation context beyond the current ask. Only applies when classifier_type is 'llm'.
+             * @description Number of prior user turns (tool output and harness reminders excluded) to include as context in the LLM classifier prompt, so a follow-up like 'now do the same for the streaming path' is classified against what it refers to. Counts turns of both roles when classifier_context_include_assistant_turns is enabled. These turns are sent to the classifier model, which may be a different deployment or provider than the routed completion model; that call carries the current user ask and, except for Claude Code requests, the extracted system-role text in full. Claude Code system text is omitted to avoid classifying harness instructions; the routed completion still receives it. Set to 0 to send neither prior turns nor any conversation context beyond the current ask. Only applies when classifier_type is 'llm'.
              * @default 3
              */
             classifier_context_window_size: number;
@@ -35210,7 +35125,7 @@ export interface components {
             reasoning_override_min_score?: number | null;
             /**
              * Reminder Markers
-             * @description Override the delimiter pairs used to recognize and strip harness-injected reminder blocks before classification. A harness that wraps injected context differently per agent type (main, subagent, cron) lists every pair it emits. Replaces, rather than adds to, the built-in default of ('<system-reminder>', '</system-reminder>'), so a harness that also emits that pair lists it too. Matching is case-insensitive.
+             * @description Override the delimiter pairs used to recognize and strip harness-injected reminder blocks before classification. A harness that wraps injected context differently per agent type (main, subagent, cron) lists every pair it emits. Replaces, rather than adds to, the built-in system-reminder pair and the Codex envelope pairs enabled for Codex user agents, so list every built-in pair your harness also emits. Matching is case-insensitive.
              */
             reminder_markers?: components["schemas"]["ReminderMarkerPair"][] | null;
             /**
@@ -38200,10 +38115,11 @@ export interface components {
             namespace?: string | null;
             /**
              * Source
-             * @description Git source reference. Supported formats:
+             * @description Plugin source reference. Supported formats:
              *     - GitHub: {'source': 'github', 'repo': 'org/repo'}
              *     - Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}
              *     - Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}
+             *     - Zip archive on any https host (e.g. S3): {'source': 'archive', 'url': 'https://bucket.s3.amazonaws.com/plugin.zip', 'sha256': '<optional hex digest>'}
              */
             source: {
                 [key: string]: string;
@@ -39731,6 +39647,8 @@ export interface components {
             aws_secret_access_key?: string | null;
             /** Aws Session Name */
             aws_session_name?: string | null;
+            /** Aws Session Tags */
+            aws_session_tags?: components["schemas"]["AwsSessionTag"][] | null;
             /** Aws Session Token */
             aws_session_token?: string | null;
             /** Aws Sts Endpoint */
@@ -43191,7 +43109,9 @@ export interface operations {
     };
     get_marketplace_claude_code_marketplace_json_get: {
         parameters: {
-            query?: never;
+            query?: {
+                key?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -43205,6 +43125,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -49399,7 +49328,7 @@ export interface operations {
         parameters: {
             query: {
                 /** @description Specify the service being hit. */
-                service: ("slack_budget_alerts" | "langfuse" | "langfuse_otel" | "slack" | "ms_teams" | "openmeter" | "webhook" | "email" | "braintrust" | "datadog" | "datadog_llm_observability" | "generic_api" | "arize" | "galileo" | "newrelic" | "sqs") | string;
+                service: ("slack_budget_alerts" | "langfuse" | "langfuse_otel" | "slack" | "ms_teams" | "openmeter" | "webhook" | "email" | "braintrust" | "datadog" | "datadog_llm_observability" | "generic_api" | "arize" | "galileo" | "newrelic" | "pointfive" | "sqs") | string;
             };
             header?: never;
             path?: never;
@@ -52453,24 +52382,6 @@ export interface operations {
             };
         };
     };
-    websocket_openai_websocket_proxy_route_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description WebSocket Protocol Switched */
-            101: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
     chat_completion_openai_deployments__model__chat_completions_post: {
         parameters: {
             query?: never;
@@ -53370,25 +53281,7 @@ export interface operations {
             };
         };
     };
-    websocket_openai_websocket_proxy_route_get_2: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description WebSocket Protocol Switched */
-            101: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    openai_proxy_route_openai_passthrough__endpoint__get: {
+    openai_passthrough_route_openai_passthrough__endpoint__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -53419,7 +53312,7 @@ export interface operations {
             };
         };
     };
-    openai_proxy_route_openai_passthrough__endpoint__put: {
+    openai_passthrough_route_openai_passthrough__endpoint__put: {
         parameters: {
             query?: never;
             header?: never;
@@ -53450,7 +53343,7 @@ export interface operations {
             };
         };
     };
-    openai_proxy_route_openai_passthrough__endpoint__post: {
+    openai_passthrough_route_openai_passthrough__endpoint__post: {
         parameters: {
             query?: never;
             header?: never;
@@ -53481,7 +53374,7 @@ export interface operations {
             };
         };
     };
-    openai_proxy_route_openai_passthrough__endpoint__delete: {
+    openai_passthrough_route_openai_passthrough__endpoint__delete: {
         parameters: {
             query?: never;
             header?: never;
@@ -53512,7 +53405,7 @@ export interface operations {
             };
         };
     };
-    openai_proxy_route_openai_passthrough__endpoint__patch: {
+    openai_passthrough_route_openai_passthrough__endpoint__patch: {
         parameters: {
             query?: never;
             header?: never;
@@ -67894,161 +67787,6 @@ export interface operations {
             header?: never;
             path: {
                 vector_store_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    vertex_proxy_route_vertex_ai__endpoint__get_2: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    vertex_proxy_route_vertex_ai__endpoint__put_2: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    vertex_proxy_route_vertex_ai__endpoint__post_2: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    vertex_proxy_route_vertex_ai__endpoint__delete_2: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    vertex_proxy_route_vertex_ai__endpoint__patch_2: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
             };
             cookie?: never;
         };

@@ -965,7 +965,9 @@ if MCP_AVAILABLE:
                             apply_tool_filters=apply_tool_filters,
                         )
                     except Exception as e:
-                        verbose_logger.exception("Error getting tools from %s: %s", server.name, e)
+                        verbose_logger.warning(
+                            "Error getting tools from %s: %s", server.name, classify_list_exception(e).tag
+                        )
                         return (), classify_list_exception(e)
                     return tools_result, ServerListOk(tool_count=len(tools_result))
 

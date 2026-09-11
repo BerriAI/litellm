@@ -62,6 +62,9 @@ class BaseResponsesAPIConfig(ABC):
         """
         return False
 
+    def supports_encrypted_agent_messages(self) -> bool:
+        return False
+
     def sign_request(
         self,
         headers: dict,

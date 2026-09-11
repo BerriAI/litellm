@@ -25,6 +25,7 @@ from collections.abc import (
 )
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
+from functools import lru_cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypedDict, cast
 from urllib.parse import ParseResult, urlparse
@@ -80,7 +81,7 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     raise_classified_list_failure,
     upstream_auth_challenge,
 )
-from litellm.proxy._experimental.mcp_server.mcp_debug import record_auth_resolution
+from litellm.proxy._experimental.mcp_server.mcp_debug import describe_upstream_http_failure, record_auth_resolution
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
     MCPPerUserTokenCache,
     mcp_per_user_token_cache,
@@ -254,6 +255,7 @@ _TRUE_ENV_VALUES: Final = frozenset(("1", "true", "yes", "on"))
 _OAUTH_DISCOVERY_RETRY_DELAYS_SECONDS: Final = (0.05, 0.15)
 _OAUTH_DISCOVERY_RETRY_BASE_SECONDS: Final = 30.0
 _OAUTH_DISCOVERY_RETRY_MAX_SECONDS: Final = 900.0
+_OAUTH_TEMPORARY_DISCOVERY_TTL_SECONDS: Final = 300.0
 
 
 def _oauth_discovery_now() -> float:
@@ -883,6 +885,53 @@ def _sanitized_error_text(exc: Exception) -> str:
     return re.sub(r"https?://\S+", "<url>", str(exc))[:200]
 
 
+async def _openapi_spec_health(
+    spec_path: str, *, timeout: float
+) -> tuple[Literal["healthy", "unhealthy", "unknown"], str | None]:
+    """Check specification availability, not upstream operations or user credentials."""
+    from litellm.llms.custom_httpx.http_handler import HTTPResponseLimitError
+    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import load_openapi_spec_async
+
+    if not spec_path.startswith(("http://", "https://")):
+        return "unknown", "OpenAPI servers have no protocol-level health probe"
+    try:
+        await asyncio.wait_for(load_openapi_spec_async(spec_path, max_bytes=10 * 1024 * 1024), timeout=timeout)
+    except asyncio.TimeoutError:
+        return "unhealthy", f"OpenAPI specification check timed out after {timeout} seconds"
+    except HTTPStatusError as exc:
+        return "unhealthy", f"OpenAPI specification request failed (HTTP {exc.response.status_code})"
+    except HTTPResponseLimitError as exc:
+        return "unknown", f"OpenAPI specification probe refused: {exc}"
+    except (httpx.RequestError, ValueError, OSError) as exc:
+        return "unhealthy", f"OpenAPI specification could not be loaded ({type(exc).__name__})"
+    return "healthy", None
+
+
+class _OpenAPIHealthProbe:
+    def __init__(self, spec_path: str, clock: Callable[[], float] = time.monotonic) -> None:
+        self.spec_path = spec_path
+        self.clock = clock
+        self.lock = asyncio.Lock()
+        self.checked_at = float("-inf")
+        self.result: tuple[Literal["healthy", "unhealthy", "unknown"], str | None, datetime.datetime] | None = None
+
+    async def check(self) -> tuple[Literal["healthy", "unhealthy", "unknown"], str | None, datetime.datetime]:
+        async with self.lock:
+            if self.result is not None and self.clock() - self.checked_at < 30.0:
+                return self.result
+            try:
+                status, error = await _openapi_spec_health(self.spec_path, timeout=MCP_HEALTH_CHECK_TIMEOUT)
+            except asyncio.CancelledError:
+                return (
+                    "unknown",
+                    "OpenAPI specification check was cancelled",
+                    datetime.datetime.now(datetime.timezone.utc),
+                )
+            self.result = (status, error, datetime.datetime.now(datetime.timezone.utc))
+            self.checked_at = self.clock()
+            return self.result
+
+
 def _discovery_failure_leaves_needs_unresolved(
     *,
     needs_authorization_url: bool,
@@ -1356,6 +1405,11 @@ def _extract_upstream_auth_failure(
     return upstream_auth_challenge(exc)
 
 
+def _upstream_failure_suffix(exc: BaseException) -> str:
+    detail: Final = describe_upstream_http_failure(exc)
+    return f"\n  upstream exchange: {detail}" if detail else ""
+
+
 def _obo_retry_applies(server: MCPServer, subject_token: str | None) -> bool:
     """Whether an upstream 401/403 should invalidate the minted credential and retry once.
 
@@ -1749,6 +1803,7 @@ class MCPServerManager:
             token_exchanger=build_token_exchanger(),
         )
         self.registry: dict[str, MCPServer] = {}
+        self._openapi_health_probes: Callable[[str], _OpenAPIHealthProbe] = lru_cache(maxsize=128)(_OpenAPIHealthProbe)
         self.config_mcp_servers: dict[str, MCPServer] = {}
         """
         eg.
@@ -1898,6 +1953,10 @@ class MCPServerManager:
         slot: Final = self._oauth_discovery_slot(server_id)
         return slot is not None and slot.generation == generation
 
+    def _expire_temporary_oauth_discovery(self, server_id: str, generation: int) -> None:
+        if self._oauth_discovery_slot_is_current(server_id, generation):
+            self._remove_oauth_discovery_slot(server_id)
+
     def _publish_resolved_oauth_server(
         self,
         server: MCPServer,
@@ -1910,7 +1969,13 @@ class MCPServerManager:
         elif server.server_id in self.config_mcp_servers:
             self.config_mcp_servers[server.server_id] = server
         else:
-            return None
+            asyncio.get_running_loop().call_later(
+                _OAUTH_TEMPORARY_DISCOVERY_TTL_SECONDS,
+                self._expire_temporary_oauth_discovery,
+                server.server_id,
+                generation,
+            )
+            return server
         self._remove_oauth_discovery_slot(server.server_id)
         return server
 
@@ -2002,6 +2067,12 @@ class MCPServerManager:
         if slot.task is not None:
             if not slot.task.done() or _oauth_discovery_now() < slot.retry_not_before:
                 return slot.task, slot.generation
+            if (
+                not slot.task.cancelled()
+                and slot.task.exception() is None
+                and isinstance(slot.task.result(), _OAuthDiscoveryResolved)
+            ):
+                return slot.task, slot.generation
         task: Final = asyncio.create_task(
             self._run_oauth_metadata_resolution(self._registered_server(server), slot.generation)
         )
@@ -2031,7 +2102,7 @@ class MCPServerManager:
             if should_defer != has_slot:
                 self._set_oauth_discovery_deferred(server.server_id, should_defer)
 
-    async def ensure_oauth_metadata_discovered(self, server: MCPServer) -> MCPServer:
+    async def ensure_oauth_metadata_discovered(self, server: MCPServer, *, _retry_stale: bool = True) -> MCPServer:
         """Join the bounded discovery task and return the resolved server.
 
         Concurrent callers share one task per server. A failed attempt remains
@@ -2058,13 +2129,13 @@ class MCPServerManager:
             outcome: Final = await asyncio.shield(task)
         except asyncio.CancelledError:
             if task.cancelled() and not self._oauth_discovery_slot_is_current(server.server_id, generation):
-                return await self.ensure_oauth_metadata_discovered(server)
+                return await self._rejoin_oauth_metadata_discovery(server, retry_stale=_retry_stale)
             raise
         match outcome:
             case _OAuthDiscoveryResolved(resolved_server):
                 return resolved_server
             case _OAuthDiscoveryStale():
-                return await self.ensure_oauth_metadata_discovered(server)
+                return await self._rejoin_oauth_metadata_discovery(server, retry_stale=_retry_stale)
             case _OAuthDiscoveryFailed(timed_out=timed_out):
                 current: Final = self._registered_server(server)
                 if current.is_client_forwarded_token:
@@ -2075,6 +2146,14 @@ class MCPServerManager:
                     status_code=503,
                     detail=f"OAuth metadata discovery {reason} for MCP server {server_ref!r}",
                 )
+
+    async def _rejoin_oauth_metadata_discovery(self, server: MCPServer, *, retry_stale: bool) -> MCPServer:
+        if retry_stale:
+            return await self.ensure_oauth_metadata_discovered(server, _retry_stale=False)
+        current: Final = self._registered_server(server)
+        if not _oauth_endpoints_unresolved(current) or current.is_client_forwarded_token:
+            return current
+        raise HTTPException(status_code=503, detail="OAuth metadata discovery changed repeatedly; retry shortly")
 
     def _remember_upstream_initialize_instructions(self, server: MCPServer, client: MCPClient) -> None:
         raw: Final[str | None] = getattr(client, "_last_initialize_instructions", None)
@@ -2444,6 +2523,8 @@ class MCPServerManager:
                 allow_elicitation=bool(server_config.get("allow_elicitation", False)),
                 timeout=server_config.get("timeout", None),
                 max_concurrent_requests=server_config.get("max_concurrent_requests", None),
+                token_validation=server_config.get("token_validation", None),
+                oauth_identity_binding=server_config.get("oauth_identity_binding", None),
             )
             self._assign_unique_short_prefix(new_server)
             _warn_internal_delegate_pkce_if_applicable(new_server, source="config")
@@ -4289,7 +4370,9 @@ class MCPServerManager:
         except MCPServerListError:
             raise
         except Exception as e:
-            verbose_logger.warning("Failed to get tools from server %s: %s", server.name, e)
+            verbose_logger.warning(
+                "Failed to get tools from server %s: %s%s", server.name, type(e).__name__, _upstream_failure_suffix(e)
+            )
             raise_classified_list_failure(e, server.name, suppress_challenge=server.is_dcr_bridge)
 
     async def get_prompts_from_server(
@@ -5034,7 +5117,9 @@ class MCPServerManager:
             verbose_logger.warning("Connection error while listing tools from %s: %s", server_name, e)
             raise MCPServerListError(ServerListFault(tag="unreachable"), server_name) from e
         except Exception as e:
-            verbose_logger.warning("Error listing tools from %s: %s", server_name, e)
+            verbose_logger.warning(
+                "Error listing tools from %s: %s%s", server_name, type(e).__name__, _upstream_failure_suffix(e)
+            )
             raise_classified_list_failure(e, server_name)
 
     _SHORT_PREFIX_MAX_REHASH_ATTEMPTS = 1024
@@ -6675,6 +6760,18 @@ class MCPServerManager:
                 status="unknown",
                 health_check_error="Server not found",
                 last_health_check=datetime.now(),
+            )
+
+        if server.spec_path:
+            spec_status, spec_error, spec_checked_at = await self._openapi_health_probes(server.spec_path).check()
+            return self._build_mcp_server_table(server).model_copy(
+                update=MappingProxyType(
+                    {
+                        "status": spec_status,
+                        "health_check_error": spec_error,
+                        "last_health_check": spec_checked_at,
+                    }
+                )
             )
 
         status: Literal["healthy", "unhealthy", "unknown"] = "unknown"

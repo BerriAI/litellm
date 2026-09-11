@@ -3529,7 +3529,7 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
 
     @pytest.mark.parametrize(
         "selector",
-        ["aws_profile_name", "aws_session_name", "aws_external_id"],
+        ["aws_profile_name", "aws_session_name", "aws_external_id", "aws_session_tags"],
     )
     def test_aws_identity_selector_in_batch_body_is_rejected(self, selector):
         with pytest.raises(ValueError, match=selector):
@@ -3548,7 +3548,7 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
 
     @pytest.mark.parametrize(
         "selector",
-        ["aws_profile_name", "aws_session_name", "aws_external_id"],
+        ["aws_profile_name", "aws_session_name", "aws_external_id", "aws_session_tags"],
     )
     def test_aws_identity_selector_under_extra_body_is_rejected(self, selector):
         with pytest.raises(ValueError, match=selector):

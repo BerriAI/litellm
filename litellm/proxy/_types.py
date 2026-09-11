@@ -497,6 +497,9 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/messages/count_tokens",
         "/v1/skills",
         "/v1/skills/{skill_id}",
+        "/claude-code/marketplace.json",
+        "/claude-code/plugins",
+        "/claude-code/plugins/{plugin_name}",
     ]
 
     # MCP tool-call / passthrough routes — data-plane. Gated by DISABLE_LLM_API_ENDPOINTS.
@@ -700,6 +703,7 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/logs",
         "/spend/logs/v2",
         "/spend/logs/ui",
+        "/spend/logs/ui/{request_id}",
         "/spend/logs/session/ui",
         "/key/spend/report",
         "/user/spend/report",
@@ -929,10 +933,10 @@ class LiteLLMRoutes(enum.Enum):
             # PROXY_ADMIN_VIEW_ONLY — the route gate must match).
             "/customer/list",
             "/customer/info",
-            # UI Logs page detail drawer (single + session) and the filter facets.
-            # The list endpoint `/spend/logs/ui` is covered via
-            # spend_tracking_routes below.
-            "/spend/logs/ui/{logId}",
+            # UI Logs page session detail drawer and the end-user filter facet.
+            # The list endpoint `/spend/logs/ui` and the single-log detail route
+            # `/spend/logs/ui/{request_id}` are covered via spend_tracking_routes
+            # below.
             "/spend/logs/session/ui",
             "/management/v1/spend_logs/end_users",
             "/management/v1/spend_logs/users",
@@ -1124,6 +1128,7 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     models: list[str] | None = None
     search_tools: list[str] | None = None
     mcp_tool_search_enabled: bool | None = None
+    skills: list[str] | None = None
 
 
 from litellm.models.team import BudgetLimitEntry as BudgetLimitEntry  # noqa: E402
@@ -2427,6 +2432,13 @@ class CoordinationRedisParams(LiteLLMPydanticObjectBase):
     )
     sentinel_password: str | None = Field(None, description="password for the sentinel nodes")
     service_name: str | None = Field(None, description="sentinel service name")
+    aws_iam_auth: bool | str | None = Field(None, description="enable AWS ElastiCache IAM authentication")
+    aws_iam_user_name: str | None = Field(None, description="AWS ElastiCache IAM user name")
+    aws_iam_cache_name: str | None = Field(None, description="AWS ElastiCache cache name")
+    aws_iam_region: str | None = Field(None, description="AWS region for ElastiCache IAM authentication")
+    aws_iam_serverless: bool | str | None = Field(
+        None, description="the ElastiCache cache is serverless rather than a self-designed cluster"
+    )
 
     def has_connection_target(self) -> bool:
         return any(value is not None for value in (self.host, self.url, self.startup_nodes, self.sentinel_nodes))
@@ -2589,6 +2601,15 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     global_max_parallel_requests: int | None = Field(
         None, description="global max parallel requests to allow for a proxy instance."
+    )
+    user_api_key_cache_max_size: int | None = Field(
+        None,
+        gt=0,
+        description=(
+            "max number of entries (virtual keys, teams, users, end users, memberships, ...) each worker keeps in "
+            "its in-memory auth cache. Defaults to 200. Raise this if you have more active keys than that or auth "
+            "lookups keep hitting the DB"
+        ),
     )
     max_request_size_mb: int | None = Field(
         None,
@@ -2834,6 +2855,25 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "Admin UI. An admin locked out of the UI can still administer the proxy over the "
             "API with the master key; unset this setting and restart the proxy to restore "
             "UI username/password login. Default is False."
+        ),
+    )
+    disable_responses_id_security: bool | None = Field(
+        None,
+        description=(
+            "If True, disables ownership enforcement on Responses API ids. "
+            "Keys may then retrieve, cancel, delete, and chain from any response id, "
+            "including ids belonging to another user or team and ids this proxy never issued. "
+            "WARNING: this removes tenant isolation on /v1/responses"
+        ),
+    )
+    allow_unmanaged_response_ids: bool | None = Field(
+        None,
+        description=(
+            "If True, lets keys address Responses API ids that this proxy did not issue "
+            "(raw provider ids, or ids issued before response-id encryption was configured). "
+            "Such an id carries no owner, so no ownership check can run on it; ids this proxy "
+            "did issue keep full ownership enforcement. Off by default, in which case an "
+            "unrecognized response id is rejected with 403"
         ),
     )
     disable_env_credential_login: bool | None = Field(
@@ -3723,6 +3763,15 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ui_callback_name="New Relic",
         litellm_callback_params=[
             "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED",
+        ],
+    )
+
+    pointfive: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="pointfive",
+        ui_callback_name="PointFive",
+        litellm_callback_params=[  # mutable-ok: the registry field is typed list
+            "POINTFIVE_API_KEY",
+            "POINTFIVE_API_URL",
         ],
     )
 
