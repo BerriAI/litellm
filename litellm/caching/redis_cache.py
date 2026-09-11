@@ -103,7 +103,16 @@ _INCREMENT_WITH_FLOOR_LUA: Final = (
     "return count"
 )
 
+_INCREMENT_WITH_TTL_LUA: Final = (
+    "local value = redis.call('INCRBYFLOAT', KEYS[1], ARGV[1]) "
+    "local ttl = tonumber(ARGV[2]) "
+    "if ttl > 0 and (ARGV[3] == '1' or redis.call('TTL', KEYS[1]) == -1) then "
+    "redis.call('EXPIRE', KEYS[1], ttl) end "
+    "return value"
+)
+
 _LUA_COUNT: Final = TypeAdapter(int)
+_LUA_FLOAT: Final = TypeAdapter(float)
 _OPTIONAL_COUNTS: Final = TypeAdapter(tuple[int | None, ...])
 
 
@@ -1401,19 +1410,10 @@ class RedisCache(BaseCache):
     async def _incrbyfloat_with_ttl(
         _redis_client: "Redis", key: str, value: float, ttl: int | None, refresh_ttl: bool
     ) -> float:
-        """INCRBYFLOAT plus its TTL command in one round trip; a third only when an unexpiring key needs an EXPIRE."""
-        if ttl is None:
-            return await _redis_client.incrbyfloat(name=key, amount=value)
-        async with _redis_client.pipeline(transaction=False) as pipe:
-            pipe.incrbyfloat(name=key, amount=value)
-            if refresh_ttl:
-                pipe.expire(key, ttl)
-            else:
-                pipe.ttl(key)
-            result, ttl_or_expire = await pipe.execute()
-        if not refresh_ttl and ttl_or_expire == -1:
-            await _redis_client.expire(key, ttl)
-        return float(result)
+        raw_value: Final = await _redis_client.eval(
+            _INCREMENT_WITH_TTL_LUA, 1, key, value, ttl or 0, "1" if refresh_ttl else "0"
+        )
+        return _LUA_FLOAT.validate_python(raw_value)
 
     @_redis_circuit_breaker_guard
     async def async_increment(
