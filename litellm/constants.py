@@ -2000,6 +2000,9 @@ NON_INFERENCE_CALL_TYPES: Final[frozenset[str]] = frozenset(
     }
 )
 
+UNKNOWN_MODEL_SPEND_LOG_MODEL: Final[str] = "unknown-model"
+MAX_SPEND_LOG_MODEL_NAME_LENGTH: Final[int] = 256
+
 # PTU reservation rollup writes rows to LiteLLM_DailyTeamSpend with this
 # sentinel api_key so PTU flat cost stays distinguishable from real per-request
 # spend under the table's composite unique constraint.

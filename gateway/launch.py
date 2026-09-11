@@ -4,8 +4,9 @@
 is fine for a plain Postgres URL but not for the pooler: PgBouncer must be
 started exactly once per pod, before the workers fork, and the workers must be
 handed the loopback URL it listens on. A pre-existing ``DATABASE_URL`` wins in
-``DatabaseURLSettings.apply_to_env`` under password auth, so setting it here is
-enough for every worker to pick the pooled URL up unchanged.
+``DatabaseURLSettings.apply_to_env`` under password auth, and one marked pooled
+wins under token auth too, so exporting it here is enough for every worker to
+pick the pooled URL up unchanged.
 
 Run with:
     python -m gateway.launch --workers 4 --host 0.0.0.0 --port 4000
@@ -19,7 +20,12 @@ from typing import Final
 from uvicorn.main import main as uvicorn_main
 
 from litellm.proxy.db.db_url_settings import DatabaseURLSettings
-from litellm.proxy.db.pgbouncer import PgBouncerError, PgBouncerSettings, start_in_container_pgbouncer
+from litellm.proxy.db.pgbouncer import (
+    PgBouncerError,
+    PgBouncerSettings,
+    export_pooled_database_url,
+    start_in_container_pgbouncer,
+)
 
 GATEWAY_APP: Final = "gateway.main:app"
 KEEPALIVE_FLAG: Final = "--timeout-keep-alive"
@@ -41,15 +47,15 @@ def pool_database_url(
     """Start the in-container PgBouncer and return its loopback URL, or None when ``pgbouncer.enabled`` is off.
 
     The upstream URL is whatever ``apply_to_env`` assembled from the discrete
-    ``DATABASE_*`` vars (or an operator-pinned ``DATABASE_URL``). Token auth is
-    rejected by the pooler itself, since it holds one password for its lifetime.
+    ``DATABASE_*`` vars (or an operator-pinned ``DATABASE_URL``). Under token
+    auth the pooler mints and renews the upstream token itself.
     """
     if not pgbouncer.enabled:
         return None
     upstream_url: Final = environ.get("DATABASE_URL")
     if upstream_url is None:
         return PgBouncerError("LITELLM_PGBOUNCER_ENABLED is set but no DATABASE_URL could be assembled")
-    return start_in_container_pgbouncer(pgbouncer, upstream_url, token_auth_enabled=settings.token_auth() is not None)
+    return start_in_container_pgbouncer(pgbouncer, upstream_url, token_auth=settings.token_auth())
 
 
 def _serve(argv: Sequence[str]) -> None:
@@ -63,7 +69,7 @@ def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -
     if isinstance(pooled_url, PgBouncerError):
         sys.exit(f"LiteLLM gateway: in-container pgbouncer could not start: {pooled_url.reason}")
     if pooled_url is not None:
-        os.environ["DATABASE_URL"] = pooled_url
+        export_pooled_database_url(pooled_url)
     serve(uvicorn_argv(argv, os.environ))
 
 

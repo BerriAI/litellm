@@ -361,12 +361,9 @@ harmless no-op for the Job and authoritative for the app pods.
 {{- end -}}
 
 {{/*
-In-container PgBouncer env for the gateway container. Fails at render time under IAM or Entra auth: the pooler holds one static password for the life of the pod.
+In-container PgBouncer env for the gateway container. Under IAM or Entra auth the pooler mints and renews the database token itself.
 */}}
 {{- define "litellm.connectionPoolEnv" -}}
-{{- if or .Values.database.writer.useIAMAuth .Values.database.writer.useAzureEntraAuth }}
-{{- fail "database.connectionPool.enabled cannot be combined with database.writer.useIAMAuth or database.writer.useAzureEntraAuth: the in-container pgbouncer holds a static database password and cannot follow a rotating token. Disable the pool or use a static database password" }}
-{{- end }}
 {{- with .Values.database.connectionPool -}}
 - name: LITELLM_PGBOUNCER_ENABLED
   value: "true"
@@ -460,3 +457,34 @@ ImplementationSpecific
 {{- end -}}
 
 {{- define "litellm.gateway.prometheusMultiprocDir" -}}/tmp/litellm_prometheus_multiproc{{- end -}}
+
+{{/*
+Directory of the collector's unix socket, shared by the gateway and
+collector containers through an emptyDir. Empty when the sidecar is off
+or gateway.collector.address is a tcp://127.0.0.1:<port> address.
+*/}}
+{{- define "litellm.gateway.collectorSocketDir" -}}
+{{- if and .Values.gateway.collector.enabled (hasPrefix "unix://" .Values.gateway.collector.address) -}}
+{{- dir (trimPrefix "unix://" .Values.gateway.collector.address) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+LITELLM_COLLECTOR_* env shared by the producer (gateway container) and the
+consumer (collector container), so both agree on the transport and the
+shutdown drain window.
+*/}}
+{{- define "litellm.gateway.collectorEnv" -}}
+{{- with .Values.gateway.collector }}
+- name: LITELLM_COLLECTOR_ENABLED
+  value: "true"
+- name: LITELLM_COLLECTOR_ADDRESS
+  value: {{ .address | quote }}
+- name: LITELLM_COLLECTOR_BUFFER_SIZE
+  value: {{ .bufferSize | quote }}
+- name: LITELLM_COLLECTOR_ON_UNAVAILABLE
+  value: {{ .onUnavailable | quote }}
+- name: LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS
+  value: {{ .drainTimeoutSeconds | quote }}
+{{- end }}
+{{- end -}}

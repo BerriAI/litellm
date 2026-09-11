@@ -273,18 +273,17 @@ connections the pooler accepts. The module sets
 and the migration task keep the direct connection.
 
 ```hcl
-create_database                 = false
-database_url                    = "postgresql://litellm:<password>@db.internal:5432/litellm"
 gateway_num_workers             = 4
 gateway_connection_pool_enabled = true
 gateway_pool_max_db_connections = 20
 gateway_pool_max_client_conn    = 1000
 ```
 
-The pool needs a static database password, so it is only valid with an
-existing database via `database_url`. The module-created Aurora authenticates
-with rotating IAM tokens (see [Aurora + IAM auth](#aurora--iam-auth)), which
-the pooler cannot follow, and `terraform plan` rejects that combination.
+The pool works with the module-created Aurora as well as an existing database
+via `database_url`. Against Aurora it authenticates with the same rotating IAM
+tokens the workers used to (see [Aurora + IAM auth](#aurora--iam-auth)): the
+pooler mints a token from the task role, renews it before it expires and hands
+the workers a loopback URL with a static password instead
 
 The componentized `gateway_image` starts through `python -m gateway.launch`,
 which reads these variables, starts the pooler once per task and hands the
@@ -345,6 +344,39 @@ ten tasks handle 4,200,000,000 tokens in a minute, `tokens / 60` is
 7,000,000 against a target of 6,000,000, so the service grows to
 `ceil(10 * 7000000 / 6000000) = 12`. Container Insights must be enabled on the
 cluster for `RunningTaskCount` to exist
+
+### Collector sidecar
+
+`collector_enabled = true` adds a second container to the gateway task
+that runs `python -m litellm.proxy.collector` from the gateway image, and sets
+`LITELLM_COLLECTOR_ENABLED=true` on the gateway so its uvicorn workers
+ship spend events (SpendLogs writes, key/team/user spend updates, budget
+alerts) to the sidecar instead of running that pipeline in the request
+path. This is the Terraform counterpart of helm's `gateway.collector`.
+The default (`false`) leaves the task definition exactly as before.
+
+Fargate tasks share one network namespace, so the sidecar listens on
+loopback TCP (`tcp://127.0.0.1:${collector_port}`, default 4010) instead
+of the Unix socket helm uses; the proxy rejects any non-loopback address.
+The sidecar gets the same database, Redis, master-key, license, proxy
+config, and `gateway_extra_env` / `gateway_extra_secrets` values as the
+gateway container, runs with `LITELLM_JOB_ROLE=collector`, and is
+non-essential with an ECS restart policy, so a sidecar crash restarts it in
+place while the gateway falls back to in-process spend tracking.
+
+```hcl
+collector_enabled = true
+# collector_cpu               = 512    # carved out of gateway_cpu
+# collector_memory            = 2048   # MiB, carved out of gateway_memory
+# collector_buffer_size       = 1000
+# collector_on_unavailable    = "fallback"  # or "drop"
+# collector_drain_timeout_seconds = 10
+```
+
+Both sidecar reservations must leave room for the gateway container inside
+`gateway_cpu` / `gateway_memory` (the plan fails otherwise). Service
+autoscaling keeps tracking the whole task's CPU and memory, sidecar
+included
 
 ## Tenant deployment
 
