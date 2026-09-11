@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -6,6 +6,7 @@ from openai.types.batch import BatchRequestCounts
 from openai.types.batch import Metadata as OpenAIBatchMetadata
 
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.types.llms.bedrock import AwsSessionTag
 from litellm.types.utils import LiteLLMBatch
 
 if TYPE_CHECKING:
@@ -116,6 +117,7 @@ class BedrockBatchesHandler:
         aws_web_identity_token: str | None = None,
         aws_sts_endpoint: str | None = None,
         aws_external_id: str | None = None,
+        aws_session_tags: Sequence[AwsSessionTag] | None = None,
         **kwargs: object,  # kwargs-ok: litellm.cancel_batch forwards arbitrary user kwargs verbatim
     ) -> "LiteLLMBatch":
         try:
@@ -139,6 +141,7 @@ class BedrockBatchesHandler:
             aws_web_identity_token=aws_web_identity_token,
             aws_sts_endpoint=aws_sts_endpoint,
             aws_external_id=aws_external_id,
+            aws_session_tags=aws_session_tags,
         )
 
         client: Final = boto3.client(
@@ -163,6 +166,7 @@ class BedrockBatchesHandler:
                 aws_web_identity_token=aws_web_identity_token,
                 aws_sts_endpoint=aws_sts_endpoint,
                 aws_external_id=aws_external_id,
+                aws_session_tags=aws_session_tags,
             )
 
         try:
@@ -283,7 +287,7 @@ class BedrockBatchesHandler:
                 ``aws_session_token``, ``aws_profile_name``,
                 ``aws_role_name``, ``aws_session_name``,
                 ``aws_web_identity_token``, ``aws_sts_endpoint``,
-                ``aws_external_id``). Unknown keys are ignored.
+                ``aws_external_id``, ``aws_session_tags``). Unknown keys are ignored.
 
         Returns:
             ``LiteLLMBatch`` shaped like an OpenAI Batch resource.
@@ -317,6 +321,7 @@ class BedrockBatchesHandler:
             aws_web_identity_token=kwargs.get("aws_web_identity_token"),
             aws_sts_endpoint=kwargs.get("aws_sts_endpoint"),
             aws_external_id=kwargs.get("aws_external_id"),
+            aws_session_tags=kwargs.get("aws_session_tags"),
         )
 
         client: Final = boto3.client(

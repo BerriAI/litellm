@@ -1,4 +1,6 @@
 import json
+from collections.abc import Mapping, Sequence
+from typing import Final
 
 import pytest
 
@@ -590,6 +592,59 @@ def test_stream_chunk_builder_litellm_usage_chunks():
     assert usage.prompt_tokens == 50
     assert usage.completion_tokens == 27
     assert usage.total_tokens == 77
+
+
+def test_calculate_usage_honors_openai_sdk_completion_usage_chunks():
+    from openai.types.completion_usage import CompletionUsage
+
+    content_chunk = ModelResponseStream(
+        id="chatcmpl-sdk-usage-1",
+        created=1745513206,
+        model="mantle-claude",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(
+                    provider_specific_fields=None,
+                    content="ok",
+                    role=None,
+                    function_call=None,
+                    tool_calls=None,
+                    audio=None,
+                ),
+                logprobs=None,
+            )
+        ],
+        provider_specific_fields=None,
+        stream_options={"include_usage": True},
+    )
+    usage_chunk = ModelResponseStream(
+        id="chatcmpl-sdk-usage-1",
+        created=1745513207,
+        model="mantle-claude",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[],
+        provider_specific_fields=None,
+        stream_options={"include_usage": True},
+    )
+    usage_chunk.usage = CompletionUsage(
+        prompt_tokens=20, completion_tokens=60, total_tokens=80, cost=0.000704
+    )
+    assert type(usage_chunk.usage) is CompletionUsage
+
+    chunks = [content_chunk, usage_chunk]
+    usage = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks, model="mantle-claude", completion_output=""
+    )
+
+    assert usage.prompt_tokens == 20
+    assert usage.completion_tokens == 60
+    assert usage.total_tokens == 80
+    assert getattr(usage, "cost", None) == pytest.approx(0.000704)
 
 
 def test_get_model_from_chunks_azure_model_router():
@@ -1423,3 +1478,79 @@ def test_calculate_usage_fills_unknown_split_from_reasoning_estimate(
     assert usage.completion_tokens == 100
     assert usage.completion_tokens_details.reasoning_tokens == expected_reasoning_tokens
     assert usage.completion_tokens_details.text_tokens == expected_text_tokens
+
+
+def _openai_chunk(
+    choices: Sequence[Mapping[str, object]], usage: Mapping[str, int] | None = None
+) -> dict[str, object]:
+    base: Final = {
+        "id": "chatcmpl-lit6552",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "gpt-5.4-mini",
+        "choices": list(choices),
+    }
+    return base if usage is None else {**base, "usage": dict(usage)}
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        pytest.param([_openai_chunk(choices=[]), _openai_chunk(choices=[])], id="all_empty_choices_dicts"),
+        pytest.param(
+            [ModelResponseStream(model="gpt-5.4-mini", choices=[]) for _ in range(2)],
+            id="all_empty_choices_objects",
+        ),
+    ],
+)
+def test_stream_chunk_builder_survives_all_empty_choices(chunks: Sequence[object]) -> None:
+    response: Final = stream_chunk_builder(chunks=list(chunks))
+
+    assert response is not None
+    assert response.choices[0].message.role == "assistant"
+    assert response.choices[0].finish_reason == "stop"
+
+
+def test_stream_chunk_builder_keeps_usage_from_usage_only_frames() -> None:
+    usage_frame: Final = _openai_chunk(
+        choices=[], usage={"prompt_tokens": 10, "completion_tokens": 0, "total_tokens": 10}
+    )
+
+    response: Final = stream_chunk_builder(chunks=[usage_frame])
+
+    assert response is not None
+    assert response.choices[0].message.role == "assistant"
+    assert response.usage.prompt_tokens == 10
+    assert response.usage.total_tokens == 10
+
+
+@pytest.mark.parametrize(
+    "delta",
+    [pytest.param({"content": "Hi"}, id="delta_without_role"), pytest.param({}, id="empty_delta")],
+)
+def test_stream_chunk_builder_defaults_role_when_delta_omits_it(delta: Mapping[str, str]) -> None:
+    chunks: Final = [
+        _openai_chunk(choices=[{"index": 0, "delta": dict(delta), "finish_reason": None}]),
+        _openai_chunk(choices=[{"index": 0, "delta": {"content": "!"}, "finish_reason": "stop"}]),
+    ]
+
+    response: Final = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    assert response.choices[0].message.role == "assistant"
+    assert response.choices[0].message.content == delta.get("content", "") + "!"
+    assert response.choices[0].finish_reason == "stop"
+
+
+def test_stream_chunk_builder_reads_role_from_first_frame_with_choices() -> None:
+    chunks: Final = [
+        _openai_chunk(choices=[]),
+        _openai_chunk(choices=[{"index": 0, "delta": {"role": "user", "content": "Hi"}, "finish_reason": None}]),
+        _openai_chunk(choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}]),
+    ]
+
+    response: Final = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    assert response.choices[0].message.role == "user"
+    assert response.choices[0].message.content == "Hi"

@@ -125,11 +125,12 @@ class TestBlockedResponseUsage:
         mock_logging.post_call_failure_hook.assert_awaited_once()
 
 
-class TestProxyExceptionPassthrough:
+class TestProxyExceptionAnthropicEnvelope:
     @pytest.mark.asyncio
-    async def test_anthropic_response_reraises_proxy_exception_unwrapped(self):
-        """A 400 ProxyException from request validation must surface as-is,
-        not be re-wrapped into a code-500 ProxyException."""
+    async def test_anthropic_response_maps_proxy_exception_to_anthropic_envelope(self):
+        """LIT-6468: a 400 ProxyException from request validation must surface as
+        Anthropic's documented {"type": "error", "error": {...}} envelope with the
+        original status and message, not the OpenAI {"error": {...}} envelope."""
         import litellm.proxy.anthropic_endpoints.endpoints as ep
         import litellm.proxy.proxy_server as proxy_server
         from litellm.proxy._types import ProxyErrorTypes, ProxyException
@@ -140,6 +141,8 @@ class TestProxyExceptionPassthrough:
             param="metadata",
             code=400,
         )
+        request = MagicMock()
+        request.headers = {"x-request-id": "req_test_6468"}
 
         with (
             patch.object(ep, "_read_request_body", new=AsyncMock(return_value={})),
@@ -151,30 +154,61 @@ class TestProxyExceptionPassthrough:
             patch.object(proxy_server, "proxy_logging_obj") as mock_logging,
         ):
             mock_logging.post_call_failure_hook = AsyncMock()
-            with pytest.raises(ProxyException) as exc_info:
-                await ep.anthropic_response(
-                    fastapi_response=MagicMock(),
-                    request=MagicMock(),
-                    user_api_key_dict=MagicMock(),
-                )
+            response = await ep.anthropic_response(
+                fastapi_response=MagicMock(),
+                request=request,
+                user_api_key_dict=MagicMock(),
+            )
 
-        assert exc_info.value is exc
-        assert exc_info.value.code == "400"
-        assert exc_info.value.param == "metadata"
+        assert response.status_code == 400
+        body = json.loads(response.body)
+        assert body == {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": "Invalid type for 'metadata': expected an object, but got a string instead.",
+            },
+            "request_id": "req_test_6468",
+        }
         mock_logging.post_call_failure_hook.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_anthropic_response_maps_429_to_rate_limit_error(self):
+        """The Anthropic error type follows the status code (429 -> rate_limit_error),
+        and a code-less exception falls back to 500 api_error."""
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        from litellm.proxy._types import ProxyException
+
+        request = MagicMock()
+        request.headers = {}
+
+        response = ep._anthropic_error_json_response(
+            ProxyException(message="Rate limit exceeded", type="rate_limit_error", param=None, code=429),
+            request,
+        )
+        assert response.status_code == 429
+        assert json.loads(response.body)["error"]["type"] == "rate_limit_error"
+
+        fallback = ep._anthropic_error_json_response(
+            ProxyException(message="boom", type="None", param=None, code=None),
+            request,
+        )
+        assert fallback.status_code == 500
+        assert json.loads(fallback.body)["error"]["type"] == "api_error"
 
 
 class TestHttpExceptionDictDetail:
     @pytest.mark.asyncio
     async def test_anthropic_response_serializes_dict_detail_http_exception(self):
-        """LIT-6466: a post_call guardrail's HTTPException(detail=<dict>) must
-        surface with a clean message plus provider_specific_fields, matching
-        /v1/chat/completions and /v1/responses, not the str() of the exception."""
+        """LIT-6466 + LIT-6468: a post_call guardrail's HTTPException(detail=<dict>)
+        must surface as Anthropic's {"type": "error", "error": {...}} envelope with
+        the guardrail's clean message plus provider_specific_fields, not the str()
+        of the exception and not the OpenAI envelope."""
         from fastapi import HTTPException
 
         import litellm.proxy.anthropic_endpoints.endpoints as ep
         import litellm.proxy.proxy_server as proxy_server
-        from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+        from litellm.proxy._types import UserAPIKeyAuth
 
         detail = {
             "error": "Content blocked: keyword 'kumquat' detected",
@@ -182,6 +216,8 @@ class TestHttpExceptionDictDetail:
             "guardrail": "keyword-block",
         }
         exc = HTTPException(status_code=400, detail=detail)
+        request = MagicMock()
+        request.headers = {}
 
         with (
             patch.object(ep, "_read_request_body", new=AsyncMock(return_value={})),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
@@ -193,17 +229,19 @@ class TestHttpExceptionDictDetail:
             patch.object(proxy_server, "proxy_logging_obj") as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
         ):
             mock_logging.post_call_failure_hook = AsyncMock()
-            with pytest.raises(ProxyException) as exc_info:
-                await ep.anthropic_response(
-                    fastapi_response=MagicMock(),
-                    request=MagicMock(),
-                    user_api_key_dict=UserAPIKeyAuth(),
-                )
+            response = await ep.anthropic_response(
+                fastapi_response=MagicMock(),
+                request=request,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
 
-        assert exc_info.value.message == "Content blocked: keyword 'kumquat' detected"
-        assert "{'error'" not in exc_info.value.message
-        assert exc_info.value.provider_specific_fields == detail
-        assert exc_info.value.code == "400"
+        assert response.status_code == 400
+        body = json.loads(response.body)
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "invalid_request_error"
+        assert body["error"]["message"] == "Content blocked: keyword 'kumquat' detected"
+        assert "{'error'" not in body["error"]["message"]
+        assert body["error"]["provider_specific_fields"] == detail
         mock_logging.post_call_failure_hook.assert_awaited_once()
 
 
@@ -215,7 +253,7 @@ class TestFailureHookRequestData:
         handler must pass that replaced dict, not the raw request body dict."""
         import litellm.proxy.anthropic_endpoints.endpoints as ep
         import litellm.proxy.proxy_server as proxy_server
-        from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+        from litellm.proxy._types import UserAPIKeyAuth
 
         captured = {}
 
@@ -224,18 +262,23 @@ class TestFailureHookRequestData:
             captured["processor_data"] = self.data
             raise RuntimeError("provider timeout")
 
+        request = MagicMock()
+        request.headers = {}
+
         with (
             patch.object(ep, "_read_request_body", new=AsyncMock(return_value={"model": "claude-sonnet"})),
             patch.object(ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=fake_process),
             patch.object(proxy_server, "proxy_logging_obj") as mock_logging,
         ):
             mock_logging.post_call_failure_hook = AsyncMock()
-            with pytest.raises(ProxyException):
-                await ep.anthropic_response(
-                    fastapi_response=MagicMock(),
-                    request=MagicMock(),
-                    user_api_key_dict=UserAPIKeyAuth(),
-                )
+            response = await ep.anthropic_response(
+                fastapi_response=MagicMock(),
+                request=request,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert response.status_code == 500
+        assert json.loads(response.body)["error"]["message"] == "provider timeout"
 
         hook_request_data = mock_logging.post_call_failure_hook.await_args.kwargs["request_data"]
         assert hook_request_data is captured["processor_data"]

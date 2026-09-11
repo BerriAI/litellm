@@ -1,8 +1,9 @@
+import os
 import sys
 import time
 import webbrowser
-from collections.abc import Callable, Mapping
-from typing import Any, Final
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, Final, TypeVar
 from urllib.parse import urlencode
 
 import click
@@ -40,10 +41,16 @@ from litellm.litellm_core_utils.cli_token_utils import (
 )
 
 from .claude_settings import (
-    CLAUDE_SETTINGS_PATH,
-    SETTINGS_FILE_OWNERS,
+    STARTING_MODEL_ROLE,
+    ApiKeyHelper,
     ClaudeSettingsError,
-    write_claude_settings,
+    KeepModel,
+    claude_settings_path,
+    configure_claude_settings,
+    configure_state_path,
+    refuse_while_owned,
+    resolve_api_key_helper,
+    settings_file_owners,
 )
 from .pkce_login import (
     Http,
@@ -100,9 +107,10 @@ class CliPollData(TypedDict, total=False):
 
 
 class CliSsoStartData(TypedDict):
-    login_id: str
-    poll_secret: str
-    user_code: str
+    login_id: ReadOnly[str]
+    poll_secret: ReadOnly[str]
+    user_code: ReadOnly[str]
+    verification_uri_complete: ReadOnly[NotRequired[str]]
 
 
 class CliAuthResult(TypedDict):
@@ -111,6 +119,8 @@ class CliAuthResult(TypedDict):
     teams: list[str]
     team_id: str | None
 
+
+_TeamMapping: Final = TypeVar("_TeamMapping", bound=Mapping[str, object])
 
 KEYRING_INSTALL_HINT: Final = "pip install 'litellm[cli]'"
 
@@ -353,7 +363,7 @@ def get_key_input():
         return None
 
 
-def display_interactive_team_selection(teams: list[dict[str, Any]], selected_index: int = 0) -> None:
+def display_interactive_team_selection(teams: Sequence[Mapping[str, Any]], selected_index: int = 0) -> None:
     """Display teams with one highlighted for selection"""
     console: Final = Console()
 
@@ -391,7 +401,7 @@ def display_interactive_team_selection(teams: list[dict[str, Any]], selected_ind
             console.print(f"   Budget: [dim]{budget_str}[/dim]\n")
 
 
-def prompt_team_selection(teams: list[dict[str, Any]]) -> dict[str, Any] | None:
+def prompt_team_selection(teams: Sequence[_TeamMapping]) -> _TeamMapping | None:
     """Interactive team selection with arrow keys"""
     if not teams:
         return None
@@ -441,8 +451,8 @@ def prompt_team_selection(teams: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 def prompt_team_selection_fallback(
-    teams: list[dict[str, Any]],
-) -> dict[str, Any] | None:
+    teams: Sequence[_TeamMapping],
+) -> _TeamMapping | None:
     """Fallback team selection for non-interactive environments"""
     if not teams:
         return None
@@ -775,13 +785,24 @@ def _render_and_prompt_for_team_selection(teams: list[CliTeam]) -> str | None:
 
 
 def _configure_claude_code(base_url: str) -> None:
-    """Point Claude Code at base_url by patching ~/.claude/settings.json."""
+    """Point Claude Code at base_url by patching the settings.json it reads, undoable with `lite unconfigure claude`."""
+    settings_path: Final = claude_settings_path(os.environ)
     try:
-        write_claude_settings(base_url, CLAUDE_SETTINGS_PATH, SETTINGS_FILE_OWNERS)
+        configure_claude_settings(
+            base_url,
+            ApiKeyHelper(resolve_api_key_helper(base_url)),
+            KeepModel(),
+            settings_path,
+            configure_state_path(settings_path),
+            settings_file_owners(settings_path),
+        )
     except ClaudeSettingsError as e:
         raise click.ClickException(f"Logged in, but could not configure Claude Code: {e}")
-    click.echo(f"\nConfigured Claude Code: {CLAUDE_SETTINGS_PATH} now routes through {base_url.rstrip('/')}.")
-    click.echo("Your other Claude Code settings were left untouched. Restart Claude Code to pick this up.")
+    click.echo(f"\nConfigured Claude Code: {settings_path} now routes through {base_url.rstrip('/')}.")
+    click.echo(
+        "Your other Claude Code settings were left untouched. Restart Claude Code to pick this up. "
+        f"Undo with `lite unconfigure claude`; `lite configure claude --model` sets {STARTING_MODEL_ROLE}."
+    )
 
 
 def _finish_login(base_url: str, api_key: str, config_claude: bool, stored: SecretSave) -> None:
@@ -850,6 +871,12 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
 
     ctx_obj: Final[CliContextObj] = ctx.obj
     base_url: Final = ctx_obj["base_url"]
+    if config_claude:
+        settings_path: Final = claude_settings_path(os.environ)
+        try:
+            refuse_while_owned(settings_path, settings_file_owners(settings_path))
+        except ClaudeSettingsError as e:
+            raise click.ClickException(f"Cannot configure Claude Code, so not logging in: {e}")
 
     try:
         if pkce:
@@ -860,11 +887,22 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
         poll_secret: Final = cli_sso_flow["poll_secret"]
         user_code: Final = cli_sso_flow["user_code"]
 
-        sso_url = f"{base_url}/sso/key/generate?" + urlencode({"source": LITELLM_CLI_SOURCE_IDENTIFIER, "key": key_id})
+        browser_prefills_code: Final = isinstance(cli_sso_flow.get("verification_uri_complete"), str)
+        sso_url: Final = f"{base_url}/sso/key/generate?" + urlencode(
+            (
+                ("source", LITELLM_CLI_SOURCE_IDENTIFIER),
+                ("key", key_id),
+                *((("user_code", user_code),) if browser_prefills_code else ()),
+            )
+        )
 
         click.echo(f"Opening browser to: {sso_url}")
         click.echo("Please complete the SSO authentication in your browser...")
-        click.echo(f"Verification code: {user_code}")
+        click.echo(
+            f"Verification code: {user_code} (pre-filled in the browser, check it matches)"
+            if browser_prefills_code
+            else f"Verification code: {user_code}"
+        )
         click.echo(f"Session ID: {key_id}")
 
         # Open browser

@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 import json
-from collections.abc import Coroutine, Mapping
+from collections.abc import Callable, Coroutine, Mapping
 from functools import partial
 from typing import Final, Literal, overload
 
@@ -47,6 +47,13 @@ __all__ = [
 
 
 ##### Container Create #######################
+async def _encode_created_container_id(
+    pending: Coroutine[object, object, ContainerObject],
+    encode: Callable[[ContainerObject], ContainerObject],
+) -> ContainerObject:
+    return encode(await pending)
+
+
 @client
 async def acreate_container(
     name: str,
@@ -256,16 +263,16 @@ def create_container(
             _is_async=_is_async,
         )
 
-        # Encode container_id with provider/model metadata for routing
+        encode: Final = partial(
+            ContainerRequestUtils.encode_container_id_in_response,
+            custom_llm_provider=custom_llm_provider,
+            litellm_metadata=kwargs.get("litellm_metadata"),
+            extra_body=extra_body,
+        )
         if isinstance(container_obj, ContainerObject):
-            container_obj = ContainerRequestUtils.encode_container_id_in_response(
-                response_obj=container_obj,
-                custom_llm_provider=custom_llm_provider,
-                litellm_metadata=kwargs.get("litellm_metadata"),
-                extra_body=extra_body,
-            )
+            return encode(container_obj)
 
-        return container_obj
+        return _encode_created_container_id(pending=container_obj, encode=encode)
 
     except Exception as e:
         raise litellm.exception_type(

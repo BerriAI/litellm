@@ -22,7 +22,16 @@ Response headers returned (all values are masked for safety):
     x-mcp-debug-auth-resolution
         Which auth priority was used for the outbound MCP call:
         ``per-request-header``, ``m2m-client-credentials``, ``static-token``,
-        ``oauth2-passthrough``, or ``no-auth``.
+        ``oauth2-passthrough``, ``stored-user-token``, ``token-exchange``,
+        ``id-jag``, ``aws-sigv4``, ``extra-headers``, or ``no-auth``.
+        ``unresolved`` means no outcome was available before the first response
+        frame; ``multiple`` means several servers resolved credentials;
+        ``not-applicable`` covers stdio; ``resolution-failed`` is a resolver error.
+
+    x-mcp-debug-auth-resolutions
+        For multiple servers, a JSON map of server IDs to resolution labels.
+        At most 32 entries are included; x-mcp-debug-auth-resolutions-truncated
+        is true when additional servers were omitted. No credentials are included.
 
     x-mcp-debug-outbound-url
         The upstream MCP server URL that will receive the request.
@@ -58,10 +67,16 @@ header is free for OAuth2 discovery::
 Symptom: ``x-mcp-debug-oauth2-token`` shows ``(none)`` and
 ``x-mcp-debug-auth-resolution`` shows ``no-auth``.
 
-This means the client didn't go through the OAuth2 flow. Check that:
-1. The ``Authorization`` header is NOT set as a static header in the client config.
-2. The ``.well-known/oauth-protected-resource`` endpoint returns valid metadata.
-3. The MCP server in LiteLLM config has ``auth_type: oauth2``.
+``no-auth`` means the resolved upstream client carries no authentication.
+An absent inbound OAuth2 token does not imply the user skipped OAuth: the gateway
+can retrieve a stored per-user token, reported as ``stored-user-token``.
+``unresolved`` is used when a stream starts before credential resolution, or a
+request (such as initialization or a cached tool listing) resolves no credential.
+Debug reporting does not fetch credentials or delay a streaming frame to resolve them.
+``extra-headers`` identifies supplied headers that won over the resolver or were
+the only headers supplied; their values are never inspected to guess a scheme.
+``per-request-header`` denotes a legacy credential override, including a BYOK
+credential supplied by the gateway; it does not imply a caller-supplied token.
 
 **Common issue: M2M token used instead of user token**
 
@@ -69,8 +84,8 @@ Symptom: ``x-mcp-debug-auth-resolution`` shows ``m2m-client-credentials``.
 
 This means the server has ``client_id``/``client_secret``/``token_url``
 configured and LiteLLM is fetching a machine-to-machine token instead of
-using the per-user OAuth2 token. If you want per-user tokens, remove the
-client credentials from the server config.
+using the per-user OAuth2 token. For gateway-stored per-user tokens,
+configure ``oauth2_flow: authorization_code``.
 
 Usage from Claude Code::
 
@@ -85,20 +100,99 @@ Usage with curl::
          http://localhost:4000/mcp/atlassian_mcp
 """
 
-from typing import TYPE_CHECKING, Final
+import json
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
+from typing import Final
 
+from starlette.requests import HTTPConnection
 from starlette.types import Message, Send
 
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
-
-if TYPE_CHECKING:
-    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.proxy._experimental.mcp_server.outbound_credentials.types import AuthResolution
 
 # Header the client sends to opt into debug mode
 MCP_DEBUG_REQUEST_HEADER: Final = "x-litellm-mcp-debug"
 
 # Prefix for all debug response headers
 _RESPONSE_HEADER_PREFIX: Final = "x-mcp-debug"
+
+
+MCP_AUTH_DIAGNOSTICS_SCOPE_KEY: Final = "litellm.mcp.auth_diagnostics"
+
+
+def record_auth_resolution(server_id: str, source: AuthResolution) -> None:
+    from mcp.server.lowlevel.server import request_ctx
+
+    context: Final[object] = request_ctx.get(None)
+    request: Final[object] = getattr(context, "request", None)
+    if isinstance(request, HTTPConnection):
+        diagnostics: Final[object] = request.scope.get(MCP_AUTH_DIAGNOSTICS_SCOPE_KEY)
+        if isinstance(diagnostics, MCPAuthDiagnostics):
+            diagnostics.record(server_id, source)
+
+
+class MCPAuthDiagnostics:
+    def __init__(self) -> None:
+        self._outcomes: tuple[tuple[str, AuthResolution], ...] = ()
+
+    def record(self, server_id: str, resolution: AuthResolution) -> None:
+        self._outcomes = tuple(item for item in self._outcomes if item[0] != server_id) + ((server_id, resolution),)
+
+    def resolution(self) -> str:
+        match self._outcomes:
+            case ():
+                return AuthResolution.unresolved.value
+            case ((_, source),):
+                return source.value
+            case _:
+                return AuthResolution.multiple.value
+
+    def headers(self) -> Mapping[str, str]:
+        if len(self._outcomes) <= 1:
+            return MappingProxyType({"x-mcp-debug-auth-resolution": self.resolution()})
+        return MappingProxyType(
+            {
+                "x-mcp-debug-auth-resolution": AuthResolution.multiple.value,
+                "x-mcp-debug-auth-resolutions": json.dumps(
+                    {
+                        server_id: source.value for server_id, source in self._outcomes[:32]
+                    },  # mutable-ok: JSON encoder requires a concrete dict
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                ),
+                **(
+                    MappingProxyType({"x-mcp-debug-auth-resolutions-truncated": "true"})
+                    if len(self._outcomes) > 32
+                    else MappingProxyType({})
+                ),
+            }
+        )
+
+
+class _DiagnosticSend:
+    def __init__(self, send: Send, headers: Mapping[str, str], resolution: Callable[[], Mapping[str, str]]) -> None:
+        self._send = send
+        self._headers = headers
+        self._resolution = resolution
+        self._start: Message | None = None
+
+    async def __call__(self, message: Message) -> None:
+        if message["type"] == "http.response.start":
+            self._start = message
+            return
+        if self._start is not None:
+            start: Final = self._start
+            self._start = None
+            headers: Final = MappingProxyType({**self._headers, **self._resolution()})
+            await self._send(
+                {  # mutable-ok: ASGI send consumes a mutable message mapping
+                    **start,
+                    "headers": tuple(start.get("headers", ()))
+                    + tuple((key.encode(), value.encode()) for key, value in headers.items()),
+                }
+            )
+        await self._send(message)
 
 
 class MCPDebug:
@@ -143,37 +237,6 @@ class MCPDebug:
             if key.lower() == MCP_DEBUG_REQUEST_HEADER:
                 return val.strip().lower() in ("true", "1", "yes")
         return False
-
-    @staticmethod
-    def resolve_auth_resolution(
-        server: "MCPServer",
-        mcp_auth_header: str | None,
-        mcp_server_auth_headers: dict[str, dict[str, str]] | None,
-        oauth2_headers: dict[str, str] | None,
-    ) -> str:
-        """
-        Determine which auth priority will be used for the outbound MCP call.
-
-        Returns one of: ``per-request-header``, ``m2m-client-credentials``,
-        ``static-token``, ``oauth2-passthrough``, or ``no-auth``.
-        """
-        from litellm.types.mcp import MCPAuth
-
-        has_server_specific: Final = bool(
-            mcp_server_auth_headers
-            and (
-                mcp_server_auth_headers.get(server.alias or "") or mcp_server_auth_headers.get(server.server_name or "")
-            )
-        )
-        if has_server_specific or mcp_auth_header:
-            return "per-request-header"
-        if server.has_client_credentials:
-            return "m2m-client-credentials"
-        if server.authentication_token:
-            return "static-token"
-        if oauth2_headers and server.auth_type == MCPAuth.oauth2:
-            return "oauth2-passthrough"
-        return "no-auth"
 
     @staticmethod
     def build_debug_headers(
@@ -244,11 +307,20 @@ class MCPDebug:
         return debug
 
     @staticmethod
-    def wrap_send_with_debug_headers(send: Send, debug_headers: dict[str, str]) -> Send:
+    def wrap_send_with_debug_headers(
+        send: Send,
+        debug_headers: Mapping[str, str],
+        resolution: Callable[[], Mapping[str, str]] | None = None,
+        *,
+        request_method: str | None = None,
+    ) -> Send:
         """
         Return a new ASGI ``send`` callable that injects *debug_headers*
         into the ``http.response.start`` message.
         """
+
+        if resolution is not None and request_method == "POST":
+            return _DiagnosticSend(send, debug_headers, resolution)
 
         async def _send_with_debug(message: Message) -> None:
             if message["type"] == "http.response.start":
@@ -266,8 +338,6 @@ class MCPDebug:
         raw_headers: dict[str, str] | None,
         scope: dict,
         mcp_servers: list[str] | None,
-        mcp_auth_header: str | None,
-        mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         oauth2_headers: dict[str, str] | None,
         client_ip: str | None,
     ) -> dict[str, str]:
@@ -288,16 +358,13 @@ class MCPDebug:
 
         server_url: str | None = None
         server_auth_type: str | None = None
-        auth_resolution = "no-auth"
+        auth_resolution: Final = AuthResolution.unresolved.value
 
         for server_name in mcp_servers or []:
             server = global_mcp_server_manager.get_mcp_server_by_name(server_name, client_ip=client_ip)
             if server:
                 server_url = server.url
                 server_auth_type = server.auth_type
-                auth_resolution = MCPDebug.resolve_auth_resolution(
-                    server, mcp_auth_header, mcp_server_auth_headers, oauth2_headers
-                )
                 break
 
         scope_headers: Final = MCPRequestHandler._safe_get_headers_from_scope(scope)
