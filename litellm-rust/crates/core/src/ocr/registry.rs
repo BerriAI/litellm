@@ -52,9 +52,10 @@ pub(crate) fn resolve_wire_adapter(
     };
     match typed_provider {
         OcrProvider::Mistral => Ok((provider.model.to_string(), OcrAdapterKind::Mistral)),
-        OcrProvider::AzureAi if is_document_intelligence_model(provider.model) => {
-            Err(Error::InvalidProvider("azure_ai".into()))
-        }
+        OcrProvider::AzureAi if is_document_intelligence_model(provider.model) => Ok((
+            provider.model.to_string(),
+            OcrAdapterKind::AzureDocumentIntelligence,
+        )),
         OcrProvider::AzureAi => Ok((provider.model.to_string(), OcrAdapterKind::AzureMistral)),
     }
 }

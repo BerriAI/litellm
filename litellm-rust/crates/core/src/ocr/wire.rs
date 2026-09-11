@@ -81,6 +81,7 @@ pub fn decode_request(wire: OcrWireRequest) -> Result<LiteLLMOcrRequest, Error> 
         extra_headers_source,
         timeout: timeout.unwrap_or(defaults.timeout),
         max_download_bytes: defaults.max_download_bytes,
+        poll_timeout: defaults.poll_timeout,
     };
     Ok(LiteLLMOcrRequest {
         connection,

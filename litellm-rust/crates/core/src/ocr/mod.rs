@@ -18,6 +18,9 @@ pub use types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocumen
 #[path = "../../tests/azure_ai_ocr.rs"]
 mod azure_ai_tests;
 #[cfg(test)]
+#[path = "../../tests/azure_document_intelligence_ocr.rs"]
+mod azure_document_intelligence_tests;
+#[cfg(test)]
 #[path = "../../tests/ocr/support.rs"]
 pub(crate) mod test_support;
 #[cfg(test)]

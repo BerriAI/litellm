@@ -708,6 +708,24 @@ def test_prepare_rust_ocr_call_preserves_proxy_input_sources():
         "api_key": "request",
     }
 
+    marshaled = rust_bridge._marshal(
+        build_request(
+            custom_llm_provider="azure_ai",
+            model="pixtral-12b-2409",
+            api_key="request-key",
+            api_base="https://azure.example.com",
+            litellm_params={
+                "proxy_server_request": {
+                    "body": {"api_base": "https://azure.example.com"},
+                    "credential_fields": ("api_key",),
+                }
+            },
+        ),
+        lambda _name: None,
+        lambda document: document,
+    )
+    assert marshaled.input_sources == {"api_base": "request", "api_key": "request"}
+
 
 def test_rust_ocr_logging_redacts_azure_credentials():
     bridge = RecordingBridge()

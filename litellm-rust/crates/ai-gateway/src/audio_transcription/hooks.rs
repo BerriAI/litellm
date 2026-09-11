@@ -272,7 +272,8 @@ fn core_error_kind(error: &Error) -> &'static str {
         Error::Auth(_)
         | Error::MissingApiKey { .. }
         | Error::MissingAzureAiCredentials
-        | Error::MissingAzureAiCredentialsOrAdToken => "AuthError",
+        | Error::MissingAzureAiCredentialsOrAdToken
+        | Error::MissingAzureDocumentIntelligenceCredentials => "AuthError",
         Error::InvalidProvider(_) => "InvalidProvider",
         Error::InvalidRequest(_) => "InvalidRequest",
         Error::InvalidType { .. } => "InvalidType",

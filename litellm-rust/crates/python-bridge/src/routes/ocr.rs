@@ -102,10 +102,10 @@ mod tests {
     use litellm_core::ocr::wire::is_supported_request;
 
     #[test]
-    fn native_activation_excludes_unmigrated_azure_document_intelligence() {
+    fn native_activation_includes_azure_document_intelligence() {
         assert!(is_supported_request("model", Some("mistral")));
         assert!(is_supported_request("pixtral-12b", Some("azure_ai")));
-        assert!(!is_supported_request(
+        assert!(is_supported_request(
             "documentintelligence/prebuilt-read",
             Some("azure_ai")
         ));

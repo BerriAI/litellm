@@ -74,6 +74,7 @@ pub struct OcrConnection {
     pub extra_headers_source: InputSource,
     pub timeout: Duration,
     pub max_download_bytes: u64,
+    pub poll_timeout: Duration,
 }
 
 impl Default for OcrConnection {
@@ -87,6 +88,7 @@ impl Default for OcrConnection {
             extra_headers_source: InputSource::Deployment,
             timeout: Duration::from_secs(OCR_HTTP_TIMEOUT_SECS),
             max_download_bytes: crate::constants::OCR_DOWNLOAD_MAX_BYTES,
+            poll_timeout: Duration::from_secs(crate::constants::OCR_POLL_TIMEOUT_SECS),
         }
     }
 }
