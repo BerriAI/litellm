@@ -36,6 +36,8 @@ pub enum OcrRequestError {
 pub enum OcrResponseError {
     #[error("invalid OCR response field: {path}")]
     ResponseField { path: String },
+    #[error("OCR response is missing non-empty content")]
+    EmptyContent,
     #[error("OCR document redirect is missing a location")]
     MissingRedirectLocation,
     #[error("OCR document redirect location is invalid")]

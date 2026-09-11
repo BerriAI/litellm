@@ -2,7 +2,6 @@ use serde_json::{Value, json};
 
 use super::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
 use crate::auth::InputSource;
-use crate::ocr::wire::{OcrWireRequest, decode_request};
 
 fn request_body(request: &str) -> Value {
     serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap()
@@ -81,30 +80,82 @@ async fn invalid_credentials_fail_before_provider_http() {
 
 #[tokio::test]
 async fn request_controlled_api_base_is_rejected_before_vertex_auth() {
-    let request = decode_request(OcrWireRequest {
-        model: "vertex_ai/model".into(),
-        document: json!({"type":"document_url","document_url":"data:application/pdf;base64,YWJj"}),
-        api_key: Some("test-key".into()),
-        api_base: Some("https://attacker.example".into()),
-        custom_llm_provider: None,
-        extra_headers: None,
-        optional_params: json!({"vertex_project":"project-1"})
-            .as_object()
-            .unwrap()
-            .clone(),
-        input_sources: std::collections::BTreeMap::from([(
-            "api_base".to_string(),
-            InputSource::Request,
-        )]),
-        timeout_seconds: Some(2.0),
-    })
-    .unwrap();
+    let mut request = wire_request(
+        "vertex_ai/mistral-ocr-maas",
+        "https://caller.example",
+        json!({"vertex_project":"project-1"}),
+    );
+    request.connection.api_base_source = InputSource::Request;
 
     let error = perform_ocr(request).await.unwrap_err();
-
     assert!(
         error
             .to_string()
             .contains("request-controlled Vertex AI endpoint")
     );
+}
+
+#[tokio::test]
+async fn adapters_build_complete_requests_and_share_mistral_normalization() {
+    use std::time::Duration;
+
+    use crate::ocr::adapters::{MistralAdapter, OcrAdapter, VertexMistralAdapter};
+    use crate::ocr::test_support::ocr_client;
+
+    let client = ocr_client();
+    let options = json!({
+        "pages": [0, 2],
+        "include_image_base64": true,
+        "vertex_project": "project-1",
+        "vertex_location": "us-central1",
+        "unknown": "ignored"
+    });
+    let direct = wire_request(
+        "mistral/mistral-ocr-maas",
+        "https://mistral.test",
+        options.clone(),
+    );
+    let vertex = wire_request("vertex_ai/mistral-ocr-maas", "https://vertex.test", options);
+    let direct_http = MistralAdapter
+        .prepare_request(&direct, &client)
+        .await
+        .unwrap();
+    let vertex_http = VertexMistralAdapter
+        .prepare_request(&vertex, &client)
+        .await
+        .unwrap();
+    assert_eq!(direct_http.url().as_str(), "https://mistral.test/v1/ocr");
+    assert_eq!(
+        vertex_http.url().as_str(),
+        "https://vertex.test/v1/projects/project-1/locations/us-central1/publishers/mistralai/models/mistral-ocr-maas:rawPredict"
+    );
+    for http in [&direct_http, &vertex_http] {
+        assert_eq!(http.method(), reqwest::Method::POST);
+        assert_eq!(http.headers()["authorization"], "Bearer test-key");
+        assert_eq!(http.headers()["content-type"], "application/json");
+        assert_eq!(http.timeout(), Some(&Duration::from_secs(2)));
+        let body: Value = serde_json::from_slice(http.body().unwrap().as_bytes().unwrap()).unwrap();
+        assert_eq!(
+            body,
+            json!({
+                "model": "mistral-ocr-maas",
+                "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
+                "pages": [0, 2],
+                "include_image_base64": true
+            })
+        );
+    }
+    let payload = json!({"pages": [{"index": 0, "markdown": "hello"}], "extra": "preserved"});
+    let direct_response = MistralAdapter
+        .transform_ocr_response(&direct, serde_json::from_value(payload.clone()).unwrap())
+        .unwrap()
+        .into_json();
+    let vertex_response = VertexMistralAdapter
+        .transform_ocr_response(&vertex, serde_json::from_value(payload).unwrap())
+        .unwrap()
+        .into_json();
+    assert_eq!(direct_response, vertex_response);
+    assert_eq!(direct_response["model"], "mistral-ocr-maas");
+    assert_eq!(direct_response["object"], "ocr");
+    assert_eq!(direct_response["extra"], "preserved");
 }

@@ -25,8 +25,6 @@ pub enum Error {
         "invalid authentication configuration: Missing Azure AI credentials - set AZURE_AI_API_KEY or configure Entra ID"
     )]
     MissingAzureAiCredentials,
-    #[error("Missing Azure AI credentials - set AZURE_AI_API_KEY or provide azure_ad_token")]
-    MissingAzureAiCredentialsOrAdToken,
     #[error(
         "invalid authentication configuration: Missing Azure Document Intelligence credentials - set AZURE_DOCUMENT_INTELLIGENCE_API_KEY or configure Entra ID"
     )]
