@@ -186,15 +186,18 @@ def _normalize_tool_choice(selected_params: dict) -> None:
     )
 
 
-def _drop_tool_choice_for_missing_function(selected_params: dict) -> None:
-    """Drop a ``FUNCTION`` tool_choice that names a tool OCI will not receive.
+def _fail_closed_tool_choice_for_missing_function(selected_params: dict) -> None:
+    """Disable tool calls when a ``FUNCTION`` tool_choice names a tool OCI will not receive.
 
     Runs after tool adaptation and tool_choice normalisation. Coding-agent
     clients that mix built-in tools with function tools may also force one of
     the built-ins through ``tool_choice``; once that tool has been skipped (see
     :func:`adapt_tool_definition_to_oci_standard`) the forced choice matches
-    nothing in the request and OCI rejects the call. Fall back to the service
-    default (the model picks) instead of failing the whole request.
+    nothing in the request and OCI rejects the call. Falling back to the
+    service default would let the model pick *any* remaining function, which
+    an agent processing untrusted content must not do when the caller forced a
+    specific tool, so fail closed instead: send ``toolChoice: NONE`` and let
+    the model answer in text. The same applies to a misspelled function name.
     """
     tc: Final = selected_params.get("toolChoice")
     if not (isinstance(tc, dict) and tc.get("type") == "FUNCTION"):
@@ -206,11 +209,12 @@ def _drop_tool_choice_for_missing_function(selected_params: dict) -> None:
     if tc.get("name") in available:
         return
     verbose_logger.warning(
-        "OCI tool_choice names function %r, which is not among the tools sent to OCI %s; dropping tool_choice",
+        "OCI tool_choice names function %r, which is not among the tools sent to OCI %s; "
+        "disabling tool calls for this request (toolChoice NONE)",
         tc.get("name"),
         sorted(str(name) for name in available if name),
     )
-    selected_params.pop("toolChoice", None)
+    selected_params["toolChoice"] = {"type": "NONE"}  # mutable-ok: OCI request payload, serialised as-is
     selected_params.pop("tool_choice", None)
 
 
@@ -593,7 +597,7 @@ class OCIChatConfig(BaseConfig):
         # OCI rejects both the OpenAI string and the nested OpenAI dict shape.
         _normalize_tool_choice(selected_params)
         if vendor != OCIVendors.COHERE:
-            _drop_tool_choice_for_missing_function(selected_params)
+            _fail_closed_tool_choice_for_missing_function(selected_params)
 
         _normalize_response_format(selected_params, vendor)
 
