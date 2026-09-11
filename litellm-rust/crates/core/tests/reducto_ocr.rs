@@ -25,7 +25,9 @@ fn request_body(request: &str) -> Value {
         "input":"reducto://already.pdf",
         "formatting":{"table_output_format":"html"},
         "retrieval":{"chunk_mode":"section"},
-        "settings":{"ocr_system":"standard"}
+        "settings":{"ocr_system":"standard"},
+        "future_ocr_option":true,
+        "provider_option":"value"
     })
 )]
 #[case(
@@ -38,7 +40,9 @@ fn request_body(request: &str) -> Value {
     "reducto://legacy.pdf",
     json!({
         "document_url":"reducto://legacy.pdf",
-        "options":{"enhance":{"agentic":[{"type":"table"}]}}
+        "options":{"enhance":{"agentic":[{"type":"table"}]}},
+        "future_ocr_option":true,
+        "provider_option":"value"
     })
 )]
 #[tokio::test]

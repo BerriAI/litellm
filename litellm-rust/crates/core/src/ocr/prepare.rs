@@ -24,6 +24,39 @@ pub(crate) fn _prepare_ocr_request<T: DeserializeOwned>(
     )
 }
 
+pub(crate) fn merge_extra_params<B: Serialize>(
+    body: &B,
+    extra_params: Map<String, Value>,
+) -> Result<Value, OcrRequestError> {
+    let Value::Object(fields) =
+        serde_json::to_value(body).map_err(|_| OcrRequestError::RequestField {
+            path: "body".into(),
+        })?
+    else {
+        return Err(OcrRequestError::RequestField {
+            path: "body".into(),
+        });
+    };
+    let extra_body = extra_params
+        .get("extra_body")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .collect::<Map<String, Value>>();
+    Ok(Value::Object(
+        fields
+            .into_iter()
+            .chain(
+                extra_params
+                    .into_iter()
+                    .filter(|(name, _)| name != "extra_body"),
+            )
+            .chain(extra_body)
+            .collect(),
+    ))
+}
+
 pub(crate) async fn transform_request_body<B>(
     client: &OcrClient,
     request: &LiteLLMOcrRequest,
