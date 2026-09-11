@@ -50,6 +50,14 @@ class UsageWindow:
             return 0.0
         return self.samples[-1].cpu_seconds - self.samples[0].cpu_seconds
 
+    def cpu_seconds_per_request(self, requests: int) -> float:
+        """CPU seconds the tree spent per request served.
+
+        The portable cost figure: cores-busy saturates at the worker count under enough load,
+        so it reads the same whether a request costs 10 ms of CPU or 40 ms. This does not.
+        """
+        return self.cpu_seconds_consumed() / requests if requests else 0.0
+
     def cpu_utilization_percentiles(self) -> tuple[float, float, float]:
         """Per-interval CPU utilization (cores busy) at p50, p90 and p99.
 
