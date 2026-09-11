@@ -76,6 +76,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.guardrails.guardrail_hooks.agent_365.agent_365 import agent_365_authorization_servers
 from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPTokenEndpointAuthMethod
 
@@ -2399,6 +2400,14 @@ async def _build_oauth_protected_resource_response(
     obo_response: Final = _obo_protected_resource_response(mcp_server, resource_url)
     if obo_response is not None:
         return obo_response
+
+    agent_365_issuers: Final = agent_365_authorization_servers(mcp_server, None) if mcp_server else ()
+    if mcp_server is not None and agent_365_issuers:
+        return {
+            "authorization_servers": list(agent_365_issuers),
+            "resource": resource_url,
+            "scopes_supported": list(mcp_server.scopes or ()),
+        }
 
     if explicitly_named and mcp_server is not None and mcp_server.advertises_gateway_authorization_server:
         return {
