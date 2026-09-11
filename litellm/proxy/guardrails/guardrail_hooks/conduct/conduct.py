@@ -56,7 +56,7 @@ except ImportError as _err:
 
         @classmethod
         def get_supported_event_hooks(cls) -> list[str]:
-            return list(cls.SUPPORTED_EVENT_HOOKS)
+            return list(cls.SUPPORTED_EVENT_HOOKS)  # mutable-ok: LiteLLM registry expects a fresh list
 
     ConductGuardrailBlocked = None
     GuardDecision = None
@@ -74,7 +74,7 @@ def raise_if_missing_package() -> None:
         raise ImportError(_import_error_message) from _import_error
 
 
-__all__ = [
+__all__ = [  # mutable-ok: standard Python re-export list
     "ConductGuardrail",
     "ConductGuardrailBlocked",
     "GuardDecision",
