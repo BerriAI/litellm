@@ -108,7 +108,7 @@ export default function TeamMemberTab({
         </span>
       ),
       key: "model_scope",
-      render: (_: unknown, record: Member) => {
+      render: (record: Member) => {
         const models = getUserAllowedModels(record.user_id);
         if (!models) {
           return <span className="text-muted-foreground">(all team models)</span>;
@@ -141,9 +141,8 @@ export default function TeamMemberTab({
         </span>
       ),
       key: "spend",
-      render: (_: unknown, record: Member) => (
-        <MoneyCell value={getUserCurrentCycleSpend(record.user_id)} decimals={2} />
-      ),
+      sortValue: (record: Member) => getUserCurrentCycleSpend(record.user_id),
+      render: (record: Member) => <MoneyCell value={getUserCurrentCycleSpend(record.user_id)} decimals={2} />,
     },
     {
       title: (
@@ -155,19 +154,22 @@ export default function TeamMemberTab({
         </span>
       ),
       key: "total_spend",
-      render: (_: unknown, record: Member) => <MoneyCell value={getUserTotalSpend(record.user_id)} decimals={2} />,
+      sortValue: (record: Member) => getUserTotalSpend(record.user_id),
+      render: (record: Member) => <MoneyCell value={getUserTotalSpend(record.user_id)} decimals={2} />,
     },
     {
       title: "Team Member Budget (USD)",
       key: "budget",
-      render: (_: unknown, record: Member) => (
+      sortValue: (record: Member) => getUserBudget(record.user_id),
+      render: (record: Member) => (
         <MoneyCell value={getUserBudget(record.user_id)} decimals={2} emptyText="Unlimited" showZero />
       ),
     },
     {
       title: "Budget Reset",
       key: "budget_reset",
-      render: (_: unknown, record: Member) => <DateCell value={getUserBudgetReset(record.user_id)} precision="date" />,
+      sortValue: (record: Member) => getUserBudgetReset(record.user_id),
+      render: (record: Member) => <DateCell value={getUserBudgetReset(record.user_id)} precision="date" />,
     },
     {
       title: (
@@ -179,12 +181,13 @@ export default function TeamMemberTab({
         </span>
       ),
       key: "rate_limits",
-      render: (_: unknown, record: Member) => <span>{getUserRateLimits(record.user_id)}</span>,
+      render: (record: Member) => <span>{getUserRateLimits(record.user_id)}</span>,
     },
   ];
 
   return (
     <MemberTable
+      key={teamData.team_id}
       members={teamData.team_info.members_with_roles}
       canEdit={canEditTeam}
       onEdit={(record) => {
