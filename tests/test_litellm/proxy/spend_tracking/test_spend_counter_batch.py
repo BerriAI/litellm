@@ -138,6 +138,37 @@ async def test_keys_bound_after_the_first_read_join_one_more_mget_for_only_the_n
 
 
 @pytest.mark.asyncio
+async def test_a_recorded_write_result_answers_later_reads_without_another_redis_read():
+    redis = CountingRedis({"spend:key:hashed": 1.0})
+    batch = SpendCounterBatch(redis)
+    batch.bind(frozenset({"spend:key:hashed"}))
+    assert await batch.read("spend:key:hashed") == (1.0, True)
+
+    batch.record("spend:key:hashed", 3.5)
+    batch.record("spend:org:org", 7.0)
+
+    assert await batch.read("spend:key:hashed") == (3.5, True)
+    assert await batch.read("spend:org:org") == (7.0, True)
+    assert redis.commands == ["MGET spend:key:hashed"]
+
+
+@pytest.mark.asyncio
+async def test_a_forgotten_counter_is_read_fresh_from_redis_when_it_is_bound_again():
+    redis = CountingRedis({"spend:key:hashed": 1.0})
+    batch = SpendCounterBatch(redis)
+    batch.bind(frozenset({"spend:key:hashed"}))
+    batch.record("spend:key:hashed", 3.5)
+
+    batch.forget("spend:key:hashed")
+    assert await batch.read("spend:key:hashed") is None
+
+    redis.store["spend:key:hashed"] = 9.0
+    batch.bind(frozenset({"spend:key:hashed"}))
+    assert await batch.read("spend:key:hashed") == (9.0, True)
+    assert redis.commands == ["MGET spend:key:hashed"]
+
+
+@pytest.mark.asyncio
 async def test_failed_mget_hands_every_counter_back_to_the_caller():
     batch = SpendCounterBatch(CountingRedis(fail=True))
     batch.bind(TOKEN_KEYS)
