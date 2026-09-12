@@ -155,19 +155,38 @@ mod tests {
     fn response_normalizes_markdown_images_blocks_and_billed_pages() {
         let response = serde_json::from_value(json!({
             "pages": [
-                {"index": 4, "markdown": {"content": "receipt", "images": [{"id":"image", "bounding_box":{"top_left_x":1}, "description":"scan"}]}},
-                {"blocks": [{"type":"text","text":"total"}]}
+                {
+                    "type":"markdown",
+                    "index":4,
+                    "markdown":{
+                        "content":"receipt",
+                        "images":[{
+                            "id":"image",
+                            "bounding_box":{"top_left_x":1,"bottom_right_x":48},
+                            "bounding_box_normalized":{"top_left_x":0.04,"bottom_right_x":0.15},
+                            "description":"scan",
+                            "category":"logo"
+                        }]
+                    }
+                },
+                {"type":"blocks","blocks":[{"type":"text","text":{"content":"total"}}]}
             ],
-            "meta": {"billed_units":{"pages":3}}
-        })).unwrap();
+            "meta":{"api_version":{"version":"2"},"billed_units":{"pages":3}}
+        }))
+        .unwrap();
         let normalized = transform_response("parse-v5.0", response).unwrap();
         assert_eq!(normalized.pages[0]["index"], 4);
         assert_eq!(normalized.pages[0]["markdown"], "receipt");
         assert_eq!(normalized.pages[0]["images"][0]["bbox"]["top_left_x"], 1);
+        assert_eq!(
+            normalized.pages[0]["images"][0]["bounding_box_normalized"]["bottom_right_x"],
+            0.15
+        );
         assert_eq!(normalized.pages[0]["images"][0]["description"], "scan");
+        assert_eq!(normalized.pages[0]["images"][0]["category"], "logo");
         assert_eq!(normalized.pages[1]["index"], 1);
         assert_eq!(normalized.pages[1]["markdown"], "");
-        assert_eq!(normalized.pages[1]["blocks"][0]["text"], "total");
+        assert_eq!(normalized.pages[1]["blocks"][0]["text"]["content"], "total");
         assert_eq!(normalized.usage_info.unwrap()["pages_processed"], 3);
     }
 

@@ -184,9 +184,16 @@ async fn rejects_invalid_document_sources_before_network(#[case] source: &str) {
 fn response_normalization_groups_blocks_and_distinguishes_null_result() {
     use crate::ocr::codecs::reducto::{ReductoResponse, transform_ocr_response};
 
-    let raw = json!({"usage":{"num_pages":"2","credits":"3"},"result":{"chunks":[
-        {"blocks":[{"content":"B","bbox":{"page":2},"kind":"table"}]},
-        {"blocks":[{"content":"A","bbox":{"page":1},"kind":"text"},{"content":"C","bbox":{"page":1}}]}
+    let raw = json!({"usage":{"num_pages":"2","credits":"3"},"result":{"type":"full","chunks":[
+        {"blocks":[{
+            "type":"Table",
+            "content":"B",
+            "bbox":{"left":0.1,"top":0.2,"width":0.8,"height":0.3,"page":2,"original_page":4},
+            "confidence":"high",
+            "granular_confidence":{"parse_confidence":0.95,"extract_confidence":null},
+            "image_url":null
+        }]},
+        {"blocks":[{"content":"A","bbox":{"page":1},"type":"Text"},{"content":"C","bbox":{"page":1}}]}
     ]}});
     let response: ReductoResponse = serde_json::from_value(raw).unwrap();
     let normalized = transform_ocr_response("parse-v3", response)
@@ -194,7 +201,17 @@ fn response_normalization_groups_blocks_and_distinguishes_null_result() {
         .into_json();
     assert_eq!(normalized["pages"][0]["markdown"], "A\n\nC");
     assert_eq!(normalized["pages"][1]["markdown"], "B");
-    assert_eq!(normalized["pages"][1]["blocks"][0]["kind"], "table");
+    assert_eq!(normalized["pages"][1]["blocks"][0]["type"], "Table");
+    assert_eq!(
+        normalized["pages"][1]["blocks"][0]["bbox"],
+        json!({"left":0.1,"top":0.2,"width":0.8,"height":0.3,"page":2,"original_page":4})
+    );
+    assert_eq!(normalized["pages"][1]["blocks"][0]["confidence"], "high");
+    assert_eq!(
+        normalized["pages"][1]["blocks"][0]["granular_confidence"]["parse_confidence"],
+        0.95
+    );
+    assert!(normalized["pages"][1]["blocks"][0]["image_url"].is_null());
     assert_eq!(normalized["usage_info"]["pages_processed"], 2);
     assert_eq!(normalized["usage_info"]["credits"], 3.0);
 

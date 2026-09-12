@@ -178,6 +178,47 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn document_variants_preserve_provider_fields_when_rewriting_sources() {
+        for (value, original, replacement, expected) in [
+            (
+                json!({
+                    "type":"document_url",
+                    "document_url":"https://example.com/input.pdf",
+                    "document_name":"input.pdf"
+                }),
+                "https://example.com/input.pdf",
+                "data:application/pdf;base64,AA==",
+                json!({
+                    "type":"document_url",
+                    "document_url":"data:application/pdf;base64,AA==",
+                    "document_name":"input.pdf"
+                }),
+            ),
+            (
+                json!({
+                    "type":"image_url",
+                    "image_url":"https://example.com/input.png",
+                    "detail":"high"
+                }),
+                "https://example.com/input.png",
+                "data:image/png;base64,AA==",
+                json!({
+                    "type":"image_url",
+                    "image_url":"data:image/png;base64,AA==",
+                    "detail":"high"
+                }),
+            ),
+        ] {
+            let document: OcrDocument = serde_json::from_value(value).unwrap();
+            assert_eq!(document.source(), original);
+            assert_eq!(
+                serde_json::to_value(document.with_source(replacement.into())).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn response_serialization_flattens_extra_fields_and_omits_absent_native_response() {
         let response = LiteLLMOcrResponse {
             pages: vec![],
