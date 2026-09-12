@@ -147,3 +147,64 @@ class TestRequestyChatCompletionStreamingHandler:
         assert not isinstance(exc_info.value, OpenRouterException)
         assert "KeyError" in str(exc_info.value)
         assert exc_info.value.status_code == 400
+
+
+def test_requesty_config_reports_custom_llm_provider():
+    assert RequestyConfig().custom_llm_provider == "requesty"
+
+
+def test_requesty_config_reads_base_url_and_key_from_env(monkeypatch):
+    """REQUESTY_API_BASE and REQUESTY_API_KEY are honoured when no explicit values are passed."""
+    monkeypatch.setenv("REQUESTY_API_BASE", "https://router.eu.requesty.ai/v1")
+    monkeypatch.setenv("REQUESTY_API_KEY", "env-test-key")
+
+    api_base, dynamic_api_key = RequestyConfig()._get_openai_compatible_provider_info(api_base=None, api_key=None)
+
+    assert api_base == "https://router.eu.requesty.ai/v1"
+    assert dynamic_api_key == "env-test-key"
+
+
+def test_supports_reasoning_swallows_lookup_errors(monkeypatch):
+    """An unknown model must not raise; it simply gets no reasoning params."""
+
+    def _boom(**_kwargs):
+        raise ValueError("unknown model")
+
+    monkeypatch.setattr(litellm, "supports_reasoning", _boom)
+
+    assert RequestyConfig()._supports_reasoning("acme/unknown-1") is False
+
+
+def test_map_openai_params_translates_max_reasoning_effort_to_xhigh():
+    """Requesty accepts reasoning_effort=xhigh where OpenAI style clients send max."""
+    optional_params = RequestyConfig().map_openai_params(
+        non_default_params={"reasoning_effort": "max"},
+        optional_params={},
+        model="openai/gpt-5",
+        drop_params=False,
+    )
+
+    assert optional_params["reasoning_effort"] == "xhigh"
+
+
+def test_map_openai_params_keeps_other_reasoning_effort_values():
+    optional_params = RequestyConfig().map_openai_params(
+        non_default_params={"reasoning_effort": "high"},
+        optional_params={},
+        model="openai/gpt-5",
+        drop_params=False,
+    )
+
+    assert optional_params["reasoning_effort"] == "high"
+
+
+def test_get_error_class_returns_requesty_exception():
+    error = RequestyConfig().get_error_class(
+        error_message="rate limited",
+        status_code=429,
+        headers={"x-request-id": "abc"},
+    )
+
+    assert isinstance(error, RequestyException)
+    assert error.status_code == 429
+    assert error.message == "rate limited"
