@@ -409,7 +409,7 @@ class RedisCircuitBreakerOpenError(Exception):
 class _RedisTimeoutLogThrottle:
     """Admits one Redis timeout log line per interval and counts the timeouts it suppressed in between."""
 
-    def __init__(self, interval: float, clock: Callable[[], float] = time.time) -> None:
+    def __init__(self, interval: float, clock: Callable[[], float] = time.monotonic) -> None:
         self.interval = interval
         self._clock = clock
         self._lock = threading.Lock()
