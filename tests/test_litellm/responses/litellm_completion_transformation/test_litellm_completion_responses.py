@@ -1,9 +1,18 @@
 import json
-from typing import Final
+from copy import deepcopy
+from typing import Final, Literal
 
 import pytest
+from openai.types.responses.response_function_web_search import (
+    ActionFind,
+    ActionOpenPage,
+    ActionSearch,
+    ActionSearchSource,
+    ResponseFunctionWebSearch,
+)
 
-
+import litellm
+from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.responses.litellm_completion_transformation.transformation import (
     TOOL_CALLS_CACHE,
     LiteLLMCompletionResponsesConfig,
@@ -4018,6 +4027,211 @@ def test_function_call_tool_id_falls_back_to_unique_id_for_degenerate_call_id():
         id="fc_2", call_id="call_tokyo", name="get_weather", arguments="{}"
     )
     assert convert(openai)["id"] == "call_tokyo"
+
+
+class TestHostedWebSearchReplay:
+    def test_emitted_hosted_search_output_round_trips_with_client_tool_result(self) -> None:
+        search_result: Final = {
+            "type": "web_search_tool_result",
+            "tool_use_id": "srvtoolu_round_trip_search",
+            "content": [{"type": "web_search_result", "url": "https://example.com/forecast"}],
+        }
+        search: Final = build_web_search_call(
+            tool_id="srvtoolu_round_trip_search", tool_input={"query": "Paris forecast"}, result=search_result
+        )
+        message: Final = Message(
+            role="assistant",
+            content="I found a forecast source.",
+            tool_calls=[
+                ChatCompletionMessageToolCall(
+                    id="srvtoolu_round_trip_search",
+                    type="function",
+                    function=Function(name="web_search", arguments='{"query":"Paris forecast"}'),
+                ),
+                ChatCompletionMessageToolCall(
+                    id="call_round_trip_weather",
+                    type="function",
+                    function=Function(name="get_weather", arguments='{"city":"Paris"}'),
+                ),
+            ],
+            provider_specific_fields={"web_search_calls": [search], "web_search_results": [search_result]},
+        )
+        response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Find a forecast source and check the weather in Paris.",
+            responses_api_request={
+                "tools": [
+                    {"type": "web_search"},
+                    {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
+                ]
+            },
+            chat_completion_response=_bridged_chat_completion_response(
+                choices=[Choices(index=0, finish_reason="tool_calls", message=message)]
+            ),
+        )
+        assert [item for item in response.output if item.type == "web_search_call"] == [search]
+        assert [item.call_id for item in response.output if item.type == "function_call"] == ["call_round_trip_weather"]
+        history: Final = [
+            {"role": "user", "content": "Find a forecast source and check the weather in Paris."},
+            *(item.model_dump(exclude_none=True) for item in response.output),
+            {"type": "function_call_output", "call_id": "call_round_trip_weather", "output": "Paris is sunny."},
+        ]
+        original: Final = deepcopy(history)
+
+        messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=history, responses_api_request={}
+        )
+
+        assert [item.get("role") for item in messages] == ["user", "assistant", "tool"]
+        assistant: Final = messages[1]
+        assert [call["id"] for call in assistant["tool_calls"]] == ["call_round_trip_weather"]
+        assert [call["function"]["name"] for call in assistant["tool_calls"]] == ["get_weather"]
+        content: Final = assistant["content"]
+        assert isinstance(content, list)
+        text_parts: Final = tuple(block["text"] for block in content if block.get("type") == "text")
+        assert text_parts[0] == "I found a forecast source."
+        replayed_searches: Final = tuple(
+            ResponseFunctionWebSearch.model_validate_json(text[text.index("{"):])
+            for text in text_parts
+            if "web_search_call" in text
+        )
+        assert replayed_searches == (search,)
+        assert messages[2]["tool_call_id"] == "call_round_trip_weather"
+        assert messages[2]["content"] == "Paris is sunny."
+        assert history == original
+
+    @pytest.mark.parametrize(
+        "action",
+        (
+            ActionSearch(
+                type="search",
+                query="hosted search history",
+                queries=["hosted search history", "search replay"],
+                sources=[ActionSearchSource(type="url", url="https://example.com/search-result")],
+            ),
+            ActionOpenPage(type="open_page", url="https://example.com/opened-page"),
+            ActionFind(type="find_in_page", url="https://example.com/find-page", pattern="search history"),
+        ),
+        ids=("search", "open_page", "find"),
+    )
+    @pytest.mark.parametrize("status", ("completed", "failed"))
+    def test_replays_typed_search_action_without_client_tool_call(
+        self,
+        action: ActionSearch | ActionOpenPage | ActionFind,
+        status: Literal["completed", "failed"],
+    ) -> None:
+        search: Final = ResponseFunctionWebSearch(
+            id="ws_replayed_search", type="web_search_call", status=status, action=action
+        )
+        input_item: Final = search.model_dump(exclude_none=True)
+        original: Final = deepcopy(input_item)
+
+        messages: Final = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+            input_item=input_item
+        )
+
+        assert len(messages) == 1
+        assert messages[0]["role"] == "assistant"
+        assert not messages[0].get("tool_calls")
+        content: Final = messages[0].get("content")
+        assert isinstance(content, str)
+        replayed: Final = ResponseFunctionWebSearch.model_validate_json(content[content.index("{"):])
+        assert replayed == search
+        assert input_item == original
+
+    @pytest.mark.parametrize("order", ((0, 1, 2, 3), (1, 0, 3, 2), (1, 3, 0, 2)))
+    @pytest.mark.parametrize("modify_params", (False, True))
+    @pytest.mark.parametrize("structured_content", (False, True))
+    def test_search_replay_preserves_client_tool_result_adjacency(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        order: tuple[int, int, int, int],
+        modify_params: bool,
+        structured_content: bool,
+    ) -> None:
+        monkeypatch.setattr(litellm, "modify_params", modify_params)
+        searches: Final = tuple(
+            ResponseFunctionWebSearch(
+                id=f"ws_search_{index}",
+                type="web_search_call",
+                status="completed",
+                action=ActionSearch(
+                    type="search",
+                    query=f"search query {index}",
+                    queries=[f"search query {index}"],
+                    sources=[ActionSearchSource(type="url", url=f"https://example.com/result-{index}")],
+                ),
+            )
+            for index in (1, 2)
+        )
+        replay_items: Final = (
+            {
+                "type": "function_call",
+                "name": "get_weather",
+                "call_id": "call_weather",
+                "arguments": '{"city":"Paris"}',
+            },
+            searches[0].model_dump(exclude_none=True),
+            {"type": "function_call", "name": "get_time", "call_id": "call_time", "arguments": "{}"},
+            searches[1].model_dump(exclude_none=True),
+        )
+        history: Final = [
+            {"role": "user", "content": "Research the forecast and call get_weather."},
+            {
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "I will check the forecast."}]
+                if structured_content
+                else "I will check the forecast.",
+            },
+            *(replay_items[index] for index in order),
+            {"role": "assistant", "content": [{"type": "output_text", "text": "I found two sources."}]},
+            {"type": "function_call_output", "call_id": "call_weather", "output": "Paris is sunny."},
+            {"type": "function_call_output", "call_id": "call_time", "output": "12:00"},
+        ]
+        original: Final = deepcopy(history)
+
+        messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=history, responses_api_request={}
+        )
+
+        assert [message.get("role") for message in messages] == ["user", "assistant", "tool", "tool"]
+        assistant: Final = messages[1]
+        assert [call["id"] for call in assistant["tool_calls"]] == ["call_weather", "call_time"]
+        assert [call["function"]["name"] for call in assistant["tool_calls"]] == ["get_weather", "get_time"]
+        assert messages[2]["tool_call_id"] == "call_weather"
+        assert messages[2]["content"] == "Paris is sunny."
+        assert messages[3]["tool_call_id"] == "call_time"
+        assert messages[3]["content"] == "12:00"
+        content: Final = assistant["content"]
+        assert isinstance(content, list)
+        text_parts: Final = tuple(block["text"] for block in content if block.get("type") == "text")
+        assert text_parts[0] == "I will check the forecast."
+        assert text_parts[-1] == "I found two sources."
+        replayed_searches: Final = tuple(
+            ResponseFunctionWebSearch.model_validate_json(text[text.index("{"):])
+            for text in text_parts
+            if "web_search_call" in text
+        )
+        assert replayed_searches == searches
+        assert history == original
+
+        provider_messages: Final = anthropic_messages_pt(
+            messages=messages, model="claude-fable-5-1", llm_provider="anthropic"
+        )
+
+        assert [message["role"] for message in provider_messages] == ["user", "assistant", "user"]
+        assistant_blocks: Final = provider_messages[1]["content"]
+        result_blocks: Final = provider_messages[2]["content"]
+        assert [block["id"] for block in assistant_blocks if block.get("type") == "tool_use"] == [
+            "call_weather", "call_time"
+        ]
+        assert [block["tool_use_id"] for block in result_blocks if block.get("type") == "tool_result"] == [
+            "call_weather", "call_time"
+        ]
+        assert [block["content"] for block in result_blocks if block.get("type") == "tool_result"] == [
+            "Paris is sunny.", "12:00"
+        ]
+        assert [block["text"] for block in assistant_blocks if block.get("type") == "text"] == list(text_parts)
+        assert history == original
 
 
 BRIDGED_CHAT_COMPLETION_ID = "chatcmpl-dfa2da3a-1586-4ff7-b64e-f59c692a5d11"

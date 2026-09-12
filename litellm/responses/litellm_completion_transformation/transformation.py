@@ -45,6 +45,7 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionAssistantMessage,
     ChatCompletionImageObject,
     ChatCompletionImageUrlObject,
     ChatCompletionRedactedThinkingBlock,
@@ -635,6 +636,7 @@ class LiteLLMCompletionResponsesConfig:
                 merged_assistant = LiteLLMCompletionResponsesConfig._merged_trailing_assistant_message(
                     messages=messages,
                     chat_completion_messages=chat_completion_messages,
+                    hosted_search=_input.get("type") == "web_search_call",
                 )
                 if merged_assistant is not None:
                     messages[-1] = merged_assistant
@@ -807,29 +809,44 @@ class LiteLLMCompletionResponsesConfig:
         chat_completion_messages: Sequence[
             AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage
         ],
-    ) -> ChatCompletionResponseMessage | None:
-        """Fold an assistant content message into a directly preceding assistant
-        tool_calls message. Providers like DeepSeek and Anthropic require tool
-        results immediately after the tool_calls message, so an assistant message
-        between them is rejected."""
+        hosted_search: bool = False,
+    ) -> ChatCompletionAssistantMessage | None:
+        """Keep replayed search context on the assistant turn so client tool results
+        still immediately follow the assistant that requested them."""
         if not messages or len(chat_completion_messages) != 1:
             return None
-        last_message = messages[-1]
-        new_message = chat_completion_messages[0]
-        if not isinstance(last_message, dict):
+        if not isinstance(messages[-1], dict):
             return None
+        last_message: Final = _STR_KEY_DICT_ADAPTER.validate_python(messages[-1])
+        new_message: Final = _STR_KEY_DICT_ADAPTER.validate_python(chat_completion_messages[0])
         if last_message.get("role") != "assistant" or new_message.get("role") != "assistant":
             return None
-        if not last_message.get("tool_calls") or last_message.get("content") or new_message.get("tool_calls"):
+        if not (last_message.get("tool_calls") or hosted_search) or new_message.get("tool_calls"):
             return None
-        new_content = new_message.get("content")
+        new_content: Final = new_message.get("content")
         if new_content is None:
             return None
+        previous_content: Final = last_message.get("content")
+        content: Final = (
+            new_content
+            if not previous_content
+            else [  # mutable-ok: outbound chat content uses JSON arrays
+                block
+                for value in (previous_content, new_content)
+                for block in (
+                    (ChatCompletionTextObject(type="text", text=value),)
+                    if isinstance(value, str)
+                    else _OBJECT_LIST_ADAPTER.validate_python(value)
+                )
+            ]
+        )
         merged: Final = {  # mutable-ok: json.dumps rejects MappingProxyType in outbound chat messages
             **last_message,
-            "content": new_content,
+            "content": content,
         }
-        return cast(ChatCompletionResponseMessage, merged)  # cast-ok: TypedDict spread widens to dict[str, object]
+        return cast(  # cast-ok: preserves the assistant fields and content blocks
+            ChatCompletionAssistantMessage, merged
+        )
 
     @staticmethod
     def _deduplicate_tool_call_output_messages(
@@ -1252,6 +1269,14 @@ class LiteLLMCompletionResponsesConfig:
         - ResponseReasoningItemParam
         - ItemReference
         """
+        if input_item.get("type") == "web_search_call":
+            search: Final = ResponseFunctionWebSearch.model_validate(input_item)
+            return [  # mutable-ok: input conversion returns chat message lists
+                GenericChatCompletionMessage(
+                    role="assistant",
+                    content="Hosted web search: " + search.model_dump_json(exclude_none=True),
+                )
+            ]
         if LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(input_item):
             # handle executed tool call results
             return (
