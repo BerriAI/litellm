@@ -1,9 +1,22 @@
 import {
   buildAutoRouterCompressionParams,
+  buildAutoRouterCompressionPatch,
   DEFAULT_AUTO_ROUTER_COMPRESSION,
   hydrateAutoRouterCompression,
   NO_COMPRESSION,
 } from "./buildAutoRouterCompression";
+
+describe("buildAutoRouterCompressionPatch", () => {
+  it.each([
+    {},
+    { auto_router_routing_compression: "routing-compressor" },
+    { auto_router_model_compression: "model-compressor" },
+    { auto_router_routing_compression: "none", auto_router_model_compression: "none" },
+    { auto_router_routing_compression: "routing-compressor", auto_router_model_compression: "model-compressor" },
+  ])("should preserve the exact stored fields on an untouched save: %j", (stored) => {
+    expect(buildAutoRouterCompressionPatch(hydrateAutoRouterCompression(stored), stored)).toEqual({});
+  });
+});
 
 describe("buildAutoRouterCompressionParams", () => {
   it("omits both keys when routing was never configured", () => {

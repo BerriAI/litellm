@@ -1918,6 +1918,7 @@ class BaseLLMHTTPHandler:
                     url=complete_url,
                     headers=signed_headers,
                 )
+                response.raise_for_status()
             else:
                 # A signed body must be sent verbatim, re-serializing it would break the signature
                 response = client.post(
@@ -1927,6 +1928,8 @@ class BaseLLMHTTPHandler:
                     json=data if signed_json_body is None else None,
                     timeout=timeout,
                 )
+        except httpx.HTTPStatusError as e:
+            raise provider_config.get_http_error_class(e)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
@@ -2019,6 +2022,7 @@ class BaseLLMHTTPHandler:
                     url=complete_url,
                     headers=signed_headers,
                 )
+                response.raise_for_status()
             else:
                 # A signed body must be sent verbatim, re-serializing it would break the signature
                 response = await async_httpx_client.post(
@@ -2028,6 +2032,8 @@ class BaseLLMHTTPHandler:
                     json=data if signed_json_body is None else None,
                     timeout=timeout,
                 )
+        except httpx.HTTPStatusError as e:
+            raise provider_config.get_http_error_class(e)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 

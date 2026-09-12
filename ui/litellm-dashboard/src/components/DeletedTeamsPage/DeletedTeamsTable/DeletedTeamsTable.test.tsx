@@ -4,6 +4,8 @@ import { renderWithProviders } from "../../../../tests/test-utils";
 import { DeletedTeamsTable } from "./DeletedTeamsTable";
 import { DeletedTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 const makeDeletedTeam = (overrides: Partial<DeletedTeam> = {}): DeletedTeam => ({
   team_id: "team-1",
   team_alias: "Test Team",
@@ -80,4 +82,22 @@ it("renders the shared pagination footer with the server row count", () => {
   expect(screen.getByTestId("pagination-page-size")).toHaveTextContent("50");
   expect(screen.getByTestId("pagination-prev")).toBeEnabled();
   expect(screen.getByTestId("pagination-next")).toBeDisabled();
+});
+
+it("links the organization and deleted by cells, leaving the deleted team id unlinked", () => {
+  renderWithProviders(
+    <DeletedTeamsTable teams={[makeDeletedTeam()]} isLoading={false} rowCount={1} {...paginationProps} />,
+  );
+
+  expect(screen.getByRole("link", { name: "org-1" })).toHaveAttribute("href", "/ui/organizations?org=org-1");
+  expect(screen.getByRole("link", { name: "user-1" })).toHaveAttribute("href", "/ui/users?user=user-1");
+  expect(screen.queryByRole("link", { name: "team-1" })).not.toBeInTheDocument();
+});
+
+it("leaves the default_user_id placeholder unlinked in the deleted by cell", () => {
+  const team = makeDeletedTeam({ deleted_by: "default_user_id", organization_id: null });
+  renderWithProviders(<DeletedTeamsTable teams={[team]} isLoading={false} rowCount={1} {...paginationProps} />);
+
+  expect(screen.getByText("default_user_id")).toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: "default_user_id" })).not.toBeInTheDocument();
 });

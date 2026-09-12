@@ -10,6 +10,7 @@ use litellm_core::router::{Deployment, LiteLLMParams, Router as ModelRouter};
 use serde::Serialize;
 use serde_json::Value;
 use tower::ServiceExt;
+use tracing::instrument::WithSubscriber;
 
 use crate::io::realtime_pool::RealtimePool;
 use crate::routes;
@@ -19,6 +20,38 @@ use crate::state::AppState;
 pub struct GatewayResponse {
     pub status: u16,
     pub body: Value,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TracedGatewayResponse {
+    pub response: Option<GatewayResponse>,
+    pub error: Option<String>,
+    pub trace: Vec<litellm_core::observability::FunctionTraceEvent>,
+}
+
+pub async fn traced_messages_request(
+    model_alias: String,
+    provider_model: String,
+    api_base: String,
+    body: Value,
+) -> TracedGatewayResponse {
+    let trace = litellm_core::observability::FunctionTrace::default();
+    let result = messages_request(model_alias, provider_model, api_base, body)
+        .with_subscriber(trace.dispatcher())
+        .await;
+    let events = trace.events();
+    match result {
+        Ok(response) => TracedGatewayResponse {
+            response: Some(response),
+            error: None,
+            trace: events,
+        },
+        Err(error) => TracedGatewayResponse {
+            response: None,
+            error: Some(error.to_string()),
+            trace: events,
+        },
+    }
 }
 
 pub async fn messages_request(
