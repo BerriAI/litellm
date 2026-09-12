@@ -75,10 +75,10 @@ impl PreparedOcrCall {
             ($( $variant:ident, $adapter:ty, $instance:expr, $provider:ident; )+) => {
                 match self.request.adapter {
                     $( OcrAdapterKind::$variant => {
-                        let bytes = $instance.read_response(&self.client, response, &url, &headers, &self.request).await?;
+                        let decoded = $instance.read_response(&self.client, response, &url, &headers, &self.request).await?;
                         Ok(OcrProviderResponse {
                             request: self.request,
-                            bytes,
+                            data: OcrProviderData::$variant(decoded),
                         })
                     }, )+
                 }
@@ -106,12 +106,14 @@ fn request_headers(request: &reqwest::Request) -> Result<Vec<(String, String)>, 
 
 macro_rules! provider_data {
     ($( $variant:ident, $adapter:ty, $instance:expr, $provider:ident; )+) => {
+        enum OcrProviderData {
+            $( $variant(super::wire::DecodedOcrResponse<<$adapter as OcrAdapter>::ProviderResponse>), )+
+        }
+
         impl OcrProviderResponse {
             pub(crate) fn normalize(self) -> Result<LiteLLMOcrResponse, Error> {
-                let native = self.request.response_format()? == super::types::OcrResponseFormat::Native;
-                match self.request.adapter {
-                    $( OcrAdapterKind::$variant => {
-                        let decoded = super::wire::decode_response::<<$adapter as OcrAdapter>::ProviderResponse>(&self.bytes, native)?;
+                match self.data {
+                    $( OcrProviderData::$variant(decoded) => {
                         let response = $instance.transform_ocr_response(&self.request, decoded.data)?;
                         Ok(LiteLLMOcrResponse { provider_native_response: decoded.native, ..response })
                     }, )+
@@ -123,7 +125,7 @@ macro_rules! provider_data {
 
 pub(crate) struct OcrProviderResponse {
     request: LiteLLMOcrRequest,
-    bytes: Vec<u8>,
+    data: OcrProviderData,
 }
 
 pub(crate) async fn post_call(hooks: &Arc<dyn OcrHooks>, bytes: &[u8]) -> Result<(), Error> {

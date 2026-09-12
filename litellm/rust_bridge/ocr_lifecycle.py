@@ -8,7 +8,6 @@ from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamicall
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.ocr import LiteLLMOcrRequest
 
 
@@ -44,8 +43,6 @@ NATIVE_OCR_LIFECYCLE: Final = NativeBinding("_ocr_lifecycle", validate=_binding)
 
 
 def select(request: LiteLLMOcrRequest) -> NativeOcrLifecycle | None:
-    if not rust_enabled():
-        return None
     if litellm.cache is not None or request.kwargs.get("caching") or request.kwargs.get("aocr"):
         return None
     return NATIVE_OCR_LIFECYCLE.load()
@@ -99,12 +96,6 @@ def call_azure_ad_token_provider(provider: object) -> str:
 
 
 def map_failure(error: Exception, request: LiteLLMOcrRequest, request_provider: str) -> Exception:
-    if isinstance(error, ValueError) and "Invalid `req_format`" in str(error):
-        return litellm.BadRequestError(
-            message=str(error),
-            model=request.model,
-            llm_provider=request_provider,
-        )
     mapper: Final = cast(  # cast-ok: bounded adapter for the legacy public exception mapper
         ExceptionMapper, litellm.exception_type
     )

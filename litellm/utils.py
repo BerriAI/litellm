@@ -7,6 +7,7 @@ import ast
 import asyncio
 import base64
 import binascii
+import contextvars
 import copy
 import datetime
 import hashlib
@@ -80,7 +81,6 @@ from litellm.constants import (
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
-from litellm.litellm_core_utils.call_completion import CallCompletion, PythonCompletion
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
@@ -1196,6 +1196,79 @@ def function_setup(
         raise e
 
 
+def _dispatch_success_logging(
+    logging_obj: LiteLLMLoggingObject,
+    result: object,
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+    is_completion_with_fallbacks: bool,
+    is_litellm_internal_call: bool,
+) -> None:
+    if not is_litellm_internal_call:
+        if getattr(logging_obj, "_defer_async_logging", False):
+
+            def _enqueue_deferred_logging() -> None:
+                asyncio.create_task(
+                    _client_async_logging_helper(
+                        logging_obj=logging_obj,
+                        result=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                        is_completion_with_fallbacks=is_completion_with_fallbacks,
+                    )
+                )
+
+            logging_obj._enqueue_deferred_logging = _enqueue_deferred_logging
+        else:
+            asyncio.create_task(
+                _client_async_logging_helper(
+                    logging_obj=logging_obj,
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    is_completion_with_fallbacks=is_completion_with_fallbacks,
+                )
+            )
+
+    logging_obj.handle_sync_success_callbacks_for_async_calls(
+        result=result,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+
+async def _client_async_logging_helper(
+    logging_obj: LiteLLMLoggingObject,
+    result,
+    start_time,
+    end_time,
+    is_completion_with_fallbacks: bool,
+):
+    if (
+        is_completion_with_fallbacks is False
+    ):  # don't log the parent event litellm.completion_with_fallbacks as a 'log_success_event', this will lead to double logging the same call - https://github.com/BerriAI/litellm/issues/7477
+        print_verbose(
+            f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
+        )
+        ################################################
+        # Async Logging Worker
+        ################################################
+        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+            async_coroutine=logging_obj.async_success_handler(result=result, start_time=start_time, end_time=end_time)
+        )
+
+        ################################################
+        # Sync Logging Worker
+        ################################################
+        logging_obj.handle_sync_success_callbacks_for_async_calls(
+            result=result,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+
 def _get_wrapper_num_retries(kwargs: dict[str, Any], exception: Exception) -> tuple[int | None, dict[str, Any]]:
     """
     Get the number of retries from the kwargs and the retry policy.
@@ -1464,7 +1537,6 @@ def client(original_function):
         start_time: Final = datetime.datetime.now()
         result = None
         logging_obj: LiteLLMLoggingObject | None = kwargs.get("litellm_logging_obj", None)
-        completion: CallCompletion | None = None
 
         # only set litellm_call_id if its not in kwargs
         if "litellm_call_id" not in kwargs:
@@ -1480,17 +1552,7 @@ def client(original_function):
 
             # Type assertion: logging_obj is guaranteed to be non-None after function_setup
             assert logging_obj is not None, "logging_obj should not be None after function_setup"
-            from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
 
-            completion = CallCompletion(
-                PythonCompletion(
-                    logging_obj,
-                    logging_executor,
-                    async_call=False,
-                    internal_call=False,
-                    completion_with_fallbacks=False,
-                )
-            )
             ## LOAD CREDENTIALS
             load_credentials_from_list(kwargs)
             kwargs["litellm_logging_obj"] = logging_obj
@@ -1588,12 +1650,7 @@ def client(original_function):
                 except Exception as e:
                     print_verbose(f"Error while checking max token limit: {e}")
             # MODEL CALL
-            invocation_kwargs: Final = (
-                {**kwargs, "_litellm_call_completion": completion}
-                if original_function.__name__ == CallTypes.ocr.value
-                else kwargs
-            )
-            result = original_function(*args, **invocation_kwargs)
+            result = original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
             if _is_streaming_request(
                 kwargs=kwargs,
@@ -1647,8 +1704,8 @@ def client(original_function):
                 kwargs=kwargs,
             )
 
-            update_response_metadata = getattr(sys.modules[__name__], "update_response_metadata")
-            update_response_metadata(
+            _update_response_metadata: Final = getattr(sys.modules[__name__], "update_response_metadata")
+            _update_response_metadata(
                 result=result,
                 logging_obj=logging_obj,
                 model=model,
@@ -1656,8 +1713,21 @@ def client(original_function):
                 start_time=start_time,
                 end_time=end_time,
             )
+
+            # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
-            completion.success(result, start_time, end_time)
+            # Copy the current context to propagate it to the background thread
+            # This is essential for OpenTelemetry span context propagation
+            ctx: Final = contextvars.copy_context()
+            executor: Final = getattr(sys.modules[__name__], "executor")
+            executor.submit(
+                ctx.run,
+                logging_obj.success_handler,
+                result,
+                start_time,
+                end_time,
+            )
+            # RETURN RESULT
             return result
         except Exception as e:
             call_type = original_function.__name__
@@ -1731,14 +1801,11 @@ def client(original_function):
             end_time = datetime.datetime.now()
 
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
-            if completion is not None:
-                completion.failure(e, traceback_exception, start_time, end_time)
-            elif logging_obj:
-                logging_obj.failure_handler(e, traceback_exception, start_time, end_time)
+            if logging_obj:
+                logging_obj.failure_handler(
+                    e, traceback_exception, start_time, end_time
+                )  # DO NOT MAKE THREADED - router retry fallback relies on this!
             raise e
-        finally:
-            if completion is not None:
-                completion.release()
 
     @wraps(original_function)
     async def wrapper_async(*args, **kwargs):
@@ -1747,7 +1814,6 @@ def client(original_function):
         result = None
         _update_response_metadata: Final = getattr(sys.modules[__name__], "update_response_metadata")
         logging_obj: LiteLLMLoggingObject | None = kwargs.get("litellm_logging_obj", None)
-        completion: CallCompletion | None = None
         LLMCachingHandler: Final = _get_cached_llm_caching_handler()
         _llm_caching_handler: Final[LLMCachingHandler] = LLMCachingHandler(
             original_function=original_function,
@@ -1773,15 +1839,7 @@ def client(original_function):
 
             # Type assertion: logging_obj is guaranteed to be non-None after function_setup
             assert logging_obj is not None, "logging_obj should not be None after function_setup"
-            completion = CallCompletion(
-                PythonCompletion(
-                    logging_obj,
-                    None,
-                    async_call=True,
-                    internal_call=_is_litellm_internal_call,
-                    completion_with_fallbacks=is_completion_with_fallbacks,
-                )
-            )
+
             modified_kwargs: Final = await async_pre_call_deployment_hook(kwargs, call_type)
             if modified_kwargs is not None:
                 kwargs = modified_kwargs
@@ -1866,12 +1924,7 @@ def client(original_function):
 
             # MODEL CALL
             try:
-                invocation_kwargs: Final = (
-                    {**kwargs, "_litellm_call_completion": completion}
-                    if original_function.__name__ == CallTypes.aocr.value
-                    else kwargs
-                )
-                result = await original_function(*args, **invocation_kwargs)
+                result = await original_function(*args, **kwargs)
             except Exception as deployment_error:
                 _deployment_call_end_time = datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
                 try:
@@ -1940,7 +1993,14 @@ def client(original_function):
                 and _caching_handler_response is not None
                 and _caching_handler_response.final_embedding_cached_response is not None
             ):
-                completion.success(result, start_time, end_time)
+                _dispatch_success_logging(
+                    logging_obj=logging_obj,
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    is_completion_with_fallbacks=is_completion_with_fallbacks,
+                    is_litellm_internal_call=_is_litellm_internal_call,
+                )
                 return _llm_caching_handler._combine_cached_embedding_response_with_api_result(
                     _caching_handler_response=_caching_handler_response,
                     embedding_response=result,
@@ -1956,7 +2016,14 @@ def client(original_function):
                 start_time=start_time,
                 end_time=end_time,
             )
-            completion.success(result, start_time, end_time)
+            _dispatch_success_logging(
+                logging_obj=logging_obj,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                is_completion_with_fallbacks=is_completion_with_fallbacks,
+                is_litellm_internal_call=_is_litellm_internal_call,
+            )
 
             return result
         except Exception as e:
@@ -1964,12 +2031,17 @@ def client(original_function):
             # Reuse the timestamp taken right when the deployment call itself failed, before
             # the failure hook ran, so a slow callback doesn't inflate the reported duration.
             end_time = _deployment_call_end_time if _deployment_call_end_time is not None else datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
-            if completion is not None:
-                completion.failure(e, traceback_exception, start_time, end_time)
-                await completion.async_failure(e, traceback_exception, start_time, end_time)
-            elif logging_obj and not _is_litellm_internal_call:
-                logging_obj.failure_handler(e, traceback_exception, start_time, end_time)
-                await logging_obj.async_failure_handler(e, traceback_exception, start_time, end_time)
+            if logging_obj and not _is_litellm_internal_call:
+                try:
+                    logging_obj.failure_handler(
+                        e, traceback_exception, start_time, end_time
+                    )  # DO NOT MAKE THREADED - router retry fallback relies on this!
+                except Exception as e:
+                    raise e
+                try:
+                    await logging_obj.async_failure_handler(e, traceback_exception, start_time, end_time)
+                except Exception as e:
+                    raise e
 
             call_type = original_function.__name__
             num_retries, kwargs = _get_wrapper_num_retries(kwargs=kwargs, exception=e)
@@ -2039,8 +2111,6 @@ def client(original_function):
             raise e
 
         finally:
-            if completion is not None:
-                completion.release()
             # Restore trace_id/session_id contextvars to their pre-call value once
             # this call (in this asyncio Task) is fully done - see
             # request_correlation_in_logs. Unlike wrapper()'s sync path, it's safe to

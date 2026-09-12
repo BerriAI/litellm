@@ -60,9 +60,14 @@ where
     E: Send + 'static,
     F: Future<Output = Result<T, E>> + Send + 'static,
 {
-    let result = run_sync_value_on(py, runtime, async move {
-        map_core_result(future.await, map_error)
-    })?;
+    if Handle::try_current().is_ok() {
+        return Err(PyRuntimeError::new_err(
+            "synchronous native routes cannot run from a Tokio context; use the async route",
+        ));
+    }
+
+    let result = release_gil(py, move || runtime.block_on(wait_for_sync_result(future)))?;
+    let result = map_core_result(result, map_error)?;
     Pythonized(result).into_pyobject(py).map(Bound::unbind)
 }
 
@@ -76,8 +81,9 @@ where
     E: Send + 'static,
     F: Future<Output = Result<T, E>> + Send + 'static,
 {
-    run_async_value(py, async move {
-        let result = map_core_result(future.await, map_error)?;
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let result = catch_future_panic(future).await?;
+        let result = map_core_result(result, map_error)?;
         Ok(Pythonized(result))
     })
 }

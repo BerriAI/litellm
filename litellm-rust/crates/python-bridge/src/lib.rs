@@ -65,7 +65,7 @@ impl ResponsesWebSocketConnection {
     }
 }
 
-#[pymodule(gil_used = true)]
+#[pymodule(gil_used = false)]
 mod _native {
     use pyo3::prelude::*;
 

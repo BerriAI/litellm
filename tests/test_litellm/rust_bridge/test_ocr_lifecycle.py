@@ -10,11 +10,11 @@ from litellm.rust_bridge.ocr import LiteLLMOcrRequest
 from litellm.rust_bridge.ocr_lifecycle import NATIVE_OCR_LIFECYCLE
 
 
-@pytest.mark.parametrize("enabled,available", [(True, False), (False, True), (False, False)])
-def test_public_selection_requires_supported_native_ocr(enabled: bool, available: bool) -> None:
+@pytest.mark.parametrize("enabled", [True, False])
+def test_public_selection_requires_available_native_ocr(enabled: bool) -> None:
     native: Final = Mock(side_effect=AssertionError("must not admit"))
     litellm.rust(enabled)
-    NATIVE_OCR_LIFECYCLE.override(native if available else None)
+    NATIVE_OCR_LIFECYCLE.override(None)
     try:
         with pytest.raises(RuntimeError, match="Rust OCR is unavailable or does not support this request"):
             litellm.ocr("mistral/mistral-ocr-latest", {"type": "document_url", "document_url": "https://example.com"})
@@ -96,7 +96,7 @@ def test_public_binding_keeps_keyword_model_and_document_in_native_hook_kwargs()
     assert "timeout" not in captured[0]
 
 
-@pytest.mark.parametrize("enabled", [False, True], ids=["legacy", "native"])
+@pytest.mark.parametrize("enabled", [False, True], ids=["flag-disabled", "flag-enabled"])
 def test_public_duplicate_argument_error_does_not_depend_on_native_selection(enabled: bool) -> None:
     native: Final = Mock(side_effect=AssertionError("binding errors precede admission"))
     document: Final = {"type": "document_url", "document_url": "https://example.com"}
@@ -111,7 +111,7 @@ def test_public_duplicate_argument_error_does_not_depend_on_native_selection(ena
     assert native.call_count == 0
 
 
-@pytest.mark.parametrize("enabled", [False, True], ids=["legacy", "native"])
+@pytest.mark.parametrize("enabled", [False, True], ids=["flag-disabled", "flag-enabled"])
 def test_public_missing_required_argument_error_does_not_depend_on_native_selection(enabled: bool) -> None:
     native: Final = Mock(side_effect=AssertionError("binding errors precede admission"))
     litellm.rust(enabled)
@@ -123,3 +123,27 @@ def test_public_missing_required_argument_error_does_not_depend_on_native_select
         NATIVE_OCR_LIFECYCLE.reset()
         litellm.rust(None)
     assert native.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("enabled", [False, True, None])
+async def test_public_ocr_ignores_rust_flag(
+    monkeypatch: pytest.MonkeyPatch, asynchronous: bool, enabled: bool | None
+) -> None:
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    response: Final = OCRResponse(pages=[], model="mistral-ocr-latest")
+    native: Final = AsyncMock(return_value=response) if asynchronous else Mock(return_value=response)
+    litellm.rust(enabled)
+    NATIVE_OCR_LIFECYCLE.override(native)
+    try:
+        if asynchronous:
+            assert await litellm.aocr("mistral/mistral-ocr-latest", {}) is response
+        else:
+            assert litellm.ocr("mistral/mistral-ocr-latest", {}) is response
+        assert native.call_count == 1
+    finally:
+        NATIVE_OCR_LIFECYCLE.reset()
+        litellm.rust(None)

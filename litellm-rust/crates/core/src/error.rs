@@ -52,6 +52,15 @@ pub enum Error {
     Unsupported(&'static str),
 }
 
+impl Error {
+    pub const fn http_status_code(&self) -> Option<u16> {
+        match self {
+            Self::InvalidRequest(_) => Some(400),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, ThisError)]
 pub(crate) enum MediaError {
     #[error("media URL rejected by network policy")]

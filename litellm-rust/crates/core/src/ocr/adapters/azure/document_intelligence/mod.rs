@@ -61,7 +61,7 @@ impl OcrAdapter for AzureDocumentIntelligenceAdapter {
         url: &str,
         headers: &[(String, String)],
         request: &LiteLLMOcrRequest,
-    ) -> Result<Vec<u8>, OcrError> {
+    ) -> Result<crate::ocr::wire::DecodedOcrResponse<Self::ProviderResponse>, OcrError> {
         polling::read_operation_response(
             client.polling_http(),
             response,
@@ -72,7 +72,6 @@ impl OcrAdapter for AzureDocumentIntelligenceAdapter {
             &request.hooks,
         )
         .await
-        .map(|decoded| decoded.text.into_bytes())
     }
 }
 

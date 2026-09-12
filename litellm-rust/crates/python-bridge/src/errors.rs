@@ -73,7 +73,18 @@ pub(crate) fn ocr_error_to_pyerr(err: Error) -> PyErr {
         Error::Network(message) if message.contains("timed out") => {
             ocr_upstream_error(408, message)
         }
-        other => core_error_to_pyerr(other),
+        other => {
+            let status = other.http_status_code();
+            let error = core_error_to_pyerr(other);
+            if let Some(status) = status {
+                Python::attach(|py| {
+                    let value = error.value(py);
+                    value.setattr("status_code", status).ok();
+                    value.setattr("message", value.to_string()).ok();
+                });
+            }
+            error
+        }
     }
 }
 
@@ -111,6 +122,18 @@ mod ocr_error_tests {
                 .and_then(|args| args.extract())
                 .expect("OCR failures retain status and unprefixed provider message");
             assert_eq!(args, (429, r#"{"message":"rate limited"}"#.to_string()));
+
+            let mapped = ocr_error_to_pyerr(Error::InvalidRequest("invalid format".into()));
+            assert!(mapped.is_instance_of::<PyValueError>(py));
+            assert_eq!(
+                mapped
+                    .value(py)
+                    .getattr("status_code")
+                    .unwrap()
+                    .extract::<u16>()
+                    .unwrap(),
+                400
+            );
         });
     }
 }

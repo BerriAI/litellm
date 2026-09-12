@@ -4,6 +4,10 @@ use crate::error::TransportError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum OcrRequestError {
+    #[error(
+        "Cohere Parse only accepts `image_url` documents; document_url and PDF inputs are not supported"
+    )]
+    CohereImageOnly,
     #[error("Invalid `req_format`. Expected 'native' or 'litellm'.")]
     RequestFormat,
     #[error("invalid OCR request field: {path}")]

@@ -10,7 +10,9 @@ use litellm_core::ocr::wire::{OcrWireRequest, consumed_optional_param_names, dec
 use litellm_core::ocr::{
     NativeOutcome, OcrAdmission, OcrCall, OcrClient, OcrHostOperation, OcrHostResult,
 };
-use litellm_python_interop::{from_py, to_py};
+use litellm_python_interop::{
+    from_py_preserving_errors as from_py, to_py_preserving_errors as to_py,
+};
 
 use crate::errors::{RustBridgeDeclined, ocr_error_to_pyerr};
 use crate::lifecycle::{PythonCallState, PythonRoute, missing_state, now, run_call};
@@ -82,9 +84,14 @@ impl PythonOcrHost {
     fn python_pre_call(
         &mut self,
         py: Python<'_>,
-        request: OcrDuringCallRequest,
+        mut request: OcrDuringCallRequest,
     ) -> PyResult<OcrDuringCallRequest> {
         let pre_call = self.pre_call.as_ref().ok_or_else(missing_state)?;
+        if let Some(body) = request.body.as_object_mut() {
+            for name in &request.retained_fields {
+                body.remove(name);
+            }
+        }
         let body = to_py(py, &request.body)?
             .into_bound(py)
             .cast_into::<PyDict>()?;
@@ -134,11 +141,9 @@ impl PythonOcrHost {
             .iter()
             .map(|(name, value)| Ok((name.extract::<String>()?, value.extract::<String>()?)))
             .collect::<PyResult<Vec<_>>>()?;
-        Ok(OcrDuringCallRequest {
-            body: from_py(&body)?,
-            headers,
-            ..request
-        })
+        request.body = from_py(&body)?;
+        request.headers = headers;
+        Ok(request)
     }
 
     fn python_post_call(
@@ -413,6 +418,13 @@ fn _ocr_lifecycle(
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
+    if let Ok(gil_enabled) = py.import("sys")?.getattr("_is_gil_enabled")
+        && !gil_enabled.call0()?.is_truthy()?
+    {
+        return Err(pyo3::exceptions::PyRuntimeError::new_err(
+            "native OCR requires the Python GIL",
+        ));
+    }
     let client = OcrClient::shared().map_err(ocr_error_to_pyerr)?;
     let call = admitted_call(OcrCall::admit(
         client,

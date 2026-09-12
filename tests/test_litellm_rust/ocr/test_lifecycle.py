@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import gc
+import json
 import sys
 import threading
 import weakref
@@ -711,7 +712,9 @@ async def test_reducto_lifecycle_retains_upload_parse_and_post_call_boundaries(
 
 
 @pytest.mark.asyncio
-async def test_document_intelligence_post_call_runs_before_polling(ocr_server: RecordingServer) -> None:
+async def test_document_intelligence_post_call_observes_submission_and_final_result(
+    ocr_server: RecordingServer,
+) -> None:
     ocr_server.expected_requests = 2
     ocr_server.enqueue(
         ResponseSpec(
@@ -725,7 +728,7 @@ async def test_document_intelligence_post_call_runs_before_polling(ocr_server: R
 
     class Observe(Logging):
         def post_call(self, *args, **kwargs):
-            boundaries.append(tuple(request.method for request in ocr_server.requests))
+            boundaries.append((tuple(request.method for request in ocr_server.requests), kwargs["original_response"]))
             return super().post_call(*args, **kwargs)
 
     logger: Final = Observe(
@@ -740,7 +743,9 @@ async def test_document_intelligence_post_call_runs_before_polling(ocr_server: R
     response: Final = await call_aocr(
         ocr_server, model="azure_ai/doc-intelligence/prebuilt-read", litellm_logging_obj=logger
     )
-    assert boundaries == [("POST",)]
+    assert [methods for methods, _ in boundaries] == [("POST",), ("POST", "GET")]
+    assert json.loads(boundaries[0][1])["status"] == "running"
+    assert json.loads(boundaries[1][1])["status"] == "succeeded"
     assert [request.method for request in ocr_server.requests] == ["POST", "GET"]
     assert ocr_server.requests[1].path == "/operations/1"
     assert response.pages == []

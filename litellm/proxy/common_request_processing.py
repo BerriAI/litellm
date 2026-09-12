@@ -3181,10 +3181,11 @@ class ProxyBaseLLMRequestProcessing:
         Extracted as a static method so tests can exercise the production
         gating logic directly rather than reimplementing the finally block.
         """
-        pending: Final = getattr(logging_obj, "_native_pending_logging", None)
-        if pending is not None:
-            logging_obj._native_pending_logging = None  # rebind-ok: consume the native release signal once
-            pending.release(not exception_raised)
+        if getattr(logging_obj, "call_type", None) in ("ocr", "aocr"):
+            pending: Final = getattr(logging_obj, "_native_pending_logging", None)
+            if pending is not None:
+                logging_obj._native_pending_logging = None  # rebind-ok: consume the native OCR release signal once
+                pending.release(not exception_raised)
         _enqueue_fn: Final = getattr(logging_obj, "_enqueue_deferred_logging", None)
         if _enqueue_fn is None:
             return

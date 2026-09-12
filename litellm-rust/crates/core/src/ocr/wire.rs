@@ -89,6 +89,7 @@ pub fn consumed_optional_param_names(
 
     let (_, adapter) = super::registry::resolve_wire_adapter(model, custom_llm_provider)?;
     let provider_fields: &[&str] = match adapter {
+        OcrAdapterKind::Cohere | OcrAdapterKind::AzureCohere => &["output_format"],
         OcrAdapterKind::Mistral | OcrAdapterKind::AzureMistral | OcrAdapterKind::VertexMistral => {
             MISTRAL_OPTION_FIELDS
         }
@@ -98,9 +99,9 @@ pub fn consumed_optional_param_names(
         OcrAdapterKind::VertexDeepSeek => DEEPSEEK_OPTION_FIELDS,
     };
     let auth_fields: &[&str] = match adapter {
-        OcrAdapterKind::AzureMistral | OcrAdapterKind::AzureDocumentIntelligence => {
-            AZURE_AUTH_OPTION_FIELDS
-        }
+        OcrAdapterKind::AzureMistral
+        | OcrAdapterKind::AzureDocumentIntelligence
+        | OcrAdapterKind::AzureCohere => AZURE_AUTH_OPTION_FIELDS,
         OcrAdapterKind::VertexMistral | OcrAdapterKind::VertexDeepSeek => VERTEX_AUTH_OPTION_FIELDS,
         _ => &[],
     };

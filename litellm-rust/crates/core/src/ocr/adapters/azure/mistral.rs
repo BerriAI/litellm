@@ -92,7 +92,7 @@ fn get_complete_url(
         })
 }
 
-async fn validate_environment(
+pub(in crate::ocr::adapters) async fn validate_environment(
     connection: &OcrConnection,
     config: &AzureAuthInputs,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),

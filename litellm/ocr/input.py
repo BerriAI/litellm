@@ -3,7 +3,9 @@ import mimetypes
 import os
 import re
 from io import IOBase
-from typing import Any, Final
+from typing import Final, Literal, Protocol
+
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 
@@ -31,7 +33,17 @@ def get_mime_type(file_path: str) -> str:
     return guessed or "application/octet-stream"
 
 
-def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str, str]:
+class FileReader(Protocol):
+    def read(self) -> bytes | str: ...
+
+
+class FileDocument(TypedDict):
+    type: ReadOnly[Literal["file"]]
+    file: ReadOnly[bytes | os.PathLike[str] | FileReader]
+    mime_type: ReadOnly[NotRequired[str]]
+
+
+def convert_file_document_to_url_document(document: FileDocument) -> dict[str, str]:
     file_input: Final = document.get("file")
     if file_input is None:
         raise ValueError(

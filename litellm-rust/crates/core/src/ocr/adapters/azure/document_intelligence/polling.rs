@@ -44,7 +44,7 @@ pub(super) async fn read_operation_response(
     }
     let bytes = crate::ocr::client::read_response_bytes(response).await?;
     crate::ocr::handler::post_call(hooks, &bytes).await?;
-    poll_operation(http_client, operation, headers, connection, native).await
+    poll_operation(http_client, operation, headers, connection, native, hooks).await
 }
 
 async fn poll_operation(
@@ -53,6 +53,7 @@ async fn poll_operation(
     headers: &[(String, String)],
     connection: &OcrConnection,
     native: bool,
+    hooks: &Arc<dyn OcrHooks>,
 ) -> Result<DecodedOcrResponse<AzureDocumentIntelligenceOperation>, OcrError> {
     let deadline = Instant::now()
         .checked_add(connection.poll_timeout)
@@ -88,7 +89,10 @@ async fn poll_operation(
         .await
         .map_err(|_| OcrPollingError::PollTimeout)??;
         match &decoded.data.status {
-            Some(OperationStatus::Succeeded) => return Ok(decoded),
+            Some(OperationStatus::Succeeded) => {
+                crate::ocr::handler::post_call(hooks, decoded.text.as_bytes()).await?;
+                return Ok(decoded);
+            }
             Some(OperationStatus::Running | OperationStatus::NotStarted) => {
                 tokio::time::timeout_at(deadline, tokio::time::sleep(Duration::from_secs(retry)))
                     .await

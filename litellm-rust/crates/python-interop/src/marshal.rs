@@ -1,12 +1,20 @@
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+use pyo3::exceptions::PyValueError;
 use pyo3::panic::PanicException;
 use pyo3::prelude::*;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 pub fn from_py<T>(value: &Bound<'_, PyAny>) -> PyResult<T>
+where
+    T: DeserializeOwned,
+{
+    pythonize::depythonize(value).map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+pub fn from_py_preserving_errors<T>(value: &Bound<'_, PyAny>) -> PyResult<T>
 where
     T: DeserializeOwned,
 {
@@ -17,14 +25,18 @@ pub fn to_py<T>(py: Python<'_>, value: &T) -> PyResult<Py<PyAny>>
 where
     T: Serialize + ?Sized,
 {
-    pythonize_bound(py, value).map(Bound::unbind)
+    pythonize::pythonize(py, value)
+        .map(Bound::unbind)
+        .map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
-fn pythonize_bound<'py, T>(py: Python<'py>, value: &T) -> PyResult<Bound<'py, PyAny>>
+pub fn to_py_preserving_errors<T>(py: Python<'_>, value: &T) -> PyResult<Py<PyAny>>
 where
     T: Serialize + ?Sized,
 {
-    pythonize::pythonize(py, value).map_err(PyErr::from)
+    pythonize::pythonize(py, value)
+        .map(Bound::unbind)
+        .map_err(PyErr::from)
 }
 
 pub struct Pythonized<T>(pub T);
@@ -38,7 +50,9 @@ where
     type Error = PyErr;
 
     fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
-        catch_unwind(AssertUnwindSafe(|| pythonize_bound(py, &self.0))).map_err(panic_to_pyerr)?
+        catch_unwind(AssertUnwindSafe(|| pythonize::pythonize(py, &self.0)))
+            .map_err(panic_to_pyerr)?
+            .map_err(|error| PyValueError::new_err(error.to_string()))
     }
 }
 
@@ -112,7 +126,15 @@ value = Broken()
                 Some(&locals),
             )
             .unwrap();
-            let error = from_py::<i64>(&locals.get_item("value").unwrap().unwrap()).unwrap_err();
+            let value = locals.get_item("value").unwrap().unwrap();
+            let legacy_error = from_py::<i64>(&value).unwrap_err();
+            assert!(legacy_error.is_instance_of::<PyValueError>(py));
+            assert!(
+                !legacy_error
+                    .value(py)
+                    .is(locals.get_item("failure").unwrap().unwrap())
+            );
+            let error = from_py_preserving_errors::<i64>(&value).unwrap_err();
             assert!(
                 error
                     .value(py)

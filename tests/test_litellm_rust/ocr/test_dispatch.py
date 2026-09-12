@@ -1,3 +1,4 @@
+import sys
 from typing import Final
 
 import pytest
@@ -16,8 +17,26 @@ def ocr_server(recording_server: RecordingServer) -> RecordingServer:
     return recording_server
 
 
-def test_public_ocr_uses_native_route_when_enabled(ocr_server: RecordingServer) -> None:
-    litellm.rust(True)
+def test_native_ocr_rejects_disabled_gil_before_provider_call(
+    ocr_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ocr_server.expected_requests = 0
+    monkeypatch.setattr(sys, "_is_gil_enabled", lambda: False, raising=False)
+
+    with pytest.raises(RuntimeError, match="native OCR requires the Python GIL"):
+        litellm.ocr(
+            model=OCR_MODEL,
+            document=OCR_DOCUMENT,
+            api_key="test-key",
+            api_base=ocr_server.base_url,
+        )
+
+    assert not ocr_server.requests
+
+
+@pytest.mark.parametrize("enabled", [False, True, None])
+def test_public_ocr_uses_native_route_independently_of_flag(ocr_server: RecordingServer, enabled: bool | None) -> None:
+    litellm.rust(enabled)
     response: Final = litellm.ocr(
         model=OCR_MODEL,
         document=OCR_DOCUMENT,
@@ -29,18 +48,3 @@ def test_public_ocr_uses_native_route_when_enabled(ocr_server: RecordingServer) 
     assert response.pages[0].markdown == "native OCR response"
     assert len(ocr_server.requests) == 1
     assert not ocr_server.requests[0].headers.get("user-agent", "").startswith("python-httpx")
-
-
-def test_public_ocr_fails_before_network_when_native_is_disabled(ocr_server: RecordingServer) -> None:
-    litellm.rust(False)
-    ocr_server.expected_requests = 0
-
-    with pytest.raises(RuntimeError, match="Rust OCR is unavailable"):
-        litellm.ocr(
-            model=OCR_MODEL,
-            document=OCR_DOCUMENT,
-            api_key="test-key",
-            api_base=ocr_server.base_url,
-        )
-
-    assert ocr_server.requests == []

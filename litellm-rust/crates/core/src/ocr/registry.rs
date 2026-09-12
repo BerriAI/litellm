@@ -23,6 +23,7 @@ super::adapters::for_each_ocr_adapter!(define_adapter_types);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum OcrProvider {
+    Cohere,
     Mistral,
     AzureAi,
     Reducto,
@@ -32,6 +33,7 @@ pub(crate) enum OcrProvider {
 impl OcrProvider {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
+            Self::Cohere => "cohere",
             Self::Mistral => "mistral",
             Self::AzureAi => "azure_ai",
             Self::Reducto => "reducto",
@@ -50,6 +52,7 @@ pub(crate) fn resolve_wire_adapter(
             custom_llm_provider: OcrProvider::Mistral.as_str(),
         });
     let typed_provider = match provider.custom_llm_provider {
+        "cohere" => OcrProvider::Cohere,
         "mistral" => OcrProvider::Mistral,
         "azure_ai" => OcrProvider::AzureAi,
         "reducto" => OcrProvider::Reducto,
@@ -57,9 +60,16 @@ pub(crate) fn resolve_wire_adapter(
         value => return Err(Error::InvalidProvider(value.to_string())),
     };
     let adapter = match typed_provider {
+        OcrProvider::Cohere => OcrAdapterKind::Cohere,
         OcrProvider::Mistral => OcrAdapterKind::Mistral,
         OcrProvider::AzureAi if is_document_intelligence_model(provider.model) => {
             OcrAdapterKind::AzureDocumentIntelligence
+        }
+        OcrProvider::AzureAi
+            if provider.model.to_ascii_lowercase().contains("cohere")
+                && provider.model.to_ascii_lowercase().contains("parse") =>
+        {
+            OcrAdapterKind::AzureCohere
         }
         OcrProvider::AzureAi => OcrAdapterKind::AzureMistral,
         OcrProvider::Reducto if provider.model.eq_ignore_ascii_case("parse-legacy") => {

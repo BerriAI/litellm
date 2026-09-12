@@ -180,8 +180,17 @@ impl super::hooks::OcrHooks for SubmissionBoundary {
         request: super::hooks::OcrPostCallRequest,
     ) -> super::hooks::OcrHookFuture<'_, super::hooks::OcrPostCallRequest> {
         Box::pin(async move {
-            assert_eq!(self.request_count.lock().unwrap().len(), 1);
-            assert_eq!(request.original_response, json!(r#"{"submitted":true}"#));
+            match self.request_count.lock().unwrap().len() {
+                1 => assert_eq!(request.original_response, json!(r#"{"submitted":true}"#)),
+                2 => assert!(
+                    request
+                        .original_response
+                        .as_str()
+                        .unwrap()
+                        .contains("succeeded")
+                ),
+                count => panic!("unexpected callback after {count} requests"),
+            }
             Ok(request)
         })
     }
