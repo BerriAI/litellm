@@ -22,6 +22,8 @@ from typing import Final, Generator, Generic, Iterator, Literal, NewType, Protoc
 
 import pytest
 import requests
+from bedrock_eventstream import decode_bedrock_stream
+from provider_diagnostics import raise_if_provider_unavailable
 from pydantic import BaseModel, ConfigDict, Field
 
 URL = NewType("URL", str)
@@ -106,15 +108,11 @@ class UnknownApiError(BaseModel):
     kind: Literal["unknown"] = "unknown"
     status_code: int
     body: str
+    headers: dict[str, str] = {}
 
 
 type Result[R: BaseModel] = (
-    Success[R]
-    | NetworkError
-    | UnauthorizedError
-    | RateLimitedError
-    | ValidationError
-    | UnknownApiError
+    Success[R] | NetworkError | UnauthorizedError | RateLimitedError | ValidationError | UnknownApiError
 )
 
 
@@ -216,6 +214,8 @@ class SseResponse(Protocol):
 
     def iter_lines(self) -> Iterator[bytes]: ...
 
+    def iter_content(self, chunk_size: int | None = 1) -> Iterator[bytes]: ...
+
 
 def _hdr(resp: SseResponse, name: str) -> str | None:
     value = resp.headers.get(name)
@@ -226,6 +226,9 @@ def unwrap[R: BaseModel](result: Result[R]) -> R:
     match result:
         case Success(data=data):
             return data
+        case UnknownApiError(status_code=status, body=body, headers=headers):
+            raise_if_provider_unavailable(status, body, headers)
+            raise AssertionError(result)
         case _:
             raise AssertionError(result)
 
@@ -238,6 +241,9 @@ def unwrap_status[R: BaseModel](result: Result[R], expected_status: int) -> R:
             return data
         case Success(status_code=status_code):
             raise AssertionError(f"expected HTTP {expected_status}, got {status_code}")
+        case UnknownApiError(status_code=status, body=body, headers=headers):
+            raise_if_provider_unavailable(status, body, headers)
+            raise AssertionError(result)
         case _:
             raise AssertionError(result)
 
@@ -250,13 +256,14 @@ def is_ok[R: BaseModel](result: Result[R]) -> bool:
             return False
 
 
-def require_successful_call(result: StreamingResponse) -> None:
+def require_successful_call(result: StreamingResponse, *, expected_provider: Literal["bedrock"] | None = None) -> None:
     """A call that should have succeeded but didn't is a hard failure, never a skip:
     if the proxy can't make a call it's expected to, the test must fail."""
     if result.ok:
         return
+    raise_if_provider_unavailable(result.status_code, result.body, result.headers, expected_provider=expected_provider)
     pytest.fail(
-        f"upstream call failed (status {result.status_code}); body={result.body[:300]}"
+        f"upstream call failed (status {result.status_code}); headers={result.headers}; body={result.body[:1000]}"
     )
 
 
@@ -270,6 +277,7 @@ def assert_auth_denied(result: StreamingResponse, context: str) -> None:
     assert result.status_code in (401, 403), (
         f"{context}: expected 401/403, got {result.status_code}: {result.body[:300]}"
     )
+
 
 def wire_body(json: BaseModel) -> dict[str, object]:
     if isinstance(json, PartialBody):
@@ -349,6 +357,9 @@ class ClassifiableResponse(Protocol):
     @property
     def content(self) -> bytes: ...
 
+    @property
+    def headers(self) -> Mapping[str, str]: ...
+
     def json(self) -> object: ...
 
 
@@ -358,7 +369,11 @@ def classify[R: BaseModel](resp: ClassifiableResponse, response_type: type[R]) -
     if resp.status_code == 429:
         return RateLimitedError(body=resp.text)
     if not resp.ok:
-        return UnknownApiError(status_code=resp.status_code, body=resp.text)
+        return UnknownApiError(
+            status_code=resp.status_code,
+            body=resp.text,
+            headers={key.lower(): value for key, value in resp.headers.items()},
+        )
     try:
         payload: Final[object] = resp.json() if resp.content else {}
         return Success(status_code=resp.status_code, data=response_type.model_validate(payload))
@@ -609,6 +624,22 @@ def streaming_outcome(
             content_type=content_type,
             headers=headers,
             body=resp.text,
+        )
+    if "application/vnd.amazon.eventstream" in (content_type or "").lower():
+        bedrock_events: Final = tuple(
+            (event, clock() - sent_at) for event in decode_bedrock_stream(resp.iter_content(chunk_size=None))
+        )
+        return StreamingResponse(
+            status_code=resp.status_code,
+            call_id=call_id,
+            response_cost=response_cost,
+            content_type=content_type,
+            headers=headers,
+            body="<streamed>",
+            chunks=len(bedrock_events),
+            stream_events=[event.payload for event, _ in bedrock_events],
+            stream_event_arrivals=[arrived for _, arrived in bedrock_events],
+            stream_error=next((event.error for event, _ in bedrock_events if event.error is not None), None),
         )
     stamped: Final = tuple((line, clock() - sent_at) for line in resp.iter_lines() if line)
     payloads: Final = tuple(

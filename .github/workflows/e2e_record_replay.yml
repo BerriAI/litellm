@@ -26,6 +26,10 @@ jobs:
        (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'record'))
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    environment: e2e-changed
+    permissions:
+      contents: read
+      id-token: write
     services:
       postgres:
         image: postgres:16.6
@@ -44,8 +48,7 @@ jobs:
       DATABASE_URL: postgresql://llmproxy:dbpassword9090@localhost:5432/litellm
       LITELLM_MASTER_KEY: sk-e2e-record-replay
       LITELLM_LOCAL_MODEL_COST_MAP: "True"
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      E2E_BEDROCK_REGION: us-east-1
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -54,7 +57,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
       - name: Set up uv
         uses: ./.github/actions/setup-uv-with-retries
@@ -66,7 +69,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra proxy
+          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --group e2e-dev --extra proxy --extra proxy-runtime
 
       - name: Cache Prisma binaries
         uses: ./.github/actions/cache-prisma-binaries
@@ -75,9 +78,47 @@ jobs:
         run: |
           uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
+      - name: Validate recording configuration
+        env:
+          ROLE: ${{ vars.E2E_AWS_ROLE_TO_ASSUME }}
+        run: test -n "${ROLE}" || { echo "::error::Set E2E_AWS_ROLE_TO_ASSUME to the existing e2e secrets reader role"; exit 1; }
+
+      - name: Configure the existing e2e secrets reader
+        id: aws
+        uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+        with:
+          role-to-assume: ${{ vars.E2E_AWS_ROLE_TO_ASSUME }}
+          aws-region: us-east-1
+          role-session-name: litellm-e2e-record-${{ github.run_id }}
+          role-duration-seconds: 900
+          output-env-credentials: false
+          output-credentials: true
+
+      - name: Fetch provider credentials from AWS Secrets Manager
+        env:
+          AWS_ACCESS_KEY_ID: ${{ steps.aws.outputs.aws-access-key-id }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.aws.outputs.aws-secret-access-key }}
+          AWS_SESSION_TOKEN: ${{ steps.aws.outputs.aws-session-token }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          umask 077
+          aws secretsmanager get-secret-value --secret-id litellm-e2e-changed-provider-keys \
+            --query SecretString --output text \
+            | uv run --no-sync python .github/e2e-stack/secrets_to_env.py tests/e2e/.env
+
+      - name: Require all recording credentials before starting the proxy
+        run: |
+          uv run --no-sync --env-file tests/e2e/.env python - <<'PY'
+          import os
+          required = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
+          missing = [key for key in required if not os.environ.get(key)]
+          if missing:
+              raise SystemExit("Missing recording credentials: " + ", ".join(missing))
+          PY
+
       - name: Start the proxy
         run: |
-          nohup uv run --no-sync litellm --config tests/e2e/gateway/record_replay_ci_config.yml --port 4000 > proxy.log 2>&1 &
+          nohup uv run --no-sync --env-file tests/e2e/.env litellm --config tests/e2e/gateway/record_replay_ci_config.yml --port 4000 > proxy.log 2>&1 &
           for _ in $(seq 1 90); do
             if curl -fs http://localhost:4000/health/liveliness > /dev/null; then
               exit 0
@@ -144,6 +185,11 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       OPENAI_API_KEY: sk-replay-must-never-reach-a-provider
       ANTHROPIC_API_KEY: sk-ant-replay-must-never-reach-a-provider
+      AWS_ACCESS_KEY_ID: e2e-bedrock-replay
+      AWS_SECRET_ACCESS_KEY: e2e-bedrock-replay-secret
+      AWS_REGION: us-east-1
+      E2E_BEDROCK_REGION: us-east-1
+      AWS_EC2_METADATA_DISABLED: "true"
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -152,7 +198,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
       - name: Set up uv
         uses: ./.github/actions/setup-uv-with-retries
@@ -164,7 +210,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra proxy
+          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --group e2e-dev --extra proxy --extra proxy-runtime
 
       - name: Cache Prisma binaries
         uses: ./.github/actions/cache-prisma-binaries
@@ -202,6 +248,10 @@ jobs:
           sudo python3 .github/scripts/e2e_egress_sentinel.py serve \
             --host api.openai.com \
             --host api.anthropic.com \
+            --host bedrock-runtime.us-east-1.amazonaws.com \
+            --host bedrock-runtime.us-east-2.amazonaws.com \
+            --host bedrock-runtime.us-west-1.amazonaws.com \
+            --host bedrock-runtime.us-west-2.amazonaws.com \
             --hits-file "${RUNNER_TEMP}/egress-hits.jsonl" \
             --ready-file "${RUNNER_TEMP}/egress-ready" \
             --pid-file "${RUNNER_TEMP}/egress.pid" \
