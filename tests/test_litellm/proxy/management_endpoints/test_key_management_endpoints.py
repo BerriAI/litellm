@@ -15,6 +15,8 @@ import inspect
 
 from litellm.proxy._types import (
     GenerateKeyRequest,
+    KeyHealthResponse,
+    LoggingCallbackStatus,
     NewUserRequest,
     LiteLLM_BudgetTable,
     LiteLLM_OrganizationTable,
@@ -18186,3 +18188,92 @@ async def test_key_creator_cannot_detach_project_without_admin_access():
         )
     assert exc.value.status_code == 403
     assert "Only proxy admins, team admins, or org admins" in str(exc.value.detail)
+
+
+def _default_team_gcs_proxy_config(team_id: str):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    pc: Final = ProxyConfig()
+    pc.config = {
+        "litellm_settings": {
+            "default_team_settings": [
+                {"team_id": team_id, "success_callback": ["gcs_bucket"], "failure_callback": ["gcs_bucket"]}
+            ]
+        }
+    }
+    return pc
+
+
+@pytest.mark.asyncio
+async def test_key_health_tests_the_team_callbacks_an_empty_key_logging_list_falls_back_to():
+    from litellm.proxy.management_endpoints.key_management_endpoints import key_health
+
+    caller: Final = UserAPIKeyAuth(api_key="sk-1", team_id="team-gcs", metadata={"logging": []}, team_metadata={})
+    logging_status: Final = LoggingCallbackStatus(callbacks=("gcs_bucket",), status="unhealthy", details="404")
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", _default_team_gcs_proxy_config("team-gcs")),  # test-quality-ok: key_health reads the module-level proxy config
+        patch(  # test-quality-ok: the mock completion behind test_key_logging needs a running proxy
+            "litellm.proxy.management_endpoints.key_management_endpoints.test_key_logging",
+            AsyncMock(return_value=logging_status),
+        ) as test_logging,
+    ):
+        response = await key_health(request=MagicMock(), user_api_key_dict=caller)
+
+    assert response == KeyHealthResponse(key="unhealthy", logging_callbacks=logging_status)
+    assert test_logging.await_args.kwargs["logging_callbacks"] == ("gcs_bucket",)
+
+
+@pytest.mark.asyncio
+async def test_key_health_without_any_effective_callbacks_reports_healthy_and_sends_no_test_log():
+    from litellm.proxy.management_endpoints.key_management_endpoints import key_health
+
+    caller: Final = UserAPIKeyAuth(api_key="sk-1", team_id="team-plain", metadata={"logging": []}, team_metadata={})
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", _default_team_gcs_proxy_config("team-gcs")),  # test-quality-ok: key_health reads the module-level proxy config
+        patch(  # test-quality-ok: the mock completion behind test_key_logging needs a running proxy
+            "litellm.proxy.management_endpoints.key_management_endpoints.test_key_logging", AsyncMock()
+        ) as test_logging,
+    ):
+        response = await key_health(request=MagicMock(), user_api_key_dict=caller)
+
+    assert response == KeyHealthResponse(key="healthy", logging_callbacks=None)
+    test_logging.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_key_health_rejects_key_logging_entries_without_a_callback_name():
+    from litellm.proxy.management_endpoints.key_management_endpoints import key_health
+
+    caller: Final = UserAPIKeyAuth(api_key="sk-1", metadata={"logging": [{"callback_type": "success"}]})
+    with patch("litellm.proxy.proxy_server.proxy_config", _default_team_gcs_proxy_config("team-gcs")):  # test-quality-ok: key_health reads the module-level proxy config
+        with pytest.raises(ProxyException) as exc:
+            await key_health(request=MagicMock(), user_api_key_dict=caller)
+
+    assert "callback_name is required" in exc.value.message
+
+
+@pytest.mark.asyncio
+async def test_flush_gcs_reports_the_failed_upload_count_from_the_registered_logger():
+    from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
+    from litellm.proxy.management_endpoints.key_management_endpoints import flush_gcs_and_describe_failures
+    from litellm.types.integrations.gcs_bucket import GCSFlushResult
+
+    class _StuckUploadGCSLogger(GCSBucketLogger):
+        def __init__(self) -> None:
+            with patch("litellm.proxy.proxy_server.premium_user", True):  # test-quality-ok: GCS logging is premium-gated
+                super().__init__(bucket_name="test-bucket")
+
+        async def flush_queue_and_report(self) -> GCSFlushResult:
+            return GCSFlushResult(sent=0, failed=3)
+
+    assert await flush_gcs_and_describe_failures(_StuckUploadGCSLogger()) == "GCS upload failed for 3 event(s), 0 uploaded"
+
+
+@pytest.mark.asyncio
+async def test_flush_gcs_names_a_missing_logger_when_the_callback_never_initialized():
+    from litellm.proxy.management_endpoints.key_management_endpoints import flush_gcs_and_describe_failures
+
+    assert (
+        await flush_gcs_and_describe_failures(None)
+        == "gcs_bucket callback was selected but no GCS logger was initialized"
+    )

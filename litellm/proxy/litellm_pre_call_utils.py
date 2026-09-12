@@ -904,18 +904,21 @@ def _get_validated_callback_metadata(item: dict, *, source: str) -> AddTeamCallb
 class KeyAndTeamLoggingSettings:
     """
     Helper class to get the dynamic logging settings for the key and team
+
+    An empty ``logging`` list is the same as no ``logging`` key: both return ``None`` so the
+    caller falls through to the next level. Disabling a callback is ``litellm_disabled_callbacks``.
     """
 
     @staticmethod
     def get_key_dynamic_logging_settings(user_api_key_dict: UserAPIKeyAuth):
         if user_api_key_dict.metadata is not None and "logging" in user_api_key_dict.metadata:
-            return decrypt_callback_vars(user_api_key_dict.metadata).get("logging")
+            return decrypt_callback_vars(user_api_key_dict.metadata).get("logging") or None
         return None
 
     @staticmethod
     def get_team_dynamic_logging_settings(user_api_key_dict: UserAPIKeyAuth):
         if user_api_key_dict.team_metadata is not None and "logging" in user_api_key_dict.team_metadata:
-            return decrypt_callback_vars(user_api_key_dict.team_metadata).get("logging")
+            return decrypt_callback_vars(user_api_key_dict.team_metadata).get("logging") or None
         return None
 
 
@@ -1029,8 +1032,8 @@ def resolve_tenant_otel_destinations(
 
     Key settings win over team settings outright, the same precedence
     ``_get_dynamic_logging_metadata`` applies, so one caller never exports the same
-    backend to two accounts. An empty key-level list counts as configured, since that
-    is what disabling a key's callbacks writes. Returns empty when OTEL V2 is off, when
+    backend to two accounts. An empty key-level list is unset and falls through to the
+    team, the way the runtime parser reads it. Returns empty when OTEL V2 is off, when
     neither level named a destination-capable backend, or when the config is
     incomplete, and the request then keeps the operator's own exporters.
 

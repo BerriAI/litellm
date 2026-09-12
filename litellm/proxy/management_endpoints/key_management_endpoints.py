@@ -38,6 +38,7 @@ from litellm.constants import (
     MINIMUM_CUSTOM_KEY_LENGTH,
     UI_SESSION_TOKEN_TEAM_ID,
 )
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.models.credentials import CredentialItem
@@ -6973,7 +6974,9 @@ async def key_health(
     Check the health of the key
 
     Checks:
-    - If key based logging is configured correctly - sends a test log
+    - If the logging that applies to this key (key metadata, team metadata, or
+      `default_team_settings` in the config) is configured correctly - sends a test log
+      and, for gcs_bucket, flushes the queue and reports the upload result
 
     Usage 
 
@@ -7015,29 +7018,40 @@ async def key_health(
     }
     ```
     """
+    from litellm.proxy.litellm_pre_call_utils import (
+        _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # the request-time resolver; the health check must report the same callbacks a request would use
+    )
+    from litellm.proxy.proxy_server import proxy_config
+
     try:
-        # Get the key's metadata
         key_metadata: Final = user_api_key_dict.metadata
-
-        health_status: Final[KeyHealthResponse] = KeyHealthResponse(
-            key="healthy",
-            logging_callbacks=None,
-        )
-
-        # Check if logging is configured in metadata
         if key_metadata and "logging" in key_metadata:
-            logging_statuses: Final = await test_key_logging(
-                user_api_key_dict=user_api_key_dict,
-                request=request,
-                key_logging=decrypt_callback_vars(key_metadata)["logging"],
+            _raise_if_key_logging_missing_callback_name(decrypt_callback_vars(key_metadata)["logging"])
+
+        callback_settings: Final = _get_dynamic_logging_metadata(
+            user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
+        )
+        logging_callbacks: Final = (
+            ()
+            if callback_settings is None
+            else tuple(
+                dict.fromkeys(
+                    (*(callback_settings.success_callback or ()), *(callback_settings.failure_callback or ()))
+                )
             )
-            health_status["logging_callbacks"] = logging_statuses
+        )
+        if not logging_callbacks:
+            return KeyHealthResponse(key="healthy", logging_callbacks=None)
 
-            # Check if any logging callback is unhealthy
-            if logging_statuses.get("status") == "unhealthy":
-                health_status["key"] = "unhealthy"
-
-        return KeyHealthResponse(**health_status)
+        logging_statuses: Final = await test_key_logging(
+            user_api_key_dict=user_api_key_dict,
+            request=request,
+            logging_callbacks=logging_callbacks,
+        )
+        return KeyHealthResponse(
+            key="unhealthy" if logging_statuses.get("status") == "unhealthy" else "healthy",
+            logging_callbacks=logging_statuses,
+        )
 
     except Exception as e:
         raise ProxyException(
@@ -7072,30 +7086,40 @@ async def _can_user_query_key_info(
     return False
 
 
+def _raise_if_key_logging_missing_callback_name(key_logging: Sequence[Mapping[str, str]]) -> None:
+    if any(callback.get("callback_name") is None for callback in key_logging):
+        raise ValueError("callback_name is required in key_logging")
+
+
+async def flush_gcs_and_describe_failures(gcs_logger: CustomLogger | None) -> str | None:
+    from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
+
+    if not isinstance(gcs_logger, GCSBucketLogger):
+        return "gcs_bucket callback was selected but no GCS logger was initialized"
+    flush_result: Final = await gcs_logger.flush_queue_and_report()
+    if flush_result.failed == 0:
+        return None
+    return f"GCS upload failed for {flush_result.failed} event(s), {flush_result.sent} uploaded"
+
+
 async def test_key_logging(
     user_api_key_dict: UserAPIKeyAuth,
     request: Request,
-    key_logging: Sequence[Mapping[str, str]],
+    logging_callbacks: Sequence[str],
 ) -> LoggingCallbackStatus:
     """
-    Test the key-based logging
+    Test the logging callbacks that apply to this key
 
-    - Test that key logging is correctly formatted and all args are passed correctly
     - Make a mock completion call -> user can check if it's correctly logged
+    - For gcs_bucket, flush the queue and report whether the upload succeeded
     - Check if any logger.exceptions were triggered -> if they were then returns it to the user client side
     """
     import logging
     from io import StringIO
 
+    from litellm.litellm_core_utils.litellm_logging import get_custom_logger_compatible_class
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
     from litellm.proxy.proxy_server import general_settings, proxy_config
-
-    logging_callbacks: Final[list[str]] = []
-    for callback in key_logging:
-        if callback.get("callback_name") is not None:
-            logging_callbacks.append(callback["callback_name"])
-        else:
-            raise ValueError("callback_name is required in key_logging")
 
     log_capture_string: Final = StringIO()
     ch: Final = logging.StreamHandler(log_capture_string)
@@ -7131,21 +7155,28 @@ async def test_key_logging(
 
     await asyncio.sleep(2)  # wait for callbacks to run, callbacks use batching so wait for the flush event
 
-    # Check if any logger exceptions were triggered
+    gcs_failure: Final = (
+        await flush_gcs_and_describe_failures(get_custom_logger_compatible_class("gcs_bucket"))
+        if "gcs_bucket" in logging_callbacks
+        else None
+    )
+
     log_contents: Final = log_capture_string.getvalue()
     logger.removeHandler(ch)
-    if log_contents:
+    if gcs_failure is not None or log_contents:
         return LoggingCallbackStatus(
             callbacks=logging_callbacks,
             status="unhealthy",
-            details=f"Logger exceptions triggered, system is unhealthy: {log_contents}",
+            details=f"Logger exceptions triggered, system is unhealthy: {gcs_failure or ''} {log_contents}".strip(),
         )
-    else:
-        return LoggingCallbackStatus(
-            callbacks=logging_callbacks,
-            status="healthy",
-            details=f"No logger exceptions triggered, system is healthy. Manually check if logs were sent to {logging_callbacks} ",
-        )
+    return LoggingCallbackStatus(
+        callbacks=logging_callbacks,
+        status="healthy",
+        details=(
+            "No logger exceptions triggered, system is healthy. "
+            f"Manually check if logs were sent to {', '.join(logging_callbacks)}"
+        ),
+    )
 
 
 _KEY_ALIAS_PATTERN: Final = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_\-/\.@]{0,253}[a-zA-Z0-9]$")

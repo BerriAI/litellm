@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
 from typing_extensions import TypedDict
@@ -33,3 +34,9 @@ class GCSLogQueueItem(TypedDict):
     payload: StandardLoggingPayload
     kwargs: dict[str, Any]
     response_obj: Any | None
+
+
+@dataclass(frozen=True, slots=True)
+class GCSFlushResult:
+    sent: int
+    failed: int
