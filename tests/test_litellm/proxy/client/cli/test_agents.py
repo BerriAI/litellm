@@ -527,6 +527,13 @@ class TestCodexModelSync:
         assert entry["upgrade"] is None
         assert entry["supported_reasoning_levels"] == _STOCK_REASONING_LEVELS
 
+    def test_api_disabled_stock_model_is_selectable_when_the_proxy_serves_it(self, tmp_path):
+        self._sync(self._listing(self._row("codex-auto-review")), tmp_path)
+        entry = self._entries(tmp_path)["codex-auto-review"]
+        assert entry["supported_in_api"] is True
+        assert entry["visibility"] == "list"
+        assert entry["base_instructions"] == _STOCK_MODELS["codex-auto-review"]["base_instructions"]
+
     def test_stock_upgrade_nudge_survives_when_its_target_is_listed(self, tmp_path):
         self._sync(self._listing(self._row("gpt-5.4"), self._row("gpt-5.6-terra")), tmp_path)
         entries = self._entries(tmp_path)
