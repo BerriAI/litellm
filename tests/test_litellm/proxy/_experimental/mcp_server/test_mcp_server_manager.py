@@ -6606,18 +6606,31 @@ class TestMCPServerManager:
         assert by_prefixed_name is not None and by_prefixed_name.description == "v2"
         assert manager.get_listed_tool(server, "missing") is None
 
-    def test_invalidate_discovery_lists_drops_listed_tools(self):
+    def test_server_definition_change_drops_listed_tools(self):
         manager = MCPServerManager()
         server = MCPServer(server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv")
         other = MCPServer(server_id="other", name="other", transport=MCPTransport.http, url="http://other")
         manager._create_prefixed_tools([MCPTool(name="echo", description="old", inputSchema={})], server)
         manager._create_prefixed_tools([MCPTool(name="ping", description="kept", inputSchema={})], other)
 
-        manager._invalidate_discovery_lists(server.server_id)
+        manager._invalidate_server_definition_caches(server.server_id)
 
         assert manager.get_listed_tool(server, "echo") is None
         kept = manager.get_listed_tool(other, "ping")
         assert kept is not None and kept.description == "kept"
+
+    @pytest.mark.asyncio
+    async def test_user_oauth_refresh_keeps_listed_tools(self):
+        """Tool definitions are server-wide, so one user's re-auth must not blank the metadata other
+        callers' tool calls hand to pre-call guardrails."""
+        manager = MCPServerManager()
+        server = MCPServer(server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv")
+        manager._create_prefixed_tools([MCPTool(name="echo", description="shared", inputSchema={})], server)
+
+        await manager.invalidate_user_oauth_token_cache("alice", server.server_id)
+
+        listed = manager.get_listed_tool(server, "echo")
+        assert listed is not None and listed.description == "shared"
 
     @pytest.mark.asyncio
     async def test_get_allowed_mcp_servers_with_user_api_key_auth(self):
