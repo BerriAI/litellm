@@ -192,13 +192,15 @@ async def prepare_gateway_memory(
     try:
         # Dispatch in process through the existing authenticated endpoint. No
         # network client, TLS context, or connection pool is created here.
-        async with httpx.ASGITransport(app=app) as transport:
+        async with httpx.ASGITransport(
+            app=app, client=request.client or ("127.0.0.1", 0), root_path=request.scope.get("root_path", "")
+        ) as transport:
 
             async def dispatch_round(body: Mapping[str, object]) -> httpx.Response:
                 result: Final = await transport.handle_async_request(
                     httpx.Request(
                         "POST",
-                        "http://litellm-memory" + request.url.path,
+                        str(request.url),
                         json=body,
                         headers=headers,
                         params=request.query_params,
