@@ -713,6 +713,8 @@ def test_shipped_openai_reasoning_rule_skips_non_reasoning_gpt_ids(shipped_cost_
         "text-embedding-4",
         "vendor/my-codex-embedding",
         "some-codex-model",
+        "azure/gpt-35-turbo-0125-custom",
+        "github_copilot/gpt-41-copilot-new",
     ):
         assert match_capability_generalizations(model) is None, model
 
