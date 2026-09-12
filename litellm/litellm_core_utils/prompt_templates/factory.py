@@ -1522,11 +1522,11 @@ _BEDROCK_TOOL_USE_ID_HASH_LEN: Final = 8
 def _sanitize_bedrock_tool_use_id(tool_use_id: str) -> str:
     """
     Bedrock Converse requires toolUseId to match [a-zA-Z0-9_.:-]+ and be at most 64 chars.
-    Over-long ids are truncated and suffixed with a short hash of the original so two ids
-    that only differ past the cut still map to distinct values.
+    Ids that need rewriting get a short hash of the original appended so two ids that only
+    differ in a replaced char or past the cut still map to distinct values.
     """
     sanitized: Final = re.sub(r"[^a-zA-Z0-9_.:-]", "_", tool_use_id) or "tool_use_id"
-    if len(sanitized) <= _BEDROCK_TOOL_USE_ID_MAX_LEN:
+    if sanitized == tool_use_id and len(sanitized) <= _BEDROCK_TOOL_USE_ID_MAX_LEN:
         return sanitized
     digest: Final = hashlib.sha256(tool_use_id.encode()).hexdigest()[:_BEDROCK_TOOL_USE_ID_HASH_LEN]
     return f"{sanitized[: _BEDROCK_TOOL_USE_ID_MAX_LEN - _BEDROCK_TOOL_USE_ID_HASH_LEN - 1]}_{digest}"

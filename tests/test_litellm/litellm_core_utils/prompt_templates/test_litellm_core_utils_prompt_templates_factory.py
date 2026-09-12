@@ -2264,6 +2264,16 @@ def test_bedrock_tool_use_id_truncation_keeps_distinct_ids_distinct():
     assert all(len(i) == 64 for i in ids)
 
 
+def test_bedrock_tool_use_id_replaced_chars_do_not_collide_with_existing_ids():
+    ids = {
+        _convert_to_bedrock_tool_call_result({"tool_call_id": i, "role": "tool", "name": "f", "content": "ok"})[
+            "toolResult"
+        ]["toolUseId"]
+        for i in ("call|x", "call_x")
+    }
+    assert len(ids) == 2
+
+
 def test_bedrock_tool_call_invoke_concatenated_json_long_id_stays_within_limit():
     long_id = "call_" + "q" * 62
     result = _convert_to_bedrock_tool_call_invoke(
