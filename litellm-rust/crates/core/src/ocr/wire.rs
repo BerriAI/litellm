@@ -1,10 +1,12 @@
 use crate::ocr::error::OcrRequestError;
 use crate::ocr::error::OcrResponseError;
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use super::hooks::{OcrDuringCallRequest, OcrPreCallRequest};
 use super::types::{LiteLLMOcrRequest, OcrConnection, OcrDocument};
 use crate::Error;
+use crate::auth::InputSource;
 use serde::{
     Deserialize,
     de::{DeserializeOwned, IntoDeserializer},
@@ -28,6 +30,8 @@ pub struct OcrWireRequest {
     pub extra_headers: Option<Map<String, Value>>,
     #[serde(default)]
     pub optional_params: Map<String, Value>,
+    #[serde(default)]
+    pub input_sources: BTreeMap<String, InputSource>,
     pub timeout_seconds: Option<f64>,
 }
 
@@ -36,6 +40,9 @@ pub fn is_supported_request(model: &str, custom_llm_provider: Option<&str>) -> b
 }
 
 pub fn decode_request(wire: OcrWireRequest) -> Result<LiteLLMOcrRequest, Error> {
+    let api_key_source = source_for(&wire.input_sources, "api_key");
+    let api_base_source = source_for(&wire.input_sources, "api_base");
+    let extra_headers_source = source_for(&wire.input_sources, "extra_headers");
     let document = decode_request_value(wire.document, "document")?;
     let headers = wire
         .extra_headers
@@ -67,14 +74,24 @@ pub fn decode_request(wire: OcrWireRequest) -> Result<LiteLLMOcrRequest, Error> 
     )?;
     let connection = OcrConnection {
         api_key: nonblank(wire.api_key),
+        api_key_source,
         api_base: nonblank(wire.api_base),
+        api_base_source,
         extra_headers: headers,
+        extra_headers_source,
         timeout: timeout.unwrap_or(defaults.timeout),
+        max_download_bytes: defaults.max_download_bytes,
+        poll_timeout: defaults.poll_timeout,
     };
     Ok(LiteLLMOcrRequest {
         connection,
+        input_sources: wire.input_sources,
         ..request
     })
+}
+
+fn source_for(sources: &BTreeMap<String, InputSource>, name: &str) -> InputSource {
+    sources.get(name).copied().unwrap_or_default()
 }
 
 fn nonblank(value: Option<String>) -> Option<String> {

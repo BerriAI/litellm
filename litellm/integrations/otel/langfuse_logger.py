@@ -3,7 +3,12 @@ from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_logger
 from litellm.integrations.otel.logger import OpenTelemetryV2
-from litellm.integrations.otel.mappers.langfuse import LANGFUSE_OBSERVATION_INPUT, LANGFUSE_OBSERVATION_OUTPUT
+from litellm.integrations.otel.mappers.langfuse import (
+    LANGFUSE_OBSERVATION_INPUT,
+    LANGFUSE_OBSERVATION_OUTPUT,
+    LANGFUSE_TRACE_NAME,
+)
+from litellm.integrations.otel.model.metadata import caller_trace_name
 from litellm.integrations.otel.model.request_io import request_input, response_output, stream_output
 from litellm.integrations.otel.plumbing.context import request_root_span
 
@@ -13,6 +18,18 @@ if TYPE_CHECKING:
 
 
 class LangfuseOpenTelemetryV2(OpenTelemetryV2):
+    """Names the trace from the request. Langfuse reads ``langfuse.trace.name`` off the root observation,
+    and the proxy's root span is still recording when the LLM call starts."""
+
+    def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
+        root: Final = request_root_span()
+        name: Final = caller_trace_name(kwargs)
+        if root is not None and root.is_recording() and name is not None:
+            root.set_attribute(LANGFUSE_TRACE_NAME, name)
+        super().log_pre_api_call(model, messages, kwargs)
+
+
+class LangfuseContentOpenTelemetryV2(LangfuseOpenTelemetryV2):
     """Stamps the request's input and output on the root observation while it is still recording.
 
     Langfuse shows a trace's input and output from its root observation. The proxy's root span ends

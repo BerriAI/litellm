@@ -1,5 +1,4 @@
 import atexit
-import json
 import secrets
 import signal
 import threading
@@ -15,8 +14,10 @@ from ..claude_settings import (
     CLAUDE_SETTINGS_PATH,
     ClaudeSettingsError,
     StaticToken,
+    install_statusline_script,
     load_json_or_empty,
     merge_claude_settings,
+    write_claude_settings,
 )
 from ..up import BackupRecord as ClaudeBackupRecord
 from ..up import restore_claude_settings, write_backup
@@ -151,6 +152,7 @@ def up(port: int) -> None:
         raise click.ClickException(str(e))
 
     try:
+        status_line: Final = install_statusline_script()
         original_existed: Final = CLAUDE_SETTINGS_PATH.exists()
         original_settings: Final = load_json_or_empty(CLAUDE_SETTINGS_PATH)
         write_backup(
@@ -158,11 +160,15 @@ def up(port: int) -> None:
             AUTOROUTE_BACKUP_PATH,
         )
         merged: Final = merge_claude_settings(
-            original_settings, base_url, StaticToken(master_key), AUTOROUTER_MODEL_NAME, AUTOROUTER_MODEL_NAME
+            original_settings,
+            base_url,
+            StaticToken(master_key),
+            AUTOROUTER_MODEL_NAME,
+            AUTOROUTER_MODEL_NAME,
+            status_line=status_line,
         )
         CLAUDE_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with secure_create(CLAUDE_SETTINGS_PATH) as f:
-            json.dump(merged, f, indent=2)
+        write_claude_settings(CLAUDE_SETTINGS_PATH, merged)
     except ClaudeSettingsError as e:
         terminate(process.pid)
         clear_pid_record()

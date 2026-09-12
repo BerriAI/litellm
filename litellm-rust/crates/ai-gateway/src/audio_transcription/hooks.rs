@@ -269,7 +269,11 @@ fn guardrail_error_to_core_error(error: GuardrailError) -> Error {
 
 fn core_error_kind(error: &Error) -> &'static str {
     match error {
-        Error::Auth(_) | Error::MissingApiKey { .. } => "AuthError",
+        Error::Auth(_)
+        | Error::MissingApiKey { .. }
+        | Error::MissingAzureAiCredentials
+        | Error::MissingAzureDocumentIntelligenceCredentials
+        | Error::MissingReductoApiKey => "AuthError",
         Error::InvalidProvider(_) => "InvalidProvider",
         Error::InvalidRequest(_) => "InvalidRequest",
         Error::InvalidType { .. } => "InvalidType",

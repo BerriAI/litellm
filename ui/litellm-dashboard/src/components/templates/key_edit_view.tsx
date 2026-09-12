@@ -305,7 +305,7 @@ export function KeyEditView({
   const handleOrganizationChange = (setField: (value: string | null) => void, orgId: string | null) => {
     setField(orgId);
     setSelectedOrganizationId(orgId);
-    form.setValue("team_id", undefined);
+    form.setValue("team_id", null);
   };
 
   const handleTeamChange = (setField: (value: string | null) => void, teamId: string | null) => {
@@ -316,7 +316,7 @@ export function KeyEditView({
       form.setValue("organization_id", selectedTeam.organization_id);
     } else if (!teamId) {
       setSelectedOrganizationId(null);
-      form.setValue("organization_id", undefined);
+      form.setValue("organization_id", null);
     }
   };
 
@@ -769,14 +769,15 @@ export function KeyEditView({
               "Organization",
               "The organization this key belongs to. Selecting an organization filters the available teams.",
             )}
+            description={hasProject ? "Organization is locked because this key belongs to a project" : undefined}
           >
             {({ value, onChange, id }) => (
               <OrganizationDropdown
                 id={id}
-                value={(value as string | undefined) ?? undefined}
+                value={value}
                 organizations={organizations}
                 loading={isOrganizationsLoading}
-                disabled={userRole !== "Admin"}
+                disabled={userRole !== "Admin" || hasProject}
                 onChange={(orgId) => handleOrganizationChange(onChange, orgId)}
               />
             )}
@@ -786,15 +787,13 @@ export function KeyEditView({
             control={form.control}
             name="team_id"
             label="Team ID"
-            description={
-              enableProjectsUI && hasProject ? "Team is locked because this key belongs to a project" : undefined
-            }
+            description={hasProject ? "Team is locked because this key belongs to a project" : undefined}
           >
             {({ value, onChange, id }) => (
               <Select
                 value={(value as string | null) ?? null}
                 onValueChange={(teamId: string | null) => handleTeamChange(onChange, teamId)}
-                disabled={enableProjectsUI && hasProject}
+                disabled={hasProject}
                 items={Object.fromEntries(
                   (visibleTeams ?? []).map((t) => [t.team_id, `${t.team_alias} (${t.team_id})`]),
                 )}

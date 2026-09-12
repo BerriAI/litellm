@@ -2437,6 +2437,7 @@ class ProxyBaseLLMRequestProcessing:
             if self._is_streaming_request(
                 data=self.data, is_streaming_request=is_streaming_request
             ) or self._is_streaming_response(response):  # use generate_responses to stream responses
+                selected_data_generator: AsyncGenerator[str, None] | None = None
                 # Call response headers hook for streaming success
                 stream_callback_headers: Final = await proxy_logging_obj.post_call_response_headers_hook(
                     data=self.data,
@@ -2561,14 +2562,9 @@ class ProxyBaseLLMRequestProcessing:
                                 None if _should_return_raw_model_name(self.data) else requested_model_from_client
                             ),
                         )
-                        return await create_response(
-                            generator=wrap_sse_stream_with_keepalive_pings(
-                                stream=selected_data_generator,
-                                ping_interval_seconds=litellm.anthropic_sse_ping_interval_seconds,
-                            ),
-                            media_type="text/event-stream",
-                            headers=custom_headers,
-                            request=request,
+                        selected_data_generator = wrap_sse_stream_with_keepalive_pings(
+                            stream=selected_data_generator,
+                            ping_interval_seconds=litellm.anthropic_sse_ping_interval_seconds,
                         )
                     # Non-streaming response - fall through to normal response handling
                 elif select_data_generator:
@@ -2595,6 +2591,7 @@ class ProxyBaseLLMRequestProcessing:
                                 user_api_key_dict=user_api_key_dict,
                             )
                         )
+                if selected_data_generator is not None:
                     return await create_response(
                         generator=selected_data_generator,
                         media_type="text/event-stream",
