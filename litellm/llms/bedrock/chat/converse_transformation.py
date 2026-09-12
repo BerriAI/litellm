@@ -234,22 +234,28 @@ class AmazonConverseConfig(BaseConfig):
             rendered = convert_content_list_to_str(message).strip()
             return rendered or "<non-text tool result omitted>"
 
+        guardrail_active: Final = "guardrailConfig" in optional_params
+
         def _rewrite(message: AllMessageValues) -> AllMessageValues:
             role = message.get("role")
             tool_calls = message.get("tool_calls")
             if role == "assistant" and tool_calls:
-                base_text = convert_content_list_to_str(message)
-                call_texts = [_tool_call_text(call) for call in tool_calls]
-                text = "\n".join(filter(None, [base_text, *call_texts]))
+                base_text: Final = convert_content_list_to_str(message)
+                call_texts: Final = tuple(_tool_call_text(call) for call in tool_calls)
+                text: Final = "\n".join(part for part in (base_text, *call_texts) if part)
                 return ChatCompletionAssistantMessage(role="assistant", content=text)
             if role in ("tool", "function"):
                 tool_call_id = message.get("tool_call_id")
                 name = message.get("name")
                 label = f"tool result for {tool_call_id or name or 'unknown'}"
-                return ChatCompletionUserMessage(
-                    role="user",
-                    content=f"[{label}: {_result_text(message)}]",
+                result_text: Final = f"[{label}: {_result_text(message)}]"
+                # Tool results are externally controlled, so guard them wherever they
+                # land in history; _convert_consecutive_user_messages_to_guarded_text
+                # only covers the trailing user turn.
+                content: Final = (
+                    [{"type": "guarded_text", "text": result_text}] if guardrail_active else result_text
                 )
+                return ChatCompletionUserMessage(role="user", content=content)
             return message
 
         verbose_logger.warning(
