@@ -3244,6 +3244,58 @@ def test_convert_response_output_accumulates_raw_tool_calls_into_one_choice():
     assert tool_calls[1].function.arguments == "*** Begin Patch"
 
 
+def test_convert_response_output_folds_preamble_message_into_tool_calls_choice():
+    """gpt-5.4+/gpt-6 models bridged to the Responses API emit a short assistant
+    message ("I'll inspect ...") followed by the function call. Emitting the message
+    as choices[0] with finish_reason=stop and the tool call as choices[1] made chat
+    clients that read only the first choice (agent harnesses) see no tool call and
+    fail the turn. Both must land in one choice with the text as content."""
+    from openai.types.responses import (
+        ResponseFunctionToolCall,
+        ResponseOutputMessage,
+        ResponseOutputText,
+        ResponseReasoningItem,
+    )
+    from openai.types.responses.response_reasoning_item import Summary
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    items = [
+        ResponseReasoningItem(id="rs_1", type="reasoning", summary=[Summary(type="summary_text", text="plan")]),
+        ResponseOutputMessage(
+            id="msg_1",
+            type="message",
+            role="assistant",
+            status="completed",
+            content=[ResponseOutputText(type="output_text", text="I'll inspect the repo first.", annotations=[])],
+        ),
+        ResponseFunctionToolCall(
+            id="fc_1",
+            type="function_call",
+            status="completed",
+            arguments='{"command": "git status"}',
+            call_id="call_bash1",
+            name="bash",
+        ),
+    ]
+
+    choices = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(items)
+
+    assert len(choices) == 1
+    choice = choices[0]
+    assert choice.index == 0
+    assert choice.finish_reason == "tool_calls"
+    assert choice.message.content == "I'll inspect the repo first."
+    assert choice.message.reasoning_content == "plan"
+    assert choice.message.reasoning_items[0]["id"] == "rs_1"
+    assert len(choice.message.tool_calls) == 1
+    assert choice.message.tool_calls[0].id == "call_bash1"
+    assert choice.message.tool_calls[0].function.name == "bash"
+    assert choice.message.tool_calls[0].function.arguments == '{"command": "git status"}'
+
+
 def test_convert_response_output_generic_pydantic_message_item():
     """litellm's completion bridge (used for non-Responses-native providers behind the
     router) emits GenericResponseOutputItem pydantic models rather than openai SDK
