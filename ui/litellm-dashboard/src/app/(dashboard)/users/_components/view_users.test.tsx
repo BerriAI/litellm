@@ -344,5 +344,16 @@ describe("ViewUserDashboard", () => {
       expect(latest[4]).toBeNull();
       expect(latest[2]).toBe(1);
     });
+
+    it("replaces the previous rows with the loading state while the search request is pending", async () => {
+      renderDashboard();
+      expect(await screen.findByText("test@example.com")).toBeInTheDocument();
+
+      userListCall.mockReturnValue(new Promise(() => undefined));
+      fireEvent.change(screen.getByPlaceholderText("Search by email or ID…"), { target: { value: "zzznomatch" } });
+
+      expect(await screen.findByText("Loading users…")).toBeInTheDocument();
+      expect(screen.queryByText("test@example.com")).not.toBeInTheDocument();
+    });
   });
 });
