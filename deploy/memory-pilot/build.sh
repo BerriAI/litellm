@@ -6,7 +6,7 @@ export RUSTUP_HOME="$PWD/.memory-pilot-rustup"
 export CARGO_HOME="$PWD/.memory-pilot-cargo"
 python -m pip install uv==0.11.7
 export UV_PROJECT_ENVIRONMENT="$PWD/.memory-pilot-venv"
-uv sync --frozen --extra proxy --no-default-groups
+uv sync --frozen --extra proxy --extra extra_proxy --no-default-groups
 export PATH="$UV_PROJECT_ENVIRONMENT/bin:$PATH"
 prisma generate --schema schema.prisma
 (
