@@ -1181,6 +1181,28 @@ async def test_apply_spend_counter_increments_open_breaker_invalidates_and_retur
 
 
 @pytest.mark.asyncio
+async def test_apply_spend_counter_increments_redis_timeout_invalidates_and_returns(monkeypatch):
+    """A Redis timeout is the streak the breaker is already counting and the cache layer already logged.
+
+    Re-raising it sent every request in the pre-open window through the cost callback's error
+    path, which logged a traceback and fired the failed-tracking alert once per request.
+    """
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    fake_cache = _make_spend_counter_cache()
+    fake_cache.redis_cache.async_increment_pipeline = AsyncMock(
+        side_effect=RedisTimeoutError("Timeout reading from 127.0.0.1:6379")
+    )
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+
+    await ps._apply_spend_counter_increments(_two_pending_increments())
+
+    deleted_keys = sorted(call.kwargs["key"] for call in fake_cache.in_memory_cache.delete_cache.call_args_list)
+    assert deleted_keys == ["spend:key:k", "spend:team:t"]
+    fake_cache.in_memory_cache.set_cache.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_apply_spend_counter_increments_other_redis_error_invalidates_and_raises(monkeypatch):
     fake_cache = _make_spend_counter_cache()
     fake_cache.redis_cache.async_increment_pipeline = AsyncMock(side_effect=ConnectionError("redis down"))

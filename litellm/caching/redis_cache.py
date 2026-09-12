@@ -330,7 +330,7 @@ def _redis_timeout_error_types() -> tuple[type, ...]:
     return (RedisTimeoutError, TimeoutError)
 
 
-def _is_redis_timeout_failure(exc: BaseException) -> bool:
+def is_redis_timeout_failure(exc: BaseException) -> bool:
     return isinstance(exc, _redis_timeout_error_types())
 
 
@@ -398,7 +398,7 @@ def _record_swallowed_redis_failure(breaker: RedisCircuitBreaker, exc: BaseExcep
     """
     if not _is_redis_health_failure(exc):
         return
-    breaker.record_failure(is_timeout=_is_redis_timeout_failure(exc))
+    breaker.record_failure(is_timeout=is_redis_timeout_failure(exc))
     _swallowed_redis_failures.set(_swallowed_redis_failures.get() + 1)
 
 
@@ -439,7 +439,7 @@ def log_redis_failure(
         logger.debug("%s: %s", message, exc, stacklevel=2)
         return
     exc_info: Final = exc if with_traceback else None
-    if not _is_redis_timeout_failure(exc):
+    if not is_redis_timeout_failure(exc):
         logger.log(level, "%s: %s", message, exc, exc_info=exc_info, stacklevel=2)
         return
     suppressed: Final = _redis_timeout_log_throttle.admit()
@@ -504,7 +504,7 @@ async def _run_under_circuit_breaker(
         result: Final = await call()
     except Exception as e:
         if _is_redis_health_failure(e):
-            breaker.record_failure(is_timeout=_is_redis_timeout_failure(e))
+            breaker.record_failure(is_timeout=is_redis_timeout_failure(e))
         raise
     _exit_circuit_breaker(breaker, admission)
     return result
@@ -521,7 +521,7 @@ def _run_under_circuit_breaker_sync(
         result: Final = call()
     except Exception as e:
         if _is_redis_health_failure(e):
-            breaker.record_failure(is_timeout=_is_redis_timeout_failure(e))
+            breaker.record_failure(is_timeout=is_redis_timeout_failure(e))
         raise
     _exit_circuit_breaker(breaker, admission)
     return result
