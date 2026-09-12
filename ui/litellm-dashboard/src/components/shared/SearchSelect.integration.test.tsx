@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, renderWithProviders as render, screen } from "../../../tests/test-utils";
+import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -36,11 +37,30 @@ describe("SearchSelect", () => {
     expect(screen.getByRole("combobox")).toHaveValue("Growth");
   });
 
-  it("shows a clear control only when a value is selected", () => {
-    const { rerender } = render(<SearchSelect options={OPTIONS} onValueChange={vi.fn()} />);
-    expect(document.querySelector('[data-slot="combobox-clear"]')).toBeNull();
-    rerender(<SearchSelect options={OPTIONS} value="team-1" onValueChange={vi.fn()} />);
-    expect(document.querySelector('[data-slot="combobox-clear"]')).not.toBeNull();
+  it("should clear to null and allow selecting again through the real control", async () => {
+    const onValueChange = vi.fn();
+    const user = userEvent.setup();
+    function Controlled() {
+      const [value, setValue] = useState<string | null>(null);
+      return (
+        <SearchSelect
+          options={OPTIONS}
+          value={value}
+          onValueChange={(next) => {
+            setValue(next);
+            onValueChange(next);
+          }}
+        />
+      );
+    }
+    render(<Controlled />);
+    expect(screen.queryByRole("button", { name: "Clear" })).not.toBeInTheDocument();
+    await chooseSelectOption(user, screen.getByRole("combobox"), "Growth");
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    expect(onValueChange).toHaveBeenLastCalledWith(null);
+    expect(screen.getByRole("combobox")).toHaveValue("");
+    await chooseSelectOption(user, screen.getByRole("combobox"), "Data Team");
+    expect(onValueChange).toHaveBeenLastCalledWith("team-3");
   });
 
   it("filters the options client-side as you type", async () => {

@@ -311,7 +311,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
                     <SearchSelect
                       options={teamOptions}
                       value={(get("team_id") as string) || undefined}
-                      onValueChange={(value) => set("team_id", value)}
+                      onValueChange={(value) => set("team_id", value ?? undefined)}
                       placeholder="Select a team…"
                       emptyText="No teams found"
                     />
@@ -320,7 +320,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
                     <SearchSelect
                       options={orgOptions}
                       value={(get("org_id") as string) || undefined}
-                      onValueChange={(value) => set("org_id", value)}
+                      onValueChange={(value) => set("org_id", value ?? undefined)}
                       placeholder="Select an organization…"
                       emptyText="No organizations found"
                     />

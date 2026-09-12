@@ -1483,11 +1483,11 @@ describe("KeyEditView", () => {
       });
     });
 
-    it("submits organization_id as null after the organization is cleared", async () => {
+    it("clears the organization and its dependent team in the update payload", async () => {
       const onSubmit = vi.fn().mockResolvedValue(undefined);
       renderWithProviders(
         <KeyEditView
-          keyData={{ ...MOCK_KEY_DATA, organization_id: "org-1" }}
+          keyData={{ ...MOCK_KEY_DATA, organization_id: "org-1", team_id: "group-maple" }}
           onCancel={() => {}}
           onSubmit={onSubmit}
           accessToken=""
@@ -1504,9 +1504,33 @@ describe("KeyEditView", () => {
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {
-        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ organization_id: null }));
+        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ organization_id: null, team_id: null }));
       });
-      expect(JSON.parse(JSON.stringify(onSubmit.mock.calls[0][0]))).toHaveProperty("organization_id", null);
+      expect(JSON.parse(JSON.stringify(onSubmit.mock.calls[0][0]))).toMatchObject({
+        organization_id: null,
+        team_id: null,
+      });
+    });
+
+    it("keeps project key relationships locked and omits unsupported project updates", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderWithProviders(
+        <KeyEditView
+          keyData={{ ...MOCK_KEY_DATA, organization_id: "org-1", team_id: "group-maple", project_id: "project-orbit" }}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken=""
+          userID=""
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+      expect(await screen.findByRole("combobox", { name: "Organization" })).toBeDisabled();
+      expect(screen.getByRole("combobox", { name: "Team ID" })).toBeDisabled();
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+      expect(onSubmit.mock.calls[0][0]).toMatchObject({ organization_id: "org-1", team_id: "group-maple" });
+      expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("project_id");
     });
   });
 

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, renderWithProviders as render, screen, waitFor } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -51,7 +51,7 @@ describe("PaginatedSearchSelect", () => {
     const onSearchChange = vi.fn();
 
     function Controlled() {
-      const [value, setValue] = useState("");
+      const [value, setValue] = useState<string | null>(null);
       return (
         <PaginatedSearchSelect
           options={OPTIONS}
@@ -71,14 +71,33 @@ describe("PaginatedSearchSelect", () => {
     expect(onSearchChange).not.toHaveBeenCalled();
   });
 
-  it("still reports a cleared input so the unfiltered page comes back", async () => {
+  it("should keep a cleared selection empty after a late page arrives and reset the query", async () => {
     const user = userEvent.setup();
     const onSearchChange = vi.fn();
-    renderSelect({ onSearchChange, value: "alias-alpha" });
-
-    await user.click(document.querySelector('[data-slot="combobox-clear"]') as HTMLElement);
-
-    await waitFor(() => expect(onSearchChange).toHaveBeenCalledWith(""));
+    const onValueChange = vi.fn();
+    function Controlled({ options }: { options: SearchSelectOption[] }) {
+      const [value, setValue] = useState<string | null>("alias-alpha");
+      return (
+        <PaginatedSearchSelect
+          options={options}
+          value={value}
+          onSearchChange={onSearchChange}
+          onValueChange={(next) => {
+            setValue(next);
+            onValueChange(next);
+          }}
+        />
+      );
+    }
+    const { rerender } = render(<Controlled options={OPTIONS} />);
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    expect(onValueChange).toHaveBeenLastCalledWith(null);
+    rerender(<Controlled options={OPTIONS.map((option) => ({ ...option }))} />);
+    await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith(""));
+    expect(screen.getByRole("combobox")).toHaveValue("");
+    expect(screen.queryByRole("button", { name: "Clear" })).not.toBeInTheDocument();
+    await chooseSelectOption(user, screen.getByRole("combobox"), "alias-beta");
+    expect(onValueChange).toHaveBeenLastCalledWith("alias-beta");
   });
 
   it("requests the next page once the list is scrolled near the bottom", async () => {
@@ -147,7 +166,7 @@ describe("PaginatedSearchSelect", () => {
 
     function ServerBacked() {
       const [search, setSearch] = useState("");
-      const [value, setValue] = useState("alias-alpha");
+      const [value, setValue] = useState<string | null>("alias-alpha");
       const freshlyBuiltOptions = OPTIONS.filter((option) => option.label.includes(search)).map((option) => ({
         ...option,
       }));
@@ -236,7 +255,7 @@ describe("PaginatedSearchSelect", () => {
 
     function Refetching() {
       const [options, setOptions] = useState<SearchSelectOption[]>([{ label: "Beta Team", value: "team-2" }]);
-      const [value, setValue] = useState("");
+      const [value, setValue] = useState<string | null>(null);
       return (
         <>
           <PaginatedSearchSelect
@@ -279,7 +298,7 @@ describe("PaginatedSearchSelect", () => {
 
     function ServerBacked() {
       const [search, setSearch] = useState("");
-      const [value, setValue] = useState("");
+      const [value, setValue] = useState<string | null>(null);
       return (
         <PaginatedSearchSelect
           options={OPTIONS.filter((option) => option.label.includes(search))}
