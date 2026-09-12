@@ -932,9 +932,9 @@ def _resolve_targeted_model_ids(
     Resolve a ``/health`` ``model`` / ``model_id`` query param to the set of
     deployment IDs the response should be scoped to, mirroring the live-path
     narrowing in ``perform_health_check()``: ``model_id`` wins when given and
-    matches ``model_info.id`` only; ``model`` targets deployments by their
-    ``litellm_params.model`` provider string, else the deployments a request
-    for that name from the caller would route to (``deployments_targeted_by_name``).
+    matches ``model_info.id`` only; ``model`` targets the deployments a request
+    for that name from the caller would route to, else those whose
+    ``litellm_params.model`` provider string is that value (``deployments_targeted_by_name``).
 
     Callers pass an already-scoped list, so a ``model_id`` outside the
     caller's scope resolves to an empty set and never to the unvalidated id.

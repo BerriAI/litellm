@@ -686,23 +686,41 @@ _TEAM_B_COPY = {
     "litellm_params": {"model": "bedrock/us.amazon.nova-2-lite-v1:0"},
     "model_info": {"id": "id-team-b", "team_id": "team-b", "team_public_model_name": "bedrock-nova"},
 }
+_GLOBAL_BARE_NAME = {
+    "model_name": "gpt-5.4-nano",
+    "litellm_params": {"model": "gpt-5.4-nano"},
+    "model_info": {"id": "id-nano"},
+}
+_TEAM_B_BARE_COPY = {
+    "model_name": "gpt-5.4-nano_team-b_7c3d",
+    "litellm_params": {"model": "gpt-5.4-nano"},
+    "model_info": {"id": "id-nano-team-b", "team_id": "team-b", "team_public_model_name": "gpt-5.4-nano"},
+}
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("team_id", "model_list", "expected_ids"),
+    ("team_id", "model", "model_list", "expected_ids"),
     [
-        (None, [_TEAM_B_COPY], ["id-team-b"]),
-        (None, [_GLOBAL_DEPLOYMENT, _TEAM_B_COPY], ["id-bedrock"]),
-        ("team-b", [_GLOBAL_DEPLOYMENT, _TEAM_B_COPY], ["id-team-b"]),
+        (None, "bedrock-nova", [_TEAM_B_COPY], ["id-team-b"]),
+        (None, "bedrock-nova", [_GLOBAL_DEPLOYMENT, _TEAM_B_COPY], ["id-bedrock"]),
+        ("team-b", "bedrock-nova", [_GLOBAL_DEPLOYMENT, _TEAM_B_COPY], ["id-team-b"]),
+        ("team-b", "gpt-5.4-nano", [_GLOBAL_BARE_NAME, _TEAM_B_BARE_COPY], ["id-nano-team-b"]),
+        (None, "gpt-5.4-nano", [_GLOBAL_BARE_NAME, _TEAM_B_BARE_COPY], ["id-nano"]),
+        (None, "bedrock/us.amazon.nova-2-lite-v1:0", [_GLOBAL_DEPLOYMENT, _TEAM_B_COPY], ["id-bedrock", "id-team-b"]),
     ],
     ids=[
         "a team-less caller reaches a public name nothing else carries",
         "model_name wins over a public name for a team-less caller",
         "a team's own copy wins over the global model_name",
+        "a team's own copy wins over a litellm_params.model equal to the public name",
+        "model_name wins over a litellm_params.model equal to it for a team-less caller",
+        "a provider model string no name carries still matches litellm_params.model",
     ],
 )
-async def test_perform_health_check_targets_a_name_the_way_a_request_for_it_routes(team_id, model_list, expected_ids):
+async def test_perform_health_check_targets_a_name_the_way_a_request_for_it_routes(
+    team_id, model, model_list, expected_ids
+):
     """``/health?model=<name>`` probes the deployments a request for that name from the same caller would route to."""
     from litellm.proxy.health_check import perform_health_check
 
@@ -713,7 +731,7 @@ async def test_perform_health_check_targets_a_name_the_way_a_request_for_it_rout
     with patch(  # test-quality-ok: the deployments handed to the probe are the assertion; no injection seam
         "litellm.proxy.health_check._perform_health_check", probe
     ):
-        healthy, unhealthy, _ = await perform_health_check(model_list=model_list, model="bedrock-nova", team_id=team_id)
+        healthy, unhealthy, _ = await perform_health_check(model_list=model_list, model=model, team_id=team_id)
 
     assert [m["model_info"]["id"] for m in probe.call_args.args[0]] == expected_ids
     assert [ep["model_id"] for ep in healthy] == expected_ids
