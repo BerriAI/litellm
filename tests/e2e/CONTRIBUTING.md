@@ -27,13 +27,49 @@ The suites run against a live proxy, so bring one up first by running the litell
 
 2. Bring up a Postgres and a Redis for the proxy to use. The repo-root `docker-compose.yml` already defines a Postgres on `5432`; a `docker run -p 6379:6379 redis:7` covers Redis. Point `DATABASE_URL` / `REDIS_HOST` / `REDIS_PORT` at whatever you run. Tests that read Redis directly default to the deployed shape (TLS + cluster mode) whenever `REDIS_HOST` is set, so for a local standalone Redis also set `REDIS_CLUSTER=false` and `REDIS_SSL=false` (plus `REDIS_PASSWORD` when your Redis requires auth)
 
-3. Start the litellm proxy locally against your config and confirm it is live:
+3. Start the identity provider the JWT API tests authenticate against, then the litellm proxy against your config, and confirm both are live. It is a real Keycloak, running the realm in `tests/e2e/idp_realm.json`, and the proxy trusts it because `JWT_PUBLIC_KEY_URL` points at that realm's JWKS. The proxy caches the JWKS for `public_key_ttl` (600s) and does not refetch on an unknown `kid`, so keep its data volume across restarts; restart the proxy if you deliberately replace that volume:
 
    ```bash
-   set -a && source .env && set +a
+   docker run -d --name litellm-e2e-idp -p 8480:8080 \
+     -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
+     -v "$PWD/tests/e2e/idp_realm.json:/opt/keycloak/data/import/realm.json:ro" \
+     -v litellm-e2e-idp-data:/opt/keycloak/data \
+     quay.io/keycloak/keycloak:26.7.3 start-dev --import-realm
+   curl -fs --retry 30 --retry-delay 2 --retry-all-errors http://127.0.0.1:8480/realms/litellm-e2e/.well-known/openid-configuration
+   export JWT_ISSUER=http://127.0.0.1:8480/realms/litellm-e2e
+   export JWT_AUDIENCE=litellm-e2e
+   export JWT_PUBLIC_KEY_URL="$JWT_ISSUER/protocol/openid-connect/certs"
    litellm --config <your-e2e-config>.yml --port 4000
    curl -fs http://localhost:4000/health/liveliness
    ```
+
+   The tests reach Keycloak at `E2E_KEYCLOAK_URL` (default `http://127.0.0.1:8480`) and provision their identities through its admin API, so they also need `E2E_KEYCLOAK_ADMIN_USER` and `E2E_KEYCLOAK_ADMIN_PASSWORD` (`admin` / `admin` for the throwaway container above; the deployed stacks take theirs from a secret). JWT auth is an enterprise feature, so the proxy needs `LITELLM_LICENSE` in its environment, and its config needs the JWT block below. `enable_jwt_auth` only routes bearer tokens with three dot-separated segments into the JWT path, so `sk-` virtual keys and the master key keep working for every other suite. `proxy_batch_write_at` is lowered so the JWT spend-attribution test sees its row well inside the poll deadline:
+
+   ```yaml
+   general_settings:
+     proxy_batch_write_at: 5
+     enable_jwt_auth: true
+     litellm_jwtauth:
+       user_id_jwt_field: sub
+       user_email_jwt_field: email
+       team_ids_jwt_field: groups
+       user_id_upsert: true
+   ```
+
+   Set `JWT_ISSUER` to the exact realm URL used by the test runner and `JWT_AUDIENCE=litellm-e2e`. The realm explicitly maps this audience, `sub`, `email`, and `groups`; the proxy fetches real signing keys from its JWKS endpoint. The rejection tests obtain signed tokens with a different audience or issuer and verify the corresponding rejection reason. The issuer test uses a different HTTP Host when requesting a token from the isolated, dynamically named test IdP.
+
+   Keycloak's password grant is a test-only provisioning shortcut, not a production login recommendation. The `litellm-e2e-admin` client adds the proxy's admin scope; the normal client does not. Never reuse this permissive realm outside an isolated test stack.
+
+   Management tests can use the shared `idp` and `jwt_identity` fixtures. Each test gets a unique Keycloak group/user and a matching proxy user/team. Setup and fallback cleanup use the master key; the operations and read-backs being tested must explicitly use `caller_key=idp.access_token(jwt_identity, client_id=ADMIN_CLIENT_ID)` (or a member token). See `management/test_jwt_management_e2e.py` for create/read/update/clear/delete and tenant-denial examples. A group claim alone is not database team membership: permission tests explicitly add the member and prove an allowed read before asserting the denied write.
+
+   Every successful IdP create immediately registers cleanup, including partial setup failures. Cleanup failures emit warnings. Tokens are minted on demand, and the expiration test waits relative to the token's actual `exp` with a bounded clock-drift check. To check first-attempt behavior locally, run both files with `--reruns 0`:
+
+   ```bash
+   E2E_KEYCLOAK_ADMIN_USER=admin E2E_KEYCLOAK_ADMIN_PASSWORD=admin \
+     uv run pytest tests/e2e/other/test_jwt_auth_e2e.py tests/e2e/management/test_jwt_management_e2e.py --reruns 0 -v
+   ```
+
+   Buildkite runs this suite against a Keycloak deployed beside the ephemeral stack by project-releaser. It fetches the realm from the test-runner revision even when it reuses a gateway image from another commit. The GitHub Actions changed-test stack starts the same digest-pinned Keycloak through `.github/e2e-stack/start-idp.sh`, imports the checked-out realm, and exports the IdP URL and credentials in `stack.env`. Both runners configure issuer/audience validation and store the realm, keys and users in a separate schema in the stack's PostgreSQL, so replacing Keycloak preserves token validity. Both wait for realm discovery before running tests. Losing the whole ephemeral database invalidates the stack. Keycloak skips imports into an existing realm, so changes to the realm export require a fresh stack (or deliberately replacing the local data volume). A stack without it fails the JWT tests rather than skipping them
 
 4. Run a suite against it; the harness reads `LITELLM_PROXY_URL` (default `http://localhost:4000`):
 
@@ -65,7 +101,7 @@ A couple of logging destinations are configured on the proxy rather than by the 
 
 ### The pull request check
 
-Every same-repository PR that adds, modifies, or renames a `tests/e2e/**/test_*.py` file runs those changed files three times. A change to the harness itself, meaning a root-level `tests/e2e/*.py` file or `pytest.ini`, `tests/e2e/gateway/`, `.github/e2e-stack/`, or the workflow, also runs the `access_control` suite as a canary, because those files have no test of their own that exercises the stack. `.github/e2e-stack/select_tests.py` applies both rules. The stack config at `tests/e2e/gateway/stage_mirror_ci_config.yml` must declare every model the selected suites use; a missing one shows up as a failed test id in the public log. The suite's own single rerun for network errors and 5xx responses (see `pytest.ini`) applies on every pass, so a transport blip does not fail the check while a race inside a test still does. The stage-mirror stack has a control-plane backend, two gateways behind nginx, Postgres, Jaeger, and TLS cluster-mode Valkey. The stack exports every gateway address in `LITELLM_PROXY_REPLICA_URLS`, so model registration waits until each gateway lists the new model rather than whichever one the load balancer answered from. Documentation, deleted-file, and application-only changes do not start the stack or request environment approval. The `ui/`, `claude_code/`, and `load/` directories, `batches/test_managed_files_enforcement_e2e.py`, `llm_translation/realtime/test_realtime_pipecat_audio_e2e.py`, and `guardrails/test_presidio_masking_e2e.py` remain outside this check because they use separate tooling or need a differently configured stack: the pipecat audio suite skips itself at import time unless the NLTK `punkt_tab` data is installed, and the presidio suite fails without the analyzer and anonymizer services this stack does not start
+Every same-repository PR that adds, modifies, or renames a `tests/e2e/**/test_*.py` file runs those changed files three times. A change to the harness itself, meaning a root-level `tests/e2e/*.py` file or `pytest.ini`, `tests/e2e/gateway/`, `.github/e2e-stack/`, or the workflow, also runs the `access_control` suite and both JWT suites as canaries, because those files have no test of their own that exercises the stack. `.github/e2e-stack/select_tests.py` applies both rules. The stack config at `tests/e2e/gateway/stage_mirror_ci_config.yml` must declare every model the selected suites use; a missing one shows up as a failed test id in the public log. The suite's own single rerun for network errors and 5xx responses (see `pytest.ini`) applies on every pass, so a transport blip does not fail the check while a race inside a test still does. The stage-mirror stack has a control-plane backend, two gateways behind nginx, Postgres, Keycloak, Jaeger, and TLS cluster-mode Valkey. Realm-only edits also trigger these canaries. The stack exports every gateway address in `LITELLM_PROXY_REPLICA_URLS`, so model registration waits until each gateway lists the new model rather than whichever one the load balancer answered from. Documentation, deleted-file, and application-only changes do not start the stack or request environment approval. The `ui/`, `claude_code/`, and `load/` directories, `batches/test_managed_files_enforcement_e2e.py`, `llm_translation/realtime/test_realtime_pipecat_audio_e2e.py`, and `guardrails/test_presidio_masking_e2e.py` remain outside this check because they use separate tooling or need a differently configured stack: the pipecat audio suite skips itself at import time unless the NLTK `punkt_tab` data is installed, and the presidio suite fails without the analyzer and anonymizer services this stack does not start. The Redis chaos test under `load/` needs a proxy it can pause the Redis of on the same host (`gateway/redis_chaos_ci_config.yml`), which `.github/workflows/test-e2e-redis-chaos.yml` boots, and which the Buildkite `e2e-redis-chaos` step in project-releaser runs co-located with Postgres and Valkey in one pod; it is deselected unless `E2E_REDIS_CHAOS` is set
 
 Every selected file must execute at least one passing test in each pass, and any test failure, collection error, or entirely skipped or deselected file fails the check. A file whose tests are all marked skip therefore cannot pass this check, so unskip at least one of them, or add the file to `UNSUPPORTED` in `select_tests.py` with the reason, before changing one. A failed pass stops the run. The public log prints pytest's one-line summary for each pass, including the rerun count, and names each failed or errored test as `classname::name`, so a retried network error or a failing test is visible without the raw output. The final `e2e-changed-tests` job succeeds only when no supported test files changed or the approved run completed all three passes. Fork PRs with selected tests fail this gate until a maintainer brings the reviewed change onto a same-repository branch
 

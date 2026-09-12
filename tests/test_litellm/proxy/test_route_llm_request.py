@@ -3,6 +3,7 @@ import pytest
 
 
 
+from typing import Final
 from unittest.mock import MagicMock
 
 from fastapi import HTTPException
@@ -1297,3 +1298,13 @@ async def test_route_request_a2a_agent_miss_does_not_consume_model_read_through(
 
     assert agents_find_unique.await_count == 2
     assert model_table.find_many_wheres == []
+
+
+def test_proxy_model_not_found_error_keeps_the_raw_model_only_in_the_client_response():
+    raw_model: Final = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
+
+    error: Final = ProxyModelNotFoundError(route="/chat/completions", model_name=raw_model)
+
+    assert raw_model in error.detail["error"]
+    assert raw_model not in error.spend_log_error_message
+    assert error.spend_log_error_message.startswith("/chat/completions: Invalid model name passed in")

@@ -32,32 +32,36 @@ from litellm.router_utils.auto_router_model_naming import (
     strategy_router_dependencies,
 )
 
-ILLEGAL_DISPLAY_PARAMS: Final = [
-    "messages",
-    "api_key",
-    "prompt",
-    "input",
-    "client_secret",
-    "azure_ad_token",
-    "azure_username",
-    "azure_password",
-    "vertex_credentials",
-    "vertex_ai_credentials",
-    "aws_access_key_id",
-    "aws_secret_access_key",
-    "aws_session_token",
-    "aws_web_identity_token",
-    "extra_headers",
-    "headers",
-    "exception",  # internal; not JSON-serializable, never for display
-    "litellm_metadata",  # internal tracking metadata with auth objects; not for display
-]
 # Provider routing fields. Allowed for proxy admins so they can see which
 # region/version a deployment is checking; gated at the endpoint layer for
 # non-admin callers (see _strip_admin_only_fields_from_health_result).
-ADMIN_ONLY_HEALTH_DISPLAY_PARAMS: Final = ("api_base", "api_version")
+ADMIN_ONLY_HEALTH_DISPLAY_PARAMS: Final = ("api_base", "api_version", "aws_bedrock_runtime_endpoint")
 
-MINIMAL_DISPLAY_PARAMS: Final = ["model", "mode_error"]
+MINIMAL_DISPLAY_PARAMS: Final = frozenset({"model", "mode_error"})
+
+HEALTH_DISPLAY_PARAMS: Final = (
+    MINIMAL_DISPLAY_PARAMS
+    | frozenset(ADMIN_ONLY_HEALTH_DISPLAY_PARAMS)
+    | frozenset(
+        {
+            "custom_llm_provider",
+            "mode",
+            "base_model",
+            "aws_region_name",
+            "region_name",
+            "watsonx_region_name",
+            "vertex_project",
+            "vertex_location",
+            "tpm",
+            "rpm",
+            "error",
+            "raw_request_typed_dict",
+            "x-ratelimit-remaining-requests",
+            "x-ratelimit-remaining-tokens",
+            "x-ms-region",
+        }
+    )
+)
 
 # Modes whose health-check probe is a chat-style completion call and
 # therefore accept `max_tokens`. Other modes (embedding, image_generation,
@@ -143,14 +147,10 @@ def _get_random_llm_message():
 
 def _clean_endpoint_data(endpoint_data: dict, details: bool | None = True):
     """
-    Clean the endpoint data for display to users.
+    Keep only the explicitly approved, JSON-safe diagnostic fields for display to users.
     """
-    endpoint_data.pop("litellm_logging_obj", None)
-    return (
-        {k: v for k, v in endpoint_data.items() if k not in ILLEGAL_DISPLAY_PARAMS}
-        if details is not False
-        else {k: v for k, v in endpoint_data.items() if k in MINIMAL_DISPLAY_PARAMS}
-    )
+    displayed: Final = HEALTH_DISPLAY_PARAMS if details is not False else MINIMAL_DISPLAY_PARAMS
+    return {k: v for k, v in endpoint_data.items() if k in displayed}
 
 
 def health_check_filter_kwargs_from_general_settings(
@@ -258,8 +258,52 @@ def _deployment_model(deployment: Mapping[str, object]) -> str | None:
     return params.get("model") if isinstance(params, Mapping) else None
 
 
+def _owner_team_id(deployment: Mapping[str, object]) -> str | None:
+    info: Final = deployment.get("model_info")
+    owner: Final = info.get("team_id") if isinstance(info, Mapping) else None
+    return owner if isinstance(owner, str) else None
+
+
+def _team_public_model_name(deployment: Mapping[str, object]) -> str | None:
+    info: Final = deployment.get("model_info")
+    name: Final = info.get("team_public_model_name") if isinstance(info, Mapping) else None
+    return name if isinstance(name, str) else None
+
+
+def _deployments_routed_by_name(
+    model_list: Sequence[Mapping[str, object]], model_name: str, team_id: str | None
+) -> tuple[Mapping[str, object], ...]:
+    """The deployments a request for ``model_name`` from this caller routes to.
+
+    A team's own copies published under that name win, then deployments carrying it as
+    ``model_name``. A caller with no team reaches a public name only when nothing carries
+    it as ``model_name``, and only an admin still has another team's deployment in a
+    scoped ``model_list`` by then.
+    """
+    own_copies: Final = tuple(
+        x
+        for x in model_list
+        if team_id is not None and _owner_team_id(x) == team_id and _team_public_model_name(x) == model_name
+    )
+    if own_copies:
+        return own_copies
+    by_name: Final = tuple(x for x in model_list if x.get("model_name") == model_name)
+    if by_name or team_id is not None:
+        return by_name
+    return tuple(x for x in model_list if _team_public_model_name(x) == model_name)
+
+
+def deployments_targeted_by_name(
+    model_list: Sequence[Mapping[str, object]], model: str, team_id: str | None
+) -> tuple[Mapping[str, object], ...]:
+    """``model`` targets deployments the way a request for it routes, else by ``litellm_params.model``."""
+    return _deployments_routed_by_name(model_list, model, team_id) or tuple(
+        x for x in model_list if _deployment_model(x) == model
+    )
+
+
 def _narrow_to_target(
-    model_list: Sequence[Mapping[str, object]], model: str | None, model_id: str | None
+    model_list: Sequence[Mapping[str, object]], model: str | None, model_id: str | None, team_id: str | None
 ) -> tuple[Mapping[str, object], ...]:
     """Narrow to the requested deployment. An id matching nothing keeps the whole list."""
     if model_id is not None:
@@ -267,8 +311,7 @@ def _narrow_to_target(
         return by_id or tuple(model_list)
     if model is None:
         return tuple(model_list)
-    by_param: Final = tuple(x for x in model_list if _deployment_model(x) == model)
-    return by_param or tuple(x for x in model_list if x.get("model_name") == model)
+    return deployments_targeted_by_name(model_list, model, team_id)
 
 
 def _is_strategy_router_deployment(litellm_params: Mapping[str, object]) -> bool:
@@ -813,13 +856,18 @@ async def perform_health_check(
     instrumentation_context: dict | None = None,
     health_check_skip_disabled_background_models: bool = False,
     router: "Router | None" = None,
+    team_id: str | None = None,
 ):
     """
     Perform a health check on the system.
 
     When model_id is provided, only the deployment with that id is checked
     (so models that share the same name but have different ids are checked separately).
-    When model (name) is provided, all deployments matching that name are checked.
+    When model (name) is provided, the deployments a request for that name from the
+    caller (``team_id``) would route to are checked: the caller's team copies published
+    under that name, else the deployments named that way, else a public name that only
+    another team's deployment carries, else the deployments whose ``litellm_params.model``
+    is that string.
 
     When ``health_check_skip_disabled_background_models`` is True (via
     ``general_settings.health_check_skip_disabled_background_models``), deployments
@@ -850,7 +898,7 @@ async def perform_health_check(
     cycle_start_time: Final = time.monotonic()
     requested_model_count: Final = len(model_list)
     skip_disabled: Final = health_check_skip_disabled_background_models
-    narrowed: Final = _health_check_eligible(_narrow_to_target(model_list, model, model_id), skip_disabled)
+    narrowed: Final = _health_check_eligible(_narrow_to_target(model_list, model, model_id, team_id), skip_disabled)
     if not narrowed:
         if instrumentation_enabled:
             logger.debug(

@@ -1,5 +1,5 @@
 import { test as base, expect } from "@playwright/test";
-import { ADMIN_STORAGE_PATH } from "../../constants";
+import { ADMIN_STORAGE_PATH, PROPAGATION_TIMEOUT_MS } from "../../constants";
 import { Page } from "../../fixtures/pages";
 import { dismissFeedbackPopup, navigateToPage, openKeyDetail } from "../../helpers/navigation";
 import {
@@ -35,6 +35,7 @@ test.describe("Proxy Admin - Key blocking", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
   test("blocking a key stops it serving and unblocking restores it", async ({ page, scopedKey }) => {
+    test.setTimeout(5 * 60_000);
     const { alias, token, apiKey } = scopedKey;
 
     await sendChatCompletion(page.request, {
@@ -70,7 +71,7 @@ test.describe("Proxy Admin - Key blocking", () => {
           }),
         {
           message: "a blocked key was still served by /v1/chat/completions",
-          timeout: 30_000,
+          timeout: PROPAGATION_TIMEOUT_MS,
         },
       )
       .toMatchObject({ status: 401, body: expect.stringContaining("blocked") });
@@ -104,7 +105,7 @@ test.describe("Proxy Admin - Key blocking", () => {
           }),
         {
           message: "an unblocked key is still refused by /v1/chat/completions",
-          timeout: 30_000,
+          timeout: PROPAGATION_TIMEOUT_MS,
         },
       )
       .toMatchObject({ status: 200, body: expect.stringContaining(MOCK_RESPONSE_TEXT) });

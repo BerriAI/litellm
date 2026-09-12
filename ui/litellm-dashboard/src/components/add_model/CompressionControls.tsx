@@ -42,8 +42,8 @@ const CompressionControls: React.FC<CompressionControlsProps> = ({ value, onChan
         </div>
         <SearchSelect
           options={options}
-          value={routing ?? ""}
-          onValueChange={(value) => onRoutingChange(value === "" ? undefined : value)}
+          value={routing}
+          onValueChange={(value) => onRoutingChange(value ?? undefined)}
           placeholder="Inherit from the request's own compression guardrails"
           emptyText="No compression guardrails found"
           aria-label="Routing decision compression"
@@ -74,8 +74,8 @@ const CompressionControls: React.FC<CompressionControlsProps> = ({ value, onChan
             <div className="mt-3">
               <SearchSelect
                 options={options}
-                value={model ?? ""}
-                onValueChange={(value) => onModelChange(value === "" ? undefined : value)}
+                value={model}
+                onValueChange={(value) => onModelChange(value ?? undefined)}
                 placeholder="None (no compression)"
                 emptyText="No compression guardrails found"
                 aria-label="Model call compression"

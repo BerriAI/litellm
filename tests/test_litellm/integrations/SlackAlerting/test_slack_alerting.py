@@ -45,6 +45,21 @@ class TestSlackAlerting(unittest.TestCase):
         result = self.slack_alerting._get_percent_of_max_budget_left(user_info)
         self.assertEqual(result, -0.2)
 
+    def test_get_user_info_str_omits_absent_token_for_user_alert(self):
+        user_info = CallInfo(
+            spend=85.0,
+            max_budget=100.0,
+            user_id="user-1",
+            user_email="person@example.com",
+            event_group=Litellm_EntityType.USER,
+        )
+
+        result = self.slack_alerting._get_user_info_str(user_info)
+
+        self.assertIn("*user_id:* `user-1`", result)
+        self.assertIn("*user_email:* `person@example.com`", result)
+        self.assertNotIn("*token:*", result)
+
     def test_get_event_and_event_message_max_budget(self):
         # Initial setup with no event
         event = None

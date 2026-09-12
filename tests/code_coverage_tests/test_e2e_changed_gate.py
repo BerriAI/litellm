@@ -144,6 +144,8 @@ def test_changed_suite_files_are_selected_unless_the_stack_cannot_run_them(
         "tests/e2e/pytest.ini",
         "tests/e2e/gateway/stage_mirror_ci_config.yml",
         ".github/e2e-stack/up.sh",
+        ".github/e2e-stack/start-idp.sh",
+        "tests/e2e/idp_realm.json",
         ".github/workflows/test-e2e-changed.yml",
     ),
 )

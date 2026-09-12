@@ -8,17 +8,28 @@ use super::handler::perform_ocr_request;
 use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
 use super::wire::{DecodedOcrResponse, decode_response};
 use crate::Error;
+use crate::auth::vertex::VertexAuth;
 use crate::constants::OCR_CONNECT_TIMEOUT_SECS;
 use crate::error::TransportError;
+use crate::media::MediaFetcher;
 
 #[derive(Clone)]
 pub struct OcrClient {
     provider_http: reqwest::Client,
+    polling_http: reqwest::Client,
+    document_fetcher: MediaFetcher,
+    vertex_auth: VertexAuth,
 }
 
 impl OcrClient {
     pub fn new(provider_http: reqwest::Client) -> Result<Self, TransportError> {
-        Ok(Self { provider_http })
+        let document_fetcher = MediaFetcher::new().map_err(TransportError::from)?;
+        Ok(Self {
+            provider_http,
+            polling_http: no_redirect_http()?,
+            document_fetcher,
+            vertex_auth: VertexAuth::default(),
+        })
     }
 
     #[tracing::instrument(
@@ -35,10 +46,35 @@ impl OcrClient {
         &self.provider_http
     }
 
-    #[cfg(test)]
-    pub(crate) fn for_test(provider_http: reqwest::Client) -> Self {
-        Self { provider_http }
+    pub(crate) fn polling_http(&self) -> &reqwest::Client {
+        &self.polling_http
     }
+
+    pub(crate) fn document_fetcher(&self) -> &MediaFetcher {
+        &self.document_fetcher
+    }
+
+    pub(crate) fn vertex_auth(&self) -> &VertexAuth {
+        &self.vertex_auth
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(provider_http: reqwest::Client, document_http: reqwest::Client) -> Self {
+        Self {
+            provider_http,
+            polling_http: no_redirect_http().expect("test polling client builds"),
+            document_fetcher: MediaFetcher::for_test(document_http),
+            vertex_auth: VertexAuth::default(),
+        }
+    }
+}
+
+fn no_redirect_http() -> Result<reqwest::Client, TransportError> {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(OCR_CONNECT_TIMEOUT_SECS))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(TransportError::from)
 }
 
 pub async fn ocr(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error> {

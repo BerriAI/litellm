@@ -1022,6 +1022,19 @@ async def common_checks(
                 fallback_spend=user_object.spend or 0.0,
                 max_budget=user_budget,
             )
+            call_info: Final = CallInfo(
+                spend=user_spend,
+                max_budget=user_budget,
+                user_id=user_object.user_id,
+                user_email=user_object.user_email,
+                event_group=Litellm_EntityType.USER,
+            )
+            asyncio.create_task(
+                proxy_logging_obj.budget_alerts(
+                    type="user_budget",
+                    user_info=call_info,
+                )
+            )
             if math.isfinite(user_budget) and user_spend >= user_budget:
                 raise litellm.BudgetExceededError(
                     current_cost=user_spend,
