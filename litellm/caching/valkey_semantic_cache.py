@@ -24,7 +24,13 @@ from typing import Any, Final
 from redis import Redis
 from redis.asyncio import Redis as AsyncRedis
 from redis.commands.search.field import TagField, VectorField
-from redis.commands.search.indexDefinition import IndexDefinition, IndexType
+
+try:
+    # redis-py >= 6.0 renamed the indexDefinition module to snake_case.
+    from redis.commands.search.index_definition import IndexDefinition, IndexType
+except ModuleNotFoundError:
+    from redis.commands.search.indexDefinition import IndexDefinition, IndexType
+
 from redis.commands.search.query import Query
 
 from litellm._logging import print_verbose
