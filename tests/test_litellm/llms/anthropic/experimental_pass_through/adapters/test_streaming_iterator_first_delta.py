@@ -238,6 +238,40 @@ async def test_streaming_chat_length_takes_precedence_over_refusal(async_mode: b
     assert "stop_details" not in message_delta["delta"]
 
 
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.asyncio
+async def test_streaming_chat_content_filter_emits_refusal_stop_reason(async_mode: bool):
+    # Issue #40857: content_filter without refusal text must emit stop_reason="refusal"
+    chunks = [
+        _make_chunk(Delta(content=None, role="assistant"), finish_reason="content_filter"),
+    ]
+    stream = _AsyncStream(chunks) if async_mode else iter(chunks)
+    wrapper = AnthropicStreamWrapper(completion_stream=stream, model="openai-model")
+
+    events = await _drain_async(wrapper) if async_mode else _drain_sync(wrapper)
+
+    message_delta = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["delta"]["stop_reason"] == "refusal"
+    assert "stop_details" not in message_delta["delta"]
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.asyncio
+async def test_streaming_chat_content_filter_with_refusal_text_emits_stop_details(async_mode: bool):
+    chunks = [
+        _make_chunk(Delta(content=None, refusal="Policy violation")),
+        _make_chunk(Delta(content=None), finish_reason="content_filter"),
+    ]
+    stream = _AsyncStream(chunks) if async_mode else iter(chunks)
+    wrapper = AnthropicStreamWrapper(completion_stream=stream, model="openai-model")
+
+    events = await _drain_async(wrapper) if async_mode else _drain_sync(wrapper)
+
+    message_delta = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["delta"]["stop_reason"] == "refusal"
+    assert message_delta["delta"]["stop_details"]["explanation"] == "Policy violation"
+
+
 def _input_json_deltas(events: List[dict]) -> List[str]:
     return [
         e["delta"]["partial_json"]

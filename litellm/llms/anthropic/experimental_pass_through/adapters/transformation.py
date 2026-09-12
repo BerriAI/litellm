@@ -1365,8 +1365,10 @@ class LiteLLMAnthropicMessagesAdapter:
             return "end_turn"
         elif openai_finish_reason == "length":
             return "max_tokens"
-        elif openai_finish_reason == "tool_calls":
+        elif openai_finish_reason in ("tool_calls", "function_call"):
             return "tool_use"
+        elif openai_finish_reason in ("content_filter", "guardrail_intervened", "refusal"):
+            return "refusal"
         return "end_turn"
 
     @staticmethod
@@ -1521,7 +1523,11 @@ class LiteLLMAnthropicMessagesAdapter:
             usage=anthropic_usage,
             content=anthropic_content,
             stop_reason=anthropic_finish_reason,
-            stop_details=(refusal_stop_details(refusal_text) if anthropic_finish_reason == "refusal" else None),
+            stop_details=(
+                refusal_stop_details(refusal_text)
+                if anthropic_finish_reason == "refusal" and refusal_text is not None
+                else None
+            ),
         )
 
         applied_edits: Final = polyfill_result.applied_edits_for_response() if polyfill_result else None

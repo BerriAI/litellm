@@ -102,6 +102,71 @@ def test_translate_chat_length_takes_precedence_over_refusal():
     assert result.get("stop_details") is None
 
 
+def test_translate_chat_content_filter_finish_reason_maps_to_refusal():
+    # Issue #40857: content_filter without refusal text must map to stop_reason="refusal"
+    response = ModelResponse(
+        id="chatcmpl-content-filter",
+        model="openai-model",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="content_filter",
+                message=Message(content=None, role="assistant"),
+            )
+        ],
+        usage=Usage(prompt_tokens=12, completion_tokens=0, total_tokens=12),
+    )
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert result["stop_reason"] == "refusal"
+    assert result.get("stop_details") is None
+
+
+def test_translate_chat_content_filter_with_refusal_text():
+    response = ModelResponse(
+        id="chatcmpl-content-filter-with-refusal",
+        model="openai-model",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="content_filter",
+                message=Message(content=None, role="assistant", refusal="Violation of safety policy"),
+            )
+        ],
+        usage=Usage(prompt_tokens=12, completion_tokens=0, total_tokens=12),
+    )
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert result["stop_reason"] == "refusal"
+    assert result.get("stop_details") == {
+        "type": "refusal",
+        "category": None,
+        "explanation": "Violation of safety policy",
+    }
+
+
+def test_translate_chat_finish_reason_refusal():
+    response = ModelResponse(
+        id="chatcmpl-refusal-finish-reason",
+        model="openai-model",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="refusal",
+                message=Message(content=None, role="assistant"),
+            )
+        ],
+        usage=Usage(prompt_tokens=12, completion_tokens=0, total_tokens=12),
+    )
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert result["stop_reason"] == "refusal"
+    assert result.get("stop_details") is None
+
+
 def test_translate_streaming_openai_chunk_to_anthropic_content_block():
     choices = [
         StreamingChoices(
