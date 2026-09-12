@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     create_anthropic_image_param,
     select_anthropic_content_block_type_for_file,
 )
+from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicStreamParser
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import normalize_cache_control_in_anthropic_payload
@@ -420,6 +421,21 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         if _is_claude_model(model):
             return self._transform_request_anthropic(model, messages, optional_params, stream, extra_body)
         return self._transform_request_openai(model, messages, optional_params, stream, extra_body)
+
+    @property
+    def uses_async_transform_request(self) -> bool:
+        return True
+
+    async def async_transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: BaseConfig signature
+        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        headers: dict[str, object],  # mutable-ok: BaseConfig signature
+    ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
+        inlined_messages: Final = await async_inline_remote_media(messages) if _is_claude_model(model) else messages
+        return self.transform_request(model, inlined_messages, optional_params, litellm_params, headers)
 
     def _transform_request_openai(
         self,

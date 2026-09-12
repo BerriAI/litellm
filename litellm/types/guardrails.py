@@ -778,6 +778,9 @@ class ContentFilterConfigModel(BaseModel):
     )
 
 
+MCP_SECURITY_ON_VIOLATION: Final = frozenset({"block", "alert"})
+
+
 class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails
     api_key: str | None = Field(default=None, description="API key for the guardrail service")
     api_base: str | None = Field(default=None, description="Base URL for the guardrail service API")
@@ -832,6 +835,15 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
+    inspect_embeddings: bool | None = Field(
+        default=None,
+        description=(
+            "When True, the Aim and Cato Networks guardrails send /embeddings `input` to the vendor as "
+            "user messages. Off by default because embedding input is documents being indexed, not a "
+            "conversation."
+        ),
+    )
+
     # Lakera specific params
     category_thresholds: LakeraCategoryThresholds | None = Field(
         default=None,
@@ -877,9 +889,13 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default=None,
         description="For /v1/realtime sessions: automatically close the session after this many guardrail violations.",
     )
-    on_violation: Literal["warn", "end_session"] | None = Field(
+    on_violation: Literal["warn", "end_session", "block", "alert"] | None = Field(
         default=None,
-        description="For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.",
+        description=(
+            "For /v1/realtime sessions: 'warn' speaks the violation message and continues; "
+            "'end_session' speaks the message and closes the connection. "
+            "For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning."
+        ),
     )
     realtime_violation_message: str | None = Field(
         default=None,
@@ -1083,6 +1099,15 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
             return float(v)
         except (TypeError, ValueError) as e:
             raise ValueError(f"timeout must be numeric, got {v!r}") from e
+
+    @model_validator(mode="after")
+    def validate_on_violation_for_guardrail(self) -> "LitellmParams":
+        if (
+            self.on_violation in MCP_SECURITY_ON_VIOLATION
+            and self.guardrail != SupportedGuardrailIntegrations.MCP_SECURITY.value
+        ):
+            raise ValueError(f"on_violation={self.on_violation!r} is only supported by guardrail='mcp_security'")
+        return self
 
     def __init__(self, **kwargs) -> None:
         default_on: Final = kwargs.pop("default_on", None)

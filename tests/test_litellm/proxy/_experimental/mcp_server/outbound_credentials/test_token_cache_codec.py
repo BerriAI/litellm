@@ -52,3 +52,17 @@ def test_undecryptable_blob_is_a_miss():
 def test_empty_plaintext_is_a_miss():
     codec = OAuthTokenCacheCodec(encrypt=lambda s: s, decrypt=lambda b: b)
     assert codec.decode("") is None
+
+
+def test_bound_token_round_trip_preserves_proof_without_refresh_secret():
+    codec = _wrapping_codec()
+    blob = codec.encode(OAuthToken("alice-token", refresh_token="private-refresh", identity_binding_proof="proof"))
+    assert "private-refresh" not in blob
+    decoded = codec.decode(blob)
+    assert decoded == OAuthToken("alice-token", identity_binding_proof="proof")
+
+
+def test_malformed_bound_entries_fail_closed():
+    codec = _wrapping_codec()
+    for payload in ("not-json", "{}", '{"access_token":"at"}', '{"access_token":1,"identity_binding_proof":"p"}'):
+        assert codec.decode("enc:litellm-bound-oauth-v1:" + payload) is None

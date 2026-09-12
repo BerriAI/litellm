@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import time
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -7,7 +8,8 @@ import pytest
 
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_cache import RedisCache
+from litellm.caching.redis_cache import RedisCache, _redis_circuit_breaker_guard, _redis_circuit_breaker_guard_sync
+from litellm.types.caching import RedisPipelineIncrementOperation
 
 
 @pytest.mark.asyncio
@@ -576,3 +578,129 @@ async def test_dual_cache_late_attach_redis_wires_writes_and_ttl_async():
     assert mock_redis.async_set_cache.call_args[0][:2] == (key_after, val_after)
 
     assert in_memory.get_cache(key_after) == val_after
+
+
+class _OpenBreakerRedis:
+    def __init__(self) -> None:
+        from litellm.caching.redis_cache import RedisCircuitBreaker
+
+        self._circuit_breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
+        for _ in range(3):
+            self._circuit_breaker.record_failure()
+
+    @_redis_circuit_breaker_guard
+    async def async_get_cache(self, key, **kwargs):
+        raise AssertionError("never reached")
+
+    @_redis_circuit_breaker_guard
+    async def async_batch_get_cache(self, key_list, **kwargs):
+        raise AssertionError("never reached")
+
+    @_redis_circuit_breaker_guard
+    async def async_set_cache(self, key, value, **kwargs):
+        raise AssertionError("never reached")
+
+    @_redis_circuit_breaker_guard
+    async def async_set_cache_pipeline(self, cache_list, **kwargs):
+        raise AssertionError("never reached")
+
+    @_redis_circuit_breaker_guard
+    async def async_increment_pipeline(self, increment_list, **kwargs):
+        raise AssertionError("never reached")
+
+    @_redis_circuit_breaker_guard
+    async def async_increment(self, key, value, **kwargs):
+        raise AssertionError("never reached")
+
+    @_redis_circuit_breaker_guard_sync
+    def get_cache(self, key, **kwargs):
+        raise AssertionError("never reached")
+
+    @_redis_circuit_breaker_guard_sync
+    def batch_get_cache(self, key_list, **kwargs):
+        raise AssertionError("never reached")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda cache: cache.async_get_cache("k"),
+        lambda cache: cache.async_batch_get_cache(["k1", "k2"]),
+        lambda cache: cache.async_set_cache("k", "v"),
+        lambda cache: cache.async_set_cache_pipeline([("k", "v")]),
+        lambda cache: cache.async_increment_cache_pipeline(
+            increment_list=[RedisPipelineIncrementOperation(key="k", increment_value=1.0, ttl=60)]
+        ),
+        lambda cache: cache.async_increment_cache("k", 1.0),
+    ],
+    ids=["get", "batch_get", "set", "set_pipeline", "increment_pipeline", "increment"],
+)
+async def test_an_open_circuit_breaker_is_not_an_error_per_request(caplog, call):
+    cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=_OpenBreakerRedis())  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    caplog.clear()
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        await call(cache)
+
+    assert [record.levelno for record in caplog.records if record.levelno >= logging.WARNING] == []
+    assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [lambda cache: cache.get_cache("k"), lambda cache: cache.batch_get_cache(["k1", "k2"])],
+    ids=["get", "batch_get"],
+)
+def test_an_open_circuit_breaker_is_not_an_error_per_sync_request(caplog, call):
+    cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=_OpenBreakerRedis())  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    caplog.clear()
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        call(cache)
+
+    assert [record.levelno for record in caplog.records if record.levelno >= logging.WARNING] == []
+    assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_a_real_redis_failure_still_logs_an_error(caplog):
+    class _BrokenRedis:
+        async def async_get_cache(self, key, **kwargs):
+            raise ConnectionError("redis is down")
+
+    cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=_BrokenRedis())  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        assert await cache.async_get_cache("k") is None
+
+    errors = [record for record in caplog.records if record.levelno == logging.ERROR]
+    assert [record.getMessage() for record in errors] == ["LiteLLM Cache: exception in async_get_cache: redis is down"]
+    assert errors[0].exc_info is not None
+
+
+def _dual_cache_with_open_breaker_and_a_memory_hit() -> DualCache:
+    in_memory = InMemoryCache()
+    in_memory.set_cache("k1", "v1")
+    return DualCache(in_memory_cache=in_memory, redis_cache=_OpenBreakerRedis(), default_redis_batch_cache_expiry=10)  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+
+
+def test_open_breaker_keeps_sync_batch_read_memory_hits_and_releases_reservations():
+    """A refused Redis batch read must still answer with the in-memory hits and hold no reservation.
+
+    The refusal was logged and turned into a bare None, so a caller lost its in-memory hits
+    for as long as the breaker stayed open, and the reserved keys stayed throttled until
+    the batch expiry passed even though nothing was ever read for them.
+    """
+    cache = _dual_cache_with_open_breaker_and_a_memory_hit()
+
+    assert list(cache.batch_get_cache(["k1", "k2"])) == ["v1", None]
+    assert "k2" not in cache.last_redis_batch_access_time
+
+
+@pytest.mark.asyncio
+async def test_open_breaker_keeps_async_batch_read_memory_hits_and_releases_reservations():
+    cache = _dual_cache_with_open_breaker_and_a_memory_hit()
+
+    assert list(await cache.async_batch_get_cache(["k1", "k2"])) == ["v1", None]
+    assert "k2" not in cache.last_redis_batch_access_time

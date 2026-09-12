@@ -225,7 +225,7 @@ mod tests {
                 (
                     "ocr",
                     "aocr",
-                    "(model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None)",
+                    "(model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, input_sources=None, timeout_seconds=None)",
                 ),
                 (
                     "transcription",
@@ -486,10 +486,11 @@ asyncio.run(exercise())
             let code = CString::new(
                 r#"
 result = routes.echo("traced")
-assert result == {
-    "response": "traced",
-    "trace": [{"function": "execute_echo", "depth": 0}],
-}
+assert result["response"] == "traced", result
+assert [event["function"] for event in result["trace"]] == ["execute_echo"], result
+failure = routes.echo("error")
+assert failure["error"] == "invalid request: synthetic error", failure
+assert [event["function"] for event in failure["trace"]] == ["execute_echo"], failure
 "#,
             )
             .expect("Python source should not contain null bytes");
