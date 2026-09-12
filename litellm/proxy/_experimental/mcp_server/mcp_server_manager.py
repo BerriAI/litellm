@@ -4436,21 +4436,15 @@ class MCPServerManager:
             if server.spec_path:
                 # OpenAPI tools were stored in the registry under the prefix
                 # active at registration time — fetch by that same prefix.
-                _tools: Final = global_mcp_tool_registry.list_tools(tool_prefix=get_server_prefix(server))
+                registry_prefix: Final = normalize_server_name(get_server_prefix(server)) + MCP_TOOL_PREFIX_SEPARATOR
+                _tools: Final = global_mcp_tool_registry.list_tools(tool_prefix=registry_prefix)
                 tools = global_mcp_tool_registry.convert_tools_to_mcp_sdk_tool_type(_tools)
                 # OpenAPI tools are stored in the registry with their prefix already
                 # applied (e.g. "test_petstore-getinventory").  Do NOT pass them
                 # through _create_prefixed_tools — that would add the prefix a second
                 # time producing "test_petstore-test_petstore-getinventory".
-                prefix: Final = get_server_prefix(server)
-                sep: Final = MCP_TOOL_PREFIX_SEPARATOR
                 unprefixed_tools: Final = [  # mutable-ok: returned through the list[MCPTool] listing contract
-                    (
-                        t.model_copy(update={"name": t.name[len(prefix) + len(sep) :]})
-                        if t.name.startswith(f"{prefix}{sep}")
-                        else t
-                    )
-                    for t in tools
+                    t.model_copy(update={"name": t.name[len(registry_prefix) :]}) for t in tools
                 ]
                 self._listed_tools_by_server_id[server.server_id] = MappingProxyType(
                     {t.name: t for t in unprefixed_tools}
