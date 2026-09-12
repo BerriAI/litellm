@@ -1,6 +1,6 @@
 import { renderWithProviders, screen, within } from "../../../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
-import { vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import GeneralSettings from "./general_settings";
 import { deleteConfigFieldSetting, getGeneralSettingsCall, updateConfigFieldSetting } from "@/components/networking";
 
@@ -115,4 +115,49 @@ describe("GeneralSettings tabs", () => {
     }
     expect(screen.queryByRole("tab", { name: /auto.?router/i })).not.toBeInTheDocument();
   });
+});
+
+it("should delete only the Default setting and retain explicit false and zero", async () => {
+  vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+    {
+      field_name: "synthetic_choice",
+      field_type: "Select",
+      field_value: "enabled",
+      field_options: ["enabled"],
+      field_description: "choice",
+      stored_in_db: true,
+    },
+    {
+      field_name: "synthetic_flag",
+      field_type: "Boolean",
+      field_value: false,
+      field_description: "flag",
+      stored_in_db: true,
+    },
+    {
+      field_name: "synthetic_count",
+      field_type: "Integer",
+      field_value: 0,
+      field_description: "count",
+      stored_in_db: true,
+    },
+  ]);
+  vi.mocked(updateConfigFieldSetting).mockClear();
+  vi.mocked(deleteConfigFieldSetting).mockClear();
+  const user = userEvent.setup();
+  renderWithProviders(<GeneralSettings accessToken="token" userRole="Admin" userID="user" />);
+  await user.click(screen.getByRole("tab", { name: "General" }));
+  const row = await screen.findByRole("row", { name: /synthetic_choice/ });
+  await user.click(within(row).getByRole("combobox"));
+  await user.click(await screen.findByRole("option", { name: "Default" }));
+  await user.click(within(row).getByRole("button", { name: "Update" }));
+  await user.click(within(screen.getByRole("row", { name: /synthetic_flag/ })).getByRole("button", { name: "Update" }));
+  await user.click(
+    within(screen.getByRole("row", { name: /synthetic_count/ })).getByRole("button", { name: "Update" }),
+  );
+  expect(vi.mocked(deleteConfigFieldSetting).mock.calls).toEqual([["token", "synthetic_choice"]]);
+  expect(vi.mocked(updateConfigFieldSetting).mock.calls).toEqual([
+    ["token", "synthetic_flag", false],
+    ["token", "synthetic_count", 0],
+  ]);
 });
