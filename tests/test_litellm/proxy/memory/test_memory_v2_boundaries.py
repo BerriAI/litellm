@@ -321,6 +321,9 @@ async def test_gateway_rounds_keep_separate_limiter_contexts_and_original_client
 
     @provider.post("/v1/messages")
     async def model(request: Request):
+        assert request.client is not None and request.client.host == "203.0.113.7"
+        assert request.url.scheme == "https" and request.headers["host"] == "gateway.example"
+        assert request.query_params["api-version"] == "test-version"
         body = await request.json()
         call_id = body["litellm_call_id"]
         stash = claim_request_stash_for_data(body)
@@ -345,7 +348,10 @@ async def test_gateway_rounds_keep_separate_limiter_contexts_and_original_client
         {
             "type": "http",
             "path": "/v1/messages",
-            "query_string": b"",
+            "scheme": "https",
+            "server": ("gateway.example", 443),
+            "client": ("203.0.113.7", 41231),
+            "query_string": b"api-version=test-version",
             "headers": [(b"authorization", b"Bearer test"), (b"idempotency-key", b"visible-only")],
         }
     )
