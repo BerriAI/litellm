@@ -18,6 +18,8 @@ import respx
 
 
 import litellm
+from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import _redis_circuit_breaker_guard
 from litellm import Router
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -13421,3 +13423,32 @@ async def test_router_max_parallel_requests_slot_released_when_stream_closed_ear
 
     assert tracker.peak == 1
     assert tracker.current == 0
+
+
+class _OpenBreakerRedis:
+    def __init__(self) -> None:
+        from litellm.caching.redis_cache import RedisCircuitBreaker
+
+        self._circuit_breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
+        for _ in range(3):
+            self._circuit_breaker.record_failure()
+
+    @_redis_circuit_breaker_guard
+    async def async_get_cache(self, key, **kwargs):
+        raise AssertionError("never reached")
+
+
+@pytest.mark.asyncio
+async def test_an_open_circuit_breaker_skips_the_session_binding_without_a_warning(caplog):
+    router = litellm.Router(
+        model_list=[{"model_name": "haiku", "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "k"}}]
+    )
+    router._claude_code_session_router_cache = DualCache(redis_cache=_OpenBreakerRedis())  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    caplog.clear()
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Router"):
+        binding = await router._get_claude_code_session_router_binding("quiet-session")
+
+    assert binding is None
+    assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
+    assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)

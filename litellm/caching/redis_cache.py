@@ -14,6 +14,7 @@ import functools
 import hashlib
 import inspect
 import json
+import logging
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from contextvars import ContextVar
@@ -371,10 +372,23 @@ def _record_swallowed_redis_failure(breaker: RedisCircuitBreaker, exc: BaseExcep
     _swallowed_redis_failures.set(_swallowed_redis_failures.get() + 1)
 
 
+class RedisCircuitBreakerOpenError(Exception):
+    pass
+
+
+def log_redis_failure(
+    logger: logging.Logger, level: int, message: str, exc: BaseException, with_traceback: bool = False
+) -> None:
+    if isinstance(exc, RedisCircuitBreakerOpenError):
+        logger.debug("%s: %s", message, exc)
+        return
+    logger.log(level, "%s: %s", message, exc, exc_info=exc if with_traceback else None)
+
+
 def _enter_circuit_breaker(breaker: RedisCircuitBreaker, name: str) -> int:
     """Reject the call if the breaker is open, else return the swallowed-failure count to compare against."""
     if breaker.is_open():
-        raise Exception(f"Redis circuit breaker is open — skipping {name}")
+        raise RedisCircuitBreakerOpenError(f"Redis circuit breaker is open — skipping {name}")
     return _swallowed_redis_failures.get()
 
 
@@ -420,7 +434,7 @@ def _run_under_circuit_breaker_sync(
         result: Final = call()
     except Exception as e:
         if _is_redis_health_failure(e):
-            breaker.record_failure()
+            breaker.record_failure(is_timeout=_is_redis_timeout_failure(e))
         raise
     _exit_circuit_breaker(breaker, swallowed_before)
     return result
