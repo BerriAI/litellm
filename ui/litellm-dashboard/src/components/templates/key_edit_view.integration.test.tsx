@@ -1,12 +1,13 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { chooseSelectOption, renderWithProviders } from "../../../tests/test-utils";
+import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { MODEL_MAX_BUDGET_PREMIUM_HINT } from "../key_team_helpers/ModelMaxBudgetEditor";
 import {
   getPassThroughEndpointsCall,
   getPoliciesList,
+  getUiSettings,
   getPromptsList,
   modelAvailableCall,
   vectorStoreListCall,
@@ -22,6 +23,7 @@ vi.mock("../networking", async () => {
   const actual = await vi.importActual("../networking");
   return {
     ...actual,
+    getUiSettings: vi.fn().mockResolvedValue({ values: { enable_projects_ui: false } }),
     getPromptsList: vi.fn().mockResolvedValue({
       prompts: [{ prompt_id: "prompt-1" }, { prompt_id: "prompt-2" }],
     }),
@@ -88,7 +90,11 @@ vi.mock("../common_components/RouterSettingsAccordion", async () => {
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganizations: vi.fn().mockReturnValue({
     data: [
-      { organization_id: "org-1", organization_alias: "Engineering" },
+      {
+        organization_id: "org-1",
+        organization_alias: "Engineering",
+        members: [{ user_id: "user-orbit", user_role: "org_admin" }],
+      },
       { organization_id: "org-2", organization_alias: "Sales" },
     ],
     isLoading: false,
@@ -366,6 +372,8 @@ describe("KeyEditView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     can.mockReturnValue(true);
+    vi.mocked(getUiSettings).mockResolvedValue({ values: { enable_projects_ui: false } });
+    testQueryClient.removeQueries({ queryKey: ["uiSettings"] });
   });
 
   describe("policy and prompt fields", () => {
@@ -1512,7 +1520,61 @@ describe("KeyEditView", () => {
       });
     });
 
-    it("keeps project key relationships locked and omits unsupported project updates", async () => {
+    it("should save an explicit project detach while keeping parents locked until the saved key changes", async () => {
+      vi.mocked(getUiSettings).mockResolvedValue({ values: { enable_projects_ui: true } });
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      const onCancel = vi.fn();
+      const key = { ...MOCK_KEY_DATA, organization_id: "org-1", team_id: "group-maple", project_id: "project-orbit" };
+      const team = {
+        team_id: "group-maple",
+        organization_id: "org-1",
+        members_with_roles: [] as { user_id: string; role: string }[],
+        team_member_permissions: [] as string[],
+      };
+      const renderEditor = (keyData: KeyResponse = key, role = "Admin", editorTeam = team) => (
+        <KeyEditView
+          keyData={keyData}
+          teams={[editorTeam]}
+          onCancel={onCancel}
+          onSubmit={onSubmit}
+          accessToken=""
+          userID="user-orbit"
+          userRole={role}
+          premiumUser={false}
+        />
+      );
+      const view = renderWithProviders(renderEditor());
+      await userEvent.click(await screen.findByRole("button", { name: "Detach from project" }));
+      expect(screen.getByRole("combobox", { name: "Organization" })).toBeDisabled();
+      expect(screen.getByRole("combobox", { name: "Team ID" })).toBeDisabled();
+      await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(onCancel).toHaveBeenCalledOnce();
+      expect(onSubmit).not.toHaveBeenCalled();
+      view.rerender(renderEditor({ ...key }));
+      await userEvent.click(await screen.findByRole("button", { name: "Detach from project" }));
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+      const expectedDetach = { project_id: null, organization_id: "org-1", team_id: "group-maple", models: key.models };
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining(expectedDetach)));
+      expect(screen.getByRole("combobox", { name: "Team ID" })).toBeDisabled();
+      view.rerender(renderEditor({ ...key, project_id: null }));
+      expect(screen.getByRole("combobox", { name: "Team ID" })).toBeEnabled();
+      expect(screen.queryByRole("button", { name: "Detach from project" })).not.toBeInTheDocument();
+      view.rerender(renderEditor(key, "Internal User"));
+      expect(screen.queryByRole("button", { name: "Detach from project" })).not.toBeInTheDocument();
+      view.rerender(renderEditor(key, "Org Admin"));
+      expect(screen.queryByRole("button", { name: "Detach from project" })).not.toBeInTheDocument();
+      const memberTeam = { ...team, members_with_roles: [{ user_id: "user-orbit", role: "user" }] };
+      view.rerender(renderEditor(key, "Org Admin", memberTeam));
+      expect(screen.queryByRole("button", { name: "Detach from project" })).not.toBeInTheDocument();
+      const permittedTeam = { ...memberTeam, team_member_permissions: ["/key/update"] };
+      view.rerender(renderEditor(key, "Org Admin", permittedTeam));
+      expect(await screen.findByRole("button", { name: "Detach from project" })).toBeInTheDocument();
+      const adminTeam = { ...team, members_with_roles: [{ user_id: "user-orbit", role: "admin" }] };
+      view.rerender(renderEditor(key, "Internal User", adminTeam));
+      expect(await screen.findByRole("button", { name: "Detach from project" })).toBeInTheDocument();
+    });
+
+    it("keeps project key relationships locked and omits project updates when the project UI is disabled", async () => {
       const onSubmit = vi.fn().mockResolvedValue(undefined);
       renderWithProviders(
         <KeyEditView

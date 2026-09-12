@@ -108,7 +108,10 @@ class KeyManagementEventHooks:
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
         if is_audit_logging_enabled():
-            _updated_values: Final = json.dumps(data.json(exclude_none=True), default=str)
+            updated_fields: Final = data.model_dump(exclude_none=True)
+            if "project_id" in data.model_fields_set:
+                updated_fields["project_id"] = data.project_id
+            _updated_values: Final = json.dumps(updated_fields, default=str)
 
             _before_value = existing_key_row.json(exclude_none=True)
             _before_value = json.dumps(_before_value, default=str)
