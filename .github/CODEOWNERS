@@ -55,3 +55,15 @@
 /ui/litellm-dashboard/src/components/agents/ @joshua-berri @yuneng-berri @ryan-crabbe-berri
 /ui/litellm-dashboard/src/components/skills/ @joshua-berri @yuneng-berri @ryan-crabbe-berri
 /ui/litellm-dashboard/src/app/(dashboard)/skills/ @joshua-berri @yuneng-berri @ryan-crabbe-berri
+/litellm/types/proxy/guardrails/guardrail_hooks/mcp_end_user_permission.py @joshua-berri @tin-berri @yucheng-berri
+/litellm/llms/anthropic/experimental_pass_through/messages/mcp_handler.py @joshua-berri @tin-berri @yucheng-berri
+/litellm/proxy/public_endpoints/agent_create_fields.json @joshua-berri
+/litellm/proxy/anthropic_endpoints/claude_code_endpoints/claude_code_skill_access.py @joshua-berri
+/ui/litellm-dashboard/src/hooks/useMcpOAuthFlow.tsx @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/hooks/useUserMcpOAuthFlow.tsx @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/hooks/useTestMCPConnection.tsx @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/hooks/mcpOAuthUtils.ts @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/utils/mcp* @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/components/chat/MCP* @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/components/permissions/MCPServerPermissions* @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/components/permissions/AgentPermissions* @joshua-berri @yuneng-berri @ryan-crabbe-berri
