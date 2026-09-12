@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 import time
+from collections.abc import Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -32,6 +33,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 )
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.caching import RedisPipelineIncrementOperation
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import (
     EmbeddingResponse,
     ModelResponse,
@@ -4052,6 +4054,125 @@ async def _seed_max_parallel_requests_slots(
         value={slot_id: time.time() for slot_id in slot_ids},
         local_only=True,
     )
+
+
+@pytest.mark.asyncio
+async def test_completed_responses_post_call_releases_parallel_slot() -> None:
+    api_key = hash_token("sk-responses-post-call")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1)
+    data = {
+        "model": "gpt-4o-mini",
+        "input": "hello",
+        "litellm_call_id": "responses-owner",
+    }
+    parallel_key = f"{{api_key:{api_key}}}:max_parallel_requests"
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=data,
+        call_type="aresponses",
+    )
+    assert handler._gauge_in_flight_from_cache_value(
+        await local_cache.async_get_cache(key=parallel_key)
+    ) == 1
+
+    await handler.async_post_call_success_hook(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        response=ResponsesAPIResponse(
+            id="resp_parallel_slot",
+            created_at=0,
+            model="gpt-4o-mini",
+            object="response",
+            output=[],
+            status="completed",
+        ),
+    )
+    assert handler._gauge_in_flight_from_cache_value(
+        await local_cache.async_get_cache(key=parallel_key)
+    ) == 0
+
+    await handler.async_log_success_event(
+        kwargs={"litellm_call_id": data["litellm_call_id"]},
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    assert handler._gauge_in_flight_from_cache_value(
+        await local_cache.async_get_cache(key=parallel_key)
+    ) == 0
+
+
+@pytest.mark.asyncio
+async def test_concurrent_success_callbacks_release_parallel_slot_once_when_redis_fails() -> None:
+    from unittest.mock import AsyncMock
+
+    api_key = hash_token("sk-concurrent-release")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=2)
+    call_id = "concurrent-release-owner"
+    parallel_key = f"{{api_key:{api_key}}}:max_parallel_requests"
+    release_started = asyncio.Event()
+    allow_redis_failure = asyncio.Event()
+
+    async def failing_release(
+        keys: Sequence[str], args: Sequence[object]
+    ) -> list[int]:
+        release_started.set()
+        await allow_redis_failure.wait()
+        raise ConnectionError("redis unavailable")
+
+    release_script = AsyncMock(side_effect=failing_release)
+    handler.parallel_release_script = release_script
+    await local_cache.async_set_cache(key=parallel_key, value=2, local_only=True)
+    stash = get_or_create_request_stash()
+    stash.owner_litellm_call_id = call_id
+    stash.parallel_slot = ParallelSlotAcquisition(
+        slot_id="slot-concurrent-release",
+        counter_keys=[parallel_key],
+    )
+    data = {"litellm_call_id": call_id}
+
+    post_call_task = asyncio.create_task(
+        handler.async_post_call_success_hook(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            response=ResponsesAPIResponse(
+                id="resp_concurrent_release",
+                created_at=0,
+                model="gpt-4o-mini",
+                object="response",
+                output=[],
+                status="completed",
+            ),
+        )
+    )
+    await asyncio.wait_for(release_started.wait(), timeout=5)
+    logging_task = asyncio.create_task(
+        handler.async_log_success_event(
+            kwargs=data,
+            response_obj=None,
+            start_time=None,
+            end_time=None,
+        )
+    )
+    allow_redis_failure.set()
+    await asyncio.wait_for(
+        asyncio.gather(post_call_task, logging_task),
+        timeout=5,
+    )
+
+    assert release_script.await_count == 1
+    assert await local_cache.async_get_cache(key=parallel_key) == 1
+    assert stash.parallel_slot is None
 
 
 async def _build_seeded_limiter():
