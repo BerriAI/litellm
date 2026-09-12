@@ -2439,6 +2439,9 @@ async def add_litellm_data_to_request(
         user_api_key_dict=user_api_key_dict,
     )
 
+    if isinstance(_pre_alias_model, str) and data.get("model") != _pre_alias_model:
+        data[_metadata_variable_name]["litellm_client_requested_model"] = _pre_alias_model  # rebind-ok: metadata out-param
+
     verbose_proxy_logger.debug("[PROXY] returned data from litellm_pre_call_utils: %s", data)
 
     # Team/Project credential overrides from model_config

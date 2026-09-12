@@ -3895,6 +3895,7 @@ def test_update_model_if_key_alias_exists():
     _update_model_if_key_alias_exists(data=data, user_api_key_dict=user_api_key_dict)
     assert data["model"] == original_model  # Should remain unchanged
 
+
     # Test case 3: Model is None
     data = {"model": None, "messages": [{"role": "user", "content": "Hello"}]}
     user_api_key_dict = UserAPIKeyAuth(
@@ -3932,6 +3933,49 @@ def test_update_model_if_key_alias_exists():
     original_model = data["model"]
     _update_model_if_key_alias_exists(data=data, user_api_key_dict=user_api_key_dict)
     assert data["model"] == original_model  # Should remain unchanged
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_preserves_client_model_for_key_alias():
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {"model": "claude-haiku-4-5"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        aliases={"claude-haiku-4-5": "claude-haiku-4-5-20251001"},
+    )
+
+    updated_data = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["model"] == "claude-haiku-4-5-20251001"
+    assert updated_data["metadata"]["litellm_client_requested_model"] == "claude-haiku-4-5"
+
+    data_without_alias = {"model": "claude-haiku-4-5"}
+    updated_without_alias = await add_litellm_data_to_request(
+        data=data_without_alias,
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert "litellm_client_requested_model" not in updated_without_alias["metadata"]
 
 
 @pytest.mark.asyncio

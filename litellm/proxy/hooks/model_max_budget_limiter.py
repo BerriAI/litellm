@@ -245,16 +245,31 @@ def _as_spend(current_spend: object) -> float:
 
 
 def _resolve_entity_model_budgets(
-    model: str,
+    models: tuple[str, ...],
     entity_budgets: Iterable[tuple[Litellm_EntityType, str | None, object]],
 ) -> tuple[tuple[Litellm_EntityType, str, ResolvedModelBudget], ...]:
-    """Drop the scopes that do not budget `model`, keeping only what can be incremented."""
+    """Drop scopes that do not budget any request model, keeping only what can be incremented."""
     return tuple(
         (entity_type, entity_id, resolved)
         for entity_type, entity_id, model_max_budget in entity_budgets
         if entity_id is not None and isinstance(model_max_budget, Mapping) and model_max_budget
-        for resolved in (resolve_model_budget(model=model, model_max_budget=model_max_budget),)
+        for resolved in (_first_resolved(models=models, model_max_budget=model_max_budget),)
         if resolved is not None and resolved.budget_config.budget_duration is not None
+    )
+
+
+def _first_resolved(
+    models: tuple[str, ...],
+    model_max_budget: Mapping[str, object],
+) -> ResolvedModelBudget | None:
+    return next(
+        (
+            resolved
+            for model in models
+            for resolved in (resolve_model_budget(model=model, model_max_budget=model_max_budget),)
+            if resolved is not None and resolved.budget_config.budget_duration is not None
+        ),
+        None,
     )
 
 
@@ -298,7 +313,15 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         model: str,
     ) -> str | None:
         budget_fallbacks: Final[dict[str, list[str]]] = user_api_key_dict.budget_fallbacks or {}
-        for fallback_model in budget_fallbacks.get(model, []):
+        fallback_models: Final = next(
+            (
+                budget_fallbacks[candidate]
+                for candidate in _budget_model_candidates(model)
+                if candidate in budget_fallbacks
+            ),
+            (),
+        )
+        for fallback_model in fallback_models:
             try:
                 await self.is_key_within_model_budget(user_api_key_dict=user_api_key_dict, model=fallback_model)
                 return fallback_model
@@ -445,16 +468,12 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         _metadata: Final[dict] = _litellm_params.get("metadata", {}) or {}
         payload_metadata: Final = standard_logging_payload.get("metadata") or {}
 
-        # Use model_group (the user-facing model alias, e.g. "gpt-4o") when
-        # available.  The enforcement path receives the model name from
-        # request_data["model"] which is the model group alias, so the spend
-        # tracking cache key must resolve from the same name.  Falling back to
-        # the deployment-level "model" field preserves behaviour for non-proxy
-        # or non-router deployments where model_group is None.
         model: Final = standard_logging_payload.get("model_group") or standard_logging_payload.get("model")
         if model is None:
             return
 
+        requested_model: Final = _metadata.get("litellm_client_requested_model")
+        models: Final = tuple(dict.fromkeys(m for m in (model, requested_model) if isinstance(m, str)))
         response_cost: Final[float] = standard_logging_payload.get("response_cost", 0)
         entity_budgets: Final = (
             (
@@ -474,12 +493,12 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             ),
         )
 
-        resolved_budgets: Final = _resolve_entity_model_budgets(model=model, entity_budgets=entity_budgets)
+        resolved_budgets: Final = _resolve_entity_model_budgets(models=models, entity_budgets=entity_budgets)
         if not resolved_budgets:
             verbose_proxy_logger.debug(
                 "Not running _PROXY_VirtualKeyModelMaxBudgetLimiter.async_log_success_event: "
-                "no key, user or end-user model_max_budget covers model=%s",
-                model,
+                "no key, user or end-user model_max_budget covers models=%s",
+                models,
             )
             return
 

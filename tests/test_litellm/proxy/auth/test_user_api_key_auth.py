@@ -35,6 +35,7 @@ from litellm.proxy.auth.auth_checks import get_key_object, _cache_key_object
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
     _check_key_model_budget_with_fallback,
+    _get_model_names_for_budget_checks,
     _ensure_litellm_received_at_on_request_state,
     _ensure_parent_otel_span_on_request_state,
     _PendingAutoRegister,
@@ -48,6 +49,13 @@ from litellm.proxy.auth.user_api_key_auth import (
     get_api_key,
     user_api_key_auth,
 )
+
+
+def test_get_model_names_for_budget_checks_includes_alias_target():
+    assert _get_model_names_for_budget_checks(
+        "claude-haiku-4-5",
+        aliases={"claude-haiku-4-5": "claude-haiku-4-5-20251001"},
+    ) == ["claude-haiku-4-5", "claude-haiku-4-5-20251001"]
 
 
 class _RoutingRequest:
@@ -6399,6 +6407,7 @@ class TestCheckKeyModelBudgetWithFallback:
             valid_token=valid_token,
             model_max_budget_limiter=limiter,
             model_name="gpt-4o",
+            requested_model="gpt-4o",
             request_data=request_data,
             request=request,
         )
@@ -6425,6 +6434,7 @@ class TestCheckKeyModelBudgetWithFallback:
             valid_token=valid_token,
             model_max_budget_limiter=limiter,
             model_name="gpt-4o",
+            requested_model="gpt-4o",
             request_data=request_data,
             request=request,
         )
@@ -6438,6 +6448,31 @@ class TestCheckKeyModelBudgetWithFallback:
         # re-parse the body from this cache instead of reusing the dict).
         cached_keys, cached_body = request.scope["parsed_body"]
         assert cached_body["model"] == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_alias_target_budget_reroutes_original_request_to_fallback(self):
+        valid_token = UserAPIKeyAuth(
+            token="test-key",
+            budget_fallbacks={"claude-haiku-4-5-20251001": ["claude-sonnet-4-5"]},
+        )
+        limiter = AsyncMock()
+        limiter.is_key_within_model_budget.side_effect = litellm.BudgetExceededError(
+            current_cost=10, max_budget=5
+        )
+        limiter.get_fallback_model_within_budget.return_value = "claude-sonnet-4-5"
+        request_data = {"model": "claude-haiku-4-5"}
+        request = self._make_request()
+
+        await _check_key_model_budget_with_fallback(
+            valid_token=valid_token,
+            model_max_budget_limiter=limiter,
+            model_name="claude-haiku-4-5-20251001",
+            requested_model="claude-haiku-4-5",
+            request_data=request_data,
+            request=request,
+        )
+
+        assert request_data["model"] == "claude-sonnet-4-5"
 
     @pytest.mark.asyncio
     async def test_raises_when_every_fallback_also_exceeded(self):
@@ -6456,6 +6491,7 @@ class TestCheckKeyModelBudgetWithFallback:
                 valid_token=valid_token,
                 model_max_budget_limiter=limiter,
                 model_name="gpt-4o",
+                requested_model="gpt-4o",
                 request_data=request_data,
                 request=request,
             )
@@ -6494,6 +6530,7 @@ class TestCheckKeyModelBudgetWithFallback:
                     valid_token=valid_token,
                     model_max_budget_limiter=limiter,
                     model_name="gpt-4o",
+                    requested_model="gpt-4o",
                     request_data=request_data,
                     request=request,
                     llm_model_list=None,
@@ -6528,6 +6565,7 @@ class TestCheckKeyModelBudgetWithFallback:
                 valid_token=valid_token,
                 model_max_budget_limiter=limiter,
                 model_name="gpt-4o",
+                requested_model="gpt-4o",
                 request_data=request_data,
                 request=request,
                 llm_model_list=None,
@@ -6563,6 +6601,7 @@ class TestCheckKeyModelBudgetWithFallback:
                     valid_token=valid_token,
                     model_max_budget_limiter=limiter,
                     model_name="gpt-4o",
+                    requested_model="gpt-4o",
                     request_data=request_data,
                     request=request,
                     llm_model_list=None,
@@ -6599,6 +6638,7 @@ class TestCheckKeyModelBudgetWithFallback:
                 valid_token=valid_token,
                 model_max_budget_limiter=limiter,
                 model_name="gpt-4o",
+                requested_model="gpt-4o",
                 request_data=request_data,
                 request=request,
                 llm_model_list=None,
@@ -6629,6 +6669,7 @@ class TestCheckKeyModelBudgetWithFallback:
                 valid_token=valid_token,
                 model_max_budget_limiter=limiter,
                 model_name="gpt-4o",
+                requested_model="gpt-4o",
                 request_data=request_data,
                 request=request,
             )

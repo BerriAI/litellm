@@ -19,6 +19,7 @@ from fastapi import HTTPException
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
+from litellm.proxy.hooks.model_max_budget_limiter import _PROXY_VirtualKeyModelMaxBudgetLimiter
 
 
 def _make_user_api_key_auth(
@@ -235,3 +236,53 @@ async def test_no_max_budget_passes():
 
     assert result is None
     mock_get_spend.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_uses_requested_model_budget():
+    cache = DualCache()
+    handler = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=cache)
+
+    await handler.async_log_success_event(
+        kwargs={
+            "standard_logging_object": {
+                "model_group": "claude-haiku-4-5-20251001",
+                "model": "anthropic/claude-haiku-4-5-20251001",
+                "response_cost": 5.5e-05,
+                "metadata": {"user_api_key_hash": "hash-1"},
+            },
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_model_max_budget": {
+                        "claude-haiku-4-5": {
+                            "budget_limit": 1e-4,
+                            "time_period": "1h",
+                        }
+                    },
+                    "litellm_client_requested_model": "claude-haiku-4-5",
+                }
+            },
+        },
+        response_obj=None,
+        start_time=0,
+        end_time=0,
+    )
+
+    assert cache.in_memory_cache.cache_dict["virtual_key_spend:hash-1:claude-haiku-4-5:1h"] == 5.5e-05
+
+
+@pytest.mark.asyncio
+async def test_get_fallback_model_within_budget_uses_alias_budget_fallbacks():
+    handler = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="sk-test",
+        model_max_budget={},
+        budget_fallbacks={"claude-haiku-4-5": ["claude-sonnet-4-5"]},
+    )
+
+    result = await handler.get_fallback_model_within_budget(
+        user_api_key_dict=user_api_key_dict,
+        model="anthropic/claude-haiku-4-5",
+    )
+
+    assert result == "claude-sonnet-4-5"

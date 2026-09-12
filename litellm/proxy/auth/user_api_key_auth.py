@@ -225,12 +225,28 @@ async def _normalize_claude_model(
 
 def _get_model_names_for_budget_checks(
     model: str | list[str] | None,
+    aliases: Mapping[str, str] | None = None,
 ) -> list[str]:
     if model is None:
         return []
     if isinstance(model, str):
-        return [model]
+        alias: Final = aliases.get(model) if isinstance(aliases, Mapping) else None
+        return [model, alias] if isinstance(alias, str) and alias != model else [model]
     return model
+
+
+def _get_model_names_for_token_budget_checks(
+    model: str | list[str] | None,
+    valid_token: UserAPIKeyAuth,
+) -> list[str]:
+    return list(
+        dict.fromkeys(
+            (
+                *_get_model_names_for_budget_checks(model=model, aliases=valid_token.aliases),
+                *_get_model_names_for_budget_checks(model=model, aliases=valid_token.team_model_aliases),
+            )
+        )
+    )
 
 
 class _KeyModelBudgetLimiter(Protocol):
@@ -308,6 +324,7 @@ async def _check_key_model_budget_with_fallback(
     valid_token: UserAPIKeyAuth,
     model_max_budget_limiter: _KeyModelBudgetLimiter,
     model_name: str,
+    requested_model: str,
     request_data: dict,
     request: Request,
     llm_model_list: list | None = None,
@@ -327,7 +344,7 @@ async def _check_key_model_budget_with_fallback(
     regardless of whether they consume ``_read_request_body()``,
     ``request.json()``, or the path ``model`` parameter.
 
-    Fallback is only attempted when ``model_name`` matches the top-level
+    Fallback is only attempted when ``requested_model`` matches the top-level
     ``request_data["model"]``; models extracted from nested fields
     (``session.model``, ``completion.model``, etc.) are not rewritable
     and raise immediately.
@@ -342,7 +359,7 @@ async def _check_key_model_budget_with_fallback(
             model=model_name,
         )
     except litellm.BudgetExceededError as e:
-        if request_data.get("model") != model_name:
+        if request_data.get("model") != requested_model:
             raise e
         fallback_model: Final = await model_max_budget_limiter.get_fallback_model_within_budget(
             user_api_key_dict=valid_token,
@@ -1618,13 +1635,14 @@ async def _user_api_key_auth_builder(
                         await _check_user_model_budget(
                             valid_token=cast(UserAPIKeyAuth, valid_token),
                             model_max_budget_limiter=model_max_budget_limiter,
-                            models=_get_model_names_for_budget_checks(
+                            models=_get_model_names_for_token_budget_checks(
                                 model=_get_model_from_request_context(
                                     request_data=request_data,
                                     route=route,
                                     request=request,
                                     llm_router=llm_router,
-                                )
+                                ),
+                                valid_token=valid_token,
                             ),
                         )
 
@@ -2130,7 +2148,10 @@ async def _user_api_key_auth_builder(
                         request=request,
                         llm_router=llm_router,
                     )
-                    current_models = _get_model_names_for_budget_checks(model=current_model)
+                    current_models = _get_model_names_for_token_budget_checks(
+                        model=current_model,
+                        valid_token=valid_token,
+                    )
 
                     if (
                         max_budget_per_model is not None
@@ -2146,6 +2167,7 @@ async def _user_api_key_auth_builder(
                                 valid_token=valid_token,
                                 model_max_budget_limiter=model_max_budget_limiter,
                                 model_name=model_name,
+                                requested_model=current_model if isinstance(current_model, str) else model_name,
                                 request_data=request_data,
                                 request=request,
                                 llm_model_list=llm_model_list,
@@ -2160,7 +2182,10 @@ async def _user_api_key_auth_builder(
                             request=request,
                             llm_router=llm_router,
                         )
-                        current_models = _get_model_names_for_budget_checks(model=current_model)
+                        current_models = _get_model_names_for_token_budget_checks(
+                            model=current_model,
+                            valid_token=valid_token,
+                        )
 
                     # Check 5a. Internal user model_max_budget
                     if current_models:
@@ -3298,7 +3323,7 @@ async def _run_post_custom_auth_checks(
         request=request,
         llm_router=llm_router,
     )
-    current_models = _get_model_names_for_budget_checks(model=current_model)
+    current_models = _get_model_names_for_token_budget_checks(model=current_model, valid_token=valid_token)
 
     # A zero-cost model cannot move any counter, so refusing it means refusing on
     # spend some other model accrued. The JWT and virtual-key paths already skip
@@ -3325,6 +3350,7 @@ async def _run_post_custom_auth_checks(
                 valid_token=valid_token,
                 model_max_budget_limiter=model_max_budget_limiter,
                 model_name=model_name,
+                requested_model=current_model if isinstance(current_model, str) else model_name,
                 request_data=request_data,
                 request=request,
                 llm_model_list=llm_model_list,
@@ -3339,7 +3365,7 @@ async def _run_post_custom_auth_checks(
             request=request,
             llm_router=llm_router,
         )
-        current_models = _get_model_names_for_budget_checks(model=current_model)
+        current_models = _get_model_names_for_token_budget_checks(model=current_model, valid_token=valid_token)
 
     # 3b. Attach and check the internal user's model_max_budget.
     # Custom auth builds its own token, so unlike the main path nothing has
