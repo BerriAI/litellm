@@ -359,7 +359,9 @@ def _effective_key_after_update(
     overlay: Final = MappingProxyType(
         {column: _decode_json_string_column(column, value) for column, value in non_default_values.items()}
     )
-    return _verification_token_from_row(MappingProxyType({**existing_key_row.model_dump(), **overlay}))
+    return _verification_token_from_row(
+        MappingProxyType({**existing_key_row.model_dump(), **overlay, "object_permission": None})
+    )
 
 
 def _update_policy_request(
@@ -381,7 +383,7 @@ def _update_policy_request(
 def _generate_budget_windows(
     budget_limits: Sequence[BudgetLimitEntry] | None,
 ) -> tuple[Mapping[str, object], ...] | None:
-    if budget_limits is None:
+    if not budget_limits:
         return None
     return tuple(
         MappingProxyType(
@@ -402,14 +404,19 @@ def _effective_key_for_generate(data: GenerateKeyRequest, now: datetime) -> Lite
     column_fields: Final = MappingProxyType(
         {field: value for field, value in requested.items() if field not in _KEY_METADATA_REQUEST_FIELDS}
     )
-    request_metadata: Final = data.metadata or MappingProxyType({})
-    folded_metadata: Final = {**request_metadata, **metadata_fields}  # mutable-ok: encrypt_callback_vars needs a dict
-    columns: Final = handle_key_type(data, {**column_fields})  # mutable-ok: handle_key_type mutates data_json in place
+    metadata: Final = data.metadata or MappingProxyType({})
+    folded_metadata: Final = {**metadata, **metadata_fields}  # mutable-ok: encrypt_callback_vars needs a dict
+    columns: Final = handle_key_type(data, {**column_fields})  # mutable-ok: handle_key_type mutates in place
     expires: Final = (
         now + timedelta(seconds=duration_in_seconds(duration=data.duration)) if data.duration is not None else None
     )
     budget_reset_at: Final = (
         get_budget_reset_time(budget_duration=data.budget_duration) if data.budget_duration is not None else None
+    )
+    key_rotation_at: Final = (
+        now + timedelta(seconds=duration_in_seconds(duration=data.rotation_interval))
+        if data.auto_rotate and data.rotation_interval
+        else None
     )
     return _verification_token_from_row(
         MappingProxyType(
@@ -418,6 +425,7 @@ def _effective_key_for_generate(data: GenerateKeyRequest, now: datetime) -> Lite
                 "metadata": encrypt_callback_vars(folded_metadata),
                 "expires": expires,
                 "budget_reset_at": budget_reset_at,
+                "key_rotation_at": key_rotation_at,
                 "budget_limits": _generate_budget_windows(data.budget_limits),
                 "object_permission": None,
             }
@@ -3249,16 +3257,6 @@ async def update_key_fn(
         _enforce_upperbound_key_params(data, fill_defaults=False)
         non_default_values: Final = await prepare_key_update_data(data=data, existing_key_row=existing_key_row)
 
-        await _enforce_custom_key_policy(
-            hook=_custom_key_policy_hook(proxy_server),
-            build_policy_request=lambda: _update_policy_request(
-                operation="update",
-                existing_key_row=existing_key_row,
-                non_default_values=non_default_values,
-                request=data,
-            ),
-        )
-
         # Only validate key_alias format if it's actually being changed
         new_key_alias: Final = non_default_values.get("key_alias", None)
         if new_key_alias != existing_key_row.key_alias:
@@ -3276,6 +3274,16 @@ async def update_key_fn(
             non_default_values.get("auto_rotate", False),
             non_default_values.get("rotation_interval"),
             existing_key_alias=existing_key_row.key_alias,
+        )
+
+        await _enforce_custom_key_policy(
+            hook=_custom_key_policy_hook(proxy_server),
+            build_policy_request=lambda: _update_policy_request(
+                operation="update",
+                existing_key_row=existing_key_row,
+                non_default_values=non_default_values,
+                request=data,
+            ),
         )
 
         if prisma_client is None:

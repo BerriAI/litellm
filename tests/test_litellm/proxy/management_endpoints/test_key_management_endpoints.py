@@ -31,6 +31,7 @@ from litellm.proxy._types import (
     ResetSpendRequest,
     UpdateKeyRequest,
 )
+from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.proxy.auth.auth_checks import _delete_cache_key_object, _project_cache_key
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -12362,7 +12363,9 @@ async def test_update_key_fn_runs_custom_key_policy_on_the_effective_row(monkeyp
     mock_prisma_client = _setup_update_key_fn_policy_mocks(monkeypatch, _policy_existing_team_key())
     received: list[CustomKeyPolicyRequest] = []
     policy = _seven_day_policy(received)
-    data = UpdateKeyRequest(key=_POLICY_HASHED_TOKEN, duration="5d", max_budget=50.0)
+    data = UpdateKeyRequest(
+        key=_POLICY_HASHED_TOKEN, duration="5d", max_budget=50.0, auto_rotate=True, rotation_interval="30d"
+    )
 
     with (
         patch(  # test-quality-ok: cache eviction is outside the policy path
@@ -12381,6 +12384,9 @@ async def test_update_key_fn_runs_custom_key_policy_on_the_effective_row(monkeyp
     mock_prisma_client.update_data.assert_awaited_once()
     assert len(received) == 1
     _assert_update_policy_request(received[0], data)
+    key_rotation_at = received[0].effective_key.key_rotation_at
+    assert key_rotation_at is not None
+    assert abs(key_rotation_at - (datetime.now(timezone.utc) + timedelta(days=30))) < timedelta(seconds=60)
 
 
 @pytest.mark.asyncio
@@ -12695,6 +12701,23 @@ async def test_effective_key_after_update_clears_expiry_for_a_minus_one_duration
     assert effective_key.expires is None
 
 
+def test_effective_key_after_update_swaps_the_object_permission_id_and_drops_the_stale_relation():
+    existing_key = LiteLLM_VerificationToken(
+        token="tok",
+        object_permission_id="op-old",
+        object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-old", mcp_servers=["old"]),
+    )
+
+    effective_key = _effective_key_after_update(
+        existing_key_row=existing_key, non_default_values={"object_permission_id": "op-new"}
+    )
+
+    assert effective_key.object_permission_id == "op-new"
+    assert effective_key.object_permission is None
+    assert existing_key.object_permission is not None
+    assert existing_key.object_permission.mcp_servers == ["old"]
+
+
 def test_effective_key_for_generate_reflects_the_processed_request_without_mutating_it():
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     data = GenerateKeyRequest(
@@ -12705,12 +12728,21 @@ def test_effective_key_for_generate_reflects_the_processed_request_without_mutat
         tags=["t1"],
         budget_duration="1d",
         max_budget=3.0,
+        budget_limits=[{"budget_duration": "1d", "max_budget": 5.0}],
+        auto_rotate=True,
+        rotation_interval="30d",
+        object_permission={"mcp_servers": ["srv"]},
         key_type=LiteLLMKeyType.LLM_API,
     )
 
     effective_key = _effective_key_for_generate(data=data, now=now)
 
     assert effective_key.expires == now + timedelta(days=5)
+    assert effective_key.key_rotation_at == now + timedelta(days=30)
+    assert effective_key.budget_limits is not None
+    assert effective_key.budget_limits[0]["max_budget"] == 5.0
+    assert effective_key.budget_limits[0]["reset_at"] is not None
+    assert effective_key.object_permission is None
     assert effective_key.org_id == "org-1"
     assert effective_key.metadata == {"a": 1, "guardrails": ["g1"], "tags": ["t1"]}
     assert effective_key.max_budget == 3.0
@@ -12722,6 +12754,18 @@ def test_effective_key_for_generate_reflects_the_processed_request_without_mutat
     assert data.guardrails == ["g1"]
     assert data.tags == ["t1"]
     assert data.duration == "5d"
+    assert data.budget_limits is not None
+    assert data.budget_limits[0].reset_at is None
+    assert data.object_permission is not None
+    assert data.object_permission.mcp_servers == ["srv"]
+
+
+def test_effective_key_for_generate_stores_no_budget_windows_for_an_empty_list():
+    effective_key = _effective_key_for_generate(
+        data=GenerateKeyRequest(budget_limits=[]), now=datetime(2026, 1, 1, tzinfo=timezone.utc)
+    )
+
+    assert effective_key.budget_limits is None
 
 
 def test_effective_key_for_generate_without_duration_never_expires():
@@ -12731,6 +12775,7 @@ def test_effective_key_for_generate_without_duration_never_expires():
 
     assert effective_key.expires is None
     assert effective_key.budget_reset_at is None
+    assert effective_key.key_rotation_at is None
     assert effective_key.key_type == "default"
 
 
@@ -12762,6 +12807,27 @@ async def test_enforce_custom_key_policy_uses_the_default_denial_message():
 
     assert exc_info.value.status_code == 403
     assert exc_info.value.detail == "Authentication Failed - Custom Auth Rule"
+
+
+@pytest.mark.asyncio
+async def test_enforce_custom_key_policy_allows_when_the_decision_is_missing():
+    received: list[CustomKeyPolicyRequest] = []
+
+    async def no_decision(policy_request: CustomKeyPolicyRequest) -> dict[str, object]:
+        received.append(policy_request)
+        return {}
+
+    await _enforce_custom_key_policy(hook=no_decision, build_policy_request=_policy_request_for_generate)
+
+    assert len(received) == 1
+    assert received[0].operation == "generate"
+
+
+@pytest.mark.asyncio
+async def test_enforce_custom_key_policy_never_builds_the_request_without_a_hook():
+    await _enforce_custom_key_policy(
+        hook=None, build_policy_request=lambda: pytest.fail("policy request built without a hook")
+    )
 
 
 @pytest.mark.asyncio
