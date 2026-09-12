@@ -24,6 +24,7 @@ from litellm.constants import SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import Litellm_EntityType
 from litellm.proxy.db.db_lookup_gate import db_lookup_gate
+from litellm.proxy.spend_tracking.spend_counter_batch import read_batched_spend_counter, record_spend_counter_value
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.table_repositories import (
     BudgetWindowSpendRepository,
@@ -195,6 +196,11 @@ class SpendCounterReseed:
         return False
 
     @staticmethod
+    async def _read_active_batch(counter_key: str) -> tuple[float | None, bool] | None:
+        """The request's MGET answers for this counter; a Redis miss there is authoritative."""
+        return await read_batched_spend_counter(counter_key)
+
+    @staticmethod
     async def coalesced(
         prisma_client: Optional["PrismaClient"],
         spend_counter_cache: "DualCache",
@@ -211,10 +217,13 @@ class SpendCounterReseed:
         """
         lock: Final = await SpendCounterReseed._get_lock(counter_key)
         async with lock:
+            batched: Final = await SpendCounterReseed._read_active_batch(counter_key)
+            if batched is not None and batched[0] is not None:
+                return batched[0]
             # Re-check after acquiring the lock. Skip in-memory on a clean
             # Redis miss - in-memory is per-pod-stale.
-            redis_clean_miss = False
-            if spend_counter_cache.redis_cache is not None:
+            redis_clean_miss = batched is not None
+            if spend_counter_cache.redis_cache is not None and not redis_clean_miss:
                 try:
                     val = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
                     if val is not None:
@@ -253,6 +262,7 @@ class SpendCounterReseed:
                         key=counter_key,
                         value=current_value,
                     )
+                    record_spend_counter_value(counter_key, current_value)
                 else:
                     cached_spend: Final = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
                     seeded_spend: Final = max(db_spend, float(cached_spend)) if cached_spend is not None else db_spend
@@ -404,8 +414,11 @@ class SpendCounterReseed:
     ) -> float | None:
         lock: Final = await SpendCounterReseed._get_lock(counter_key)
         async with lock:
-            redis_clean_miss = False
-            if spend_counter_cache.redis_cache is not None:
+            batched: Final = await SpendCounterReseed._read_active_batch(counter_key)
+            if batched is not None and batched[0] is not None:
+                return batched[0]
+            redis_clean_miss = batched is not None
+            if spend_counter_cache.redis_cache is not None and not redis_clean_miss:
                 try:
                     val = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
                     if val is not None:
@@ -449,6 +462,7 @@ class SpendCounterReseed:
                         key=counter_key,
                         value=current_value,
                     )
+                    record_spend_counter_value(counter_key, float(current_value))
                 else:
                     cached_spend: Final = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
                     seeded_spend: Final = (

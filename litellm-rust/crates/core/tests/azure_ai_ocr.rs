@@ -70,7 +70,7 @@ async fn facade_acquires_supplied_entra_token_for_final_request() {
 struct ReplaceBodyDocument;
 
 impl OcrHooks for ReplaceBodyDocument {
-    fn has_guardrails(&self) -> bool {
+    fn intercepts_requests(&self) -> bool {
         true
     }
 
