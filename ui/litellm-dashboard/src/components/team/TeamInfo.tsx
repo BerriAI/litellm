@@ -333,7 +333,10 @@ const teamUpdateFieldsSchema = z.object({
   modelLimits: z
     .array(
       z.object({
-        model: z.string().min(1, "Missing model"),
+        model: z
+          .string()
+          .nullable()
+          .refine((model) => Boolean(model), "Missing model"),
         tpm: z.number().nullish(),
         rpm: z.number().nullish(),
       }),
@@ -1879,7 +1882,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <SearchSelect
                         inputId={id}
                         value={value ?? ""}
-                        onValueChange={(next) => onChange(next === "" ? null : next)}
+                        onValueChange={onChange}
                         options={userOrganizations.map((org) => ({
                           value: org.organization_id ?? "",
                           label: org.organization_alias || org.organization_id || "",

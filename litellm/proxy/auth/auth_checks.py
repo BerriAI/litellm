@@ -102,6 +102,7 @@ from litellm.proxy.guardrails.tool_name_extraction import (
 )
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
+from litellm.proxy.spend_tracking.carried_budget_state import carry_organization_budget_state
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
@@ -1021,6 +1022,19 @@ async def common_checks(
                 counter_key=f"spend:user:{user_object.user_id}",
                 fallback_spend=user_object.spend or 0.0,
                 max_budget=user_budget,
+            )
+            call_info: Final = CallInfo(
+                spend=user_spend,
+                max_budget=user_budget,
+                user_id=user_object.user_id,
+                user_email=user_object.user_email,
+                event_group=Litellm_EntityType.USER,
+            )
+            asyncio.create_task(
+                proxy_logging_obj.budget_alerts(
+                    type="user_budget",
+                    user_info=call_info,
+                )
             )
             if math.isfinite(user_budget) and user_spend >= user_budget:
                 raise litellm.BudgetExceededError(
@@ -5621,6 +5635,8 @@ async def _organization_max_budget_check(
 
     if org_table is None:
         return
+
+    carry_organization_budget_state(valid_token=valid_token, org_table=org_table)
 
     # Get max_budget from organization's budget table
     org_max_budget: float | None = None
