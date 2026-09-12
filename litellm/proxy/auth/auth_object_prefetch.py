@@ -58,6 +58,37 @@ _TEAM_LISTS: Final = _lists_as_json(
 )
 _ORG_LISTS: Final = _lists_as_json("o", ("models",))
 _PROJECT_LISTS: Final = _lists_as_json("p", ("models",))
+_PERMISSION_LISTS: Final = _lists_as_json(
+    "op",
+    (
+        "mcp_servers",
+        "mcp_access_groups",
+        "mcp_toolsets",
+        "blocked_tools",
+        "vector_stores",
+        "agents",
+        "agent_access_groups",
+        "models",
+        "search_tools",
+        "skills",
+    ),
+)
+_BUDGET_LISTS: Final = _lists_as_json("b", ("allowed_models",))
+
+
+def _budget_json(owner_alias: str) -> str:
+    return (
+        f"(SELECT to_jsonb(b) || jsonb_build_object({_BUDGET_LISTS}) "
+        f'FROM "LiteLLM_BudgetTable" b WHERE b.budget_id = {owner_alias}.budget_id)'
+    )
+
+
+def _permission_json(owner_alias: str) -> str:
+    return (
+        f"(SELECT to_jsonb(op) || jsonb_build_object({_PERMISSION_LISTS}) "
+        f'FROM "LiteLLM_ObjectPermissionTable" op WHERE op.object_permission_id = {owner_alias}.object_permission_id)'
+    )
+
 
 _SQL: Final = f"""
 SELECT
@@ -66,13 +97,10 @@ SELECT
       {_USER_LISTS},
       'organization_memberships',
       COALESCE((
-        SELECT jsonb_agg(to_jsonb(om) || jsonb_build_object(
-          'litellm_budget_table', (SELECT to_jsonb(b) FROM "LiteLLM_BudgetTable" b WHERE b.budget_id = om.budget_id)
-        ))
+        SELECT jsonb_agg(to_jsonb(om) || jsonb_build_object('litellm_budget_table', {_budget_json("om")}))
         FROM "LiteLLM_OrganizationMembership" om WHERE om.user_id = u.user_id
       ), '[]'::jsonb),
-      'object_permission',
-      (SELECT to_jsonb(op) FROM "LiteLLM_ObjectPermissionTable" op WHERE op.object_permission_id = u.object_permission_id)
+      'object_permission', {_permission_json("u")}
     )
     FROM "LiteLLM_UserTable" u WHERE u.user_id = $1
   ) AS user_row,
@@ -80,32 +108,27 @@ SELECT
     SELECT to_jsonb(t) || jsonb_build_object(
       {_TEAM_LISTS},
       'litellm_model_table', (SELECT to_jsonb(m) FROM "LiteLLM_ModelTable" m WHERE m.id = t.model_id),
-      'object_permission',
-      (SELECT to_jsonb(op) FROM "LiteLLM_ObjectPermissionTable" op WHERE op.object_permission_id = t.object_permission_id)
+      'object_permission', {_permission_json("t")}
     )
     FROM "LiteLLM_TeamTable" t WHERE t.team_id = $2
   ) AS team_row,
   (
-    SELECT to_jsonb(tm) || jsonb_build_object(
-      'litellm_budget_table', (SELECT to_jsonb(b) FROM "LiteLLM_BudgetTable" b WHERE b.budget_id = tm.budget_id)
-    )
+    SELECT to_jsonb(tm) || jsonb_build_object('litellm_budget_table', {_budget_json("tm")})
     FROM "LiteLLM_TeamMembership" tm WHERE tm.user_id = $3 AND tm.team_id = $2
   ) AS membership_row,
   (
     SELECT to_jsonb(o) || jsonb_build_object(
       {_ORG_LISTS},
-      'litellm_budget_table', (SELECT to_jsonb(b) FROM "LiteLLM_BudgetTable" b WHERE b.budget_id = o.budget_id),
-      'object_permission',
-      (SELECT to_jsonb(op) FROM "LiteLLM_ObjectPermissionTable" op WHERE op.object_permission_id = o.object_permission_id)
+      'litellm_budget_table', {_budget_json("o")},
+      'object_permission', {_permission_json("o")}
     )
     FROM "LiteLLM_OrganizationTable" o WHERE o.organization_id = $4
   ) AS organization_row,
   (
     SELECT to_jsonb(p) || jsonb_build_object(
       {_PROJECT_LISTS},
-      'litellm_budget_table', (SELECT to_jsonb(b) FROM "LiteLLM_BudgetTable" b WHERE b.budget_id = p.budget_id),
-      'object_permission',
-      (SELECT to_jsonb(op) FROM "LiteLLM_ObjectPermissionTable" op WHERE op.object_permission_id = p.object_permission_id)
+      'litellm_budget_table', {_budget_json("p")},
+      'object_permission', {_permission_json("p")}
     )
     FROM "LiteLLM_ProjectTable" p WHERE p.project_id = $5
   ) AS project_row
