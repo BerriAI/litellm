@@ -2,6 +2,7 @@
 team and hand the getters rows they validate. The per-regime round-trip counts are unit-tested with fakes in
 tests/test_litellm/proxy/auth/test_auth_object_prefetch.py."""
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -15,6 +16,7 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
 )
 from litellm.proxy.auth.auth_object_prefetch import AuthObjectRefs, prefetch_auth_objects
+from litellm.proxy.auth.team_grants import team_model_aliases
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -82,6 +84,37 @@ async def test_join_binds_the_membership_to_the_requested_team(prisma):
         await prisma.db.litellm_usertable.delete_many(where={"user_id": user_id})
         await prisma.db.litellm_organizationtable.delete_many(where={"organization_id": org_id})
         await prisma.db.litellm_budgettable.delete_many(where={"budget_id": {"in": [f"a-{run}", f"b-{run}"]}})
+
+
+async def test_join_reads_team_model_aliases_from_the_mapped_column(prisma):
+    """The model table stores aliases in a column named ``aliases``; the cached team must expose ``model_aliases``."""
+    run = uuid4().hex
+    team_id = f"pf-team-{run}"
+    aliases = {"gpt-4o": f"gpt-4o-{run}"}
+    model_table = await prisma.db.litellm_modeltable.create(
+        data={"model_aliases": json.dumps(aliases), "created_by": "t", "updated_by": "t"}
+    )
+    try:
+        await prisma.db.litellm_teamtable.create(data={"team_id": team_id, "model_id": model_table.id})
+        expected_team = await prisma.db.litellm_teamtable.find_unique(
+            where={"team_id": team_id}, include={"litellm_model_table": True}
+        )
+
+        cache = UserApiKeyCache(in_memory_cache=InMemoryCache(), redis_cache=None)
+        refs = AuthObjectRefs(user_id=None, team_id=team_id, membership_user_id=None, organization_id=None)
+        await prefetch_auth_objects(refs=refs, user_api_key_cache=cache, prisma_client=prisma)
+
+        dead_db = _dead_db()
+        team = await get_team_object(team_id=team_id, prisma_client=dead_db, user_api_key_cache=cache)
+        assert dead_db.db.mock_calls == [], "getters must be served from the prefetched cache"
+
+        assert expected_team is not None and expected_team.litellm_model_table is not None
+        assert team.litellm_model_table is not None
+        assert team.litellm_model_table.model_aliases == expected_team.litellm_model_table.model_aliases == aliases
+        assert team_model_aliases(team) == aliases
+    finally:
+        await prisma.db.litellm_teamtable.delete_many(where={"team_id": team_id})
+        await prisma.db.litellm_modeltable.delete_many(where={"id": model_table.id})
 
 
 async def test_join_reads_null_nested_lists_the_way_prisma_does(prisma):

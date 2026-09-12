@@ -97,17 +97,18 @@ SELECT
       {_USER_LISTS},
       'organization_memberships',
       COALESCE((
-        SELECT jsonb_agg(to_jsonb(om) || jsonb_build_object('litellm_budget_table', {_budget_json("om")}))
-        FROM "LiteLLM_OrganizationMembership" om WHERE om.user_id = u.user_id
-      ), '[]'::jsonb),
-      'object_permission', {_permission_json("u")}
+        SELECT jsonb_agg(to_jsonb(om)) FROM "LiteLLM_OrganizationMembership" om WHERE om.user_id = u.user_id
+      ), '[]'::jsonb)
     )
     FROM "LiteLLM_UserTable" u WHERE u.user_id = $1
   ) AS user_row,
   (
     SELECT to_jsonb(t) || jsonb_build_object(
       {_TEAM_LISTS},
-      'litellm_model_table', (SELECT to_jsonb(m) FROM "LiteLLM_ModelTable" m WHERE m.id = t.model_id),
+      'litellm_model_table', (
+        SELECT (to_jsonb(m) - 'aliases') || jsonb_build_object('model_aliases', m.aliases)
+        FROM "LiteLLM_ModelTable" m WHERE m.id = t.model_id
+      ),
       'object_permission', {_permission_json("t")}
     )
     FROM "LiteLLM_TeamTable" t WHERE t.team_id = $2
