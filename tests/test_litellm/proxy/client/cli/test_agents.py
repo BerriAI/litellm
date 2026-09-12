@@ -1,6 +1,7 @@
 import inspect
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -54,6 +55,17 @@ class _Recorder:
     def __call__(self, *args):
         self.calls.append(args)
         return self.returns
+
+
+class _FakeRun:
+    def __init__(self, returncode=0, stderr=""):
+        self.returncode = returncode
+        self.stderr = stderr
+        self.calls = []
+
+    def __call__(self, args, **kwargs):
+        self.calls.append((args, kwargs))
+        return subprocess.CompletedProcess(args, self.returncode, "", self.stderr)
 
 
 class _FakeJsonResponse:
@@ -365,7 +377,7 @@ class TestCodexModelSync:
     def _row(model_id, **extra):
         return {"id": model_id, "object": "model", "created": 1, "owned_by": "openai", **extra}
 
-    def _sync(self, listing, codex_home, base_url="http://localhost:4000/"):
+    def _sync(self, listing, codex_home, base_url="http://localhost:4000/", run=None):
         captured = {}
 
         def fake_get(url, headers, timeout):
@@ -373,7 +385,13 @@ class TestCodexModelSync:
             captured["headers"] = headers
             return _FakeResponse(200, listing)
 
-        result = codex_model_sync_args({"CODEX_HOME": str(codex_home)}, base_url, "sk-key", get=fake_get)
+        result = codex_model_sync_args(
+            {"CODEX_HOME": str(codex_home)},
+            base_url,
+            "sk-key",
+            get=fake_get,
+            run=_FakeRun() if run is None else run,
+        )
         return captured, result
 
     @staticmethod
@@ -411,6 +429,8 @@ class TestCodexModelSync:
         assert entry["truncation_policy"] == {"mode": "bytes", "limit": 10000}
         assert entry["experimental_supported_tools"] == []
         assert entry["support_verbosity"] is False
+        assert entry["supports_reasoning_summaries"] is False
+        assert entry["supports_parallel_tool_calls"] is False
         for nullable in ("description", "availability_nux", "upgrade", "default_verbosity", "apply_patch_tool_type"):
             assert nullable in entry and entry[nullable] is None
         assert entry["base_instructions"].startswith("You are a coding agent running in the Codex CLI")
@@ -457,6 +477,7 @@ class TestCodexModelSync:
             "http://localhost:4000",
             "sk-key",
             get=lambda *a, **k: _FakeResponse(200, self._listing(self._row("m"))),
+            run=_FakeRun(),
             home=lambda: tmp_path,
         )
         assert self._catalog_path(result) == str(tmp_path / ".codex" / "litellm-models.json")
@@ -510,17 +531,108 @@ class TestCodexModelSync:
         assert isinstance(result, ModelSyncSkipped)
         assert reason in result.reason
 
-    @pytest.mark.parametrize("command", ["codex", "/opt/bin/codex"])
-    def test_codex_syncs_through_the_agent_dispatch(self, tmp_path, command):
+    @pytest.mark.parametrize("binary", ["codex", "/opt/bin/codex", "codex.cmd", "/c/npm/codex.CMD"])
+    def test_codex_syncs_through_the_agent_dispatch_with_the_binary_it_will_run(self, tmp_path, binary):
+        run = _FakeRun()
         result = agent_model_sync_env(
-            command,
+            binary,
             {"CODEX_HOME": str(tmp_path)},
             "http://localhost:4000",
             "sk-key",
             False,
             get=lambda *a, **k: _FakeResponse(200, self._listing(self._row("m"))),
+            run=run,
         )
         assert self._catalog_path(result) == str(tmp_path / "litellm-models.json")
+        assert binary in run.calls[0][0]
+
+    def test_opencode_dispatch_never_runs_codex(self):
+        def boom(*a, **k):
+            raise AssertionError("only the Codex sync reads its catalog back")
+
+        result = agent_model_sync_env(
+            "opencode",
+            {},
+            "http://localhost:4000",
+            "sk-key",
+            False,
+            get=lambda *a, **k: _FakeResponse(200, self._listing(self._row("m"))),
+            run=boom,
+        )
+        assert "OPENCODE_CONFIG_CONTENT" in result
+
+    def test_catalog_is_read_back_through_codex_before_launch(self, tmp_path):
+        run = _FakeRun()
+        _, result = self._sync(self._listing(self._row("m")), tmp_path, run=run)
+        path = self._catalog_path(result)
+
+        assert len(run.calls) == 1
+        command, options = run.calls[0]
+        assert command == ("codex", "-c", f"model_catalog_json={json.dumps(path)}", "debug", "models")
+        assert options["env"] == {"CODEX_HOME": str(tmp_path)}
+        assert options["stdin"] is subprocess.DEVNULL
+        assert options["capture_output"] is True
+        assert options["text"] is True
+        assert options["timeout"] == 10
+
+    def test_codex_rejecting_the_catalog_skips_the_sync_and_keeps_the_file(self, tmp_path):
+        stderr = (
+            "Error: failed to parse model_catalog_json path `/home/me/.codex/litellm-models.json` as JSON: "
+            "missing field `supports_parallel_tool_calls` at line 1 column 21648\n"
+        )
+        _, result = self._sync(self._listing(self._row("m")), tmp_path, run=_FakeRun(1, stderr))
+        assert isinstance(result, ModelSyncSkipped)
+        assert result.reason == (
+            "`codex debug models` exited 1: Error: failed to parse model_catalog_json path "
+            "`/home/me/.codex/litellm-models.json` as JSON: missing field `supports_parallel_tool_calls` "
+            "at line 1 column 21648"
+        )
+        assert (tmp_path / "litellm-models.json").exists()
+
+    def test_codex_without_debug_models_skips_the_sync(self, tmp_path):
+        stderr = "error: unrecognized subcommand 'models'\n\nUsage: codex debug [OPTIONS] <COMMAND>\n"
+        _, result = self._sync(self._listing(self._row("m")), tmp_path, run=_FakeRun(2, stderr))
+        assert isinstance(result, ModelSyncSkipped)
+        assert result.reason == "`codex debug models` exited 2: error: unrecognized subcommand 'models'"
+
+    def test_codex_failing_silently_is_reported(self, tmp_path):
+        _, result = self._sync(self._listing(self._row("m")), tmp_path, run=_FakeRun(1))
+        assert isinstance(result, ModelSyncSkipped)
+        assert result.reason == "`codex debug models` exited 1: no output"
+
+    @pytest.mark.parametrize(
+        "error", [OSError("codex vanished"), subprocess.TimeoutExpired("codex", 10)], ids=["oserror", "timeout"]
+    )
+    def test_unrunnable_preflight_is_reported_not_raised(self, tmp_path, error):
+        def failing_run(*a, **k):
+            raise error
+
+        _, result = self._sync(self._listing(self._row("m")), tmp_path, run=failing_run)
+        assert isinstance(result, ModelSyncSkipped)
+        assert result.reason.startswith("`codex debug models` failed: ")
+        assert str(error) in result.reason
+
+    def test_windows_shim_preflight_goes_through_cmd_exe(self, tmp_path):
+        shim = _WINDOWS_CLAUDE_CMD.replace("claude", "codex")
+        run = _FakeRun()
+        result = codex_model_sync_args(
+            {"CODEX_HOME": str(tmp_path)},
+            "http://localhost:4000",
+            "sk-key",
+            binary=shim,
+            get=lambda *a, **k: _FakeResponse(200, self._listing(self._row("m"))),
+            run=run,
+        )
+        override = f"model_catalog_json={json.dumps(self._catalog_path(result))}"
+        doubled = override.replace('"', '""')
+        assert run.calls[0][0] == f'{_CMD_PREFIX}""{shim}" "-c" "{doubled}" "debug" "models""'
+
+    def test_default_binary_is_codex_on_path(self):
+        assert _default_of(codex_model_sync_args, "binary") == "codex"
+
+    def test_default_runner_is_subprocess_run(self):
+        assert _default_of(codex_model_sync_args, "run") is subprocess.run
+        assert _default_of(agent_model_sync_env, "run") is subprocess.run
 
     def test_skip_verify_keeps_the_launch_offline(self):
         def boom(*a, **k):
@@ -593,7 +705,13 @@ class TestRunAgent:
             launcher=lambda p, a, e: order.append("launch"),
         )
         assert order == ["verify", "sync", "launch"]
-        assert calls["args"] == ("opencode", {"HOME": "/home/me"}, "http://localhost:4000", "sk-key", False)
+        assert calls["args"] == (
+            "/usr/local/bin/opencode",
+            {"HOME": "/home/me"},
+            "http://localhost:4000",
+            "sk-key",
+            False,
+        )
 
     def test_unreachable_proxy_is_not_asked_for_models(self):
         def failing_verify(*a):

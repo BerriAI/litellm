@@ -69,6 +69,7 @@ CODEX_PROXY_PROVIDER: Final = "litellm"
 CODEX_HOME_ENV: Final = "CODEX_HOME"
 CODEX_MODEL_CATALOG_FILENAME: Final = "litellm-models.json"
 _CODEX_BASE_INSTRUCTIONS_PATH: Final = Path(__file__).with_name("codex_base_instructions.md")
+_CODEX_PREFLIGHT_TIMEOUT_SECONDS: Final = 10.0
 
 
 class AgentRunError(Exception):
@@ -399,9 +400,11 @@ class _CodexTruncationPolicy(BaseModel):
 class _CodexModel(BaseModel):
     """One `ModelInfo` entry of a Codex model catalog.
 
-    Every field Codex's deserializer has no default for is spelled out here; the
-    values match the fallback metadata Codex uses today for a model slug it
-    does not know, so picking a proxy model behaves the same as `codex -m` did.
+    Every field that some Codex release since `model_catalog_json` appeared
+    (0.105.0) deserializes without a default is spelled out here, so one catalog
+    parses on all of them; the values match the fallback metadata Codex uses for
+    a model slug it does not know, so picking a proxy model behaves the same as
+    `codex -m` did.
     """
 
     slug: str
@@ -415,6 +418,8 @@ class _CodexModel(BaseModel):
     availability_nux: None = None
     upgrade: None = None
     support_verbosity: Literal[False] = False
+    supports_reasoning_summaries: Literal[False] = False
+    supports_parallel_tool_calls: Literal[False] = False
     default_verbosity: None = None
     apply_patch_tool_type: None = None
     truncation_policy: _CodexTruncationPolicy = _CodexTruncationPolicy()
@@ -470,12 +475,48 @@ def _replace_file(path: Path, text: str) -> None:
         raise
 
 
+def _codex_catalog_rejection(
+    binary: str,
+    override: str,
+    env: Mapping[str, str],
+    *,
+    run: Callable[..., subprocess.CompletedProcess[str]],
+) -> str | None:
+    """Why the installed Codex refuses the catalog, or None once it reads the file back.
+
+    `codex debug models` parses the catalog the way a launch does, so a Codex
+    whose ModelInfo schema disagrees with the one written here fails now, with
+    the sync skipped, instead of exiting on startup. Releases before 0.130.0
+    have no `debug models` and fail the same way. A batch shim goes through
+    cmd.exe exactly as the launch will.
+    """
+    name: Final = os.path.basename(binary)
+    command: Final = _windows_command(binary, (binary, "-c", override, "debug", "models"))
+    try:
+        completed: Final = run(
+            command,
+            env=dict(env),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=_CODEX_PREFLIGHT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return f"`{name} debug models` failed: {e}"
+    if completed.returncode == 0:
+        return None
+    lines: Final = completed.stderr.strip().splitlines()
+    return f"`{name} debug models` exited {completed.returncode}: {lines[0] if lines else 'no output'}"
+
+
 def codex_model_sync_args(
     base_env: Mapping[str, str],
     base_url: str,
     api_key: str,
     *,
+    binary: str = "codex",
     get: Callable[..., requests.Response] = requests.get,
+    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
     home: Callable[[], Path] = Path.home,
     instructions_path: Path = _CODEX_BASE_INSTRUCTIONS_PATH,
 ) -> ModelSyncArgs | ModelSyncSkipped:
@@ -483,9 +524,11 @@ def codex_model_sync_args(
 
     Codex has no env or inline equivalent of OPENCODE_CONFIG_CONTENT: the catalog
     must be a file, so it is written under $CODEX_HOME (default ~/.codex) and
-    atomically replaced on every launch. The key never lands in the file. A
-    failed fetch, read or write is reported rather than raised: Codex still
-    launches with its built-in catalog and takes a proxy model by name via -m.
+    atomically replaced on every launch, then read back once through the Codex
+    at `binary` before it is handed over. The key never lands in the file. A
+    failed fetch, read, write or read-back is reported rather than raised: Codex
+    still launches with its built-in catalog and takes a proxy model by name via
+    -m, and a rejected file stays on disk to be looked at.
     """
     listing: Final = _fetch_model_listing(base_url, api_key, get=get)
     if isinstance(listing, ModelSyncSkipped):
@@ -502,32 +545,39 @@ def codex_model_sync_args(
         _replace_file(path, catalog)
     except OSError as e:
         return ModelSyncSkipped(f"could not write {path}: {e}")
-    return ModelSyncArgs(("-c", f"model_catalog_json={json.dumps(str(path))}"))
+    override: Final = f"model_catalog_json={json.dumps(str(path))}"
+    rejection: Final = _codex_catalog_rejection(binary, override, base_env, run=run)
+    if rejection is not None:
+        return ModelSyncSkipped(rejection)
+    return ModelSyncArgs(("-c", override))
 
 
 def agent_model_sync_env(
-    command: str,
+    binary: str,
     base_env: Mapping[str, str],
     base_url: str,
     api_key: str,
     skip_verify: bool,
     *,
     get: Callable[..., requests.Response] = requests.get,
+    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> ModelSyncResult:
     """Extra env or args an agent needs to see the proxy's model list.
 
-    OpenCode takes it as env, Codex as a `-c` override; Claude Code discovers
-    models itself through CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY.
-    skip_verify means the caller wants no pre-launch proxy call at all, so the
-    listing is skipped too rather than hanging on an offline proxy.
+    binary is the resolved path the launch will run (`codex.cmd` on a Windows
+    npm install). OpenCode takes the list as env, Codex as a `-c` override that
+    binary has read back first; Claude Code discovers models itself through
+    CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY. skip_verify means the caller
+    wants no pre-launch proxy call at all, so the listing is skipped too rather
+    than hanging on an offline proxy.
     """
-    agent: Final = os.path.basename(command)
+    agent: Final = os.path.splitext(os.path.basename(binary))[0]
     if agent not in ("opencode", "codex"):
         return _NO_EXTRA_ENV
     if skip_verify:
         return ModelSyncSkipped(f"{_SKIP_VERIFY_FLAG} was passed")
     if agent == "codex":
-        return codex_model_sync_args(base_env, base_url, api_key, get=get)
+        return codex_model_sync_args(base_env, base_url, api_key, binary=binary, get=get, run=run)
     return opencode_model_sync_env(base_env, base_url, api_key, get=get)
 
 
@@ -682,7 +732,7 @@ def run_agent(
         verify(base_url, api_key)
 
     env_before_sync: Final = base_env if base_env is not None else os.environ
-    synced: Final = sync_models(command[0], env_before_sync, base_url, api_key, skip_verify)
+    synced: Final = sync_models(binary, env_before_sync, base_url, api_key, skip_verify)
     if isinstance(synced, ModelSyncSkipped):
         warn(f"litellm: not syncing {display_name} models from the proxy: {synced.reason}")
 
