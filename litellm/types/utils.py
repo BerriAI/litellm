@@ -4010,6 +4010,7 @@ class LlmProviders(str, Enum):
     LIBERTAI = "libertai"
     PINSTRIPES = "pinstripes"
     COGNITION = "cognition"
+    MIZUMI = "mizumi"
     SCX_AI = "scx-ai"
     DARKBLOOM = "darkbloom"
     META = "meta"
