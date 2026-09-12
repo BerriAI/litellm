@@ -14,11 +14,15 @@ pub(crate) fn transform_ocr_request(
     if document.source().is_empty() {
         return Err(OcrRequestError::MissingField("document URL"));
     }
+    let content = OcrDocument::ImageUrl {
+        image_url: document.source().to_string(),
+        extra_fields: serde_json::Map::new(),
+    };
     Ok(DeepSeekOcrRequest {
         model: provider_model.to_string(),
         messages: vec![DeepSeekOcrMessage {
             role: UserRole::User,
-            content: vec![document],
+            content: vec![content],
         }],
         params: params.clone(),
     })
