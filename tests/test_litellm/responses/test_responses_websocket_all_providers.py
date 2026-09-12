@@ -2473,6 +2473,53 @@ class TestWebSocketChunkTypes:
         assert messages[0]["content"][0]["text"] == "Part 1Part 2"
 
 
+class TestResponsesWebSocketCredentials:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "explicit_key,global_key,expected_key",
+        [
+            ("deployment-key", None, "deployment-key"),
+            ("deployment-key", "global-key", "deployment-key"),
+            (None, "global-key", "global-key"),
+        ],
+    )
+    async def test_openai_websocket_authorization(self, monkeypatch, explicit_key, global_key, expected_key):
+        from unittest.mock import AsyncMock, patch
+
+        import litellm
+        from litellm.responses import main as responses_main
+
+        monkeypatch.setattr(litellm, "api_key", global_key)
+        monkeypatch.setattr(litellm, "openai_key", None)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setenv("LITELLM_RUST", "false")
+        captured_headers = []
+
+        class FakeConnect:
+            def __init__(self, url, **kwargs):
+                captured_headers.append(kwargs["additional_headers"])
+
+            async def __aenter__(self):
+                raise RuntimeError("stop at upstream handshake")
+
+            async def __aexit__(self, *args):
+                pass
+
+        websocket = MagicMock()
+        websocket.close = AsyncMock()
+        with patch("websockets.connect", FakeConnect):
+            await responses_main._aresponses_websocket.__wrapped__(
+                model="gpt-6-astra",
+                websocket=websocket,
+                api_key=explicit_key,
+                api_base="https://upstream.invalid/v1",
+                litellm_logging_obj=MagicMock(),
+            )
+
+        assert len(captured_headers) == 1
+        assert captured_headers[0]["Authorization"] == f"Bearer {expected_key}"
+
+
 class TestNativeWebSocketUrlConstruction:
     """Test that native WebSocket URLs include the model query parameter.
 
