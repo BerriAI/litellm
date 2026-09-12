@@ -30,16 +30,37 @@ class NativeMimeType(Protocol):
 
 
 _FILE_DOCUMENT: Final = NativeBinding(
-    "_ocr_file_document", validate=lambda value: cast(NativeFileDocument, value) if callable(value) else None
+    "_ocr_file_document",
+    validate=lambda value: (
+        cast(  # cast-ok: native export owns the callable signature
+            NativeFileDocument, value
+        )
+        if callable(value)
+        else None
+    ),
 )
 _UPLOAD_DOCUMENT: Final = NativeBinding(
-    "_ocr_upload_document", validate=lambda value: cast(NativeUploadDocument, value) if callable(value) else None
+    "_ocr_upload_document",
+    validate=lambda value: (
+        cast(  # cast-ok: native export owns the callable signature
+            NativeUploadDocument, value
+        )
+        if callable(value)
+        else None
+    ),
 )
 _MAX_FILE_BYTES: Final = NativeBinding(
     "_OCR_MAX_FILE_BYTES", validate=lambda value: value if isinstance(value, int) and value > 0 else None
 )
 _MIME_TYPE: Final = NativeBinding(
-    "_ocr_mime_type", validate=lambda value: cast(NativeMimeType, value) if callable(value) else None
+    "_ocr_mime_type",
+    validate=lambda value: (
+        cast(  # cast-ok: native export owns the callable signature
+            NativeMimeType, value
+        )
+        if callable(value)
+        else None
+    ),
 )
 
 
