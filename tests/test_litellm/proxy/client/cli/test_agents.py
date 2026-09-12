@@ -262,6 +262,7 @@ class TestOpencodeModelSync:
         assert provider["options"] == {
             "baseURL": "http://localhost:4000/v1",
             "apiKey": "{env:OPENAI_API_KEY}",
+            "timeout": 600_000,
         }
         assert provider["models"] == {
             "gpt-5.5": {"name": "gpt-5.5"},

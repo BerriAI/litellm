@@ -41,6 +41,7 @@ OPENCODE_CONFIG_CONTENT_ENV: Final = "OPENCODE_CONFIG_CONTENT"
 OPENCODE_PROVIDER_ID: Final = "litellm"
 OPENCODE_PROVIDER_NAME: Final = "LiteLLM"
 OPENCODE_PROVIDER_NPM: Final = "@ai-sdk/openai-compatible"
+OPENCODE_REQUEST_TIMEOUT_MS: Final = 600_000
 
 _SKIP_VERIFY_FLAG: Final = "--skip-verify"
 
@@ -277,6 +278,7 @@ class _OpenCodeModel(BaseModel):
 class _OpenCodeProviderOptions(BaseModel):
     baseURL: str
     apiKey: str
+    timeout: int
 
 
 class _OpenCodeProvider(BaseModel):
@@ -304,7 +306,9 @@ def opencode_provider_config(base_url: str, models: Sequence[ListedModel]) -> st
     One model entry per chat-capable /v1/models row (mode chat, responses, or
     unknown), so OpenCode's model picker mirrors what the key can call. The key
     is read back through {env:OPENAI_API_KEY}, which build_agent_env exports, so
-    it never lands in the config text. OpenCode merges this inline config over
+    it never lands in the config text. The provider timeout matches the proxy's
+    600s request_timeout so OpenCode does not abandon a long generation the
+    proxy is still willing to serve. OpenCode merges this inline config over
     the user's own files, leaving unrelated keys and providers untouched.
     """
     chat_models: Final = tuple(m for m in models if m.mode is None or m.mode in _OPENCODE_CHAT_MODES)
@@ -314,6 +318,7 @@ def opencode_provider_config(base_url: str, models: Sequence[ListedModel]) -> st
         options=_OpenCodeProviderOptions(
             baseURL=base_url.rstrip("/") + "/v1",
             apiKey=f"{{env:{OPENAI_API_KEY_ENV}}}",
+            timeout=OPENCODE_REQUEST_TIMEOUT_MS,
         ),
         models=MappingProxyType({m.id: _opencode_model_entry(m) for m in chat_models}),
     )
