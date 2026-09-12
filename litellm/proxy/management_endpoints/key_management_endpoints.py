@@ -2063,8 +2063,13 @@ async def generate_service_account_key_fn(
     )
 
     if data.metadata is None or data.metadata.get("service_account_id") is None:
-        service_account_id: Final = (data.metadata or {}).get("service_account_id") or data.key_alias or str(uuid.uuid4())
-        data.metadata = {**(data.metadata or {}), "service_account_id": service_account_id}  # rebind-ok: stamping the generated service_account_id onto the request model so it persists on the key
+        service_account_id: Final = (
+            (data.metadata or {}).get("service_account_id") or data.key_alias or str(uuid.uuid4())
+        )
+        data.metadata = {  # rebind-ok: stamping the generated service_account_id onto the request model so it persists on the key
+            **(data.metadata or {}),
+            "service_account_id": service_account_id,
+        }
 
     verbose_proxy_logger.debug("entered /key/generate")
 

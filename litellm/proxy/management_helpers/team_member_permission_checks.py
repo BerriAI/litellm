@@ -85,10 +85,9 @@ class TeamMemberPermissionChecks:
             check_db_only=True,
         )
 
-        # 4. Resolve the caller's role in the key's team (service accounts act as "user")
         caller_team_role: Final = _get_caller_team_role(team_table=team_table, user_api_key_dict=user_api_key_dict)
 
-        # 5. Check if the team member has permissions for the endpoint
+        # 4. Check if the team member has permissions for the endpoint
         has_permission: Final = TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
             team_member_role=caller_team_role,
             team_table=team_table,
@@ -224,7 +223,6 @@ class TeamMemberPermissionChecks:
             check_db_only=True,
         )
 
-        # 4. Resolve the caller's role in the key's team (service accounts act as "user")
         caller_team_role: Final = _get_caller_team_role(team_table=team_table, user_api_key_dict=user_api_key_dict)
         return caller_team_role is not None
 
