@@ -1355,6 +1355,7 @@ class BilledTokenRates:
     input_cost_per_token: float
     output_cost_per_token: float
     cache_read_input_token_cost: float
+    cache_read_input_audio_token_cost: float
     cache_creation_input_token_cost: float
     cache_creation_input_token_cost_above_1hr: float
     output_cost_per_reasoning_token: float
@@ -1366,6 +1367,7 @@ class BilledTokenRates:
             input_cost_per_token=self.input_cost_per_token * multiplier,
             output_cost_per_token=self.output_cost_per_token * multiplier,
             cache_read_input_token_cost=self.cache_read_input_token_cost * multiplier,
+            cache_read_input_audio_token_cost=self.cache_read_input_audio_token_cost * multiplier,
             cache_creation_input_token_cost=self.cache_creation_input_token_cost * multiplier,
             cache_creation_input_token_cost_above_1hr=self.cache_creation_input_token_cost_above_1hr * multiplier,
             output_cost_per_reasoning_token=self.output_cost_per_reasoning_token * multiplier,
@@ -1389,15 +1391,16 @@ def _reasoning_token_count(usage: Usage) -> int:
     return parsed or _coerce_token_count(getattr(usage, "reasoning_tokens", 0))
 
 
-def _cache_token_counts(usage: Usage) -> tuple[int, int, CacheCreationTokenDetails | None]:
-    """(cache read tokens, cache creation tokens, cache creation details): read from prompt_tokens_details
-    first, then the private top-level counters the Usage constructor mirrors cache tokens onto for
-    providers/callers that bypass the details."""
+def _cache_token_counts(usage: Usage) -> tuple[int, int, int, CacheCreationTokenDetails | None]:
+    """(cache read tokens, cached audio tokens, cache creation tokens, cache creation details): read from
+    prompt_tokens_details first, then the private top-level counters the Usage constructor mirrors cache
+    tokens onto for providers/callers that bypass the details."""
     parsed: Final = parse_prompt_tokens_details(usage) if usage.prompt_tokens_details is not None else None
     parsed_read: Final = parsed["cache_hit_tokens"] if parsed is not None else 0
     parsed_creation: Final = parsed["cache_creation_tokens"] if parsed is not None else 0
     return (
         parsed_read or _coerce_token_count(getattr(usage, "_cache_read_input_tokens", 0)),
+        parsed["cache_hit_audio_tokens"] if parsed is not None else 0,
         parsed_creation or _coerce_token_count(getattr(usage, "_cache_creation_input_tokens", 0)),
         parsed["cache_creation_token_details"] if parsed is not None else None,
     )
@@ -1408,11 +1411,13 @@ def _custom_pricing_rates(custom_cost_per_token: CostPerToken) -> BilledTokenRat
     cache rates (else the input rate) and reasoning at the output rate, as _cost_per_token_custom_pricing_helper does."""
     input_rate: Final = custom_cost_per_token["input_cost_per_token"]
     output_rate: Final = custom_cost_per_token["output_cost_per_token"]
+    cache_read_rate: Final = custom_cost_per_token.get("cache_read_input_token_cost", input_rate)
     cache_creation_rate: Final = custom_cost_per_token.get("cache_creation_input_token_cost", input_rate)
     return BilledTokenRates(
         input_cost_per_token=input_rate,
         output_cost_per_token=output_rate,
-        cache_read_input_token_cost=custom_cost_per_token.get("cache_read_input_token_cost", input_rate),
+        cache_read_input_token_cost=cache_read_rate,
+        cache_read_input_audio_token_cost=cache_read_rate,
         cache_creation_input_token_cost=cache_creation_rate,
         cache_creation_input_token_cost_above_1hr=cache_creation_rate,
         output_cost_per_reasoning_token=output_rate,
@@ -1449,6 +1454,11 @@ def _cost_map_billed_rates(
         completion_base_cost=completion_base_cost,
         current_time=billing_time,
     )
+    audio_cache_read_rate: Final = _get_cost_per_unit(
+        model_info,
+        _get_service_tier_cost_key("cache_read_input_audio_token_cost", service_tier),
+        None,
+    )
     multiplier: Final = (
         _get_regional_uplift_multiplier(model_info, data_residency)
         * get_vertex_regional_endpoint_uplift(model_info, vertex_location)
@@ -1458,6 +1468,9 @@ def _cost_map_billed_rates(
         input_cost_per_token=prompt_base_cost,
         output_cost_per_token=completion_base_cost,
         cache_read_input_token_cost=cache_read_cost_rate,
+        cache_read_input_audio_token_cost=(
+            audio_cache_read_rate if audio_cache_read_rate is not None else cache_read_cost_rate
+        ),
         cache_creation_input_token_cost=cache_creation_cost_rate,
         cache_creation_input_token_cost_above_1hr=cache_creation_cost_above_1hr_rate,
         output_cost_per_reasoning_token=reasoning_rate,
@@ -1530,7 +1543,9 @@ def get_token_type_cost_breakdown(
     if rates is None:
         return TokenTypeCostBreakdown(0.0, 0.0, 0.0)
 
-    cache_read_tokens, cache_creation_tokens, cache_creation_token_details = _cache_token_counts(usage)
+    cache_read_tokens, cached_audio_tokens, cache_creation_tokens, cache_creation_token_details = _cache_token_counts(
+        usage
+    )
     cache_creation_cost: Final = (
         float(cache_creation_tokens) * rates.cache_creation_input_token_cost
         if custom_cost_per_token is not None
@@ -1543,7 +1558,10 @@ def get_token_type_cost_breakdown(
     )
     return TokenTypeCostBreakdown(
         reasoning_cost=float(_reasoning_token_count(usage)) * rates.output_cost_per_reasoning_token,
-        cache_read_cost=float(cache_read_tokens) * rates.cache_read_input_token_cost,
+        cache_read_cost=(
+            float(cache_read_tokens - cached_audio_tokens) * rates.cache_read_input_token_cost
+            + float(cached_audio_tokens) * rates.cache_read_input_audio_token_cost
+        ),
         cache_creation_cost=cache_creation_cost,
         rates=rates,
     )

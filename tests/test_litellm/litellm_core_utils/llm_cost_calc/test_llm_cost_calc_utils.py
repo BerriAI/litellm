@@ -4006,6 +4006,7 @@ def test_billed_token_rates_follow_the_token_tier_the_breakdown_bills_at(monkeyp
         input_cost_per_token=6e-6,
         output_cost_per_token=3e-5,
         cache_read_input_token_cost=6e-7,
+        cache_read_input_audio_token_cost=6e-7,
         cache_creation_input_token_cost=7.5e-6,
         cache_creation_input_token_cost_above_1hr=0.0,
         output_cost_per_reasoning_token=3e-5,
@@ -5252,3 +5253,25 @@ def test_cached_audio_tokens_billed_at_audio_cache_rate_through_model_info_looku
 
     prompt_cost, _ = generic_cost_per_token(model="gpt-realtime-2.1-mini", usage=usage, custom_llm_provider="openai")
     assert prompt_cost == pytest.approx(300 * 6e-7 + 100 * 6e-8 + 200 * 1e-5 + 400 * 3e-7)
+
+
+def test_cache_read_breakdown_splits_cached_audio_at_the_audio_cache_rate(_local_model_cost_map: None) -> None:
+    usage = Usage(
+        prompt_tokens=4863,
+        completion_tokens=1087,
+        total_tokens=5950,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=1693,
+            audio_tokens=3170,
+            cached_tokens=2816,
+            cached_tokens_details={"text_tokens": 896, "audio_tokens": 1920},
+        ),
+    )
+
+    breakdown = get_token_type_cost_breakdown(model="gpt-realtime-2.1-mini", custom_llm_provider="openai", usage=usage)
+    prompt_cost, _ = generic_cost_per_token(model="gpt-realtime-2.1-mini", usage=usage, custom_llm_provider="openai")
+
+    assert breakdown.cache_read_cost == pytest.approx(896 * 6e-8 + 1920 * 3e-7)
+    assert breakdown.rates is not None
+    assert breakdown.rates.cache_read_input_audio_token_cost == pytest.approx(3e-7)
+    assert prompt_cost == pytest.approx((1693 - 896) * 6e-7 + (3170 - 1920) * 1e-5 + breakdown.cache_read_cost)
