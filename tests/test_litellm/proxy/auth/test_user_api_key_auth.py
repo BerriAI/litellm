@@ -6475,6 +6475,39 @@ class TestCheckKeyModelBudgetWithFallback:
         assert request_data["model"] == "claude-sonnet-4-5"
 
     @pytest.mark.asyncio
+    async def test_alias_budget_loop_stops_after_fallback(self):
+        valid_token = UserAPIKeyAuth(
+            token="test-key",
+            aliases={"claude-haiku-4-5": "claude-haiku-4-5-20251001"},
+            budget_fallbacks={"claude-haiku-4-5": ["claude-sonnet-4-5"]},
+        )
+        limiter = AsyncMock()
+        limiter.is_key_within_model_budget.side_effect = litellm.BudgetExceededError(
+            current_cost=10, max_budget=5
+        )
+        limiter.get_fallback_model_within_budget.return_value = "claude-sonnet-4-5"
+        request_data = {"model": "claude-haiku-4-5"}
+        request = self._make_request()
+        candidates = ["claude-haiku-4-5", "claude-haiku-4-5-20251001"]
+
+        for model_name in candidates:
+            if await _check_key_model_budget_with_fallback(
+                valid_token=valid_token,
+                model_max_budget_limiter=limiter,
+                model_name=model_name,
+                requested_model="claude-haiku-4-5",
+                request_data=request_data,
+                request=request,
+            ):
+                break
+
+        assert request_data["model"] == "claude-sonnet-4-5"
+        limiter.is_key_within_model_budget.assert_awaited_once_with(
+            user_api_key_dict=valid_token,
+            model="claude-haiku-4-5",
+        )
+
+    @pytest.mark.asyncio
     async def test_raises_when_every_fallback_also_exceeded(self):
         valid_token = UserAPIKeyAuth(
             token="test-key", budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]}
