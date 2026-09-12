@@ -133,6 +133,7 @@ mod tests {
 
     #[rstest]
     #[case("pages", json!([0, 2]))]
+    #[case("pages", json!("0,2-4"))]
     #[case("include_image_base64", json!(true))]
     #[case("image_limit", json!(2))]
     #[case("image_min_size", json!(100))]

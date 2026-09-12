@@ -207,6 +207,47 @@ mod tests {
     }
 
     #[test]
+    fn file_name_mime_mapping_matches_python() {
+        for (name, expected) in [
+            ("document.pdf", "application/pdf"),
+            ("image.png", "image/png"),
+            ("photo.jpg", "image/jpeg"),
+            ("photo.jpeg", "image/jpeg"),
+            ("animation.gif", "image/gif"),
+            ("image.webp", "image/webp"),
+            ("scan.tiff", "image/tiff"),
+            ("scan.tif", "image/tiff"),
+            ("bitmap.bmp", "image/bmp"),
+            ("DOCUMENT.PDF", "application/pdf"),
+            ("IMAGE.PNG", "image/png"),
+            ("file.unknown-extension", "application/octet-stream"),
+        ] {
+            assert_eq!(mime_type_for_name(name), expected);
+        }
+    }
+
+    #[test]
+    fn upload_mime_mapping_matches_python() {
+        assert_eq!(
+            upload_mime_type(Some("report.pdf"), Some("application/octet-stream")),
+            "application/pdf"
+        );
+        assert_eq!(upload_mime_type(Some("image.png"), None), "image/png");
+        assert_eq!(upload_mime_type(None, None), "application/octet-stream");
+        assert_eq!(
+            upload_mime_type(Some("doc.pdf"), Some("application/pdf; charset=utf-8")),
+            "application/pdf"
+        );
+        assert_eq!(
+            upload_mime_type(
+                Some("img.png"),
+                Some("image/png; charset=utf-8; boundary=something")
+            ),
+            "image/png"
+        );
+    }
+
+    #[test]
     fn file_encoding_enforces_decoded_size_limit() {
         let bytes = vec![b'a'; OCR_INLINE_MAX_BYTES + 1];
         assert_eq!(

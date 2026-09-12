@@ -46,10 +46,7 @@ pub(crate) fn transform_ocr_response(
     let mut extra_fields = Map::new();
     extra_fields.insert("content".into(), option_value(result.content));
     extra_fields.insert("tables".into(), option_value(result.tables));
-    extra_fields.insert(
-        "key_value_pairs".into(),
-        option_value(result.key_value_pairs),
-    );
+    extra_fields.insert("keyValuePairs".into(), option_value(result.key_value_pairs));
     Ok(LiteLLMOcrResponse {
         pages,
         model: model.into(),

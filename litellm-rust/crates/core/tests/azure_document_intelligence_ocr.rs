@@ -125,6 +125,14 @@ async fn immediate_response_normalizes_pages_and_preserves_native() {
         json!({"width":816,"height":1056,"dpi":96})
     );
     assert_eq!(result.usage_info, Some(json!({"pages_processed":1})));
+    let serialized = result.clone().into_json();
+    assert_eq!(serialized["content"], "A\n\nB");
+    assert_eq!(serialized["tables"], json!([{"cells":[]}]));
+    assert_eq!(
+        serialized["keyValuePairs"],
+        json!([{"key":{"content":"A"}}])
+    );
+    assert!(serialized.get("key_value_pairs").is_none());
     assert_eq!(result.provider_native_response, Some(operation));
 }
 
