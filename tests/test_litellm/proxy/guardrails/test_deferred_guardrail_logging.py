@@ -15,6 +15,7 @@ Streaming: CSW.__anext__ stores args on logging_obj at stream end.
 """
 
 import asyncio
+import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1454,7 +1455,7 @@ class TestArmDeferredStreamDispatch:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("stored_args", [(object(),), (object(), object(), object())])
-    async def test_raw_generator_stream_with_unknown_arg_shape_logs_and_drops(self, stored_args):
+    async def test_raw_generator_stream_with_unknown_arg_shape_logs_and_drops(self, stored_args, caplog):
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
         logging_obj, recorded = self._dispatch_recording_logging_obj()
@@ -1474,14 +1475,15 @@ class TestArmDeferredStreamDispatch:
             patch.object(  # test-quality-ok: GLOBAL_LOGGING_WORKER is a process-global singleton with no injection seam
                 GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue"
             ) as mock_enqueue,
-            patch("litellm.proxy.common_request_processing.verbose_proxy_logger") as mock_logger,
+            caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
         ):
             ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
             await asyncio.sleep(0)
 
         mock_enqueue.assert_not_called()
         assert recorded == {}
-        mock_logger.error.assert_called_once()
+        dropped = [r for r in caplog.records if r.getMessage().startswith("Deferred stream logging dropped")]
+        assert len(dropped) == 1
 
     @pytest.mark.asyncio
     async def test_csw_closure_routes_through_deferred_stream_guardrails(self, monkeypatch):
