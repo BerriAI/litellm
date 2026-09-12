@@ -24,7 +24,7 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.types.utils import LlmProviders, Usage
+from litellm.types.utils import CostBreakdown, LlmProviders, Usage
 from litellm.proxy._types import UserAPIKeyAuth
 
 
@@ -47,6 +47,7 @@ class TestVertexAILivePassthroughLoggingHandler:
         """Create a mock logging object"""
         mock = MagicMock(spec=LiteLLMLoggingObj)
         mock.model_call_details = {}
+        mock._response_cost_calculator.return_value = None
         return mock
 
     @pytest.fixture
@@ -474,6 +475,64 @@ class TestVertexAILivePassthroughLoggingHandler:
 
         assert grounded > plain, "a grounded session must cost more than the same tokens ungrounded"
 
+    def _priced_logging_obj(self) -> LiteLLMLoggingObj:
+        """A real logging object, since the session's price is handed to it turn by turn."""
+        logging_obj = LiteLLMLoggingObj(
+            model=self.NATIVE_AUDIO_MODEL,
+            messages=[],
+            stream=True,
+            call_type="pass_through_endpoint",
+            start_time=datetime.now(),
+            litellm_call_id="live-session",
+            function_id="live",
+        )
+        logging_obj.update_environment_variables(
+            model=self.NATIVE_AUDIO_MODEL,
+            user="u",
+            optional_params={},
+            litellm_params={},
+            call_type="pass_through_endpoint",
+        )
+        logging_obj.model_call_details["custom_llm_provider"] = "vertex_ai"
+        return logging_obj
+
+    def _billed_session(
+        self, handler: VertexAILivePassthroughLoggingHandler, messages: list[dict[str, object]]
+    ) -> tuple[float, CostBreakdown]:
+        logging_obj = self._priced_logging_obj()
+        result = handler.vertex_ai_live_passthrough_handler(
+            websocket_messages=messages,
+            logging_obj=logging_obj,
+            url_route="/vertex_ai/live",
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            request_body={},
+            model=self.NATIVE_AUDIO_MODEL,
+            custom_llm_provider="vertex_ai",
+        )
+        assert result["result"] is not None, "the handler must produce a usage-bearing response to bill"
+        assert logging_obj.cost_breakdown is not None, "the session's price must reach the logging object"
+        return result["result"]._hidden_params["response_cost"], logging_obj.cost_breakdown
+
+    def test_each_grounded_turn_pays_its_own_query_fee(self, handler):
+        """Google charges the grounding fee per grounded prompt, not per session.
+
+        Summing the session into one usage collapsed two grounded turns into one query, so the
+        second question was answered for free. The bill now grows by one fee per grounded turn.
+        """
+        head, turn = self._live_messages(self.AUDIO_SESSION[:1])
+        grounding = self._grounding_frame({"webSearchQueries": ["q"]})
+
+        plain_cost, _ = self._billed_session(handler, [head, turn, turn])
+        one_cost, one_breakdown = self._billed_session(handler, [head, grounding, turn, turn])
+        two_cost, two_breakdown = self._billed_session(handler, [head, grounding, turn, grounding, turn])
+
+        fee = one_cost - plain_cost
+        assert fee > 0, "a grounded turn must cost more than the same tokens ungrounded"
+        assert two_cost - plain_cost == pytest.approx(2 * fee), "two grounded turns must pay the fee twice"
+        assert two_breakdown["total_cost"] == pytest.approx(two_cost)
+        assert two_breakdown["tool_usage_cost"] == pytest.approx(2 * one_breakdown["tool_usage_cost"])
+
     def test_reporting_tool_use_tokens_does_not_move_the_bill(self, handler, mock_logging_obj):
         """Deliberate boundary: these tokens are reported here, and priced nowhere.
 
@@ -676,6 +735,7 @@ class TestVertexAILivePassthroughIntegration:
         """Create a mock logging object"""
         mock = MagicMock(spec=LiteLLMLoggingObj)
         mock.model_call_details = {}
+        mock._response_cost_calculator.return_value = None
         return mock
 
     @patch(
@@ -809,6 +869,7 @@ class TestVertexAILivePassthroughErrorHandling:
         """Create a mock logging object"""
         mock = MagicMock(spec=LiteLLMLoggingObj)
         mock.model_call_details = {}
+        mock._response_cost_calculator.return_value = None
         return mock
 
     def test_invalid_websocket_messages_format(self):
