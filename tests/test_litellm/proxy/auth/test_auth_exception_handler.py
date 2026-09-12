@@ -445,46 +445,6 @@ async def test_handle_authentication_error_budget_exceeded():
     assert int(exc_info.value.code) == status.HTTP_429_TOO_MANY_REQUESTS
 
 
-async def _failure_hook_kwargs_for(raised: Exception) -> dict:
-    handler = UserAPIKeyAuthExceptionHandler()
-    with patch(  # test-quality-ok: the handler imports proxy_logging_obj from proxy_server with no injection seam
-        "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
-        new_callable=AsyncMock,
-        return_value=None,
-    ) as mock_post_call_failure_hook:
-        with pytest.raises(ProxyException):
-            await handler._handle_authentication_error(raised, MagicMock(), {}, "/v1/chat/completions", None, "sk-bad")
-    return mock_post_call_failure_hook.call_args.kwargs
-
-
-@pytest.mark.asyncio
-async def test_bare_auth_exception_is_logged_with_the_public_401():
-    """Regression for LIT-5884: the spend log records the client-facing 401 while callbacks keep the raw exception."""
-    raised = Exception("Invalid proxy server token passed")
-    hook_kwargs = await _failure_hook_kwargs_for(raised)
-    logged = hook_kwargs["client_exception"]
-
-    assert hook_kwargs["original_exception"] is raised
-    assert isinstance(logged, ProxyException)
-    assert int(logged.code) == status.HTTP_401_UNAUTHORIZED
-    assert "Invalid proxy server token passed" in logged.message
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "raised",
-    [
-        pytest.param(BudgetExceededError(message="Budget exceeded", current_cost=1, max_budget=1), id="budget"),
-        pytest.param(HTTPException(status_code=403, detail="not allowed"), id="http"),
-        pytest.param(ProxyException(message="m", type=ProxyErrorTypes.auth_error, param=None, code=429), id="proxy"),
-    ],
-)
-async def test_status_bearing_auth_exceptions_are_logged_unchanged(raised):
-    hook_kwargs = await _failure_hook_kwargs_for(raised)
-    assert hook_kwargs["original_exception"] is raised
-    assert hook_kwargs["client_exception"] is raised
-
-
 @pytest.mark.asyncio
 async def test_route_passed_to_post_call_failure_hook():
     """
