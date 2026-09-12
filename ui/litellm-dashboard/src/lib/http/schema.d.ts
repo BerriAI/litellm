@@ -1242,6 +1242,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Auto Router Session
+         * @description One auto-routed session, for the key that ran it: the model its last turn was routed to and the
+         *     session's spend against the router's savings baseline. Built for a coding agent's status line
+         *     or stop hook, so any virtual key may call it and only ever sees rows written under its own
+         *     key hash. Reads the LiteLLM_AutoRouterSession rollup, which the asynchronous spend flush
+         *     fills a moment after each turn; a session with no flushed auto-routed turn yet is a 404. The
+         *     id is bounded the way the writer bounded it, so an oversized client id still finds its row.
+         */
+        get: operations["get_auto_router_session_auto_router_session_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auto_router/shadow_eval": {
         parameters: {
             query?: never;
@@ -23572,6 +23597,62 @@ export interface components {
             /** @description The decision record this request would have written to its log row */
             routing_decision: components["schemas"]["StandardLoggingRoutingDecision"];
         };
+        /**
+         * AutoRouterSessionResponse
+         * @description One auto-routed session as its own key sees it: what the last turn ran on, and what the session cost
+         *     against the router's savings baseline (the priciest model in its hardest tier).
+         */
+        AutoRouterSessionResponse: {
+            /**
+             * Baseline Model
+             * @description The savings baseline most of this session's turns were priced against, recorded turn by turn, so it still names the counterfactual after the router is reconfigured or removed. None when no turn recorded one: rows from before the baseline was recorded, and adaptive and quality routers, which derive no baseline and so report no savings
+             */
+            baseline_model: string | null;
+            /**
+             * Baseline Models
+             * @description Turns priced against each baseline model; more than one entry means the router's baseline changed mid-session and baseline_spend mixes both
+             */
+            baseline_models: {
+                [key: string]: number;
+            };
+            /**
+             * Baseline Spend
+             * @description spend plus saved_spend: the estimated single-model cost
+             */
+            baseline_spend: number;
+            /**
+             * Last Model
+             * @description The deployment model the most recent turn was routed to
+             */
+            last_model: string;
+            /**
+             * Router Name
+             * @description The auto-router alias the session's requests were sent to
+             */
+            router_name: string;
+            /**
+             * Router Type
+             * @description complexity, adaptive or quality
+             */
+            router_type: string;
+            /**
+             * Saved Spend
+             * @description Estimated savings against the baseline, net of classifier cost
+             */
+            saved_spend: number;
+            /** Session Id */
+            session_id: string;
+            /**
+             * Spend
+             * @description What the session's routed traffic actually cost, classifier calls included
+             */
+            spend: number;
+            /**
+             * Turns
+             * @description Auto-routed turns the rollup has recorded for this session so far
+             */
+            turns: number;
+        };
         /** AwsSessionTag */
         AwsSessionTag: {
             /** Key */
@@ -25630,6 +25711,11 @@ export interface components {
              */
             allow_cli_sso_verification_uri_complete?: boolean | null;
             /**
+             * Allow Unmanaged Response Ids
+             * @description If True, lets keys address Responses API ids that this proxy did not issue (raw provider ids, or ids issued before response-id encryption was configured). Such an id carries no owner, so no ownership check can run on it; ids this proxy did issue keep full ownership enforcement. Off by default, in which case an unrecognized response id is rejected with 403
+             */
+            allow_unmanaged_response_ids?: boolean | null;
+            /**
              * Allowed Routes
              * @description Proxy API Endpoints you want users to be able to access
              */
@@ -25748,6 +25834,11 @@ export interface components {
              * @description If True and SSO is configured (MICROSOFT_CLIENT_ID, GOOGLE_CLIENT_ID, GENERIC_CLIENT_ID, or SAML_IDP_METADATA_URL/XML), disables username/password login on /login, /v2/login, and /v3/login so SSO is the only way to reach the Admin UI. An admin locked out of the UI can still administer the proxy over the API with the master key; unset this setting and restart the proxy to restore UI username/password login. Default is False.
              */
             disable_password_login_when_sso_enabled?: boolean | null;
+            /**
+             * Disable Responses Id Security
+             * @description If True, disables ownership enforcement on Responses API ids. Keys may then retrieve, cancel, delete, and chain from any response id, including ids belonging to another user or team and ids this proxy never issued. WARNING: this removes tenant isolation on /v1/responses
+             */
+            disable_responses_id_security?: boolean | null;
             /**
              * Enable Openai Websocket Passthrough
              * @description Serve the OpenAI pass-through WebSocket route, which relays frames to OpenAI under the proxy's own provider credential without reading them. Off by default.
@@ -36319,7 +36410,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */
@@ -41664,6 +41755,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AutoRouterClassifierDefaultPromptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_auto_router_session_auto_router_session_get: {
+        parameters: {
+            query: {
+                /** @description The client session id (x-*-session-id header) the turns were sent under */
+                session_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRouterSessionResponse"];
                 };
             };
             /** @description Validation Error */

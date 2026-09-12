@@ -19,6 +19,7 @@ from litellm.constants import (
     LITTELM_CLI_SERVICE_ACCOUNT_NAME,
     LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     MAX_SPEND_LOG_MODEL_NAME_LENGTH,
+    MCP_SPEND_LOG_MODEL_PREFIX,
     REDACTED_BY_LITELM_STRING,
     SESSION_ID_OMITTED_METADATA_KEY,
     UNKNOWN_MODEL_SPEND_LOG_MODEL,
@@ -338,7 +339,8 @@ def _sl_attribution_fallback(
 
 
 def _looks_like_model_name(model: str) -> bool:
-    return len(model) <= MAX_SPEND_LOG_MODEL_NAME_LENGTH and not any(char.isspace() for char in model)
+    candidate: Final = model.removeprefix(MCP_SPEND_LOG_MODEL_PREFIX)
+    return len(candidate) <= MAX_SPEND_LOG_MODEL_NAME_LENGTH and not any(char.isspace() for char in candidate)
 
 
 def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogsPayload:

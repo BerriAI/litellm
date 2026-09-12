@@ -18,6 +18,7 @@ from starlette.routing import BaseRoute, Match
 from starlette.types import Receive, Scope, Send
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.route_priority import hot_routes_first
 
 if TYPE_CHECKING:
     from fastapi import APIRouter, FastAPI
@@ -343,31 +344,40 @@ class LazyFeatureMiddleware:
         await self.app(scope, receive, send)
 
 
-def _lazy_slots(app: "FastAPI") -> Mapping[str, int]:
+def _lazy_slots(app: "FastAPI") -> Mapping[str, BaseRoute | None]:
     return app.state.lazy_slots if hasattr(app.state, "lazy_slots") else MappingProxyType({})
 
 
 def reserve_lazy_slot(app: "FastAPI", name: str, features: tuple[LazyFeature, ...] = LAZY_FEATURES) -> None:
-    """Record the table position the feature's router used to be included at, so its
-    routes are spliced back in there once it loads and keep the same precedence."""
+    """Record the route the feature's router used to be included after, so its routes
+    are spliced back in there once it loads and keep the same precedence. Anchoring on
+    the route rather than its index survives later reordering of the table."""
     feat: Final = next(f for f in features if f.name == name)
-    app.state.lazy_slots = MappingProxyType({**_lazy_slots(app), feat.module_path: len(app.router.routes)})
+    anchor: Final = app.router.routes[-1] if app.router.routes else None
+    app.state.lazy_slots = MappingProxyType({**_lazy_slots(app), feat.module_path: anchor})
+
+
+def _slot_index(routes: Sequence[BaseRoute], anchor: BaseRoute | None) -> int:
+    if anchor is None:
+        return 0
+    return next((i + 1 for i, route in enumerate(routes) if route is anchor), len(routes))
 
 
 def _eager_route_wins(app: "FastAPI", feat: LazyFeature, scope: Scope) -> bool:
     """Routes ahead of a feature's reserved slot beat its routes in Starlette's scan,
     so a request one of them fully matches never needs the feature loaded."""
-    slot: Final = _lazy_slots(app).get(feat.module_path)
-    if slot is None:
+    slots: Final = _lazy_slots(app)
+    if feat.module_path not in slots:
         return False
-    return any(route.matches(scope)[0] is Match.FULL for route in app.router.routes[:slot])
+    ahead: Final = app.router.routes[: _slot_index(app.router.routes, slots[feat.module_path])]
+    return any(route.matches(scope)[0] is Match.FULL for route in ahead)
 
 
 def _in_registry_order(
     routes: Sequence[BaseRoute],
     lazy_routes: Mapping[str, tuple[BaseRoute, ...]],
     features: tuple[LazyFeature, ...],
-    slots: Mapping[str, int],
+    slots: Mapping[str, BaseRoute | None],
 ) -> tuple[BaseRoute, ...]:
     """Lazy routers land in registry order, not first-request order, so overlapping
     paths (/openai/{endpoint:path} vs /openai/v1/realtime/calls) resolve the same
@@ -380,7 +390,7 @@ def _in_registry_order(
     eager: Final = tuple(route for route in routes if id(route) not in lazy_ids)
 
     def slot_of(module_path: str) -> int:
-        return min(slots.get(module_path, len(eager)), len(eager))
+        return _slot_index(eager, slots[module_path]) if module_path in slots else len(eager)
 
     return tuple(
         route
@@ -416,8 +426,8 @@ async def _force_load(app: "FastAPI", feat: LazyFeature, features: tuple[LazyFea
                 {**previous, feat.module_path: tuple(app.router.routes[before:])}
             )
             app.state.lazy_routes = lazy_routes  # rebind-ok: the app owns the record of which routes each feature added
-            app.router.routes[:] = _in_registry_order(  # rebind-ok: the app owns its route table
-                app.router.routes, lazy_routes, features, _lazy_slots(app)
+            app.router.routes[:] = hot_routes_first(  # rebind-ok: the app owns its route table
+                _in_registry_order(app.router.routes, lazy_routes, features, _lazy_slots(app))
             )
             app.state.lazy_loaded.add(feat.module_path)
             app.openapi_schema = None
