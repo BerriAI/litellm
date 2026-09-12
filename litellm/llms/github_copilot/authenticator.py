@@ -145,6 +145,14 @@ class Authenticator:
             verbose_logger.warning("Error reading API endpoint from file: %s", e)
             return None
 
+    def _invalidate_access_token(self) -> None:
+        """Delete the cached access token so the next get_access_token() can re-login."""
+        try:
+            os.remove(self.access_token_file)
+            verbose_logger.warning("Invalidated cached GitHub Copilot access token")
+        except OSError:
+            pass
+
     def _refresh_api_key(self) -> dict[str, Any]:
         """
         Refresh the API key using the access token.
@@ -155,12 +163,11 @@ class Authenticator:
         Raises:
             RefreshAPIKeyError: If unable to refresh the API key.
         """
-        access_token: Final = self.get_access_token()
-        headers: Final = self._get_github_headers(access_token)
         api_key_url: Final = os.getenv("GITHUB_COPILOT_API_KEY_URL", DEFAULT_GITHUB_API_KEY_URL)
-
         max_retries: Final = 3
         for attempt in range(max_retries):
+            access_token: Final = self.get_access_token()
+            headers: Final = self._get_github_headers(access_token)
             try:
                 sync_client = _get_httpx_client()
                 response = sync_client.get(api_key_url, headers=headers)
@@ -173,8 +180,27 @@ class Authenticator:
                 else:
                     verbose_logger.warning("API key response missing token: %s", response_json)
             except httpx.HTTPStatusError as e:
-                verbose_logger.error("HTTP error refreshing API key (attempt %s/%s): %s", attempt + 1, max_retries, e)
-            except Exception as e:
+                status: Final = e.response.status_code
+                verbose_logger.error(
+                    "HTTP error refreshing API key (attempt %s/%s): %s",
+                    attempt + 1,
+                    max_retries,
+                    e,
+                )
+                if status in (401, 403):
+                    verbose_logger.warning(
+                        "Access token rejected by GitHub (%s), invalidating cached token",
+                        status,
+                    )
+                    self._invalidate_access_token()
+                    continue
+                if status == 429 or status >= 500:
+                    continue
+                raise RefreshAPIKeyError(
+                    message=f"HTTP error refreshing API key: {e}",
+                    status_code=status,
+                )
+            except httpx.RequestError as e:
                 verbose_logger.error("Unexpected error refreshing API key: %s", e)
 
         raise RefreshAPIKeyError(
