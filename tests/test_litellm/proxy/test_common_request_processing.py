@@ -485,6 +485,47 @@ class TestProxyBaseLLMRequestProcessing:
         tag_budget_check.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_enforce_guardrail_added_tag_budgets_checks_only_added_tags(self, monkeypatch):
+        """
+        The helper must forward only tags that pre_call_hook added, so tags the
+        caller already sent (and auth already checked) are not budget-checked twice.
+        """
+        from litellm.proxy.common_request_processing import _enforce_guardrail_added_tag_budgets
+
+        tag_budget_check = AsyncMock()
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "_tag_max_budget_check",
+            tag_budget_check,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+
+        await _enforce_guardrail_added_tag_budgets(
+            data={"metadata": {"tags": ["existing-tag", "guardrail-tag"]}},
+            tags_before_guardrails=frozenset({"existing-tag"}),
+            user_api_key_dict=mock_user_api_key_dict,
+            proxy_logging_obj=mock_proxy_logging_obj,
+        )
+
+        tag_budget_check.assert_awaited_once()
+        _, call_kwargs = tag_budget_check.call_args
+        assert call_kwargs["request_body"] == {"metadata": {"tags": ["guardrail-tag"]}}
+        assert call_kwargs["valid_token"] is mock_user_api_key_dict
+
+        tag_budget_check.reset_mock()
+        await _enforce_guardrail_added_tag_budgets(
+            data={"metadata": {"tags": ["existing-tag"]}},
+            tags_before_guardrails=frozenset({"existing-tag"}),
+            user_api_key_dict=mock_user_api_key_dict,
+            proxy_logging_obj=mock_proxy_logging_obj,
+        )
+        tag_budget_check.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_common_processing_pre_call_logic_arms_auto_router_compression_before_guardrails(
         self, monkeypatch
     ):
