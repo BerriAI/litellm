@@ -10669,7 +10669,9 @@ class Router:
             litellm_model_name_model_info.get("key") if litellm_model_name_model_info is not None else None
         )
         if cost_map_omits_token_price(model_id, builtin_key, base_model_key):
-            return cast(ModelInfo, {**model_info, "input_cost_per_token": None, "output_cost_per_token": None})
+            return cast(  # cast-ok: TypedDict spread with overridden keys loses its type
+                ModelInfo, {**model_info, "input_cost_per_token": None, "output_cost_per_token": None}
+            )
         return model_info
 
     def _set_model_group_info(self, model_group: str, user_facing_model_group_name: str) -> ModelGroupInfo | None:
