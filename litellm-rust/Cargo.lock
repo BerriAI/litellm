@@ -1950,6 +1950,7 @@ dependencies = [
  "base64 0.22.1",
  "data-url",
  "gcp_auth",
+ "mime_guess",
  "moka",
  "rand 0.8.7",
  "reqwest 0.12.28",

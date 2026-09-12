@@ -14,6 +14,8 @@ use tokio::sync::Mutex;
 use crate::errors::ocr_error_to_pyerr;
 use crate::execution::{run_async_value, run_sync_value};
 
+mod preparation;
+
 pub(crate) trait PythonRoute: Send + Sync {
     fn state(&self) -> &PythonCallState;
     fn state_mut(&mut self) -> &mut PythonCallState;
@@ -532,12 +534,7 @@ impl PythonCallState {
     }
 
     pub fn prepare(&mut self, py: Python<'_>) -> PyResult<()> {
-        self.kwargs = py
-            .import("litellm.rust_bridge.lifecycle")?
-            .getattr("prepare")?
-            .call1((&self.kwargs, self.logger(py)?))?
-            .cast_into::<PyDict>()?
-            .unbind();
+        self.kwargs = preparation::prepare(py, self.kwargs.bind(py), &self.logger(py)?)?.unbind();
         Ok(())
     }
 

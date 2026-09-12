@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Mapping, Sequence
-from os import PathLike
-from pathlib import Path
 from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
 
 import litellm
@@ -43,42 +41,13 @@ NATIVE_OCR_LIFECYCLE: Final = NativeBinding("_ocr_lifecycle", validate=_binding)
 
 
 def select(request: LiteLLMOcrRequest) -> NativeOcrLifecycle | None:
-    if litellm.cache is not None or request.kwargs.get("caching") or request.kwargs.get("aocr"):
+    if request.kwargs.get("aocr"):
         return None
     return NATIVE_OCR_LIFECYCLE.load()
 
 
 def arguments(request: LiteLLMOcrRequest) -> Mapping[str, object]:
     return request.kwargs
-
-
-class FileReader(Protocol):
-    def __call__(self) -> object: ...
-
-
-def read_file_input(file_input: object) -> tuple[bytes, str | None]:
-    if isinstance(file_input, str):
-        raise ValueError(
-            "OCR file input does not accept bare str values. Pass bytes, a pathlib.Path, or a file-like object."
-        )
-    if isinstance(file_input, PathLike):
-        path: Final = Path(
-            cast(PathLike[str], file_input)
-        )  # cast-ok: Path validates the path protocol at its consumption point
-        return path.read_bytes(), path.name
-    if isinstance(file_input, bytes):
-        return file_input, None
-    reader: Final[object] = getattr(file_input, "read", None)
-    if callable(reader):
-        data: Final = cast(FileReader, reader)()  # cast-ok: read is callable and its return is validated below
-        encoded: Final = data.encode("utf-8") if isinstance(data, str) else data
-        if not isinstance(encoded, bytes):
-            raise TypeError(f"OCR file read must return bytes or str, got {type(encoded)}")
-        name: Final = getattr(file_input, "name", None)
-        return encoded, name if isinstance(name, str) else None
-    raise ValueError(
-        f"Unsupported file input type: {type(file_input)}. Expected pathlib.Path, bytes, or a file-like object."
-    )
 
 
 def call_azure_ad_token_provider(provider: object) -> str:

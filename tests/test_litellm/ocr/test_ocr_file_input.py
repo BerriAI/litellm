@@ -14,6 +14,7 @@ import os
 import tempfile
 from io import BytesIO
 from pathlib import Path
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import orjson
@@ -480,3 +481,37 @@ class TestProxySecurityGuard:
             "data:application/pdf;base64,"
         )
         assert result["model"] == "mistral/mistral-ocr-latest"
+
+
+@pytest.mark.asyncio
+async def test_proxy_upload_stops_reading_at_size_limit() -> None:
+    from starlette.datastructures import UploadFile
+
+    from litellm.ocr.input import get_max_file_bytes
+    from litellm.proxy.ocr_endpoints.endpoints import _parse_multipart_form
+
+    limit: Final = get_max_file_bytes()
+    with tempfile.TemporaryFile() as stream:
+        stream.truncate(limit * 2)
+        upload: Final = UploadFile(file=stream, filename="large.pdf")
+        request: Final = MagicMock(form=AsyncMock(return_value=FormData({"file": upload})))
+        with pytest.raises(ValueError, match="exceeds the size limit"):
+            await _parse_multipart_form(request)
+        assert stream.tell() == limit + 1
+
+
+@pytest.mark.asyncio
+async def test_proxy_upload_filename_is_only_metadata(tmp_path: Path) -> None:
+    from starlette.datastructures import UploadFile
+
+    from litellm.proxy.ocr_endpoints.endpoints import _parse_multipart_form
+
+    secret: Final = tmp_path / "secret.pdf"
+    secret.write_bytes(b"server secret")
+    upload: Final = UploadFile(file=BytesIO(b"uploaded bytes"), filename=str(secret))
+    request: Final = MagicMock(form=AsyncMock(return_value=FormData({"file": upload})))
+    result: Final = await _parse_multipart_form(request)
+    assert result["document"] == {
+        "type": "document_url",
+        "document_url": "data:application/pdf;base64,dXBsb2FkZWQgYnl0ZXM=",
+    }

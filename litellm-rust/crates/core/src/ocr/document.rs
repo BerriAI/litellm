@@ -2,11 +2,11 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use data_url::mime::Mime;
 use data_url::{DataUrl, DataUrlError, forgiving_base64::DecodeError};
 use reqwest::Url;
-use serde_json::{Map, Value};
+use serde_json::Map;
 
 use super::error::{OcrError, OcrRequestError, OcrResponseError};
 use super::types::{OcrConnection, OcrDocument};
-use crate::constants::OCR_MAX_FETCH_REDIRECTS;
+use crate::constants::{OCR_INLINE_MAX_BYTES, OCR_MAX_FETCH_REDIRECTS};
 use crate::error::{MediaError, TransportError};
 use crate::media::{DownloadPolicy, MediaFetcher};
 
@@ -14,32 +14,34 @@ pub fn encode_file_document(
     bytes: &[u8],
     file_name: Option<&str>,
     mime_type: Option<&str>,
-) -> Result<Value, OcrRequestError> {
+) -> Result<OcrDocument, OcrRequestError> {
     if bytes.is_empty() {
-        return Err(OcrRequestError::RequestField {
-            path: "document.file".into(),
-        });
+        return Err(OcrRequestError::EmptyFile);
     }
-    let mime_type = mime_type.map(str::trim);
-    if mime_type.is_some_and(|value| !valid_mime_type(value)) {
-        return Err(OcrRequestError::RequestField {
-            path: "document.mime_type".into(),
-        });
+    if bytes.len() > OCR_INLINE_MAX_BYTES {
+        return Err(OcrRequestError::InlineDocumentTooLarge);
+    }
+    if let Some(value) = mime_type
+        && !valid_mime_type(value)
+    {
+        return Err(OcrRequestError::InvalidMimeType(value.into()));
     }
     let mime_type = mime_type
         .map(str::to_string)
-        .or_else(|| file_name.and_then(mime_type_for_name).map(str::to_string))
+        .or_else(|| file_name.map(|name| mime_type_for_name(name).to_string()))
         .unwrap_or_else(|| "application/octet-stream".into());
     let source = format!("data:{mime_type};base64,{}", STANDARD.encode(bytes));
-    let (kind, field) = if mime_type.starts_with("image/") {
-        ("image_url", "image_url")
+    Ok(if mime_type.starts_with("image/") {
+        OcrDocument::ImageUrl {
+            image_url: source,
+            extra_fields: Map::new(),
+        }
     } else {
-        ("document_url", "document_url")
-    };
-    Ok(Value::Object(Map::from_iter([
-        ("type".into(), Value::String(kind.into())),
-        (field.into(), Value::String(source)),
-    ])))
+        OcrDocument::DocumentUrl {
+            document_url: source,
+            extra_fields: Map::new(),
+        }
+    })
 }
 
 fn valid_mime_type(value: &str) -> bool {
@@ -48,22 +50,39 @@ fn valid_mime_type(value: &str) -> bool {
     };
     !kind.is_empty()
         && !subtype.is_empty()
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'+' | b'-' | b'_')
+        && kind.chars().chain(subtype.chars()).all(|character| {
+            character.is_alphanumeric() || matches!(character, '.' | '+' | '-' | '_')
         })
 }
 
-fn mime_type_for_name(name: &str) -> Option<&'static str> {
-    let extension = name.rsplit_once('.')?.1;
+pub fn mime_type_for_name(name: &str) -> &'static str {
+    let extension = std::path::Path::new(name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
     match extension.to_ascii_lowercase().as_str() {
-        "pdf" => Some("application/pdf"),
-        "png" => Some("image/png"),
-        "jpg" | "jpeg" => Some("image/jpeg"),
-        "gif" => Some("image/gif"),
-        "webp" => Some("image/webp"),
-        "tiff" | "tif" => Some("image/tiff"),
-        "bmp" => Some("image/bmp"),
-        _ => None,
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "tiff" | "tif" => "image/tiff",
+        "bmp" => "image/bmp",
+        _ => mime_guess::from_path(name)
+            .first_raw()
+            .unwrap_or("application/octet-stream"),
+    }
+}
+
+pub fn upload_mime_type<'a>(file_name: Option<&str>, content_type: Option<&'a str>) -> &'a str {
+    match content_type
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+    {
+        Some(value) if !value.is_empty() && value != "application/octet-stream" => value,
+        _ => file_name
+            .map(mime_type_for_name)
+            .unwrap_or("application/octet-stream"),
     }
 }
 
@@ -176,24 +195,43 @@ mod tests {
     fn file_bytes_are_encoded_with_core_owned_mime_policy() {
         assert_eq!(
             encode_file_document(b"abc", Some("scan.png"), None).unwrap(),
-            serde_json::json!({
-                "type": "image_url",
-                "image_url": "data:image/png;base64,YWJj"
-            })
+            OcrDocument::ImageUrl {
+                image_url: "data:image/png;base64,YWJj".into(),
+                extra_fields: Map::new(),
+            }
         );
         assert_eq!(
             encode_file_document(b"abc", None, Some("application/pdf")).unwrap(),
-            serde_json::json!({
-                "type": "document_url",
-                "document_url": "data:application/pdf;base64,YWJj"
-            })
+            document("data:application/pdf;base64,YWJj")
+        );
+    }
+
+    #[test]
+    fn file_encoding_enforces_decoded_size_limit() {
+        let bytes = vec![b'a'; OCR_INLINE_MAX_BYTES + 1];
+        assert_eq!(
+            encode_file_document(&bytes, None, None),
+            Err(OcrRequestError::InlineDocumentTooLarge)
+        );
+        let document = encode_file_document(&bytes[..OCR_INLINE_MAX_BYTES], None, None).unwrap();
+        let inline = InlineDocument::parse(document.source()).unwrap().unwrap();
+        assert_eq!(
+            inline.decode(OCR_INLINE_MAX_BYTES).unwrap(),
+            bytes[..OCR_INLINE_MAX_BYTES]
         );
     }
 
     #[test]
     fn file_encoding_rejects_empty_bytes_and_invalid_explicit_mime() {
         assert!(encode_file_document(b"", None, None).is_err());
-        assert!(encode_file_document(b"abc", None, Some("text/plain;bad")).is_err());
+        for mime in [
+            "text/plain;bad",
+            "text/plain/extra",
+            " text/plain",
+            "text/plain\n",
+        ] {
+            assert!(encode_file_document(b"abc", None, Some(mime)).is_err());
+        }
     }
 
     #[test]

@@ -2,7 +2,7 @@ use serde_json::{Map, Value};
 use std::sync::Arc;
 
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyTuple};
+use pyo3::types::{PyDict, PyTuple};
 
 use litellm_core::auth::{ResolvedCredential, SecretValue};
 use litellm_core::ocr::hooks::{OcrDuringCallRequest, OcrPostCallRequest, OcrPreCallRequest};
@@ -363,22 +363,8 @@ fn extract_document(py: Python<'_>, document: &Bound<'_, PyAny>) -> PyResult<Val
     if document.get_item("type")?.extract::<String>()? != "file" {
         return from_py(document);
     }
-    let file = document.get_item("file")?;
-    let (bytes, name): (Py<PyBytes>, Option<String>) = py
-        .import("litellm.rust_bridge.ocr_lifecycle")?
-        .getattr("read_file_input")?
-        .call1((file,))?
-        .extract()?;
-    let mime_type = document
-        .get_item("mime_type")
-        .ok()
-        .and_then(|value| value.extract::<String>().ok());
-    litellm_core::ocr::encode_file_document(
-        bytes.bind(py).as_bytes(),
-        name.as_deref(),
-        mime_type.as_deref(),
-    )
-    .map_err(|error| ocr_error_to_pyerr(error.into()))
+    serde_json::to_value(super::ocr_document::file_document(py, document)?)
+        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
 }
 
 fn retained_document(

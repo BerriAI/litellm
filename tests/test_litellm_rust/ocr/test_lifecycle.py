@@ -772,3 +772,28 @@ async def test_vertex_deepseek_public_lifecycle_normalizes_before_success(ocr_se
         ocr_server.requests[0].path
         == "/v1/projects/project-1/locations/europe-west4/endpoints/openapi/chat/completions"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("limit", ["budget", "retries"])
+async def test_shared_call_limits_still_reject_before_reading_ocr_file(
+    ocr_server: RecordingServer, monkeypatch: pytest.MonkeyPatch, asynchronous: bool, limit: str
+) -> None:
+    ocr_server.expected_requests = 0
+    reads: Final = []
+
+    class File:
+        def read(self):
+            reads.append("read")
+            return b"abc"
+
+    monkeypatch.setattr(litellm, "max_budget", 1 if limit == "budget" else None)
+    monkeypatch.setattr(litellm, "_current_cost", 2)
+    monkeypatch.setattr(litellm, "num_retries_per_request", 1 if limit == "retries" else None)
+    expected: Final = litellm.BudgetExceededError if limit == "budget" else RuntimeError
+    arguments: Final = {"document": {"type": "file", "file": File()}, "metadata": {"previous_models": ["earlier"]}}
+    with pytest.raises(expected, match=r"Budget has been exceeded|Max retries per request hit"):
+        await call_aocr(ocr_server, **arguments) if asynchronous else call_ocr(ocr_server, **arguments)
+    assert reads == []
+    assert ocr_server.requests == []

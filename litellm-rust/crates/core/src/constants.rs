@@ -48,7 +48,7 @@ pub(crate) const MEDIA_CONNECT_TIMEOUT_SECS: u64 = 10;
 
 pub(crate) const OCR_HTTP_TIMEOUT_SECS: u64 = 600;
 pub(crate) const OCR_CONNECT_TIMEOUT_SECS: u64 = 10;
-pub(crate) const OCR_INLINE_MAX_BYTES: usize = 50 * 1024 * 1024;
+pub const OCR_INLINE_MAX_BYTES: usize = 50 * 1024 * 1024;
 pub(crate) const OCR_DOWNLOAD_MAX_BYTES: u64 = 50 * 1024 * 1024;
 pub(crate) const OCR_MAX_FETCH_REDIRECTS: usize = 10;
 pub(crate) const OCR_POLL_TIMEOUT_SECS: u64 = 120;

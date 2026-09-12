@@ -52,10 +52,6 @@ async def drive(execution: Execution) -> object:
         execution.close()
 
 
-class CredentialLoader(Protocol):
-    def __call__(self, kwargs: dict[str, object]) -> None: ...
-
-
 class MetadataUpdater(Protocol):
     def __call__(
         self,
@@ -97,22 +93,13 @@ def setup(
     return CallSetup(logger, prepared)
 
 
-def prepare(kwargs: Mapping[str, object], logger: Logging) -> dict[str, object]:
+def check_limits(kwargs: Mapping[str, object]) -> None:
     import litellm
-    from litellm import utils
 
-    arguments: Final = {  # mutable-ok: credential loader updates an owned kwargs dict
-        **kwargs,
-        "litellm_logging_obj": logger,
-    }
-    load_credentials: Final = cast(  # cast-ok: legacy credential loader mutates a concrete kwargs dict
-        CredentialLoader, utils.load_credentials_from_list
-    )
-    load_credentials(arguments)
     current_cost: Final = litellm._current_cost  # pyright: ignore[reportPrivateUsage]  # shared SDK budget counter has no public accessor
     if litellm.max_budget and current_cost > litellm.max_budget:
         raise litellm.BudgetExceededError(current_cost=current_cost, max_budget=litellm.max_budget)
-    metadata: Final = arguments.get("metadata")
+    metadata: Final = kwargs.get("metadata")
     if isinstance(metadata, Mapping):
         typed_metadata: Final = cast(  # cast-ok: runtime Mapping check establishes read-only metadata
             Mapping[str, object], metadata
@@ -125,7 +112,6 @@ def prepare(kwargs: Mapping[str, object], logger: Logging) -> dict[str, object]:
             >= litellm.num_retries_per_request
         ):
             raise RuntimeError("Max retries per request hit!")
-    return arguments
 
 
 def finalize(

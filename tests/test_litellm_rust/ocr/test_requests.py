@@ -6,13 +6,13 @@ import pytest
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
+from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.requests import (
     OCR_DOCUMENT,
     OCR_RESPONSE,
     call_native_aocr,
     call_native_ocr,
 )
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -456,3 +456,160 @@ async def test_native_azure_ocr_rejects_coroutine_returned_by_sync_token_provide
         coroutine.close()
     assert calls == []
     assert ocr_server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("explicit_key", [False, True])
+async def test_native_ocr_inherits_named_credentials_without_overwriting_arguments(
+    ocr_server: RecordingServer, monkeypatch: pytest.MonkeyPatch, asynchronous: bool, explicit_key: bool
+) -> None:
+    from litellm.models.credentials import CredentialItem
+
+    pages: Final = [0]
+    opaque: Final = object()
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(credential_name="other", credential_info={}, credential_values={"api_key": "wrong-key"}),
+            CredentialItem(
+                credential_name="ocr-test",
+                credential_info={},
+                credential_values={
+                    "api_key": "credential-key",
+                    "api_base": ocr_server.base_url,
+                    "pages": pages,
+                    "opaque": opaque,
+                },
+            ),
+            CredentialItem(credential_name="ocr-test", credential_info={}, credential_values={"api_key": "later-key"}),
+        ],
+    )
+
+    class Observer(RecordingLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            super().log_pre_api_call(model, messages, kwargs)
+            pages.append(2)
+
+    arguments: Final = {
+        "model": "mistral/mistral-ocr-latest",
+        "document": OCR_DOCUMENT,
+        "litellm_credential_name": "ocr-test",
+        "callbacks": [Observer()],
+        **({"api_key": "explicit-key"} if explicit_key else {}),
+    }
+    response: Final = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
+    assert response.pages[0].markdown == "native OCR response"
+    assert (
+        ocr_server.requests[0].headers["authorization"]
+        == f"Bearer {'explicit-key' if explicit_key else 'credential-key'}"
+    )
+    assert ocr_server.requests[0].body["pages"] == [0, 2]
+
+
+@pytest.mark.parametrize("source", ["sdk", "proxy"])
+@pytest.mark.parametrize(
+    "filename,mime", [("scan.PNG", "image/png"), ("document.pdf", "application/pdf"), ("note.txt", "text/plain")]
+)
+def test_ocr_file_helpers_use_native_document_preparation(source: str, filename: str, mime: str) -> None:
+    from io import BytesIO
+
+    from litellm.ocr.input import convert_file_document_to_url_document, get_mime_type
+    from litellm.proxy.ocr_endpoints.endpoints import _build_document_from_upload
+
+    file: Final = BytesIO(b"abc")
+    file.name = filename
+    document: Final = (
+        convert_file_document_to_url_document({"type": "file", "file": file})
+        if source == "sdk"
+        else _build_document_from_upload(b"abc", filename, "application/octet-stream; charset=utf-8")
+    )
+    field: Final = "image_url" if mime.startswith("image/") else "document_url"
+    assert get_mime_type(filename) == mime
+    assert document == {"type": field, field: f"data:{mime};base64,YWJj"}
+
+
+@pytest.mark.parametrize("attribute", ["read", "name"])
+def test_native_file_preparation_preserves_property_errors(attribute: str) -> None:
+    from litellm.ocr.input import convert_file_document_to_url_document
+
+    failure: Final = LookupError("file property failed")
+
+    class File:
+        def __getattribute__(self, name: str):
+            if name == attribute:
+                raise failure
+            return super().__getattribute__(name)
+
+        def read(self):
+            return b"abc"
+
+    with pytest.raises(LookupError) as caught:
+        convert_file_document_to_url_document({"type": "file", "file": File()})
+    assert caught.value is failure
+
+
+@pytest.mark.parametrize("kind", ["bytes", "path", "reader"])
+def test_native_file_preparation_rejects_oversized_input(kind: str, tmp_path: Path) -> None:
+    from litellm.ocr.input import FileDocument, convert_file_document_to_url_document, get_max_file_bytes
+
+    limit: Final = get_max_file_bytes()
+    path: Final = tmp_path / "large.pdf"
+    with path.open("wb") as stream:
+        stream.truncate(limit + 1)
+
+    class Reader:
+        def read(self) -> bytes:
+            return b"a" * (limit + 1)
+
+    document: Final[FileDocument] = {
+        "type": "file",
+        "file": path if kind == "path" else Reader() if kind == "reader" else b"a" * (limit + 1),
+    }
+    with pytest.raises(ValueError, match="exceeds the size limit"):
+        convert_file_document_to_url_document(document)
+
+
+@pytest.mark.parametrize("kind", ["str", "path", "reader"])
+def test_native_upload_binding_rejects_filesystem_inputs(kind: str, tmp_path: Path) -> None:
+    from io import BytesIO
+    from typing import cast  # noqa: TID251  # deliberately invalid inputs exercise the native runtime boundary
+
+    from litellm.ocr.input import convert_upload_to_url_document
+
+    path: Final = tmp_path / "secret.pdf"
+    path.write_bytes(b"server secret")
+    source: Final = str(path) if kind == "str" else path if kind == "path" else BytesIO(b"abc")
+    with pytest.raises(TypeError):
+        convert_upload_to_url_document(cast(bytes, source), "document.pdf", None)
+
+
+@pytest.mark.parametrize("extra_bytes", [0, 1])
+def test_native_upload_enforces_file_size_limit(extra_bytes: int) -> None:
+    import base64
+
+    from litellm.ocr.input import convert_upload_to_url_document, get_max_file_bytes
+
+    content: Final = b"a" * (get_max_file_bytes() + extra_bytes)
+    if extra_bytes:
+        with pytest.raises(ValueError, match="exceeds the size limit"):
+            convert_upload_to_url_document(content, "scan.pdf", None)
+        return
+    document: Final = convert_upload_to_url_document(content, "scan.pdf", None)
+    assert document["type"] == "document_url"
+    assert base64.b64decode(document["document_url"].split(",", 1)[1]) == content
+
+
+def test_native_file_preparation_preserves_reader_exception() -> None:
+    from litellm.ocr.input import convert_file_document_to_url_document
+
+    failure: Final = RuntimeError("reader failed")
+
+    class Reader:
+        def read(self) -> bytes:
+            raise failure
+
+    with pytest.raises(RuntimeError) as caught:
+        convert_file_document_to_url_document({"type": "file", "file": Reader()})
+    assert caught.value is failure

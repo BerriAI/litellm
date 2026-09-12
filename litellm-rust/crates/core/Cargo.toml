@@ -6,10 +6,6 @@ license.workspace = true
 repository.workspace = true
 autotests = false
 
-[[test]]
-name = "workspace_crate_allowlist"
-path = "tests/workspace_crate_allowlist.rs"
-
 [dependencies]
 base64.workspace = true
 azure_core.workspace = true
@@ -17,6 +13,7 @@ azure_identity.workspace = true
 data-url = "0.3.2"
 gcp_auth.workspace = true
 moka.workspace = true
+mime_guess = "2.0.5"
 rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true

@@ -4,6 +4,10 @@ use crate::error::TransportError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum OcrRequestError {
+    #[error("File is empty or could not be read")]
+    EmptyFile,
+    #[error("Invalid MIME type: {0}")]
+    InvalidMimeType(String),
     #[error(
         "Cohere Parse only accepts `image_url` documents; document_url and PDF inputs are not supported"
     )]
