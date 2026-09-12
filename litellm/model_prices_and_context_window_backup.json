@@ -59098,9 +59098,9 @@
         "litellm_provider": "wandb",
         "mode": "chat",
         "supports_reasoning": true,
-        "input_cost_per_token": 0.00000131,
-        "output_cost_per_token": 0.00000396,
-        "cache_read_input_token_cost": 0.000000044,
+        "input_cost_per_token": 1.31e-06,
+        "output_cost_per_token": 3.96e-06,
+        "cache_read_input_token_cost": 4.4e-08,
         "supports_prompt_caching": true,
         "source": "https://wandb.ai/site/pricing/tokens/"
     },
@@ -59108,9 +59108,9 @@
         "litellm_provider": "wandb",
         "mode": "chat",
         "supports_reasoning": true,
-        "input_cost_per_token": 0.0000001,
-        "output_cost_per_token": 0.00000015,
-        "cache_read_input_token_cost": 0.00000005,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 1.5e-07,
+        "cache_read_input_token_cost": 5e-08,
         "supports_prompt_caching": true,
         "source": "https://wandb.ai/site/pricing/tokens/"
     },
@@ -60832,12 +60832,13 @@
         "source": "https://docs.together.ai/docs/serverless-models"
     },
     "together_ai/moonshotai/Kimi-K2.6": {
-        "input_cost_per_token": 1.2e-06,
-        "output_cost_per_token": 4.5e-06,
         "cache_read_input_token_cost": 2e-07,
+        "deprecation_date": "2026-08-19",
+        "input_cost_per_token": 1.2e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 262144,
         "mode": "chat",
+        "output_cost_per_token": 4.5e-06,
         "source": "https://api.together.xyz/v1/models"
     },
     "together_ai/moonshotai/Kimi-K2.5-fp4": {
@@ -60858,20 +60859,22 @@
         "source": "https://api.together.xyz/v1/models"
     },
     "together_ai/zai-org/GLM-5": {
+        "deprecation_date": "2026-06-22",
         "input_cost_per_token": 1e-06,
-        "output_cost_per_token": 3.2e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 202752,
         "mode": "chat",
+        "output_cost_per_token": 3.2e-06,
         "source": "https://api.together.xyz/v1/models"
     },
     "together_ai/zai-org/GLM-5.1": {
-        "input_cost_per_token": 1.4e-06,
-        "output_cost_per_token": 4.4e-06,
         "cache_read_input_token_cost": 2.6e-07,
+        "deprecation_date": "2026-07-10",
+        "input_cost_per_token": 1.4e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 202752,
         "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
         "source": "https://api.together.xyz/v1/models"
     },
     "together_ai/deepseek-ai/DeepSeek-R1-0528": {
@@ -60883,27 +60886,30 @@
         "source": "https://api.together.xyz/v1/models"
     },
     "together_ai/Qwen/Qwen3-Coder-Next-FP8": {
+        "deprecation_date": "2026-05-14",
         "input_cost_per_token": 5e-07,
-        "output_cost_per_token": 1.2e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 262144,
         "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
         "source": "https://api.together.xyz/v1/models"
     },
     "together_ai/Qwen/Qwen3-VL-32B-Instruct": {
+        "deprecation_date": "2026-02-25",
         "input_cost_per_token": 5e-07,
-        "output_cost_per_token": 1.5e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 262144,
         "mode": "chat",
+        "output_cost_per_token": 1.5e-06,
         "source": "https://api.together.xyz/v1/models"
     },
     "together_ai/Qwen/Qwen3-VL-8B-Instruct": {
+        "deprecation_date": "2026-04-16",
         "input_cost_per_token": 1.8e-07,
-        "output_cost_per_token": 6.8e-07,
         "litellm_provider": "together_ai",
         "max_input_tokens": 262144,
         "mode": "chat",
+        "output_cost_per_token": 6.8e-07,
         "source": "https://api.together.xyz/v1/models"
     },
     "together_ai/mistralai/Ministral-3-14B-Instruct-2512": {
@@ -60931,11 +60937,12 @@
         "source": "https://api.together.xyz/v1/models"
     },
     "together_ai/Qwen/QwQ-32B": {
+        "deprecation_date": "2025-11-13",
         "input_cost_per_token": 1.2e-06,
-        "output_cost_per_token": 1.2e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 131072,
         "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
         "source": "https://api.together.xyz/v1/models"
     },
     "cerebras/gemma-4-31b": {
