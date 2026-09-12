@@ -6667,6 +6667,44 @@ class TestMCPServerManager:
             assert tool.inputSchema["properties"] == {"limit": {"type": "integer"}}
 
     @pytest.mark.asyncio
+    async def test_openapi_listing_ignores_overlapping_server_prefix(self):
+        from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+        server = MCPServer(
+            server_id="pet-id",
+            name="pet",
+            alias="pet",
+            transport=MCPTransport.http,
+            url=None,
+            spec_path="/spec.yaml",
+        )
+        manager = MCPServerManager()
+        manager._create_mcp_client = AsyncMock(return_value=AsyncMock())
+
+        async def _handler(**kwargs):
+            return None
+
+        with patch.dict(global_mcp_tool_registry.tools, {}, clear=True):
+            global_mcp_tool_registry.register_tool(
+                name="pet-petstore-list",
+                description="Local pet tool",
+                input_schema={"type": "object", "properties": {"limit": {"type": "integer"}}},
+                handler=_handler,
+            )
+            global_mcp_tool_registry.register_tool(
+                name="petstore-list",
+                description="Foreign petstore tool",
+                input_schema={"type": "object", "properties": {"status": {"type": "string"}}},
+                handler=_handler,
+            )
+            listed = await manager._get_tools_from_server(server=server, add_prefix=True)
+
+        assert [t.name for t in listed] == ["pet-petstore-list"]
+        tool = manager.get_listed_tool(server, "petstore-list")
+        assert tool is not None and tool.description == "Local pet tool"
+        assert tool.inputSchema["properties"] == {"limit": {"type": "integer"}}
+
+    @pytest.mark.asyncio
     async def test_get_allowed_mcp_servers_with_user_api_key_auth(self):
         """
         Test that get_allowed_mcp_servers properly receives and uses user_api_key_auth
