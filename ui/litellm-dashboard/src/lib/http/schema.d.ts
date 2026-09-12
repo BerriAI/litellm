@@ -31990,8 +31990,9 @@ export interface components {
             /**
              * Certainty
              * @default observed
+             * @enum {string}
              */
-            certainty: string;
+            certainty: "user_stated" | "observed" | "inferred";
             /** Content */
             content: string;
             /** Created At */
@@ -32003,8 +32004,9 @@ export interface components {
             /**
              * Kind
              * @default context
+             * @enum {string}
              */
-            kind: string;
+            kind: "workflow" | "decision" | "correction" | "learning" | "context" | "disagreement";
             /** Memory Id */
             memory_id: string;
             /**

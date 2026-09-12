@@ -7,6 +7,8 @@ from typing_extensions import Self
 MemoryTarget: TypeAlias = Literal["gateway", "organization", "team", "project", "user", "key"]
 MemoryScope: TypeAlias = Literal["key", "user", "team", "project", "organization"]
 MemoryActivation: TypeAlias = Literal["disabled", "opt_in", "automatic"]
+MemoryKind: TypeAlias = Literal["workflow", "decision", "correction", "learning", "context", "disagreement"]
+MemoryCertainty: TypeAlias = Literal["user_stated", "observed", "inferred"]
 
 
 class MemoryPolicyInput(BaseModel):
@@ -60,8 +62,8 @@ class MemoryCapture(BaseModel):
     expected_revision: datetime | None = None
     when_to_use: str = Field(default="", max_length=700)
     scope: str = Field(default="", max_length=200)
-    kind: Literal["workflow", "decision", "correction", "learning", "context", "disagreement"] = "context"
-    certainty: Literal["user_stated", "observed", "inferred"] = "observed"
+    kind: MemoryKind = "context"
+    certainty: MemoryCertainty = "observed"
     source: str = Field(default="", max_length=1000)
 
 
@@ -78,8 +80,8 @@ class MemoryEntry(BaseModel):
     actor: str | None = None
     when_to_use: str = ""
     scope: str = ""
-    kind: str = "context"
-    certainty: str = "observed"
+    kind: MemoryKind = "context"
+    certainty: MemoryCertainty = "observed"
     source: str = ""
 
 
@@ -103,9 +105,9 @@ class MemoryObservation(BaseModel):
     title: str = Field(min_length=3, max_length=180)
     when_to_use: str = Field(min_length=5, max_length=700)
     content: str = Field(min_length=10, max_length=6000)
-    kind: Literal["workflow", "decision", "correction", "learning", "context", "disagreement"]
+    kind: MemoryKind
     scope: str = Field(min_length=1, max_length=200)
-    certainty: Literal["user_stated", "observed", "inferred"]
+    certainty: MemoryCertainty
     evidence: str = Field(min_length=5, max_length=2000)
     source: str = Field(min_length=3, max_length=1000)
 

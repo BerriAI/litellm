@@ -29,20 +29,22 @@ def memory_entry(row: "LiteLLM_MemoryTable") -> MemoryEntry:
     )
     title: Final = metadata.get("title")
     evidence: Final = metadata.get("evidence")
-    return MemoryEntry(
-        memory_id=row.memory_id,
-        key=row.key.rsplit(":", 1)[-1],
-        title=title if isinstance(title, str) else row.key,
-        content=row.value,
-        evidence=evidence if isinstance(evidence, str) else "",
-        updated_at=row.updated_at,
-        created_at=row.created_at,
-        actor=row.created_by,
-        **{  # mutable-ok: Pydantic accepts native keyword argument dictionaries.
-            name: value
-            for name in ("when_to_use", "scope", "kind", "certainty", "source")
-            if isinstance(value := metadata.get(name), str)
-        },
+    return MemoryEntry.model_validate(
+        {  # mutable-ok: Pydantic validates stored JSON metadata and database fields together.
+            "memory_id": row.memory_id,
+            "key": row.key.rsplit(":", 1)[-1],
+            "title": title if isinstance(title, str) else row.key,
+            "content": row.value,
+            "evidence": evidence if isinstance(evidence, str) else "",
+            "updated_at": row.updated_at,
+            "created_at": row.created_at,
+            "actor": row.created_by,
+            **{  # mutable-ok: Pydantic validates these stored JSON metadata fields.
+                name: value
+                for name in ("when_to_use", "scope", "kind", "certainty", "source")
+                if isinstance(value := metadata.get(name), str)
+            },
+        }
     )
 
 
