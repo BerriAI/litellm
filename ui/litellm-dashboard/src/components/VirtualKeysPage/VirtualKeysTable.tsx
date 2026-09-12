@@ -128,7 +128,8 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
 
   const {
     data: keys,
-    isPending: isLoading,
+    isPending,
+    isPlaceholderData,
     isFetching,
     refetch,
   } = useKeys(tablePagination.pageIndex + 1, tablePagination.pageSize, keyListOptions);
@@ -280,7 +281,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
         onColumnFiltersChange={handleColumnFiltersChange}
         enableColumnResizing
         columnResizeMode="onChange"
-        isLoading={isLoading}
+        isLoading={isPending || isPlaceholderData}
         loadingMessage="Loading keys..."
         noDataMessage="No keys found"
         fillHeight
