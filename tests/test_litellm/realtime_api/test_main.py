@@ -266,7 +266,8 @@ def test_transcription_only_detection_rejects_speech_model(local_model_cost_map)
 
 
 @pytest.mark.asyncio
-async def test_azure_health_check_keeps_beta_path_for_speech_model():
+async def test_azure_health_check_probes_the_ga_upstream_for_an_unconfigured_speech_model(monkeypatch):
+    monkeypatch.delenv("LITELLM_AZURE_REALTIME_PROTOCOL", raising=False)
     connect = _CapturingConnect()
     with patch("websockets.connect", connect):
         assert await realtime_main._realtime_health_check(
@@ -276,14 +277,18 @@ async def test_azure_health_check_keeps_beta_path_for_speech_model():
             api_base="https://my-endpoint.openai.azure.com",
             api_version="2024-10-01-preview",
         )
-    assert connect.url == (
-        "wss://my-endpoint.openai.azure.com/openai/realtime"
-        "?api-version=2024-10-01-preview&deployment=gpt-4o-realtime-preview"
-    )
+    assert connect.url == "wss://my-endpoint.openai.azure.com/openai/v1/realtime?model=gpt-4o-realtime-preview"
+
+
+_AZURE_BETA_HEALTH_URL: Final = (
+    "wss://my-endpoint.openai.azure.com/openai/realtime"
+    "?api-version=2024-10-01-preview&deployment=gpt-4o-realtime-preview"
+)
 
 
 @pytest.mark.asyncio
-async def test_azure_health_check_honors_deployment_realtime_protocol():
+async def test_azure_health_check_honors_deployment_realtime_protocol(monkeypatch):
+    monkeypatch.delenv("LITELLM_AZURE_REALTIME_PROTOCOL", raising=False)
     connect = _CapturingConnect()
     with patch("websockets.connect", connect):
         assert await realtime_main._realtime_health_check(
@@ -292,9 +297,24 @@ async def test_azure_health_check_honors_deployment_realtime_protocol():
             api_key="fake-key",
             api_base="https://my-endpoint.openai.azure.com",
             api_version="2024-10-01-preview",
-            model_params={"realtime_protocol": "GA"},
+            model_params={"realtime_protocol": "beta"},
         )
-    assert connect.url == "wss://my-endpoint.openai.azure.com/openai/v1/realtime?model=gpt-4o-realtime-preview"
+    assert connect.url == _AZURE_BETA_HEALTH_URL
+
+
+@pytest.mark.asyncio
+async def test_azure_health_check_honors_env_realtime_protocol(monkeypatch):
+    monkeypatch.setenv("LITELLM_AZURE_REALTIME_PROTOCOL", "beta")
+    connect = _CapturingConnect()
+    with patch("websockets.connect", connect):
+        assert await realtime_main._realtime_health_check(
+            model="gpt-4o-realtime-preview",
+            custom_llm_provider="azure",
+            api_key="fake-key",
+            api_base="https://my-endpoint.openai.azure.com",
+            api_version="2024-10-01-preview",
+        )
+    assert connect.url == _AZURE_BETA_HEALTH_URL
 
 
 class _ConnectThatStopsAfterCapturingTheUrl:

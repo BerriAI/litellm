@@ -586,9 +586,7 @@ def _azure_realtime_health_protocol(
     configured: Final = configured_raw if isinstance(configured_raw, str) else None
     if configured is not None:
         return configured, query_params
-    if query_params is not None:
-        return "GA", query_params
-    return "beta", None
+    return "GA", query_params
 
 
 def _realtime_health_check_auth_headers(
@@ -621,8 +619,8 @@ async def _realtime_health_check(
         api_key: str - api key
         custom_llm_provider: str - custom llm provider
         realtime_protocol: Optional[str] - protocol version ("GA"/"v1" for GA path, "beta" for beta path);
-            None resolves it for Azure from model_params/env, with transcription-only models probing GA
-            plus intent=transcription the way real calls do
+            None resolves it for Azure from model_params/env and otherwise probes GA, the upstream a client
+            without the OpenAI-Beta header is bridged to, with transcription-only models adding intent=transcription
 
     Returns:
         bool - True if connection is successful, False otherwise
