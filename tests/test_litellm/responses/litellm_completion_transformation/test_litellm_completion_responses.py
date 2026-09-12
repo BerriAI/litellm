@@ -4246,3 +4246,65 @@ class TestStreamingSnapshotItemIds:
         reasoning_items = _bridged_output_items(completed_event.response, "reasoning")
         assert len(reasoning_items) == 1
         assert reasoning_items[0].id == streamed_event.item_id
+
+
+def test_transform_chat_completion_response_incomplete_details():
+    from openai.types.responses.response import IncompleteDetails
+
+    resp_length = ModelResponse(
+        id="resp-length",
+        choices=[Choices(index=0, finish_reason="length", message=Message(content="cutoff", role="assistant"))],
+        model="gpt-4o",
+    )
+    result_length = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={},
+        chat_completion_response=resp_length,
+    )
+    assert result_length.status == "incomplete"
+    assert result_length.incomplete_details is not None
+    assert result_length.incomplete_details.reason == "max_output_tokens"
+
+    resp_filter = ModelResponse(
+        id="resp-filter",
+        choices=[Choices(index=0, finish_reason="content_filter", message=Message(content=None, role="assistant"))],
+        model="gpt-4o",
+    )
+    result_filter = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={},
+        chat_completion_response=resp_filter,
+    )
+    assert result_filter.status == "incomplete"
+    assert result_filter.incomplete_details is not None
+    assert result_filter.incomplete_details.reason == "content_filter"
+
+    resp_refusal = ModelResponse(
+        id="resp-refusal",
+        choices=[Choices(index=0, finish_reason="refusal", message=Message(content=None, role="assistant"))],
+        model="gpt-4o",
+    )
+    result_refusal = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={},
+        chat_completion_response=resp_refusal,
+    )
+    assert result_refusal.status == "incomplete"
+    assert result_refusal.incomplete_details is not None
+    assert result_refusal.incomplete_details.reason == "content_filter"
+
+    existing_details = IncompleteDetails(reason="content_filter")
+    resp_existing = ModelResponse(
+        id="resp-existing",
+        choices=[Choices(index=0, finish_reason="length", message=Message(content="cutoff", role="assistant"))],
+        model="gpt-4o",
+    )
+    resp_existing.incomplete_details = existing_details
+    result_existing = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={},
+        chat_completion_response=resp_existing,
+    )
+    assert result_existing.status == "incomplete"
+    assert result_existing.incomplete_details == existing_details
+
