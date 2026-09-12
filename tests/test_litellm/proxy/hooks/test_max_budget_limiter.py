@@ -272,6 +272,40 @@ async def test_async_log_success_event_uses_requested_model_budget():
 
 
 @pytest.mark.asyncio
+async def test_async_log_success_event_reads_requested_model_from_litellm_metadata():
+    cache = DualCache()
+    handler = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=cache)
+
+    await handler.async_log_success_event(
+        kwargs={
+            "standard_logging_object": {
+                "model_group": "claude-haiku-4-5-20251001",
+                "model": "anthropic/claude-haiku-4-5-20251001",
+                "response_cost": 5.5e-05,
+                "metadata": {"user_api_key_hash": "hash-1"},
+            },
+            "litellm_params": {
+                "metadata": {"trace": "x"},
+                "litellm_metadata": {
+                    "user_api_key_model_max_budget": {
+                        "claude-haiku-4-5": {
+                            "budget_limit": 1e-4,
+                            "time_period": "1h",
+                        }
+                    },
+                    "litellm_client_requested_model": "claude-haiku-4-5",
+                },
+            },
+        },
+        response_obj=None,
+        start_time=0,
+        end_time=0,
+    )
+
+    assert cache.in_memory_cache.cache_dict["virtual_key_spend:hash-1:claude-haiku-4-5:1h"] == 5.5e-05
+
+
+@pytest.mark.asyncio
 async def test_get_fallback_model_within_budget_uses_alias_budget_fallbacks():
     handler = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
     user_api_key_dict = UserAPIKeyAuth(

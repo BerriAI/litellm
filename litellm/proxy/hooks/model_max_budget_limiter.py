@@ -9,6 +9,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import Span
+from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
@@ -465,7 +466,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             return
 
         _litellm_params: Final[dict] = kwargs.get("litellm_params", {}) or {}
-        _metadata: Final[dict] = _litellm_params.get("metadata", {}) or {}
+        _metadata: Final[dict] = get_litellm_metadata_from_kwargs(kwargs) or {}
         payload_metadata: Final = standard_logging_payload.get("metadata") or {}
 
         model: Final = standard_logging_payload.get("model_group") or standard_logging_payload.get("model")
