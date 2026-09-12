@@ -1485,13 +1485,13 @@ def _original_inputs_for(
 ) -> dict | None:  # mutable-ok: matches _process_response(original_inputs=) signature
     """Baseline the hook's return value is compared against to decide "allow" vs "mask".
 
-    ``apply_guardrail`` masks a fresh ``inputs`` dict, so that dict is the baseline. Pre-call
-    hooks edit the request in place and return it, so the baseline is a deep copy of the
-    prompt-bearing keys taken before the hook runs.
+    Hooks may edit their argument in place and return it, so the baseline is always a deep
+    copy taken before the hook runs: the whole ``inputs`` dict for ``apply_guardrail``, the
+    prompt-bearing request keys for pre-call hooks.
     """
     if func_name == "apply_guardrail":
         inputs: Final = kwargs.get("inputs")
-        return inputs if isinstance(inputs, dict) else None
+        return copy.deepcopy(inputs) if isinstance(inputs, dict) else None
     if event_type != GuardrailEventHooks.pre_call:
         return None
     return {key: copy.deepcopy(value) for key, value in request_data.items() if key in _PRE_CALL_CONTENT_KEYS}

@@ -3055,3 +3055,23 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
         )
 
         assert self._logged_response(data) == "mask"
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_masking_inputs_in_place_logs_mask(self):
+        class InPlaceMaskingGuardrail(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: Optional["LiteLLMLoggingObj"] = None,
+            ) -> GenericGuardrailAPIInputs:
+                inputs["texts"] = ["<REDACTED>"]
+                return inputs
+
+        data = self._request()
+        await InPlaceMaskingGuardrail(guardrail_name="g").apply_guardrail(
+            inputs={"texts": ["SECRET_PROMPT"]}, request_data=data, input_type="request"
+        )
+
+        assert self._logged_response(data) == "mask"
