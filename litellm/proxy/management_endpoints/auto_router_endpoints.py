@@ -32,11 +32,15 @@ from litellm.proxy.auth.auth_checks import (
     can_key_call_resolved_model,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.db.autorouter_session_rollup import AUTOROUTER_BENCHMARKS_SQL
+from litellm.proxy.db.autorouter_session_rollup import (
+    AUTOROUTER_BENCHMARKS_SQL,
+    bounded_session_id,
+)
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     refresh_proxy_server_request_body_snapshot,
 )
+from litellm.repositories.autorouter_session_repository import AutoRouterSessionRepository
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router_strategy.complexity_router import ComplexityRouter
@@ -54,6 +58,7 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterCacheStats,
     AutoRouterRoutingTestRequest,
     AutoRouterRoutingTestResponse,
+    AutoRouterSessionResponse,
     ComplexityRouterConfigValidationRequest,
     ComplexityRouterConfigValidationResponse,
     RequestComplexityRouterConfig,
@@ -701,6 +706,51 @@ async def get_auto_router_benchmarks(
         routers_in_scope=len(groups),
         totals=_benchmark_totals(_summed_agg_row(rows)),
         groups=groups,
+    )
+
+
+@router.get(
+    "/auto_router/session",
+    tags=("auto router",),
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=AutoRouterSessionResponse,
+)
+async def get_auto_router_session(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    session_id: Annotated[
+        str, Query(description="The client session id (x-*-session-id header) the turns were sent under")
+    ],
+) -> AutoRouterSessionResponse:
+    """
+    One auto-routed session, for the key that ran it: the model its last turn was routed to and the
+    session's spend against the router's savings baseline. Built for a coding agent's status line
+    or stop hook, so any virtual key may call it and only ever sees rows written under its own
+    key hash. Reads the LiteLLM_AutoRouterSession rollup, which the asynchronous spend flush
+    fills a moment after each turn; a session with no flushed auto-routed turn yet is a 404. The
+    id is bounded the way the writer bounded it, so an oversized client id still finds its row.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+    row: Final = await AutoRouterSessionRepository(prisma_client).find_latest_for_key(
+        user_api_key_dict.api_key, bounded_session_id(session_id)
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=404, detail=f"No auto-routed turns recorded for session {session_id!r} under this key"
+        )
+    return AutoRouterSessionResponse(
+        session_id=session_id,
+        router_name=row.router_name,
+        router_type=row.router_type,
+        turns=row.turns,
+        last_model=row.last_model,
+        spend=row.spend,
+        saved_spend=row.saved_spend,
+        baseline_spend=row.spend + row.saved_spend,
+        baseline_model=row.baseline_model,
+        baseline_models=row.baseline_models,
     )
 
 

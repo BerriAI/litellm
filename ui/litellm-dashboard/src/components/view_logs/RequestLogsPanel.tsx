@@ -209,15 +209,14 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         setPagination({ ...requested, pageIndex: 0 });
         return;
       }
-      if (requested.pageIndex <= pagination.pageIndex) {
+      if (requested.pageIndex !== pagination.pageIndex + 1) {
         setPagination(requested);
         return;
       }
       const nextCursor = filteredLogs.next_session_cursor;
       if (!nextCursor || logsQuery.isPlaceholderData) return;
-      const nextPageIndex = pagination.pageIndex + 1;
-      setSessionCursors((previous) => ({ ...previous, [nextPageIndex]: nextCursor }));
-      setPagination({ ...requested, pageIndex: nextPageIndex });
+      setSessionCursors((previous) => ({ ...previous, [requested.pageIndex]: nextCursor }));
+      setPagination(requested);
     },
     [usesSessionCursor, pagination, filteredLogs.next_session_cursor, logsQuery.isPlaceholderData],
   );

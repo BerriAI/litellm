@@ -25,6 +25,7 @@ DATABASE_PASSWORD="${E2E_DATABASE_PASSWORD:-dbpassword9090}"
 DATABASE_NAME="${E2E_DATABASE_NAME:-litellm}"
 JAEGER_OTLP_PORT="${E2E_JAEGER_OTLP_PORT:-4318}"
 JAEGER_QUERY_PORT="${E2E_JAEGER_QUERY_PORT:-16686}"
+KEYCLOAK_PORT="${E2E_KEYCLOAK_PORT:-8081}"
 
 MASTER_KEY="${LITELLM_MASTER_KEY:-sk-e2e-$(openssl rand -hex 16)}"
 
@@ -124,6 +125,9 @@ SERVER_ENV=(
   "OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:${JAEGER_OTLP_PORT}"
   "SSL_CERT_FILE=${CERTS_DIR}/ca-bundle.pem"
   "PYTHONPATH=${REPO_ROOT}"
+  "JWT_PUBLIC_KEY_URL=http://127.0.0.1:${KEYCLOAK_PORT}/realms/litellm-e2e/protocol/openid-connect/certs"
+  "JWT_ISSUER=http://127.0.0.1:${KEYCLOAK_PORT}/realms/litellm-e2e"
+  "JWT_AUDIENCE=litellm-e2e"
 )
 if [[ -n "${VERTEXAI_CREDENTIALS:-}" ]]; then
   printf '%s' "${VERTEXAI_CREDENTIALS}" > "${STACK_DIR}/vertex-adc.json"
@@ -131,6 +135,8 @@ if [[ -n "${VERTEXAI_CREDENTIALS:-}" ]]; then
 fi
 
 cd "${REPO_ROOT}"
+
+env "${SERVER_ENV[@]}" "E2E_KEYCLOAK_PORT=${KEYCLOAK_PORT}" bash .github/e2e-stack/start-idp.sh
 
 log "running migrations"
 env "${SERVER_ENV[@]}" uv run --no-sync python migrations/run.py >"${LOGS_DIR}/migrations.log" 2>&1
@@ -200,6 +206,9 @@ LITELLM_MASTER_KEY=${MASTER_KEY}
 REDIS_HOST=127.0.0.1
 REDIS_PORT=${REDIS_PORT}
 E2E_OTEL_QUERY_URL=http://127.0.0.1:${JAEGER_QUERY_PORT}
+E2E_KEYCLOAK_URL=http://127.0.0.1:${KEYCLOAK_PORT}
+E2E_KEYCLOAK_ADMIN_USER=admin
+E2E_KEYCLOAK_ADMIN_PASSWORD=e2e-ephemeral-idp-not-a-secret
 SSL_CERT_FILE=${CERTS_DIR}/ca-bundle.pem
 DATABASE_URL=postgresql://${DATABASE_USER}:${DATABASE_PASSWORD}@${DATABASE_HOST}:${DATABASE_PORT}/${DATABASE_NAME}
 EOF

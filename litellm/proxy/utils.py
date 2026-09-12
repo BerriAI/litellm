@@ -121,6 +121,11 @@ from litellm.proxy.db.create_views import (
     should_create_missing_views,
 )
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.db_url_settings import (
+    DatabaseURLSettings,
+    add_missing_query_params,
+    token_refresh_params_from_url,
+)
 from litellm.proxy.db.exception_handler import (
     PrismaDBExceptionHandler,
     call_with_db_reconnect_retry,
@@ -877,9 +882,10 @@ _EMPTY_LIFT: Final = MappingProxyType({})
 def _failure_fields_to_lift(request_data: Mapping[str, object]) -> Mapping[str, object]:
     """Failure-path callbacks run after ``litellm_logging_obj`` is popped from
     request_data (it is not serialisable), so the caller merges these fields
-    onto request_data first: the first-handoff instant for preprocessing
-    latency, recovered or estimated usage for token counts, and the standard
-    logging object for deployment attribution on failed-request spend logs."""
+    onto request_data first: the request start and first-handoff instants for
+    duration and preprocessing latency, the call type, recovered or estimated
+    usage for token counts, and the standard logging object for deployment
+    attribution on failed-request spend logs."""
     _logging_obj: Final = request_data.get("litellm_logging_obj")
     if _logging_obj is None:
         return _EMPTY_LIFT
@@ -891,7 +897,9 @@ def _failure_fields_to_lift(request_data: Mapping[str, object]) -> Mapping[str, 
         dispatched=_first_handoff is not None,
     )
     _entries: Final = (
+        ("start_time", _model_call_details.get("start_time")),
         ("first_api_call_start_time", _first_handoff),
+        ("call_type", _model_call_details.get("call_type")),
         ("combined_usage_object", None if _usage_to_lift is None else _usage_to_lift[0]),
         ("response_cost", None if _usage_to_lift is None else (_usage_to_lift[1] or 0.0)),
         ("standard_logging_object", _model_call_details.get("standard_logging_object")),
@@ -4051,7 +4059,10 @@ class PrismaClient:
                 # loop and times out after 30s.
                 if token_auth is not None and reader_iam_endpoint is not None:
                     reader_token: Final = mint_database_token(token_auth, reader_iam_endpoint)
-                    read_replica_url = reader_iam_endpoint.build_url(reader_token)
+                    read_replica_url = add_missing_query_params(
+                        reader_iam_endpoint.build_url(reader_token),
+                        token_refresh_params_from_url(read_replica_url),
+                    )
                     os.environ["DATABASE_URL_READ_REPLICA"] = read_replica_url
                 reader_kwargs: Final[dict[str, Any]] = {"datasource": {"url": read_replica_url}}
                 if http_client is not None:
@@ -7804,7 +7815,7 @@ def construct_database_url_from_env_vars() -> str | None:
         if database_schema:
             database_url += f"?schema={database_schema}"
 
-        return database_url
+        return add_missing_query_params(database_url, DatabaseURLSettings.from_env().tls_params())
 
     return None
 

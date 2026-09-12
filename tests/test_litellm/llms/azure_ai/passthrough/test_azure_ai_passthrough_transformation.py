@@ -608,9 +608,11 @@ async def test_streaming_responses_relay_flush_reaches_the_success_callbacks_wit
     )
     stream = "event: response.completed\ndata: " + json.dumps(RESPONSES_COMPLETED_EVENT) + "\n\n"
 
-    await logging_obj.async_flush_passthrough_collected_chunks(
-        raw_bytes=[stream.encode()], provider_config=AzureAIPassthroughConfig()
+    collector = AzureAIPassthroughConfig().create_stream_collector(
+        model="gpt-5.4-mini", custom_llm_provider="azure_ai", endpoint="gpt/openai/responses"
     )
+    collector.add(stream.encode())
+    await logging_obj.async_flush_passthrough_collected_chunks(collector=collector)
     info = litellm.get_model_info("azure_ai/gpt-5.4-mini")
 
     assert probe.logged_call_type == "allm_passthrough_route"

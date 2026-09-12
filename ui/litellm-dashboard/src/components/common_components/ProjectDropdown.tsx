@@ -4,8 +4,8 @@ import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 
 interface ProjectDropdownProps {
   projects?: ProjectResponse[] | null;
-  value?: string;
-  onChange?: (value: string) => void;
+  value?: string | null;
+  onChange?: (value: string | null) => void;
   disabled?: boolean;
   loading?: boolean;
   /** When set, only show projects belonging to this team */

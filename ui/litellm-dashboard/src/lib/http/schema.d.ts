@@ -21,6 +21,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/.well-known/agent-skills/index.json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Agent Skills Index
+         * @description Agent Skills v0.2.0 discovery index over every skill stored on this proxy.
+         */
+        get: operations["agent_skills_index__well_known_agent_skills_index_json_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/.well-known/jwks.json": {
         parameters: {
             query?: never;
@@ -207,17 +227,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Oauth Protected Resource Mcp
-         * @description OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.
-         *
-         *     Legacy pattern: /{server_name}/mcp
-         *     Discovery path: /.well-known/oauth-protected-resource/{server_name}/mcp
-         *
-         *     This endpoint is kept for backward compatibility. New integrations should
-         *     use the standard MCP pattern (/mcp/{server_name}) instead.
-         */
-        get: operations["oauth_protected_resource_mcp__well_known_oauth_protected_resource_get"];
+        /** Oauth Protected Resource Root */
+        get: operations["oauth_protected_resource_root__well_known_oauth_protected_resource_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -311,6 +322,26 @@ export interface paths {
         };
         /** Openid Configuration */
         get: operations["openid_configuration__well_known_openid_configuration_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/.well-known/skills/index.json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Agent Skills Index
+         * @description Agent Skills v0.2.0 discovery index over every skill stored on this proxy.
+         */
+        get: operations["agent_skills_index__well_known_skills_index_json_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1186,6 +1217,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/authorize/mcp-session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Authorize Mcp Session */
+        get: operations["authorize_mcp_session_authorize_mcp_session_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auto_router/benchmarks": {
         parameters: {
             query?: never;
@@ -1236,6 +1284,31 @@ export interface paths {
          * @description Get the system prompt an auto-router's LLM classifier sends for an edited tier set
          */
         post: operations["preview_auto_router_classifier_prompt_auto_router_classifier_default_prompt_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto_router/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Auto Router Session
+         * @description One auto-routed session, for the key that ran it: the model its last turn was routed to and the
+         *     session's spend against the router's savings baseline. Built for a coding agent's status line
+         *     or stop hook, so any virtual key may call it and only ever sees rows written under its own
+         *     key hash. Reads the LiteLLM_AutoRouterSession rollup, which the asynchronous spend flush
+         *     fills a moment after each turn; a session with no flushed auto-routed turn yet is a 404. The
+         *     id is bounded the way the writer bounded it, so an oversized client id still finds its row.
+         */
+        get: operations["get_auto_router_session_auto_router_session_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4136,6 +4209,7 @@ export interface paths {
          *
          *     Returns:
          *     - worker_pid: Process ID
+         *     - hostname: Host (the pod on Kubernetes) the worker runs on
          *     - status: Overall health based on memory usage
          *     - memory: Process memory usage and RAM info
          *     - caches: Cache item counts and descriptions
@@ -8055,6 +8129,7 @@ export interface paths {
          *     - user_id: Optional[str] - User ID associated with key
          *     - team_id: Optional[str] - Team ID associated with key
          *     - agent_id: Optional[str] - The agent id associated with the key.
+         *     - project_id: Optional[str] - Omit to retain the project, or send null to detach. A different project ID is rejected.
          *     - organization_id: Optional[str] - The organization id of the key.
          *     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
          *     - models: Optional[list] - Model_name's a user is allowed to call
@@ -9547,26 +9622,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/openai/": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * WebSocket: openai_websocket_proxy_route
-         * @description WebSocket connection endpoint
-         */
-        get: operations["websocket_openai_websocket_proxy_route_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/openai/deployments/{model}/chat/completions": {
         parameters: {
             query?: never;
@@ -10122,26 +10177,6 @@ export interface paths {
         patch: operations["openai_proxy_route_openai__endpoint__patch"];
         trace?: never;
     };
-    "/openai_passthrough/": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * WebSocket: openai_websocket_proxy_route
-         * @description WebSocket connection endpoint
-         */
-        get: operations["websocket_openai_websocket_proxy_route_get_2"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/openai_passthrough/{endpoint}": {
         parameters: {
             query?: never;
@@ -10150,132 +10185,72 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Openai Proxy Route
-         * @description Pass-through endpoint for OpenAI API calls.
-         *
-         *     Available on both routes:
-         *     - /openai/{endpoint:path} - Standard OpenAI passthrough route
-         *     - /openai_passthrough/{endpoint:path} - Dedicated passthrough route (recommended for Responses API)
-         *
-         *     Use /openai_passthrough/* when you need guaranteed passthrough to OpenAI without conflicts
-         *     with LiteLLM's native implementations (e.g., for the Responses API at /v1/responses).
+         * Openai Passthrough Route
+         * @description Dedicated pass-through to the OpenAI API with no overlap with LiteLLM's native
+         *     implementations (e.g. the Responses API at /v1/responses).
          *
          *     Examples:
-         *         Standard route:
-         *         - /openai/v1/chat/completions
-         *         - /openai/v1/assistants
-         *         - /openai/v1/threads
-         *
-         *         Dedicated passthrough (for Responses API):
          *         - /openai_passthrough/v1/responses
          *         - /openai_passthrough/v1/responses/{response_id}
          *         - /openai_passthrough/v1/responses/{response_id}/input_items
          *
          *     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
          */
-        get: operations["openai_proxy_route_openai_passthrough__endpoint__get"];
+        get: operations["openai_passthrough_route_openai_passthrough__endpoint__get"];
         /**
-         * Openai Proxy Route
-         * @description Pass-through endpoint for OpenAI API calls.
-         *
-         *     Available on both routes:
-         *     - /openai/{endpoint:path} - Standard OpenAI passthrough route
-         *     - /openai_passthrough/{endpoint:path} - Dedicated passthrough route (recommended for Responses API)
-         *
-         *     Use /openai_passthrough/* when you need guaranteed passthrough to OpenAI without conflicts
-         *     with LiteLLM's native implementations (e.g., for the Responses API at /v1/responses).
+         * Openai Passthrough Route
+         * @description Dedicated pass-through to the OpenAI API with no overlap with LiteLLM's native
+         *     implementations (e.g. the Responses API at /v1/responses).
          *
          *     Examples:
-         *         Standard route:
-         *         - /openai/v1/chat/completions
-         *         - /openai/v1/assistants
-         *         - /openai/v1/threads
-         *
-         *         Dedicated passthrough (for Responses API):
          *         - /openai_passthrough/v1/responses
          *         - /openai_passthrough/v1/responses/{response_id}
          *         - /openai_passthrough/v1/responses/{response_id}/input_items
          *
          *     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
          */
-        put: operations["openai_proxy_route_openai_passthrough__endpoint__put"];
+        put: operations["openai_passthrough_route_openai_passthrough__endpoint__put"];
         /**
-         * Openai Proxy Route
-         * @description Pass-through endpoint for OpenAI API calls.
-         *
-         *     Available on both routes:
-         *     - /openai/{endpoint:path} - Standard OpenAI passthrough route
-         *     - /openai_passthrough/{endpoint:path} - Dedicated passthrough route (recommended for Responses API)
-         *
-         *     Use /openai_passthrough/* when you need guaranteed passthrough to OpenAI without conflicts
-         *     with LiteLLM's native implementations (e.g., for the Responses API at /v1/responses).
+         * Openai Passthrough Route
+         * @description Dedicated pass-through to the OpenAI API with no overlap with LiteLLM's native
+         *     implementations (e.g. the Responses API at /v1/responses).
          *
          *     Examples:
-         *         Standard route:
-         *         - /openai/v1/chat/completions
-         *         - /openai/v1/assistants
-         *         - /openai/v1/threads
-         *
-         *         Dedicated passthrough (for Responses API):
          *         - /openai_passthrough/v1/responses
          *         - /openai_passthrough/v1/responses/{response_id}
          *         - /openai_passthrough/v1/responses/{response_id}/input_items
          *
          *     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
          */
-        post: operations["openai_proxy_route_openai_passthrough__endpoint__post"];
+        post: operations["openai_passthrough_route_openai_passthrough__endpoint__post"];
         /**
-         * Openai Proxy Route
-         * @description Pass-through endpoint for OpenAI API calls.
-         *
-         *     Available on both routes:
-         *     - /openai/{endpoint:path} - Standard OpenAI passthrough route
-         *     - /openai_passthrough/{endpoint:path} - Dedicated passthrough route (recommended for Responses API)
-         *
-         *     Use /openai_passthrough/* when you need guaranteed passthrough to OpenAI without conflicts
-         *     with LiteLLM's native implementations (e.g., for the Responses API at /v1/responses).
+         * Openai Passthrough Route
+         * @description Dedicated pass-through to the OpenAI API with no overlap with LiteLLM's native
+         *     implementations (e.g. the Responses API at /v1/responses).
          *
          *     Examples:
-         *         Standard route:
-         *         - /openai/v1/chat/completions
-         *         - /openai/v1/assistants
-         *         - /openai/v1/threads
-         *
-         *         Dedicated passthrough (for Responses API):
          *         - /openai_passthrough/v1/responses
          *         - /openai_passthrough/v1/responses/{response_id}
          *         - /openai_passthrough/v1/responses/{response_id}/input_items
          *
          *     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
          */
-        delete: operations["openai_proxy_route_openai_passthrough__endpoint__delete"];
+        delete: operations["openai_passthrough_route_openai_passthrough__endpoint__delete"];
         options?: never;
         head?: never;
         /**
-         * Openai Proxy Route
-         * @description Pass-through endpoint for OpenAI API calls.
-         *
-         *     Available on both routes:
-         *     - /openai/{endpoint:path} - Standard OpenAI passthrough route
-         *     - /openai_passthrough/{endpoint:path} - Dedicated passthrough route (recommended for Responses API)
-         *
-         *     Use /openai_passthrough/* when you need guaranteed passthrough to OpenAI without conflicts
-         *     with LiteLLM's native implementations (e.g., for the Responses API at /v1/responses).
+         * Openai Passthrough Route
+         * @description Dedicated pass-through to the OpenAI API with no overlap with LiteLLM's native
+         *     implementations (e.g. the Responses API at /v1/responses).
          *
          *     Examples:
-         *         Standard route:
-         *         - /openai/v1/chat/completions
-         *         - /openai/v1/assistants
-         *         - /openai/v1/threads
-         *
-         *         Dedicated passthrough (for Responses API):
          *         - /openai_passthrough/v1/responses
          *         - /openai_passthrough/v1/responses/{response_id}
          *         - /openai_passthrough/v1/responses/{response_id}/input_items
          *
          *     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
          */
-        patch: operations["openai_proxy_route_openai_passthrough__endpoint__patch"];
+        patch: operations["openai_passthrough_route_openai_passthrough__endpoint__patch"];
         trace?: never;
     };
     "/organization/daily/activity": {
@@ -20047,6 +20022,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/skills/{skill_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Agent Skills Archive
+         * @description Stored skill upload, repacked so SKILL.md sits at the archive root.
+         */
+        get: operations["agent_skills_archive_v1_skills__skill_id__archive_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/threads": {
         parameters: {
             query?: never;
@@ -21891,52 +21886,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/vertex-ai/{endpoint}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Vertex Proxy Route
-         * @description Call LiteLLM proxy via Vertex AI SDK.
-         *
-         *     [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
-         */
-        get: operations["vertex_proxy_route_vertex_ai__endpoint__get_2"];
-        /**
-         * Vertex Proxy Route
-         * @description Call LiteLLM proxy via Vertex AI SDK.
-         *
-         *     [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
-         */
-        put: operations["vertex_proxy_route_vertex_ai__endpoint__put_2"];
-        /**
-         * Vertex Proxy Route
-         * @description Call LiteLLM proxy via Vertex AI SDK.
-         *
-         *     [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
-         */
-        post: operations["vertex_proxy_route_vertex_ai__endpoint__post_2"];
-        /**
-         * Vertex Proxy Route
-         * @description Call LiteLLM proxy via Vertex AI SDK.
-         *
-         *     [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
-         */
-        delete: operations["vertex_proxy_route_vertex_ai__endpoint__delete_2"];
-        options?: never;
-        head?: never;
-        /**
-         * Vertex Proxy Route
-         * @description Call LiteLLM proxy via Vertex AI SDK.
-         *
-         *     [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
-         */
-        patch: operations["vertex_proxy_route_vertex_ai__endpoint__patch_2"];
-        trace?: never;
-    };
     "/vertex_ai/discovery/{endpoint}": {
         parameters: {
             query?: never;
@@ -23249,6 +23198,32 @@ export interface components {
             /** Tags */
             tags?: string[];
         };
+        /** AgentSkillsIndex */
+        AgentSkillsIndex: {
+            /**
+             * $Schema
+             * @default https://schemas.agentskills.io/discovery/0.2.0/schema.json
+             */
+            $schema: string;
+            /** Skills */
+            skills: components["schemas"]["AgentSkillsIndexEntry"][];
+        };
+        /** AgentSkillsIndexEntry */
+        AgentSkillsIndexEntry: {
+            /** Description */
+            description: string;
+            /** Digest */
+            digest: string;
+            /** Name */
+            name: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "archive";
+            /** Url */
+            url: string;
+        };
         /**
          * AlertType
          * @description Enum for alert types and management event types
@@ -23717,6 +23692,62 @@ export interface components {
             routed_model_configured: boolean;
             /** @description The decision record this request would have written to its log row */
             routing_decision: components["schemas"]["StandardLoggingRoutingDecision"];
+        };
+        /**
+         * AutoRouterSessionResponse
+         * @description One auto-routed session as its own key sees it: what the last turn ran on, and what the session cost
+         *     against the router's savings baseline (the priciest model in its hardest tier).
+         */
+        AutoRouterSessionResponse: {
+            /**
+             * Baseline Model
+             * @description The savings baseline most of this session's turns were priced against, recorded turn by turn, so it still names the counterfactual after the router is reconfigured or removed. None when no turn recorded one: rows from before the baseline was recorded, and adaptive and quality routers, which derive no baseline and so report no savings
+             */
+            baseline_model: string | null;
+            /**
+             * Baseline Models
+             * @description Turns priced against each baseline model; more than one entry means the router's baseline changed mid-session and baseline_spend mixes both
+             */
+            baseline_models: {
+                [key: string]: number;
+            };
+            /**
+             * Baseline Spend
+             * @description spend plus saved_spend: the estimated single-model cost
+             */
+            baseline_spend: number;
+            /**
+             * Last Model
+             * @description The deployment model the most recent turn was routed to
+             */
+            last_model: string;
+            /**
+             * Router Name
+             * @description The auto-router alias the session's requests were sent to
+             */
+            router_name: string;
+            /**
+             * Router Type
+             * @description complexity, adaptive or quality
+             */
+            router_type: string;
+            /**
+             * Saved Spend
+             * @description Estimated savings against the baseline, net of classifier cost
+             */
+            saved_spend: number;
+            /** Session Id */
+            session_id: string;
+            /**
+             * Spend
+             * @description What the session's routed traffic actually cost, classifier calls included
+             */
+            spend: number;
+            /**
+             * Turns
+             * @description Auto-routed turns the rollup has recorded for this session so far
+             */
+            turns: number;
         };
         /** AwsSessionTag */
         AwsSessionTag: {
@@ -25776,6 +25807,11 @@ export interface components {
              */
             allow_cli_sso_verification_uri_complete?: boolean | null;
             /**
+             * Allow Unmanaged Response Ids
+             * @description If True, lets keys address Responses API ids that this proxy did not issue (raw provider ids, or ids issued before response-id encryption was configured). Such an id carries no owner, so no ownership check can run on it; ids this proxy did issue keep full ownership enforcement. Off by default, in which case an unrecognized response id is rejected with 403
+             */
+            allow_unmanaged_response_ids?: boolean | null;
+            /**
              * Allowed Routes
              * @description Proxy API Endpoints you want users to be able to access
              */
@@ -25894,6 +25930,11 @@ export interface components {
              * @description If True and SSO is configured (MICROSOFT_CLIENT_ID, GOOGLE_CLIENT_ID, GENERIC_CLIENT_ID, or SAML_IDP_METADATA_URL/XML), disables username/password login on /login, /v2/login, and /v3/login so SSO is the only way to reach the Admin UI. An admin locked out of the UI can still administer the proxy over the API with the master key; unset this setting and restart the proxy to restore UI username/password login. Default is False.
              */
             disable_password_login_when_sso_enabled?: boolean | null;
+            /**
+             * Disable Responses Id Security
+             * @description If True, disables ownership enforcement on Responses API ids. Keys may then retrieve, cancel, delete, and chain from any response id, including ids belonging to another user or team and ids this proxy never issued. WARNING: this removes tenant isolation on /v1/responses
+             */
+            disable_responses_id_security?: boolean | null;
             /**
              * Enable Openai Websocket Passthrough
              * @description Serve the OpenAI pass-through WebSocket route, which relays frames to OpenAI under the proxy's own provider credential without reading them. Off by default.
@@ -26153,6 +26194,11 @@ export interface components {
              * @description If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.
              */
             use_spend_logs_partitioning?: boolean | null;
+            /**
+             * User Api Key Cache Max Size
+             * @description max number of entries (virtual keys, teams, users, end users, memberships, ...) each worker keeps in its in-memory auth cache. Defaults to 200. Raise this if you have more active keys than that or auth lookups keep hitting the DB
+             */
+            user_api_key_cache_max_size?: number | null;
             /** User Header Mappings */
             user_header_mappings?: components["schemas"]["UserHeaderMapping"][] | null;
             /**
@@ -28414,6 +28460,8 @@ export interface components {
             team_id?: string | null;
             /** User Email */
             user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
         };
         /**
          * KeyMetricWithMetadata
@@ -36460,7 +36508,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */
@@ -38032,6 +38080,11 @@ export interface components {
             } | null;
             /** Policies */
             policies?: string[] | null;
+            /**
+             * Project Id
+             * @description Omit to retain the project, or send null to detach. Assigning a different project is not supported.
+             */
+            project_id?: string | null;
             /** Prompts */
             prompts?: string[] | null;
             /** Rotation Interval */
@@ -40131,6 +40184,26 @@ export interface operations {
             };
         };
     };
+    agent_skills_index__well_known_agent_skills_index_json_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSkillsIndex"];
+                };
+            };
+        };
+    };
     jwks_json__well_known_jwks_json_get: {
         parameters: {
             query?: never;
@@ -40335,11 +40408,9 @@ export interface operations {
             };
         };
     };
-    oauth_protected_resource_mcp__well_known_oauth_protected_resource_get: {
+    oauth_protected_resource_root__well_known_oauth_protected_resource_get: {
         parameters: {
-            query?: {
-                mcp_server_name?: string | null;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -40352,16 +40423,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": {
+                        [key: string]: string | string[];
+                    };
                 };
             };
         };
@@ -40464,6 +40528,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    agent_skills_index__well_known_skills_index_json_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSkillsIndex"];
                 };
             };
         };
@@ -41716,6 +41800,43 @@ export interface operations {
             };
         };
     };
+    authorize_mcp_session_authorize_mcp_session_get: {
+        parameters: {
+            query: {
+                redirect_uri: string;
+                client_id: string;
+                state?: string;
+                code_challenge?: string | null;
+                code_challenge_method?: string | null;
+                response_type?: string | null;
+                resource?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_auto_router_benchmarks_auto_router_benchmarks_get: {
         parameters: {
             query?: {
@@ -41805,6 +41926,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AutoRouterClassifierDefaultPromptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_auto_router_session_auto_router_session_get: {
+        parameters: {
+            query: {
+                /** @description The client session id (x-*-session-id header) the turns were sent under */
+                session_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRouterSessionResponse"];
                 };
             };
             /** @description Validation Error */
@@ -52513,24 +52666,6 @@ export interface operations {
             };
         };
     };
-    websocket_openai_websocket_proxy_route_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description WebSocket Protocol Switched */
-            101: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
     chat_completion_openai_deployments__model__chat_completions_post: {
         parameters: {
             query?: never;
@@ -53430,25 +53565,7 @@ export interface operations {
             };
         };
     };
-    websocket_openai_websocket_proxy_route_get_2: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description WebSocket Protocol Switched */
-            101: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    openai_proxy_route_openai_passthrough__endpoint__get: {
+    openai_passthrough_route_openai_passthrough__endpoint__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -53479,7 +53596,7 @@ export interface operations {
             };
         };
     };
-    openai_proxy_route_openai_passthrough__endpoint__put: {
+    openai_passthrough_route_openai_passthrough__endpoint__put: {
         parameters: {
             query?: never;
             header?: never;
@@ -53510,7 +53627,7 @@ export interface operations {
             };
         };
     };
-    openai_proxy_route_openai_passthrough__endpoint__post: {
+    openai_passthrough_route_openai_passthrough__endpoint__post: {
         parameters: {
             query?: never;
             header?: never;
@@ -53541,7 +53658,7 @@ export interface operations {
             };
         };
     };
-    openai_proxy_route_openai_passthrough__endpoint__delete: {
+    openai_passthrough_route_openai_passthrough__endpoint__delete: {
         parameters: {
             query?: never;
             header?: never;
@@ -53572,7 +53689,7 @@ export interface operations {
             };
         };
     };
-    openai_proxy_route_openai_passthrough__endpoint__patch: {
+    openai_passthrough_route_openai_passthrough__endpoint__patch: {
         parameters: {
             query?: never;
             header?: never;
@@ -65165,6 +65282,37 @@ export interface operations {
             };
         };
     };
+    agent_skills_archive_v1_skills__skill_id__archive_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                skill_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     create_threads_v1_threads_post: {
         parameters: {
             query?: never;
@@ -67954,161 +68102,6 @@ export interface operations {
             header?: never;
             path: {
                 vector_store_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    vertex_proxy_route_vertex_ai__endpoint__get_2: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    vertex_proxy_route_vertex_ai__endpoint__put_2: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    vertex_proxy_route_vertex_ai__endpoint__post_2: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    vertex_proxy_route_vertex_ai__endpoint__delete_2: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    vertex_proxy_route_vertex_ai__endpoint__patch_2: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
             };
             cookie?: never;
         };
