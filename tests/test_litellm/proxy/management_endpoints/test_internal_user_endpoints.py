@@ -2097,6 +2097,22 @@ def test_update_internal_user_params_reset_max_budget_with_none():
     assert non_default_values["user_id"] == "test_user"
 
 
+def test_update_internal_user_params_explicit_duration_clear_overrides_role_default(monkeypatch):
+    import litellm
+
+    monkeypatch.setattr(litellm, "internal_user_budget_duration", "30d")
+    data = UpdateUserRequest(
+        user_id="duration-clear-test",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        budget_duration=None,
+    )
+
+    updated = _update_internal_user_params(data_json=data.model_dump(exclude_unset=True), data=data)
+
+    assert updated["budget_duration"] is None
+    assert updated["budget_reset_at"] is None
+
+
 def test_update_internal_user_params_ignores_other_nones():
     """
     Test that other fields are still filtered out if None

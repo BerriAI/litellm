@@ -289,6 +289,15 @@ it("should show a loading state on the initial load and hide the data", () => {
   expect(screen.queryByText("Test Key Alias")).not.toBeInTheDocument();
 });
 
+it("replaces the previous rows with the loading state while a new search is pending", () => {
+  mockUseKeys.mockReturnValue(keysResult([mockKey], {}, { isPlaceholderData: true, isFetching: true }));
+
+  renderWithProviders(<VirtualKeysTable />);
+
+  expect(screen.getByText("Loading keys...")).toBeInTheDocument();
+  expect(screen.queryByText("Test Key Alias")).not.toBeInTheDocument();
+});
+
 it("should show 'No keys found' message when the key list is empty", () => {
   mockUseKeys.mockReturnValue(keysResult([]));
 
