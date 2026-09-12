@@ -720,7 +720,7 @@ def _build_aggregated_sql_query(
             FROM "{pg_table}"
             WHERE {where_clause}
             GROUP BY api_key
-            ORDER BY SUM(spend) DESC
+            ORDER BY SUM(spend) DESC, api_key
             LIMIT {_MAX_API_KEYS_IN_BREAKDOWN}
         )
         SELECT
