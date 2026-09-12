@@ -816,3 +816,40 @@ describe("managed keys survive an untouched open-and-save", () => {
     expect(buildUpdatedComplexityRouterConfig(STORED_ALL_MANAGED, hydrated).heuristic_first_max_tier).toBe("SIMPLE");
   });
 });
+
+describe("LLM V2 configuration preservation", () => {
+  const v2Config = {
+    efficient_profile: "Efficient coding model",
+    capable_profile: "Capable coding model",
+    harness: "Shell access, one attempt",
+    max_quality_gap: 0.03,
+    response_format: "json_object",
+    calibration: { version: "pair-v1", prompt_version: "llm-v2-1" },
+  };
+  const stored = {
+    tiers: { SIMPLE: ["efficient"], REASONING: ["capable"] },
+    classifier_type: "llm_v2" as const,
+    classifier_llm_config: { model: "judge", timeout_ms: 15000 },
+    llm_v2_config: v2Config,
+    classification_mode: "user_turn" as const,
+    adaptive: false,
+  };
+
+  it("preserves profiles and the judge when saving an existing V2 router", () => {
+    const value = hydrateComplexityRouterConfig(stored, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(stored, value);
+    expect(saved.classifier_type).toBe("llm_v2");
+    expect(saved.classifier_llm_config).toMatchObject(stored.classifier_llm_config);
+    expect(saved.llm_v2_config).toEqual(v2Config);
+    expect(saved.classification_mode).toBe("user_turn");
+    expect(saved).not.toHaveProperty("classification_prompt");
+    expect(saved).not.toHaveProperty("dimension_weights");
+  });
+
+  it("drops V2 settings when switching to a different classifier", () => {
+    const value = hydrateComplexityRouterConfig(stored, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(stored, { ...value, classifier_type: "heuristic" });
+    expect(saved).not.toHaveProperty("llm_v2_config");
+    expect(saved).not.toHaveProperty("classifier_llm_config");
+  });
+});

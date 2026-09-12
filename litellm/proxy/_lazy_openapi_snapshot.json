@@ -18968,7 +18968,7 @@
                   }
                 }
               },
-              "description": "\n    Unified rate-limit error.\n\n    Every rate-limit condition surfaced by litellm \u2014 whether it originated from\n    an upstream LLM provider, a vendor batch endpoint, or one of litellm's own\n    proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,\n    max-iterations, etc.) \u2014 is raised as an instance of this class.\n\n    The :attr:`category` attribute lets callers distinguish the source. See\n    :class:`RateLimitErrorCategory` for the available values.\n    "
+              "description": "\nUnified rate-limit error.\n\nEvery rate-limit condition surfaced by litellm \u2014 whether it originated from\nan upstream LLM provider, a vendor batch endpoint, or one of litellm's own\nproxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,\nmax-iterations, etc.) \u2014 is raised as an instance of this class.\n\nThe :attr:`category` attribute lets callers distinguish the source. See\n:class:`RateLimitErrorCategory` for the available values.\n"
             },
             "500": {
               "content": {

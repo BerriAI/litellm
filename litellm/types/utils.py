@@ -2879,6 +2879,8 @@ RoutingDecisionCause = Literal[
     # meant anything that filtered `signals` silently changed what the row claimed.
     "reasoning_override",
     "llm_classifier",
+    "llm_v2_classifier",
+    "llm_v2_fallback",
     # classifier_type 'heuristic_first': the local scorer produced at least one signal and landed at
     # or below heuristic_first_max_tier, so it decided the tier and the LLM classifier was never
     # called. Distinct from "heuristic_scorer", which is a router whose only classifier IS the
