@@ -1340,6 +1340,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "IMAGE_PROHIBITED_CONTENT",
             "TOO_MANY_TOOL_CALLS",
             "MALFORMED_RESPONSE",
+            "NO_IMAGE",
         }
     )
 
@@ -2224,21 +2225,22 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         grounding_metadata: Final[list[dict]] = []
         url_context_metadata: Final[list[dict]] = []
-        image_response: list[ImageURLListItem] | None = None
         safety_ratings: Final[list] = []
         citation_metadata: Final[list] = []
-        chat_completion_message: Final[ChatCompletionResponseMessage] = {"role": "assistant"}
-        chat_completion_logprobs: ChoiceLogprobs | None = None
-        tools: list[ChatCompletionToolCallChunk] | None = []
-        functions: ChatCompletionToolCallFunctionChunk | None = None
-        thinking_blocks: list[ChatCompletionThinkingBlock] | None = None
-        reasoning_content: str | None = None
-        thought_signatures: Sequence[str] | None = None
-        server_side_tool_invocations: list[dict[str, object]] | None = None
 
         for idx, candidate in enumerate(_candidates):
-            if "content" not in candidate:
+            if "content" not in candidate and "finishReason" not in candidate:
                 continue
+
+            image_response: list[ImageURLListItem] | None = None
+            chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
+            chat_completion_logprobs: ChoiceLogprobs | None = None
+            tools: list[ChatCompletionToolCallChunk] | None = []
+            functions: ChatCompletionToolCallFunctionChunk | None = None
+            thinking_blocks: list[ChatCompletionThinkingBlock] | None = None
+            reasoning_content: str | None = None
+            thought_signatures: Sequence[str] | None = None
+            server_side_tool_invocations: list[dict[str, object]] | None = None
 
             # Extract metadata using helper function
             (
@@ -2253,7 +2255,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             safety_ratings.extend(candidate_safety_ratings)
             citation_metadata.extend(candidate_citation_metadata)
 
-            if "parts" in candidate["content"]:
+            if "content" in candidate and candidate["content"] and "parts" in candidate["content"]:
                 (
                     content,
                     reasoning_content,
@@ -2348,6 +2350,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 tool_invocation_fields["server_side_tool_invocations"] = server_side_tool_invocations
                 chat_completion_message["provider_specific_fields"] = tool_invocation_fields
 
+            if candidate.get("finishReason"):
+                finish_reason_fields = chat_completion_message.get("provider_specific_fields") or {}
+                finish_reason_fields["native_finish_reason"] = candidate.get("finishReason")
+                chat_completion_message["provider_specific_fields"] = finish_reason_fields
+
             if isinstance(model_response, ModelResponseStream):
                 choice = VertexGeminiConfig._create_streaming_choice(
                     chat_completion_message=chat_completion_message,
@@ -2368,6 +2375,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     message=chat_completion_message,
                     logprobs=chat_completion_logprobs,
                     enhancements=None,
+                    provider_specific_fields=chat_completion_message.get("provider_specific_fields"),
                 )
                 model_response.choices.append(choice)
 
