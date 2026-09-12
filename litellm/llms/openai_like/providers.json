@@ -200,5 +200,11 @@
       "temperature_max": 1.99
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "gitgot": {
+    "base_url": "https://inference.gitgot.ai/v1",
+    "api_key_env": "GITGOT_API_KEY",
+    "api_base_env": "GITGOT_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/embeddings"]
   }
 }
