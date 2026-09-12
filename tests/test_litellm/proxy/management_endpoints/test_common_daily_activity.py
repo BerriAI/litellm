@@ -1,12 +1,13 @@
+import re
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import psycopg
 import pytest
-
-from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
-
+from psycopg.rows import dict_row
+from pytest_postgresql import factories
 
 from litellm.proxy.management_endpoints.common_daily_activity import (
     _MAX_API_KEYS_IN_BREAKDOWN,
@@ -20,6 +21,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity_aggregated,
     update_metrics,
 )
+from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendMetadata,
     SpendMetrics,
@@ -1155,41 +1157,6 @@ class TestBuildAggregatedSqlQuery:
         assert "(date, model_group)" not in normalized
         assert "COALESCE(model_group, model)" not in normalized
 
-    def test_api_key_rollups_are_bounded_to_top_keys(self):
-        """Grouping on the raw api_key column makes result rows scale with every distinct key."""
-        sql, params = _build_aggregated_sql_query(
-            table_name="litellm_dailyuserspend",
-            entity_id_field="user_id",
-            entity_id="user-1",
-            start_date="2026-05-29",
-            end_date="2026-06-02",
-            model="bedrock/global.anthropic.claude-opus-4-8",
-            api_key="sk-test",
-            timezone_offset_minutes=-330,
-        )
-
-        normalized = " ".join(sql.split())
-        assert "WITH top_api_keys AS ( SELECT api_key AS top_api_key" in normalized
-        assert f"ORDER BY SUM(spend) DESC LIMIT {_MAX_API_KEYS_IN_BREAKDOWN}" in normalized
-
-        grouping_block = normalized.split("GROUP BY GROUPING SETS (", 1)[1]
-        grouping_sets = {part.strip() for part in grouping_block.split("),")}
-        for grouping_set in grouping_sets:
-            assert "api_key" not in grouping_set.replace("tk.top_api_key", ""), (
-                f"grouping set uses the unbounded raw api_key column: {grouping_set}"
-            )
-        assert grouping_block.count("tk.top_api_key") == 6
-
-        # The CTE and the outer WHERE reuse the same $N placeholders, so the
-        # params list is unchanged: date bounds, entity, model, api_key filter.
-        assert params == [
-            "2026-05-29",
-            "2026-06-02",
-            "user-1",
-            "bedrock/global.anthropic.claude-opus-4-8",
-            "sk-test",
-        ]
-
 
 class TestAggregatedEmptyEntityFilter:
     _BUILDERS: Final = (_build_aggregated_sql_query, _build_entity_rollup_sql_query)
@@ -1305,6 +1272,128 @@ async def test_get_daily_activity_aggregated_empty_result_set():
     assert result.metadata.total_cache_read_input_tokens == 0
     assert result.metadata.total_cache_creation_input_tokens == 0
     assert result.metadata.total_compression_saved_tokens == 0
+
+
+_aggregated_postgresql_proc: Final = factories.postgresql_proc()
+_aggregated_postgresql: Final = factories.postgresql("_aggregated_postgresql_proc")
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_aggregated_bounds_api_key_rollups(
+    _aggregated_postgresql: psycopg.Connection,
+):
+    """Exercise the GROUPING SETS query against real Postgres with more keys than the cap.
+
+    key-004 and key-005 tie on spend exactly at the _MAX_API_KEYS_IN_BREAKDOWN
+    cutoff; the deterministic api_key tiebreaker must keep key-004 and drop
+    key-005. Excluded keys still count toward the totals via the grand-total
+    and date-level rollup rows.
+    """
+    conn: Final = _aggregated_postgresql
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE "LiteLLM_DailyUserSpend" (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                date TEXT NOT NULL,
+                api_key TEXT NOT NULL,
+                model TEXT,
+                model_group TEXT,
+                custom_llm_provider TEXT,
+                mcp_namespaced_tool_name TEXT,
+                endpoint TEXT,
+                prompt_tokens BIGINT DEFAULT 0,
+                completion_tokens BIGINT DEFAULT 0,
+                cache_read_input_tokens BIGINT DEFAULT 0,
+                cache_creation_input_tokens BIGINT DEFAULT 0,
+                compression_saved_tokens BIGINT DEFAULT 0,
+                compression_savings_spend DOUBLE PRECISION DEFAULT 0,
+                prompt_caching_savings_spend DOUBLE PRECISION DEFAULT 0,
+                gateway_injected_caching_savings_spend DOUBLE PRECISION DEFAULT 0,
+                autorouter_savings_spend DOUBLE PRECISION DEFAULT 0,
+                spend DOUBLE PRECISION DEFAULT 0,
+                api_requests BIGINT DEFAULT 0,
+                successful_requests BIGINT DEFAULT 0,
+                failed_requests BIGINT DEFAULT 0
+            )
+            """
+        )
+        cur.executemany(
+            """
+            INSERT INTO "LiteLLM_DailyUserSpend"
+                (id, user_id, date, api_key, model, model_group, custom_llm_provider,
+                 endpoint, prompt_tokens, spend, api_requests, successful_requests)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            [
+                (
+                    f"row-{i:03d}",
+                    f"user-{i:03d}",
+                    "2026-06-01",
+                    f"key-{i:03d}",
+                    "gpt-5",
+                    "",
+                    "openai",
+                    "/v1/chat/completions",
+                    10,
+                    6.0 if i == 4 else float(i + 1),
+                    1,
+                    1,
+                )
+                for i in range(_MAX_API_KEYS_IN_BREAKDOWN + 5)
+            ],
+        )
+    conn.commit()
+
+    row_counts: Final[list[int]] = []  # mutable-ok: out-param for the query_raw shim
+
+    async def query_raw(sql: str, *params: str) -> list[dict[str, object]]:
+        converted: Final = re.sub(r"\$(\d+)", r"%(p\1)s", sql)
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                converted,  # pyright: ignore[reportArgumentType]  # psycopg stubs want a literal-typed query
+                {f"p{i}": v for i, v in enumerate(params, start=1)},
+            )
+            rows: Final = cur.fetchall()
+        row_counts.append(len(rows))
+        return rows
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.query_raw = query_raw
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+
+    result = await get_daily_activity_aggregated(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2026-06-01",
+        end_date="2026-06-01",
+        model=None,
+        api_key=None,
+    )
+
+    # 13 grouping sets: 7 key-less sets emit one row each; the 6 api_key sets
+    # emit the top N keys plus one NULL bucket for the excluded keys.
+    assert row_counts == [7 + 6 * (_MAX_API_KEYS_IN_BREAKDOWN + 1)]
+
+    # Totals still cover every key, capped or not.
+    assert result.metadata.total_spend == pytest.approx(5566.0)
+    assert result.metadata.total_api_requests == _MAX_API_KEYS_IN_BREAKDOWN + 5
+
+    expected_top: Final = {f"key-{i:03d}" for i in range(6, 105)} | {"key-004"}
+    day: Final = result.results[0]
+    assert len(day.breakdown.api_keys) == _MAX_API_KEYS_IN_BREAKDOWN
+    assert set(day.breakdown.api_keys) == expected_top
+    assert day.breakdown.api_keys["key-004"].metrics.spend == 6.0
+    assert "key-005" not in day.breakdown.api_keys
+
+    assert day.breakdown.models["gpt-5"].metrics.spend == pytest.approx(5566.0)
+    assert set(day.breakdown.models["gpt-5"].api_key_breakdown) == expected_top
 
 
 def _no_spend_record():
