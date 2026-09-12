@@ -6651,14 +6651,17 @@ class TestMCPServerManager:
         async def _handler(**kwargs):
             return None
 
-        with patch.dict(global_mcp_tool_registry.tools, {}, clear=True):
-            global_mcp_tool_registry.register_tool(
-                name="petstore-list_pets",
-                description="List pets",
-                input_schema={"type": "object", "properties": {"limit": {"type": "integer"}}},
-                handler=_handler,
-            )
+        global_mcp_tool_registry.unregister_tools_with_prefix("petstore-")
+        global_mcp_tool_registry.register_tool(
+            name="petstore-list_pets",
+            description="List pets",
+            input_schema={"type": "object", "properties": {"limit": {"type": "integer"}}},
+            handler=_handler,
+        )
+        try:
             listed = await manager._get_tools_from_server(server=server, add_prefix=add_prefix)
+        finally:
+            global_mcp_tool_registry.unregister_tools_with_prefix("petstore-")
 
         assert [t.name for t in listed] == ["petstore-list_pets" if add_prefix else "list_pets"]
         for name in ("list_pets", "petstore-list_pets"):
@@ -6684,20 +6687,25 @@ class TestMCPServerManager:
         async def _handler(**kwargs):
             return None
 
-        with patch.dict(global_mcp_tool_registry.tools, {}, clear=True):
-            global_mcp_tool_registry.register_tool(
-                name="pet-petstore-list",
-                description="Local pet tool",
-                input_schema={"type": "object", "properties": {"limit": {"type": "integer"}}},
-                handler=_handler,
-            )
-            global_mcp_tool_registry.register_tool(
-                name="petstore-list",
-                description="Foreign petstore tool",
-                input_schema={"type": "object", "properties": {"status": {"type": "string"}}},
-                handler=_handler,
-            )
+        for prefix in ("pet-", "petstore-"):
+            global_mcp_tool_registry.unregister_tools_with_prefix(prefix)
+        global_mcp_tool_registry.register_tool(
+            name="pet-petstore-list",
+            description="Local pet tool",
+            input_schema={"type": "object", "properties": {"limit": {"type": "integer"}}},
+            handler=_handler,
+        )
+        global_mcp_tool_registry.register_tool(
+            name="petstore-list",
+            description="Foreign petstore tool",
+            input_schema={"type": "object", "properties": {"status": {"type": "string"}}},
+            handler=_handler,
+        )
+        try:
             listed = await manager._get_tools_from_server(server=server, add_prefix=True)
+        finally:
+            for prefix in ("pet-", "petstore-"):
+                global_mcp_tool_registry.unregister_tools_with_prefix(prefix)
 
         assert [t.name for t in listed] == ["pet-petstore-list"]
         tool = manager.get_listed_tool(server, "petstore-list")
