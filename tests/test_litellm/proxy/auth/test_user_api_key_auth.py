@@ -1695,20 +1695,22 @@ async def test_auth_prefetches_referenced_objects_only_after_the_key_may_call_th
         request._url = URL(url="/chat/completions")
 
         with (
-            patch(
+            patch(  # test-quality-ok: the builder has no DI seam for the key lookup; stands in for the DB
                 "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
                 new_callable=AsyncMock,
                 return_value=valid_token,
             ),
-            patch(
+            patch(  # test-quality-ok: the observable is whether the prefetch runs before or after this check
                 "litellm.proxy.auth.user_api_key_auth._enforce_key_and_fallback_model_access",
                 new_callable=AsyncMock,
                 side_effect=None if model_allowed else denied,
             ),
-            patch(
+            patch(  # test-quality-ok: counting prefetch calls on a denied request IS the regression being pinned
                 "litellm.proxy.auth.user_api_key_auth.prefetch_auth_objects", new_callable=AsyncMock
             ) as mock_prefetch,
-            patch("litellm.proxy.auth.user_api_key_auth.get_user_object", new_callable=AsyncMock, return_value=None),
+            patch(  # test-quality-ok: no DB in this test; the user lookup must not fail the allowed path
+                "litellm.proxy.auth.user_api_key_auth.get_user_object", new_callable=AsyncMock, return_value=None
+            ),
         ):
             call = _user_api_key_auth_builder(
                 request=request,
