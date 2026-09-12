@@ -4,6 +4,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import MCPDiscovery from "./mcp_discovery";
 import { fetchDiscoverableMCPServers } from "@/components/networking";
 import type { DiscoverableMCPServer } from "@/components/mcp_tools/types";
+import { renderWithProviders } from "../../../../../tests/test-utils";
+import { setServerRootPath } from "@/lib/serverRootPath";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 vi.mock("@/components/networking", () => ({
   fetchDiscoverableMCPServers: vi.fn(),
@@ -36,10 +41,51 @@ const defaultProps = {
 describe("MCPDiscovery", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setServerRootPath("/");
     vi.mocked(fetchDiscoverableMCPServers).mockResolvedValue({
       servers: [githubServer, slackServer],
       categories: ["Developer Tools", "Communication"],
     });
+  });
+
+  it.each(["", "/litellm"])("should render available catalog logos under the %s server root", async (root) => {
+    const testDirectory = dirname(fileURLToPath(import.meta.url));
+    const registry = JSON.parse(
+      readFileSync(resolve(testDirectory, "../../../../../../../litellm/proxy/mcp_registry.json"), "utf8"),
+    ) as { servers: DiscoverableMCPServer[] };
+    const expectedLogos = [
+      ["exa", "/ui/assets/logos/exa_ai.png"],
+      ["tavily", "/ui/assets/logos/tavily.png"],
+      ["slack", "/ui/assets/logos/slack.svg"],
+      ["twilio", "/ui/assets/logos/twilio.svg"],
+      [
+        "playwright",
+        "https://raw.githubusercontent.com/microsoft/playwright/2f6148bcd1a96ec687d55ce08645fc6315b1514e/packages/recorder/public/playwright-logo.svg",
+      ],
+      ["browserbase", "https://www.browserbase.com/favicon.svg"],
+      ["aws", "/ui/assets/logos/aws.svg"],
+    ] as const;
+    setServerRootPath(root);
+    vi.mocked(fetchDiscoverableMCPServers).mockResolvedValue({
+      servers: expectedLogos.map(([name]) => {
+        const server = registry.servers.find((entry) => entry.name === name)!;
+        return server;
+      }),
+      categories: [],
+    });
+
+    renderWithProviders(<MCPDiscovery {...defaultProps} />);
+
+    for (const [name, source] of expectedLogos) {
+      const server = registry.servers.find((entry) => entry.name === name)!;
+      if (source.startsWith("/ui/")) {
+        expect(existsSync(resolve(testDirectory, "../../../../../public", source.slice(4)))).toBe(true);
+      }
+      expect(await screen.findByRole("img", { name: server.title })).toHaveAttribute(
+        "src",
+        source.startsWith("/ui/") ? `${root}${source}` : source,
+      );
+    }
   });
 
   // Each category name renders twice: once as a filter pill (a button) and once
