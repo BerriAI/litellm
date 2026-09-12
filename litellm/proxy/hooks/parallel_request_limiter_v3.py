@@ -522,6 +522,7 @@ class RequestRateLimiterStash:
     owner_litellm_call_id: str | None = None
     rate_limit_response: RateLimitResponse | None = None
     parallel_slot: ParallelSlotAcquisition | None = None
+    parallel_release_complete: asyncio.Event = field(default_factory=asyncio.Event)
     reserved_tokens: int = 0
     reserved_model: str | None = None
     reserved_scopes: frozenset[tuple[str, str]] = field(default_factory=frozenset)
@@ -546,6 +547,13 @@ _request_stash: Final[ContextVar[RequestRateLimiterStash | None]] = ContextVar(
 
 def get_request_stash() -> RequestRateLimiterStash | None:
     return _request_stash.get()
+
+
+async def wait_for_request_parallel_release() -> None:
+    """Let sequential internal requests wait for their deferred slot release."""
+    stash: Final = get_request_stash()
+    if stash is not None and stash.parallel_slot is not None:
+        await stash.parallel_release_complete.wait()
 
 
 def get_or_create_request_stash() -> RequestRateLimiterStash:
@@ -3375,6 +3383,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     parent_otel_span=user_api_key_dict.parent_otel_span,
                 )
                 stash.parallel_slot = None
+                stash.parallel_release_complete.set()
             self._handle_rate_limit_error(
                 response=io_response,
                 descriptors=descriptors,
@@ -3547,6 +3556,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         slot_id=parallel_slot_id,
                         counter_keys=parallel_counter_keys,
                     )
+                    stash.parallel_release_complete.clear()
 
             # ----------------------------------------------------------------
             # TPM token reservation
@@ -3638,6 +3648,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                             parent_otel_span=user_api_key_dict.parent_otel_span,
                         )
                         stash.parallel_slot = None
+                        stash.parallel_release_complete.set()
                     self._handle_rate_limit_error(
                         response=tpm_response,
                         descriptors=descriptors,
@@ -4457,6 +4468,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     parent_otel_span=litellm_parent_otel_span,
                 )
                 stash.parallel_slot = None
+                stash.parallel_release_complete.set()
 
             pipeline_operations: Final = self._build_success_event_pipeline_operations(
                 kwargs=kwargs,
@@ -4583,6 +4595,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     parent_otel_span=litellm_parent_otel_span,
                 )
                 stash.parallel_slot = None
+                stash.parallel_release_complete.set()
 
             # Skip the reservation refund if async_post_call_failure_hook
             # already released it (proxy-level rejection that also bubbles up
@@ -4699,6 +4712,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             parent_otel_span=None,
         )
         stash.parallel_slot = None
+        stash.parallel_release_complete.set()
 
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
         """
@@ -4780,6 +4794,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     parent_otel_span=user_api_key_dict.parent_otel_span,
                 )
                 stash.parallel_slot = None
+                stash.parallel_release_complete.set()
 
             if stash.batch_enqueued_reservation is not None:
                 await self.batch_enqueued_token_store.refund(

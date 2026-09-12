@@ -1,9 +1,9 @@
-ALTER TABLE "LiteLLM_MemoryTable" ADD COLUMN "namespace" TEXT;
+ALTER TABLE "LiteLLM_MemoryTable" ADD COLUMN IF NOT EXISTS "namespace" TEXT;
 
-CREATE INDEX "LiteLLM_MemoryTable_namespace_updated_at_idx"
+CREATE INDEX IF NOT EXISTS "LiteLLM_MemoryTable_namespace_updated_at_idx"
 ON "LiteLLM_MemoryTable"("namespace", "updated_at");
 
-CREATE TABLE "LiteLLM_MemoryPolicy" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_MemoryPolicy" (
     "policy_id" TEXT NOT NULL,
     "target_type" TEXT NOT NULL,
     "target_id" TEXT NOT NULL,
@@ -15,10 +15,10 @@ CREATE TABLE "LiteLLM_MemoryPolicy" (
     CONSTRAINT "LiteLLM_MemoryPolicy_pkey" PRIMARY KEY ("policy_id")
 );
 
-CREATE UNIQUE INDEX "LiteLLM_MemoryPolicy_target_type_target_id_key"
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_MemoryPolicy_target_type_target_id_key"
 ON "LiteLLM_MemoryPolicy"("target_type", "target_id");
 
-CREATE TABLE "LiteLLM_MemoryPreference" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_MemoryPreference" (
     "subject" TEXT NOT NULL,
     "enabled" BOOLEAN NOT NULL DEFAULT false,
     "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,

@@ -2,10 +2,9 @@ import json
 from typing import TYPE_CHECKING, Final
 
 from fastapi import HTTPException
-from prisma.errors import UniqueViolationError
 from pydantic import TypeAdapter
 
-from litellm.proxy.memory.policy import MemoryAccess, memory_digest, resolve_memory_access
+from litellm.proxy.memory.policy import MemoryAccess, memory_digest, memory_primary_client, resolve_memory_access
 from litellm.repositories.table_repositories import MemoryRepository
 from litellm.types.memory_v2 import MemoryCapture, MemoryEntry, MemorySearch
 
@@ -36,9 +35,9 @@ def memory_entry(row: "LiteLLM_MemoryTable") -> MemoryEntry:
 
 class MemoryStore:
     def __init__(self, prisma_client: object, access: MemoryAccess) -> None:
-        self.prisma_client = prisma_client
+        self.prisma_client = memory_primary_client(prisma_client)
         self.access = access
-        self.table = MemoryRepository(prisma_client).table
+        self.table = MemoryRepository(self.prisma_client).table
 
     async def _namespace(self, *, write: bool = False, require_active: bool = True) -> str:
         current: Final = await resolve_memory_access(self.prisma_client, self.access.identity)
@@ -115,6 +114,8 @@ class MemoryStore:
         return memory_entry(row)
 
     async def capture(self, capture: MemoryCapture) -> MemoryEntry:
+        from prisma.errors import UniqueViolationError
+
         namespace: Final = await self._namespace(write=True)
         key: Final = f"memory-v2:{namespace}:{capture.key}"
         metadata: Final = {  # mutable-ok: Prisma serializes these as native JSON containers.

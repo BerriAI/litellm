@@ -305,6 +305,7 @@ CONTROL_PLANE_PREFIXES: tuple[str, ...] = (
     "/global",
     "/config",
     "/guardrails",
+    "/v2/memory/policies",
     "/openapi.json",
 )
 

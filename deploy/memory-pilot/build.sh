@@ -4,6 +4,7 @@ set -euo pipefail
 # writable homes to install the repository's pinned toolchain during uv sync.
 export RUSTUP_HOME="$PWD/.memory-pilot-rustup"
 export CARGO_HOME="$PWD/.memory-pilot-cargo"
+export PRISMA_BINARY_CACHE_DIR="$PWD/.memory-pilot-prisma"
 python -m pip install uv==0.11.7
 export UV_PROJECT_ENVIRONMENT="$PWD/.memory-pilot-venv"
 uv sync --frozen --extra proxy --extra extra_proxy --no-default-groups

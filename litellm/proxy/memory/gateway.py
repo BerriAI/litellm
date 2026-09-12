@@ -20,7 +20,8 @@ from litellm.litellm_core_utils.prompt_templates.server_tools import (
     prepare_server_tools,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.memory.policy import MemoryIdentity, resolve_memory_access
+from litellm.proxy.hooks.parallel_request_limiter_v3 import wait_for_request_parallel_release
+from litellm.proxy.memory.policy import MemoryIdentity, gateway_memory_is_configured, resolve_memory_access
 from litellm.proxy.memory.store import MemoryStore
 from litellm.types.memory_v2 import MemoryCapture, MemoryRead, MemorySearch
 
@@ -155,11 +156,16 @@ async def prepare_gateway_memory(
 ) -> dict[str, object]:
     if _memory_call.get() or route not in ("acompletion", "aresponses", "anthropic_messages"):
         return data
-    from litellm.proxy.proxy_server import app, prisma_client
+    from litellm.proxy.proxy_server import app, prisma_client, user_api_key_cache
 
     if prisma_client is None:
         return data
-    access: Final = await resolve_memory_access(prisma_client, MemoryIdentity.from_auth(auth))
+    identity: Final = MemoryIdentity.from_auth(auth)
+    if not identity.user_id and not identity.key_id:
+        return data
+    if not await gateway_memory_is_configured(prisma_client, user_api_key_cache):
+        return data
+    access: Final = await resolve_memory_access(prisma_client, identity)
     if not access.active:
         return data
     functions: Final = tuple(
@@ -184,18 +190,35 @@ async def prepare_gateway_memory(
     }
     token: Final = _memory_call.set(True)
     try:
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://litellm-memory"
-        ) as client:
+        # Dispatch in process through the existing authenticated endpoint. No
+        # network client, TLS context, or connection pool is created here.
+        async with httpx.ASGITransport(app=app) as transport:
+
+            async def dispatch_round(body: Mapping[str, object]) -> httpx.Response:
+                result: Final = await transport.handle_async_request(
+                    httpx.Request(
+                        "POST",
+                        "http://litellm-memory" + request.url.path,
+                        json=body,
+                        headers=headers,
+                        params=request.query_params,
+                    )
+                )
+                await result.aread()
+                # Success accounting runs asynchronously. The next model round
+                # must not compete with this completed call for the same slot.
+                await wait_for_request_parallel_release()
+                return result
 
             async def call_model(body: Mapping[str, object]) -> Mapping[str, object]:
                 round_body: Final = {  # mutable-ok: HTTP JSON serialization requires a native dictionary.
                     **body,
                     "litellm_call_id": str(uuid4()),
                 }
-                result: Final = await client.post(
-                    request.url.path, json=round_body, headers=headers, params=request.query_params
-                )
+                # Each endpoint owns its request context, including the rate
+                # limiter's mutable stash. Reusing this task would let the next
+                # round overwrite the owner seen by deferred logging callbacks.
+                result: Final = await asyncio.create_task(dispatch_round(round_body))
                 if result.is_error:
                     raise HTTPException(
                         status_code=result.status_code,

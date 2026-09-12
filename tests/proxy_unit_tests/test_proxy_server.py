@@ -503,7 +503,11 @@ def test_custom_logger_failure_handler(mock_acompletion, client_no_auth):
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    setattr(litellm.proxy.proxy_server, "prisma_client", "FAKE-VAR")
+    # The request has no memory policy; keep the database edge inert.
+    memory_db = MagicMock()
+    memory_db.db.litellm_memorypolicy.find_many = AsyncMock(return_value=[])
+    memory_db.db.litellm_memorypreference.find_unique = AsyncMock(return_value=None)
+    setattr(litellm.proxy.proxy_server, "prisma_client", memory_db)
     setattr(litellm.proxy.proxy_server, "proxy_logging_obj", proxy_logging_obj)
 
     with patch.object(

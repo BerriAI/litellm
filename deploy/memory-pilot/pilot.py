@@ -7,15 +7,19 @@ from contextvars import ContextVar
 from typing import Final
 
 import httpx
-from fastapi import HTTPException, Request
+from starlette.exceptions import HTTPException
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import UI_TEAM_ID, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+from litellm.proxy.auth.user_api_key_auth import _get_bearer_token_or_received_api_key
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.utils import CallTypesLiteral
 
 _UPSTREAM: Final = os.environ["UPSTREAM_LITELLM_BASE_URL"].rstrip("/")
@@ -42,25 +46,28 @@ forward_credential: Final = ForwardCredential()
 class PilotGateway:
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
-        self.upstream = httpx.AsyncClient(timeout=20)
+        self.upstream = get_async_httpx_client(
+            httpxSpecialProvider.PassThroughEndpoint,
+            params={"timeout": 20, "client_alias": "memory-pilot-upstream"},
+        )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "lifespan":
             try:
                 await self.app(scope, receive, send)
             finally:
-                await self.upstream.aclose()
+                await self.upstream.close()
             return
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
         request: Final = Request(scope, receive)
-        credential: Final = (
+        credential: Final = _get_bearer_token_or_received_api_key(
             request.headers.get("x-litellm-api-key")
             or request.headers.get("authorization")
             or request.headers.get("x-api-key")
             or ""
-        ).removeprefix("Bearer ")
+        )
         from litellm.proxy.proxy_server import master_key, prisma_client
 
         if not credential or master_key and secrets.compare_digest(credential, master_key):
