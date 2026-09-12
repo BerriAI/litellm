@@ -2332,6 +2332,9 @@ class ProxyBaseLLMRequestProcessing:
                     "Ensure common_processing_pre_call_logic was called before using this parameter."
                 )
         else:
+            from litellm.proxy.memory.gateway import prepare_gateway_memory
+
+            self.data.update(await prepare_gateway_memory(self.data, request, user_api_key_dict, route_type))
             self.data, logging_obj = await self._pre_call_with_fallbacks(
                 request=request,
                 general_settings=general_settings,

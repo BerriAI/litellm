@@ -1,0 +1,124 @@
+"""An isolated office pilot that preserves upstream gateway credentials."""
+
+import hashlib
+import os
+import secrets
+from contextvars import ContextVar
+from typing import Final
+
+import httpx
+from fastapi import HTTPException, Request
+from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
+
+from litellm.caching.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UI_TEAM_ID, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+from litellm.repositories.verification_token_repository import VerificationTokenRepository
+from litellm.types.utils import CallTypesLiteral
+
+_UPSTREAM: Final = os.environ["UPSTREAM_LITELLM_BASE_URL"].rstrip("/")
+_CREDENTIAL: Final[ContextVar[str | None]] = ContextVar("memory_pilot_credential", default=None)
+_INFERENCE: Final = frozenset(
+    ("/chat/completions", "/v1/chat/completions", "/responses", "/v1/responses", "/v1/messages")
+)
+_SELF_SERVICE: Final = frozenset(("/v2/memory/status", "/v2/memory/preference", "/v2/memory/entries"))
+
+
+class ForwardCredential(CustomLogger):
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict[str, object], call_type: CallTypesLiteral
+    ) -> dict[str, object]:
+        credential: Final = _CREDENTIAL.get()
+        if credential is None:
+            raise HTTPException(status_code=403, detail="Use your upstream gateway key for model calls")
+        return {**data, "api_key": credential, "api_base": _UPSTREAM}
+
+
+forward_credential: Final = ForwardCredential()
+
+
+class PilotGateway:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+        self.upstream = httpx.AsyncClient(timeout=20)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "lifespan":
+            try:
+                await self.app(scope, receive, send)
+            finally:
+                await self.upstream.aclose()
+            return
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        request: Final = Request(scope, receive)
+        credential: Final = (
+            request.headers.get("x-litellm-api-key")
+            or request.headers.get("authorization")
+            or request.headers.get("x-api-key")
+            or ""
+        ).removeprefix("Bearer ")
+        from litellm.proxy.proxy_server import master_key, prisma_client
+
+        if not credential or master_key and secrets.compare_digest(credential, master_key):
+            await self.app(scope, receive, send)
+            return
+        if prisma_client is None:
+            await JSONResponse({"error": "Pilot database unavailable"}, status_code=503)(scope, receive, send)
+            return
+        digest: Final = hashlib.sha256(credential.encode()).hexdigest()
+        tokens: Final = VerificationTokenRepository(prisma_client)
+        local_key: Final = await tokens.find_by_id(digest)
+        if local_key and local_key.team_id == UI_TEAM_ID:
+            await self.app(scope, receive, send)
+            return
+        if (
+            not credential.startswith("sk-")
+            and ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(credential) is not None
+        ):
+            await self.app(scope, receive, send)
+            return
+        path: Final = request.url.path.rstrip("/")
+        if path not in _INFERENCE | _SELF_SERVICE | {"/models", "/v1/models"} and not path.startswith(
+            "/v2/memory/entries/"
+        ):
+            await JSONResponse(
+                {"error": "Upstream keys can only use inference and their own memories"}, status_code=403
+            )(scope, receive, send)
+            return
+        try:
+            models: Final = await self.upstream.get(
+                _UPSTREAM + "/v1/models", headers={"Authorization": "Bearer " + credential}
+            )
+        except httpx.HTTPError:
+            await JSONResponse({"error": "Upstream gateway unavailable"}, status_code=503)(scope, receive, send)
+            return
+        if models.is_error:
+            await JSONResponse({"error": "Upstream gateway rejected this key"}, status_code=models.status_code)(
+                scope, receive, send
+            )
+            return
+        if path in ("/models", "/v1/models"):
+            await JSONResponse(models.json())(scope, receive, send)
+            return
+        await tokens.table.upsert(
+            where={"token": digest},
+            data={
+                "create": {"token": digest, "models": [], "key_alias": "Memory pilot " + digest[:8]},
+                "update": {},
+            },
+        )
+        token: Final = _CREDENTIAL.set(credential)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            _CREDENTIAL.reset(token)
+
+
+def create_app() -> PilotGateway:
+    from litellm.proxy.proxy_server import app
+
+    return PilotGateway(app)

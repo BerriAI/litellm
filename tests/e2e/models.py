@@ -69,6 +69,7 @@ class ObjectPermission(BaseModel):
 
 
 class KeyGenerateBody(BaseModel):
+    max_parallel_requests: int | None = None
     models: list[str] = []
     duration: str | None = None
     max_budget: float | None = None
@@ -1175,6 +1176,7 @@ class UserNewBody(BaseModel):
     user_email: str
     user_role: UserRole
     user_id: str | None = None
+    auto_create_key: bool | None = None
 
 
 class UserNewResponse(BaseModel):
@@ -1304,3 +1306,102 @@ class ReadinessDetailsResponse(ReadinessResponse):
 
     litellm_version: str | None = None
     success_callbacks: list[str] = []
+
+
+class MemoryPolicyBody(BaseModel):
+    target_type: Literal["gateway", "organization", "team", "project", "user", "key"]
+    target_id: str
+    activation: Literal["disabled", "opt_in", "automatic"]
+    scope: Literal["key", "user", "team", "project", "organization"] = "key"
+
+
+class MemoryPolicyData(MemoryPolicyBody):
+    policy_id: str
+
+
+class MemoryPreferenceBody(BaseModel):
+    enabled: bool
+
+
+class MemoryStatusData(BaseModel):
+    active: bool
+    activation: str
+    scope: str | None
+    opted_in: bool
+    policy_id: str | None
+
+
+class MemoryEntryParams(BaseModel):
+    query: str = ""
+    limit: int = 20
+    key_id: str | None = None
+    offset: int = 0
+
+
+class MemoryCaptureBody(BaseModel):
+    key: str
+    title: str
+    content: str
+    evidence: str
+    expected_revision: str | None = None
+
+
+class MemoryEntryData(BaseModel):
+    memory_id: str
+    key: str
+    title: str
+    content: str
+    evidence: str
+    updated_at: str
+
+
+class MemoryEntriesData(RootModel[list[MemoryEntryData]]):
+    pass
+
+
+class MemoryLegacyParams(BaseModel):
+    key_prefix: str = "memory-v2:"
+    page: int = 1
+    page_size: int = 500
+
+
+class MemoryLegacyRow(BaseModel):
+    memory_id: str
+    key: str
+    user_id: str | None = None
+
+
+class MemoryLegacyRows(BaseModel):
+    memories: list[MemoryLegacyRow]
+    total: int
+
+
+class MemoryResponsesBody(BaseModel):
+    model: str
+    input: str
+    stream: bool
+    max_output_tokens: int = 1200
+    store: bool = False
+    cache: dict[str, bool] = {"no-cache": True}
+
+
+class MemoryStreamDelta(BaseModel):
+    content: str | None = None
+    text: str | None = None
+
+
+class MemoryStreamChoice(BaseModel):
+    delta: MemoryStreamDelta = MemoryStreamDelta()
+
+
+class MemoryStreamEvent(BaseModel):
+    delta: MemoryStreamDelta | str | None = None
+    choices: list[MemoryStreamChoice] = []
+
+    @property
+    def text(self) -> str:
+        if isinstance(self.delta, str):
+            return self.delta
+        if self.delta:
+            return self.delta.text or self.delta.content or ""
+        return "".join(choice.delta.content or "" for choice in self.choices)

@@ -1,0 +1,15 @@
+model_list:
+  - model_name: "*"
+    litellm_params:
+      model: litellm_proxy/*
+      api_base: os.environ/UPSTREAM_LITELLM_BASE_URL
+    model_info:
+      supports_function_calling: true
+litellm_settings:
+  callbacks:
+    - hooks.forward_credential
+  drop_params: true
+  turn_off_message_logging: true
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  store_model_in_db: true
