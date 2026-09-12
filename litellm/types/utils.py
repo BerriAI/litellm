@@ -2920,6 +2920,7 @@ RoutingDecisionCause = Literal[
     # same tier served instead. The displaced group rides in signals. Reported even on a kept
     # session pin, since the pinned model did not serve the request.
     "health_failover",
+    "health_default_fallback",
     "session_affinity_pin",
     "session_affinity_escalation",
     # classification_mode 'user_turn': the request is an agent loop's continuation turn (no new

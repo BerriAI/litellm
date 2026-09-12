@@ -44,6 +44,7 @@ from litellm.types.llms.openai import (
 from litellm.types.responses.main import (
     OutputCodeInterpreterCall,
     build_code_interpreter_log_outputs,
+    build_web_search_call,
 )
 from litellm.types.utils import (
     Delta,
@@ -649,6 +650,7 @@ class ModelResponseIterator:
         # Accumulate web_search_tool_result blocks for multi-turn reconstruction
         # See: https://github.com/BerriAI/litellm/issues/17737
         self.web_search_results: list[dict[str, object]] = []
+        self._web_search_calls: dict[str, object] = {}  # mutable-ok: provider call state by id
 
         # Accumulate compaction blocks for multi-turn reconstruction
         self.compaction_blocks: list[dict[str, object]] = []
@@ -724,10 +726,11 @@ class ModelResponseIterator:
         content_block: Final = ContentBlockDelta(**chunk)
         thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] = []
 
-        self.content_blocks.append(content_block)
         if "text" in content_block["delta"]:
             text = content_block["delta"]["text"]
-        elif "partial_json" in content_block["delta"]:
+            return text, tool_use, thinking_blocks, provider_specific_fields, reasoning_content
+        self.content_blocks.append(content_block)
+        if "partial_json" in content_block["delta"]:
             # Only emit tool calls if we're in a tool_use or server_tool_use block
             # web_search_tool_result blocks also have input_json_delta but should not be treated as tool calls
             # See: https://github.com/BerriAI/litellm/issues/17254
@@ -820,6 +823,19 @@ class ModelResponseIterator:
             content_block_start = ContentBlockStartText(**chunk)
 
         return content_block_start
+
+    def _web_search_call_snapshot(self) -> dict[str, object]:
+        return dict(self._web_search_calls)  # mutable-ok: stream payload snapshot
+
+    def _complete_web_search_call(self, result: dict[str, object]) -> None:
+        tool_use_id: Final = result.get("tool_use_id")
+        if not isinstance(tool_use_id, str) or tool_use_id not in self._web_search_calls:
+            return
+        self._web_search_calls[tool_use_id] = build_web_search_call(
+            tool_id=tool_use_id,
+            tool_input=self._server_tool_inputs.get(tool_use_id, {}),  # mutable-ok: empty provider input
+            result=result,
+        )
 
     def _build_code_interpreter_results(self) -> list:
         """Convert accumulated tool_results to OutputCodeInterpreterCall objects.
@@ -922,6 +938,14 @@ class ModelResponseIterator:
                         self._current_server_tool_id = content_block_start["content_block"]["id"]
                         tool_input: Final = content_block_start["content_block"].get("input", {})
                         self._server_tool_inputs[self._current_server_tool_id] = tool_input
+                        if _stream_tool_name == "web_search":
+                            self._web_search_calls[self._current_server_tool_id] = build_web_search_call(
+                                self._current_server_tool_id,
+                                tool_input,
+                                {"content": []},  # mutable-ok: no provider result yet
+                                status="in_progress",
+                            )
+                            provider_specific_fields["web_search_calls"] = self._web_search_call_snapshot()
                     # Include caller information if present (for programmatic tool calling)
                     if "caller" in content_block_start["content_block"]:
                         caller_data: Final = content_block_start["content_block"]["caller"]
@@ -956,7 +980,9 @@ class ModelResponseIterator:
                         # The full content comes in content_block_start, not in deltas
                         # See: https://github.com/BerriAI/litellm/issues/17737
                         self.web_search_results.append(content_block_start["content_block"])
+                        self._complete_web_search_call(content_block_start["content_block"])
                         provider_specific_fields["web_search_results"] = self.web_search_results
+                        provider_specific_fields["web_search_calls"] = self._web_search_call_snapshot()
                     elif content_type == "web_fetch_tool_result":
                         # Capture web_fetch_tool_result for multi-turn reconstruction
                         # The full content comes in content_block_start, not in deltas
