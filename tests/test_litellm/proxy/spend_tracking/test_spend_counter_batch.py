@@ -11,6 +11,7 @@ import pytest
 import litellm.proxy.proxy_server as ps
 from litellm.caching.redis_cache import RedisCache
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     SpendCounterBatch,
     active_spend_counter_batch,
@@ -168,9 +169,7 @@ async def test_get_current_spend_inside_the_scope_costs_one_mget_for_all_admissi
         user_spend = await ps.get_current_spend(counter_key="spend:user:user", fallback_spend=7.0)
 
     assert (key_spend, team_spend, org_spend, user_spend) == (3.0, 4.0, 5.0, 7.0)
-    assert [c for c in redis.commands if c.startswith("GET ")] == ["GET spend:user:user"], (
-        "only the cold reseed re-reads"
-    )
+    assert [c for c in redis.commands if c.startswith("GET ")] == [], "the cold reseed reuses the MGET miss"
     assert [c for c in redis.commands if c.startswith("MGET ")] == [f"MGET {' '.join(sorted(TOKEN_KEYS))}"]
 
 
@@ -248,3 +247,54 @@ async def test_batch_reads_never_touch_a_prisma_client_when_redis_answers(monkey
         assert await ps.get_current_spend(counter_key="spend:key:hashed", fallback_spend=0.0) == 3.0
 
     assert prisma.db.mock_calls == []
+
+
+def _reseed_prisma(spend: float) -> MagicMock:
+    prisma = MagicMock()
+    prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=MagicMock(spend=spend))
+    return prisma
+
+
+@pytest.mark.asyncio
+async def test_reseed_reuses_the_admission_mget_instead_of_its_own_get():
+    redis = CountingRedis({"spend:key:hashed": 7.5})
+    prisma = _reseed_prisma(spend=1.0)
+    cache = _spend_counter_cache(redis)
+
+    with spend_counter_batch_scope(redis):
+        bind_admission_counter_keys(TOKEN, end_user_id=None)
+        value = await SpendCounterReseed.coalesced(prisma, cache, counter_key="spend:key:hashed")
+
+    assert value == 7.5
+    assert redis.commands == [
+        "MGET spend:key:hashed spend:org:org spend:team:team spend:team_member:user:team spend:user:user"
+    ]
+    assert prisma.db.mock_calls == []
+
+
+@pytest.mark.asyncio
+async def test_reseed_treats_a_batched_clean_miss_as_authoritative_and_seeds_from_the_db():
+    redis = CountingRedis()
+    redis.async_set_cache = AsyncMock(return_value=True)
+    prisma = _reseed_prisma(spend=2.25)
+    cache = _spend_counter_cache(redis, in_memory={"spend:key:hashed": 99.0})
+
+    with spend_counter_batch_scope(redis):
+        bind_admission_counter_keys(TOKEN, end_user_id=None)
+        value = await SpendCounterReseed.coalesced(prisma, cache, counter_key="spend:key:hashed")
+
+    assert value == 2.25
+    assert [c for c in redis.commands if c.startswith("GET")] == []
+    redis.async_set_cache.assert_awaited_once_with(key="spend:key:hashed", value=2.25, nx=True)
+
+
+@pytest.mark.asyncio
+async def test_reseed_outside_the_scope_still_re_checks_redis_itself():
+    redis = CountingRedis({"spend:key:hashed": 4.0})
+
+    value = await SpendCounterReseed.coalesced(
+        _reseed_prisma(spend=1.0), _spend_counter_cache(redis), "spend:key:hashed"
+    )
+
+    assert value == 4.0
+    assert redis.commands == ["GET spend:key:hashed"]
