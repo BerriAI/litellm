@@ -936,6 +936,41 @@ class TestSingulrLoggingHook:
         assert guardrail_information[0]["guardrail_status"] == "success"
 
     @pytest.mark.asyncio
+    async def test_mcp_tool_call_is_not_reported(self, singulr_guardrail):
+        """MCP traffic is already covered by the pre/post_mcp_call hooks, which send
+        the richer mcp_request/mcp_response payloads. The logging_only hook sees the
+        same call again with model="MCP: <tool_name>" and must skip it so Singulr
+        doesn't get a duplicate, lower-fidelity report of every tool call."""
+        kwargs = {"model": "MCP: get_weather", "messages": [{"role": "user", "content": "hi"}]}
+        with patch.object(singulr_guardrail.async_handler, "post") as mock_post:
+            updated_kwargs, result = await singulr_guardrail.async_logging_hook(
+                kwargs=kwargs, result={"choices": []}, call_type="acompletion"
+            )
+        mock_post.assert_not_called()
+        assert "standard_logging_object" not in updated_kwargs
+        assert result == {"choices": []}
+
+    @pytest.mark.asyncio
+    async def test_mcp_list_tools_call_is_not_reported(self, singulr_guardrail):
+        kwargs = {"model": "MCP: list_tools", "messages": [{"role": "user", "content": "hi"}]}
+        with patch.object(singulr_guardrail.async_handler, "post") as mock_post:
+            await singulr_guardrail.async_logging_hook(kwargs=kwargs, result=None, call_type="acompletion")
+        mock_post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_mcp_model_is_still_reported(self, singulr_guardrail):
+        """Guard against the skip being too broad: a normal LLM call whose model
+        merely mentions MCP later in the name must still be reported."""
+        resp = _make_response({"should_block": False})
+        kwargs = {"model": "gpt-4o-mcp", "messages": [{"role": "user", "content": "hi"}]}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            updated_kwargs, _ = await singulr_guardrail.async_logging_hook(
+                kwargs=kwargs, result=None, call_type="acompletion"
+            )
+        mock_post.assert_called_once()
+        assert updated_kwargs["standard_logging_object"]["guardrail_information"][0]["guardrail_status"] == "success"
+
+    @pytest.mark.asyncio
     async def test_records_standard_logging_guardrail_information(self, singulr_guardrail):
         resp = _make_response({"should_block": False})
         kwargs = {"messages": [{"role": "user", "content": "hi"}]}
@@ -1112,7 +1147,7 @@ class TestSingulrRequestWiring:
             )
         call_kwargs = mock_post.call_args.kwargs
         assert call_kwargs["timeout"] == 5.0
-        assert call_kwargs["url"] == "https://api.test.singulr.ai/api/v1/ai-gateway/litellm"
+        assert call_kwargs["url"] == "https://api.test.singulr.ai/api/v1/ai-gateway/litellm-v2"
 
 
 class TestSingulrBuildHeaders:

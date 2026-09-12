@@ -44,9 +44,10 @@ from litellm.types.utils import (
 )
 
 _DEFAULT_API_BASE: Final = "http://localhost:8003"
-_GUARD_ENDPOINT: Final = "/api/v1/ai-gateway/litellm"
+_GUARD_ENDPOINT: Final = "/api/v1/ai-gateway/litellm-v2"
 _DEFAULT_TIMEOUT: Final = 30.0
 _EMPTY_MAPPING: Final[Mapping[str, Any]] = MappingProxyType({})
+_MCP_MODEL_PREFIX: Final = "MCP:"
 
 
 class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
@@ -375,6 +376,7 @@ class SingulrGuardrail(CustomGuardrail):
         singulr_resp_obj = SingulrGuardrailPayload(
             correlation_id=request_data.get("litellm_call_id"),
             guardrail_scope="response",
+            model_name=request_data.get("model"),
             messages=request_data.get("messages"),
             images=inputs.get("images"),
             response=assistant_message,
@@ -405,6 +407,7 @@ class SingulrGuardrail(CustomGuardrail):
         try:
             return SingulrGuardrailPayload(
                 correlation_id=kwargs.get("litellm_call_id"),
+                model_name=kwargs.get("model"),
                 guardrail_scope="response",
                 response=result,
                 metadata=metadata,
@@ -459,12 +462,21 @@ class SingulrGuardrail(CustomGuardrail):
             return "guardrail_intervened"
         return "success"
 
+    @staticmethod
+    def _is_mcp_call(kwargs: Mapping[str, Any]) -> bool:
+        model: Final = kwargs.get("model")
+        return isinstance(model, str) and model.startswith(_MCP_MODEL_PREFIX)
+
     async def async_logging_hook(
         self,
         kwargs: dict,  # mutable-ok: matches CustomLogger override; mutated via setdefault
         result: Any,  # noqa: ANN401  # required by CustomLogger.async_logging_hook override signature
         call_type: str,
     ) -> tuple[dict, Any]:
+        if self._is_mcp_call(kwargs):
+            verbose_proxy_logger.debug("Singulr: skipping logging_only report for MCP call %s", kwargs.get("model"))
+            return kwargs, result
+
         start_time: Final = datetime.now(timezone.utc)
         guardrail_status: Final = await self._logging_only_guardrail_status(kwargs=kwargs, result=result)
         if guardrail_status is None:
