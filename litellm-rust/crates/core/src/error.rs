@@ -21,6 +21,18 @@ pub enum Error {
         "Missing {provider} API Key - A call is being made to {provider} but no key is set either in the environment variables or via params"
     )]
     MissingApiKey { provider: &'static str },
+    #[error(
+        "invalid authentication configuration: Missing Azure AI credentials - set AZURE_AI_API_KEY or configure Entra ID"
+    )]
+    MissingAzureAiCredentials,
+    #[error(
+        "invalid authentication configuration: Missing Azure Document Intelligence credentials - set AZURE_DOCUMENT_INTELLIGENCE_API_KEY or configure Entra ID"
+    )]
+    MissingAzureDocumentIntelligenceCredentials,
+    #[error(
+        "Missing REDUCTO_API_KEY - set it in the environment or pass api_key to litellm.ocr()/litellm.aocr()"
+    )]
+    MissingReductoApiKey,
     #[error("upstream request failed with status {status}: {body}")]
     Http { status: u16, body: String },
     #[error("upstream network error: {0}")]
@@ -38,6 +50,28 @@ pub enum Error {
     /// keep a reference implementation treat this as "fall back", not "fail".
     #[error("unsupported by the rust path: {0}")]
     Unsupported(&'static str),
+}
+
+#[derive(Debug, ThisError)]
+pub(crate) enum MediaError {
+    #[error("media URL rejected by network policy")]
+    BlockedUrl,
+    #[error("media download is disabled")]
+    DownloadDisabled,
+    #[error("media download exceeds the maximum size")]
+    DownloadTooLarge,
+    #[error("too many redirects while fetching media")]
+    TooManyRedirects,
+    #[error("media redirect is missing a Location header")]
+    MissingRedirectLocation,
+    #[error("invalid media redirect")]
+    InvalidRedirect,
+    #[error("media download failed with status {0}")]
+    Http(u16),
+    #[error("media download timed out")]
+    Timeout,
+    #[error("{0}")]
+    Transport(#[from] TransportError),
 }
 
 #[derive(Clone, Debug, ThisError, PartialEq, Eq)]
@@ -93,6 +127,15 @@ impl From<TransportError> for Error {
     }
 }
 
+impl From<crate::AuthError> for Error {
+    fn from(error: crate::AuthError) -> Self {
+        match error {
+            crate::AuthError::MissingApiKey { provider } => Self::MissingApiKey { provider },
+            error => Self::Auth(error.to_string()),
+        }
+    }
+}
+
 pub fn json_type_name(value: &serde_json::Value) -> &'static str {
     match value {
         serde_json::Value::Null => "null",
@@ -107,6 +150,14 @@ pub fn json_type_name(value: &serde_json::Value) -> &'static str {
 #[cfg(test)]
 mod transport_tests {
     use super::*;
+
+    #[test]
+    fn missing_auth_key_preserves_provider_in_public_error() {
+        assert_eq!(
+            Error::from(crate::AuthError::MissingApiKey { provider: "Vertex" }),
+            Error::MissingApiKey { provider: "Vertex" }
+        );
+    }
 
     #[tokio::test]
     async fn transport_errors_remove_urls_and_keep_dispatch_context() {

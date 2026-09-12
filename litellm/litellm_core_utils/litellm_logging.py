@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
 
 from httpx import Response
 from pydantic import BaseModel, JsonValue
@@ -211,7 +211,7 @@ if TYPE_CHECKING:
     from litellm.integrations.otel.logger import OpenTelemetryV2
     from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
     from litellm.litellm_core_utils.llm_cost_calc.utils import BilledTokenRates
-    from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig, LoggedRelayResponse
+    from litellm.llms.base_llm.passthrough.transformation import PassthroughStreamCollector
 try:
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
         EnterpriseCallbackControls,
@@ -2396,52 +2396,17 @@ class Logging(LiteLLMLoggingBaseClass):
         for scope in [key for key in spans_logged if isinstance(key, tuple) and key[-1:] == ("success",)]:
             del spans_logged[scope]
 
-    def _flush_passthrough_collected_chunks_helper(
-        self,
-        raw_bytes: list[bytes],
-        provider_config: "BasePassthroughConfig",
-    ) -> Optional["LoggedRelayResponse"]:
-        all_chunks: Final = provider_config._convert_raw_bytes_to_str_lines(raw_bytes)
-        complete_streaming_response: Final = provider_config.handle_logging_collected_chunks(
-            all_chunks=all_chunks,
-            litellm_logging_obj=self,
-            model=self.model,
-            custom_llm_provider=self.model_call_details.get("custom_llm_provider", ""),
-            endpoint=self.model_call_details.get("endpoint", ""),
-        )
-        return complete_streaming_response
-
-    def flush_passthrough_collected_chunks(
-        self,
-        raw_bytes: list[bytes],
-        provider_config: "BasePassthroughConfig",
-    ):
+    def flush_passthrough_collected_chunks(self, collector: "PassthroughStreamCollector"):
         """
-        Flush collected chunks from the logging object
-        This is used to log the collected chunks once streaming is done on passthrough endpoints
-
-        1. Decode the raw bytes to string lines
-        2. Get the complete streaming response from the provider config
-        3. Log the complete streaming response (trigger success handler)
-        This is used for passthrough endpoints
+        Log the response a passthrough stream collector assembled once streaming is done (trigger success handler)
         """
-        complete_streaming_response: Final = self._flush_passthrough_collected_chunks_helper(
-            raw_bytes=raw_bytes,
-            provider_config=provider_config,
-        )
+        complete_streaming_response: Final = collector.build_logged_response(litellm_logging_obj=self)
 
         if complete_streaming_response is not None:
             self.success_handler(result=complete_streaming_response)
 
-    async def async_flush_passthrough_collected_chunks(
-        self,
-        raw_bytes: list[bytes],
-        provider_config: "BasePassthroughConfig",
-    ):
-        complete_streaming_response: Final = self._flush_passthrough_collected_chunks_helper(
-            raw_bytes=raw_bytes,
-            provider_config=provider_config,
-        )
+    async def async_flush_passthrough_collected_chunks(self, collector: "PassthroughStreamCollector"):
+        complete_streaming_response: Final = collector.build_logged_response(litellm_logging_obj=self)
 
         if complete_streaming_response is not None:
             await self.async_success_handler(result=complete_streaming_response)
@@ -6505,7 +6470,7 @@ def _get_traceback_str_for_error(error_str: str) -> str:
 from decimal import Decimal
 
 # used for unit testing
-from typing import Any, Optional, Union
+from typing import Any, Union
 
 
 def create_dummy_standard_logging_payload() -> StandardLoggingPayload:

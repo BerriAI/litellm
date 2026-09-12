@@ -1,3 +1,4 @@
+use crate::auth::error::MissingCredential;
 use crate::error::Error;
 use crate::messages::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
 
@@ -21,13 +22,7 @@ pub fn resolve_anthropic_api_key(
     non_empty(api_key)
         .map(str::to_string)
         .or_else(|| env_lookup(ANTHROPIC_API_KEY_ENV).filter(|value| !value.trim().is_empty()))
-        .ok_or_else(|| {
-            Error::Auth(
-                "Missing Anthropic API Key - Set `api_key` or the ANTHROPIC_API_KEY \
-                 environment variable"
-                    .to_string(),
-            )
-        })
+        .ok_or_else(|| Error::from(crate::AuthError::from(MissingCredential::AnthropicApiKey)))
 }
 
 pub fn complete_anthropic_url(

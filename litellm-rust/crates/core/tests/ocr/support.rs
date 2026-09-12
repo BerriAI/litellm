@@ -8,7 +8,11 @@ use crate::ocr::wire::{OcrWireRequest, decode_request};
 use crate::ocr::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrClient};
 
 pub(crate) fn ocr_client() -> OcrClient {
-    OcrClient::for_test(reqwest::Client::new())
+    let document_http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("test document client builds");
+    OcrClient::for_test(reqwest::Client::new(), document_http)
 }
 
 pub(crate) async fn perform_ocr(
@@ -26,6 +30,7 @@ pub(crate) fn wire_request(model: &str, base: &str, options: Value) -> LiteLLMOc
         custom_llm_provider: None,
         extra_headers: None,
         optional_params: options.as_object().unwrap().clone(),
+        input_sources: Default::default(),
         timeout_seconds: Some(2.0),
     })
     .unwrap()

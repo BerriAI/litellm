@@ -30,12 +30,17 @@ struct TokenCounter {
 impl TokenCounter {
     #[new]
     fn new(py: Python<'_>, tokenizer_json: &str) -> PyResult<Self> {
-        let inner = release_gil(py, || CoreTokenCounter::from_json(tokenizer_json))
-            .map_err(token_count_error_to_pyerr)?;
-        Ok(Self {
-            inner: Arc::new(inner),
-            encode_slots: Arc::new(Semaphore::new(encode_parallelism())),
-        })
+        Self::load(py, || CoreTokenCounter::from_json(tokenizer_json))
+    }
+
+    #[staticmethod]
+    fn from_cl100k_ranks(py: Python<'_>, rank_file: &str) -> PyResult<Self> {
+        Self::load(py, || CoreTokenCounter::from_cl100k_ranks(rank_file))
+    }
+
+    #[staticmethod]
+    fn from_o200k_ranks(py: Python<'_>, rank_file: &str) -> PyResult<Self> {
+        Self::load(py, || CoreTokenCounter::from_o200k_ranks(rank_file))
     }
 
     fn acount_request<'py>(&self, py: Python<'py>, body: &[u8]) -> PyResult<Bound<'py, PyAny>> {
@@ -58,6 +63,19 @@ impl TokenCounter {
     }
 }
 
+impl TokenCounter {
+    fn load(
+        py: Python<'_>,
+        load: impl FnOnce() -> Result<CoreTokenCounter, Error> + Send,
+    ) -> PyResult<Self> {
+        let inner = release_gil(py, load).map_err(token_count_error_to_pyerr)?;
+        Ok(Self {
+            inner: Arc::new(inner),
+            encode_slots: Arc::new(Semaphore::new(encode_parallelism())),
+        })
+    }
+}
+
 fn encode_parallelism() -> usize {
     available_parallelism().map_or(TOKEN_COUNT_FALLBACK_PARALLELISM, NonZero::get)
 }
@@ -70,7 +88,7 @@ fn count_body(counter: &CoreTokenCounter, body: &[u8]) -> Result<InputTokenCount
 fn token_count_error_to_pyerr(error: Error) -> PyErr {
     let message = error.to_string();
     match error {
-        Error::Load(_) => PyValueError::new_err(message),
+        Error::Load(_) | Error::Ranks(_) | Error::UnicodeClasses => PyValueError::new_err(message),
         Error::RequestParse(_)
         | Error::MissingInput
         | Error::FloatText

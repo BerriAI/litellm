@@ -28,6 +28,7 @@ from litellm.integrations.otel.model.payloads import (
 
 LANGFUSE_OBSERVATION_INPUT: Final = "langfuse.observation.input"
 LANGFUSE_OBSERVATION_OUTPUT: Final = "langfuse.observation.output"
+LANGFUSE_TRACE_NAME: Final = "langfuse.trace.name"
 
 
 class LangfuseMapper:
@@ -36,6 +37,7 @@ class LangfuseMapper:
         "langfuse.observation.model.name": lambda d: d.request_model or None,
         "langfuse.observation.metadata.provider": lambda d: d.provider or None,
         "langfuse.observation.id": lambda d: d.identity.call_id or None,
+        LANGFUSE_TRACE_NAME: lambda d: d.trace_name or None,
         "langfuse.trace.metadata.team_id": lambda d: d.identity.team_id or None,
         "langfuse.trace.metadata.team_alias": lambda d: d.identity.team_alias or None,
     }

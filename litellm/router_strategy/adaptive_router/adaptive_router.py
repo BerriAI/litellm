@@ -461,6 +461,8 @@ class AdaptiveRouter:
                 if d_alpha == 0 and d_beta == 0:
                     continue
                 cell_key = (attribution_type, target_model)
+                if cell_key not in self._cells:
+                    continue
                 self._cells[cell_key] = apply_delta(
                     self._cells[cell_key],
                     d_alpha,
