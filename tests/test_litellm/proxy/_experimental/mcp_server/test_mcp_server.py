@@ -9021,6 +9021,14 @@ class TestAgent365ChallengeAtConnect:
         )
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("path", ["/mcp", "/mcp/tools,other"])
+    async def test_aggregate_route_is_not_challenged_at_connect(self, agent_365_guardrail, path):
+        """The per-server metadata's ``resource`` can never equal the aggregate ``/mcp`` URL the client
+        connected to (RFC 9728 3.3), and one guarded server must not 401 a multi-server connect, so the
+        Agent 365 challenge is left to tools/call there."""
+        assert await self._connect(self._server([self.GATEWAY_SCOPE]), None, path=path) is None
+
+    @pytest.mark.asyncio
     async def test_entra_assertion_present_connects(self, agent_365_guardrail):
         bearer = {"Authorization": "Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1LTEifQ.c2ln"}
         assert await self._connect(self._server([self.GATEWAY_SCOPE]), bearer) is None

@@ -6606,6 +6606,19 @@ class TestMCPServerManager:
         assert by_prefixed_name is not None and by_prefixed_name.description == "v2"
         assert manager.get_listed_tool(server, "missing") is None
 
+    def test_invalidate_discovery_lists_drops_listed_tools(self):
+        manager = MCPServerManager()
+        server = MCPServer(server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv")
+        other = MCPServer(server_id="other", name="other", transport=MCPTransport.http, url="http://other")
+        manager._create_prefixed_tools([MCPTool(name="echo", description="old", inputSchema={})], server)
+        manager._create_prefixed_tools([MCPTool(name="ping", description="kept", inputSchema={})], other)
+
+        manager._invalidate_discovery_lists(server.server_id)
+
+        assert manager.get_listed_tool(server, "echo") is None
+        kept = manager.get_listed_tool(other, "ping")
+        assert kept is not None and kept.description == "kept"
+
     @pytest.mark.asyncio
     async def test_get_allowed_mcp_servers_with_user_api_key_auth(self):
         """

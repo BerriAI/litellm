@@ -4501,6 +4501,7 @@ class MCPServerManager:
         self._prompt_discovery_cache.invalidate(server_id)
         self._resource_discovery_cache.invalidate(server_id)
         self._template_discovery_cache.invalidate(server_id)
+        self._listed_tools_by_server_id.pop(server_id, None)
 
     def _discovery_key(
         self,

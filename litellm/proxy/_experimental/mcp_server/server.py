@@ -4144,10 +4144,13 @@ if MCP_AVAILABLE:
             # header lost, so the discovery flow needs this pre-emptive challenge. Servers gated by an
             # Agent 365 guardrail (OBO to the evaluate API) get the same challenge, also when the only
             # bearer is the LiteLLM key itself, which admits the caller but is not an exchangeable subject.
+            # Only on the server's own route: the per-server metadata ``resource`` must equal the URL the
+            # client connected to (RFC 9728 3.3), which aggregate ``/mcp`` and multi-server connects never do.
             if server and (
                 (server.auth_type == MCPAuth.oauth2_token_exchange and not oauth2_headers)
                 or (
-                    not agent_365_subject_token_present(oauth2_headers)
+                    _get_mcp_servers_in_path(get_route_relative_request_path(scope)) == [server_name]
+                    and not agent_365_subject_token_present(oauth2_headers)
                     and agent_365_authorization_servers(server, user_api_key_auth)
                 )
             ):
