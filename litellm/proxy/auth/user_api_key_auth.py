@@ -1807,11 +1807,6 @@ async def _user_api_key_auth_builder(
 
             return valid_token
 
-        if valid_token is not None:
-            await _prefetch_referenced_auth_objects(
-                valid_token, end_user_id=end_user_id, user_api_key_cache=user_api_key_cache, prisma_client=prisma_client
-            )
-
         if (
             valid_token is not None
             and isinstance(valid_token, UserAPIKeyAuth)
@@ -1951,9 +1946,6 @@ async def _user_api_key_auth_builder(
             valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
             valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
             valid_token.allowed_model_region = end_user_params.get("allowed_model_region")
-            await _prefetch_referenced_auth_objects(
-                valid_token, end_user_id=end_user_id, user_api_key_cache=user_api_key_cache, prisma_client=prisma_client
-            )
 
         if valid_token is not None:
             valid_token = _update_key_budget_with_temp_budget_increase(valid_token)
@@ -1984,6 +1976,9 @@ async def _user_api_key_auth_builder(
                 request=request,
                 llm_model_list=llm_model_list,
                 llm_router=llm_router,
+            )
+            await _prefetch_referenced_auth_objects(
+                valid_token, end_user_id=end_user_id, user_api_key_cache=user_api_key_cache, prisma_client=prisma_client
             )
 
             # Check 2. If user_id for this token is in budget - done in common_checks()
@@ -2895,7 +2890,8 @@ async def _prefetch_referenced_auth_objects(
     user_api_key_cache: UserApiKeyCache,
     prisma_client: PrismaClient | None,
 ) -> None:
-    """Warm every object and spend counter the checks below will read, in one MGET each (one DB query when cold)."""
+    """Warm every object and spend counter the checks below will read, in one MGET each (one DB query when cold).
+    Runs after the key's model access check so a denied request costs no more than it did before."""
     bind_admission_counter_keys(valid_token, end_user_id=end_user_id or None)
     await prefetch_auth_objects(
         refs=AuthObjectRefs.from_token(valid_token),
