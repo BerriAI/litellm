@@ -11236,12 +11236,13 @@ def test_named_resource_discovery_follows_matching_authorization_issuer(
     assert authorization.json()["issuer"] == resource["authorization_servers"][0]
 
 
-def test_static_root_path_authorization_discovery_preserves_issuer(monkeypatch):
+def test_static_root_path_authorization_discovery_preserves_issuer(monkeypatch, tmp_path):
     import subprocess
     import sys
 
     monkeypatch.setenv("SERVER_ROOT_PATH", "/gateway")
     monkeypatch.setenv("PROXY_BASE_URL", "http://testserver/gateway")
+    monkeypatch.setenv("LITELLM_UI_PATH", str(tmp_path / "ui"))
     result = subprocess.run(
         [
             sys.executable,
