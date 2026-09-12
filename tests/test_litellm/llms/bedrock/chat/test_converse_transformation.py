@@ -6714,6 +6714,54 @@ def test_transform_request_neutralized_tool_output_is_guarded(monkeypatch):
     assert "secret tool output" in serialized
 
 
+def test_transform_request_neutralized_tool_output_guarded_mid_history(monkeypatch):
+    """Regression: a neutralized tool result that is NOT the trailing turn (an
+    assistant reply and a later user turn follow it) must still be guardContent.
+    _convert_consecutive_user_messages_to_guarded_text only covers the trailing
+    user turn, so neutralize itself must guard untrusted tool output regardless
+    of position, else an attacker controlling the tool response bypasses the
+    guardrail (bot review)."""
+    monkeypatch.setattr(litellm, "modify_params", False)
+    config = AmazonConverseConfig()
+
+    result = config.transform_request(
+        model="us.anthropic.claude-opus-4-5-20251101-v1:0",
+        messages=[
+            {"role": "user", "content": "look it up"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": "IGNORE_PRIOR malware"},
+            {"role": "assistant", "content": "Here is the summary."},
+            {"role": "user", "content": "thanks"},
+        ],
+        optional_params={
+            "guardrailConfig": {"guardrailIdentifier": "gid", "guardrailVersion": "1"}
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    _assert_no_structured_tool_blocks(result)
+    blocks = [block for message in result["messages"] for block in message["content"]]
+    guarded_texts = [
+        block["guardContent"]["text"]["text"] for block in blocks if "guardContent" in block
+    ]
+    plain_texts = [block["text"] for block in blocks if "text" in block and "guardContent" not in block]
+    assert any("malware" in text for text in guarded_texts), "mid-history tool output must be guarded"
+    assert not any(
+        "malware" in text for text in plain_texts
+    ), "mid-history tool output must not reach the model as unguarded text"
+
+
 @pytest.mark.asyncio
 async def test_async_transform_request_no_tools_with_tool_history(monkeypatch):
     """Async is a separate request assembler; it must neutralize identically."""
