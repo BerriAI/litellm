@@ -644,11 +644,36 @@ async def test_perform_health_check_narrows_to_a_team_deployment_by_its_public_n
         "litellm.proxy.health_check._perform_health_check", probe
     ):
         healthy, unhealthy, _ = await perform_health_check(
-            model_list=[team_deployment, other_deployment], model="bedrock-nova"
+            model_list=[team_deployment, other_deployment], model="bedrock-nova", team_id="team-b"
         )
 
     assert [m["model_info"]["id"] for m in probe.call_args.args[0]] == ["id-team-b"]
     assert [ep["model_id"] for ep in healthy] == ["id-team-b"]
+    assert unhealthy == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("team_id", [None, "team-a"])
+async def test_perform_health_check_keeps_a_public_name_to_the_owning_team(team_id):
+    """A team's public model name is not a global alias: callers outside the team must not probe its deployment."""
+    from litellm.proxy.health_check import perform_health_check
+
+    team_deployment = {
+        "model_name": "bedrock-nova_team-b_9f2c",
+        "litellm_params": {"model": "bedrock/us.amazon.nova-2-lite-v1:0"},
+        "model_info": {"id": "id-team-b", "team_id": "team-b", "team_public_model_name": "bedrock-nova"},
+    }
+    probe = AsyncMock(return_value=([{"model": "bedrock/us.amazon.nova-2-lite-v1:0", "model_id": "id-team-b"}], [], {}))
+
+    with patch(  # test-quality-ok: the deployments handed to the probe are the assertion; no injection seam
+        "litellm.proxy.health_check._perform_health_check", probe
+    ):
+        healthy, unhealthy, _ = await perform_health_check(
+            model_list=[team_deployment], model="bedrock-nova", team_id=team_id
+        )
+
+    probe.assert_not_awaited()
+    assert healthy == []
     assert unhealthy == []
 
 
