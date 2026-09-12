@@ -1182,7 +1182,11 @@ async def test_end_user_jwt_auth(monkeypatch):
         "llm_router",
         router,
     )
-    setattr(litellm.proxy.proxy_server, "prisma_client", {})
+    # No memory policy exists for this authenticated JWT user.
+    memory_db = MagicMock()
+    memory_db.db.litellm_memorypolicy.find_many = AsyncMock(return_value=[])
+    memory_db.db.litellm_memorypreference.find_unique = AsyncMock(return_value=None)
+    setattr(litellm.proxy.proxy_server, "prisma_client", memory_db)
     setattr(litellm.proxy.proxy_server, "jwt_handler", jwt_handler)
     from litellm.proxy.proxy_server import cost_tracking
 

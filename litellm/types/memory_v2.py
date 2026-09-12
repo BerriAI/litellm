@@ -1,7 +1,8 @@
 from datetime import datetime
-from typing import Literal, Self, TypeAlias
+from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from typing_extensions import Self
 
 MemoryTarget: TypeAlias = Literal["gateway", "organization", "team", "project", "user", "key"]
 MemoryScope: TypeAlias = Literal["key", "user", "team", "project", "organization"]

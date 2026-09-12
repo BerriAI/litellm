@@ -5,7 +5,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from litellm.proxy._types import UI_TEAM_ID, LitellmUserRoles, UserAPIKeyAuth, user_api_key_has_admin_view
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.memory.memory_endpoints import is_memory_team_admin, require_memory_prisma
-from litellm.proxy.memory.policy import MemoryAccess, MemoryIdentity, memory_digest, resolve_memory_access
+from litellm.proxy.memory.policy import (
+    MemoryAccess,
+    MemoryIdentity,
+    invalidate_memory_configuration,
+    memory_digest,
+    memory_primary_client,
+    resolve_memory_access,
+)
 from litellm.proxy.memory.store import MemoryStore
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.project_repository import ProjectRepository
@@ -41,7 +48,7 @@ router: Final = APIRouter(
 async def require_policy_admin(
     auth: UserAPIKeyAuth, target_type: MemoryTarget, target_id: str, *, write: bool = True
 ) -> None:
-    prisma: Final = require_memory_prisma()
+    prisma: Final = memory_primary_client(require_memory_prisma())
     if write and auth.user_role in (LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY):
         raise HTTPException(status_code=403, detail="Memory policies require administrator write access")
     proxy_admin: Final = (
@@ -92,7 +99,7 @@ async def list_policies(
         raise HTTPException(status_code=403, detail="Select a target you administer")
     elif target_type is not None or target_id is not None:
         raise HTTPException(status_code=400, detail="Provide both target_type and target_id")
-    rows: Final = await MemoryPolicyRepository(require_memory_prisma()).table.find_many(
+    rows: Final = await MemoryPolicyRepository(memory_primary_client(require_memory_prisma())).table.find_many(
         where={  # mutable-ok: Prisma serializes these as native JSON containers.
             "target_type": target_type,
             "target_id": target_id,
@@ -121,7 +128,7 @@ async def set_policy(policy: MemoryPolicyInput, auth: UserAPIKeyAuth = _AUTH) ->
         **policy.model_dump(),
         "updated_by": auth.user_id or "proxy-admin",
     }
-    row: Final = await MemoryPolicyRepository(require_memory_prisma()).table.upsert(
+    row: Final = await MemoryPolicyRepository(memory_primary_client(require_memory_prisma())).table.upsert(
         where={  # mutable-ok: Prisma serializes these as native JSON containers.
             "policy_id": policy_id
         },
@@ -133,12 +140,13 @@ async def set_policy(policy: MemoryPolicyInput, auth: UserAPIKeyAuth = _AUTH) ->
             "update": fields,
         },
     )
+    await invalidate_memory_configuration()
     return MemoryPolicy.model_validate(row, from_attributes=True)
 
 
 @router.delete("/policies/{policy_id}", status_code=204)
 async def delete_policy(policy_id: str, auth: UserAPIKeyAuth = _AUTH) -> Response:
-    table: Final = MemoryPolicyRepository(require_memory_prisma()).table
+    table: Final = MemoryPolicyRepository(memory_primary_client(require_memory_prisma())).table
     row: Final = await table.find_unique(
         where={  # mutable-ok: Prisma serializes these as native JSON containers.
             "policy_id": policy_id
@@ -153,13 +161,14 @@ async def delete_policy(policy_id: str, auth: UserAPIKeyAuth = _AUTH) -> Respons
             "policy_id": policy_id
         }
     )
+    await invalidate_memory_configuration()
     return Response(status_code=204)
 
 
 @router.get("/preference", response_model=MemoryPreference)
 async def get_preference(auth: UserAPIKeyAuth = _AUTH) -> MemoryPreference:
     subject: Final = MemoryIdentity.from_auth(auth).preference_subject
-    row: Final = await MemoryPreferenceRepository(require_memory_prisma()).table.find_unique(
+    row: Final = await MemoryPreferenceRepository(memory_primary_client(require_memory_prisma())).table.find_unique(
         where={  # mutable-ok: Prisma serializes these as native JSON containers.
             "subject": subject
         }
@@ -174,13 +183,13 @@ async def set_preference(preference: MemoryPreference, auth: UserAPIKeyAuth = _A
         raise HTTPException(status_code=403, detail="Read-only users cannot change memory preferences")
     subject: Final = identity.preference_subject
     if not preference.enabled:
-        await MemoryPreferenceRepository(require_memory_prisma()).table.delete_many(
+        await MemoryPreferenceRepository(memory_primary_client(require_memory_prisma())).table.delete_many(
             where={  # mutable-ok: Prisma serializes these as native JSON containers.
                 "subject": subject
             }
         )
         return preference
-    await MemoryPreferenceRepository(require_memory_prisma()).table.upsert(
+    await MemoryPreferenceRepository(memory_primary_client(require_memory_prisma())).table.upsert(
         where={  # mutable-ok: Prisma serializes these as native JSON containers.
             "subject": subject
         },
@@ -206,7 +215,7 @@ async def get_status(
 
 
 async def access_for_key(auth: UserAPIKeyAuth, key_id: str | None) -> MemoryAccess:
-    prisma: Final = require_memory_prisma()
+    prisma: Final = memory_primary_client(require_memory_prisma())
     if key_id is None:
         return await resolve_memory_access(prisma, MemoryIdentity.from_auth(auth))
     key: Final = await VerificationTokenRepository(prisma).find_by_id(key_id, id_field="token")
@@ -224,7 +233,7 @@ async def access_for_key(auth: UserAPIKeyAuth, key_id: str | None) -> MemoryAcce
         user_id=key.user_id,
         team_id=key.team_id,
         project_id=key.project_id,
-        organization_id=team.organization_id if team else key.org_id,
+        organization_id=key.org_id or (team.organization_id if team else None),
         read_only=MemoryIdentity.from_auth(auth).read_only,
     )
     return await resolve_memory_access(prisma, identity)
@@ -238,7 +247,7 @@ async def list_entries(
     key_id: str | None = Query(None, pattern=r"^[a-f0-9]{64}$"),
     auth: UserAPIKeyAuth = _AUTH,
 ) -> list[MemoryEntry]:
-    prisma: Final = require_memory_prisma()
+    prisma: Final = memory_primary_client(require_memory_prisma())
     access: Final = await access_for_key(auth, key_id)
     return await MemoryStore(prisma, access).search(
         MemorySearch(query=query, limit=limit, offset=offset), require_active=False
@@ -251,7 +260,7 @@ async def capture_entry(
     key_id: str | None = Query(None, pattern=r"^[a-f0-9]{64}$"),
     auth: UserAPIKeyAuth = _AUTH,
 ) -> MemoryEntry:
-    prisma: Final = require_memory_prisma()
+    prisma: Final = memory_primary_client(require_memory_prisma())
     access: Final = await access_for_key(auth, key_id)
     return await MemoryStore(prisma, access).capture(capture)
 
@@ -262,7 +271,7 @@ async def delete_entry(
     key_id: str | None = Query(None, pattern=r"^[a-f0-9]{64}$"),
     auth: UserAPIKeyAuth = _AUTH,
 ) -> Response:
-    prisma: Final = require_memory_prisma()
+    prisma: Final = memory_primary_client(require_memory_prisma())
     access: Final = await access_for_key(auth, key_id)
     if not await MemoryStore(prisma, access).delete(memory_id):
         raise HTTPException(status_code=404, detail="Memory not found")

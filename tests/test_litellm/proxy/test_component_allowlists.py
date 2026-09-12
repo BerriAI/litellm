@@ -235,3 +235,14 @@ def test_every_app_mount_is_assigned_to_a_component():
         f"Add them to GATEWAY_MOUNT_PATHS, BACKEND_MOUNT_PATHS, or serve them "
         f"from the UI container:\n  " + "\n  ".join(sorted(unassigned))
     )
+
+
+def test_memory_v2_policies_stay_on_backend_while_own_entries_are_available_on_gateway():
+    gateway = _component_paths(app.router.routes, GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES)
+    backend = _component_paths(app.router.routes, BACKEND_EXACT_PATHS, BACKEND_PATH_PREFIXES)
+    for path in ("/v2/memory/policies", "/v2/memory/policies/{policy_id}"):
+        assert path in backend
+        assert path not in gateway
+    for path in ("/v2/memory/status", "/v2/memory/preference", "/v2/memory/entries", "/v2/memory/entries/{memory_id}"):
+        assert path in gateway
+        assert path in backend

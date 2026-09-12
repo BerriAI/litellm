@@ -4232,6 +4232,12 @@ async def test_success_event_releases_parallel_slot_v3(monkeypatch):
         await local_cache.async_get_cache(key=counter_key)
     ) == 1
 
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import wait_for_request_parallel_release
+
+    waiter = asyncio.create_task(wait_for_request_parallel_release())
+    await asyncio.sleep(0)
+    assert not waiter.done(), "Internal rounds must wait while the completed call still owns a slot"
+
     await handler.async_log_success_event(
         kwargs={
             "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
@@ -4242,6 +4248,7 @@ async def test_success_event_releases_parallel_slot_v3(monkeypatch):
         start_time=datetime.now(),
         end_time=datetime.now(),
     )
+    await asyncio.wait_for(waiter, timeout=1)
     assert handler._gauge_in_flight_from_cache_value(
         await local_cache.async_get_cache(key=counter_key)
     ) == 0
