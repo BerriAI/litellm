@@ -6,6 +6,7 @@ Source:  https://github.com/sseshachala/conductai/tree/main/packages/conduct-lit
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Awaitable, Callable, Mapping
 from functools import partial
 from types import MappingProxyType
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
 MISSING_PACKAGE_MESSAGE: Final = (
-    "conduct-litellm-guard is required for the Conduct guardrail. "
+    "conduct-litellm-guard>=0.2.5 is required for the Conduct guardrail. "
     'Install it with: pip install "conduct-litellm-guard>=0.2.5"'
 )
 
@@ -96,8 +97,15 @@ async def apply_conduct_guardrail(
     return inputs
 
 
+def binds_unreachable_fallback(guardrail_cls: type[object]) -> bool:
+    return "unreachable_fallback" in inspect.signature(guardrail_cls.__init__).parameters
+
+
 try:
     from conduct_litellm_guard.guardrail import ConductGuard, ConductGuardBlocked
+
+    if not binds_unreachable_fallback(ConductGuard):
+        raise ImportError(MISSING_PACKAGE_MESSAGE)
 except ImportError as import_error:
     _import_error: Final = import_error
 
@@ -143,6 +151,7 @@ __all__ = (
     "ConductGuardrail",
     "ConductVerdict",
     "apply_conduct_guardrail",
+    "binds_unreachable_fallback",
     "decision_status",
     "record_decision",
     "request_payload",

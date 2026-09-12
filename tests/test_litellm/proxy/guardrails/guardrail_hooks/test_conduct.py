@@ -22,6 +22,7 @@ from litellm.proxy.guardrails.guardrail_hooks.conduct import (
 )
 from litellm.proxy.guardrails.guardrail_hooks.conduct.conduct import (
     apply_conduct_guardrail,
+    binds_unreachable_fallback,
     record_decision,
     request_payload,
 )
@@ -216,6 +217,21 @@ def test_missing_package_fails_at_config_load_with_install_hint() -> None:
         InMemoryGuardrailHandler().initialize_guardrail(_guardrail(_params()))
 
     assert litellm.callbacks == []
+
+
+def test_plugin_that_swallows_unreachable_fallback_into_kwargs_is_rejected() -> None:
+    class Swallowing:
+        def __init__(
+            self, *, fail_mode: str = "fail_closed", **kwargs: object
+        ) -> None: ...  # kwargs-ok: models plugin 0.2.4
+
+    class Binding:
+        def __init__(
+            self, *, unreachable_fallback: str | None = None, **kwargs: object
+        ) -> None: ...  # kwargs-ok: plugin 0.2.5
+
+    assert not binds_unreachable_fallback(Swallowing)
+    assert binds_unreachable_fallback(Binding)
 
 
 def test_request_payload_scans_translated_texts_as_user_turns() -> None:
