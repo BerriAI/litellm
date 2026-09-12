@@ -2771,7 +2771,9 @@ def test_sanitize_error_information_persists_no_raw_model_for_an_unknown_model_r
 ):
     error_information: Final = StandardLoggingPayloadSetup.get_error_information(original_exception=original_exception)
 
-    sanitized: Final = _sanitize_error_information_for_spend_logs(error_information, original_exception=original_exception)
+    sanitized: Final = _sanitize_error_information_for_spend_logs(
+        error_information, original_exception=original_exception
+    )
 
     assert sanitized is not None
     assert sanitized["error_message"] == expected_error_message
