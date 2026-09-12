@@ -26,7 +26,6 @@ from collections.abc import (
     MutableMapping,
     Sequence,
 )
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType, UnionType
 from typing import (
