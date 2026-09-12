@@ -67,6 +67,42 @@ tests:
             value: "true"
           any: true
 
+  - it: emits no TLS env by default
+    template: gateway/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_SSLMODE
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_SSLROOTCERT
+          any: true
+
+  - it: writer sslMode and sslRootCert reach gateway and backend as DATABASE_SSLMODE and DATABASE_SSLROOTCERT
+    templates:
+      - gateway/deployment.yaml
+      - backend/deployment.yaml
+    set:
+      database.writer.useIAMAuth: true
+      database.writer.sslMode: verify-full
+      database.writer.sslRootCert: /etc/ssl/certs/ca-certificates.crt
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_SSLMODE
+            value: verify-full
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_SSLROOTCERT
+            value: /etc/ssl/certs/ca-certificates.crt
+          any: true
+
   - it: writer rejects both token sources at once
     template: gateway/deployment.yaml
     set:
