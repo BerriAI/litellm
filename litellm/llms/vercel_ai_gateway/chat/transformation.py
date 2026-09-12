@@ -93,3 +93,50 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
 
         models: Final = response.json()["data"]
         return [model["id"] for model in models]
+
+    def get_models_with_info(
+        self, api_key: str | None = None, api_base: str | None = None
+    ) -> list[dict] | None:
+        """
+        Fetch Vercel AI Gateway's public catalog with pricing and capabilities.
+        """
+        from litellm.litellm_core_utils.gateway_catalog_cache import optional_float
+
+        resolved_base, _ = self._get_openai_compatible_provider_info(api_base, api_key)
+        if resolved_base is None:
+            resolved_base = "https://ai-gateway.vercel.sh/v1"
+
+        response: Final = litellm.module_level_client.get(url=f"{resolved_base}/models")
+        if response.status_code != 200:
+            raise Exception(f"Failed to get models: {response.text}")
+
+        entries: Final[list[dict]] = []
+        for item in response.json().get("data", []):
+            model_id: Final = item.get("id")
+            item_type: Final = item.get("type")
+            if not model_id or item_type not in ("language", "embedding"):
+                continue
+
+            pricing: Final = item.get("pricing") or {}
+            modalities: Final = item.get("modalities") or {}
+            input_modalities: Final = modalities.get("input") or []
+            tags: Final = item.get("tags") or []
+            context_window: Final = item.get("context_window")
+
+            entries.append(
+                {
+                    "key": f"vercel_ai_gateway/{model_id}",
+                    "litellm_provider": "vercel_ai_gateway",
+                    "mode": "chat" if item_type == "language" else "embedding",
+                    "max_tokens": context_window,
+                    "max_input_tokens": context_window,
+                    "max_output_tokens": item.get("max_tokens") if item_type == "language" else None,
+                    "input_cost_per_token": optional_float(pricing.get("input")),
+                    "output_cost_per_token": optional_float(pricing.get("output")),
+                    "cache_read_input_token_cost": optional_float(pricing.get("input_cache_read")),
+                    "cache_creation_input_token_cost": optional_float(pricing.get("input_cache_write")),
+                    "supports_vision": "image" in input_modalities,
+                    "supports_reasoning": "reasoning" in tags,
+                }
+            )
+        return entries

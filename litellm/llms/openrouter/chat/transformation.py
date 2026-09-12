@@ -65,6 +65,59 @@ class OpenrouterConfig(OpenAIGPTConfig):
             api_base=api_base or "https://openrouter.ai/api/v1",
         )
 
+    def get_models_with_info(
+        self, api_key: str | None = None, api_base: str | None = None
+    ) -> list[dict] | None:
+        """
+        Fetch OpenRouter's public catalog with pricing and capabilities.
+        Docs: https://openrouter.ai/docs/api-reference/list-available-models
+        """
+        from litellm.litellm_core_utils.gateway_catalog_cache import optional_float
+
+        resolved_key: Final = self.get_api_key(api_key)
+        base: Final = (api_base or "https://openrouter.ai/api/v1").rstrip("/")
+        headers: Final = {"Authorization": f"Bearer {resolved_key}"} if resolved_key else {}
+
+        response: Final = litellm.module_level_client.get(
+            url=f"{base}/models",
+            headers=headers,
+        )
+        if response.status_code != 200:
+            raise Exception(f"Failed to get models: {response.text}")
+
+        entries: Final[list[dict]] = []
+        for item in response.json().get("data", []):
+            model_id: Final = item.get("id")
+            if not model_id or model_id.startswith("~"):  # ~ids are aliases
+                continue
+
+            pricing: Final = item.get("pricing") or {}
+            top_provider: Final = item.get("top_provider") or {}
+            architecture: Final = item.get("architecture") or {}
+            input_modalities: Final = architecture.get("input_modalities") or []
+            supported_parameters: Final = item.get("supported_parameters") or []
+            context_length: Final = item.get("context_length")
+
+            entries.append(
+                {
+                    "key": f"openrouter/{model_id}",
+                    "litellm_provider": "openrouter",
+                    "mode": "chat",
+                    "max_tokens": context_length,
+                    "max_input_tokens": context_length,
+                    "max_output_tokens": top_provider.get("max_completion_tokens"),
+                    "input_cost_per_token": optional_float(pricing.get("prompt")),
+                    "output_cost_per_token": optional_float(pricing.get("completion")),
+                    "cache_read_input_token_cost": optional_float(pricing.get("input_cache_read")),
+                    "cache_creation_input_token_cost": optional_float(pricing.get("input_cache_write")),
+                    "supports_vision": "image" in input_modalities,
+                    "supports_audio_input": "audio" in input_modalities,
+                    "supports_reasoning": "reasoning" in supported_parameters
+                    or "include_reasoning" in supported_parameters,
+                }
+            )
+        return entries
+
     def map_openai_params(
         self,
         non_default_params: dict[str, object],

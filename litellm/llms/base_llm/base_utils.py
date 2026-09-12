@@ -57,6 +57,16 @@ class BaseLLMModelInfo(ABC):
         """
         return []
 
+    def get_models_with_info(
+        self, api_key: str | None = None, api_base: str | None = None
+    ) -> list[dict] | None:
+        """
+        Returns catalog entries with metadata (costs, context window,
+        modalities) in ModelInfoBase field names, or None when the provider
+        does not serve catalog metadata.
+        """
+        return None
+
     @staticmethod
     @abstractmethod
     def get_api_key(api_key: str | None = None) -> str | None:
