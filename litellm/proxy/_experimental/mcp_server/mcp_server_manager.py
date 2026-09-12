@@ -46,7 +46,7 @@ from mcp.types import (
     ResourceTemplate,
 )
 from mcp.types import Tool as MCPTool
-from pydantic import AnyUrl, BaseModel
+from pydantic import AnyUrl, BaseModel, TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
@@ -1684,15 +1684,13 @@ _DiscoveryKey: TypeAlias = tuple[str, str | None]
 _DISCOVERY_CACHE_LIMIT: Final = 1024
 
 
-@dataclass(frozen=True, slots=True)
-class _DiscoveryEntry(Generic[_DiscoveryItem]):
-    items: tuple[_DiscoveryItem, ...]
-
-
 class _DiscoveryCache(Generic[_DiscoveryItem]):
-    def __init__(self, ttl: float, clock: Callable[[], float]) -> None:
+    def __init__(
+        self, ttl: float, clock: Callable[[], float], adapter: TypeAdapter[tuple[_DiscoveryItem, ...]]
+    ) -> None:
         self._ttl = ttl
-        self._entries = InMemoryCache(max_size_in_memory=_DISCOVERY_CACHE_LIMIT, clock=clock)
+        self._adapter = adapter
+        self._entries = InMemoryCache(max_size_in_memory=_DISCOVERY_CACHE_LIMIT, max_size_per_item=64, clock=clock)
         self._pending: dict[
             _DiscoveryKey, asyncio.Task[list[_DiscoveryItem]]
         ] = {}  # mutable-ok: constant-time fetch registration
@@ -1720,11 +1718,9 @@ class _DiscoveryCache(Generic[_DiscoveryItem]):
     ) -> tuple[_DiscoveryItem, ...]:
         if self._ttl <= 0:
             return tuple(await fetch())
-        entry: Final = cast(  # cast-ok: private cache contains only entries for this item type
-            "_DiscoveryEntry[_DiscoveryItem] | None", self._entries.get_cache(json.dumps(key))
-        )
+        entry: Final[object] = self._entries.get_cache(json.dumps(key))
         if entry is not None:
-            return tuple(item.model_copy(deep=True) for item in entry.items)
+            return self._adapter.validate_python(entry)
         pending: Final = self._pending.get(key)
         if pending is not None:
             return await self._await_fetch(key, pending)
@@ -1760,7 +1756,7 @@ class _DiscoveryCache(Generic[_DiscoveryItem]):
             if self._pending.get(key) is asyncio.current_task():
                 self._entries.set_cache(
                     json.dumps(key),
-                    _DiscoveryEntry(tuple(item.model_copy(deep=True) for item in items)),
+                    self._adapter.dump_json(tuple(items)),
                     ttl=self._ttl,
                 )
             return items
@@ -1909,9 +1905,15 @@ class MCPServerManager:
             token_exchanger=build_token_exchanger(),
         )
         discovery_ttl: Final = _mcp_discovery_cache_ttl()
-        self._prompt_discovery_cache = _DiscoveryCache[Prompt](discovery_ttl, discovery_clock)
-        self._resource_discovery_cache = _DiscoveryCache[Resource](discovery_ttl, discovery_clock)
-        self._template_discovery_cache = _DiscoveryCache[ResourceTemplate](discovery_ttl, discovery_clock)
+        self._prompt_discovery_cache = _DiscoveryCache[Prompt](
+            discovery_ttl, discovery_clock, TypeAdapter(tuple[Prompt, ...])
+        )
+        self._resource_discovery_cache = _DiscoveryCache[Resource](
+            discovery_ttl, discovery_clock, TypeAdapter(tuple[Resource, ...])
+        )
+        self._template_discovery_cache = _DiscoveryCache[ResourceTemplate](
+            discovery_ttl, discovery_clock, TypeAdapter(tuple[ResourceTemplate, ...])
+        )
         self.registry: dict[str, MCPServer] = {}
         self._openapi_health_probes: Callable[[str], _OpenAPIHealthProbe] = lru_cache(maxsize=128)(_OpenAPIHealthProbe)
         self.config_mcp_servers: dict[str, MCPServer] = {}
