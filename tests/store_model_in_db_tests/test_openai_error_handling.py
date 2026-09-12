@@ -210,7 +210,8 @@ async def test_chat_completion_bad_model_with_spend_logs():
         assert "traceback" in error_info
         assert error_info["error_code"] == "400"
         assert error_info["error_class"] in ("ProxyModelNotFoundError", "BadRequestError")
-        assert "non-existent-model" in error_info["error_message"]
+        assert "non-existent-model" not in error_info["error_message"]
+        assert "/chat/completions: Invalid model name passed in" in error_info["error_message"]
 
         # Verify request details
         assert log_entry["cache_hit"] == "False"
