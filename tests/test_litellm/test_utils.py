@@ -6430,3 +6430,11 @@ def test_completion_finishes_response_metadata_before_handing_the_response_to_th
     assert snapshot["litellm_call_id"]
     assert snapshot["response_cost"] is not None
     assert snapshot["api_base"]
+
+
+def test_get_model_info_carries_cache_read_input_audio_token_cost(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    info = litellm.get_model_info("gpt-realtime-2.1-mini", custom_llm_provider="openai")
+    assert info["cache_read_input_audio_token_cost"] == 3e-07
+    assert info["cache_read_input_token_cost"] == 6e-08
