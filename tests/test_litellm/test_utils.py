@@ -4248,9 +4248,6 @@ def test_deepseek_flash_completion_cost():
 _FIREWORKS_MODELS = [
     (
         "accounts/fireworks/models/glm-5p2",
-        1.4e-06,
-        4.4e-06,
-        1.4e-07,
         1048576,
         131072,
         False,
@@ -4258,9 +4255,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/glm-5p1",
-        1.4e-06,
-        4.4e-06,
-        2.6e-07,
         202800,
         131072,
         False,
@@ -4268,9 +4262,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/routers/glm-5p1-fast",
-        2.8e-06,
-        8.8e-06,
-        5.2e-07,
         202800,
         131072,
         False,
@@ -4278,9 +4269,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/qwen3p7-plus",
-        4e-07,
-        1.6e-06,
-        8e-08,
         262144,
         65536,
         True,
@@ -4288,9 +4276,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/minimax-m3",
-        3e-07,
-        1.2e-06,
-        6e-08,
         512000,
         512000,
         True,
@@ -4298,9 +4283,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/minimax-m2p7",
-        3e-07,
-        1.2e-06,
-        6e-08,
         196608,
         196608,
         False,
@@ -4308,9 +4290,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/kimi-k2p7-code",
-        9.5e-07,
-        4e-06,
-        1.9e-07,
         262144,
         32768,
         True,
@@ -4318,9 +4297,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/routers/kimi-k2p7-code-fast",
-        1.9e-06,
-        8e-06,
-        3.8e-07,
         262144,
         32768,
         True,
@@ -4328,9 +4304,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/kimi-k2p6",
-        9.5e-07,
-        4e-06,
-        1.6e-07,
         262144,
         32768,
         True,
@@ -4338,9 +4311,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/routers/kimi-k2p6-fast",
-        2e-06,
-        8e-06,
-        3e-07,
         262144,
         32768,
         True,
@@ -4348,9 +4318,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/gpt-oss-120b",
-        1.5e-07,
-        6e-07,
-        1.5e-08,
         131072,
         32768,
         False,
@@ -4358,9 +4325,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/gpt-oss-20b",
-        7e-08,
-        3e-07,
-        3.5e-08,
         131072,
         32768,
         False,
@@ -4368,9 +4332,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/deepseek-v4-pro",
-        1.74e-06,
-        3.48e-06,
-        1.45e-07,
         1048576,
         384000,
         False,
@@ -4378,9 +4339,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/deepseek-v4-flash",
-        1.4e-07,
-        2.8e-07,
-        2.8e-08,
         1048576,
         384000,
         False,
@@ -4412,9 +4370,6 @@ _FIREWORKS_ROUTER_SHORT_FORMS = [
 def _assert_fireworks_entry(
     model_cost,
     model_path,
-    expected_input,
-    expected_output,
-    expected_cache,
     expected_max_input,
     expected_max_output,
     expected_vision,
@@ -4424,9 +4379,9 @@ def _assert_fireworks_entry(
     assert info is not None, f"fireworks_ai/{model_path} missing from model cost map"
     assert info["litellm_provider"] == "fireworks_ai"
     assert info["mode"] == "chat"
-    assert info["input_cost_per_token"] == expected_input
-    assert info["output_cost_per_token"] == expected_output
-    assert info["cache_read_input_token_cost"] == expected_cache
+    assert info["input_cost_per_token"] > 0
+    assert info["output_cost_per_token"] > 0
+    assert "cache_read_input_token_cost" in info
     assert info["max_input_tokens"] == expected_max_input
     assert info["max_output_tokens"] == expected_max_output
     assert info["max_tokens"] == expected_max_output

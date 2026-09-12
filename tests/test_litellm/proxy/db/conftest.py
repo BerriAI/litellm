@@ -35,6 +35,14 @@ DB_ENV_KEYS = (
 _db_env_snapshot_key = pytest.StashKey[dict[str, Optional[str]]]()
 
 
+def _is_zombie(pid: int) -> bool:
+    try:
+        stat: Final = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return False
+    return stat.rpartition(")")[2].split()[0] == "Z"
+
+
 def _db_env_snapshot() -> dict[str, Optional[str]]:
     return {key: os.environ.get(key) for key in DB_ENV_KEYS}
 
@@ -135,6 +143,8 @@ class FakePrismaCli:
             try:
                 os.kill(pid, 0)
             except ProcessLookupError:
+                return True
+            if _is_zombie(pid):
                 return True
             time.sleep(0.05)
         return False
