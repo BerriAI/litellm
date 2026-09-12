@@ -20,6 +20,7 @@ const ENABLE_ANTHROPIC_PROMPT_CACHING = "enable_anthropic_prompt_caching";
 const ANTHROPIC_PROMPT_CACHING_TTL = "anthropic_prompt_caching_ttl";
 
 interface GeneralSettingsPageProps {
+  section: "general" | "router";
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
@@ -183,7 +184,7 @@ export const PromptCachingPanel: React.FC<{
   );
 };
 
-const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, userRole, userID }) => {
+const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, userRole, userID, section }) => {
   const [generalSettings, setGeneralSettings] = useState<generalSettingsItem[]>([]);
 
   useEffect(() => {
@@ -251,6 +252,69 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
     return null;
   }
 
+  if (section === "general") {
+    return (
+      <div className="w-full px-8 py-6">
+        <Card>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Setting</TableHead>
+                  <TableHead>Value</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Action</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {generalSettings
+                  .filter((value) => value.field_type !== "TypedDictionary" && value.field_tab !== PROMPT_CACHING_TAB)
+                  .map((value, index) => (
+                    <TableRow key={index}>
+                      <TableCell className="whitespace-normal">
+                        <p className="break-words">{value.field_name}</p>
+                        <p
+                          style={{
+                            fontSize: "0.65rem",
+                            color: "#808080",
+                            fontStyle: "italic",
+                          }}
+                          className="mt-1 break-words"
+                        >
+                          {value.field_description}
+                        </p>
+                      </TableCell>
+                      <TableCell>
+                        <SettingValueEditor setting={value} onChange={handleInputChange} />
+                      </TableCell>
+                      <TableCell>
+                        {value.stored_in_db == true ? (
+                          <StatusBadge tone="success" label="In DB" />
+                        ) : value.stored_in_db == false ? (
+                          <StatusBadge tone="neutral" label="In Config" />
+                        ) : (
+                          <StatusBadge tone="neutral" label="Not Set" />
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Button onClick={() => handleUpdateField(value.field_name)}>Update</Button>
+                        <span
+                          onClick={() => handleResetField(value.field_name)}
+                          className="inline-flex shrink-0 cursor-pointer items-center justify-center px-1.5 py-1.5 text-destructive"
+                        >
+                          <Trash2 className="h-5 w-5 shrink-0" />
+                        </span>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="w-full">
       <Tabs defaultValue="loadbalancing" className="h-[75vh] w-full">
@@ -259,7 +323,6 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
           <TabsTrigger value="routing-groups">Routing Groups</TabsTrigger>
           <TabsTrigger value="fallbacks">Fallbacks</TabsTrigger>
           <TabsTrigger value="prompt-caching">Prompt Caching</TabsTrigger>
-          <TabsTrigger value="general">General</TabsTrigger>
         </TabsList>
         <TabsContent value="loadbalancing" className="px-8 py-6" keepMounted>
           <RouterSettings accessToken={accessToken} userRole={userRole} userID={userID} />
@@ -272,64 +335,6 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
         </TabsContent>
         <TabsContent value="prompt-caching" className="px-8 py-6" keepMounted>
           <PromptCachingPanel accessToken={accessToken} settings={generalSettings} onChange={handleInputChange} />
-        </TabsContent>
-        <TabsContent value="general" className="px-8 py-6" keepMounted>
-          <Card>
-            <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Setting</TableHead>
-                    <TableHead>Value</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Action</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {generalSettings
-                    .filter((value) => value.field_type !== "TypedDictionary" && value.field_tab !== PROMPT_CACHING_TAB)
-                    .map((value, index) => (
-                      <TableRow key={index}>
-                        <TableCell className="whitespace-normal">
-                          <p className="break-words">{value.field_name}</p>
-                          <p
-                            style={{
-                              fontSize: "0.65rem",
-                              color: "#808080",
-                              fontStyle: "italic",
-                            }}
-                            className="mt-1 break-words"
-                          >
-                            {value.field_description}
-                          </p>
-                        </TableCell>
-                        <TableCell>
-                          <SettingValueEditor setting={value} onChange={handleInputChange} />
-                        </TableCell>
-                        <TableCell>
-                          {value.stored_in_db == true ? (
-                            <StatusBadge tone="success" label="In DB" />
-                          ) : value.stored_in_db == false ? (
-                            <StatusBadge tone="neutral" label="In Config" />
-                          ) : (
-                            <StatusBadge tone="neutral" label="Not Set" />
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <Button onClick={() => handleUpdateField(value.field_name)}>Update</Button>
-                          <span
-                            onClick={() => handleResetField(value.field_name)}
-                            className="inline-flex shrink-0 cursor-pointer items-center justify-center px-1.5 py-1.5 text-destructive"
-                          >
-                            <Trash2 className="h-5 w-5 shrink-0" />
-                          </span>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
         </TabsContent>
       </Tabs>
     </div>

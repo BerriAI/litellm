@@ -39,6 +39,7 @@ export const pageDescriptions: Record<string, string> = {
   prompts: "Manage and version prompt templates",
   skills: "Browse and manage Claude Code skills",
   usage: "View legacy usage dashboard",
+  "general-settings": "Configure general proxy settings",
   "router-settings": "Configure routing and load balancing settings",
   "logging-and-alerts": "Set up logging and alert configurations",
   "admin-panel": "Access admin panel and settings",

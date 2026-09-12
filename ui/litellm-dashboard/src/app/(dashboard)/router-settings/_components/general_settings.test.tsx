@@ -1,6 +1,6 @@
 import { renderWithProviders, screen, within } from "../../../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
-import { vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import GeneralSettings from "./general_settings";
 import { deleteConfigFieldSetting, getGeneralSettingsCall, updateConfigFieldSetting } from "@/components/networking";
 
@@ -64,18 +64,17 @@ const settingsRow = async (fieldName: string) => {
 
 const numericValueIn = (row: HTMLElement) => Number((within(row).getByRole("spinbutton") as HTMLInputElement).value);
 
-describe("GeneralSettings General tab", () => {
+describe("GeneralSettings page", () => {
   beforeEach(() => {
     vi.mocked(getGeneralSettingsCall).mockResolvedValue([...SETTINGS_FIXTURE.map((s) => ({ ...s }))]);
     vi.mocked(updateConfigFieldSetting).mockClear();
     vi.mocked(deleteConfigFieldSetting).mockClear();
   });
 
-  it("updates max_ui_session_budget with its own value, not the value at its filtered index", async () => {
+  it("should update max_ui_session_budget with its own value, not the value at its filtered index", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<GeneralSettings accessToken="token" userRole="Admin" userID="user" />);
+    renderWithProviders(<GeneralSettings section="general" accessToken="token" userRole="Admin" userID="user" />);
 
-    await user.click(screen.getByText("General"));
     const row = await settingsRow("max_ui_session_budget");
 
     await user.click(within(row).getByRole("button", { name: /update/i }));
@@ -83,11 +82,10 @@ describe("GeneralSettings General tab", () => {
     expect(updateConfigFieldSetting).toHaveBeenCalledWith("token", "max_ui_session_budget", 7.5);
   });
 
-  it("reset shows the field's default value instead of an empty input", async () => {
+  it("should show the field's default value after reset", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<GeneralSettings accessToken="token" userRole="Admin" userID="user" />);
+    renderWithProviders(<GeneralSettings section="general" accessToken="token" userRole="Admin" userID="user" />);
 
-    await user.click(screen.getByText("General"));
     const row = await settingsRow("max_ui_session_budget");
     expect(numericValueIn(row)).toBe(7.5);
 
@@ -101,18 +99,35 @@ describe("GeneralSettings General tab", () => {
   });
 });
 
-// The five tabs here are proxy-wide settings. Auto-routers moved to Models + Endpoints.
-describe("GeneralSettings tabs", () => {
+describe("GeneralSettings navigation", () => {
   beforeEach(() => {
-    vi.mocked(getGeneralSettingsCall).mockResolvedValue([]);
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue(SETTINGS_FIXTURE);
   });
 
-  it("renders the proxy-wide tabs and no auto-router tab", async () => {
-    renderWithProviders(<GeneralSettings accessToken="token" userRole="proxy_admin" userID="u" />);
+  it("should show the existing General fields without the router tabs or prompt caching controls", async () => {
+    renderWithProviders(<GeneralSettings section="general" accessToken="token" userRole="proxy_admin" userID="u" />);
 
-    for (const name of ["Loadbalancing", "Routing Groups", "Fallbacks", "Prompt Caching", "General"]) {
-      expect(await screen.findByRole("tab", { name })).toBeInTheDocument();
-    }
-    expect(screen.queryByRole("tab", { name: /auto.?router/i })).not.toBeInTheDocument();
+    await screen.findByRole("row", { name: /max_ui_session_budget/ });
+
+    expect(screen.getAllByRole("row")).toHaveLength(3);
+    expect(screen.getAllByRole("spinbutton")).toHaveLength(2);
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+  });
+
+  it("should keep the four router tabs with Prompt Caching and exclude the General table", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<GeneralSettings section="router" accessToken="token" userRole="proxy_admin" userID="u" />);
+
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "Loadbalancing",
+      "Routing Groups",
+      "Fallbacks",
+      "Prompt Caching",
+    ]);
+    await user.click(screen.getByRole("tab", { name: "Prompt Caching" }));
+
+    expect(await screen.findByText("Automatic Anthropic prompt caching")).toBeInTheDocument();
+    expect(screen.queryByRole("row", { name: /max_ui_session_budget/, hidden: true })).not.toBeInTheDocument();
   });
 });

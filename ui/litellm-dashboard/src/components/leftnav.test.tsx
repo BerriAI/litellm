@@ -239,6 +239,28 @@ describe("Sidebar (leftnav)", () => {
     expect(placementsOf("router-settings")).toEqual(["SETTINGS > settings"]);
   });
 
+  it.each([
+    ["admin", false],
+    ["admin", true],
+    ["internal", false],
+  ])(
+    "should expose General Settings alongside Router Settings only to admins (role=%s, viewOnly=%s)",
+    (role, viewOnly) => {
+      mockUseAuthorized.mockReturnValue({ ...mockUseAuthorized(), userRole: role, isViewOnly: viewOnly });
+      navState.pathname = "/ui/general-settings";
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      if (role === "admin") {
+        expect(screen.getByRole("link", { name: "General Settings" })).toHaveAttribute("href", "/ui/general-settings");
+        expect(screen.getByRole("link", { name: "Router Settings" })).toHaveAttribute("href", "/ui/router-settings");
+      } else {
+        expect(screen.queryByRole("link", { name: "General Settings" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("link", { name: "Router Settings" })).not.toBeInTheDocument();
+      }
+      expect(placementsOf("general-settings")).toEqual(["SETTINGS > settings"]);
+    },
+  );
+
   it("has no duplicate keys among all menu items and their children", () => {
     // React keys must be unique across the whole nav config, otherwise the
     // active-item highlight and group expansion collide.
@@ -612,6 +634,10 @@ describe("getBreadcrumb", () => {
 
   it("resolves a nested child route to its parent section", () => {
     expect(getBreadcrumb("/ui/search-tools/")).toEqual({ section: "AI Gateway", title: "Search Tools" });
+  });
+
+  it("should resolve General Settings under the Settings section", () => {
+    expect(getBreadcrumb("/ui/general-settings/")).toEqual({ section: "Settings", title: "General Settings" });
   });
 
   it("resolves router-settings under the Settings section", () => {

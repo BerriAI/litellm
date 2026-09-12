@@ -328,6 +328,13 @@ const menuGroups: MenuGroup[] = [
         roles: all_admin_roles,
         children: [
           {
+            key: "general-settings",
+            page: "general-settings",
+            label: "General Settings",
+            icon: <SettingsIcon {...ICON} />,
+            roles: all_admin_roles,
+          },
+          {
             key: "router-settings",
             page: "router-settings",
             label: "Router Settings",
