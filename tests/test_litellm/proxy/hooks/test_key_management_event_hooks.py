@@ -6,6 +6,7 @@ Validates that email and secret manager operations are independent and non-block
 
 import asyncio
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -497,9 +498,9 @@ class TestKeyUpdatedAuditLogObjectId:
             project_id="project-orbit",
         )
 
-        data = UpdateKeyRequest(key=request_key, max_budget=2000.0)
-        if detach_project:
-            data.project_id = None
+        data: Final = UpdateKeyRequest(
+            key=request_key, max_budget=2000.0, **({"project_id": None} if detach_project else {})
+        )
 
         with (
             patch("litellm.store_audit_logs", True),
@@ -544,12 +545,14 @@ class TestKeyUpdatedAuditLogObjectId:
 
         hashed_key = hash_token("sk-raw-test-key-31620")
 
-        audit_row = await self._run_updated_hook_and_capture_audit_log(request_key=hashed_key, detach_project=detach_project)
+        audit_row: Final = await self._run_updated_hook_and_capture_audit_log(
+            request_key=hashed_key, detach_project=detach_project,
+        )
 
         assert audit_row.object_id == hashed_key
-        updated_values = json.loads(audit_row.updated_values)
+        updated_values: Final = json.loads(audit_row.updated_values)
         assert ("project_id" in updated_values) is detach_project
         if detach_project:
-            assert updated_values["project_id"] == "None"
+            assert updated_values["project_id"] is None
             assert json.loads(audit_row.before_value)["project_id"] == "project-orbit"
         assert updated_values["max_budget"] == 2000.0

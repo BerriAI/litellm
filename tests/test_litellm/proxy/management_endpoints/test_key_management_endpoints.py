@@ -18167,7 +18167,8 @@ async def test_project_detachment_uses_effective_project_for_validation(project_
                 None, False, MagicMock(), cache,
             )
         assert exc.value.status_code == 400
-        assert ("not in project's allowed models" if project_id == "project-orbit" else "reassignment") in str(exc.value.detail)
+        expected: Final = "not in project's allowed models" if project_id == "project-orbit" else "reassignment"
+        assert expected in str(exc.value.detail)
 
 
 @pytest.mark.asyncio
