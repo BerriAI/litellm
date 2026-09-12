@@ -1205,6 +1205,66 @@ async def test_a_probe_overtaken_by_a_later_outage_leaves_the_breaker_to_the_new
     assert breaker._state == breaker.CLOSED
 
 
+@pytest.mark.asyncio
+async def test_pool_wait_timeout_is_a_timeout_failure_not_hard_connectivity():
+    """A saturated blocking pool must not open the breaker before the timeout minimum duration.
+
+    redis-py's async BlockingConnectionPool gives up waiting for a free connection by raising
+    ConnectionError("No connection available.") chained from asyncio.TimeoutError. Redis itself
+    is healthy in that case, so the failure has to be classed as a timeout and stay behind the
+    duration gate instead of being counted as a hard connectivity failure.
+    """
+    from fakeredis import FakeServer
+    from fakeredis.aioredis import FakeConnection
+    from redis.asyncio import BlockingConnectionPool, Redis
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    from litellm.caching.redis_cache import RedisCircuitBreaker, _run_under_circuit_breaker
+
+    pool = BlockingConnectionPool(connection_class=FakeConnection, server=FakeServer(), max_connections=1, timeout=0.01)
+    client = Redis(connection_pool=pool)
+    breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, timeout_min_duration=5.0)
+
+    busy_connection = await pool.get_connection()
+    try:
+        for _ in range(breaker.failure_threshold * 2):
+            with pytest.raises(RedisConnectionError, match="No connection available"):
+                await _run_under_circuit_breaker(breaker, "op", lambda: client.get("k"))
+    finally:
+        await pool.release(busy_connection)
+
+    assert breaker.is_open() is False, "a busy pool is a timeout gated on duration, not a dead Redis"
+    assert await _run_under_circuit_breaker(breaker, "op", lambda: client.get("k")) is None
+    await client.aclose()
+
+
+def test_timeout_classification_follows_the_explicit_cause_chain_only():
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    from litellm.caching.redis_cache import _is_redis_timeout_failure
+
+    def raise_chained_from_timeout() -> None:
+        try:
+            raise asyncio.TimeoutError()
+        except asyncio.TimeoutError as err:
+            raise RedisConnectionError("No connection available.") from err
+
+    def raise_while_handling_timeout() -> None:
+        try:
+            raise asyncio.TimeoutError()
+        except asyncio.TimeoutError:
+            raise RedisConnectionError("refused")
+
+    with pytest.raises(RedisConnectionError) as chained:
+        raise_chained_from_timeout()
+    with pytest.raises(RedisConnectionError) as contextual:
+        raise_while_handling_timeout()
+
+    assert _is_redis_timeout_failure(chained.value) is True
+    assert _is_redis_timeout_failure(contextual.value) is False
+    assert _is_redis_timeout_failure(RedisConnectionError("refused")) is False
+
+
 class _RoundTripCountingRedis:
     """Fake redis.asyncio client: one round trip per awaited command or pipeline execute."""
 

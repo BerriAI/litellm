@@ -16,7 +16,7 @@ import inspect
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import timedelta
@@ -317,19 +317,37 @@ def _is_redis_health_failure(exc: BaseException) -> bool:
 def _redis_timeout_error_types() -> tuple[type, ...]:
     """Health failures that are timeouts rather than unambiguous connectivity errors.
 
-    ``builtins.TimeoutError`` covers ``asyncio.TimeoutError`` and ``socket.timeout``
-    (aliases since py3.11 / py3.10). ``redis.exceptions.TimeoutError`` does not subclass
-    either, so it is listed explicitly.
+    ``builtins.TimeoutError`` covers ``socket.timeout`` (an alias since py3.10) and, from
+    py3.11, ``asyncio.TimeoutError``; on py3.10 ``asyncio.TimeoutError`` is still its own
+    class, so it is listed explicitly. ``redis.exceptions.TimeoutError`` subclasses neither.
     """
     try:
         from redis.exceptions import TimeoutError as RedisTimeoutError
     except ImportError:
-        return (TimeoutError,)
-    return (RedisTimeoutError, TimeoutError)
+        return (TimeoutError, asyncio.TimeoutError)
+    return (RedisTimeoutError, TimeoutError, asyncio.TimeoutError)
+
+
+_MAX_EXCEPTION_CAUSE_DEPTH: Final = 20
+
+
+def _explicit_causes(exc: BaseException) -> Iterator[BaseException]:
+    current = exc  # rebind-ok: advances one link per iteration of the bounded walk
+    for _ in range(_MAX_EXCEPTION_CAUSE_DEPTH):
+        yield current
+        if current.__cause__ is None:
+            return
+        current = current.__cause__
 
 
 def _is_redis_timeout_failure(exc: BaseException) -> bool:
-    return isinstance(exc, _redis_timeout_error_types())
+    """True when ``exc`` or any exception it was explicitly raised ``from`` is a timeout.
+
+    redis-py's blocking pool reports a pool wait timeout as ``ConnectionError`` chained from
+    ``asyncio.TimeoutError``, which is a busy pool rather than an unreachable Redis.
+    """
+    timeout_types: Final = _redis_timeout_error_types()
+    return any(isinstance(link, timeout_types) for link in _explicit_causes(exc))
 
 
 class _BreakerMetrics:
