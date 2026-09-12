@@ -3,11 +3,7 @@ import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 import openai
 import litellm
@@ -207,7 +203,6 @@ async def test_responses_retry_on_auth_error(sync_mode):
     This validates that the @client decorator properly handles responses/aresponses retries.
     """
     from unittest.mock import patch
-    import openai
 
     num_retries = 2
 

@@ -13,33 +13,50 @@ management route).
 
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from access_control_client import (
     AccessControlClient,
     MODEL_ACCESS_DENIED_MARKER,
     ROUTE_NOT_ALLOWED_MARKER,
+    error_envelope,
 )
 from e2e_config import unique_marker
+from e2e_http import Success, UnauthorizedError, UnknownApiError, unwrap
 from lifecycle import ResourceManager
+from models import ChatBody, ChatMessage, ChatResponse, EmbedBody, LiteLLMParamsBody
+from proxy_client import ProxyClient
 
 pytestmark = pytest.mark.e2e
 
 ALLOWED_MODEL = "gemini-2.5-flash"
 DISALLOWED_MODEL = "gpt-5.5"
-
-
-def _is_json(body: str) -> bool:
-    try:
-        json.loads(body)
-        return True
-    except ValueError:
-        return False
+VIRTUAL_KEY_BACKEND = "anthropic/claude-haiku-4-5-20251001"
+EMBEDDING_MODEL = "openai-text-embedding-3-small"
 
 
 class TestAccessControl:
+    def test_allowed_model_is_permitted(
+        self, client: AccessControlClient, resources: ResourceManager
+    ) -> None:
+        """The allow-list's positive half.
+
+        Without this, every other case in this class passes just as happily
+        against a gateway that denies the allowed model too, because they only
+        ever assert that something was refused.
+        """
+        key = resources.key(models=[ALLOWED_MODEL])
+        result = client.chat_status(
+            key, ALLOWED_MODEL, f"capital of France? {unique_marker()}"
+        )
+        assert result.status_code == 200, (
+            f"key allow-listed for {ALLOWED_MODEL!r} must be able to call it, got "
+            f"{result.status_code}: {result.body[:300]}"
+        )
+        assert ChatResponse.model_validate_json(result.body).choices, (
+            f"200 must carry a real completion, not an error envelope: {result.body[:300]}"
+        )
+
     def test_disallowed_model_is_denied_403(
         self, client: AccessControlClient, resources: ResourceManager
     ) -> None:
@@ -53,6 +70,31 @@ class TestAccessControl:
         )
         assert MODEL_ACCESS_DENIED_MARKER in result.body, (
             f"403 body must be a model-access denial, got: {result.body[:300]}"
+        )
+
+    @pytest.mark.covers("other.auth.virtual_key.route_group_allowed")
+    def test_llm_api_routes_group_grants_every_llm_endpoint(
+        self, client: AccessControlClient, resources: ResourceManager
+    ) -> None:
+        key = client.llm_only_key()
+        resources.defer(lambda: client.delete_key(key))
+
+        chat = client.chat_status(key, ALLOWED_MODEL, f"capital of France? {unique_marker()}")
+        assert chat.status_code == 200, (
+            f"llm_api_routes key must reach /chat/completions, got {chat.status_code}: {chat.body[:300]}"
+        )
+        assert ChatResponse.model_validate_json(chat.body).choices, (
+            f"200 must carry a real completion, not an error envelope: {chat.body[:300]}"
+        )
+
+        embedding = unwrap(
+            client.proxy.embed(key, EmbedBody(model=EMBEDDING_MODEL, input=f"route group {unique_marker()}"))
+        )
+        assert embedding.model, f"llm_api_routes key reached /embeddings but got no model back: {embedding}"
+
+        denied = client.create_model_status(key, f"e2e-route-group-{unique_marker()}")
+        assert denied.status_code == 403 and ROUTE_NOT_ALLOWED_MARKER in denied.body, (
+            f"the same key must still be shut out of /model/new, got {denied.status_code}: {denied.body[:300]}"
         )
 
     def test_llm_only_key_forbidden_from_management_route_403(
@@ -80,4 +122,66 @@ class TestAccessControl:
             f"unknown model must be rejected 400 before forwarding, got "
             f"{result.status_code}: {result.body[:300]}"
         )
-        assert _is_json(result.body), f"400 body must be valid JSON: {result.body[:300]}"
+        envelope = error_envelope(result.body)
+        assert envelope is not None, (
+            f"400 body must be an OpenAI-shaped error envelope, got: {result.body[:300]}"
+        )
+        assert envelope.error.message, (
+            f"400 error must carry a message a client can surface: {result.body[:300]}"
+        )
+
+
+class TestVirtualKeyAuth:
+    """Virtual-key auth the way OpenAI-compatible clients send it: a real key
+    must reach chat, a forged bearer must be rejected before the provider."""
+
+    @pytest.mark.covers(
+        "mgmt.virtual_key.valid_allows",
+        "mgmt.virtual_key.invalid_denied",
+        exercised_on=[],
+    )
+    def test_valid_key_allows_and_invalid_key_denied(
+        self, proxy: ProxyClient, resources: ResourceManager
+    ) -> None:
+        model = f"e2e-auth-chat-{unique_marker()}"
+        model_id = proxy.create_model(
+            model,
+            LiteLLMParamsBody(model=VIRTUAL_KEY_BACKEND, api_key="os.environ/ANTHROPIC_API_KEY"),
+        )
+        resources.defer(lambda: proxy.delete_model(model_id))
+        key = resources.key()
+
+        ok = unwrap(
+            proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[
+                        ChatMessage(
+                            role="user",
+                            content=f"Reply with one word. {unique_marker()}",
+                        )
+                    ],
+                    max_tokens=16,
+                ),
+            )
+        )
+        assert ok.choices, f"valid key must complete chat: {ok}"
+
+        bad = proxy.chat(
+            "sk-e2e-forged-not-a-real-key",
+            ChatBody(
+                model=model,
+                messages=[ChatMessage(role="user", content="should not run")],
+                max_tokens=8,
+            ),
+        )
+        match bad:
+            case UnauthorizedError():
+                return
+            case UnknownApiError(status_code=status) if status in (401, 403):
+                return
+            case Success():
+                pytest.fail("forged bearer must not reach a successful completion")
+            case _:
+                pytest.fail(f"forged bearer must be auth-denied, got {bad}")

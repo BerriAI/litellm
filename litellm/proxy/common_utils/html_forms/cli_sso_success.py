@@ -1,3 +1,5 @@
+from typing import Final
+
 from litellm.proxy.common_utils.banner import LITELLM_BANNER
 
 
@@ -9,7 +11,7 @@ def render_cli_sso_success_page() -> str:
         str: HTML content for the success page
     """
 
-    html_content = f"""
+    html_content: Final = f"""
     <!DOCTYPE html>
     <html lang="en">
     <head>

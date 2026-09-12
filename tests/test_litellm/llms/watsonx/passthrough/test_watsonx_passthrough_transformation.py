@@ -5,14 +5,11 @@ Tests the Watsonx-specific passthrough configuration including URL construction,
 streaming detection, and authentication handling.
 """
 
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
 from litellm.llms.watsonx.passthrough.transformation import WatsonxPassthroughConfig

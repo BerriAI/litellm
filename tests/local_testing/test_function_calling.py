@@ -1,16 +1,10 @@
-import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 import litellm
@@ -49,7 +43,7 @@ def get_current_weather(location, unit="fahrenheit"):
         "mistral/mistral-large-latest",
         "claude-haiku-4-5-20251001",
         "gemini/gemini-2.5-flash-lite",
-        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
@@ -304,7 +298,7 @@ _PARALLEL_TOOL_HISTORY_MESSAGES = [
         # so tool history with no tools= completes instead of raising.
         ("claude-haiku-4-5-20251001", _PARALLEL_TOOL_HISTORY_MESSAGES),
         (
-            "anthropic.claude-3-sonnet-20240229-v1:0",
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             [
                 {
                     "role": "user",
@@ -553,7 +547,7 @@ def test_groq_parallel_function_call():
 @pytest.mark.parametrize(
     "model",
     [
-        "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
     ],
 )
 def test_passing_tool_result_as_list(model):

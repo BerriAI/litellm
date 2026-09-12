@@ -23,7 +23,7 @@ import pytest
 from pydantic import BaseModel, RootModel
 
 from e2e_config import unique_marker
-from e2e_gateway import Gateway
+from proxy_client import ProxyClient
 from e2e_http import Success, unwrap
 from endpoints_client import EndpointsClient
 from lifecycle import ResourceManager
@@ -116,14 +116,14 @@ def _model_info_entry(entries: list[ModelInfoEntry], model_name: str) -> ModelIn
     pytest.fail(f"{model_name} absent from /model/info; the override did not load")
 
 
-def _poll_breakdown_row(gateway: Gateway, key: str, response_id: str | None) -> _SpendRow:
+def _poll_breakdown_row(proxy: ProxyClient, key: str, response_id: str | None) -> _SpendRow:
     """Poll /spend/logs until the call's row lands with a cost breakdown (rows
     flush ~60s behind the call via proxy_batch_write_at)."""
-    deadline = time.monotonic() + gateway.poll_timeout
+    deadline = time.monotonic() + proxy.poll_timeout
     while time.monotonic() < deadline:
-        result = gateway.transport.get(
+        result = proxy.transport.get(
             "/spend/logs",
-            headers=gateway.transport.master,
+            headers=proxy.transport.master,
             params=SpendLogsParams(api_key=key),
             response_type=_SpendRows,
         )
@@ -144,7 +144,7 @@ def _poll_breakdown_row(gateway: Gateway, key: str, response_id: str | None) -> 
                 return row
         if priced and response_id is None:
             return priced[0]
-        time.sleep(gateway.poll_interval)
+        time.sleep(proxy.poll_interval)
     pytest.fail("no spend row with a cost breakdown landed before the deadline")
 
 
@@ -158,7 +158,7 @@ class TestCustomPricing:
         model = _provision_custom_priced(endpoints_client, resources)
 
         chat = unwrap(
-            endpoints_client.gateway.chat(
+            endpoints_client.proxy.chat(
                 scoped_key,
                 ChatBody(
                     model=model,
@@ -172,7 +172,7 @@ class TestCustomPricing:
             )
         )
 
-        row = _poll_breakdown_row(endpoints_client.gateway, scoped_key, chat.id)
+        row = _poll_breakdown_row(endpoints_client.proxy, scoped_key, chat.id)
         assert row.metadata and row.metadata.cost_breakdown  # guaranteed by the poll
         breakdown = row.metadata.cost_breakdown
 
@@ -198,7 +198,7 @@ class TestCustomPricing:
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
         model = _provision_custom_priced(endpoints_client, resources)
-        entry = _model_info_entry(endpoints_client.gateway.model_info(), model)
+        entry = _model_info_entry(endpoints_client.proxy.model_info(), model)
 
         assert entry.litellm_params.input_cost_per_token == CUSTOM_INPUT_RATE, (
             f"/model/info litellm_params input rate "
@@ -223,7 +223,7 @@ class TestCustomPricing:
             output_cost_per_token=None,
         )
 
-        entries = {entry.model_name: entry for entry in endpoints_client.gateway.model_info()}
+        entries = {entry.model_name: entry for entry in endpoints_client.proxy.model_info()}
         custom_entry = entries.get(custom)
         sibling_entry = entries.get(sibling)
         assert custom_entry is not None, f"{custom} absent from /model/info"

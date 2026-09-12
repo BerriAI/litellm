@@ -200,6 +200,60 @@ def test_get_custom_headers_without_model_id():
         assert headers["x-litellm-model-id"] in [None, ""]
 
 
+class _FakeLoggingObj:
+    def __init__(self, litellm_params):
+        self.litellm_params = litellm_params
+        self.litellm_call_id = "test-call-id"
+
+
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+def test_get_custom_headers_includes_deployment_model_name(metadata_key):
+    """
+    x-litellm-model-name should expose the underlying deployment model string,
+    which the router records under litellm_params[metadata]["deployment"].
+    """
+    mock_user_api_key_dict = MagicMock()
+    mock_user_api_key_dict.tpm_limit = 1000
+    mock_user_api_key_dict.rpm_limit = 100
+
+    logging_obj = _FakeLoggingObj(
+        litellm_params={metadata_key: {"deployment": "azure/gpt-4o-2024-08-06"}}
+    )
+
+    headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+        user_api_key_dict=mock_user_api_key_dict,
+        model_id="deployment-uuid",
+        request_data={},
+        hidden_params={},
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert headers["x-litellm-model-name"] == "azure/gpt-4o-2024-08-06"
+    assert headers["x-litellm-model-id"] == "deployment-uuid"
+
+
+def test_get_custom_headers_omits_model_name_when_deployment_missing():
+    """
+    Without a deployment model string, x-litellm-model-name must not be emitted
+    (rather than leaking an empty/None value).
+    """
+    mock_user_api_key_dict = MagicMock()
+    mock_user_api_key_dict.tpm_limit = 1000
+    mock_user_api_key_dict.rpm_limit = 100
+
+    logging_obj = _FakeLoggingObj(litellm_params={"metadata": {}})
+
+    headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+        user_api_key_dict=mock_user_api_key_dict,
+        model_id="deployment-uuid",
+        request_data={},
+        hidden_params={},
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert "x-litellm-model-name" not in headers
+
+
 def test_get_custom_headers_with_empty_string_model_id():
     """
     Test that get_custom_headers handles empty string model_id correctly.

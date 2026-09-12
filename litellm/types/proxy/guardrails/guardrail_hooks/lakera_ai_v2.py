@@ -1,44 +1,42 @@
-from typing import Dict, List, Optional
-
 from typing_extensions import TypedDict
 
 from litellm.types.llms.openai import AllMessageValues
 
 
 class LakeraAIRequest(TypedDict, total=False):
-    messages: List[AllMessageValues]
-    project_id: Optional[str]
-    payload: Optional[bool]
-    breakdown: Optional[bool]
-    metadata: Optional[Dict]
-    dev_info: Optional[bool]
+    messages: list[AllMessageValues]
+    project_id: str | None
+    payload: bool | None
+    breakdown: bool | None
+    metadata: dict | None
+    dev_info: bool | None
 
 
 class LakeraAIPayloadItem(TypedDict, total=False):
-    start: Optional[int]
-    end: Optional[int]
-    text: Optional[str]
-    detector_type: Optional[str]
-    labels: Optional[List[str]]
+    start: int | None
+    end: int | None
+    text: str | None
+    detector_type: str | None
+    labels: list[str] | None
 
 
 class LakeraAIBreakdownItem(TypedDict, total=False):
-    project_id: Optional[str]
-    policy_id: Optional[str]
-    detector_id: Optional[str]
-    detector_type: Optional[str]
-    detected: Optional[bool]
+    project_id: str | None
+    policy_id: str | None
+    detector_id: str | None
+    detector_type: str | None
+    detected: bool | None
 
 
 class LakeraAIDevInfo(TypedDict, total=False):
-    git_revision: Optional[str]
-    git_timestamp: Optional[str]
-    model_version: Optional[str]
-    version: Optional[str]
+    git_revision: str | None
+    git_timestamp: str | None
+    model_version: str | None
+    version: str | None
 
 
 class LakeraAIResponse(TypedDict, total=False):
-    flagged: Optional[bool]
-    payload: Optional[List[LakeraAIPayloadItem]]
-    breakdown: Optional[List[LakeraAIBreakdownItem]]
-    dev_info: Optional[LakeraAIDevInfo]
+    flagged: bool | None
+    payload: list[LakeraAIPayloadItem] | None
+    breakdown: list[LakeraAIBreakdownItem] | None
+    dev_info: LakeraAIDevInfo | None

@@ -3,10 +3,12 @@ Arize Phoenix prompt manager that integrates with LiteLLM's prompt management sy
 Fetches prompt versions from Arize Phoenix and provides workspace-based access control.
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from collections.abc import Mapping, Sequence
+from typing import Any, Final, cast
 
 from jinja2 import DictLoader, select_autoescape
 from jinja2.sandbox import ImmutableSandboxedEnvironment
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import (
@@ -20,6 +22,31 @@ from litellm.types.utils import StandardCallbackDynamicParams
 from .arize_phoenix_client import ArizePhoenixClient
 
 
+class ArizePhoenixContentPart(TypedDict, total=False):
+    type: ReadOnly[str]
+    text: ReadOnly[str]
+
+
+class ArizePhoenixTemplateMessage(TypedDict, total=False):
+    role: ReadOnly[str]
+    content: ReadOnly[Sequence[ArizePhoenixContentPart]]
+
+
+class ArizePhoenixTemplateBody(TypedDict, total=False):
+    messages: ReadOnly[Sequence[ArizePhoenixTemplateMessage]]
+
+
+class ArizePhoenixPromptMetadata(TypedDict):
+    model_name: ReadOnly[str | None]
+    model_provider: ReadOnly[str | None]
+    description: ReadOnly[str]
+    template_type: ReadOnly[str | None]
+    template_format: ReadOnly[str]
+    invocation_parameters: ReadOnly[Mapping[str, Mapping[str, object]]]
+    temperature: ReadOnly[float | None]
+    max_tokens: ReadOnly[int | None]
+
+
 class ArizePhoenixPromptTemplate:
     """
     Represents a prompt template loaded from Arize Phoenix.
@@ -28,10 +55,10 @@ class ArizePhoenixPromptTemplate:
     def __init__(
         self,
         template_id: str,
-        messages: List[Dict[str, Any]],
-        metadata: Dict[str, Any],
-        model: Optional[str] = None,
-    ):
+        messages: Sequence[ArizePhoenixTemplateMessage],
+        metadata: ArizePhoenixPromptMetadata,
+        model: str | None = None,
+    ) -> None:
         self.template_id = template_id
         self.messages = messages
         self.metadata = metadata
@@ -43,7 +70,7 @@ class ArizePhoenixPromptTemplate:
         self.description = metadata.get("description", "")
         self.template_format = metadata.get("template_format", "MUSTACHE")
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"ArizePhoenixPromptTemplate(id='{self.template_id}', model='{self.model}')"
 
 
@@ -61,14 +88,14 @@ class ArizePhoenixTemplateManager:
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        prompt_id: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        prompt_id: str | None = None,
     ):
         self.api_key = api_key
         self.api_base = api_base
         self.prompt_id = prompt_id
-        self.prompts: Dict[str, ArizePhoenixPromptTemplate] = {}
+        self.prompts: dict[str, ArizePhoenixPromptTemplate] = {}
         self.arize_client = ArizePhoenixClient(api_key=self.api_key, api_base=self.api_base)
 
         # Templates fetched from Arize Phoenix come from external workspace
@@ -97,23 +124,23 @@ class ArizePhoenixTemplateManager:
         """Load a specific prompt version from Arize Phoenix."""
         try:
             # Fetch the prompt version from Arize Phoenix
-            prompt_data = self.arize_client.get_prompt_version(prompt_version_id)
+            prompt_data: Final = self.arize_client.get_prompt_version(prompt_version_id)
 
             if prompt_data:
-                template = self._parse_prompt_data(prompt_data, prompt_version_id)
+                template: Final = self._parse_prompt_data(prompt_data, prompt_version_id)
                 self.prompts[prompt_version_id] = template
             else:
                 raise ValueError(f"Prompt version '{prompt_version_id}' not found")
         except Exception as e:
             raise Exception(f"Failed to load prompt version '{prompt_version_id}' from Arize Phoenix: {e}")
 
-    def _parse_prompt_data(self, data: Dict[str, Any], prompt_version_id: str) -> ArizePhoenixPromptTemplate:
+    def _parse_prompt_data(self, data: dict[str, Any], prompt_version_id: str) -> ArizePhoenixPromptTemplate:
         """Parse Arize Phoenix prompt data and extract messages and metadata."""
-        template_data = data.get("template", {})
-        messages = template_data.get("messages", [])
+        template_data: Final[ArizePhoenixTemplateBody] = data.get("template", {})
+        messages: Final = template_data.get("messages", [])
 
         # Extract invocation parameters
-        invocation_params = data.get("invocation_parameters", {})
+        invocation_params: Final = data.get("invocation_parameters", {})
         provider_params = {}
 
         # Extract provider-specific parameters
@@ -129,7 +156,7 @@ class ArizePhoenixTemplateManager:
                     break
 
         # Build metadata dictionary
-        metadata = {
+        metadata: Final[ArizePhoenixPromptMetadata] = {
             "model_name": data.get("model_name"),
             "model_provider": data.get("model_provider"),
             "description": data.get("description", ""),
@@ -146,13 +173,15 @@ class ArizePhoenixTemplateManager:
             metadata=metadata,
         )
 
-    def render_template(self, template_id: str, variables: Optional[Dict[str, Any]] = None) -> List[AllMessageValues]:
+    def render_template(
+        self, template_id: str, variables: Mapping[str, object] | None = None
+    ) -> list[AllMessageValues]:
         """Render a template with the given variables and return formatted messages."""
         if template_id not in self.prompts:
             raise ValueError(f"Template '{template_id}' not found")
 
-        template = self.prompts[template_id]
-        rendered_messages: List[AllMessageValues] = []
+        template: Final = self.prompts[template_id]
+        rendered_messages: Final[list[AllMessageValues]] = []
 
         for message in template.messages:
             role = message.get("role", "user")
@@ -175,16 +204,16 @@ class ArizePhoenixTemplateManager:
             final_content = " ".join(rendered_content_parts)
 
             rendered_messages.append(
-                {"role": role, "content": final_content}  # type: ignore
+                cast("AllMessageValues", {"role": role, "content": final_content})  # cast-ok: Phoenix roles are OpenAI
             )
 
         return rendered_messages
 
-    def get_template(self, template_id: str) -> Optional[ArizePhoenixPromptTemplate]:
+    def get_template(self, template_id: str) -> ArizePhoenixPromptTemplate | None:
         """Get a template by ID."""
         return self.prompts.get(template_id)
 
-    def list_templates(self) -> List[str]:
+    def list_templates(self) -> list[str]:
         """List all available template IDs."""
         return list(self.prompts.keys())
 
@@ -215,16 +244,16 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        prompt_id: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        prompt_id: str | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.api_key = api_key
         self.api_base = api_base
         self.prompt_id = prompt_id
-        self._prompt_manager: Optional[ArizePhoenixTemplateManager] = None
+        self._prompt_manager: ArizePhoenixTemplateManager | None = None
 
     @property
     def integration_name(self) -> str:
@@ -245,8 +274,8 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
     def get_prompt_template(
         self,
         prompt_id: str,
-        prompt_variables: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[List[AllMessageValues], Dict[str, Any]]:
+        prompt_variables: Mapping[str, object] | None = None,
+    ) -> tuple[list[AllMessageValues], dict[str, object]]:
         """
         Get a prompt template and render it with variables.
 
@@ -257,23 +286,23 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
         Returns:
             Tuple of (rendered_messages, metadata)
         """
-        template = self.prompt_manager.get_template(prompt_id)
+        template: Final = self.prompt_manager.get_template(prompt_id)
         if not template:
             raise ValueError(f"Prompt template '{prompt_id}' not found")
 
         # Render the template
-        rendered_messages = self.prompt_manager.render_template(prompt_id, prompt_variables or {})
+        rendered_messages: Final = self.prompt_manager.render_template(prompt_id, prompt_variables or {})
 
         # Extract metadata
-        metadata = {
+        metadata: Final[dict[str, object]] = {
             "model": template.model,
             "temperature": template.temperature,
             "max_tokens": template.max_tokens,
         }
 
         # Add additional invocation parameters
-        invocation_params = template.invocation_parameters
-        provider_params = {}
+        invocation_params: Final = template.invocation_parameters
+        provider_params: Mapping[str, object] = {}
 
         if "openai" in invocation_params:
             provider_params = invocation_params["openai"]
@@ -289,14 +318,14 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
 
     def pre_call_hook(
         self,
-        user_id: Optional[str],
-        messages: List[AllMessageValues],
-        function_call: Optional[Union[Dict[str, Any], str]] = None,
-        litellm_params: Optional[Dict[str, Any]] = None,
-        prompt_id: Optional[str] = None,
-        prompt_variables: Optional[Dict[str, Any]] = None,
+        user_id: str | None,
+        messages: list[AllMessageValues],
+        function_call: dict[str, object] | str | None = None,
+        litellm_params: dict[str, object] | None = None,
+        prompt_id: str | None = None,
+        prompt_variables: dict[str, object] | None = None,
         **kwargs,
-    ) -> Tuple[List[AllMessageValues], Optional[Dict[str, Any]]]:
+    ) -> tuple[list[AllMessageValues], dict[str, object] | None]:
         """
         Pre-call hook that processes the prompt template before making the LLM call.
         """
@@ -337,12 +366,12 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
 
         except Exception as e:
             # Log error but don't fail the call
-            import litellm
+            from litellm._logging import verbose_proxy_logger
 
-            litellm._logging.verbose_proxy_logger.error(f"Error in Arize Phoenix prompt pre_call_hook: {e}")
+            verbose_proxy_logger.error("Error in Arize Phoenix prompt pre_call_hook: %s", e)
             return messages, litellm_params
 
-    def get_available_prompts(self) -> List[str]:
+    def get_available_prompts(self) -> list[str]:
         """Get list of available prompt IDs."""
         return self.prompt_manager.list_templates()
 
@@ -354,26 +383,26 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
 
     def should_run_prompt_management(
         self,
-        prompt_id: Optional[str],
-        prompt_spec: Optional[PromptSpec],
+        prompt_id: str | None,
+        prompt_spec: PromptSpec | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> bool:
         """
         Determine if prompt management should run based on the prompt_id.
 
-        For Arize Phoenix, we always return True and handle the prompt loading
-        in the _compile_prompt_helper method.
+        Arize Phoenix needs a prompt_id to compile, so it declines requests without one;
+        prompt loading itself happens in the _compile_prompt_helper method.
         """
-        return True
+        return prompt_id is not None
 
     def _compile_prompt_helper(
         self,
-        prompt_id: Optional[str],
-        prompt_spec: Optional[PromptSpec],
-        prompt_variables: Optional[dict],
+        prompt_id: str | None,
+        prompt_spec: PromptSpec | None,
+        prompt_variables: dict | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
-        prompt_label: Optional[str] = None,
-        prompt_version: Optional[int] = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
     ) -> PromptManagementClient:
         """
         Compile an Arize Phoenix prompt template into a PromptManagementClient structure.
@@ -395,10 +424,11 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
             rendered_messages, prompt_metadata = self.get_prompt_template(prompt_id, prompt_variables)
 
             # Extract model from metadata (if specified)
-            template_model = prompt_metadata.get("model")
+            raw_template_model: Final = prompt_metadata.get("model")
+            template_model: Final = raw_template_model if isinstance(raw_template_model, str) else None
 
             # Extract optional parameters from metadata
-            optional_params = {}
+            optional_params: Final = {}
             for param in [
                 "temperature",
                 "max_tokens",
@@ -422,12 +452,12 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
 
     async def async_compile_prompt_helper(
         self,
-        prompt_id: Optional[str],
-        prompt_variables: Optional[dict],
+        prompt_id: str | None,
+        prompt_variables: dict | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
-        prompt_spec: Optional[PromptSpec] = None,
-        prompt_label: Optional[str] = None,
-        prompt_version: Optional[int] = None,
+        prompt_spec: PromptSpec | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
     ) -> PromptManagementClient:
         """
         Async version of compile prompt helper. Since Arize Phoenix operations are synchronous,
@@ -447,17 +477,17 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
     def get_chat_completion_prompt(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         non_default_params: dict,
-        prompt_id: Optional[str],
-        prompt_variables: Optional[dict],
+        prompt_id: str | None,
+        prompt_variables: dict | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
-        prompt_spec: Optional[PromptSpec] = None,
-        prompt_label: Optional[str] = None,
-        prompt_version: Optional[int] = None,
-        ignore_prompt_manager_model: Optional[bool] = False,
-        ignore_prompt_manager_optional_params: Optional[bool] = False,
-    ) -> Tuple[str, List[AllMessageValues], dict]:
+        prompt_spec: PromptSpec | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
+        ignore_prompt_manager_model: bool | None = False,
+        ignore_prompt_manager_optional_params: bool | None = False,
+    ) -> tuple[str, list[AllMessageValues], dict]:
         """
         Get chat completion prompt from Arize Phoenix and return processed model, messages, and parameters.
         """

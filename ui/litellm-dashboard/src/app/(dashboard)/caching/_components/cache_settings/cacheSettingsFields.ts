@@ -1,12 +1,27 @@
-import type { FormItemProps } from "antd";
+export type CacheFieldType =
+  | "string"
+  | "password"
+  | "integer"
+  | "float"
+  | "boolean"
+  | "list"
+  | "model-select"
+  | "select";
 
-export type CacheFieldType = "string" | "password" | "integer" | "float" | "boolean" | "list" | "model-select";
+export interface CacheFieldOption {
+  readonly value: string;
+  readonly label: string;
+}
 
 export type RedisType = "node" | "cluster" | "sentinel" | "semantic";
 
 export type CacheSection = "connection" | "cluster" | "sentinel" | "semantic" | "ssl" | "cacheManagement" | "gcp";
 
-export type CacheFieldRule = NonNullable<FormItemProps["rules"]>[number];
+export type CacheFieldRule = (value: unknown) => string | null;
+
+// Marker the backend returns for a configured credential and maps back to the
+// stored secret on save, so the plaintext never round-trips through the form.
+export const REDACTED_VALUE = "***REDACTED***";
 
 export interface CacheField {
   readonly name: string;
@@ -16,7 +31,11 @@ export interface CacheField {
   readonly helpText: string;
   readonly redisType: RedisType | null;
   readonly defaultValue?: string | number | boolean;
+  readonly options?: readonly CacheFieldOption[];
   readonly rules?: CacheFieldRule[];
+  // Credential field: never prefilled into the form, and dropped from the save
+  // payload when left untouched so the redacted marker is never persisted.
+  readonly secret?: boolean;
 }
 
 export const REDIS_TYPES: readonly RedisType[] = ["node", "cluster", "sentinel", "semantic"];
@@ -28,60 +47,42 @@ export const REDIS_TYPE_DESCRIPTIONS: Readonly<Record<RedisType, string>> = {
   semantic: "Semantic caching that reuses responses for similar prompts",
 };
 
-const portRule: CacheFieldRule = {
-  validator: (_rule, value) => {
-    if (value === undefined || value === null || String(value).trim() === "") {
-      return Promise.resolve();
-    }
-    const port = Number(value);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      return Promise.reject(new Error("Port must be an integer between 1 and 65535"));
-    }
-    return Promise.resolve();
-  },
+const isBlank = (value: unknown): boolean => value === undefined || value === null || String(value).trim() === "";
+
+const portRule: CacheFieldRule = (value) => {
+  if (isBlank(value)) {
+    return null;
+  }
+  const port = Number(value);
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? null : "Port must be an integer between 1 and 65535";
 };
 
-const jsonListRule: CacheFieldRule = {
-  validator: (_rule, value) => {
-    if (value === undefined || value === null || String(value).trim() === "") {
-      return Promise.resolve();
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(String(value));
-    } catch {
-      return Promise.reject(new Error("Must be a valid JSON array (use double quotes)"));
-    }
-    if (!Array.isArray(parsed)) {
-      return Promise.reject(new Error("Must be a JSON array"));
-    }
-    return Promise.resolve();
-  },
+const jsonListRule: CacheFieldRule = (value) => {
+  if (isBlank(value)) {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(String(value));
+  } catch {
+    return "Must be a valid JSON array (use double quotes)";
+  }
+  return Array.isArray(parsed) ? null : "Must be a JSON array";
 };
 
-const nonNegativeIntegerRule: CacheFieldRule = {
-  validator: (_rule, value) => {
-    if (value === undefined || value === null || String(value).trim() === "") {
-      return Promise.resolve();
-    }
-    const parsed = Number(value);
-    if (!Number.isInteger(parsed) || parsed < 0) {
-      return Promise.reject(new Error("Must be a non-negative integer"));
-    }
-    return Promise.resolve();
-  },
+const nonNegativeIntegerRule: CacheFieldRule = (value) => {
+  if (isBlank(value)) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? null : "Must be a non-negative integer";
 };
 
-const numberRule: CacheFieldRule = {
-  validator: (_rule, value) => {
-    if (value === undefined || value === null || String(value).trim() === "") {
-      return Promise.resolve();
-    }
-    if (Number.isNaN(Number(value))) {
-      return Promise.reject(new Error("Must be a number"));
-    }
-    return Promise.resolve();
-  },
+const numberRule: CacheFieldRule = (value) => {
+  if (isBlank(value)) {
+    return null;
+  }
+  return Number.isNaN(Number(value)) ? "Must be a number" : null;
 };
 
 export const CACHE_FIELDS: readonly CacheField[] = [
@@ -93,6 +94,7 @@ export const CACHE_FIELDS: readonly CacheField[] = [
     helpText:
       "Full Redis/Valkey connection URL (e.g. redis://:password@host:6379/1). When set, it takes precedence over Host, Port, Password, and Database Index.",
     redisType: null,
+    secret: true,
   },
   {
     name: "host",
@@ -128,6 +130,7 @@ export const CACHE_FIELDS: readonly CacheField[] = [
     section: "connection",
     helpText: "Redis server password",
     redisType: null,
+    secret: true,
   },
   {
     name: "username",
@@ -170,6 +173,7 @@ export const CACHE_FIELDS: readonly CacheField[] = [
     section: "sentinel",
     helpText: "Password for Redis Sentinel authentication",
     redisType: "sentinel",
+    secret: true,
   },
   {
     name: "similarity_threshold",
@@ -188,6 +192,20 @@ export const CACHE_FIELDS: readonly CacheField[] = [
     section: "semantic",
     helpText: "Embedding model for semantic cache",
     redisType: "semantic",
+  },
+  {
+    name: "semantic_cache_scope",
+    label: "Semantic Cache Scope",
+    type: "select",
+    section: "semantic",
+    helpText:
+      "Who can share a semantic cache hit. Key shares hits between all end users of a key/team/org. End user also isolates per end user; requests without an end user fall back to the key scope.",
+    redisType: "semantic",
+    defaultValue: "key",
+    options: [
+      { value: "key", label: "Key (shared by all end users of the key/team/org)" },
+      { value: "end_user", label: "End user (isolated per end user)" },
+    ],
   },
   {
     name: "ssl",

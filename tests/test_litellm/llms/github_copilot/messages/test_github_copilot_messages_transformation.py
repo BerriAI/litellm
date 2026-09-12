@@ -1,10 +1,7 @@
-import os
-import sys
 from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.github_copilot.common_utils import GetAPIKeyError
@@ -326,3 +323,11 @@ def test_github_copilot_config_does_not_handle_web_search_natively():
 
     assert GithubCopilotAnthropicMessagesConfig().handles_web_search_natively() is False
     assert AnthropicMessagesConfig().handles_web_search_natively() is True
+
+
+def test_github_copilot_messages_config_probes_capabilities_under_copilot_namespace():
+    """Capability probes in the shared pass-through helpers read
+    ``self.custom_llm_provider``; without this override they probed the
+    ``anthropic`` namespace and ignored the exact ``github_copilot/claude-*``
+    cost-map entries."""
+    assert GithubCopilotAnthropicMessagesConfig().custom_llm_provider == "github_copilot"

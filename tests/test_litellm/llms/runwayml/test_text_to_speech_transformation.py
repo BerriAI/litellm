@@ -2,10 +2,7 @@
 Test RunwayML text-to-speech transformation
 """
 
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.llms.runwayml.text_to_speech.transformation import (
     RunwayMLTextToSpeechConfig,

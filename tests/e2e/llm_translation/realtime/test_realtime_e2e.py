@@ -6,10 +6,10 @@ schema: the session lifecycle, the canonical response event sequence with a
 reconstructed transcript and usage, and a full tool-call round-trip (call ->
 tool result -> a follow-up response that uses the result).
 
-One GA-speaking client validates every provider; only the model alias changes. A
-provider whose realtime alias is not configured on the proxy skips (skip on
-environment); once it is configured, a protocol failure is a hard failure. See
-REALTIME_COVERAGE_MATRIX.md.
+One GA-speaking client validates every provider; only the model alias changes.
+Every provider is provisioned at session start, so a missing realtime alias is a
+hard failure, not a skip; once configured, a protocol failure is likewise a hard
+failure. See REALTIME_COVERAGE_MATRIX.md.
 """
 
 import pytest

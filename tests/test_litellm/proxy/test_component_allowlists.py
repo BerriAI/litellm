@@ -75,6 +75,7 @@ _DB_ENV_KEYS = (
     "DATABASE_HOST_READ_REPLICA",
     "DATABASE_PASSWORD",
     "IAM_TOKEN_DB_AUTH",
+    "AZURE_POSTGRESQL_AUTH",
 )
 _PRE_DB_ENV = {_key: os.environ.pop(_key, None) for _key in _DB_ENV_KEYS}
 _PRE_COMPONENT_LIFESPAN = app.router.lifespan_context
