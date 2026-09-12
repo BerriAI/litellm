@@ -55,14 +55,12 @@ def test_two_exporters_receive_the_same_span():
 
 
 def _capturing_kind(kind):
-    """Register ``kind`` so every ExporterSpec of that kind exports into one buffer."""
     exporter = InMemorySpanExporter()
     register_exporter_factory(kind, lambda _spec: exporter)
     return exporter
 
 
 def _emit_langfuse_stamped_span(provider):
-    """The shared span both a generic ``otel`` and a ``langfuse_otel`` callback write to."""
     span = provider.get_tracer("test").start_span("chat proof-model")
     span.set_attribute("gen_ai.request.model", "proof-model")
     span.set_attribute("langfuse.trace.name", "private-langfuse-only-name")
@@ -72,8 +70,6 @@ def _emit_langfuse_stamped_span(provider):
 
 
 def test_generic_exporter_does_not_receive_langfuse_attributes_the_langfuse_exporter_keeps():
-    """``otel`` + ``langfuse_otel`` together: the operator's own collector must see the
-    OTel GenAI vocabulary only, while the Langfuse sink keeps its trace name and I/O."""
     generic = _capturing_kind("capture_generic_collector")
     langfuse = _capturing_kind("capture_langfuse_sink")
     cfg = OpenTelemetryV2Config(
@@ -94,8 +90,6 @@ def test_generic_exporter_does_not_receive_langfuse_attributes_the_langfuse_expo
 
 
 def test_langfuse_mapper_on_a_plain_otlp_exporter_keeps_langfuse_attributes():
-    """``otel`` alone with ``mapper_names: [langfuse]`` points the mapper at the operator's
-    exporter on purpose, so that exporter is the Langfuse sink and nothing is stripped."""
     sink = _capturing_kind("capture_langfuse_mapper_sink")
     cfg = OpenTelemetryV2Config(
         mapper_names=["langfuse"], exporters=[ExporterSpec(kind="capture_langfuse_mapper_sink")]

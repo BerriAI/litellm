@@ -502,12 +502,6 @@ def _without_langfuse_attributes(span: ReadableSpan) -> ReadableSpan:
 
 
 def _reads_langfuse_attributes(spec: ExporterSpec, config: OpenTelemetryV2Config) -> bool:
-    """Whether ``spec`` is the sink the ``langfuse.*`` attributes on a span are meant for.
-
-    An unowned exporter is the operator's generic collector, unless the config runs the
-    ``langfuse`` mapper with no Langfuse-owned exporter to deliver it (the mapper pointed
-    at ``OTEL_EXPORTER_*`` directly).
-    """
     if spec.owner is not None:
         return spec.owner is ExporterOwner.LANGFUSE_OTEL
     return "langfuse" in config.mapper_names and all(
@@ -803,9 +797,6 @@ class _OverriddenBackendFilter(SpanProcessor):
 
 
 class _LangfuseAttributeFilter(SpanProcessor):
-    """Strip the ``langfuse.*`` attributes a Langfuse callback stamps on the shared spans
-    before they reach an exporter that is not a Langfuse sink."""
-
     def __init__(self, inner: SpanProcessor) -> None:
         self._inner: Final = inner
 
