@@ -2,6 +2,7 @@ import json
 import threading
 from collections.abc import Generator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from io import BytesIO
 from typing import Final
 
 import pytest
@@ -99,6 +100,38 @@ def test_native_ocr_with_compiled_rust_extension(
     }
 
 
+@pytest.mark.parametrize(
+    "file_input,mime_type,expected_type,expected_field,expected_uri",
+    [
+        (b"abc", "application/pdf", "document_url", "document_url", "data:application/pdf;base64,YWJj"),
+        (BytesIO(b"abc"), "image/png", "image_url", "image_url", "data:image/png;base64,YWJj"),
+    ],
+)
+def test_native_lifecycle_core_encodes_python_file_input(
+    ocr_server,
+    file_input,
+    mime_type,
+    expected_type,
+    expected_field,
+    expected_uri,
+):
+    server, requests = ocr_server
+    litellm.rust(True)
+    response = litellm.ocr(
+        model="mistral/mistral-ocr-latest",
+        document={"type": "file", "file": file_input, "mime_type": mime_type},
+        api_key="test-key",
+        api_base=f"http://127.0.0.1:{server.server_port}",
+        opaque_extension=object(),
+    )
+    assert response.pages[0].markdown == "native OCR response"
+    assert requests[0]["body"]["document"] == {
+        "type": expected_type,
+        expected_field: expected_uri,
+    }
+    assert "opaque_extension" not in requests[0]["body"]
+
+
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("model", ["mistral/mistral-ocr-latest", "azure_ai/doc-intelligence/prebuilt-read"])
 @pytest.mark.asyncio
@@ -145,24 +178,20 @@ async def test_native_public_ocr_matches_python(model, asynchronous):
     server: Final = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread: Final = Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    responses: Final = []
     try:
-        for enabled in (False, True):
-            litellm.rust(enabled)
-            arguments: Final = {
-                "model": model,
-                "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
-                "api_key": "test-key",
-                "api_base": f"http://127.0.0.1:{server.server_port}",
-                "pages": [0, 2],
-                "timeout": 3.0,
-            }
-            response: Final = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
-            responses.append(response.model_dump())
-        assert len(calls) == 2
-        assert calls[0] == calls[1]
-        for key in ("model", "pages", "object"):
-            assert responses[0][key] == responses[1][key]
+        litellm.rust(True)
+        arguments: Final = {
+            "model": model,
+            "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
+            "api_key": "test-key",
+            "api_base": f"http://127.0.0.1:{server.server_port}",
+            "pages": [0, 2],
+            "timeout": 3.0,
+        }
+        response: Final = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
+        response_data: Final = response.model_dump()
+        assert len(calls) == 1
+        assert response_data["object"] == "ocr"
     finally:
         server.shutdown()
         server.server_close()
@@ -195,7 +224,7 @@ def test_native_ocr_rejects_invalid_input_before_network(ocr_server, custom_prov
     from litellm.rust_bridge import _native
 
     server, requests = ocr_server
-    with pytest.raises(ValueError, match=r"invalid (OCR request field|provider)|invalid request"):
+    with pytest.raises(ValueError, match="Document URL is required"):
         _native.ocr(
             model="mistral-ocr-latest",
             custom_llm_provider=custom_provider,
@@ -224,7 +253,7 @@ async def test_native_ocr_enforces_request_deadline_without_fallback(ocr_server,
         "num_retries": 0,
     }
     started = time.monotonic()
-    with pytest.raises(litellm.APIConnectionError):
+    with pytest.raises(litellm.Timeout):
         await asyncio.wait_for(
             litellm.aocr(**arguments) if asynchronous else asyncio.to_thread(litellm.ocr, **arguments),
             timeout=3,

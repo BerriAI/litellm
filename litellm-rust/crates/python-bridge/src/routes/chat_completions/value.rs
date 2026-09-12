@@ -9,12 +9,12 @@ use pyo3::prelude::*;
 use serde_json::Value;
 
 use crate::errors::chat_completions_error_to_pyerr;
-use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty, required_value};
+use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty, required_array};
 
 fn prepare_chat_completions(
     inputs: ChatCompletionsInputs,
 ) -> PyResult<impl Future<Output = Result<ChatCompletionsResponse, Error>> + Send + 'static> {
-    let messages = required_value("messages", inputs.messages, Value::is_array, "list")?;
+    let messages = required_array("messages", inputs.messages)?;
     let optional_params = object_or_empty("optional_params", inputs.optional_params)?;
     let options = RouteOptions::from_python(RouteOptionsInputs {
         model: inputs.model,
@@ -36,7 +36,7 @@ fn prepare_chat_completions(
         } = options;
         run_chat_completions(ChatCompletionsRequest {
             model: &model,
-            messages,
+            messages: Value::Array(messages),
             optional_params,
             api_key: api_key.as_deref(),
             api_base: api_base.as_deref(),

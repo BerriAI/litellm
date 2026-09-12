@@ -1,4 +1,5 @@
 use serde_json::{Value, json};
+use std::sync::{Arc, Mutex};
 
 use super::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
 use super::wire::{OcrWireRequest, decode_request};
@@ -124,6 +125,14 @@ async fn immediate_response_normalizes_pages_and_preserves_native() {
         json!({"width":816,"height":1056,"dpi":96})
     );
     assert_eq!(result.usage_info, Some(json!({"pages_processed":1})));
+    let serialized = result.clone().into_json();
+    assert_eq!(serialized["content"], "A\n\nB");
+    assert_eq!(serialized["tables"], json!([{"cells":[]}]));
+    assert_eq!(
+        serialized["keyValuePairs"],
+        json!([{"key":{"content":"A"}}])
+    );
+    assert!(serialized.get("key_value_pairs").is_none());
     assert_eq!(result.provider_native_response, Some(operation));
 }
 
@@ -167,6 +176,55 @@ async fn accepted_response_polls_to_success_with_only_credentials() {
                 .contains("ocp-apim-subscription-key: test-key")
         );
     }
+}
+
+struct SubmissionBoundary {
+    request_count: Arc<Mutex<Vec<String>>>,
+}
+
+impl super::hooks::OcrHooks for SubmissionBoundary {
+    fn post_call(
+        &self,
+        request: super::hooks::OcrPostCallRequest,
+    ) -> super::hooks::OcrHookFuture<'_, super::hooks::OcrPostCallRequest> {
+        Box::pin(async move {
+            match self.request_count.lock().unwrap().len() {
+                1 => assert_eq!(request.original_response, json!(r#"{"submitted":true}"#)),
+                2 => assert!(
+                    request
+                        .original_response
+                        .as_str()
+                        .unwrap()
+                        .contains("succeeded")
+                ),
+                count => panic!("unexpected callback after {count} requests"),
+            }
+            Ok(request)
+        })
+    }
+}
+
+#[tokio::test]
+async fn accepted_response_runs_post_call_before_polling() {
+    let (base, seen, server) = mock_server(vec![
+        MockResponse {
+            status: 202,
+            headers: vec![("Operation-Location", "{base}/operation".into())],
+            body: json!({"submitted": true}),
+        },
+        MockResponse::json(json!({"status":"succeeded"})),
+    ])
+    .await;
+    let request = super::LiteLLMOcrRequest {
+        hooks: Arc::new(SubmissionBoundary {
+            request_count: seen.clone(),
+        }),
+        ..wire_request("azure_ai/doc-intelligence/prebuilt-read", &base, json!({}))
+    };
+
+    perform_ocr(request).await.unwrap();
+    server.await.unwrap();
+    assert_eq!(seen.lock().unwrap().len(), 2);
 }
 
 #[tokio::test]
@@ -361,7 +419,7 @@ async fn pre_call_guardrail_receives_caller_pages_before_mapping() {
 
     struct RewritePages;
     impl OcrHooks for RewritePages {
-        fn has_guardrails(&self) -> bool {
+        fn intercepts_requests(&self) -> bool {
             true
         }
 

@@ -11,7 +11,7 @@ import pytest_asyncio
 
 import litellm
 from litellm import utils
-from litellm.litellm_core_utils import litellm_logging
+from litellm.litellm_core_utils import litellm_logging, thread_pool_executor
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.rust_bridge.configuration import (  # pyright: ignore[reportPrivateUsage]  # preserve raw configuration state in test isolation
     _CONFIGURATION,
@@ -29,11 +29,6 @@ CALLBACK_ATTRIBUTES: Final = (
     "_async_success_callback",
     "_async_failure_callback",
 )
-EXPECTED_FAILURE_REASONS: Final = {
-    "ocr/test_callbacks.py": "requires the OCR callback lifecycle implementation from #40070",
-    "ocr/test_guardrails.py": "requires the OCR guardrail lifecycle implementation from #40070",
-    "ocr/test_requests.py": "requires the OCR request and Azure authentication implementation from #40070",
-}
 
 
 def _list_attribute(container: ModuleType, attribute: str) -> list[object]:
@@ -76,7 +71,9 @@ async def isolate_ocr_test_state() -> AsyncIterator[None]:
         stack.enter_context(_rebound(litellm, "cache", None))  # test-quality-ok: isolate process-global cache
         stack.enter_context(_rebound(_CONFIGURATION, "override", None))
         executor: Final = ThreadPoolExecutor(thread_name_prefix="rust-ocr-test-logging")
+        stack.enter_context(_rebound(litellm_logging, "executor", executor))
         stack.enter_context(_rebound(utils, "executor", executor))
+        stack.enter_context(_rebound(thread_pool_executor, "executor", executor))
         try:
             yield
         finally:
@@ -94,14 +91,6 @@ def recording_server() -> Generator[RecordingServer]:
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    for item in items:
-        if "test_litellm_rust" not in item.path.parts:
-            continue
-        relative_path: Final = "/".join(item.path.parts[item.path.parts.index("test_litellm_rust") + 1 :])
-        reason: Final = EXPECTED_FAILURE_REASONS.get(relative_path)
-        if reason is not None:
-            item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
-
     if not _parse_env_bool(os.environ.get("LITELLM_RUST")):
         skip: Final = pytest.mark.skip(reason="requires LITELLM_RUST=1 and a compiled Rust extension")
         for item in items:
