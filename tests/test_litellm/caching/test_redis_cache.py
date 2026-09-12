@@ -1252,3 +1252,60 @@ def test_timeouts_during_a_blip_log_once_per_interval_not_once_per_call(sync_bat
         for _ in range(3):
             assert sync_batch_redis_cache.get_cache("lit7520") is None
     assert [r.levelno for r in caplog.records if "redis unavailable" in r.getMessage()] == [logging.ERROR] * 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_method",
+    [
+        pytest.param(lambda c: c.async_set_cache_pipeline([("lit7520", "v")]), id="async_set_cache_pipeline"),
+        pytest.param(lambda c: c.async_set_cache_sadd("lit7520", ["v"], ttl=None), id="async_set_cache_sadd"),
+        pytest.param(lambda c: c.async_increment("lit7520", 1.0), id="async_increment"),
+        pytest.param(
+            lambda c: c.async_increment_pipeline([{"key": "lit7520", "increment_value": 1.0, "ttl": 60}]),
+            id="async_increment_pipeline",
+        ),
+        pytest.param(lambda c: c.async_rpush("lit7520", ["v"]), id="async_rpush"),
+        pytest.param(
+            lambda c: c.async_rpush_pipeline([{"key": "lit7520", "values": ["v"]}]), id="async_rpush_pipeline"
+        ),
+        pytest.param(lambda c: c.async_lpop("lit7520"), id="async_lpop"),
+        pytest.param(lambda c: c.async_lpop_pipeline([{"key": "lit7520", "count": 1}]), id="async_lpop_pipeline"),
+    ],
+)
+async def test_write_path_timeouts_inside_the_interval_stay_at_debug(call_method, caplog, monkeypatch, redis_no_ping):
+    """A write or list operation timing out mid-streak is counted by the throttle instead of logging its own ERROR."""
+    import contextlib
+    import logging
+
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    from litellm.caching import redis_cache as redis_cache_module
+    from litellm.caching.redis_cache import _RedisTimeoutLogThrottle
+
+    clock = MagicMock(return_value=1_000.0)
+    throttle = _RedisTimeoutLogThrottle(interval=5.0, clock=clock)
+    assert throttle.admit() == 0
+    monkeypatch.setattr(redis_cache_module, "_redis_timeout_log_throttle", throttle)
+
+    timeout = RedisTimeoutError("Timeout reading from 127.0.0.1:6379")
+    client = MagicMock()
+    client.pipeline.return_value.__aenter__.side_effect = timeout
+    client.sadd = AsyncMock(side_effect=timeout)
+    client.incrbyfloat = AsyncMock(side_effect=timeout)
+    client.rpush = AsyncMock(side_effect=timeout)
+    client.lpop = AsyncMock(side_effect=timeout)
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    cache = RedisCache()
+
+    with (
+        patch.object(cache, "init_async_client", return_value=client),
+        caplog.at_level(logging.DEBUG, logger="LiteLLM"),
+    ):
+        with contextlib.suppress(RedisTimeoutError):
+            await call_method(cache)
+
+    timeout_records = [r for r in caplog.records if "Timeout reading from" in r.getMessage()]
+    assert [(r.levelno, r.filename) for r in timeout_records] == [(logging.DEBUG, "redis_cache.py")]
+    clock.return_value += 5.0
+    assert throttle.admit() == 1
