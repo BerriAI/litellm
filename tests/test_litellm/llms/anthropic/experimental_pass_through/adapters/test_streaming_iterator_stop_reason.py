@@ -10,6 +10,8 @@ bridge emitted ``stop_reason: "end_turn"`` and Anthropic tool-runners
 (Claude Code, ``messages.stream``) silently dropped the tool call.
 """
 
+from typing import Final
+
 import pytest
 
 from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
@@ -18,7 +20,7 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterato
 from litellm.llms.ollama.chat.transformation import (
     OllamaChatCompletionResponseIterator,
 )
-from litellm.types.utils import ModelResponseStream
+from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
 
 _OLLAMA_TOOL_CHUNK = {
     "model": "qwen3:8b",
@@ -77,3 +79,26 @@ def test_ollama_mid_stream_tool_call_yields_tool_use_stop_reason_sync():
 async def test_ollama_mid_stream_tool_call_yields_tool_use_stop_reason_async():
     wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(_ollama_streamed_chunks()), model="qwen3:8b")
     _assert_tool_use_stop_reason([event async for event in wrapper])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_mode", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(("finish_reason", "stop_reason"), [("content_filter", "refusal"), ("stop", "end_turn")])
+async def test_content_filter_without_refusal_text(finish_reason: str, stop_reason: str, async_mode: bool) -> None:
+    chunks: Final = [
+        ModelResponseStream(choices=[StreamingChoices(delta=Delta(role="assistant", content=""), finish_reason=None)]),
+        ModelResponseStream(
+            choices=[StreamingChoices(delta=Delta(), finish_reason=finish_reason)],
+            usage=Usage(prompt_tokens=12, completion_tokens=0, total_tokens=12),
+        ),
+    ]
+    wrapper: Final = AnthropicStreamWrapper(
+        completion_stream=_AsyncStream(chunks) if async_mode else iter(chunks), model="openai-model"
+    )
+    events: Final = [event async for event in wrapper] if async_mode else list(wrapper)
+    message_deltas: Final = tuple(event for event in events if event["type"] == "message_delta")
+
+    assert len(message_deltas) == 1
+    assert message_deltas[0]["delta"]["stop_reason"] == stop_reason
+    assert message_deltas[0]["usage"]["input_tokens"] == 12
+    assert events[-1]["type"] == "message_stop"
