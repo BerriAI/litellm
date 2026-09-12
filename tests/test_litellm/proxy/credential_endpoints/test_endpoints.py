@@ -220,9 +220,11 @@ def test_create_credential_answers_409_when_the_name_is_already_taken(credential
     )
 
     assert response.status_code == 409, f"name collision answered {response.status_code}: {response.text}"
-    detail = response.json()["error"]["message"]
-    assert "aws_bedrock" in str(detail)
-    assert "PATCH /credentials/aws_bedrock" in str(detail)
+    message = response.json()["error"]["message"]
+    assert message == (
+        "Credential 'aws_bedrock' already exists. "
+        "Update it with PATCH /credentials/aws_bedrock, or delete it first."
+    ), f"the operator reads this message verbatim: {message}"
     assert "Unique constraint" not in response.text, f"the Prisma internals must not leak: {response.text}"
     create.assert_not_awaited(), "the guard must reject before writing"
 

@@ -41,13 +41,11 @@ class CredentialHelperUtils:
         )
 
 
-def _credential_exists_detail(credential_name: str) -> dict[str, str]:
-    return {
-        "error": (
-            f"Credential '{credential_name}' already exists. "
-            f"Update it with PATCH /credentials/{credential_name}, or delete it first."
-        )
-    }
+def _credential_exists_detail(credential_name: str) -> str:
+    return (
+        f"Credential '{credential_name}' already exists. "
+        f"Update it with PATCH /credentials/{credential_name}, or delete it first."
+    )
 
 
 @router.post(
