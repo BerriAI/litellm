@@ -1,0 +1,161 @@
+{
+  "commit": "0690520080fde5f63878ac1b4f0e00cc19843f36",
+  "checked_at": "2026-09-12T00:47:58.724993+00:00",
+  "report_state": "complete",
+  "patch": {
+    "hits": 2,
+    "misses": 0,
+    "partials": 0,
+    "coverage": 100.0
+  },
+  "repository_totals": {
+    "files": 2306,
+    "lines": 299189,
+    "hits": 241384,
+    "misses": 57805,
+    "partials": 0,
+    "coverage": 80.67,
+    "branches": 0,
+    "methods": 0,
+    "sessions": 26,
+    "complexity": 0.0,
+    "complexity_total": 0.0,
+    "complexity_ratio": 0,
+    "diff": 0
+  },
+  "pending_latest_flags": [],
+  "carryforward_only_flags": [],
+  "latest_uploads": {
+    "proxy-db-custom-logging": {
+      "created_at": "2026-09-12 00:29:39.804054+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659847"
+    },
+    "proxy-extras": {
+      "created_at": "2026-09-12 00:29:07.813498+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659737"
+    },
+    "proxy-db-proxy-runtime": {
+      "created_at": "2026-09-12 00:30:04.859549+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659847"
+    },
+    "proxy-db-proxy-server-core": {
+      "created_at": "2026-09-12 00:30:05.649193+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659847"
+    },
+    "proxy-auth": {
+      "created_at": "2026-09-12 00:31:53.840929+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659737"
+    },
+    "enterprise-package": {
+      "created_at": "2026-09-12 00:31:54.406510+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659737"
+    },
+    "proxy-db-key-generation": {
+      "created_at": "2026-09-12 00:29:13.657287+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659847"
+    },
+    "caching-local": {
+      "created_at": "2026-09-12 00:29:36.377291+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659737"
+    },
+    "proxy-db-guardrails-hooks": {
+      "created_at": "2026-09-12 00:29:40.733119+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659847"
+    },
+    "proxy-db-budgets": {
+      "created_at": "2026-09-12 00:29:42.012213+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659847"
+    },
+    "proxy-db-auth-checks": {
+      "created_at": "2026-09-12 00:29:42.038878+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659847"
+    },
+    "proxy-db-logging-misc": {
+      "created_at": "2026-09-12 00:29:46.421753+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659847"
+    },
+    "core-utils": {
+      "created_at": "2026-09-12 00:31:06.101986+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659737"
+    },
+    "proxy-db-proxy-utils": {
+      "created_at": "2026-09-12 00:29:59.021514+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659847"
+    },
+    "proxy-db-endpoints-and-responses": {
+      "created_at": "2026-09-12 00:46:51.823818+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659847"
+    },
+    "proxy-db-jwt-and-keys": {
+      "created_at": "2026-09-12 00:43:35.312515+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659847"
+    },
+    "responses-caching-types": {
+      "created_at": "2026-09-12 00:30:25.200653+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659737"
+    },
+    "proxy-db-db-and-spend": {
+      "created_at": "2026-09-12 00:30:41.933696+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659847"
+    },
+    "llm-vertex-ai": {
+      "created_at": "2026-09-12 00:31:04.257370+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659737"
+    },
+    "proxy-server": {
+      "created_at": "2026-09-12 00:30:09.483568+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659737"
+    },
+    "enterprise-routing": {
+      "created_at": "2026-09-12 00:31:15.603683+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659737"
+    },
+    "integrations": {
+      "created_at": "2026-09-12 00:31:55.000705+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659737"
+    },
+    "proxy-endpoints": {
+      "created_at": "2026-09-12 00:32:42.750998+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659737"
+    },
+    "proxy-infra": {
+      "created_at": "2026-09-12 00:33:25.192749+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659737"
+    },
+    "llm-other-providers": {
+      "created_at": "2026-09-12 00:33:58.668841+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659737"
+    },
+    "misc": {
+      "created_at": "2026-09-12 00:36:47.126910+00:00",
+      "state": "merged",
+      "build_url": "https://github.com/BerriAI/litellm/actions/runs/34661659737"
+    }
+  },
+  "pull_and_commit_totals_match": true
+}

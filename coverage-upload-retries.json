@@ -1,0 +1,7 @@
+{
+  "commit": "0690520080fde5f63878ac1b4f0e00cc19843f36",
+  "jwt_test_retry_attempt": 3,
+  "endpoint_test_retry_attempt": 4,
+  "endpoint_job": 103467492826,
+  "reason": "Two successfully delivered Codecov reports remained unprocessed for over ten minutes. Upload-only retry could not find reports because artifact names include the run attempt; reran the two CI shards to regenerate their artifacts"
+}
