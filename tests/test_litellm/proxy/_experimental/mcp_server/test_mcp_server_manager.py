@@ -30,7 +30,7 @@ from mcp.types import (
     TextResourceContents,
 )
 from mcp.types import Tool as MCPTool
-from pydantic import AnyUrl
+from pydantic import AnyUrl, TypeAdapter
 
 from litellm.constants import MCP_METADATA_TIMEOUT
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -13224,7 +13224,7 @@ def test_discovery_cache_keys_isolate_user_dependent_auth(auth_type: MCPAuth) ->
 async def test_discovery_cache_retries_cancelled_fetches() -> None:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import _DiscoveryCache
 
-    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock())
+    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock(), TypeAdapter(tuple[Prompt, ...]))
 
     async def cancelled() -> list[Prompt]:
         raise asyncio.CancelledError()
@@ -13241,7 +13241,7 @@ async def test_discovery_cache_retries_cancelled_fetches() -> None:
 async def test_discovery_cache_cancels_fetch_when_last_waiter_leaves() -> None:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import _DiscoveryCache
 
-    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock())
+    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock(), TypeAdapter(tuple[Prompt, ...]))
     entered: Final = asyncio.Event()
     stopped: Final = asyncio.Event()
     release: Final = asyncio.Event()
@@ -13270,7 +13270,7 @@ async def test_discovery_cache_cancels_fetch_when_last_waiter_leaves() -> None:
 async def test_discovery_cache_bounds_detached_fetches_without_dropping_results() -> None:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import _DiscoveryCache
 
-    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock())
+    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock(), TypeAdapter(tuple[Prompt, ...]))
     entered: Final[asyncio.Queue[None]] = asyncio.Queue()
     release: Final = asyncio.Event()
 
@@ -13389,7 +13389,7 @@ async def test_discovery_resolves_stored_oauth_for_the_requesting_user() -> None
 async def test_discovery_cache_evicts_results_at_capacity() -> None:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import _DiscoveryCache
 
-    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock())
+    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock(), TypeAdapter(tuple[Prompt, ...]))
 
     async def original() -> list[Prompt]:
         return [Prompt(name="original")]
@@ -13407,7 +13407,7 @@ async def test_discovery_cache_evicts_results_at_capacity() -> None:
 async def test_discovery_cache_invalidation_preserves_other_servers_and_pending_fetches() -> None:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import _DiscoveryCache
 
-    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock())
+    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock(), TypeAdapter(tuple[Prompt, ...]))
     entered: Final = asyncio.Event()
     release: Final = asyncio.Event()
 
@@ -13432,3 +13432,16 @@ async def test_discovery_cache_invalidation_preserves_other_servers_and_pending_
     assert (await cache.get(("other", None), refetched))[0].name == "pending"
     assert (await cache.get(("server-extra", None), refetched))[0].name == "original"
     assert (await cache.get(("server", None), refetched))[0].name == "refetched"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("description", ("x" * 96_000, "é" * 40_000), ids=("ascii", "unicode"))
+async def test_discovery_cache_returns_oversized_results_without_retaining_them(description: str) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _DiscoveryCache
+
+    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock(), TypeAdapter(tuple[Prompt, ...]))
+    fetch: Final = AsyncMock(return_value=[Prompt(name="large", description=description)])
+    for _ in range(2):
+        result: Final = await cache.get(("server", None), fetch)
+        assert result[0].description == description
+    assert fetch.await_count == 2
