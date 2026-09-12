@@ -167,17 +167,18 @@ class ManagementClient:
             response_type=KeyInfoResponse,
         )
 
-    def delete_key_strict(self, key: str, *, caller_key: str | None = None) -> None:
+    def delete_key_strict(self, key: str, *, caller_key: str | None = None, missing_ok: bool = False) -> None:
         """Strict delete for the act phase of a test: a failed delete is a hard
         failure, unlike the warn-only ProxyClient.delete_key used at teardown."""
-        _ = unwrap(
-            self.proxy.transport.post(
-                "/key/delete",
-                headers=self.proxy.management_headers(caller_key),
-                json=KeyDeleteBody(keys=[key]),
-                response_type=NoBody,
-            )
+        result = self.proxy.transport.post(
+            "/key/delete",
+            headers=self.proxy.management_headers(caller_key),
+            json=KeyDeleteBody(keys=[key]),
+            response_type=NoBody,
         )
+        if missing_ok and isinstance(result, UnknownApiError) and result.status_code == 404:
+            return
+        _ = unwrap(result)
 
     def delete_model_strict(self, model_id: str) -> None:
         """Strict delete for the act phase of a test: a failed delete is a hard

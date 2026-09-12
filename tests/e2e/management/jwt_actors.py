@@ -84,7 +84,7 @@ class ActorFactory:
                 )
             )
         )
-        self.resources.defer(lambda: self.bootstrap.delete_key_strict(created.key))
+        self.resources.defer(lambda: self.bootstrap.delete_key_strict(created.key, missing_ok=True))
         return created
 
     def tenant(self) -> Tenant:
