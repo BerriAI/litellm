@@ -34719,6 +34719,22 @@
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
     },
+    "meta/muse-voice-transcribe-1.0": {
+        "input_cost_per_second": 0.00005,
+        "litellm_provider": "meta",
+        "mode": "audio_transcription",
+        "source": "https://dev.meta.ai/docs/speech-to-text",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true
+    },
     "meta_llama/Llama-3.3-70B-Instruct": {
         "litellm_provider": "meta_llama",
         "max_input_tokens": 128000,
@@ -59108,9 +59124,9 @@
         "litellm_provider": "wandb",
         "mode": "chat",
         "supports_reasoning": true,
-        "input_cost_per_token": 0.00000131,
-        "output_cost_per_token": 0.00000396,
-        "cache_read_input_token_cost": 0.000000044,
+        "input_cost_per_token": 1.31e-06,
+        "output_cost_per_token": 3.96e-06,
+        "cache_read_input_token_cost": 4.4e-08,
         "supports_prompt_caching": true,
         "source": "https://wandb.ai/site/pricing/tokens/"
     },
@@ -59118,9 +59134,9 @@
         "litellm_provider": "wandb",
         "mode": "chat",
         "supports_reasoning": true,
-        "input_cost_per_token": 0.0000001,
-        "output_cost_per_token": 0.00000015,
-        "cache_read_input_token_cost": 0.00000005,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 1.5e-07,
+        "cache_read_input_token_cost": 5e-08,
         "supports_prompt_caching": true,
         "source": "https://wandb.ai/site/pricing/tokens/"
     },
