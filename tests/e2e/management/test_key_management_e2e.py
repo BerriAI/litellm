@@ -12,7 +12,7 @@ asserting once.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Final, Literal
 
 import pytest
@@ -21,8 +21,11 @@ from e2e_config import unique_marker
 from e2e_http import NoBody, StreamingResponse, unwrap
 from lifecycle import ResourceManager
 from management_client import ManagementClient
-from models import CLEAR, ChatResponse, KeyDeleteBody, KeyGenerateBody, KeyInfo, KeyUpdateBody, LiteLLMParamsBody, OrgNewBody, TeamNewBody
-from pydantic import BaseModel
+from models import (
+    CLEAR, ChatResponse, KeyDeleteBody, KeyGenerateBody, KeyInfo, KeyUpdateBody,
+    LiteLLMParamsBody, OrgNewBody, TeamNewBody,
+)
+from pydantic import BaseModel, RootModel
 
 pytestmark = pytest.mark.e2e
 
@@ -145,11 +148,23 @@ class ProjectBlockBody(ProjectIdentity):
     blocked: bool
 
 
+class ProjectDeleteBody(BaseModel):
+    project_ids: list[str]
+
+
+@pytest.fixture
+def project_resources(client: ManagementClient) -> Iterator[ResourceManager]:
+    manager: Final = ResourceManager(client=client.proxy, strict_cleanup=True)
+    yield manager
+    manager.teardown()
+
+
 class TestKeyManagementRoutes:
     @pytest.mark.covers("mgmt.key.update.persists")
     def test_project_detachment_preserves_key_scope_and_refreshes_auth(
-        self, client: ManagementClient, resources: ResourceManager
+        self, client: ManagementClient, project_resources: ResourceManager
     ) -> None:
+        resources: Final = project_resources
         name: Final = f"e2e-detach-{unique_marker()}"
         model_id: Final = client.proxy.create_model(
             name, LiteLLMParamsBody(model="openai/synthetic-detachment", api_key="synthetic", mock_response="orbit")
@@ -164,8 +179,9 @@ class TestKeyManagementRoutes:
             json=ProjectCreateBody(team_id=team_id, project_alias=name, models=[name]),
             response_type=ProjectIdentity,
         ))
-        resources.defer(lambda: unwrap(client.proxy.transport.post(
-            "/project/delete", headers=client.proxy.transport.master, json=project, response_type=NoBody,
+        resources.defer(lambda: unwrap(client.proxy.transport.delete(
+            "/project/delete", headers=client.proxy.transport.master,
+            json=ProjectDeleteBody(project_ids=[project.project_id]), response_type=RootModel[list[ProjectIdentity]],
         )))
         key: Final = _generate_key(client, resources, KeyGenerateBody(
             key_alias=name, team_id=team_id, organization_id=org_id, project_id=project.project_id,
