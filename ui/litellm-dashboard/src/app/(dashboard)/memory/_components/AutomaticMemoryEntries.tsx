@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { type FormEvent, useState } from "react";
 
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import { Button } from "@/components/ui/button";
@@ -68,6 +68,23 @@ export function AutomaticMemoryEntries({ userId, readOnly }: Readonly<{ userId: 
     setEditing(null);
     setDeleting(null);
   };
+  const saveCorrection = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!editing) return;
+    const body: Capture = {
+      key: editing.key,
+      title: editing.title,
+      content: editing.content,
+      evidence: editing.evidence,
+      when_to_use: editing.when_to_use,
+      scope: editing.scope,
+      kind: editing.kind,
+      certainty: editing.certainty,
+      source: editing.source,
+      expected_revision: editing.updated_at,
+    };
+    save.mutate({ key: keyId, body });
+  };
   return (
     <section className="rounded-lg border p-5 space-y-4" aria-labelledby="automatic-entries-title">
       <h2 id="automatic-entries-title" className="font-semibold">
@@ -121,28 +138,7 @@ export function AutomaticMemoryEntries({ userId, readOnly }: Readonly<{ userId: 
         ))}
       </ul>
       {editing && (
-        <form
-          className="space-y-3 rounded-md border p-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const body: Capture = {
-              key: editing.key,
-              title: editing.title,
-              content: editing.content,
-              evidence: editing.evidence,
-              when_to_use: editing.when_to_use,
-              scope: editing.scope,
-              kind: editing.kind,
-              certainty: editing.certainty,
-              source: editing.source,
-              expected_revision: editing.updated_at,
-            };
-            save.mutate({
-              key: keyId,
-              body,
-            });
-          }}
-        >
+        <form className="space-y-3 rounded-md border p-4" onSubmit={saveCorrection}>
           <Label htmlFor="memory-edit-content">Correct this memory</Label>
           <Textarea
             id="memory-edit-content"
