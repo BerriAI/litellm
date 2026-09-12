@@ -445,6 +445,41 @@ async def test_handle_authentication_error_budget_exceeded():
     assert int(exc_info.value.code) == status.HTTP_429_TOO_MANY_REQUESTS
 
 
+async def _exception_logged_for(raised: Exception) -> Exception:
+    handler = UserAPIKeyAuthExceptionHandler()
+    with patch(  # test-quality-ok: the handler imports proxy_logging_obj from proxy_server with no injection seam
+        "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+        new_callable=AsyncMock,
+        return_value=None,
+    ) as mock_post_call_failure_hook:
+        with pytest.raises(ProxyException):
+            await handler._handle_authentication_error(raised, MagicMock(), {}, "/v1/chat/completions", None, "sk-bad")
+    return mock_post_call_failure_hook.call_args.kwargs["original_exception"]
+
+
+@pytest.mark.asyncio
+async def test_bare_auth_exception_is_logged_with_the_public_401():
+    """Regression for LIT-5884: failure logs record the client-facing 401, not an empty error code."""
+    logged = await _exception_logged_for(Exception("Invalid proxy server token passed"))
+
+    assert isinstance(logged, ProxyException)
+    assert int(logged.code) == status.HTTP_401_UNAUTHORIZED
+    assert "Invalid proxy server token passed" in logged.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raised",
+    [
+        pytest.param(BudgetExceededError(message="Budget exceeded", current_cost=1, max_budget=1), id="budget"),
+        pytest.param(HTTPException(status_code=403, detail="not allowed"), id="http"),
+        pytest.param(ProxyException(message="m", type=ProxyErrorTypes.auth_error, param=None, code=429), id="proxy"),
+    ],
+)
+async def test_status_bearing_auth_exceptions_are_logged_unchanged(raised):
+    assert await _exception_logged_for(raised) is raised
+
+
 @pytest.mark.asyncio
 async def test_route_passed_to_post_call_failure_hook():
     """

@@ -93,6 +93,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
+from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import (
     coerce_token_limit,
     get_or_create_metadata_bucket,
@@ -872,6 +873,13 @@ def _failure_usage_to_lift(
 
 
 _EMPTY_LIFT: Final = MappingProxyType({})
+
+
+def _call_type_for_route(route: str | None) -> str | None:
+    if route is None:
+        return None
+    call_types: Final = get_call_types_for_route(route)
+    return call_types[0].value if call_types else None
 
 
 def _failure_fields_to_lift(request_data: Mapping[str, object]) -> Mapping[str, object]:
@@ -2544,10 +2552,6 @@ class ProxyLogging:
 
     @staticmethod
     def _stream_requires_guardrail_translation(user_api_key_dict: UserAPIKeyAuth) -> bool:
-        from litellm.litellm_core_utils.api_route_to_call_types import (
-            get_call_types_for_route,
-        )
-
         route: Final = user_api_key_dict.request_route
         if not route:
             return False
@@ -3015,6 +3019,7 @@ class ProxyLogging:
                 start_time=datetime.now(),
                 **request_data,
             )
+            request_data["litellm_logging_obj"] = litellm_logging_obj  # rebind-ok: lifted then popped by the caller
             if "metadata" not in request_data:
                 request_data["metadata"] = {}
             request_data["metadata"].update(user_api_key_logged_metadata)
@@ -3039,25 +3044,23 @@ class ProxyLogging:
             )
 
             input: list | str | dict = ""
-            normalized_call_type: str | None = None
+            body_shape_call_type: str | None = None
             if "messages" in request_data and isinstance(request_data["messages"], list):
                 input = request_data["messages"]
                 litellm_logging_obj.model_call_details["messages"] = input
-                if litellm_logging_obj.call_type != CallTypes.pass_through.value:
-                    normalized_call_type = CallTypes.acompletion.value
+                body_shape_call_type = CallTypes.acompletion.value
             elif "prompt" in request_data and isinstance(request_data["prompt"], str):
                 input = request_data["prompt"]
                 litellm_logging_obj.model_call_details["prompt"] = input
-                if litellm_logging_obj.call_type != CallTypes.pass_through.value:
-                    normalized_call_type = CallTypes.atext_completion.value
+                body_shape_call_type = CallTypes.atext_completion.value
             elif "input" in request_data and isinstance(request_data["input"], list):
                 input = request_data["input"]
                 litellm_logging_obj.model_call_details["input"] = input
-                if litellm_logging_obj.call_type != CallTypes.pass_through.value:
-                    normalized_call_type = CallTypes.aembedding.value
-            if normalized_call_type is not None:
-                litellm_logging_obj.call_type = normalized_call_type
-                litellm_logging_obj.model_call_details["call_type"] = normalized_call_type
+                body_shape_call_type = CallTypes.aembedding.value
+            resolved_call_type: Final = _call_type_for_route(route) or body_shape_call_type
+            if resolved_call_type is not None and litellm_logging_obj.call_type != CallTypes.pass_through.value:
+                litellm_logging_obj.call_type = resolved_call_type
+                litellm_logging_obj.model_call_details["call_type"] = resolved_call_type
             # Pass-through endpoints are logged via the callback loop's
             # async_post_call_failure_hook — skip pre_call and failure handlers.
             if litellm_logging_obj.call_type == CallTypes.pass_through.value:

@@ -267,3 +267,45 @@ async def test_handle_logging_proxy_only_path_propagates_async_failure_raises(
             route="/chat/completions",
             original_exception=Exception("x"),
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route, request_data, expected_call_type",
+    [
+        ("/v1/chat/completions", {}, "acompletion"),
+        ("/chat/completions", {"model": "m", "messages": [{"role": "user", "content": "hi"}]}, "acompletion"),
+        ("/v1/messages", {"model": "m", "messages": [{"role": "user", "content": "hi"}]}, "anthropic_messages"),
+        ("/v1/responses", {"model": "m", "input": "hi"}, "aresponses"),
+        ("/v1/embeddings", {"model": "m", "input": ["hi"]}, "aembedding"),
+        ("/model/info", {}, "/model/info"),
+    ],
+)
+async def test_post_call_failure_hook_lifts_route_call_type_for_gate_rejections(
+    proxy_logging, make_user_api_key_auth, route, request_data, expected_call_type
+):
+    """Regression for LIT-5884: the matched route, not the body shape, sets the
+    spend-log call_type for requests rejected before dispatch."""
+    proxy_logging.alert_types = []
+    await proxy_logging.post_call_failure_hook(
+        request_data=request_data,
+        original_exception=Exception("Authentication Error, No api key passed in."),
+        user_api_key_dict=make_user_api_key_auth(request_route=route),
+        error_type=ProxyErrorTypes.auth_error,
+        route=route,
+    )
+    assert request_data["call_type"] == expected_call_type
+    assert "start_time" in request_data
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_falls_back_to_body_shape_without_a_route(proxy_logging, make_user_api_key_auth):
+    proxy_logging.alert_types = []
+    request_data = {"model": "m", "messages": [{"role": "user", "content": "hi"}]}
+    await proxy_logging.post_call_failure_hook(
+        request_data=request_data,
+        original_exception=Exception("Authentication Error, No api key passed in."),
+        user_api_key_dict=make_user_api_key_auth(request_route="/chat/completions"),
+        error_type=ProxyErrorTypes.auth_error,
+    )
+    assert request_data["call_type"] == "acompletion"

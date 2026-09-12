@@ -41,6 +41,13 @@ else:
     Span = Any
 
 
+_STATUS_BEARING_EXCEPTIONS: Final = (ProxyException, HTTPException, litellm.BudgetExceededError)
+
+
+def _exception_for_failure_logging(e: Exception) -> Exception:
+    return e if isinstance(e, _STATUS_BEARING_EXCEPTIONS) else _as_proxy_exception(e)
+
+
 def _as_proxy_exception(e: Exception) -> ProxyException:
     """Convert an authentication failure into the ProxyException the client receives."""
     if isinstance(e, litellm.BudgetExceededError):
@@ -201,7 +208,7 @@ class UserAPIKeyAuthExceptionHandler:
             # Allow callbacks to transform the error response
             transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
                 request_data=_with_requester_ip_address(request_data, requester_ip),
-                original_exception=e,
+                original_exception=_exception_for_failure_logging(e),
                 user_api_key_dict=user_api_key_dict,
                 error_type=ProxyErrorTypes.auth_error,
                 route=route,

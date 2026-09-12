@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
+from litellm.proxy._types import LiteLLMRoutes
 from litellm.proxy.analytics_endpoints.analytics_endpoints import get_global_activity
 from litellm.proxy.analytics_endpoints.cache_activity import (
     ERROR_BREAKDOWN_SQL,
@@ -110,6 +111,23 @@ async def test_filters_are_passed_to_sql_as_json_arrays(mock_prisma: MagicMock):
     for call in filtered_calls:
         assert call.args[3] == json.dumps(["my-key"])
         assert call.args[4] == json.dumps(["gpt-5.1", "claude-opus-4-8"])
+
+
+@pytest.mark.asyncio
+async def test_info_route_failures_are_excluded_from_groups_and_error_breakdown(mock_prisma: MagicMock):
+    """Regression for LIT-5884: failed info-route calls are spend-logged but are not inference traffic."""
+    await get_global_activity(start_date="2026-07-01", end_date="2026-07-27", key_aliases=[], models=[])
+
+    filtered_calls = [
+        call for call in mock_prisma.db.query_raw.call_args_list if call.args[0] in (GROUPS_SQL, ERROR_BREAKDOWN_SQL)
+    ]
+    assert len(filtered_calls) == 2
+    for call in filtered_calls:
+        excluded_call_types = json.loads(call.args[5])
+        assert excluded_call_types == LiteLLMRoutes.info_routes.value
+        assert {"/model/info", "/v1/models", "/key/info"} <= set(excluded_call_types)
+        assert "" not in excluded_call_types
+        assert 'sl."call_type" NOT IN (SELECT jsonb_array_elements_text($5::jsonb))' in call.args[0]
 
 
 @pytest.mark.asyncio
