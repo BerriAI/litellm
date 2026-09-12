@@ -154,7 +154,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TokenCountResponse,
 )
-from litellm.utils import load_credentials_from_list
+from litellm.utils import cost_map_omits_token_price, load_credentials_from_list
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -13618,9 +13618,10 @@ def _enrich_model_info_with_litellm_data(
     discovered_model_info: Final = (
         llm_router.get_discovered_model_info(model_info.get("id")) if llm_router is not None else MappingProxyType({})
     )
+    unpriced: Final = cost_map_omits_token_price(model_info.get("id"), litellm_model_info.get("key"))
     for k, v in MappingProxyType({**litellm_model_info, **discovered_model_info}).items():
         if k not in model_info or (model_info[k] is None and k in discovered_model_info):
-            model_info[k] = v
+            model_info[k] = None if unpriced and k in ("input_cost_per_token", "output_cost_per_token") else v
     model["model_info"] = model_info
     # don't return the api key / vertex credentials
     # don't return the llm credentials
