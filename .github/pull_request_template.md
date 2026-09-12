@@ -129,7 +129,7 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
      human reader
      Leave this section empty if there are none -->
 
-## Assumptions
+## Assumptions Made
 
 <!-- One bullet per claim this PR relies on that you did not actually test, each written as the claim
      followed by what breaks if it turns out to be wrong. Write it for a reviewer who wants to attack
