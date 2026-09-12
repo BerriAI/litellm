@@ -180,7 +180,7 @@ class _ProxyDBLogger(CustomLogger):
         # here because the input above is constructed non-None.
         _error_information = cast(
             StandardLoggingPayloadErrorInformation,
-            _sanitize_error_information_for_spend_logs(_error_information),
+            _sanitize_error_information_for_spend_logs(_error_information, original_exception=original_exception),
         )
         _metadata["error_information"] = _error_information
 

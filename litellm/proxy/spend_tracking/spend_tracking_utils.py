@@ -1167,6 +1167,7 @@ def _redact_prompt_fields_in_guardrail_entry(
 
 def _sanitize_error_information_for_spend_logs(
     error_information: StandardLoggingPayloadErrorInformation | None,
+    original_exception: BaseException | None = None,
 ) -> StandardLoggingPayloadErrorInformation | None:
     """
     Sanitize ``error_information`` before it lands in ``LiteLLM_SpendLogs.metadata``.
@@ -1181,6 +1182,10 @@ def _sanitize_error_information_for_spend_logs(
       ``'input'`` / ``'messages'`` / ``'prompt'`` values *and* Pydantic v2
       ``input_value=...`` assignments inside both ``error_message`` and
       ``traceback`` so prompts cannot leak through either field.
+    - An unknown-model rejection (``ProxyModelNotFoundError``) persists its
+      ``spend_log_error_message``, which names the route and the rejection
+      without the raw client ``model`` string, matching the ``unknown-model``
+      placeholder in the row's ``model`` column.
 
     Scoped to the spend-log path — OTEL/Datadog/etc. callbacks still receive
     the untruncated error per ``LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE``.
@@ -1188,7 +1193,12 @@ def _sanitize_error_information_for_spend_logs(
     if error_information is None:
         return None
 
-    sanitized = cast(dict, {**error_information})
+    persisted: Final = (
+        {**error_information, "error_message": original_exception.spend_log_error_message}
+        if isinstance(original_exception, ProxyModelNotFoundError)
+        else error_information
+    )
+    sanitized = cast(dict, {**persisted})
 
     if not should_store_prompts_and_responses_in_spend_logs():
         for field in ("error_message", "traceback"):
