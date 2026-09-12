@@ -1515,6 +1515,23 @@ def _sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
     return sanitized
 
 
+_BEDROCK_TOOL_USE_ID_MAX_LEN: Final = 64
+_BEDROCK_TOOL_USE_ID_HASH_LEN: Final = 8
+
+
+def _sanitize_bedrock_tool_use_id(tool_use_id: str) -> str:
+    """
+    Bedrock Converse requires toolUseId to match [a-zA-Z0-9_.:-]+ and be at most 64 chars.
+    Over-long ids are truncated and suffixed with a short hash of the original so two ids
+    that only differ past the cut still map to distinct values.
+    """
+    sanitized: Final = re.sub(r"[^a-zA-Z0-9_.:-]", "_", tool_use_id) or "tool_use_id"
+    if len(sanitized) <= _BEDROCK_TOOL_USE_ID_MAX_LEN:
+        return sanitized
+    digest: Final = hashlib.sha256(tool_use_id.encode()).hexdigest()[:_BEDROCK_TOOL_USE_ID_HASH_LEN]
+    return f"{sanitized[: _BEDROCK_TOOL_USE_ID_MAX_LEN - _BEDROCK_TOOL_USE_ID_HASH_LEN - 1]}_{digest}"
+
+
 _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES: Final = {"application/pdf", "text/plain"}
 
 
@@ -3661,7 +3678,9 @@ def _convert_to_bedrock_tool_call_invoke(
                         if parsed_objects:
                             # First object keeps the original tool id.
                             for obj_idx, obj in enumerate(parsed_objects):
-                                block_id = tool_id if obj_idx == 0 else f"{tool_id}_{obj_idx}"
+                                block_id = _sanitize_bedrock_tool_use_id(
+                                    tool_id if obj_idx == 0 else f"{tool_id}_{obj_idx}"
+                                )
                                 bedrock_tool = BedrockToolUseBlock(input=obj, name=name, toolUseId=block_id)
                                 _parts_list.append(BedrockContentBlock(toolUse=bedrock_tool))
                             # cache_control applies to the whole original
@@ -3678,7 +3697,9 @@ def _convert_to_bedrock_tool_call_invoke(
                         # Fallback: no objects extracted — use empty dict.
                         arguments_dict = {}
 
-                bedrock_tool = BedrockToolUseBlock(input=arguments_dict, name=name, toolUseId=tool_id)
+                bedrock_tool = BedrockToolUseBlock(
+                    input=arguments_dict, name=name, toolUseId=_sanitize_bedrock_tool_use_id(tool_id)
+                )
                 bedrock_content_block = BedrockContentBlock(toolUse=bedrock_tool)
                 _parts_list.append(bedrock_content_block)
 
@@ -3849,7 +3870,7 @@ def _convert_to_bedrock_tool_call_result(
     tool_result_content_blocks, used_search_results = _build_bedrock_tool_result_content_blocks(message)
 
     message.get("name", "")
-    id: Final = str(message.get("tool_call_id", str(uuid.uuid4())))
+    id: Final = _sanitize_bedrock_tool_use_id(str(message.get("tool_call_id", str(uuid.uuid4()))))
 
     tool_result: Final = BedrockToolResultBlock(content=tool_result_content_blocks, toolUseId=id)
     if used_search_results:

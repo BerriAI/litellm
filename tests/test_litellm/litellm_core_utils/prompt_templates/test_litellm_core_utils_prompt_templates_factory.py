@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import os
+import re
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -2206,6 +2207,78 @@ def test_bedrock_tool_call_invoke_empty_arguments():
     result = _convert_to_bedrock_tool_call_invoke(tool_calls)
     assert len(result) == 1
     assert result[0]["toolUse"]["input"] == {}
+
+
+_BEDROCK_TOOL_USE_ID_RE = re.compile(r"^[a-zA-Z0-9_.:-]{1,64}$")
+
+
+@pytest.mark.parametrize(
+    "tool_call_id",
+    [
+        "call_" + "x" * 100,
+        "call|with|pipes",
+        "call_" + "y" * 60 + "|end",
+        "call:ok.dots-and_under",
+    ],
+)
+def test_bedrock_tool_use_id_is_sanitized_consistently_for_invoke_and_result(tool_call_id):
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/34239: client-minted
+    tool_call ids longer than 64 chars or with chars outside [a-zA-Z0-9_.:-] made Bedrock
+    return a 400. The invoke and result paths must produce the same valid toolUseId so the
+    toolUse/toolResult pair still correlates.
+    """
+    invoke = _convert_to_bedrock_tool_call_invoke(
+        [
+            {
+                "id": tool_call_id,
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"location": "Boston"}'},
+            }
+        ]
+    )
+    result = _convert_to_bedrock_tool_call_result(
+        {"tool_call_id": tool_call_id, "role": "tool", "name": "get_weather", "content": "sunny"}
+    )
+    tool_use_id = invoke[0]["toolUse"]["toolUseId"]
+    assert _BEDROCK_TOOL_USE_ID_RE.match(tool_use_id)
+    assert result["toolResult"]["toolUseId"] == tool_use_id
+
+
+def test_bedrock_tool_use_id_valid_ids_pass_through_unchanged():
+    result = _convert_to_bedrock_tool_call_result(
+        {"tool_call_id": "tooluse_Ab.c:1-2_3", "role": "tool", "name": "f", "content": "ok"}
+    )
+    assert result["toolResult"]["toolUseId"] == "tooluse_Ab.c:1-2_3"
+
+
+def test_bedrock_tool_use_id_truncation_keeps_distinct_ids_distinct():
+    prefix = "call_" + "z" * 70
+    ids = {
+        _convert_to_bedrock_tool_call_result(
+            {"tool_call_id": f"{prefix}{suffix}", "role": "tool", "name": "f", "content": "ok"}
+        )["toolResult"]["toolUseId"]
+        for suffix in ("a", "b")
+    }
+    assert len(ids) == 2
+    assert all(len(i) == 64 for i in ids)
+
+
+def test_bedrock_tool_call_invoke_concatenated_json_long_id_stays_within_limit():
+    long_id = "call_" + "q" * 62
+    result = _convert_to_bedrock_tool_call_invoke(
+        [
+            {
+                "id": long_id,
+                "type": "function",
+                "function": {"name": "run", "arguments": '{"cmd":"a"}{"cmd":"b"}'},
+            }
+        ]
+    )
+    ids = [block["toolUse"]["toolUseId"] for block in result]
+    assert len(ids) == 2
+    assert len(set(ids)) == 2
+    assert all(_BEDROCK_TOOL_USE_ID_RE.match(i) for i in ids)
 
 
 def test_bedrock_tool_call_invoke_concatenated_json():
