@@ -1,11 +1,12 @@
 import asyncio
+import time
 from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from litellm._service_logger import ServiceLogging
-from litellm.caching.redis_cache import RedisCache
+from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
 
 
 @pytest.fixture
@@ -515,14 +516,46 @@ async def test_circuit_breaker_opens_when_method_swallows_redis_failure(call_met
         await call_method(cache)
 
 
-def test_circuit_breaker_open_keeps_sync_batch_get_cache_as_a_miss(sync_batch_redis_cache):
-    """An open breaker must preserve the sync batch read's dictionary fallback."""
+def test_circuit_breaker_open_makes_sync_batch_get_cache_fast_fail(sync_batch_redis_cache, caplog):
+    """Once the breaker is open the sync batch read refuses with the typed error instead of a miss.
+
+    Swallowing the refusal into `{}` made every sync batch read on an open breaker emit an ERROR
+    log and a service failure event per call, and the DualCache caller could not tell the
+    refusal from a dead Redis, so it dropped its in-memory hits too.
+    """
     from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
 
     for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):
         assert sync_batch_redis_cache.batch_get_cache(key_list=["lit6729"]) == {}
 
-    assert sync_batch_redis_cache.batch_get_cache(key_list=["lit6729"]) == {}
+    caplog.clear()
+    with caplog.at_level("INFO"):
+        with pytest.raises(RedisCircuitBreakerOpenError):
+            sync_batch_redis_cache.batch_get_cache(key_list=["lit6729"])
+    sync_batch_redis_cache.redis_client.mget.assert_called()
+    assert caplog.records == []
+
+
+def test_sync_get_cache_failure_feeds_the_breaker_and_logs_a_well_formed_record(sync_batch_redis_cache, caplog):
+    """The sync get path swallowed its Redis error without recording it, and its log call was malformed.
+
+    `verbose_logger.error("...: ", e)` passes the exception as a format argument to a message
+    with no placeholder, so the record carried no error text. Nothing fed the breaker either,
+    so a dead Redis read through this path never opened it.
+    """
+    from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
+
+    sync_batch_redis_cache.redis_client.get.side_effect = OSError("redis unavailable")
+
+    with caplog.at_level("ERROR"):
+        for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):
+            assert sync_batch_redis_cache.get_cache("lit7468") is None
+
+    assert all("redis unavailable" in record.getMessage() for record in caplog.records)
+    assert len(caplog.records) == REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
+    assert sync_batch_redis_cache._circuit_breaker.is_open() is True
+    with pytest.raises(RedisCircuitBreakerOpenError):
+        sync_batch_redis_cache.get_cache("lit7468")
 
 
 @pytest.fixture
@@ -617,7 +650,8 @@ def test_sync_batch_get_cache_survives_a_service_callback_that_raises(
         with ThreadPoolExecutor(max_workers=1) as pool:
             assert pool.submit(cache.batch_get_cache, key_list=["lit6729"]).result() == {}
 
-    assert cache.batch_get_cache(key_list=["lit6729"]) == {}
+    with pytest.raises(RedisCircuitBreakerOpenError):
+        cache.batch_get_cache(key_list=["lit6729"])
 
 
 def test_call_stack_info_skips_breaker_guard_frames():
@@ -966,6 +1000,8 @@ async def test_breaker_metrics_track_state_and_failure_class():
     assert sample("litellm_redis_circuit_breaker_state", {"state": "open"}) == open_gauge_before + 1
     assert sample("litellm_redis_circuit_breaker_state", {"state": "closed"}) == closed_gauge_before
 
+    breaker._opened_at = time.time() - 9999
+    assert breaker.is_open() is False
     breaker.record_success()
     assert sample("litellm_redis_circuit_breaker_state", {"state": "open"}) == open_gauge_before
     assert sample("litellm_redis_circuit_breaker_state", {"state": "closed"}) == closed_gauge_before + 1
@@ -986,3 +1022,139 @@ def test_sync_guard_counts_a_timeout_as_a_timeout():
             _run_under_circuit_breaker_sync(breaker, "op", timing_out_call)
 
     assert breaker.is_open() is False
+
+
+def test_success_admitted_before_the_breaker_opened_cannot_close_it():
+    """A stale in-flight success must not close a breaker that opened while it ran.
+
+    Calls admitted while the breaker was still closed finish after later failures opened it.
+    Recording their success unconditionally closed the breaker again, skipping the recovery
+    timeout and the single half-open probe, so the breaker flapped between open and closed
+    on every straggler while Redis was still down.
+    """
+    from litellm.caching.redis_cache import RedisCircuitBreaker
+
+    breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
+    for _ in range(3):
+        breaker.record_failure()
+    assert breaker._state == breaker.OPEN
+
+    breaker.record_success()
+
+    assert breaker._state == breaker.OPEN
+    assert breaker.is_open() is True
+
+
+def test_recovery_probe_still_closes_the_breaker():
+    from litellm.caching.redis_cache import RedisCircuitBreaker
+
+    breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
+    for _ in range(3):
+        breaker.record_failure()
+    breaker._opened_at = time.time() - 9999
+    assert breaker.is_open() is False
+    assert breaker._state == breaker.HALF_OPEN
+
+    breaker.record_success()
+
+    assert breaker._state == breaker.CLOSED
+    assert breaker.is_open() is False
+
+
+@pytest.mark.asyncio
+async def test_stale_success_during_the_recovery_probe_leaves_the_breaker_to_the_probe():
+    """A call admitted before the trip that finishes while HALF_OPEN must not close the breaker.
+
+    Only the one call designated as the recovery probe has actually reached Redis after the
+    outage, so closing on the straggler's success resumed full Redis traffic before the probe
+    had proven anything.
+    """
+    from litellm.caching.redis_cache import RedisCircuitBreaker, _run_under_circuit_breaker
+
+    breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
+    stale_admitted = asyncio.Event()
+    stale_release = asyncio.Event()
+    probe_admitted = asyncio.Event()
+    probe_release = asyncio.Event()
+
+    async def stale_call() -> str:
+        stale_admitted.set()
+        await stale_release.wait()
+        return "stale"
+
+    async def probe_call() -> str:
+        probe_admitted.set()
+        await probe_release.wait()
+        return "probe"
+
+    stale = asyncio.ensure_future(_run_under_circuit_breaker(breaker, "op", stale_call))
+    await stale_admitted.wait()
+    for _ in range(3):
+        breaker.record_failure()
+    assert breaker._state == breaker.OPEN
+    breaker._opened_at = time.time() - 9999
+    probe = asyncio.ensure_future(_run_under_circuit_breaker(breaker, "op", probe_call))
+    await probe_admitted.wait()
+    assert breaker._state == breaker.HALF_OPEN
+
+    stale_release.set()
+    assert await stale == "stale"
+
+    assert breaker._state == breaker.HALF_OPEN, "the straggler must not close the breaker for the probe"
+    assert breaker.is_open() is True
+
+    probe_release.set()
+    assert await probe == "probe"
+
+    assert breaker._state == breaker.CLOSED
+    assert breaker.is_open() is False
+
+
+@pytest.mark.asyncio
+async def test_a_probe_overtaken_by_a_later_outage_leaves_the_breaker_to_the_new_probe():
+    """A probe still in flight when a late failure reopens the breaker must not close it for the next probe.
+
+    Once the breaker has reopened, only the probe admitted after that outage has reached
+    Redis, so the older probe's success no longer says anything about whether Redis recovered.
+    """
+    from litellm.caching.redis_cache import RedisCircuitBreaker, _run_under_circuit_breaker
+
+    breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
+    old_probe_admitted = asyncio.Event()
+    old_probe_release = asyncio.Event()
+    new_probe_admitted = asyncio.Event()
+    new_probe_release = asyncio.Event()
+
+    async def old_probe_call() -> str:
+        old_probe_admitted.set()
+        await old_probe_release.wait()
+        return "old probe"
+
+    async def new_probe_call() -> str:
+        new_probe_admitted.set()
+        await new_probe_release.wait()
+        return "new probe"
+
+    for _ in range(3):
+        breaker.record_failure()
+    breaker._opened_at = time.time() - 9999
+    old_probe = asyncio.ensure_future(_run_under_circuit_breaker(breaker, "op", old_probe_call))
+    await old_probe_admitted.wait()
+    assert breaker._state == breaker.HALF_OPEN
+
+    breaker.record_failure()
+    assert breaker._state == breaker.OPEN
+    breaker._opened_at = time.time() - 9999
+    new_probe = asyncio.ensure_future(_run_under_circuit_breaker(breaker, "op", new_probe_call))
+    await new_probe_admitted.wait()
+    assert breaker._state == breaker.HALF_OPEN
+
+    old_probe_release.set()
+    assert await old_probe == "old probe"
+
+    assert breaker._state == breaker.HALF_OPEN, "the overtaken probe must not close the breaker for the new probe"
+    assert breaker.is_open() is True
+
+    new_probe_release.set()
+    assert await new_probe == "new probe"
+    assert breaker._state == breaker.CLOSED
