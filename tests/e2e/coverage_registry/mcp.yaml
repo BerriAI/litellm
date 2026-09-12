@@ -119,3 +119,11 @@
   assertions: [succeeds]
   source: "server.py:1089"
   rationale: Smoke; rarely used; same auth model as tools
+- id: mcp.list_tools.api_key.toolset_scoped
+  module: mcp
+  tier: P0
+  operation: list_tools
+  auth_family: api_key
+  assertions: [toolset_scoped]
+  source: "user_api_key_auth_mcp.py:2137"
+  rationale: "A key granted a toolset lists exactly the toolset's tools: the rest of the server's catalog stays hidden and every stored name resolves"

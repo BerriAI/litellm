@@ -8,10 +8,9 @@ Has 4 primary methods:
     - async_get_cache
 """
 
-import asyncio
+import logging
 import time
-import traceback
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Sequence
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Final
 
@@ -23,8 +22,8 @@ from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
 
 from .base_cache import BaseCache
-from .in_memory_cache import InMemoryCache
-from .redis_cache import RedisCache
+from .in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY, InMemoryCache
+from .redis_cache import RedisCache, RedisCircuitBreakerOpenError, log_redis_failure
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -83,6 +82,9 @@ class DualCache(BaseCache):
 
         if default_redis_ttl is not None:
             self.default_redis_ttl = default_redis_ttl
+
+    def update_in_memory_max_size(self, max_size: int | None) -> None:
+        self.in_memory_cache.max_size_in_memory = DEFAULT_MAX_SIZE_IN_MEMORY if max_size is None else max_size
 
     def attach_redis_cache(
         self,
@@ -178,8 +180,10 @@ class DualCache(BaseCache):
 
             print_verbose(f"get cache: cache result: {result}")
             return result
-        except Exception:
-            verbose_logger.error(traceback.format_exc())
+        except Exception as e:
+            log_redis_failure(
+                verbose_logger, logging.ERROR, "LiteLLM Cache: exception in get_cache", e, with_traceback=True
+            )
 
     def batch_get_cache(
         self,
@@ -188,31 +192,43 @@ class DualCache(BaseCache):
         local_only: bool = False,
         **kwargs,
     ):
-        received_args: Final = locals()
-        received_args.pop("self")
-
-        def run_in_new_loop():
-            """Run the coroutine in a new event loop within this thread."""
-            new_loop: Final = asyncio.new_event_loop()
-            try:
-                asyncio.set_event_loop(new_loop)
-                return new_loop.run_until_complete(self.async_batch_get_cache(**received_args))
-            finally:
-                new_loop.close()
-                asyncio.set_event_loop(None)
-
         try:
-            # First, try to get the current event loop
-            _ = asyncio.get_running_loop()
-            # If we're already in an event loop, run in a separate thread
-            # to avoid nested event loop issues
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                future: Final = executor.submit(run_in_new_loop)
-                return future.result()
+            in_memory_result: Final = (
+                self.in_memory_cache.batch_get_cache(keys, **kwargs) if self.in_memory_cache is not None else None
+            )
+            result: Final = in_memory_result if in_memory_result is not None else tuple(None for _ in keys)
 
-        except RuntimeError:
-            # No running event loop, we can safely run in this thread
-            return run_in_new_loop()
+            if None not in result or self.redis_cache is None or local_only:
+                return result
+
+            sublist_keys, previous_access_times = self._reserve_redis_batch_keys(time.time(), keys, result)
+            if len(sublist_keys) == 0:
+                return result
+
+            try:
+                redis_result: Final = self.redis_cache.batch_get_cache(
+                    key_list=sublist_keys, parent_otel_span=parent_otel_span
+                )
+            except Exception as e:
+                # Do not throttle subsequent callers if the Redis read fails.
+                self._rollback_redis_batch_key_reservations(previous_access_times)
+                if isinstance(e, RedisCircuitBreakerOpenError):
+                    verbose_logger.debug("LiteLLM Cache: batch_get_cache served from memory only: %s", e)
+                    return result
+                raise
+
+            if self.in_memory_cache is not None:
+                for key, value in redis_result.items():
+                    if value is not None:
+                        self.in_memory_cache.set_cache(key, value, **self._backfill_kwargs(kwargs))
+
+            return list(  # mutable-ok: public list contract
+                redis_result.get(key) if value is None else value for key, value in zip(keys, result)
+            )
+        except Exception as e:
+            log_redis_failure(
+                verbose_logger, logging.ERROR, "LiteLLM Cache: exception in batch_get_cache", e, with_traceback=True
+            )
 
     async def async_get_cache(
         self,
@@ -244,14 +260,16 @@ class DualCache(BaseCache):
 
             print_verbose(f"get cache: cache result: {result}")
             return result
-        except Exception:
-            verbose_logger.error(traceback.format_exc())
+        except Exception as e:
+            log_redis_failure(
+                verbose_logger, logging.ERROR, "LiteLLM Cache: exception in async_get_cache", e, with_traceback=True
+            )
 
     def _reserve_redis_batch_keys(
         self,
         current_time: float,
         keys: list[str],
-        result: list[Any],
+        result: Sequence[object],
     ) -> tuple[list[str], dict[str, float | None]]:
         """
         Atomically choose keys to fetch from Redis and reserve their access time.
@@ -313,9 +331,12 @@ class DualCache(BaseCache):
                         redis_result: Final = await self.redis_cache.async_batch_get_cache(
                             sublist_keys, parent_otel_span=parent_otel_span
                         )
-                    except Exception:
+                    except Exception as e:
                         # Do not throttle subsequent callers if the Redis read fails.
                         self._rollback_redis_batch_key_reservations(previous_access_times)
+                        if isinstance(e, RedisCircuitBreakerOpenError):
+                            verbose_logger.debug("LiteLLM Cache: async_batch_get_cache served from memory only: %s", e)
+                            return result
                         raise
 
                     # Short-circuit if redis_result is None or contains only None values
@@ -333,8 +354,14 @@ class DualCache(BaseCache):
                             await self.in_memory_cache.async_set_cache(key, value, **self._backfill_kwargs(kwargs))
 
             return result
-        except Exception:
-            verbose_logger.error(traceback.format_exc())
+        except Exception as e:
+            log_redis_failure(
+                verbose_logger,
+                logging.ERROR,
+                "LiteLLM Cache: exception in async_batch_get_cache",
+                e,
+                with_traceback=True,
+            )
 
     async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):
         print_verbose(f"async set cache: cache key: {key}; local_only: {local_only}; value: {value}")
@@ -347,10 +374,14 @@ class DualCache(BaseCache):
             if self.redis_cache is not None and local_only is False:
                 await self.redis_cache.async_set_cache(key, value, **kwargs)
         except Exception as e:
-            verbose_logger.exception("LiteLLM Cache: Excepton async add_cache: %s", e)
+            log_redis_failure(
+                verbose_logger, logging.ERROR, "LiteLLM Cache: exception in async add_cache", e, with_traceback=True
+            )
 
     # async_batch_set_cache
-    async def async_set_cache_pipeline(self, cache_list: list, local_only: bool = False, **kwargs):
+    async def async_set_cache_pipeline(
+        self, cache_list: Sequence[tuple[str, object]], local_only: bool = False, **kwargs
+    ):
         """
         Batch write values to the cache
         """
@@ -366,7 +397,9 @@ class DualCache(BaseCache):
                     cache_list=cache_list, ttl=kwargs.pop("ttl", None), **kwargs
                 )
         except Exception as e:
-            verbose_logger.exception("LiteLLM Cache: Excepton async add_cache: %s", e)
+            log_redis_failure(
+                verbose_logger, logging.ERROR, "LiteLLM Cache: exception in async add_cache", e, with_traceback=True
+            )
 
     async def async_increment_cache(
         self,
@@ -404,8 +437,10 @@ class DualCache(BaseCache):
 
             return result
         except Exception as e:
-            verbose_logger.warning(
-                "Redis async_increment_cache failed, falling back to in-memory result: %s",
+            log_redis_failure(
+                verbose_logger,
+                logging.WARNING,
+                "Redis async_increment_cache failed, falling back to in-memory result",
                 e,
             )
             return result
@@ -433,8 +468,10 @@ class DualCache(BaseCache):
 
             return result
         except Exception as e:
-            verbose_logger.warning(
-                "Redis async_increment_cache_pipeline failed, falling back to in-memory result: %s",
+            log_redis_failure(
+                verbose_logger,
+                logging.WARNING,
+                "Redis async_increment_cache_pipeline failed, falling back to in-memory result",
                 e,
             )
             return result

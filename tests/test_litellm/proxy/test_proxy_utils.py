@@ -1,13 +1,15 @@
 import datetime as real_datetime
 import smtplib
+from typing import Final
 
 import pytest
 from fastapi import HTTPException
 
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy._types import ProxyErrorTypes
-from litellm.proxy.utils import ProxyLogging
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
+from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 
 
@@ -579,6 +581,75 @@ class TestPostCallFailureHookLiftsStandardLoggingObject:
         assert "standard_logging_object" not in request_data
 
 
+class TestPostCallFailureHookLiftsCallTypeAndStartTime:
+    """A guardrail-blocked MCP tool call fails before any LLM call. The failure
+    spend row is built from request_data after ``litellm_logging_obj`` is popped,
+    so ``call_type`` and the request ``start_time`` must be lifted off the logging
+    object first, or the Logs page shows the row as an LLM call with a blank call
+    type and a 0s duration (LIT-7453).
+    """
+
+    @pytest.mark.asyncio
+    async def test_failed_mcp_tool_call_spend_row_keeps_call_type_model_and_duration(self):
+        import traceback
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+        from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+        request_start = real_datetime.datetime.now() - real_datetime.timedelta(seconds=2)
+        logging_obj = Logging(
+            model="MCP: deepwiki-ask_question",
+            messages=[],
+            stream=False,
+            call_type="call_mcp_tool",
+            start_time=request_start,
+            litellm_call_id="call-1",
+            function_id="fn-1",
+        )
+        logging_obj.update_environment_variables(
+            model="MCP: deepwiki-ask_question",
+            user="",
+            optional_params={},
+            litellm_params={"metadata": {"user_api_key_hash": "hashed"}},
+        )
+        blocked = Exception("Content blocked: keyword 'confidential' detected")
+        logging_obj.failure_handler(blocked, traceback.format_exc(), request_start, real_datetime.datetime.now())
+        request_data = {
+            "name": "deepwiki-ask_question",
+            "arguments": {"question": "confidential"},
+            "litellm_logging_obj": logging_obj,
+        }
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        spend_writer = SimpleNamespace(update_database=AsyncMock())
+        original_callbacks = list(litellm.callbacks)
+        litellm.callbacks = [_ProxyDBLogger(spend_writer=lambda: spend_writer)]
+        try:
+            with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+                await proxy_logging_obj.post_call_failure_hook(
+                    request_data=request_data,
+                    original_exception=blocked,
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+                )
+        finally:
+            litellm.callbacks = original_callbacks
+            ProxyLogging._callback_capabilities_cache.clear()
+
+        db_call = spend_writer.update_database.call_args.kwargs
+        payload = get_logging_payload(
+            kwargs=db_call["kwargs"],
+            response_obj=db_call["completion_response"],
+            start_time=db_call["start_time"],
+            end_time=db_call["end_time"],
+        )
+        assert payload["call_type"] == "call_mcp_tool"
+        assert payload["model"] == "MCP: deepwiki-ask_question"
+        assert payload["endTime"] - payload["startTime"] >= real_datetime.timedelta(seconds=2)
+
+
 class TestPostCallFailureHookEstimatesDispatchedInputTokens:
     """A non-stream request that failed after dispatch (timeout, provider
     error) consumed provider-billed input tokens but recovered no usage.
@@ -886,6 +957,7 @@ from typing import cast
 
 import litellm
 from litellm.proxy.utils import create_model_info_response
+from litellm.types.router import DeploymentModelListingInfo
 from litellm.types.utils import ModelInfo
 
 
@@ -913,7 +985,7 @@ def test_create_model_info_response_includes_max_tokens_from_lookup():
 
 def test_create_model_info_response_does_not_call_router_group_info():
     router = MagicMock()
-    router.get_configured_token_limits.return_value = (None, None)
+    router.get_model_listing_info.return_value = None
 
     response = create_model_info_response(
         model_id="some-model",
@@ -928,7 +1000,9 @@ def test_create_model_info_response_does_not_call_router_group_info():
 
 def test_create_model_info_response_uses_deployment_limits_when_not_in_cost_map():
     router = MagicMock()
-    router.get_configured_token_limits.return_value = (32000, 8000)
+    router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+        cost_map_keys=("my-custom-deployment",), max_input_tokens=32000, max_output_tokens=8000
+    )
 
     response = create_model_info_response(
         model_id="my-custom-deployment",
@@ -942,9 +1016,52 @@ def test_create_model_info_response_uses_deployment_limits_when_not_in_cost_map(
     assert response["max_output_tokens"] == 8000
 
 
+def test_create_model_info_response_uses_deployment_mode_for_auto_router():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+            },
+            {
+                "model_name": "claude-auto",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "tiers": {
+                            "SIMPLE": "claude-sonnet",
+                            "MEDIUM": "claude-sonnet",
+                            "COMPLEX": "claude-sonnet",
+                        }
+                    },
+                    "complexity_router_default_model": "claude-sonnet",
+                },
+                "model_info": {
+                    "mode": "chat",
+                    "max_input_tokens": 1_000_000,
+                    "max_output_tokens": 128_000,
+                },
+            },
+        ]
+    )
+
+    response = create_model_info_response(
+        model_id="claude-auto",
+        provider="openai",
+        llm_router=router,
+        get_model_info=_raise_unmapped,
+    )
+
+    assert response["mode"] == "chat"
+    assert response["max_input_tokens"] == 1_000_000
+    assert response["max_output_tokens"] == 128_000
+
+
 def test_create_model_info_response_deployment_limits_override_cost_map():
     router = MagicMock()
-    router.get_configured_token_limits.return_value = (200000, None)
+    router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+        cost_map_keys=("gpt-4o",), max_input_tokens=200000, max_output_tokens=None
+    )
 
     response = create_model_info_response(
         model_id="gpt-4o",
@@ -955,6 +1072,54 @@ def test_create_model_info_response_deployment_limits_override_cost_map():
 
     assert response["max_input_tokens"] == 200000
     assert response["max_output_tokens"] == 16384
+
+
+def test_create_model_info_response_reports_widest_window_in_a_mixed_group():
+    """A group mixing models advertises the widest window, not whichever is listed first."""
+    limits = {
+        "small-model": _fake_model_info(max_input_tokens=200000, max_output_tokens=4096, mode="chat"),
+        "large-model": _fake_model_info(max_input_tokens=1000000, max_output_tokens=128000, mode="chat"),
+    }
+
+    for keys in (("small-model", "large-model"), ("large-model", "small-model")):
+        router = MagicMock()
+        router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+            cost_map_keys=keys, max_input_tokens=None, max_output_tokens=None
+        )
+
+        response = create_model_info_response(
+            model_id="house-claude",
+            provider="openai",
+            llm_router=router,
+            get_model_info=lambda model: limits[model],
+        )
+
+        assert response["max_input_tokens"] == 1000000, keys
+        assert response["max_output_tokens"] == 128000, keys
+
+
+def test_create_model_info_response_resolves_alias_once_per_listing():
+    """The alias is the same for every deployment in the group, so it is looked up once."""
+    seen: list[str] = []
+
+    def _tracking_get_model_info(model: str) -> ModelInfo:
+        seen.append(model)
+        return _fake_model_info(max_input_tokens=128000)
+
+    router = MagicMock()
+    router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+        cost_map_keys=("model-a", "model-b"), max_input_tokens=None, max_output_tokens=None
+    )
+
+    create_model_info_response(
+        model_id="house-model",
+        provider="openai",
+        llm_router=router,
+        get_model_info=_tracking_get_model_info,
+    )
+
+    assert seen.count("house-model") == 1
+    assert sorted(seen) == ["house-model", "model-a", "model-b"]
 
 
 def test_create_model_info_response_survives_malformed_configured_limits():
@@ -1266,13 +1431,14 @@ class TestCreateSmtpConnection:
             patch("smtplib.SMTP_SSL") as mock_smtp_ssl,
             patch("smtplib.SMTP") as mock_smtp,
         ):
-            result = _create_smtp_connection(smtp_host="mail.example.com", smtp_port=465)
+            result = _create_smtp_connection(smtp_host="mail.example.com", smtp_port=465, timeout=30.0)
 
         mock_smtp.assert_not_called()
         assert result is mock_smtp_ssl.return_value
         _, kwargs = mock_smtp_ssl.call_args
         assert kwargs["host"] == "mail.example.com"
         assert kwargs["port"] == 465
+        assert kwargs["timeout"] == 30.0
         context = kwargs["context"]
         assert isinstance(context, ssl.SSLContext)
         assert context.verify_mode == ssl.CERT_REQUIRED
@@ -1286,11 +1452,11 @@ class TestCreateSmtpConnection:
             patch("smtplib.SMTP_SSL") as mock_smtp_ssl,
             patch("smtplib.SMTP") as mock_smtp,
         ):
-            result = _create_smtp_connection(smtp_host="mail.example.com", smtp_port=587)
+            result = _create_smtp_connection(smtp_host="mail.example.com", smtp_port=587, timeout=30.0)
 
         mock_smtp_ssl.assert_not_called()
         assert result is mock_smtp.return_value
-        mock_smtp.assert_called_once_with(host="mail.example.com", port=587)
+        mock_smtp.assert_called_once_with(host="mail.example.com", port=587, timeout=30.0)
 
 
 class TestSendEmailStartTls:
@@ -1751,13 +1917,14 @@ def test_a_failure_with_no_logging_object_lifts_nothing():
     assert dict(_failure_fields_to_lift({"litellm_logging_obj": _LoggingObj({})})) == {}
 
 
-def test_a_dispatched_failure_lifts_the_four_fields_the_spend_log_needs():
+def test_a_dispatched_failure_lifts_the_fields_the_spend_log_needs():
     from litellm.proxy.utils import _failure_fields_to_lift
 
     lifted = _failure_fields_to_lift(
         {
             "litellm_logging_obj": _LoggingObj(
                 {
+                    "start_time": 1699999999.0,
                     "first_api_call_start_time": 1700000000.0,
                     "call_type": "acompletion",
                     "model": FAILURE_USAGE_MODEL,
@@ -1769,15 +1936,57 @@ def test_a_dispatched_failure_lifts_the_four_fields_the_spend_log_needs():
     )
 
     assert set(lifted) == {
+        "start_time",
         "first_api_call_start_time",
+        "call_type",
         "combined_usage_object",
         "response_cost",
         "standard_logging_object",
     }
+    assert lifted["start_time"] == 1699999999.0
     assert lifted["first_api_call_start_time"] == 1700000000.0
+    assert lifted["call_type"] == "acompletion"
     assert lifted["response_cost"] == 0.0
     assert lifted["combined_usage_object"].prompt_tokens > 0
     assert lifted["standard_logging_object"] == {"id": "log-1"}
+
+
+@pytest.mark.asyncio
+async def test_a_dispatched_failure_is_counted_off_the_event_loop():
+    from unittest.mock import AsyncMock, patch
+
+    from tests.large_text import text
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    warm_tokenizer("claude-fable-5")
+    request_data = {
+        "litellm_logging_obj": _LoggingObj(
+            {
+                "first_api_call_start_time": 1700000000.0,
+                "call_type": "acompletion",
+                "model": "claude-fable-5",
+                "messages": [{"role": "user", "content": text * 100}],
+            }
+        ),
+        "metadata": {},
+    }
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.alert_types = []
+    with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+        _, took, lags = await timed_with_loop_lags(
+            lambda: proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
+                original_exception=Exception("boom"),
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+        )
+
+    assert request_data["combined_usage_object"].prompt_tokens > 0
+    assert_loop_stayed_free(took, lags)
 
 
 @pytest.mark.asyncio
@@ -1877,3 +2086,245 @@ async def test_proxy_only_error_5xx_keeps_traceback_and_runs_sync_callbacks(monk
         Logging.failure_handler = orig_sync_failure
 
     assert "test_proxy_utils" in captured["async_traceback"]
+
+
+def test_create_model_info_response_resolves_alias_to_deployment_model():
+    """A public model name that is not itself a cost-map key must not be resolved through
+    the fallback-generalization rules: `bedrock-claude-opus-5` matches the generic
+    claude-family baseline (200k/64k) by substring, while the deployment it fronts really
+    accepts 1M/128k. Regression for the /v1/models alias resolution introduced in v1.94.0."""
+    from litellm import Router
+
+    saved_model_cost = dict(litellm.model_cost)
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "bedrock-claude-opus-5",
+                    "litellm_params": {
+                        "custom_llm_provider": "bedrock",
+                        "model": "bedrock/eu.anthropic.claude-opus-5",
+                    },
+                    "model_info": {"base_model": "eu.anthropic.claude-opus-5"},
+                }
+            ]
+        )
+
+        response = create_model_info_response(
+            model_id="bedrock-claude-opus-5", provider="openai", llm_router=router
+        )
+    finally:
+        litellm.model_cost.clear()
+        litellm.model_cost.update(saved_model_cost)
+
+    assert response["max_input_tokens"] == 1000000
+    assert response["max_output_tokens"] == 128000
+
+
+def test_create_model_info_response_keeps_exact_alias_over_generalized_deployment_model():
+    """Mirror of the alias bug: when the deployment points at a custom backend name that
+    only matches a generalization rule, the listed name's exact cost-map entry is the
+    better answer and must win."""
+    from litellm import Router
+
+    saved_model_cost = dict(litellm.model_cost)
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "claude-opus-5",
+                    "litellm_params": {
+                        "custom_llm_provider": "bedrock",
+                        "model": "bedrock/my-claude-opus-5-provisioned",
+                    },
+                }
+            ]
+        )
+
+        response = create_model_info_response(
+            model_id="claude-opus-5", provider="openai", llm_router=router
+        )
+    finally:
+        litellm.model_cost.clear()
+        litellm.model_cost.update(saved_model_cost)
+
+    assert response["max_input_tokens"] == 1000000
+
+
+def test_create_model_info_response_falls_back_to_alias_for_opaque_deployment_name():
+    """An Azure deployment named after the resource rather than the model has no cost-map
+    entry; the listed name still does, and must keep answering."""
+    from litellm import Router
+
+    saved_model_cost = dict(litellm.model_cost)
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o",
+                    "litellm_params": {"model": "azure/my-gpt4o-deployment"},
+                }
+            ]
+        )
+
+        response = create_model_info_response(
+            model_id="gpt-4o", provider="openai", llm_router=router
+        )
+    finally:
+        litellm.model_cost.clear()
+        litellm.model_cost.update(saved_model_cost)
+
+    assert response["max_input_tokens"] == 128000
+    assert response["max_output_tokens"] == 16384
+
+
+def test_create_model_info_response_resolves_mode_through_deployment_model():
+    """`mode` is derived from the same lookup, so an aliased embedding deployment
+    currently reports no mode at all; it must report `embedding`."""
+    from litellm import Router
+
+    saved_model_cost = dict(litellm.model_cost)
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "my-embeddings",
+                    "litellm_params": {"model": "openai/text-embedding-3-small"},
+                }
+            ]
+        )
+
+        response = create_model_info_response(
+            model_id="my-embeddings", provider="openai", llm_router=router
+        )
+    finally:
+        litellm.model_cost.clear()
+        litellm.model_cost.update(saved_model_cost)
+
+    assert response["mode"] == "embedding"
+
+
+@pytest.mark.parametrize(
+    "key_metadata, team_metadata, expected_to_run",
+    [
+        ({"guardrails": ["key-scoped-guardrail"]}, None, True),
+        ({}, {"guardrails": ["key-scoped-guardrail"]}, True),
+        ({"guardrails": ["some-other-guardrail"]}, None, False),
+        ({}, None, False),
+    ],
+)
+def test_convert_mcp_to_llm_format_carries_key_and_team_guardrails(key_metadata, team_metadata, expected_to_run):
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    guardrail = CustomGuardrail(guardrail_name="key-scoped-guardrail", event_hook="pre_mcp_call", default_on=False)
+    kwargs = {
+        "name": "ask_question",
+        "arguments": {"question": "hello"},
+        "server_name": "deepwiki",
+        "user_api_key_auth": UserAPIKeyAuth(metadata=key_metadata, team_metadata=team_metadata),
+    }
+    request_obj = proxy_logging._create_mcp_request_object_from_kwargs(kwargs)
+
+    with patch(  # test-quality-ok: the key-guardrail premium gate reads this proxy_server module global and has no injection seam
+        "litellm.proxy.proxy_server.premium_user", True
+    ):
+        synthetic = proxy_logging._convert_mcp_to_llm_format(request_obj, kwargs)
+
+    assert guardrail.should_run_guardrail(synthetic, GuardrailEventHooks.pre_mcp_call) is expected_to_run
+
+
+class _TracebackRecordingLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.received_traceback: str | None = None
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> HTTPException | None:
+        self.received_traceback = traceback_str
+        return None
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_redacts_traceback_before_callbacks(monkeypatch):
+    """A pass-through upstream failure hands the hook the httpx traceback, whose
+    message quotes the upstream URL with the provider key in its query string.
+    Every callback, custom loggers included, must receive it redacted."""
+    import traceback
+    from unittest.mock import AsyncMock, patch
+
+    import httpx
+
+    provider_key = "AIza" + "S" * 35
+    upstream_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent?key={provider_key}"
+    response = httpx.Response(400, request=httpx.Request("POST", upstream_url))
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError:
+        upstream_traceback = traceback.format_exc()
+    assert provider_key in upstream_traceback
+
+    recorder = _TracebackRecordingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.alert_types = []
+    with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+        await proxy_logging_obj.post_call_failure_hook(
+            request_data={"metadata": {}},
+            original_exception=HTTPException(status_code=400, detail="Upstream passthrough request failed with status 400"),
+            user_api_key_dict=UserAPIKeyAuth(),
+            traceback_str=upstream_traceback,
+        )
+
+    assert recorder.received_traceback is not None
+    assert provider_key not in recorder.received_traceback
+    assert "REDACTED" in recorder.received_traceback
+
+
+class TestPrismaClientTokenAuthBehindThePool:
+    """Behind the in-container pool the supervisor renews the writer's database
+    token and hands the workers a loopback URL with a static password, so the
+    writer wrapper must not run its own refresh loop. The reader is not pooled
+    and keeps refreshing its own token."""
+
+    UPSTREAM: Final = "postgresql://litellm:TOKEN@db.internal:5432/litellm"
+    READER: Final = "postgresql://litellm:TOKEN@reader.internal:5432/litellm"
+
+    def _client(self, monkeypatch: pytest.MonkeyPatch, pooled: bool) -> PrismaClient:
+        from litellm.proxy.db.pgbouncer import PGBOUNCER_POOLED_ENV_VAR
+
+        monkeypatch.delenv("AZURE_POSTGRESQL_AUTH", raising=False)
+        monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "true")
+        monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+        monkeypatch.setenv("DATABASE_URL", self.UPSTREAM)
+        monkeypatch.setenv("DATABASE_URL_READ_REPLICA", self.READER)
+        if pooled:
+            monkeypatch.setenv(PGBOUNCER_POOLED_ENV_VAR, "true")
+        else:
+            monkeypatch.delenv(PGBOUNCER_POOLED_ENV_VAR, raising=False)
+        rds: Final = MagicMock()
+        rds.generate_db_auth_token.return_value = "TOKEN"
+        with patch("boto3.client", return_value=rds):
+            return PrismaClient(database_url=self.UPSTREAM, proxy_logging_obj=MagicMock(spec=ProxyLogging))
+
+    def test_a_pooled_writer_leaves_token_refresh_to_the_pooler_while_the_reader_keeps_its_own(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+        client = self._client(monkeypatch, pooled=True)
+        assert isinstance(client.db, RoutingPrismaWrapper)
+        assert client.db.writer.iam_token_db_auth is False
+        assert client.db.reader.iam_token_db_auth is True
+        assert client.token_auth is not None
+
+    def test_an_unpooled_writer_still_refreshes_its_own_token(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+        client = self._client(monkeypatch, pooled=False)
+        assert isinstance(client.db, RoutingPrismaWrapper)
+        assert client.db.writer.iam_token_db_auth is True
+        assert client.db.reader.iam_token_db_auth is True

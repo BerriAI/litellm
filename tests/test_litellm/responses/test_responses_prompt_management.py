@@ -13,6 +13,7 @@ Covers:
   I) async path propagates optional params to downstream handler
 """
 
+from importlib import import_module
 import asyncio
 from typing import List, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -62,23 +63,20 @@ def _provider_by_model(model: str, **_: object) -> tuple[str, str, None, None]:
 def _patch_responses_dispatch():
     """Patch everything after the prompt management block so tests stay unit-level."""
     return [
-        patch(
-            "litellm.responses.main.litellm.get_llm_provider",
+        patch.object(
+            import_module("litellm.responses.main").litellm, "get_llm_provider",
             side_effect=_provider_by_model,
         ),
-        patch(
-            "litellm.responses.mcp.litellm_proxy_mcp_handler."
-            "LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway",
+        patch.object(
+            import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler, "_should_use_litellm_mcp_gateway",
             return_value=False,
         ),
-        patch(
-            "litellm.responses.main.ProviderConfigManager"
-            ".get_provider_responses_api_config",
+        patch.object(
+            import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config",
             return_value=None,
         ),
-        patch(
-            "litellm.responses.main.litellm_completion_transformation_handler"
-            ".response_api_handler",
+        patch.object(
+            import_module("litellm.responses.main").litellm_completion_transformation_handler, "response_api_handler",
             return_value=MagicMock(),
         ),
     ]
@@ -393,8 +391,8 @@ class TestResponsesAPIPromptManagement:
 
         patches = _patch_responses_dispatch()
         with (
-            patch(
-                "litellm.responses.main.litellm.get_llm_provider",
+            patch.object(
+                import_module("litellm.responses.main").litellm, "get_llm_provider",
                 side_effect=_provider_by_model,
             ),
             patches[1],
@@ -599,8 +597,8 @@ def test_sync_prompt_swap_resolves_credentials_for_swapped_provider(monkeypatch:
 
     monkeypatch.setenv("XAI_API_KEY", "sk-xai-test")
     logging_obj = _make_logging_obj("gpt-4o-mini", [{"role": "user", "content": "hi"}])
-    with patch(  # test-quality-ok: handler boundary stub proves creds resolve for the swapped provider without network
-        "litellm.responses.main.base_llm_http_handler.response_api_handler", return_value=MagicMock()
+    with patch.object(  # test-quality-ok: handler boundary stub proves creds resolve for the swapped provider without network
+        import_module("litellm.responses.main").base_llm_http_handler, "response_api_handler", return_value=MagicMock()
     ) as mock_handler:
         litellm.responses(input="hi", model="xai/grok-4", prompt_id="p1", litellm_logging_obj=logging_obj)
 

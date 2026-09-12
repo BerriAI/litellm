@@ -1,4 +1,4 @@
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import process_response_headers
@@ -27,6 +27,9 @@ from ..common_utils import (
     get_chatgpt_default_headers,
     get_chatgpt_default_instructions,
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -107,7 +110,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         self,
         model: str,
         raw_response: Any,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
     ):
         body_text: Final = raw_response.text or ""
         if not self._should_parse_as_sse(raw_response=raw_response, body_text=body_text):

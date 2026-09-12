@@ -19,12 +19,24 @@ export function useEntityLinkClick(href: string): (e: React.MouseEvent) => void 
 }
 
 interface EntityLinkProps {
-  href: string;
+  href?: string;
   className?: string;
   children: React.ReactNode;
 }
 
 export function EntityLink({ href, className, children }: EntityLinkProps) {
+  if (!href) {
+    return <span className={cn("inline-block min-w-0 max-w-full truncate font-semibold", className)}>{children}</span>;
+  }
+
+  return (
+    <LinkedEntity href={href} className={className}>
+      {children}
+    </LinkedEntity>
+  );
+}
+
+function LinkedEntity({ href, className, children }: EntityLinkProps & { href: string }) {
   const handleClick = useEntityLinkClick(href);
 
   return (

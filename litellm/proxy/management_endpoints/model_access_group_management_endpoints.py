@@ -2,18 +2,34 @@
 Allow proxy admin to manage model access groups
 
 Endpoints here:
-- POST /model_group/new - Create a new access group with multiple model names
+- POST /access_group/new - Create a new access group with multiple model names
+- GET /access_group/list - List every access group
+- GET /access_group/{access_group}/info - Read one access group, including its budget
+- PUT /access_group/{access_group}/update - Replace an access group's deployments
+- DELETE /access_group/{access_group}/delete - Delete an access group and its budget
+- GET /access_group/{access_group}/budget - Read an access group's shared budget and spend
+- PUT /access_group/{access_group}/budget - Set or replace an access group's shared budget
+- DELETE /access_group/{access_group}/budget - Clear an access group's shared budget
 """
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from datetime import datetime
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Annotated, Any, Final, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    model_access_group_cache_key,
+    model_access_group_registry_cache_key,
+)
+from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 
 # Clear cache and reload models to pick up the access group changes
 from litellm.proxy.management_endpoints.model_management_endpoints import (
@@ -22,10 +38,16 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     model_info_as_mapping,
     reload_serving_verdict,
 )
+from litellm.proxy.management_helpers.utils import handle_budget_for_entity
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.model_repository import ModelRepository
+from litellm.repositories.table_repositories import ModelAccessGroupBudgetRepository
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+    AccessGroupBudget,
+    AccessGroupBudgetRequest,
+    AccessGroupBudgetResponse,
     AccessGroupInfo,
+    DeleteAccessGroupBudgetResponse,
     DeleteModelGroupResponse,
     ListAccessGroupsResponse,
     NewModelGroupRequest,
@@ -36,7 +58,43 @@ from litellm.types.proxy.management_endpoints.model_management_endpoints import 
 if TYPE_CHECKING:
     from litellm import Router
 
-router: Final = APIRouter()
+router: Final = APIRouter(tags=["model management"])
+
+_AUTH_DEPENDENCIES: Final = (Depends(user_api_key_auth),)
+
+
+class _ErrorDetail(TypedDict):
+    error: ReadOnly[str]
+
+
+class _ModelAccessGroupWhere(TypedDict):
+    access_group_name: ReadOnly[str]
+
+
+class _BudgetInclude(TypedDict):
+    litellm_budget_table: ReadOnly[bool]
+
+
+class _ModelAccessGroupBudgetCreate(TypedDict):
+    access_group_name: ReadOnly[str]
+    budget_id: ReadOnly[str | None]
+    created_by: ReadOnly[str]
+    updated_by: ReadOnly[str]
+
+
+class _ModelAccessGroupBudgetUpdate(TypedDict):
+    budget_id: ReadOnly[str | None]
+    updated_by: ReadOnly[str]
+
+
+class _ModelAccessGroupBudgetUpsert(TypedDict):
+    create: ReadOnly[_ModelAccessGroupBudgetCreate]
+    update: ReadOnly[_ModelAccessGroupBudgetUpdate]
+
+
+def _http_error(status_code: int, message: str) -> HTTPException:
+    detail: Final[_ErrorDetail] = {"error": message}
+    return HTTPException(status_code=status_code, detail=detail)
 
 
 class _DeploymentRow(Protocol):
@@ -58,8 +116,167 @@ class _ModelTableClient(Protocol):
     async def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
 
 
+class _BudgetRow(Protocol):
+    @property
+    def budget_id(self) -> str: ...
+
+    @property
+    def max_budget(self) -> float | None: ...
+
+    @property
+    def soft_budget(self) -> float | None: ...
+
+    @property
+    def budget_duration(self) -> str | None: ...
+
+    @property
+    def budget_reset_at(self) -> datetime | None: ...
+
+
+class _ModelAccessGroupBudgetRow(Protocol):
+    @property
+    def access_group_name(self) -> str: ...
+
+    @property
+    def spend(self) -> float: ...
+
+    @property
+    def budget_id(self) -> str | None: ...
+
+    @property
+    def litellm_budget_table(self) -> _BudgetRow | None: ...
+
+
+class _ModelAccessGroupBudgetTableClient(Protocol):
+    async def find_unique(
+        self, *, where: Mapping[str, object], include: Mapping[str, object] | None = None
+    ) -> _ModelAccessGroupBudgetRow | None: ...
+
+    async def upsert(
+        self,
+        *,
+        where: Mapping[str, object],
+        data: Mapping[str, object],
+        include: Mapping[str, object] | None = None,
+    ) -> _ModelAccessGroupBudgetRow: ...
+
+    async def find_many(
+        self, *, include: Mapping[str, object] | None = None
+    ) -> Sequence[_ModelAccessGroupBudgetRow]: ...
+
+    async def delete(self, *, where: Mapping[str, object]) -> _ModelAccessGroupBudgetRow | None: ...
+
+
 def _model_table(prisma_client: PrismaClient) -> _ModelTableClient:
     return ModelRepository(prisma_client).table
+
+
+def _model_access_group_budget_table(prisma_client: PrismaClient) -> _ModelAccessGroupBudgetTableClient:
+    return ModelAccessGroupBudgetRepository(prisma_client).table
+
+
+def _prisma_client_or_500() -> PrismaClient:
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise _http_error(500, "Database not connected.")
+    return prisma_client
+
+
+def _auth_cache() -> UserApiKeyCache:
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    return user_api_key_cache
+
+
+async def _evict_model_access_group_cache_keys(access_group: str, auth_cache: UserApiKeyCache) -> None:
+    """
+    Every endpoint that writes an access group budget row must call this, or the budget stays
+    unenforced until the TTL expires: auth gates the feature on a cached registry of the groups
+    that have a budget row, read cache-first with no freshness check.
+    """
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+        evict_and_broadcast,
+    )
+
+    await evict_and_broadcast(
+        cache_keys=(model_access_group_cache_key(access_group), model_access_group_registry_cache_key()),
+        user_api_key_cache=auth_cache,
+    )
+
+
+async def _model_access_group_budget_row(
+    access_group: str, prisma_client: PrismaClient
+) -> _ModelAccessGroupBudgetRow | None:
+    where: Final[_ModelAccessGroupWhere] = {"access_group_name": access_group}
+    include: Final[_BudgetInclude] = {"litellm_budget_table": True}
+    return await _model_access_group_budget_table(prisma_client).find_unique(where=where, include=include)
+
+
+async def _model_access_group_budget_rows(
+    prisma_client: PrismaClient,
+) -> Mapping[str, _ModelAccessGroupBudgetRow]:
+    """Every group's budget row in one read, so listing groups does not fan out into one query
+    per group."""
+    include: Final[_BudgetInclude] = {"litellm_budget_table": True}
+    rows: Final = await _model_access_group_budget_table(prisma_client).find_many(include=include)
+    return MappingProxyType({row.access_group_name: row for row in rows})
+
+
+def _with_budget(info: AccessGroupInfo, row: _ModelAccessGroupBudgetRow | None) -> AccessGroupInfo:
+    """The group as listed, plus whatever budget hangs off it. A group with no row has spent
+    nothing, because clearing a budget drops the row that recorded the spend."""
+    return AccessGroupInfo(
+        access_group=info.access_group,
+        model_names=info.model_names,
+        deployment_count=info.deployment_count,
+        spend=row.spend if row is not None else 0.0,
+        budget=_budget_or_none(row),
+    )
+
+
+def _budget_or_none(row: _ModelAccessGroupBudgetRow | None) -> AccessGroupBudget | None:
+    budget: Final = row.litellm_budget_table if row is not None else None
+    if budget is None:
+        return None
+    return AccessGroupBudget(
+        budget_id=budget.budget_id,
+        max_budget=budget.max_budget,
+        soft_budget=budget.soft_budget,
+        budget_duration=budget.budget_duration,
+        budget_reset_at=budget.budget_reset_at,
+    )
+
+
+def _budget_response(access_group: str, row: _ModelAccessGroupBudgetRow | None) -> AccessGroupBudgetResponse:
+    return AccessGroupBudgetResponse(
+        access_group=access_group,
+        spend=row.spend if row is not None else 0.0,
+        budget=_budget_or_none(row),
+    )
+
+
+async def _delete_model_access_group_budget_row(
+    access_group: str, prisma_client: PrismaClient, auth_cache: UserApiKeyCache
+) -> bool:
+    """
+    Drop the group's budget row only, matching /tag/delete: the LiteLLM_BudgetTable row survives
+    because the link is ON DELETE SET NULL and a budget_id an admin passed in may be shared with
+    other entities.
+
+    Evicts unconditionally: a group with no row of its own can still be sitting in the cached
+    registry, so skipping the eviction when nothing was deleted would leave that stale.
+    """
+    where: Final[_ModelAccessGroupWhere] = {"access_group_name": access_group}
+    row: Final = await _model_access_group_budget_table(prisma_client).delete(where=where)
+    await _evict_model_access_group_cache_keys(access_group, auth_cache)
+    return row is not None
+
+
+async def _raise_404_if_model_access_group_missing(access_group: str, prisma_client: PrismaClient) -> None:
+    access_groups_map: Final = await get_all_access_groups_from_db(prisma_client=prisma_client)
+    if access_group not in access_groups_map:
+        raise _http_error(404, f"Access group '{access_group}' not found")
 
 
 def validate_models_exist(model_names: Sequence[str], llm_router: "Router | None") -> tuple[bool, Sequence[str]]:
@@ -356,13 +573,12 @@ async def get_all_access_groups_from_db(
 
 @router.post(
     "/access_group/new",
-    tags=["model management"],
-    dependencies=[Depends(user_api_key_auth)],
+    dependencies=_AUTH_DEPENDENCIES,
     response_model=NewModelGroupResponse,
 )
 async def create_model_group(
     data: NewModelGroupRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """
     Create a new access group containing multiple model names.
@@ -503,17 +719,17 @@ async def create_model_group(
 
 @router.get(
     "/access_group/list",
-    tags=["model management"],
-    dependencies=[Depends(user_api_key_auth)],
+    dependencies=_AUTH_DEPENDENCIES,
     response_model=ListAccessGroupsResponse,
 )
 async def list_access_groups(
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """
     List all access groups.
     
-    Returns a list of all access groups with their model names and deployment counts.
+    Returns a list of all access groups with their model names, deployment counts, shared budget
+    and the spend drawn against it.
     
     Example:
     ```bash
@@ -534,11 +750,11 @@ async def list_access_groups(
 
     try:
         access_groups_map: Final = await get_all_access_groups_from_db(prisma_client=prisma_client)
+        budget_rows: Final = await _model_access_group_budget_rows(prisma_client)
 
-        # Sort by access group name
         access_groups_list: Final = sorted(
-            access_groups_map.values(),
-            key=lambda x: x.access_group,
+            (_with_budget(info, budget_rows.get(info.access_group)) for info in access_groups_map.values()),
+            key=lambda group: group.access_group,
         )
 
         return ListAccessGroupsResponse(access_groups=access_groups_list)
@@ -553,13 +769,12 @@ async def list_access_groups(
 
 @router.get(
     "/access_group/{access_group}/info",
-    tags=["model management"],
-    dependencies=[Depends(user_api_key_auth)],
+    dependencies=_AUTH_DEPENDENCIES,
     response_model=AccessGroupInfo,
 )
 async def get_access_group_info(
     access_group: str,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """
     Get information about a specific access group.
@@ -574,7 +789,7 @@ async def get_access_group_info(
     - access_group: str - The access group name (URL path parameter)
     
     Returns:
-    - AccessGroupInfo with the access group details
+    - AccessGroupInfo with the access group details, its shared budget and its spend
     
     Raises:
     - HTTPException 404: If access group not found
@@ -596,7 +811,10 @@ async def get_access_group_info(
                 detail={"error": f"Access group '{access_group}' not found"},
             )
 
-        return access_groups_map[access_group]
+        return _with_budget(
+            access_groups_map[access_group],
+            await _model_access_group_budget_row(access_group, prisma_client),
+        )
 
     except HTTPException:
         raise
@@ -610,14 +828,13 @@ async def get_access_group_info(
 
 @router.put(
     "/access_group/{access_group}/update",
-    tags=["model management"],
-    dependencies=[Depends(user_api_key_auth)],
+    dependencies=_AUTH_DEPENDENCIES,
     response_model=NewModelGroupResponse,
 )
 async def update_access_group(
     access_group: str,
     data: UpdateModelGroupRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """
     Update an access group's model names.
@@ -765,13 +982,13 @@ async def update_access_group(
 
 @router.delete(
     "/access_group/{access_group}/delete",
-    tags=["model management"],
-    dependencies=[Depends(user_api_key_auth)],
+    dependencies=_AUTH_DEPENDENCIES,
     response_model=DeleteModelGroupResponse,
 )
 async def delete_access_group(
     access_group: str,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    auth_cache: Annotated[UserApiKeyCache, Depends(_auth_cache)],
 ):
     """
     Delete an access group.
@@ -835,6 +1052,13 @@ async def delete_access_group(
         removed_pairs: Final = tuple(pair for pair in removed if pair is not None)
         models_updated: Final = len(removed_pairs)
 
+        # Budget last, deliberately: failing here strands a budget row for a group already on no
+        # deployment (clutter), where the reverse order can leave a live group enforcing nothing.
+        # The LiteLLM_BudgetTable row it linked is left alone, as /tag/delete leaves a tag's.
+        await _delete_model_access_group_budget_row(
+            access_group=access_group, prisma_client=prisma_client, auth_cache=auth_cache
+        )
+
         # Clear cache and reload models to pick up the access group changes
         live_before_reload: Final = live_model_ids_snapshot()
         reload_outcome: Final = await clear_cache()
@@ -864,3 +1088,162 @@ async def delete_access_group(
             status_code=500,
             detail={"error": f"Failed to delete access group: {e}"},
         )
+
+
+@router.get(
+    "/access_group/{access_group}/budget",
+    dependencies=_AUTH_DEPENDENCIES,
+    response_model=AccessGroupBudgetResponse,
+)
+async def get_access_group_budget(
+    access_group: str,
+) -> AccessGroupBudgetResponse:
+    """
+    Get the shared budget of an access group, and the spend drawn against it.
+
+    Example:
+    ```bash
+    curl -X GET 'http://localhost:4000/access_group/production-models/budget' \\
+      -H 'Authorization: Bearer sk-1234'
+    ```
+
+    Parameters:
+    - access_group: str - The access group name (URL path parameter)
+
+    Returns:
+    - AccessGroupBudgetResponse; budget is null when the group has no budget set
+
+    Raises:
+    - HTTPException 404: If access group not found
+    """
+    prisma_client: Final = _prisma_client_or_500()
+    await _raise_404_if_model_access_group_missing(access_group=access_group, prisma_client=prisma_client)
+
+    return _budget_response(
+        access_group=access_group,
+        row=await _model_access_group_budget_row(access_group, prisma_client),
+    )
+
+
+@router.put(
+    "/access_group/{access_group}/budget",
+    dependencies=_AUTH_DEPENDENCIES,
+    response_model=AccessGroupBudgetResponse,
+)
+async def set_access_group_budget(
+    access_group: str,
+    data: AccessGroupBudgetRequest,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    auth_cache: Annotated[UserApiKeyCache, Depends(_auth_cache)],
+) -> AccessGroupBudgetResponse:
+    """
+    Set or replace the shared budget of an access group. Idempotent.
+
+    Every key that can reach a model in the group draws from this one budget.
+
+    Example:
+    ```bash
+    curl -X PUT 'http://localhost:4000/access_group/production-models/budget' \\
+      -H 'Authorization: Bearer sk-1234' \\
+      -H 'Content-Type: application/json' \\
+      -d '{
+        "max_budget": 100.0,
+        "budget_duration": "30d"
+      }'
+    ```
+
+    Parameters:
+    - access_group: str - The access group name (URL path parameter)
+    - max_budget: Optional[float] - Requests fail once the group's shared spend exceeds this
+    - soft_budget: Optional[float] - Fires an alert when reached; requests still succeed
+    - budget_duration: Optional[str] - Frequency of resetting the group's spend (e.g. '30d')
+    - budget_id: Optional[str] - Link an existing budget instead of creating one
+
+    Returns:
+    - AccessGroupBudgetResponse with the stored budget and current spend
+
+    Raises:
+    - HTTPException 400: If no budget field is given, or budget_duration cannot be parsed
+    - HTTPException 404: If access group not found
+    """
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
+    prisma_client: Final = _prisma_client_or_500()
+    if not data.model_dump(exclude_none=True):
+        raise _http_error(400, "One of max_budget, soft_budget, budget_duration or budget_id is required")
+    validate_budget_duration(data.budget_duration)
+    await _raise_404_if_model_access_group_missing(access_group=access_group, prisma_client=prisma_client)
+
+    existing_row: Final = await _model_access_group_budget_row(access_group, prisma_client)
+    budget_id: Final = await handle_budget_for_entity(
+        data=data,
+        existing_budget_id=existing_row.budget_id if existing_row is not None else None,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+        litellm_proxy_admin_name=litellm_proxy_admin_name,
+    )
+    actor: Final = user_api_key_dict.user_id or litellm_proxy_admin_name
+    upsert_data: Final[_ModelAccessGroupBudgetUpsert] = {
+        "create": {
+            "access_group_name": access_group,
+            "budget_id": budget_id,
+            "created_by": actor,
+            "updated_by": actor,
+        },
+        "update": {"budget_id": budget_id, "updated_by": actor},
+    }
+    where: Final[_ModelAccessGroupWhere] = {"access_group_name": access_group}
+    include: Final[_BudgetInclude] = {"litellm_budget_table": True}
+    row: Final = await _model_access_group_budget_table(prisma_client).upsert(
+        where=where, data=upsert_data, include=include
+    )
+    await _evict_model_access_group_cache_keys(access_group, auth_cache)
+
+    verbose_proxy_logger.info("Set budget %s on access group '%s'", budget_id, access_group)
+    return _budget_response(access_group=access_group, row=row)
+
+
+@router.delete(
+    "/access_group/{access_group}/budget",
+    dependencies=_AUTH_DEPENDENCIES,
+    response_model=DeleteAccessGroupBudgetResponse,
+)
+async def delete_access_group_budget(
+    access_group: str,
+    auth_cache: Annotated[UserApiKeyCache, Depends(_auth_cache)],
+) -> DeleteAccessGroupBudgetResponse:
+    """
+    Clear the shared budget of an access group, leaving the group itself in place.
+
+    Example:
+    ```bash
+    curl -X DELETE 'http://localhost:4000/access_group/production-models/budget' \\
+      -H 'Authorization: Bearer sk-1234'
+    ```
+
+    Parameters:
+    - access_group: str - The access group name (URL path parameter)
+
+    Returns:
+    - DeleteAccessGroupBudgetResponse; budget_deleted is false when there was nothing to clear
+
+    Raises:
+    - HTTPException 404: If access group not found
+    """
+    prisma_client: Final = _prisma_client_or_500()
+    await _raise_404_if_model_access_group_missing(access_group=access_group, prisma_client=prisma_client)
+
+    budget_deleted: Final = await _delete_model_access_group_budget_row(
+        access_group=access_group,
+        prisma_client=prisma_client,
+        auth_cache=auth_cache,
+    )
+    return DeleteAccessGroupBudgetResponse(
+        access_group=access_group,
+        budget_deleted=budget_deleted,
+        message=(
+            f"Budget for access group '{access_group}' deleted successfully"
+            if budget_deleted
+            else f"Access group '{access_group}' has no budget to delete"
+        ),
+    )

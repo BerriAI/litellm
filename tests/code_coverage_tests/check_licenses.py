@@ -6,11 +6,15 @@ from pathlib import Path
 import re
 import sys
 import time
-import tomllib
 from typing import Callable, Dict, Final, List, Optional, Protocol, Set, Tuple
 
 from packaging.requirements import Requirement
 import requests
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 DEFAULT_TRANSITIVE_PIN_PACKAGES = (
     "aiofiles",

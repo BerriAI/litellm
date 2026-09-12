@@ -1,3 +1,4 @@
+import hashlib
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -74,6 +75,8 @@ class TestCloudZeroHourlyExport:
             fake_db = MagicMock()
 
             async def query_raw_mock(query: str, *params):
+                if "sha256(" in query:
+                    return []
                 start_time_utc = params[0] if len(params) > 0 else None
                 end_time_utc = params[1] if len(params) > 1 else None
                 limit = params[2] if len(params) > 2 else None
@@ -146,6 +149,9 @@ class TestCloudZeroHourlyExport:
                 return joined
 
             fake_db.query_raw = AsyncMock(side_effect=query_raw_mock)
+            fake_db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+            fake_db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+            fake_db.litellm_usertable.find_many = AsyncMock(return_value=[])
             fake_client.db = fake_db
             mock_prisma_client_getter.return_value = fake_client
 
@@ -160,3 +166,26 @@ class TestCloudZeroHourlyExport:
             logger = CloudZeroLogger(api_key="test", connection_id="test")
 
             await logger._hourly_usage_data_export()
+
+
+class TestLiteLLMDatabaseUsageData:
+    @pytest.mark.asyncio
+    async def test_builds_frame_from_rows_recovered_for_double_hashed_keys(self, monkeypatch: pytest.MonkeyPatch):
+        double_hashed = hashlib.sha256(b"sk-hashed-token").hexdigest()
+        joined_row = {"api_key": "sk-joined", "api_key_alias": "joined", "team_id": "team-0", "user_email": None, "spend": 0.1}
+        dirty_row = {"api_key": double_hashed, "api_key_alias": None, "team_id": None, "user_email": None, "spend": 0.5}
+
+        async def query_raw(query: str, *params):
+            if "sha256(" in query:
+                return [{"digest": double_hashed, "key_alias": "batch-worker", "team_id": "team-1", "user_id": None}]
+            return [joined_row, dirty_row]
+
+        fake_client = MagicMock()
+        fake_client.db.query_raw = AsyncMock(side_effect=query_raw)
+        db = LiteLLMDatabase()
+        monkeypatch.setattr(db, "_ensure_prisma_client", lambda: fake_client)
+
+        result = await db.get_usage_data()
+
+        assert result["api_key_alias"].to_list() == ["joined", "batch-worker"]
+        assert result["team_id"].to_list() == ["team-0", "team-1"]

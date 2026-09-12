@@ -7,8 +7,6 @@ from unittest.mock import Mock, patch
 import pytest
 from click.testing import CliRunner
 
-
-
 import litellm.proxy.client.cli
 from litellm._version import version as litellm_version
 from litellm.proxy.client.cli import cli

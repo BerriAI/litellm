@@ -187,6 +187,22 @@ def test_construct_database_url_from_env_vars_with_schema(monkeypatch):
     }
 
 
+def test_construct_database_url_from_env_vars_carries_tls_env(monkeypatch: pytest.MonkeyPatch):
+    """The CLI password path builds its URL here, so DATABASE_SSLMODE and
+    DATABASE_SSLROOTCERT must reach PgBouncer through it too."""
+    monkeypatch.setenv("DATABASE_HOST", "db.example.com")
+    monkeypatch.setenv("DATABASE_USERNAME", "user")
+    monkeypatch.setenv("DATABASE_PASSWORD", "pass")
+    monkeypatch.setenv("DATABASE_NAME", "litellm")
+    monkeypatch.setenv("DATABASE_SCHEMA", "public")
+    monkeypatch.setenv("DATABASE_SSLMODE", "verify-full")
+    monkeypatch.setenv("DATABASE_SSLROOTCERT", "/etc/ssl/certs/ca-certificates.crt")
+    assert construct_database_url_from_env_vars() == (
+        "postgresql://user:pass@db.example.com/litellm"
+        "?schema=public&sslmode=verify-full&sslrootcert=%2Fetc%2Fssl%2Fcerts%2Fca-certificates.crt"
+    )
+
+
 def test_construct_database_url_from_env_vars_error_path_missing_host(monkeypatch):
     monkeypatch.delenv("DATABASE_HOST", raising=False)
     monkeypatch.setenv("DATABASE_USERNAME", "user")

@@ -317,3 +317,55 @@ def test_body_model_stays_the_endpoint_name_when_hf_model_name_is_unset(monkeypa
     client = _invoke_sagemaker_chat(monkeypatch)
 
     assert client.request_body["model"] == "my-endpoint"
+
+
+@pytest.mark.parametrize(
+    "region,stream,expected_url",
+    [
+        (
+            "cn-north-1",
+            False,
+            "https://runtime.sagemaker.cn-north-1.amazonaws.com.cn/endpoints/my-endpoint/invocations",
+        ),
+        (
+            "cn-north-1",
+            True,
+            "https://runtime.sagemaker.cn-north-1.amazonaws.com.cn/endpoints/my-endpoint/invocations-response-stream",
+        ),
+        (
+            "us-gov-west-1",
+            False,
+            "https://runtime.sagemaker.us-gov-west-1.amazonaws.com/endpoints/my-endpoint/invocations",
+        ),
+        (
+            "us-west-2",
+            False,
+            "https://runtime.sagemaker.us-west-2.amazonaws.com/endpoints/my-endpoint/invocations",
+        ),
+    ],
+)
+def test_get_complete_url_uses_partition_dns_suffix(region: str, stream: bool, expected_url: str) -> None:
+    url = SagemakerChatConfig().get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="my-endpoint",
+        optional_params={"aws_region_name": region},
+        litellm_params={},
+        stream=stream,
+    )
+    assert url == expected_url
+
+
+def test_get_complete_url_sagemaker_base_url_override_wins() -> None:
+    url = SagemakerChatConfig().get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="my-endpoint",
+        optional_params={
+            "aws_region_name": "cn-north-1",
+            "sagemaker_base_url": "https://my-private-endpoint.example.com/invocations",
+        },
+        litellm_params={},
+        stream=False,
+    )
+    assert url == "https://my-private-endpoint.example.com/invocations"

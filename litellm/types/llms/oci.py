@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, SerializeAsAny
 
@@ -105,9 +105,9 @@ class OCIChatRequestPayload(BaseModel):
     # Honoured by GPT-5 family, Gemini 2.5, Grok reasoning variants,
     # Cohere Command-A-Reasoning. Ignored by non-reasoning models.
     reasoningEffort: str | None = None
-    responseFormat: dict[str, Any] | None = None
-    toolChoice: str | dict[str, Any] | None = None
-    logitBias: dict[str, Any] | None = None
+    responseFormat: dict[str, object] | None = None
+    toolChoice: str | dict[str, object] | None = None
+    logitBias: dict[str, object] | None = None
     logProbs: int | None = None
 
 
@@ -163,7 +163,7 @@ class OCIResponseChoice(BaseModel):
     # reasoning phase without producing any visible content.
     message: OCIMessage | None = None
     finishReason: str | None = None
-    logprobs: dict[str, Any] | None = None
+    logprobs: dict[str, object] | None = None
 
 
 class OCIChatResponse(BaseModel):
@@ -275,7 +275,7 @@ class CohereToolCall(BaseModel):
     """Tool call made by Cohere model."""
 
     name: str
-    parameters: dict[str, Any]
+    parameters: dict[str, object]
 
 
 class CohereToolResult(BaseModel):
@@ -286,7 +286,7 @@ class CohereToolResult(BaseModel):
     """
 
     call: CohereToolCall
-    outputs: list[dict[str, Any]]
+    outputs: list[dict[str, object]]
 
 
 class CohereChatRequest(BaseModel):
@@ -318,12 +318,12 @@ class CohereChatRequest(BaseModel):
     # OCI Cohere responseFormat is {"type": "TEXT" | "JSON_OBJECT", "schema"?: ...};
     # there is no JSON_SCHEMA type. The shape is built in
     # OCIChatConfig._normalize_response_format.
-    responseFormat: dict[str, Any] | None = None
+    responseFormat: dict[str, object] | None = None
     preambleOverride: str | None = None
-    documents: list[dict[str, Any]] | None = None
+    documents: list[dict[str, object]] | None = None
     searchQueriesOnly: bool | None = None
     searchEntryPoint: str | None = None
-    grounding: dict[str, Any] | None = None
+    grounding: dict[str, object] | None = None
     isEcho: bool | None = None
     isSearchQueriesOnly: bool | None = None
     isRawPrompting: bool | None = None
@@ -333,7 +333,7 @@ class CohereChatRequest(BaseModel):
     citationQuality: str | None = None
     maxInputTokens: int | None = None
     isStream: bool | None = None
-    streamOptions: dict[str, Any] | None = None
+    streamOptions: dict[str, object] | None = None
 
 
 class CohereUsage(BaseModel):
@@ -342,8 +342,8 @@ class CohereUsage(BaseModel):
     promptTokens: int
     completionTokens: int
     totalTokens: int
-    promptTokensDetails: dict[str, Any] | None = None
-    completionTokensDetails: dict[str, Any] | None = None
+    promptTokensDetails: dict[str, object] | None = None
+    completionTokensDetails: dict[str, object] | None = None
 
 
 class CohereCitation(BaseModel):
@@ -378,7 +378,7 @@ class CohereChatResponse(BaseModel):
     # Optional fields
     chatHistory: list[CohereMessage] | None = None
     citations: list[CohereCitation] | None = None
-    documents: list[dict[str, Any]] | None = None
+    documents: list[dict[str, object]] | None = None
     errorMessage: str | None = None
     isSearchRequired: bool | None = None
     prompt: str | None = None

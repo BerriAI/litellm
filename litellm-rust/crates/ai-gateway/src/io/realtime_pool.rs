@@ -28,7 +28,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
-use litellm_core::CoreResult;
+use litellm_core::Error;
 use litellm_core::realtime::types::RealtimeEvent;
 
 use crate::io::realtime::{
@@ -438,7 +438,7 @@ impl RealtimePool {
 ///
 /// `key.api_key` is already resolved (non-blank). The first frame OpenAI sends
 /// unprompted is `session.created`; we buffer exactly that and read nothing more.
-async fn warm_one(key: &UpstreamKey) -> CoreResult<WarmConnection> {
+async fn warm_one(key: &UpstreamKey) -> Result<WarmConnection, Error> {
     let upstream: UpstreamWs =
         dial_upstream(&key.model, &key.api_key, key.api_base.as_deref()).await?;
     let (tx, mut rx) = upstream.split();

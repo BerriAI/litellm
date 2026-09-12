@@ -4,6 +4,7 @@ import json
 import os
 from collections.abc import Callable, Mapping
 from functools import lru_cache
+from types import MappingProxyType
 from typing import Any, Final, Literal, NamedTuple, cast
 
 import httpx
@@ -13,6 +14,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
+from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.common_utils import BaseOpenAILLM
 from litellm.secret_managers.get_azure_ad_token_provider import (
@@ -581,7 +583,8 @@ class BaseAzureLLM(BaseOpenAILLM):
         if scope is None:
             scope = "https://cognitiveservices.azure.com/.default"
 
-        max_retries: Final = litellm_params.get("max_retries")
+        configured_max_retries: Final = litellm_params.get("max_retries")
+        max_retries: Final = DEFAULT_MAX_RETRIES if configured_max_retries is None else configured_max_retries
         timeout: Final = litellm_params.get("timeout")
         if not api_key and azure_ad_token_provider is None and tenant_id and client_id and client_secret:
             verbose_logger.debug("Using Azure AD Token Provider from Entra ID for Azure Auth")
@@ -641,8 +644,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         else:
             azure_client_params["http_client"] = self._get_sync_http_client()
 
-        if max_retries is not None:
-            azure_client_params["max_retries"] = max_retries
+        azure_client_params["max_retries"] = max_retries
         if timeout is not None:
             azure_client_params["timeout"] = timeout
 
@@ -788,6 +790,32 @@ class BaseAzureLLM(BaseOpenAILLM):
         final_url: Final = httpx.URL(new_url).copy_with(params=query_params)
 
         return str(final_url)
+
+    @staticmethod
+    def get_azure_v1_image_url(api_base: str, api_version: str | None, route: str) -> str | None:
+        """
+        Azure's v1 surface serves images at ``/openai/v1/images/{generations,edits}`` and routes by
+        ``model`` in the request body, so any deployment path and stale ``api-version`` in
+        ``api_base`` have to be dropped.
+
+        Returns None when ``api_version`` is a dated one, which still uses the deployment route.
+        """
+        if not BaseAzureLLM._is_azure_v1_api_version(api_version):
+            return None
+
+        base_url: Final = httpx.URL(api_base)
+        openai_path_start: Final = base_url.path.find("/openai")
+        resource_base: Final = str(
+            base_url.copy_with(
+                path=base_url.path if openai_path_start == -1 else base_url.path[:openai_path_start],
+                params=httpx.QueryParams(tuple((k, v) for k, v in base_url.params.multi_items() if k != "api-version")),
+            )
+        )
+        return BaseAzureLLM._get_base_azure_url(
+            api_base=resource_base,
+            litellm_params=MappingProxyType({"api_version": api_version}),
+            route=route,
+        )
 
     @staticmethod
     def _is_azure_v1_api_version(api_version: str | None) -> bool:

@@ -2920,7 +2920,7 @@ async def test_get_config_callbacks_with_all_types(client_no_auth):
         assert result["status"] == "success"
         assert "callbacks" in result
 
-        callbacks = result["callbacks"]
+        callbacks = [cb for cb in result["callbacks"] if not cb.get("read_only", False)]
 
         # Verify we have all 5 callbacks (2 success + 1 failure + 2 success_and_failure)
         assert len(callbacks) == 5
@@ -3076,7 +3076,9 @@ async def test_update_config_success_callback_normalization():
     admin_user = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test"
     )
-    await proxy_server.update_config(config_update, user_api_key_dict=admin_user)
+    request = MagicMock()
+    request.json = AsyncMock(return_value={"litellm_settings": {"success_callback": ["SQS", "sQs"]}})
+    await proxy_server.update_config(config_update, request=request, user_api_key_dict=admin_user)
 
     assert (
         "litellm_settings" in upserted

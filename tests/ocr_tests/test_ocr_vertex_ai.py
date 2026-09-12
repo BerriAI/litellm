@@ -5,9 +5,11 @@ Note: Vertex AI OCR automatically converts URLs to base64 data URIs since
 the Vertex AI endpoint doesn't have internet access.
 """
 
-import os
 import json
+import os
 import tempfile
+from typing import Final
+
 import pytest
 from base_ocr_unit_tests import BaseOCRTest
 
@@ -139,3 +141,19 @@ def test_vertex_ai_ocr_routing():
     assert isinstance(
         deepseek_variant, VertexAIDeepSeekOCRConfig
     ), "DeepSeek variant should route to VertexAIDeepSeekOCRConfig"
+
+
+@pytest.mark.parametrize("model", ("deepseek-ocr-maas", "deepseek-ai/deepseek-ocr-maas"))
+def test_deepseek_request_uses_single_provider_namespace(model: str) -> None:
+    from litellm.llms.vertex_ai.ocr.deepseek_transformation import (
+        VertexAIDeepSeekOCRConfig,
+    )
+
+    request: Final = VertexAIDeepSeekOCRConfig().transform_ocr_request(
+        model=model,
+        document={"type": "image_url", "image_url": "data:image/png;base64,AA=="},
+        optional_params={},
+        headers={},
+    )
+
+    assert request.data["model"] == "deepseek-ai/deepseek-ocr-maas"

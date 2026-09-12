@@ -1,9 +1,13 @@
+import asyncio
+import copy
 import json
 import time
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
-
 
 import httpx
 import pytest
@@ -15,9 +19,10 @@ from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, Prisma
 import litellm
 import litellm.proxy.health_endpoints._health_endpoints as _health_endpoints_module
 from litellm.litellm_core_utils.health_check_helpers import TEST_IMAGE_BASE64
-
+from litellm.models.credentials import CredentialItem
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.router import Router
 from litellm.proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
     _show_no_redis_warning,
@@ -145,7 +150,11 @@ async def test_db_health_transport_error_never_raises(transport_error):
         result = await _db_health_readiness_check()
 
     assert result["status"] == "disconnected"
-    mock_prisma.attempt_db_reconnect.assert_called_once_with(reason="health_readiness_check")
+    mock_prisma.attempt_db_reconnect.assert_called_once_with(
+        reason="health_readiness_check",
+        timeout_seconds=_health_endpoints_module.DB_READINESS_CHECK_TIMEOUT_SECONDS,
+        lock_timeout_seconds=_health_endpoints_module.DB_READINESS_CHECK_TIMEOUT_SECONDS,
+    )
 
 
 @pytest.mark.asyncio
@@ -175,7 +184,11 @@ async def test_db_health_transport_error_reconnect_succeeds(transport_error):
         result = await _db_health_readiness_check()
 
     assert result["status"] == "connected"
-    mock_prisma.attempt_db_reconnect.assert_called_once_with(reason="health_readiness_check")
+    mock_prisma.attempt_db_reconnect.assert_called_once_with(
+        reason="health_readiness_check",
+        timeout_seconds=_health_endpoints_module.DB_READINESS_CHECK_TIMEOUT_SECONDS,
+        lock_timeout_seconds=_health_endpoints_module.DB_READINESS_CHECK_TIMEOUT_SECONDS,
+    )
     assert mock_prisma.health_check.call_count == 2
 
 
@@ -1050,6 +1063,35 @@ async def test_health_services_endpoint_galileo(status, error_message):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,error_message",
+    [
+        ("healthy", ""),
+        ("unhealthy", "PointFive authentication failed"),
+    ],
+)
+async def test_health_services_endpoint_pointfive(monkeypatch, status, error_message):
+    import litellm.integrations.pointfive as pointfive_package
+
+    mock_instance = MagicMock()
+    mock_instance.async_health_check = AsyncMock(return_value={"status": status, "error_message": error_message})
+    logger_class = MagicMock(return_value=mock_instance)
+    monkeypatch.setattr(pointfive_package, "PointFiveLogger", logger_class)
+
+    result = await health_services_endpoint(user_api_key_dict=_pointfive_admin(), service="pointfive")
+
+    if status == "healthy":
+        assert result["status"] == "healthy"
+        assert result["message"] == "PointFive is healthy"
+    else:
+        assert result["status"] == "unhealthy"
+        assert result["message"] == error_message
+    mock_instance.async_health_check.assert_awaited_once()
+    # A check that left the periodic flush running would leak a flusher per press of the ui test button.
+    logger_class.assert_called_once_with(start_periodic_flush=False)
+
+
+@pytest.mark.asyncio
 async def test_health_services_endpoint_datadog_llm_observability():
     """
     Verify that 'datadog_llm_observability' is accepted as a valid service
@@ -1182,27 +1224,23 @@ def test_health_liveliness_endpoint(proxy_client):
     Test that /health/liveliness endpoint returns 200 OK with "I'm alive!" message.
     This is a critical orchestration endpoint that must be simple and fast.
     """
-    # Measure the time taken for the health check call
-    start_time = time.perf_counter()
+    warm_up: Final = proxy_client.get("/health/liveliness")
+    assert warm_up.status_code == 200, f"Expected 200 OK, got {warm_up.status_code}: {warm_up.text}"
 
-    # Make GET request to /health/liveliness
-    response = proxy_client.get("/health/liveliness")
+    def _timed_poll() -> tuple[float, httpx.Response]:
+        start_time: Final = time.perf_counter()
+        response: Final = proxy_client.get("/health/liveliness")
+        return (time.perf_counter() - start_time) * 1000, response
 
-    end_time = time.perf_counter()
-    duration_ms = (end_time - start_time) * 1000
+    polls: Final = tuple(_timed_poll() for _ in range(5))
 
-    # Assert response status
-    assert response.status_code == 200, f"Expected 200 OK, got {response.status_code}: {response.text}"
+    for _, response in polls:
+        assert response.status_code == 200, f"Expected 200 OK, got {response.status_code}: {response.text}"
+        assert response.json() == "I'm alive!", f"Expected 'I'm alive!' message, got: {response.json()}"
 
-    # Assert response content (FastAPI JSON-encodes the string)
-    assert response.json() == "I'm alive!", f"Expected 'I'm alive!' message, got: {response.json()}"
-
-    # Verify response is fast (should be < 100ms for a simple endpoint)
-    # This is critical for orchestration systems that poll frequently
-    assert duration_ms < 100, f"Health check took {duration_ms:.2f}ms, expected < 100ms for a simple endpoint"
-
-    # Log the duration for visibility (useful for CI/CD monitoring)
-    print(f"\n/health/liveliness response time: {duration_ms:.2f}ms")
+    durations_ms: Final = tuple(sorted(duration_ms for duration_ms, _ in polls))
+    median_ms: Final = durations_ms[len(durations_ms) // 2]
+    assert median_ms < 100, f"Median of {len(polls)} health checks took {median_ms:.2f}ms, expected < 100ms"
 
 
 def test_health_liveness_endpoint(proxy_client):
@@ -1229,6 +1267,18 @@ def test_health_liveness_endpoint(proxy_client):
 
     # Log the duration for visibility (useful for CI/CD monitoring)
     print(f"\n/health/liveness response time: {duration_ms:.2f}ms")
+
+
+def test_health_backlog_includes_admission_control_stats(proxy_client):
+    response = proxy_client.get("/health/backlog")
+
+    assert response.status_code == 200, response.text
+    assert set(response.json()) == {
+        "in_flight_requests",
+        "admitted_requests",
+        "queued_requests",
+        "rejected_requests",
+    }
 
 
 def test_health_readiness(proxy_client):
@@ -1282,6 +1332,33 @@ def test_health_readiness_details_returns_diagnostic_fields(monkeypatch):
     assert "litellm_version" in response_data
     assert "success_callbacks" in response_data
     assert "cache" in response_data
+
+
+@pytest.mark.parametrize(
+    "general_settings, expected_warning",
+    [
+        ({}, True),
+        ({"disable_env_credential_login": True}, False),
+    ],
+)
+def test_health_readiness_details_reports_env_credential_login_warning(monkeypatch, general_settings, expected_warning):
+    """
+    The Admin UI banner is driven by this flag: it must be True while
+    env-credential login is possible and False once
+    `disable_env_credential_login` turns that login path off.
+    """
+    app = FastAPI()
+    app.include_router(_health_endpoints_module.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    client = TestClient(app)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+
+    response = client.get("/health/readiness/details")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["show_env_credential_login_warning"] is expected_warning
 
 
 def test_health_readiness_allows_explicit_legacy_public_details(monkeypatch):
@@ -1506,7 +1583,7 @@ async def test_health_endpoint_filters_model_list_by_user_access():
     ):
         from fastapi import Response
 
-        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict)
+        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict, model=None, model_id=None)
 
     assert "model_list" in captured, "health_endpoint did not call _perform_health_check_and_save"
     returned_names = {m["model_name"] for m in captured["model_list"]}
@@ -1569,7 +1646,7 @@ async def test_health_endpoint_keeps_full_model_list_for_all_proxy_models():
     ):
         from fastapi import Response
 
-        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict)
+        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict, model=None, model_id=None)
 
     returned_names = {m["model_name"] for m in captured["model_list"]}
     assert returned_names == {
@@ -1637,10 +1714,229 @@ async def test_health_endpoint_resolves_all_team_models_to_team_allowlist():
     ):
         from fastapi import Response
 
-        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict)
+        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict, model=None, model_id=None)
 
     returned_names = {m["model_name"] for m in captured["model_list"]}
     assert returned_names == {"model-b"}, f"all-team-models key should health-check the team's models: {returned_names}"
+
+
+def _router_for(model_list: Sequence[Mapping[str, object]]) -> Router:
+    return Router(model_list=copy.deepcopy(list(model_list)))
+
+
+_ACCESS_GROUP_MODEL_LIST = [
+    {
+        "model_name": "bedrock-nova",
+        "litellm_params": {"model": "bedrock/us.amazon.nova-2-lite-v1:0"},
+        "model_info": {"id": "id-bedrock", "access_groups": ["bedrock-group"]},
+    },
+    {
+        "model_name": "gpt-5.4-mini",
+        "litellm_params": {"model": "openai/gpt-5.4-mini"},
+        "model_info": {"id": "id-openai"},
+    },
+]
+_ACCESS_GROUP_ROUTER = _router_for(_ACCESS_GROUP_MODEL_LIST)
+_TEAM_MODEL_LIST = [
+    _ACCESS_GROUP_MODEL_LIST[0],
+    {
+        "model_name": "bedrock-nova_team-b_9f2c",
+        "litellm_params": {"model": "bedrock/us.amazon.nova-2-lite-v1:0"},
+        "model_info": {
+            "id": "id-team-b",
+            "team_id": "team-b",
+            "team_public_model_name": "bedrock-nova",
+            "access_groups": ["bedrock-group"],
+        },
+    },
+]
+_TEAM_CACHED_RESULTS = {
+    "healthy_endpoints": [
+        {"model": "bedrock/us.amazon.nova-2-lite-v1:0", "model_id": "id-bedrock"},
+        {"model": "bedrock/us.amazon.nova-2-lite-v1:0", "model_id": "id-team-b"},
+    ],
+    "unhealthy_endpoints": [],
+    "healthy_count": 2,
+    "unhealthy_count": 0,
+}
+_ACCESS_GROUP_CACHED_RESULTS = {
+    "healthy_endpoints": [
+        {"model": "bedrock/us.amazon.nova-2-lite-v1:0", "model_id": "id-bedrock"},
+        {"model": "openai/gpt-5.4-mini", "model_id": "id-openai"},
+    ],
+    "unhealthy_endpoints": [],
+    "healthy_count": 2,
+    "unhealthy_count": 0,
+}
+
+
+@contextmanager
+def _proxy_health_globals(
+    llm_model_list: Sequence[Mapping[str, object]],
+    llm_router: object,
+    use_background_health_checks: bool = False,
+    health_check_results: Mapping[str, object] | None = None,
+) -> Iterator[None]:
+    with (
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.llm_model_list", list(llm_model_list)
+        ),
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.llm_router", llm_router
+        ),
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.prisma_client", None
+        ),
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.use_background_health_checks", use_background_health_checks
+        ),
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.user_model", None
+        ),
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.health_check_results", dict(health_check_results or {})
+        ),
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.health_check_details", True
+        ),
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.health_check_concurrency", 1
+        ),
+    ):
+        yield
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_expands_access_group_on_live_path():
+    """
+    LIT-6907 / gh-28206: a key granted a model access group carries the group
+    name in user_api_key_dict.models. Matching it as a literal model_name
+    filtered every deployment out and /health answered 0/0 for a model the
+    same key could call.
+    """
+    from fastapi import Response
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    captured: dict = {}
+
+    async def fake_perform(**kwargs):
+        captured["model_list"] = kwargs["model_list"]
+        return {"healthy_endpoints": [], "unhealthy_endpoints": [], "healthy_count": 0, "unhealthy_count": 0}
+
+    with (
+        _proxy_health_globals(_ACCESS_GROUP_MODEL_LIST, _ACCESS_GROUP_ROUTER),
+        patch(  # test-quality-ok: the model list handed to the probe is the assertion; no injection seam
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            side_effect=fake_perform,
+        ),
+    ):
+        await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-group"]),
+            model=None,
+            model_id=None,
+        )
+
+    assert [m["model_name"] for m in captured["model_list"]] == ["bedrock-nova"]
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_expands_access_group_on_background_cache_path():
+    """
+    LIT-6907: the background-cache path scoped the cached entries through the
+    same literal model_name match, so an access-group key got an empty result
+    plus a warning blaming missing model_info.id.
+    """
+    from fastapi import Response
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _ACCESS_GROUP_MODEL_LIST,
+        _ACCESS_GROUP_ROUTER,
+        use_background_health_checks=True,
+        health_check_results=_ACCESS_GROUP_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-group"]),
+            model=None,
+            model_id=None,
+        )
+
+    assert [e["model_id"] for e in result["healthy_endpoints"]] == ["id-bedrock"]
+    assert result["healthy_count"] == 1
+    assert "warnings" not in result
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_treats_no_team_all_team_models_as_unrestricted():
+    """
+    A key granted "all-team-models" without a team resolves to an empty
+    allowlist in the auth layer, which means unrestricted. /health used to
+    keep the unresolved sentinel and filter every deployment out instead.
+    """
+    from fastapi import Response
+
+    from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    captured: dict = {}
+
+    async def fake_perform(**kwargs):
+        captured["model_list"] = kwargs["model_list"]
+        return {"healthy_endpoints": [], "unhealthy_endpoints": [], "healthy_count": 0, "unhealthy_count": 0}
+
+    with (
+        _proxy_health_globals(_ACCESS_GROUP_MODEL_LIST, None),
+        patch(  # test-quality-ok: the model list handed to the probe is the assertion; no injection seam
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            side_effect=fake_perform,
+        ),
+    ):
+        await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="hashed-test-key", models=[SpecialModelNames.all_team_models.value], team_id=None
+            ),
+            model=None,
+            model_id=None,
+        )
+
+    assert {m["model_name"] for m in captured["model_list"]} == {"bedrock-nova", "gpt-5.4-mini"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_omits_model_id_warning_when_no_deployment_matches():
+    """
+    The missing-model_info.id warning is only true when a matching deployment
+    exists without an id. A key whose grants match no deployment at all gets a
+    plain empty result, not advice to populate ids that are already there.
+    """
+    from fastapi import Response
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _ACCESS_GROUP_MODEL_LIST,
+        _ACCESS_GROUP_ROUTER,
+        use_background_health_checks=True,
+        health_check_results=_ACCESS_GROUP_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["no-such-model"]),
+            model=None,
+            model_id=None,
+        )
+
+    assert result["healthy_count"] == 0
+    assert result["unhealthy_count"] == 0
+    assert "warnings" not in result
 
 
 @pytest.mark.asyncio
@@ -1834,7 +2130,7 @@ async def test_health_endpoint_admin_sees_routing_fields_non_admin_does_not():
     # withheld so clients that previously parsed them can detect the change.
     assert (
         non_admin_response.headers.get("Litellm-Health-Field-Notice")
-        == "api_base and api_version are admin-only on this endpoint"
+        == "api_base, api_version, aws_bedrock_runtime_endpoint are admin-only on this endpoint"
     )
     assert "Litellm-Health-Field-Notice" not in admin_response.headers
 
@@ -1923,7 +2219,7 @@ async def test_health_endpoint_blocks_cross_scope_model_id_under_background_cach
     cache filter was driven by an unvalidated ID and the global cache
     leaked id-b's entry to the caller.
     """
-    from fastapi import Response
+    from fastapi import HTTPException, Response
 
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
@@ -1974,21 +2270,18 @@ async def test_health_endpoint_blocks_cross_scope_model_id_under_background_cach
     ):
         # Calling with model="model-b" rather than model_id="id-b" because
         # the model_id branch raises 404 when llm_router is None. The bug
-        # being verified is the same: targeted resolver must drop entries
-        # not in the caller's scoped model_list. With the fix, the result
-        # has no leaked endpoints and the targeted-503 path fires.
-        result = await health_endpoint(
-            response=response,
-            user_api_key_dict=user_api_key_dict,
-            model="model-b",
-            model_id=None,
-        )
+        # being verified is the same: a target outside the caller's scoped
+        # model_list is refused before the cache is read.
+        with pytest.raises(HTTPException) as refused:
+            await health_endpoint(
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+                model="model-b",
+                model_id=None,
+            )
 
-    leaked_ids = {ep.get("model_id") for ep in result.get("healthy_endpoints", [])}
-    leaked_ids |= {ep.get("model_id") for ep in result.get("unhealthy_endpoints", [])}
-    assert "id-b" not in leaked_ids, "background cache leaked an out-of-scope deployment to a scoped caller"
-    assert result["healthy_count"] == 0
-    assert response.status_code == 503
+    assert refused.value.status_code == 403
+    assert "leaky-internal.test" not in str(refused.value.detail)
 
 
 @pytest.mark.asyncio
@@ -2120,6 +2413,7 @@ async def test_health_endpoint_returns_503_when_requested_model_has_no_healthy_e
             response=response,
             user_api_key_dict=user_api_key_dict,
             model="model-a",
+            model_id=None,
         )
 
     assert response.status_code == 503
@@ -2180,6 +2474,7 @@ async def test_health_endpoint_returns_200_when_requested_model_has_healthy_endp
             response=response,
             user_api_key_dict=user_api_key_dict,
             model="model-a",
+            model_id=None,
         )
 
     assert response.status_code == 200
@@ -2274,6 +2569,159 @@ async def test_health_readiness_returns_503_when_db_disconnected():
 
     assert response.status_code == 503
     assert result == {"status": "healthy", "db": "disconnected"}
+
+
+@pytest.mark.asyncio
+async def test_health_readiness_returns_200_when_db_down_and_allow_requests_on_db_unavailable():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/34934.
+
+    allow_requests_on_db_unavailable keeps the proxy serving through a DB
+    outage, so the readiness probe must keep the pod in rotation (200) and
+    report the DB state through the body, not the status code. Otherwise
+    K8s pulls every replica before the request-layer fail-open can run.
+    """
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_readiness
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=PrismaError("nope"))
+    mock_prisma.attempt_db_reconnect = AsyncMock(side_effect=Exception("still nope"))
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+    response = Response()
+    with (
+        patch(  # test-quality-ok: the readiness path reads the proxy-global DB client; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ),
+        patch.dict(  # test-quality-ok: the fail-open flag lives in the proxy-global general_settings; no injection seam
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": True},
+        ),
+    ):
+        result = await health_readiness(response=response)
+
+    assert response.status_code == 200
+    assert result == {"status": "healthy", "db": "disconnected"}
+
+
+@pytest.mark.asyncio
+async def test_health_readiness_details_returns_200_when_db_down_and_allow_requests_on_db_unavailable():
+    """
+    The detailed readiness payload (public via
+    allow_public_health_readiness_details, or /health/readiness/details)
+    must honor the same flag so probes pointed at it also stay 200.
+    """
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _get_health_readiness_details,
+    )
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=PrismaError("nope"))
+    mock_prisma.attempt_db_reconnect = AsyncMock(side_effect=Exception("still nope"))
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+    response = Response()
+    with (
+        patch(  # test-quality-ok: the readiness path reads the proxy-global DB client; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ),
+        patch.dict(  # test-quality-ok: the fail-open flag lives in the proxy-global general_settings; no injection seam
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": True},
+        ),
+    ):
+        result = await _get_health_readiness_details(response=response)
+
+    assert response.status_code == 200
+    assert result["db"] == "disconnected"
+
+
+@pytest.mark.asyncio
+async def test_db_health_readiness_check_bounds_hung_health_check():
+    """
+    A connection that hangs mid-failover must not stall the probe past the
+    kubelet's timeoutSeconds; the DB round-trip is bounded and reported as
+    disconnected instead.
+    """
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _db_health_readiness_check,
+    )
+
+    async def hang():
+        await asyncio.sleep(60)
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = hang
+    mock_prisma.attempt_db_reconnect = AsyncMock(side_effect=Exception("still down"))
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+    with patch(  # test-quality-ok: lowers the module-level probe timeout so the hung-call test finishes fast
+        "litellm.proxy.health_endpoints._health_endpoints.DB_READINESS_CHECK_TIMEOUT_SECONDS",
+        0.05,
+    ):
+        start = time.monotonic()
+        with patch(  # test-quality-ok: the readiness path reads the proxy-global DB client; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ):
+            result = await _db_health_readiness_check()
+        elapsed = time.monotonic() - start
+
+    assert result["status"] == "disconnected"
+    assert elapsed < 5
+
+
+@pytest.mark.asyncio
+async def test_db_health_readiness_check_overall_deadline_bounds_hung_reconnect():
+    """
+    The whole probe-path DB check (initial check + reconnect + re-check,
+    including reconnect lock waits) runs under one deadline, so a reconnect
+    that hangs on the lock still returns disconnected within the deadline.
+    """
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _db_health_readiness_check,
+    )
+
+    async def hang(**kwargs):
+        await asyncio.sleep(60)
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=httpx.ConnectError("down"))
+    mock_prisma.attempt_db_reconnect = hang
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+    with patch(  # test-quality-ok: lowers the module-level probe timeout so the hung-call test finishes fast
+        "litellm.proxy.health_endpoints._health_endpoints.DB_READINESS_PROBE_DEADLINE_SECONDS",
+        0.05,
+    ):
+        start = time.monotonic()
+        with patch(  # test-quality-ok: the readiness path reads the proxy-global DB client; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ):
+            result = await _db_health_readiness_check()
+        elapsed = time.monotonic() - start
+
+    assert result["status"] == "disconnected"
+    assert elapsed < 5
 
 
 @pytest.mark.asyncio
@@ -2411,6 +2859,691 @@ def test_clean_endpoint_data_never_displays_credential_fields(credential_field, 
     assert canary not in str(cleaned)
 
 
+async def _live_probed_model_ids(
+    model_list: Sequence[Mapping[str, object]], user_api_key_dict: UserAPIKeyAuth, model: str | None = None
+) -> set[str]:
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    captured: dict = {}
+
+    async def fake_perform(**kwargs):
+        captured["model_list"] = kwargs["model_list"]
+        return {"healthy_endpoints": [], "unhealthy_endpoints": [], "healthy_count": 0, "unhealthy_count": 0}
+
+    with (
+        _proxy_health_globals(model_list, _router_for(model_list)),
+        patch(  # test-quality-ok: the model list handed to the probe is the assertion; no injection seam
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            side_effect=fake_perform,
+        ),
+    ):
+        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict, model=model, model_id=None)
+
+    return {m["model_info"]["id"] for m in captured["model_list"]}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_hides_another_teams_deployment_behind_a_shared_access_group():
+    """
+    Expanding an access group must not reach past the team boundary: a
+    team-a key holding the group name may not probe team-b's deployment even
+    though that deployment sits in the same group.
+    """
+    probed = await _live_probed_model_ids(
+        _TEAM_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-group"], team_id="team-a"),
+    )
+
+    assert probed == {"id-bedrock"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_hides_team_deployments_from_a_key_with_no_team():
+    """
+    Routing never serves a team-owned deployment to a caller without a team
+    (``filter_team_based_models``), so a team-less access-group key must not
+    probe team-b's deployment with team-b's credentials either.
+    """
+    probed = await _live_probed_model_ids(
+        _TEAM_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-group"], team_id=None),
+    )
+
+    assert probed == {"id-bedrock"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_id", "expected_ids"),
+    [(None, {"id-bedrock"}), ("team-a", {"id-bedrock"}), ("team-b", {"id-bedrock", "id-team-b"})],
+)
+async def test_health_endpoint_keeps_an_unrestricted_non_admin_key_to_its_own_team(team_id, expected_ids):
+    """
+    A key with no model restriction is still bound by routing's team rule:
+    it may probe global deployments and its own team's, never another team's.
+    """
+    probed = await _live_probed_model_ids(
+        _TEAM_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=[], team_id=team_id),
+    )
+
+    assert probed == expected_ids
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_lets_a_proxy_admin_probe_every_teams_deployment():
+    probed = await _live_probed_model_ids(
+        _TEAM_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert probed == {"id-bedrock", "id-team-b"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_keeps_an_unrestricted_non_admin_key_to_its_own_team_on_background_cache_path():
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _TEAM_MODEL_LIST,
+        _router_for(_TEAM_MODEL_LIST),
+        use_background_health_checks=True,
+        health_check_results=_TEAM_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=[], team_id="team-a"),
+            model=None,
+            model_id=None,
+        )
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-bedrock"]
+    assert result["healthy_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_shows_a_teams_own_deployment_by_its_public_name():
+    """
+    A team key names its team deployment by ``team_public_model_name``, while
+    the proxy model list carries the internal ``<name>_<team_id>_<uuid>``
+    name; the deployment must still be probed for its own team.
+    """
+    probed = await _live_probed_model_ids(
+        _TEAM_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-nova"], team_id="team-b"),
+    )
+
+    assert probed == {"id-bedrock", "id-team-b"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_hides_another_teams_deployment_on_background_cache_path():
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _TEAM_MODEL_LIST,
+        _router_for(_TEAM_MODEL_LIST),
+        use_background_health_checks=True,
+        health_check_results=_TEAM_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-group"], team_id="team-a"),
+            model=None,
+            model_id=None,
+        )
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-bedrock"]
+    assert result["healthy_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_refuses_a_targeted_deployment_outside_the_callers_scope_on_live_path():
+    """
+    A scoped key asking for a deployment it may not see must get a 403 and no
+    probe at all: probing the rest of its scope instead would report another
+    deployment's health under the requested id and store it as such.
+    """
+    from fastapi import HTTPException, Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    fake_perform = AsyncMock()
+
+    with (
+        _proxy_health_globals(_TEAM_MODEL_LIST, _router_for(_TEAM_MODEL_LIST)),
+        patch(  # test-quality-ok: the probe must never run; no injection seam
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            fake_perform,
+        ),
+        pytest.raises(HTTPException) as excinfo,
+    ):
+        await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-group"], team_id=None),
+            model=None,
+            model_id="id-team-b",
+        )
+
+    assert excinfo.value.status_code == 403
+    fake_perform.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_refuses_a_targeted_deployment_outside_the_callers_scope_on_background_cache_path():
+    from fastapi import HTTPException, Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with (
+        _proxy_health_globals(
+            _TEAM_MODEL_LIST,
+            _router_for(_TEAM_MODEL_LIST),
+            use_background_health_checks=True,
+            health_check_results=_TEAM_CACHED_RESULTS,
+        ),
+        pytest.raises(HTTPException) as excinfo,
+    ):
+        await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-group"], team_id="team-a"),
+            model="bedrock-nova_team-b_9f2c",
+            model_id=None,
+        )
+
+    assert excinfo.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_hides_team_deployments_from_a_key_with_no_team_on_background_cache_path():
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _TEAM_MODEL_LIST,
+        _router_for(_TEAM_MODEL_LIST),
+        use_background_health_checks=True,
+        health_check_results=_TEAM_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-group"], team_id=None),
+            model=None,
+            model_id=None,
+        )
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-bedrock"]
+    assert result["healthy_count"] == 1
+
+
+_TEAM_ONLY_MODEL_LIST = [_TEAM_MODEL_LIST[1]]
+_BARE_NAME_MODEL_LIST = [
+    {"model_name": "gpt-5.4-nano", "litellm_params": {"model": "gpt-5.4-nano"}, "model_info": {"id": "id-nano"}},
+    {
+        "model_name": "gpt-5.4-nano_team-b_7c3d",
+        "litellm_params": {"model": "gpt-5.4-nano"},
+        "model_info": {"id": "id-nano-team-b", "team_id": "team-b", "team_public_model_name": "gpt-5.4-nano"},
+    },
+]
+_BARE_NAME_CACHED_RESULTS = {
+    "healthy_endpoints": [
+        {"model": "gpt-5.4-nano", "model_id": "id-nano"},
+        {"model": "gpt-5.4-nano", "model_id": "id-nano-team-b"},
+    ],
+    "unhealthy_endpoints": [],
+    "healthy_count": 2,
+    "unhealthy_count": 0,
+}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_probes_a_team_only_deployment_by_its_public_name_on_live_path():
+    """
+    A team key targets its deployment by ``team_public_model_name``; when that
+    name resolves to nothing but the team deployment, the probe must run rather
+    than 403 as if the key were out of scope.
+    """
+    probed = await _live_probed_model_ids(
+        _TEAM_ONLY_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-nova"], team_id="team-b"),
+        model="bedrock-nova",
+    )
+
+    assert probed == {"id-team-b"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_returns_a_team_only_deployment_by_its_public_name_on_background_cache_path():
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _TEAM_ONLY_MODEL_LIST,
+        _router_for(_TEAM_ONLY_MODEL_LIST),
+        use_background_health_checks=True,
+        health_check_results=_TEAM_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-nova"], team_id="team-b"),
+            model="bedrock-nova",
+            model_id=None,
+        )
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-team-b"]
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_returns_only_the_owning_teams_copy_behind_a_shared_public_name_on_cache_path():
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _TEAM_MODEL_LIST,
+        _router_for(_TEAM_MODEL_LIST),
+        use_background_health_checks=True,
+        health_check_results=_TEAM_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-nova"], team_id="team-b"),
+            model="bedrock-nova",
+            model_id=None,
+        )
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-team-b"]
+
+
+async def _live_narrowed_model_ids(
+    model_list: Sequence[Mapping[str, object]],
+    user_api_key_dict: UserAPIKeyAuth,
+    model: str | None = None,
+    model_id: str | None = None,
+) -> set[str]:
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    async def fake_probe(model_list, details=True, max_concurrency=None, instrumentation_context=None):
+        probed = [{"model": m["litellm_params"]["model"], "model_id": m["model_info"]["id"]} for m in model_list]
+        return probed, [], {}
+
+    with (
+        _proxy_health_globals(model_list, _router_for(model_list)),
+        patch(  # test-quality-ok: the probe is the provider edge; which deployments reach it is the assertion
+            "litellm.proxy.health_check._perform_health_check", side_effect=fake_probe
+        ),
+    ):
+        result = await health_endpoint(
+            response=Response(), user_api_key_dict=user_api_key_dict, model=model, model_id=model_id
+        )
+
+    return {ep["model_id"] for ep in result["healthy_endpoints"]}
+
+
+_ADMIN_OUTSIDE_TEAM_B = UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_role=LitellmUserRoles.PROXY_ADMIN)
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_keeps_an_admin_probe_by_name_off_other_teams_public_copies():
+    """
+    An admin outside team-b asks for ``bedrock-nova``. Team-b's copy answers to
+    that name only for team-b (routing keys public names by team), so probing
+    it too would spend team-b's credentials and let a healthy team copy mask a
+    down global deployment as 200.
+    """
+    probed = await _live_narrowed_model_ids(_TEAM_MODEL_LIST, _ADMIN_OUTSIDE_TEAM_B, model="bedrock-nova")
+
+    assert probed == {"id-bedrock"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_probes_only_the_owning_teams_copy_behind_a_shared_public_name():
+    """Team-b's requests for ``bedrock-nova`` route to its copy alone, so its health probe reaches only that copy."""
+    probed = await _live_narrowed_model_ids(
+        _TEAM_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-nova"], team_id="team-b"),
+        model="bedrock-nova",
+    )
+
+    assert probed == {"id-team-b"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_probes_only_the_teams_copy_when_provider_model_equals_public_name():
+    """A bare provider model equal to the public name must not pull the global copy into the team's probe."""
+    probed = await _live_narrowed_model_ids(
+        _BARE_NAME_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["gpt-5.4-nano"], team_id="team-b"),
+        model="gpt-5.4-nano",
+    )
+
+    assert probed == {"id-nano-team-b"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_returns_only_the_teams_copy_when_provider_model_equals_public_name_on_cache_path():
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _BARE_NAME_MODEL_LIST,
+        _router_for(_BARE_NAME_MODEL_LIST),
+        use_background_health_checks=True,
+        health_check_results=_BARE_NAME_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["gpt-5.4-nano"], team_id="team-b"),
+            model="gpt-5.4-nano",
+            model_id=None,
+        )
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-nano-team-b"]
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_keeps_an_admin_probe_by_name_off_other_teams_public_copies_on_background_cache_path():
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _TEAM_MODEL_LIST,
+        _router_for(_TEAM_MODEL_LIST),
+        use_background_health_checks=True,
+        health_check_results=_TEAM_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(), user_api_key_dict=_ADMIN_OUTSIDE_TEAM_B, model="bedrock-nova", model_id=None
+        )
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-bedrock"]
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_probes_a_team_only_public_name_for_an_admin_on_live_path():
+    """
+    An admin's request for a public name only team-b's deployment carries routes
+    to that deployment, so the health probe for that name must reach it too
+    instead of answering an empty 503.
+    """
+    probed = await _live_narrowed_model_ids(_TEAM_ONLY_MODEL_LIST, _ADMIN_OUTSIDE_TEAM_B, model="bedrock-nova")
+
+    assert probed == {"id-team-b"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_returns_a_team_only_public_name_for_an_admin_on_background_cache_path():
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _TEAM_ONLY_MODEL_LIST,
+        _router_for(_TEAM_ONLY_MODEL_LIST),
+        use_background_health_checks=True,
+        health_check_results=_TEAM_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(), user_api_key_dict=_ADMIN_OUTSIDE_TEAM_B, model="bedrock-nova", model_id=None
+        )
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-team-b"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_background_health_checks", [False, True])
+async def test_health_endpoint_keeps_a_team_only_public_name_off_a_team_less_key(use_background_health_checks):
+    """
+    A key with no team holds the name ``bedrock-nova`` but never sees team-b's
+    deployment, so the public-name fallback an admin gets must not open it up.
+    """
+    from fastapi import HTTPException, Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with (
+        _proxy_health_globals(
+            _TEAM_ONLY_MODEL_LIST,
+            _router_for(_TEAM_ONLY_MODEL_LIST),
+            use_background_health_checks=use_background_health_checks,
+            health_check_results=_TEAM_CACHED_RESULTS,
+        ),
+        patch(  # test-quality-ok: the probe must never run; the endpoint has no injection seam for it
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save", new_callable=AsyncMock
+        ) as probe,
+        pytest.raises(HTTPException) as refused,
+    ):
+        await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-nova"]),
+            model="bedrock-nova",
+            model_id=None,
+        )
+
+    assert refused.value.status_code == 403
+    assert "bedrock-nova" in str(refused.value.detail)
+    probe.assert_not_awaited()
+
+
+def test_resolve_targeted_model_ids_lets_model_id_win_over_model():
+    resolve = _health_endpoints_module._resolve_targeted_model_ids
+
+    assert resolve(_TEAM_MODEL_LIST, "bedrock-nova", "id-team-b", None) == {"id-team-b"}
+    assert resolve([_TEAM_MODEL_LIST[0]], "bedrock-nova", "id-team-b", None) == set()
+    assert resolve(_TEAM_MODEL_LIST, "bedrock-nova", None, None) == {"id-bedrock"}
+    assert resolve(_TEAM_MODEL_LIST, "bedrock-nova", None, "team-b") == {"id-team-b"}
+    assert resolve(_TEAM_ONLY_MODEL_LIST, "bedrock-nova", None, None) == {"id-team-b"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_background_health_checks", [False, True])
+async def test_health_endpoint_rejects_an_in_scope_model_paired_with_a_foreign_model_id(use_background_health_checks):
+    """
+    A key scoped to ``bedrock-nova`` pairs that name with another team's
+    deployment id. The in-scope name must not carry the foreign id past the
+    403: the live path narrows by id first, so the caller's own deployment
+    would be probed and its result stored under the foreign id.
+    """
+    from fastapi import HTTPException, Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with (
+        _proxy_health_globals(
+            _TEAM_MODEL_LIST,
+            _router_for(_TEAM_MODEL_LIST),
+            use_background_health_checks=use_background_health_checks,
+            health_check_results=_TEAM_CACHED_RESULTS,
+        ),
+        patch(  # test-quality-ok: the probe must never run; the endpoint has no injection seam for it
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save", new_callable=AsyncMock
+        ) as probe,
+        pytest.raises(HTTPException) as refused,
+    ):
+        await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-nova"]),
+            model="bedrock-nova",
+            model_id="id-team-b",
+        )
+
+    assert refused.value.status_code == 403
+    assert "id-team-b" in str(refused.value.detail)
+    probe.assert_not_awaited()
+
+
+@pytest.mark.parametrize("use_background_health_checks", [False, True])
+@pytest.mark.asyncio
+async def test_health_endpoint_returns_404_for_a_model_paired_with_an_unknown_model_id(use_background_health_checks):
+    """
+    ``model_id`` wins over ``model``: pairing a known name with an id no
+    deployment carries gets the same 404 as the lone unknown id, before any
+    probe runs or a result is stored under the unknown id.
+    """
+    from fastapi import HTTPException, Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with (
+        _proxy_health_globals(
+            _TEAM_MODEL_LIST,
+            _router_for(_TEAM_MODEL_LIST),
+            use_background_health_checks=use_background_health_checks,
+            health_check_results=_TEAM_CACHED_RESULTS,
+        ),
+        patch(  # test-quality-ok: the probe must never run; the endpoint has no injection seam for it
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save", new_callable=AsyncMock
+        ) as probe,
+        pytest.raises(HTTPException) as refused,
+    ):
+        await health_endpoint(
+            response=Response(),
+            user_api_key_dict=_ADMIN_OUTSIDE_TEAM_B,
+            model="bedrock-nova",
+            model_id="id-nobody-has",
+        )
+
+    assert refused.value.status_code == 404
+    assert "id-nobody-has" in str(refused.value.detail)
+    probe.assert_not_awaited()
+
+
+def test_health_test_connection_keeps_error_and_raw_request_through_the_allowlist(monkeypatch):
+    """
+    The dashboard's Test Connect button reads ``result.error`` and
+    ``result.raw_request_typed_dict`` from /health/test_connection, so the
+    allowlist must keep both while dropping the probe's own params.
+    """
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    app = FastAPI()
+    app.include_router(_health_endpoints_module.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    client = TestClient(app)
+
+    with (
+        patch(  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ),
+        respx.mock(assert_all_called=True) as respx_mock,
+    ):
+        respx_mock.post(host="api.openai.com", path="/v1/chat/completions").respond(
+            status_code=401, json={"error": {"message": "Incorrect API key provided"}}
+        )
+        response = client.post(
+            "/health/test_connection",
+            json={
+                "mode": "chat",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-test", "timeout": 7},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "error"
+    assert "Incorrect API key provided" in body["result"]["error"]
+    assert "api.openai.com" in body["result"]["raw_request_typed_dict"]["raw_request_api_base"]
+    assert not {"api_key", "timeout", "exception"} & set(body["result"])
+
+
+def test_clean_endpoint_data_keeps_only_json_safe_diagnostics():
+    """
+    LIT-6907: _clean_endpoint_data used to copy every litellm_param not on a
+    deny list, so a nested mapping keyed by a tuple reached jsonable_encoder
+    and 500'd /health. Only the explicit allowlist survives now.
+    """
+    from fastapi.encoders import jsonable_encoder
+
+    from litellm.proxy.health_check import _clean_endpoint_data
+
+    cleaned = _clean_endpoint_data(
+        {
+            "model": "bedrock/us.amazon.nova-2-lite-v1:0",
+            "custom_llm_provider": "bedrock",
+            "aws_region_name": "us-east-1",
+            "metadata": {("us-east-1", "primary"): "canary-nested-mapping"},
+            "allow_client_keepalive_override": False,
+            "api_key": "CANARY-API-KEY",
+            "x-ratelimit-remaining-requests": 99,
+            "raw_request_typed_dict": {"raw_request_api_base": "https://example.test"},
+            "aws_bedrock_runtime_endpoint": "https://vpce-bedrock.example.test",
+        },
+        details=True,
+    )
+
+    assert cleaned == {
+        "model": "bedrock/us.amazon.nova-2-lite-v1:0",
+        "custom_llm_provider": "bedrock",
+        "aws_region_name": "us-east-1",
+        "x-ratelimit-remaining-requests": 99,
+        "raw_request_typed_dict": {"raw_request_api_base": "https://example.test"},
+        "aws_bedrock_runtime_endpoint": "https://vpce-bedrock.example.test",
+    }
+    assert jsonable_encoder(cleaned) == cleaned
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_result_survives_non_json_safe_deployment_params():
+    """
+    LIT-6907: the full /health path with a deployment carrying a tuple-keyed
+    nested mapping must produce a response FastAPI can encode, with the
+    approved diagnostics intact and the offending param absent.
+    """
+    from fastapi import Response
+    from fastapi.encoders import jsonable_encoder
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    model_list = [
+        {
+            "model_name": "bedrock-nova",
+            "litellm_params": {
+                "model": "bedrock/us.amazon.nova-2-lite-v1:0",
+                "aws_region_name": "us-east-1",
+                "aws_access_key_id": "CANARY-ACCESS-KEY",
+                "metadata": {("us-east-1", "primary"): "canary-nested-mapping"},
+            },
+            "model_info": {"id": "id-bedrock"},
+        }
+    ]
+
+    with (
+        _proxy_health_globals(model_list, None),
+        patch(  # test-quality-ok: the provider probe is faked; the assertion is the response shaping after it
+            "litellm.ahealth_check", AsyncMock(return_value={"x-ratelimit-remaining-requests": 99})
+        ),
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-admin-key", user_role=LitellmUserRoles.PROXY_ADMIN),
+            model=None,
+            model_id=None,
+        )
+
+    encoded = jsonable_encoder(result)
+    assert encoded["healthy_count"] == 1
+    entry = encoded["healthy_endpoints"][0]
+    assert entry["model_id"] == "id-bedrock"
+    assert entry["aws_region_name"] == "us-east-1"
+    assert entry["x-ratelimit-remaining-requests"] == 99
+    assert "metadata" not in entry
+    assert "CANARY" not in str(encoded)
+
+
 class TestConfigBaseForHealthCheck:
     """A request that sets its own connection fields gets a base without the
     configuration's credentials; anything it leaves unset still comes from
@@ -2502,6 +3635,172 @@ class TestConfigBaseForHealthCheck:
         )
         assert base["litellm_credential_name"] == "OpenAI-prod"
         assert base["api_key"] == "sk-configured"
+
+    def test_request_naming_another_credential_does_not_inherit_config_credentials(self):
+        base = self._base(self.CONFIG, {"model": "openai/gpt-4o", "litellm_credential_name": "Another-cred"})
+        assert "api_key" not in base
+        assert "api_base" not in base
+        assert "vertex_credentials" not in base
+        assert base["rpm"] == 100
+
+    def test_blank_credential_name_names_no_credential(self):
+        base = self._base(self.CONFIG, {"model": "openai/gpt-4o", "litellm_credential_name": ""})
+        assert base["api_key"] == "sk-configured"
+
+    def test_opt_in_does_not_put_config_credentials_over_a_named_credential(self):
+        base = self._base(
+            self.CONFIG,
+            {"model": "openai/gpt-4o", "litellm_credential_name": "Another-cred"},
+            allow_client_side_credentials=True,
+        )
+        assert "api_key" not in base
+
+
+class TestTestConnectionUsesTheNamedCredential:
+    CREDENTIAL_KEY = "sk-credential-key"
+    OTHER_DEPLOYMENT_KEY = "sk-other-deployment-key"
+    OTHER_DEPLOYMENT_BASE = "https://other-deployment.example/v1"
+    REQUEST = {
+        "model": "xai/grok-4",
+        "custom_llm_provider": "xai",
+        "litellm_credential_name": "my-xai-cred",
+    }
+    COMPLETION = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "grok-4",
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+    @staticmethod
+    def _credential(**values: str) -> CredentialItem:
+        return CredentialItem(credential_name="my-xai-cred", credential_info={}, credential_values=values)
+
+    @staticmethod
+    def _wildcard_deployment(**litellm_params: str) -> dict:
+        return {
+            "model_name": "xai/*",
+            "litellm_params": {"model": "xai/*", **litellm_params},
+            "model_info": {"id": "unrelated-wildcard-deployment"},
+        }
+
+    def _probe(
+        self,
+        monkeypatch,
+        deployment: dict,
+        request_litellm_params: dict,
+        deployment_by_id: object | None = None,
+        request_model_info: dict | None = None,
+    ) -> httpx.Request:
+        """Run /health/test_connection and hand back the upstream request it made."""
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+        app = FastAPI()
+        app.include_router(_health_endpoints_module.router)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        router = MagicMock()
+        router.get_model_list.return_value = [deployment]
+        router.get_deployment.return_value = deployment_by_id
+
+        with (
+            patch(  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+                "litellm.proxy.proxy_server.prisma_client", MagicMock()
+            ),
+            patch(  # test-quality-ok: the deployment the probe is matched against is a proxy global; it has no injection seam
+                "litellm.proxy.proxy_server.llm_router", router
+            ),
+            respx.mock(assert_all_called=True) as respx_mock,
+        ):
+            respx_mock.post(path__regex=r".*/chat/completions").respond(json=self.COMPLETION)
+            response = TestClient(app).post(
+                "/health/test_connection",
+                json={
+                    "mode": "chat",
+                    "litellm_params": request_litellm_params,
+                    "model_info": request_model_info or {"mode": "chat"},
+                },
+            )
+            probe = respx_mock.calls.last.request
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "success", response.text
+        return probe
+
+    def test_named_credentials_key_is_sent_not_the_matched_deployments_key(self, monkeypatch):
+        monkeypatch.setattr(litellm, "credential_list", [self._credential(api_key=self.CREDENTIAL_KEY)])
+
+        probe = self._probe(
+            monkeypatch,
+            self._wildcard_deployment(api_key=self.OTHER_DEPLOYMENT_KEY),
+            self.REQUEST,
+        )
+
+        assert probe.headers["authorization"] == f"Bearer {self.CREDENTIAL_KEY}"
+
+    def test_named_credentials_api_base_is_used_not_the_matched_deployments(self, monkeypatch):
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [self._credential(api_key=self.CREDENTIAL_KEY, api_base="https://credential.example/v1")],
+        )
+
+        probe = self._probe(
+            monkeypatch,
+            self._wildcard_deployment(api_base=self.OTHER_DEPLOYMENT_BASE),
+            self.REQUEST,
+        )
+
+        assert probe.url.host == "credential.example"
+
+    def test_named_credential_without_an_api_base_leaves_the_provider_default(self, monkeypatch):
+        monkeypatch.setattr(litellm, "credential_list", [self._credential(api_key=self.CREDENTIAL_KEY)])
+
+        probe = self._probe(
+            monkeypatch,
+            self._wildcard_deployment(api_base=self.OTHER_DEPLOYMENT_BASE),
+            self.REQUEST,
+        )
+
+        assert probe.url.host == "api.x.ai"
+
+    def test_configured_model_named_without_a_credential_still_inherits_its_config(self, monkeypatch):
+        probe = self._probe(
+            monkeypatch,
+            self._wildcard_deployment(api_key=self.OTHER_DEPLOYMENT_KEY, api_base=self.OTHER_DEPLOYMENT_BASE),
+            {"model": "xai/grok-4", "custom_llm_provider": "xai"},
+        )
+
+        assert probe.headers["authorization"] == f"Bearer {self.OTHER_DEPLOYMENT_KEY}"
+        assert probe.url.host == "other-deployment.example"
+
+    def test_deployment_probed_by_id_keeps_the_endpoint_it_is_configured_with(self, monkeypatch):
+        """The model detail page always echoes back the credential the deployment already uses."""
+        from litellm.types.router import Deployment, LiteLLM_Params
+
+        monkeypatch.setattr(litellm, "credential_list", [self._credential(api_key=self.CREDENTIAL_KEY)])
+
+        probe = self._probe(
+            monkeypatch,
+            self._wildcard_deployment(api_key=self.OTHER_DEPLOYMENT_KEY, api_base=self.OTHER_DEPLOYMENT_BASE),
+            self.REQUEST,
+            deployment_by_id=Deployment(
+                model_name="grok-4",
+                litellm_params=LiteLLM_Params(
+                    model="xai/grok-4",
+                    api_base="https://configured.example/v1",
+                    litellm_credential_name="my-xai-cred",
+                ),
+                model_info={"id": "configured-deployment"},
+            ),
+            request_model_info={"id": "configured-deployment", "mode": "chat"},
+        )
+
+        assert probe.url.host == "configured.example"
+        assert probe.headers["authorization"] == f"Bearer {self.CREDENTIAL_KEY}"
 
 
 class TestNoRedisWarning:
@@ -2746,13 +4045,13 @@ def test_test_model_connection_accepts_image_edit_mode(monkeypatch):
 
     app = FastAPI()
     app.include_router(_health_endpoints_module.router)
-    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN
-    )
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
     client = TestClient(app)
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+        patch(  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ),
         respx.mock(assert_all_called=True) as respx_mock,
     ):
         respx_mock.post(host="api.openai.com", path="/v1/images/edits").respond(
@@ -2768,3 +4067,60 @@ def test_test_model_connection_accepts_image_edit_mode(monkeypatch):
 
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "success"
+
+
+def _pointfive_admin() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(token="admin-token", user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+
+@pytest.mark.asyncio
+async def test_health_services_endpoint_pointfive_without_a_key_is_unhealthy_not_a_server_error(monkeypatch):
+    """
+    The logger refuses to start without an api key.
+
+    That refusal is the answer the operator asked for, so it has to come back as an
+    unhealthy result rather than a 500 from the endpoint.
+    """
+    import litellm.integrations.pointfive as pointfive_package
+
+    def refuse(**_):
+        raise ValueError("pointfive logging requires an api key. Set POINTFIVE_API_KEY")
+
+    monkeypatch.setattr(pointfive_package, "PointFiveLogger", refuse)
+
+    result = await health_services_endpoint(user_api_key_dict=_pointfive_admin(), service="pointfive")
+
+    assert result["status"] == "unhealthy"
+    assert "requires an api key" in result["message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "role",
+    [
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        LitellmUserRoles.TEAM,
+        LitellmUserRoles.CUSTOMER,
+    ],
+)
+async def test_health_services_endpoint_pointfive_blocks_non_admin(monkeypatch, role):
+    """
+    The ping travels on the proxy-wide PointFive credential and stamps liveness at PointFive.
+
+    A tenant key must not be able to keep an integration looking alive, or read back
+    account-level authentication failures through it.
+    """
+    import litellm.integrations.pointfive as pointfive_package
+    from litellm.proxy._types import ProxyException
+
+    logger_class = MagicMock()
+    monkeypatch.setattr(pointfive_package, "PointFiveLogger", logger_class)
+
+    with pytest.raises(ProxyException) as raised:
+        await health_services_endpoint(
+            user_api_key_dict=UserAPIKeyAuth(token="t", user_id="u", user_role=role), service="pointfive"
+        )
+
+    assert str(raised.value.code) == "403"
+    logger_class.assert_not_called()

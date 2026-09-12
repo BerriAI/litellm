@@ -46,6 +46,7 @@ export interface KeyMetricWithMetadata {
 export interface KeyMetadata {
   key_alias: string | null;
   team_id: string | null;
+  user_email?: string | null;
   tags?: { tag: string; usage: number }[];
 }
 

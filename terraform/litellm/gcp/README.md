@@ -238,6 +238,129 @@ this with `litellm_license`. To tune the export cadence, set
 
 Behavior matches the AWS stack 1:1; the variable names are identical
 
+### Prometheus metrics sidecar
+
+`gateway_metrics_port` adds a `metrics` sidecar
+(`python -m litellm.proxy.prometheus_metrics_server`) to the gateway Cloud Run
+service that aggregates the workers' samples over an in-memory volume shared
+with the gateway container, so the collector's scrape never runs on an
+inference worker. Cloud Run only routes traffic to the gateway container, so
+the load balancer keeps hitting port 4000 (including the gateway's own
+authenticated `/metrics`, which stays as it was) and the sidecar port is
+reachable on localhost inside the instance only. To get the series out, the
+stack also adds Google's
+[Managed Service for Prometheus sidecar](https://cloud.google.com/stackdriver/docs/managed-prometheus/cloudrun-sidecar)
+(`gateway_metrics_collector_image`) with a `RunMonitoring` config stored in
+Secret Manager that scrapes `localhost:<port>/metrics` every 30s and writes to
+Cloud Monitoring as `prometheus.googleapis.com/...` metrics. Enabling it grants
+the runtime service account `roles/monitoring.metricWriter` and
+`roles/logging.logWriter` on the project. Needs `gateway_image` v1.101.0 or
+newer. See [Prometheus metrics](https://docs.litellm.ai/docs/proxy/prometheus)
+for the metrics themselves
+
+```hcl
+gateway_metrics_port = 4001
+```
+
+The collector scrapes from inside the instance, so scrapes on an instance with
+no in-flight requests can fail when CPU is throttled between requests. Keep
+`gateway_min_instances` at 1 or more and, if you see gaps, enable
+instance-based billing on the gateway service. Unlike the AWS stack there is
+no `gateway_metrics_scrape_cidrs`: nothing outside the instance can reach the
+sidecar port, so there is no network rule to open
+
+### Autoscaling
+
+Cloud Run scales the gateway on request concurrency (plus its built-in CPU
+target), not on a metric you attach. Each instance takes up to
+`gateway_max_instance_request_concurrency` requests at once (default 80)
+and Cloud Run adds instances between `gateway_min_instances` and
+`gateway_max_instances` when the in-flight count fills up. That is the
+request-rate signal for this stack: lower the concurrency for LLM streams
+that hold a worker for tens of seconds, since a stream counts as one request
+for as long as it is open
+
+There is no tokens-per-second path here. Cloud Run's autoscaler has no
+custom-metric input, so the `litellm_total_tokens_metric_total` counter the
+proxy exposes cannot drive it. If you need token-based scaling on GCP, run
+the gateway on GKE with the Helm chart's `targetTokensPerSecond` (see
+"Dependencies only" below) rather than wiring the counter into Cloud
+Monitoring, which the autoscaler would ignore
+
+### In-container connection pool
+
+Each of the `gateway_num_workers` uvicorn workers opens its own Prisma pool
+straight to Cloud SQL, so one instance holds `workers x connection_limit`
+connections and the fleet's footprint against the database ceiling grows with
+every instance Cloud Run adds. `gateway_connection_pool_enabled` runs a
+PgBouncer (transaction mode, loopback) inside the gateway container that all
+workers share, capping the instance at `gateway_pool_max_db_connections`
+upstream connections however many workers it runs.
+`gateway_pool_max_client_conn` bounds the worker-side connections the pooler
+accepts. The module sets `LITELLM_PGBOUNCER_ENABLED`,
+`LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS` and `LITELLM_PGBOUNCER_MAX_CLIENT_CONN`
+on the gateway service only; the backend service and the migrations job keep
+the direct connection
+
+```hcl
+gateway_num_workers             = 4
+gateway_connection_pool_enabled = true
+gateway_pool_max_db_connections = 20
+gateway_pool_max_client_conn    = 1000
+```
+
+The pooler holds one static database password for the life of the instance.
+This stack authenticates to Cloud SQL with the Secret Manager password (see
+[Database authentication](#database-authentication)), so nothing else is
+needed; a Cloud SQL Auth Proxy sidecar with IAM auth would not work with the
+pool
+
+The gateway container starts through `python -m gateway.launch` (the
+componentized image's own entrypoint) rather than `uvicorn` directly. The
+launcher reads these variables, starts the pooler once per instance before
+uvicorn forks the workers and hands them its loopback `DATABASE_URL`. It also
+honours `KEEPALIVE_TIMEOUT` from `gateway_extra_env` the way the image does
+
+### Collector sidecar
+
+`collector_enabled = true` adds a `spend-collector` container to the gateway
+Cloud Run service that runs `python -m litellm.proxy.collector` from the gateway
+image, and sets `LITELLM_COLLECTOR_ENABLED=true` on the gateway so its
+uvicorn workers ship spend events (SpendLogs writes, key/team/user spend
+updates, budget alerts) to the sidecar instead of running that pipeline in
+the request path. This is the Terraform counterpart of helm's
+`gateway.collector`. The default (`false`) leaves the service exactly as
+before. It is independent of the metrics sidecars above, whose GMP scraper
+already owns the `collector` container name.
+
+Containers in one Cloud Run instance share localhost, so the sidecar listens
+on loopback TCP (`tcp://127.0.0.1:${collector_port}`, default 4010)
+instead of the Unix socket helm uses; the proxy rejects any non-loopback
+address. The sidecar runs the same Redis CA + `DATABASE_URL` bootstrap as
+the gateway container, gets the same database, Redis, master-key, license,
+proxy config, and `gateway_extra_env` / `gateway_extra_secrets` values, and
+runs with `LITELLM_JOB_ROLE=collector`. With `gateway_connection_pool_enabled`
+it also gets the `LITELLM_PGBOUNCER_*` env, so its Prisma client goes through
+the instance-local PgBouncer instead of opening a second pool straight to the
+database. When it is unreachable the gateway falls back to in-process spend
+tracking.
+
+```hcl
+collector_enabled = true
+# collector_cpu               = "1000m"  # added on top of gateway_cpu
+# collector_memory            = "2Gi"    # added on top of gateway_memory
+# collector_buffer_size       = 1000
+# collector_on_unavailable    = "fallback"  # or "drop"
+# collector_drain_timeout_seconds = 10
+```
+
+Cloud Run allocates CPU per instance while requests are in flight, and the
+sidecar shares that allocation. Spend events are shipped right after each
+response, so this works with request-based billing, but keep
+`gateway_min_instances >= 1` if spend must keep draining while an instance
+is otherwise idle. Variable names match the AWS stack; only the resource
+units differ (Cloud Run strings vs Fargate units)
+
 ## Tenant deployment
 
 Every resource the stack creates is named `${tenant}-litellm-${env}` (or
@@ -392,6 +515,63 @@ with its own provider config (one `examples/default`-style root per project),
 or fork the module to add `configuration_aliases` and pass per-instance
 `providers = { ... }`.
 
+## Dependencies only (run LiteLLM on GKE)
+
+Set `create_runtime = false` to provision Cloud SQL, Memorystore, GCS,
+Secret Manager, and the runtime service account without Cloud Run or the
+load balancer. For a Shared VPC, set the full host-project network ID and
+skip PSA creation after the host project has configured it:
+
+```hcl
+create_runtime        = false
+network_id            = "projects/<host>/global/networks/<vpc>"
+create_psa_connection = false
+```
+
+The host project must already have Private Services Access configured on
+that network and the Service Networking API enabled; the module cannot set
+PSA up from a service project. GKE nodes must sit on the same Shared VPC so
+the Cloud SQL and Memorystore private IPs are routable from the pods. Run
+the root with its provider pointed at the project that should own the
+dependencies. `create_runtime = true` with `network_id` set is also allowed,
+but the Serverless VPC Access connector has to live in the same project as
+the network, so that combination only works when the VPC is in the
+deployment project
+
+Map the outputs into the Helm values as follows:
+
+```yaml
+database:
+  writer:
+    host: <cloudsql_writer_ip>
+    dbname: <db_name>
+    passwordSecret:
+      name: <kubernetes-secret-with-db-credentials>
+  reader:
+    host: <cloudsql_reader_ip>
+    dbname: <db_name>
+    passwordSecret:
+      name: <kubernetes-secret-with-db-credentials>
+redis:
+  host: <redis_host>
+  port: <redis_port>
+masterKey:
+  secretName: <kubernetes-secret-with-master-key>
+```
+
+Create the database Secret with keys `username` (the `db_username` output)
+and `password` (read it with `gcloud secrets versions access latest
+--secret=<db_password_secret_id>`), and the master key Secret from
+`master_key_secret_id` the same way. Memorystore only accepts TLS by
+default, so store the `redis_server_ca_pem` output in a third Secret,
+mount it into the gateway and backend pods via `volumes` / `volumeMounts`,
+and add `REDIS_SSL=true` and `REDIS_SSL_CA_CERTS=<mount path>` to each
+component's `extraEnv`. Setting `redis_transit_encryption = false` removes
+the CA plumbing at the cost of plaintext Redis traffic inside the VPC
+
+The chart's pre-install/pre-upgrade migration hook runs the Prisma
+migration, so nothing replaces the Cloud Run migrations Job in this mode
+
 ## Storage and database retention
 
 Two opt-in tripwires guard against accidental data loss on
@@ -409,14 +589,15 @@ Flip `cloudsql_deletion_protection` to `false` or `gcs_force_destroy` to
 
 ## Redis encryption
 
-Memorystore runs with `transit_encryption_mode = "SERVER_AUTHENTICATION"`,
-so the proxy connects via `rediss://`. The instance's self-signed CA cert
-(`server_ca_certs[0].cert`) is shipped to gateway + backend as
-`REDIS_CA_PEM_B64`; their entrypoint shell decodes it to `/tmp/redis-ca.pem`
-before uvicorn starts and points `REDIS_SSL_CA_CERTS` at that path. No
-extra config needed — but if you ever swap Memorystore for an external
-Redis, override `REDIS_HOST`/`REDIS_PORT` and either drop these env vars
-or point them at your own CA.
+By default, Memorystore runs with
+`transit_encryption_mode = "SERVER_AUTHENTICATION"`, so Cloud Run connects
+via `rediss://`. The instance's self-signed CA cert
+(`server_ca_certs[0].cert`) is shipped to gateway and backend as
+`REDIS_CA_PEM_B64`; their entrypoint shell decodes it to
+`/tmp/redis-ca.pem` before uvicorn starts and points `REDIS_SSL_CA_CERTS` at
+that path. Set `redis_transit_encryption = false` to use plaintext Redis.
+For GKE, use `redis_server_ca_pem` as described in the dependencies-only
+section, or accept the security tradeoff of disabling transit encryption
 
 ## Files
 
@@ -434,4 +615,5 @@ or point them at your own CA.
 | `iam.tf`          | Runtime SA + Cloud SQL client + Secret Manager accessor              |
 | `cloudrun.tf`     | 3 Cloud Run services + Cloud Run Job for migrations                  |
 | `load_balancer.tf`| External HTTPS LB, serverless NEGs, URL map for path routing         |
-| `outputs.tf`      | LB IP, service URLs, secret IDs, migration `execute` command         |
+| `outputs.tf`      | LB IP, service URLs, dependency endpoints, secret IDs, migration command |
+| `tests/`          | Plan-only mock-provider coverage for deployment modes and Redis encryption |
