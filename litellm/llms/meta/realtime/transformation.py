@@ -495,6 +495,8 @@ class MuseEventTransformer:
 
     def _speech_start(self, message: Mapping[str, JsonValue]) -> _TurnState:
         turn: Final = self._turn(_required_turn_id(message, "speechStart"))
+        if turn.stopped:
+            return turn
         turn.started = True
         self._active_turn_id = turn.item_id
         return turn
