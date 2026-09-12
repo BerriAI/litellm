@@ -6081,8 +6081,6 @@ async def list_keys(
         # an exact user_id (e.g. an integration scoping to one user with an admin
         # key) receive other users' keys (user_id="alice" -> "alice2"). Exact by
         # default restores the prior behavior; the dashboard opts in explicitly.
-        # user_id substring stays admin-only: non-admins are scoped to their own
-        # user_id below. key_alias is a global AND filter, so it only narrows.
         use_substring_matching: Final = substring_matching and is_proxy_admin
         use_key_alias_substring_matching: Final = substring_matching
 
