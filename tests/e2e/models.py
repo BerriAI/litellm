@@ -11,7 +11,16 @@ from datetime import datetime
 from typing import Final, Literal
 
 from e2e_http import PartialBody
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, RootModel, model_serializer, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    RootModel,
+    model_serializer,
+    model_validator,
+)
 
 # ---------- keys ----------
 
@@ -67,6 +76,7 @@ class KeyGenerateBody(BaseModel):
     budget_duration: str | None = None
     user_id: str | None = None
     team_id: str | None = None
+    project_id: str | None = None
     organization_id: str | None = None
     budget_id: str | None = None
     key_alias: str | None = None
@@ -130,6 +140,8 @@ class KeyInfo(BaseModel):
     models: list[str] = []
     tpm_limit: int | None = None
     rpm_limit: int | None = None
+    project_id: str | None = None
+    organization_id: str | None = None
     team_id: str | None = None
     blocked: bool | None = None
     spend: float | None = None
@@ -695,6 +707,7 @@ class SpendLogRow(BaseModel):
     total_tokens: int | None = None
     request_tags: list[str] | None = None
     metadata: SpendLogMetadata | None = None
+    proxy_server_request: JsonValue = None
 
 
 class SpendLogs(RootModel[list[SpendLogRow]]):
@@ -926,6 +939,7 @@ class LiteLLMParamsBody(BaseModel):
     timeout: float | None = None
     tpm: int | None = None
     weight: int | None = None
+    cooldown_time: float | None = None
     order: int | None = None
 
 
@@ -1046,6 +1060,7 @@ class KeyUpdateBody(BaseModel):
     clears `budget_reset_at` with it), and `metadata` replaces the stored metadata wholesale."""
 
     key: str
+    project_id: str | Cleared | None = None
     models: list[str] | None = None
     key_alias: str | None = None
     tpm_limit: int | None = None
@@ -1259,6 +1274,19 @@ class TagListResponse(RootModel[list[TagListEntry]]):
 
 
 # ---------- health / lifecycle ----------
+
+
+class ProcessMemory(BaseModel):
+    ram_usage_mb: float | None = None
+    system_memory_percent: float | None = None
+    error: str | None = None
+
+
+class MemorySummaryResponse(BaseModel):
+    worker_pid: int
+    hostname: str | None = None
+    status: str
+    memory: ProcessMemory
 
 
 class ReadinessResponse(BaseModel):

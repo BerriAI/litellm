@@ -125,6 +125,18 @@ def build_agent_env(
     return env
 
 
+def codex_proxy_provider(base_url: str) -> Mapping[str, str | bool]:
+    return MappingProxyType(
+        {
+            "name": "LiteLLM proxy",
+            "base_url": base_url.rstrip("/") + "/v1",
+            "wire_api": "responses",
+            "supports_websockets": False,
+            "requires_openai_auth": False,
+        }
+    )
+
+
 def _codex_proxy_args(base_url: str) -> list[str]:
     """Codex `-c` overrides that point it at the proxy.
 
@@ -134,21 +146,19 @@ def _codex_proxy_args(base_url: str) -> list[str]:
     because the proxy does not speak the Responses WebSocket protocol. The key is
     read from OPENAI_API_KEY, which build_agent_env already exports.
     """
-    root: Final = base_url.rstrip("/") + "/v1"
     provider: Final = f"model_providers.{CODEX_PROXY_PROVIDER}"
     return [
         "-c",
         f'model_provider="{CODEX_PROXY_PROVIDER}"',
-        "-c",
-        f'{provider}.name="LiteLLM proxy"',
-        "-c",
-        f'{provider}.base_url="{root}"',
+        *(
+            argument
+            for key, value in codex_proxy_provider(base_url).items()
+            for argument in ("-c", f"{provider}.{key}={json.dumps(value)}")
+        ),
         "-c",
         f'{provider}.env_key="{OPENAI_API_KEY_ENV}"',
         "-c",
-        f'{provider}.wire_api="responses"',
-        "-c",
-        f"{provider}.supports_websockets=false",
+        f"{provider}.http_headers={{}}",
     ]
 
 

@@ -49,7 +49,7 @@ async fn facade_executes_vertex_deepseek_at_the_openai_endpoint() {
     assert!(body.get("extra_body").is_none());
     assert_eq!(
         body["messages"][0]["content"][0],
-        json!({"type":"document_url","document_url":"gs://bucket/document.pdf"})
+        json!({"type":"image_url","image_url":"gs://bucket/document.pdf"})
     );
 }
 

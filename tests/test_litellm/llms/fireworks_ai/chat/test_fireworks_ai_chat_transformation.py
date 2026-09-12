@@ -501,8 +501,8 @@ def test_unmapped_model_fallback_function_calling():
     assert info["supports_function_calling"] is True
 
 
-def test_transform_messages_helper_strips_thinking_blocks():
-    """thinking_blocks must not be forwarded to Fireworks chat completions."""
+def test_transform_messages_helper_strips_thinking_blocks_but_keeps_reasoning_content():
+    """Fireworks rejects thinking_blocks but requires reasoning_content to be replayed for reasoning_history."""
     config = FireworksAIConfig()
     messages = [
         {"role": "user", "content": "Translate a poem."},
@@ -519,7 +519,7 @@ def test_transform_messages_helper_strips_thinking_blocks():
         messages, model="accounts/fireworks/models/glm-5p1", litellm_params={}
     )
     assert "thinking_blocks" not in out[1]
-    assert "reasoning_content" not in out[1]
+    assert out[1]["reasoning_content"] == "internal"
     assert out[1]["content"] == "I can help."
 
 

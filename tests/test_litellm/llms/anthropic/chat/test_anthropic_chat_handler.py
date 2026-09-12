@@ -1382,6 +1382,52 @@ def test_current_content_block_type_tracking():
     assert iterator.current_content_block_type is None
 
 
+def test_web_search_calls_are_cumulative_through_incomplete_search():
+    iterator = ModelResponseIterator(None, sync_stream=True)
+    first_start = iterator.chunk_parser(
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_A",
+                "name": "web_search",
+                "input": {"query": "a"},
+            },
+        }
+    )
+    first_result = iterator.chunk_parser(
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_A",
+                "content": [],
+            },
+        }
+    )
+    second_start = iterator.chunk_parser(
+        {
+            "type": "content_block_start",
+            "index": 2,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_B",
+                "name": "web_search",
+                "input": {"query": "b"},
+            },
+        }
+    )
+
+    assert list(first_start.choices[0].delta.provider_specific_fields["web_search_calls"]) == ["srvtoolu_A"]
+    assert first_result.choices[0].delta.provider_specific_fields["web_search_calls"]["srvtoolu_A"].status == "completed"
+    calls = second_start.choices[0].delta.provider_specific_fields["web_search_calls"]
+    assert list(calls) == ["srvtoolu_A", "srvtoolu_B"]
+    assert calls["srvtoolu_A"].status == "completed"
+    assert calls["srvtoolu_B"].status == "in_progress"
+
+
 def test_web_search_tool_result_captured_in_provider_specific_fields():
     """
     Test that web_search_tool_result content is captured in provider_specific_fields.
