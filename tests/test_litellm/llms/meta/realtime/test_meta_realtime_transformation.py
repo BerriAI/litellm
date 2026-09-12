@@ -407,6 +407,24 @@ def test_finished_turn_ignores_late_duplicates():
     )
 
 
+def test_late_duplicate_speech_start_does_not_capture_the_next_turnless_transcript():
+    transformer = MuseEventTransformer()
+    transformer.configure(MuseSessionConfig(MUSE_MODEL, "PUSH_TO_TALK", 24_000, ()))
+    transformer.transform(json.loads(_event("speechStart", turnId="turn-1")))
+    transformer.transform(json.loads(_event("speechComplete", turnId="turn-1", transcript="first")))
+
+    assert transformer.transform(json.loads(_event("speechStart", turnId="turn-1"))) == ()
+    events = transformer.transform(json.loads(_event("transcript", transcript="second", final=True)))
+
+    assert [event["type"] for event in events] == [
+        "input_audio_buffer.speech_started",
+        "input_audio_buffer.speech_stopped",
+        "conversation.item.input_audio_transcription.completed",
+    ]
+    assert events[2]["transcript"] == "second"
+    assert events[2]["item_id"] != "turn-1"
+
+
 def test_turn_memory_is_bounded_by_turn_limit():
     transformer = MuseEventTransformer(turn_limit=2)
 
