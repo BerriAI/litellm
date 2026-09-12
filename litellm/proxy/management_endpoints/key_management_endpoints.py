@@ -5960,7 +5960,7 @@ async def list_keys(
     key_hash: str | None = Query(None, description="Filter keys by key hash"),
     key_alias: str | None = Query(
         None,
-        description="Filter keys by key alias. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching.",
+        description="Filter keys by key alias. Exact match by default; set substring_matching=true for case-insensitive substring matching.",
     ),
     search: str | None = Query(
         None,
@@ -5981,7 +5981,7 @@ async def list_keys(
     agent_id: str | None = Query(None, description="Filter keys by agent ID"),
     substring_matching: bool = Query(
         False,
-        description="If true (proxy admins only), match user_id/key_alias as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id/key_alias filter must never return another user's keys.",
+        description="If true, match key_alias (any caller) and user_id (proxy admins only) as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id filter must never return another user's keys.",
     ),
     expires: str | None = Query(
         None,
@@ -6075,13 +6075,16 @@ async def list_keys(
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
         ]
 
-        # Substring matching is opt-in (admin-only). /key/list matched user_id and
-        # key_alias exactly before substring search was added; auto-applying a
-        # substring match to every admin call broke that contract and let a caller
-        # passing an exact user_id (e.g. an integration scoping to one user with an
-        # admin key) receive other users' keys (user_id="alice" -> "alice2"). Exact
-        # by default restores the prior behavior; the dashboard opts in explicitly.
+        # Substring matching is opt-in. /key/list matched user_id and key_alias
+        # exactly before substring search was added; auto-applying a substring
+        # match to every admin call broke that contract and let a caller passing
+        # an exact user_id (e.g. an integration scoping to one user with an admin
+        # key) receive other users' keys (user_id="alice" -> "alice2"). Exact by
+        # default restores the prior behavior; the dashboard opts in explicitly.
+        # user_id substring stays admin-only: non-admins are scoped to their own
+        # user_id below. key_alias is a global AND filter, so it only narrows.
         use_substring_matching: Final = substring_matching and is_proxy_admin
+        use_key_alias_substring_matching: Final = substring_matching
 
         # Admins may omit user_id to list all keys; non-admins are scoped to self.
         if not user_id and not is_proxy_admin:
@@ -6108,6 +6111,7 @@ async def list_keys(
             access_group_id=access_group_id,
             agent_id=agent_id,
             use_substring_matching=use_substring_matching,
+            use_key_alias_substring_matching=use_key_alias_substring_matching,
             expires_filter=expires if isinstance(expires, str) else None,
             search=search,
         )
@@ -6353,6 +6357,7 @@ def _build_key_filter_conditions(
     access_group_id: str | None = None,
     agent_id: str | None = None,
     use_substring_matching: bool = False,
+    use_key_alias_substring_matching: bool = False,
     expires_filter: str | None = None,
     search: str | None = None,
 ) -> Mapping[str, object]:
@@ -6448,7 +6453,7 @@ def _build_key_filter_conditions(
         *(
             (
                 {"key_alias": {"contains": key_alias, "mode": "insensitive"}}
-                if use_substring_matching
+                if use_key_alias_substring_matching
                 else {"key_alias": key_alias},
             )
             if key_alias and isinstance(key_alias, str)
@@ -6494,6 +6499,7 @@ async def _list_key_helper(
     access_group_id: str | None = None,
     agent_id: str | None = None,
     use_substring_matching: bool = False,
+    use_key_alias_substring_matching: bool = False,
     expires_filter: str | None = None,
     search: str | None = None,
 ) -> KeyListResponseObject:
@@ -6533,6 +6539,7 @@ async def _list_key_helper(
         access_group_id=access_group_id,
         agent_id=agent_id,
         use_substring_matching=use_substring_matching,
+        use_key_alias_substring_matching=use_key_alias_substring_matching,
         expires_filter=expires_filter,
         search=search,
     )
