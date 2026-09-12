@@ -2729,7 +2729,7 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "prism/deepseek-v4-flash"
+    "default_model_placeholder": "prism/deepseek-v4.1-flash"
   },
   {
     "provider": "RECRAFT",

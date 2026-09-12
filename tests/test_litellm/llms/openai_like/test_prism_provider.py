@@ -41,22 +41,34 @@ def test_prism_provider_keeps_explicit_credentials(monkeypatch: pytest.MonkeyPat
     assert api_base == "https://prism.internal.example/v1"
 
 
-def test_prism_model_cost_and_capabilities():
+@pytest.mark.parametrize(
+    ("model", "input_cost", "output_cost", "max_output_tokens"),
+    [
+        ("prism/deepseek-v4.1-flash", 0.30, 1.20, 384_000),
+        ("prism/deepseek-v4-flash", 0.14, 0.28, 393_216),
+    ],
+)
+def test_prism_model_cost_and_capabilities(
+    model: str,
+    input_cost: float,
+    output_cost: float,
+    max_output_tokens: int,
+):
     from litellm.cost_calculator import cost_per_token
 
     prompt_cost, completion_cost = cost_per_token(
-        model="prism/deepseek-v4-flash",
+        model=model,
         prompt_tokens=1_000_000,
         completion_tokens=1_000_000,
         custom_llm_provider="prism",
     )
-    model_info = litellm.get_model_info("prism/deepseek-v4-flash")
+    model_info = litellm.get_model_info(model)
 
-    assert prompt_cost == pytest.approx(0.14)
-    assert completion_cost == pytest.approx(0.28)
+    assert prompt_cost == pytest.approx(input_cost)
+    assert completion_cost == pytest.approx(output_cost)
     assert model_info["cache_read_input_token_cost"] == pytest.approx(7e-08)
     assert model_info["max_input_tokens"] == 1_000_000
-    assert model_info["max_output_tokens"] == 393_216
+    assert model_info["max_output_tokens"] == max_output_tokens
     assert model_info["supports_function_calling"] is True
     assert model_info["supports_native_streaming"] is True
     assert model_info["supports_reasoning"] is True
@@ -70,7 +82,7 @@ def test_prism_is_available_in_add_model_form():
 
     assert prism["provider"] == "PRISM"
     assert prism["provider_display_name"] == "Prism"
-    assert prism["default_model_placeholder"] == "prism/deepseek-v4-flash"
+    assert prism["default_model_placeholder"] == "prism/deepseek-v4.1-flash"
     assert {field["key"]: field["required"] for field in prism["credential_fields"]} == {
         "api_base": False,
         "api_key": True,
