@@ -44,7 +44,7 @@ import { KeywordTierRule } from "../add_model/KeywordTierRules";
 import { DEFAULT_MATCH_THRESHOLD } from "../add_model/SemanticKeywordMatching";
 import {
   type AutoRouterCompressionState,
-  buildAutoRouterCompressionParams,
+  buildAutoRouterCompressionPatch,
   DEFAULT_AUTO_ROUTER_COMPRESSION,
   hydrateAutoRouterCompression,
 } from "../add_model/buildAutoRouterCompression";
@@ -679,7 +679,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         ...modelData.litellm_params,
         complexity_router_config: updatedConfig,
         complexity_router_default_model: defaultModel,
-        ...buildAutoRouterCompressionParams(autoRouterCompression),
+        ...buildAutoRouterCompressionPatch(autoRouterCompression, modelData.litellm_params ?? {}),
       };
       const updatedModelInfo = {
         ...modelData.model_info,
