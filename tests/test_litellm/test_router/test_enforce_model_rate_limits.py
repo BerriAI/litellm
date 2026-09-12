@@ -144,6 +144,29 @@ class TestModelRateLimitingCheck:
         assert "TPM limit=1000" in str(exc_info.value)
         assert "current usage=1000" in str(exc_info.value)
 
+    @pytest.mark.asyncio
+    async def test_async_pre_call_check_queries_remote_cache_without_local_only(self):
+        """Test that async_pre_call_check allows DualCache to check Redis without forcing local_only=True."""
+        mock_cache = MagicMock()
+        mock_cache.async_get_cache = AsyncMock(return_value=1000)
+
+        check = ModelRateLimitingCheck(dual_cache=mock_cache)
+
+        deployment = {
+            "tpm": 1000,
+            "litellm_params": {"model": "gpt-4"},
+            "model_info": {"id": "test-id"},
+            "model_name": "test-model",
+        }
+
+        with pytest.raises(litellm.RateLimitError):
+            await check.async_pre_call_check(deployment)
+
+        # Verify async_get_cache was called without local_only=True restriction
+        mock_cache.async_get_cache.assert_called_once()
+        _, kwargs = mock_cache.async_get_cache.call_args
+        assert kwargs.get("local_only") is not True
+
     def test_log_success_event_increments_cache(self):
         """Test that log_success_event correctly increments the cache."""
         mock_cache = MagicMock()
