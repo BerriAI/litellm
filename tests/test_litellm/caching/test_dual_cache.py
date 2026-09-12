@@ -708,12 +708,7 @@ async def test_open_breaker_keeps_async_batch_read_memory_hits_and_releases_rese
 
 @pytest.mark.asyncio
 async def test_redis_timeouts_falling_back_to_memory_log_once_per_interval(caplog, monkeypatch):
-    """The in-memory fallback WARNING must not repeat for every timed-out increment during a blip.
-
-    The rate limiter's pipeline increments and the dual cache increments each logged a WARNING per
-    call while Redis timed out, hundreds of lines per second before the breaker opened. The first
-    timeout of a streak keeps its WARNING, the rest are DEBUG until the summary interval passes.
-    """
+    """The first fallback WARNING of a timeout streak logs, the rest stay at DEBUG until the summary."""
     from redis.exceptions import TimeoutError as RedisTimeoutError
 
     from litellm.caching import redis_cache as redis_cache_module

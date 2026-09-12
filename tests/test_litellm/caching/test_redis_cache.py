@@ -1205,14 +1205,7 @@ async def test_a_probe_overtaken_by_a_later_outage_leaves_the_breaker_to_the_new
 
 
 def test_timeouts_during_a_blip_log_once_per_interval_not_once_per_call(sync_batch_redis_cache, caplog, monkeypatch):
-    """A Redis latency blip must not write one ERROR line per timed-out cache call.
-
-    Before the breaker opens (up to REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION of timeouts) every
-    cache operation logged its own ERROR or WARNING line, so one single-worker proxy wrote
-    ~1100 lines in 5 s at LITELLM_LOG=WARNING. A timeout streak now logs its first failure, then
-    one summary line per REDIS_TIMEOUT_LOG_INTERVAL carrying the count of suppressed timeouts,
-    while every timeout stays visible at DEBUG. Hard connectivity failures keep their per-call line.
-    """
+    """A timeout streak logs its first failure plus one summary per interval; other failures log per call."""
     import logging
 
     from redis.exceptions import TimeoutError as RedisTimeoutError

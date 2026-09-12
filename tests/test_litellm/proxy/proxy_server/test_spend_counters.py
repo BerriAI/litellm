@@ -1182,11 +1182,7 @@ async def test_apply_spend_counter_increments_open_breaker_invalidates_and_retur
 
 @pytest.mark.asyncio
 async def test_apply_spend_counter_increments_redis_timeout_invalidates_and_returns(monkeypatch):
-    """A Redis timeout is the streak the breaker is already counting and the cache layer already logged.
-
-    Re-raising it sent every request in the pre-open window through the cost callback's error
-    path, which logged a traceback and fired the failed-tracking alert once per request.
-    """
+    """A Redis timeout invalidates the counters and returns without reaching the cost callback's error path."""
     from redis.exceptions import TimeoutError as RedisTimeoutError
 
     fake_cache = _make_spend_counter_cache()
