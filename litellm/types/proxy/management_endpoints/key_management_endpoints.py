@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, model_validator
 from typing_extensions import ReadOnly, TypedDict
@@ -128,11 +128,18 @@ class BulkUpdateTeamKeysRequest(BaseModel):
         return self
 
 
-CustomKeyPolicyOperation = Literal["generate", "update", "regenerate"]
+CustomKeyPolicyOperation: TypeAlias = Literal["generate", "update", "regenerate"]
 
 
 class CustomKeyPolicyRequest(LiteLLMPydanticObjectBase):
-    """What `general_settings.custom_key_policy` receives: the operation, the key row as it will be written, and the raw request."""
+    """What `general_settings.custom_key_policy` receives.
+
+    `effective_key` is the verification token row as it will be written: the existing row overlaid with the
+    requested changes, with `duration` resolved to `expires` and `budget_duration` to `budget_reset_at`. Values the
+    proxy fills in after the policy stay at their defaults: `token`, `key_name`, `created_by`, `updated_by` and the
+    soft-budget `budget_id` on generate, the rotated token on regenerate, and the `object_permission` relation on
+    every operation (`object_permission_id` is set; read `request.object_permission` for the requested change).
+    """
 
     model_config = ConfigDict(protected_namespaces=(), frozen=True)
 
