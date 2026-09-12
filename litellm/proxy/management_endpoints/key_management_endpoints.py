@@ -2718,6 +2718,12 @@ async def _validate_update_key_data(
         user_api_key_dict=user_api_key_dict,
     )
 
+    if data.project_id is not None and data.project_id != existing_key_row.project_id:
+        raise HTTPException(
+            status_code=400, detail="Project reassignment is not supported. Use null to detach the key."
+        )
+    is_project_change: Final = "project_id" in data.model_fields_set and data.project_id != existing_key_row.project_id
+
     common_key_access_checks(
         user_api_key_dict=user_api_key_dict,
         data=data,
@@ -2810,7 +2816,9 @@ async def _validate_update_key_data(
     # non-budget change means the caller was authorized — skip the redundant
     # _check_key_admin_access that would otherwise require team/org admin status.
     _key_is_team_key: Final = getattr(existing_key_row, "team_id", None) is not None
-    can_skip_admin_check: Final = (caller_is_creator or _key_is_team_key) and not _is_budget_change
+    can_skip_admin_check: Final = (caller_is_creator or _key_is_team_key) and not (
+        _is_budget_change or is_project_change
+    )
     if (not _is_proxy_admin) and not can_skip_admin_check:
         hashed_key: Final = existing_key_row.token
         await _check_key_admin_access(
@@ -2853,7 +2861,9 @@ async def _validate_update_key_data(
     )
 
     # Validate key against project limits if project_id is being set
-    _project_id_to_check: Final = getattr(data, "project_id", None) or getattr(existing_key_row, "project_id", None)
+    _project_id_to_check: Final = (
+        data.project_id if "project_id" in data.model_fields_set else existing_key_row.project_id
+    )
     if _project_id_to_check is not None and (data.models is not None or data.max_budget is not None):
         await _check_project_key_limits(
             project_id=_project_id_to_check,
@@ -2962,6 +2972,7 @@ async def update_key_fn(
     - user_id: Optional[str] - User ID associated with key
     - team_id: Optional[str] - Team ID associated with key
     - agent_id: Optional[str] - The agent id associated with the key.
+    - project_id: Optional[str] - Omit to retain the project, or send null to detach. A different project ID is rejected.
     - organization_id: Optional[str] - The organization id of the key.
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
     - models: Optional[list] - Model_name's a user is allowed to call
@@ -3729,7 +3740,7 @@ async def delete_key_fn(
             )
 
         verbose_proxy_logger.debug(
-            "/keys/delete - cache after delete: %s", user_api_key_cache.in_memory_cache.cache_dict
+            "/keys/delete - cache after delete: %s", user_api_key_cache.key_object_cache.in_memory_cache.cache_dict
         )
 
         asyncio.create_task(

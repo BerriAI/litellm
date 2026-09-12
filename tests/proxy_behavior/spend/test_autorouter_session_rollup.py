@@ -42,6 +42,7 @@ async def _turn(
     saved: float = 0.02,
     classifier_cost: float = 0.0,
     tier: "str | None" = None,
+    baseline: "str | None" = None,
 ) -> None:
     touched: Final = 1 if (hit or ttl is not None or not covered) else 0
     await db.execute_raw(
@@ -61,6 +62,7 @@ async def _turn(
         ttl,
         touched,
         tier,
+        baseline,
     )
 
 
@@ -335,6 +337,27 @@ async def test_a_mid_session_router_type_change_keeps_foreign_tier_names_out_of_
 
     row = await _row(db, key)
     assert row["tier_turns"] == {"medium": 2}
+    assert row["turns"] == 3
+
+
+async def test_baseline_models_count_the_turns_priced_against_each_baseline(db):
+    key = f"k-{uuid.uuid4()}"
+    await _turn(db, key, "A", T0, baseline="opus")
+    await _turn(db, key, "B", T0 + timedelta(seconds=10), baseline="opus")
+    await _turn(db, key, "A", T0 + timedelta(seconds=20), baseline="sonnet")
+
+    assert (await _row(db, key))["baseline_models"] == {"opus": 2, "sonnet": 1}
+
+
+async def test_a_turn_priced_against_no_baseline_leaves_the_map_alone(db):
+    key = f"k-{uuid.uuid4()}"
+    await _turn(db, key, "A", T0, baseline=None)
+    assert (await _row(db, key))["baseline_models"] == {}
+
+    await _turn(db, key, "A", T0 + timedelta(seconds=10), baseline="opus")
+    await _turn(db, key, "A", T0 + timedelta(seconds=20), baseline=None)
+    row = await _row(db, key)
+    assert row["baseline_models"] == {"opus": 1}
     assert row["turns"] == 3
 
 

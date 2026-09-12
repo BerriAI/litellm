@@ -2421,6 +2421,253 @@ def test_mock_completion_usage_falls_back_to_default_without_admission_count():
     assert response.usage.prompt_tokens == litellm_main.DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT
 
 
+_ADMISSION_INPUT_TOKENS: Final = 51234
+
+
+def _admission_metadata(input_tokens: int) -> dict[str, object]:  # mutable-ok: logging writes into metadata
+    return {"user_api_key_budget_reservation": {"reserved_cost": 1.0, "input_tokens": input_tokens}}
+
+
+_ADMISSION_METADATA: Final = _admission_metadata(_ADMISSION_INPUT_TOKENS)
+_MOCK_STREAM_MESSAGES: Final = [{"role": "user", "content": "hello " * 200}]
+_STREAM_CHUNK_BUILDER_TOKEN_COUNTER: Final = "litellm.litellm_core_utils.streaming_chunk_builder_utils.token_counter"
+
+
+def _prompt_token_counter_calls(token_counter: MagicMock) -> list[object]:
+    return [call for call in token_counter.call_args_list if call.kwargs.get("messages") is not None]
+
+
+def _client_usage_chunks(chunks: list[ModelResponseStream]) -> list[Usage]:
+    return [chunk.usage for chunk in chunks if getattr(chunk, "usage", None) is not None]
+
+
+@pytest.mark.parametrize("n", (None, 2))
+def test_mock_completion_stream_usage_reports_admission_input_tokens_without_tokenizer_fallback(n: int | None):
+    with patch(_STREAM_CHUNK_BUILDER_TOKEN_COUNTER, wraps=litellm.token_counter) as token_counter:
+        chunks: Final = list(
+            litellm.completion(
+                model="openai/gpt-5.4-mini",
+                messages=_MOCK_STREAM_MESSAGES,
+                mock_response="ok",
+                api_key="mock",
+                stream=True,
+                n=n,
+                stream_options={"include_usage": True},
+                metadata=_ADMISSION_METADATA,
+            )
+        )
+
+    usage_chunks: Final = _client_usage_chunks(chunks)
+    assert len(usage_chunks) == 1
+    assert usage_chunks[0].prompt_tokens == _ADMISSION_INPUT_TOKENS
+    assert usage_chunks[0].completion_tokens == litellm_main.DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
+    assert usage_chunks[0].total_tokens == _ADMISSION_INPUT_TOKENS + usage_chunks[0].completion_tokens
+    assert _prompt_token_counter_calls(token_counter) == []
+    assert all(chunk.choices for chunk in chunks[:-1])
+    assert {chunk.id for chunk in chunks} == {chunks[0].id}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("n", (None, 2))
+async def test_mock_acompletion_stream_usage_reports_admission_input_tokens_without_tokenizer_fallback(
+    n: int | None,
+):
+    with patch(_STREAM_CHUNK_BUILDER_TOKEN_COUNTER, wraps=litellm.token_counter) as token_counter:
+        response: Final = await litellm.acompletion(
+            model="openai/gpt-5.4-mini",
+            messages=_MOCK_STREAM_MESSAGES,
+            mock_response="ok",
+            api_key="mock",
+            stream=True,
+            n=n,
+            stream_options={"include_usage": True},
+            litellm_metadata=_ADMISSION_METADATA,
+        )
+        chunks: Final = [chunk async for chunk in response]
+
+    usage_chunks: Final = _client_usage_chunks(chunks)
+    assert len(usage_chunks) == 1
+    assert usage_chunks[0].prompt_tokens == _ADMISSION_INPUT_TOKENS
+    assert usage_chunks[0].total_tokens == _ADMISSION_INPUT_TOKENS + usage_chunks[0].completion_tokens
+    assert _prompt_token_counter_calls(token_counter) == []
+    assert all(chunk.choices for chunk in chunks[:-1])
+    assert {chunk.id for chunk in chunks} == {chunks[0].id}
+
+
+def test_mock_completion_stream_without_include_usage_hides_usage_chunk_but_logs_admission_count():
+    with patch(_STREAM_CHUNK_BUILDER_TOKEN_COUNTER, wraps=litellm.token_counter) as token_counter:
+        chunks: Final = list(
+            litellm.completion(
+                model="openai/gpt-5.4-mini",
+                messages=_MOCK_STREAM_MESSAGES,
+                mock_response="ok",
+                api_key="mock",
+                stream=True,
+                metadata=_ADMISSION_METADATA,
+            )
+        )
+
+    assert _client_usage_chunks(chunks) == []
+    assert all(len(chunk.choices) == 1 for chunk in chunks)
+    assert chunks[-1]._hidden_params["usage"].prompt_tokens == _ADMISSION_INPUT_TOKENS
+    assert _prompt_token_counter_calls(token_counter) == []
+
+
+def test_mock_completion_stream_with_empty_stream_options_completes_and_logs_admission_count():
+    with patch(_STREAM_CHUNK_BUILDER_TOKEN_COUNTER, wraps=litellm.token_counter) as token_counter:
+        chunks: Final = list(
+            litellm.completion(
+                model="openai/gpt-5.4-mini",
+                messages=_MOCK_STREAM_MESSAGES,
+                mock_response="ok",
+                api_key="mock",
+                stream=True,
+                stream_options={},
+                metadata=_ADMISSION_METADATA,
+            )
+        )
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "ok"
+    assert _client_usage_chunks(chunks) == []
+    assert _prompt_token_counter_calls(token_counter) == []
+
+
+@pytest.mark.asyncio
+async def test_mock_acompletion_stream_with_empty_stream_options_completes_and_logs_admission_count():
+    with patch(_STREAM_CHUNK_BUILDER_TOKEN_COUNTER, wraps=litellm.token_counter) as token_counter:
+        response: Final = await litellm.acompletion(
+            model="openai/gpt-5.4-mini",
+            messages=_MOCK_STREAM_MESSAGES,
+            mock_response="ok",
+            api_key="mock",
+            stream=True,
+            stream_options={},
+            litellm_metadata=_ADMISSION_METADATA,
+        )
+        chunks: Final = [chunk async for chunk in response]
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "ok"
+    assert _client_usage_chunks(chunks) == []
+    assert _prompt_token_counter_calls(token_counter) == []
+
+
+def test_mock_completion_stream_without_admission_count_falls_back_to_tokenizer():
+    expected_prompt_tokens: Final = litellm.token_counter(model="openai/gpt-5.4-mini", messages=_MOCK_STREAM_MESSAGES)
+    with patch(_STREAM_CHUNK_BUILDER_TOKEN_COUNTER, wraps=litellm.token_counter) as token_counter:
+        chunks: Final = list(
+            litellm.completion(
+                model="openai/gpt-5.4-mini",
+                messages=_MOCK_STREAM_MESSAGES,
+                mock_response="ok",
+                api_key="mock",
+                stream=True,
+                stream_options={"include_usage": True},
+                metadata={"user_api_key_budget_reservation": {"reserved_cost": 1.0}},
+            )
+        )
+
+    usage_chunks: Final = _client_usage_chunks(chunks)
+    assert len(usage_chunks) == 1
+    assert usage_chunks[0].prompt_tokens == expected_prompt_tokens
+    assert usage_chunks[0].total_tokens == expected_prompt_tokens + usage_chunks[0].completion_tokens
+    assert len(_prompt_token_counter_calls(token_counter)) >= 1
+
+
+@pytest.mark.asyncio
+async def test_mock_acompletion_stream_without_admission_count_falls_back_to_tokenizer():
+    expected_prompt_tokens: Final = litellm.token_counter(model="openai/gpt-5.4-mini", messages=_MOCK_STREAM_MESSAGES)
+    with patch(_STREAM_CHUNK_BUILDER_TOKEN_COUNTER, wraps=litellm.token_counter) as token_counter:
+        response: Final = await litellm.acompletion(
+            model="openai/gpt-5.4-mini",
+            messages=_MOCK_STREAM_MESSAGES,
+            mock_response="ok",
+            api_key="mock",
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+        chunks: Final = [chunk async for chunk in response]
+
+    usage_chunks: Final = _client_usage_chunks(chunks)
+    assert len(usage_chunks) == 1
+    assert usage_chunks[0].prompt_tokens == expected_prompt_tokens
+    assert len(_prompt_token_counter_calls(token_counter)) >= 1
+
+
+def _usage_triple(usage: Usage) -> tuple[int, int, int]:
+    return (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens)
+
+
+@pytest.mark.parametrize("input_tokens", (_ADMISSION_INPUT_TOKENS, 0))
+def test_mock_completion_stream_and_non_stream_report_the_same_admission_usage(input_tokens: int):
+    metadata: Final = _admission_metadata(input_tokens)
+    non_stream: Final = litellm.completion(
+        model="openai/gpt-5.4-mini",
+        messages=_MOCK_STREAM_MESSAGES,
+        mock_response="ok",
+        api_key="mock",
+        metadata=metadata,
+    )
+    with patch(_STREAM_CHUNK_BUILDER_TOKEN_COUNTER, wraps=litellm.token_counter) as token_counter:
+        chunks: Final = list(
+            litellm.completion(
+                model="openai/gpt-5.4-mini",
+                messages=_MOCK_STREAM_MESSAGES,
+                mock_response="ok",
+                api_key="mock",
+                stream=True,
+                stream_options={"include_usage": True},
+                metadata=metadata,
+            )
+        )
+
+    assert _usage_triple(non_stream.usage) == _usage_triple(_client_usage_chunks(chunks)[0])
+    assert non_stream.usage.prompt_tokens == input_tokens
+    assert _prompt_token_counter_calls(token_counter) == []
+
+
+@pytest.mark.asyncio
+async def test_mock_acompletion_stream_reports_zero_admission_input_tokens_without_tokenizer_fallback():
+    with patch(_STREAM_CHUNK_BUILDER_TOKEN_COUNTER, wraps=litellm.token_counter) as token_counter:
+        response: Final = await litellm.acompletion(
+            model="openai/gpt-5.4-mini",
+            messages=[{"role": "user", "content": ""}],
+            mock_response="ok",
+            api_key="mock",
+            stream=True,
+            stream_options={"include_usage": True},
+            litellm_metadata=_admission_metadata(0),
+        )
+        chunks: Final = [chunk async for chunk in response]
+
+    usage_chunks: Final = _client_usage_chunks(chunks)
+    assert len(usage_chunks) == 1
+    assert _usage_triple(usage_chunks[0]) == (0, usage_chunks[0].completion_tokens, usage_chunks[0].completion_tokens)
+    assert _prompt_token_counter_calls(token_counter) == []
+
+
+def test_mock_text_completion_stream_and_non_stream_report_the_same_zero_admission_usage():
+    metadata: Final = _admission_metadata(0)
+    non_stream: Final = litellm.text_completion(
+        model="openai/gpt-5.4-mini", prompt="", mock_response="ok", api_key="mock", metadata=metadata
+    )
+    chunks: Final = list(
+        litellm.text_completion(
+            model="openai/gpt-5.4-mini",
+            prompt="",
+            mock_response="ok",
+            api_key="mock",
+            stream=True,
+            stream_options={"include_usage": True},
+            metadata=metadata,
+        )
+    )
+
+    stream_usages: Final = tuple(chunk.usage for chunk in chunks if getattr(chunk, "usage", None) is not None)
+    assert len(stream_usages) == 1
+    assert _usage_triple(non_stream.usage) == _usage_triple(stream_usages[0])
+    assert non_stream.usage.prompt_tokens == 0
+
+
 def test_mock_completion_stream_with_model_response():
     """Test that mock_completion correctly handles stream=True with a ModelResponse as mock_response."""
     from litellm import completion

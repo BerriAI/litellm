@@ -80,7 +80,23 @@ if TYPE_CHECKING:
     from prisma.models import LiteLLM_OrganizationTable as PrismaOrganizationTable
     from prisma.models import LiteLLM_UserTable as PrismaUserTable
 
-router: Final = APIRouter()
+
+async def _enterprise_license_required(
+    _user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> None:
+    from litellm.proxy.proxy_server import premium_user
+
+    if not premium_user:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Organizations are only available for LiteLLM Enterprise users. "
+                f"{CommonProxyErrors.not_premium_user.value}"
+            },
+        )
+
+
+router: Final = APIRouter(dependencies=[Depends(_enterprise_license_required)])
 
 
 class _ObjectPermissionRow(Protocol):
