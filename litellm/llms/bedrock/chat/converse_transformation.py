@@ -252,9 +252,7 @@ class AmazonConverseConfig(BaseConfig):
                 # Tool results are externally controlled, so guard them wherever they
                 # land in history; _convert_consecutive_user_messages_to_guarded_text
                 # only covers the trailing user turn.
-                content: Final = (
-                    [{"type": "guarded_text", "text": result_text}] if guardrail_active else result_text
-                )
+                content: Final = [{"type": "guarded_text", "text": result_text}] if guardrail_active else result_text
                 return ChatCompletionUserMessage(role="user", content=content)
             return message
 
