@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Final, cast
+import json
 from unittest.mock import patch
 
 import httpx
@@ -1728,17 +1729,28 @@ async def test_streaming_params_from_config_control_output_scan_cadence(
 
 
 @asynccontextmanager
-async def _guardrail_transforming_into(messages: list[dict[str, object]]) -> AsyncIterator[CrowdStrikeAIDRHandler]:
-    """A guardrail whose AI Guard returns ``messages`` as its rewrite."""
+async def _guardrail_redacting(secret: str, replacement: str) -> AsyncIterator[CrowdStrikeAIDRHandler]:
+    def redacted(content: object) -> object:
+        if isinstance(content, str):
+            return content.replace(secret, replacement)
+        if isinstance(content, list):
+            return [
+                {**part, "text": redacted(part["text"])} if isinstance(part, dict) and "text" in part else part
+                for part in content
+            ]
+        return content
 
     def respond(request: httpx.Request) -> httpx.Response:
+        sent: Final = json.loads(request.content)["guard_input"]["messages"]
         return httpx.Response(
             status_code=200,
             json={
                 "result": {
                     "blocked": False,
                     "transformed": True,
-                    "guard_output": {"messages": messages},
+                    "guard_output": {
+                        "messages": [{**message, "content": redacted(message.get("content"))} for message in sent]
+                    },
                 },
             },
             request=request,
@@ -1836,3 +1848,43 @@ async def test_aligned_rewrite_is_written_back() -> None:
     )
 
     assert cast(list, responses_input[0]["content"])[0]["text"] == "my ssn is <US_SSN>"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "responses_input", "redacted_input"),
+    [
+        (
+            "instructions add a system message",
+            [{"role": "user", "content": [{"type": "input_text", "text": "my ssn is 078-05-1120"}]}],
+            [{"role": "user", "content": [{"type": "input_text", "text": "my ssn is <US_SSN>"}]}],
+        ),
+        (
+            "tool items sit between two user turns",
+            [
+                {"role": "user", "content": [{"type": "input_text", "text": "hello"}]},
+                {"type": "function_call", "call_id": "c1", "name": "get_x", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "c1", "output": "42"},
+                {"role": "user", "content": [{"type": "input_text", "text": "my ssn is 078-05-1120"}]},
+            ],
+            [
+                {"role": "user", "content": [{"type": "input_text", "text": "hello"}]},
+                {"type": "function_call", "call_id": "c1", "name": "get_x", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "c1", "output": "42"},
+                {"role": "user", "content": [{"type": "input_text", "text": "my ssn is <US_SSN>"}]},
+            ],
+        ),
+    ],
+)
+async def test_structured_rewrite_lands_on_shapes_the_flat_path_cannot_align(
+    case: str,
+    responses_input: list[dict[str, object]],
+    redacted_input: list[dict[str, object]],
+) -> None:
+    data: dict[str, object] = {"model": "gpt-5.6", "instructions": "be terse", "input": responses_input}
+
+    async with _guardrail_redacting("078-05-1120", "<US_SSN>") as guardrail:
+        await OpenAIResponsesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    assert data["input"] == redacted_input, case
+    assert data["instructions"] == "be terse", case
