@@ -36,6 +36,9 @@ def database() -> Iterator[MagicMock]:
         table.delete = AsyncMock()
         table.delete_many = AsyncMock(return_value=0)
         table.create = AsyncMock()
+        table.count = AsyncMock(return_value=0)
+    client.db.tx.return_value.__aenter__.return_value = client.db
+    client.db.execute_raw = AsyncMock()
     client.db.litellm_teamtable.find_unique.return_value = {
         "team_id": "team",
         "organization_id": None,
