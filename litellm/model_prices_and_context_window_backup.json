@@ -14615,7 +14615,7 @@
     },
     "computer-use-preview": {
         "input_cost_per_token": 3e-06,
-        "litellm_provider": "azure",
+        "litellm_provider": "openai",
         "max_input_tokens": 8192,
         "max_output_tokens": 1024,
         "max_tokens": 1024,
@@ -14635,10 +14635,11 @@
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": false,
         "supports_reasoning": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "source": "https://platform.openai.com/docs/models/computer-use-preview"
     },
     "dall-e-2": {
         "deprecation_date": "2026-05-12",
@@ -39019,7 +39020,9 @@
         "supports_max_reasoning_effort": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "supports_response_schema": true,
+        "source": "https://openrouter.ai/api/v1/models"
     },
     "openrouter/anthropic/claude-sonnet-4.5": {
         "input_cost_per_image": 0.0048,
@@ -39167,18 +39170,20 @@
     },
     "openrouter/deepseek/deepseek-v3.2": {
         "input_cost_per_token": 2.69e-07,
-        "input_cost_per_token_cache_hit": 2.8e-08,
+        "input_cost_per_token_cache_hit": 1.345e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 163840,
-        "max_output_tokens": 163840,
-        "max_tokens": 163840,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 4e-07,
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "source": "https://openrouter.ai/api/v1/models"
     },
     "openrouter/deepseek/deepseek-v3.2-exp": {
         "input_cost_per_token": 2.7e-07,
