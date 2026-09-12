@@ -1138,6 +1138,46 @@ class RedisCache(BaseCache):
             )
             _record_swallowed_redis_failure(self._circuit_breaker, e)
 
+    @_redis_circuit_breaker_guard
+    async def async_set_cache_pipeline_with_ttls(self, cache_list: Sequence[tuple[str, object, float | None]]) -> None:
+        """One round trip for writes whose TTLs differ; a ``None`` TTL falls back to the default TTL."""
+        if len(cache_list) == 0:
+            return
+        commands: Final = tuple(
+            (self.check_and_fix_namespace(key=cache_key), json.dumps(cache_value), self.get_ttl(ttl=ttl))
+            for cache_key, cache_value, ttl in cache_list
+        )
+        start_time: Final = time.time()
+        try:
+            async with self.init_async_client().pipeline(transaction=False) as pipe:
+                for cache_key, json_cache_value, ttl in commands:
+                    pipe.set(name=cache_key, value=json_cache_value, ex=None if ttl is None else timedelta(seconds=ttl))
+                await pipe.execute()
+            asyncio.create_task(
+                self.service_logger_obj.async_service_success_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=time.time() - start_time,
+                    call_type=f"async_set_cache_pipeline_with_ttls <- {_get_call_stack_info()}",
+                    start_time=start_time,
+                    end_time=time.time(),
+                )
+            )
+        except Exception as e:
+            asyncio.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=time.time() - start_time,
+                    error=e,
+                    call_type=f"async_set_cache_pipeline_with_ttls <- {_get_call_stack_info()}",
+                    start_time=start_time,
+                    end_time=time.time(),
+                )
+            )
+            verbose_logger.error(
+                "LiteLLM Redis Caching: async_set_cache_pipeline_with_ttls() - Got exception from REDIS %s", str(e)
+            )
+            _record_swallowed_redis_failure(self._circuit_breaker, e)
+
     async def _set_cache_sadd_helper(
         self,
         redis_client: async_redis_client,
