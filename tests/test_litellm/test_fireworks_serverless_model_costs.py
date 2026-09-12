@@ -58,7 +58,7 @@ def test_bare_fireworks_ids_resolve_through_prefixed_entries():
         assert info["max_output_tokens"] == expected["max_output_tokens"]
 
 
-def test_deepseek_v4p1_flash_twin_costs():
+def test_deepseek_v4p1_flash_twin_costs(local_model_cost_map):
     for model in (
         "fireworks_ai/deepseek-v4p1-flash",
         "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash",
