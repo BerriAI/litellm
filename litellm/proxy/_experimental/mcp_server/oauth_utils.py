@@ -199,7 +199,7 @@ def get_route_relative_request_path(scope: Scope) -> str:
     :func:`litellm.proxy.auth.auth_utils.get_request_route`, which the rest of the MCP auth path
     already routes through, so ``/litellmfoo`` is not truncated under ``root_path=/litellm``."""
     raw_path = str(scope.get("_original_path") or scope.get("path", "") or "")
-    root_path = str(scope.get("app_root_path") or scope.get("root_path") or "").rstrip("/")
+    root_path = str(scope.get("app_root_path", scope.get("root_path")) or "").rstrip("/")
     if root_path and (raw_path == root_path or raw_path.startswith(f"{root_path}/")):
         return raw_path[len(root_path) :]
     return raw_path
