@@ -1,10 +1,12 @@
 import asyncio
 import time
 from collections.abc import Iterator
+from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import litellm
 from litellm._service_logger import ServiceLogging
 from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
 
@@ -679,7 +681,6 @@ def test_sync_batch_get_cache_survives_a_service_callback_that_raises(
     from concurrent.futures import ThreadPoolExecutor
 
     import litellm
-
     from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
 
     cache, service_logger = sync_batch_cache_with_service_logger
@@ -1202,3 +1203,45 @@ async def test_a_probe_overtaken_by_a_later_outage_leaves_the_breaker_to_the_new
     new_probe_release.set()
     assert await new_probe == "new probe"
     assert breaker._state == breaker.CLOSED
+
+
+class _SetRecordingPipeline:
+    def __init__(self) -> None:
+        self.sets: list[tuple[str, str, timedelta | None]] = []
+        self.executes = 0
+
+    async def __aenter__(self) -> "_SetRecordingPipeline":
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        return None
+
+    def set(self, name: str, value: str, ex: timedelta | None) -> None:
+        self.sets.append((name, value, ex))
+
+    async def execute(self) -> list[bool]:
+        self.executes += 1
+        return [True] * len(self.sets)
+
+
+@pytest.mark.asyncio
+async def test_async_set_cache_pipeline_with_ttls_keeps_each_entry_ttl(monkeypatch, redis_no_ping):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    monkeypatch.setattr(litellm, "default_redis_ttl", 300)
+    redis_cache = RedisCache(namespace="ns")
+    pipe = _SetRecordingPipeline()
+    client = MagicMock()
+    client.pipeline = MagicMock(return_value=pipe)
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        await redis_cache.async_set_cache_pipeline_with_ttls(
+            (("team_id:t1", {"team_id": "t1"}, 60), ("u1", {"user_id": "u1"}, 7), ("org_id:o1", {"a": 1}, None))
+        )
+
+    client.pipeline.assert_called_once_with(transaction=False)
+    assert pipe.executes == 1
+    assert pipe.sets == [
+        ("ns:team_id:t1", '{"team_id": "t1"}', timedelta(seconds=60)),
+        ("ns:u1", '{"user_id": "u1"}', timedelta(seconds=7)),
+        ("ns:org_id:o1", '{"a": 1}', timedelta(seconds=300)),
+    ]
