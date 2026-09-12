@@ -102,6 +102,46 @@ def test_translate_chat_length_takes_precedence_over_refusal():
     assert result.get("stop_details") is None
 
 
+def test_translate_chat_content_filter_to_anthropic_response():
+    response = ModelResponse(
+        id="chatcmpl-content-filter",
+        model="openai-model",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="content_filter",
+                message=Message(content=None, role="assistant"),
+            )
+        ],
+        usage=Usage(prompt_tokens=1, completion_tokens=0, total_tokens=1),
+    )
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert result["content"] == []
+    assert result["stop_reason"] == "refusal"
+
+
+def test_translate_chat_refusal_finish_reason_to_anthropic_response():
+    response = ModelResponse(
+        id="chatcmpl-refusal-reason",
+        model="openai-model",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="refusal",
+                message=Message(content=None, role="assistant"),
+            )
+        ],
+        usage=Usage(prompt_tokens=1, completion_tokens=0, total_tokens=1),
+    )
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert result["content"] == []
+    assert result["stop_reason"] == "refusal"
+
+
 def test_translate_streaming_openai_chunk_to_anthropic_content_block():
     choices = [
         StreamingChoices(
