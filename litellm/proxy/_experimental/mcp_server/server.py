@@ -56,6 +56,7 @@ from litellm.proxy._experimental.mcp_server.mcp_debug import (
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     _redact_mcp_resource_url,
+    get_byok_www_authenticate,
     get_passthrough_www_authenticate,
     get_route_relative_request_path,
     well_known_root_suffix,
@@ -2852,7 +2853,7 @@ if MCP_AVAILABLE:
                     "server_name": mcp_server.server_name or mcp_server.name,
                     "message": "User identity is required for BYOK servers",
                 },
-                headers={"WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'},
+                headers={"WWW-Authenticate": get_byok_www_authenticate()},
             )
 
         # Check shared credential cache before hitting the DB.
@@ -2873,9 +2874,7 @@ if MCP_AVAILABLE:
                                 "Complete the OAuth authorization flow to provide your API key."
                             ),
                         },
-                        headers={
-                            "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
-                        },
+                        headers={"WWW-Authenticate": get_byok_www_authenticate()},
                     )
                 return
 
@@ -2914,7 +2913,7 @@ if MCP_AVAILABLE:
                         "Complete the OAuth authorization flow to provide your API key."
                     ),
                 },
-                headers={"WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'},
+                headers={"WWW-Authenticate": get_byok_www_authenticate()},
             )
 
     async def execute_mcp_tool(
@@ -3068,9 +3067,7 @@ if MCP_AVAILABLE:
                                 "Complete the OAuth authorization flow to provide your API key."
                             ),
                         },
-                        headers={
-                            "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
-                        },
+                        headers={"WWW-Authenticate": get_byok_www_authenticate()},
                     )
                 mcp_auth_header = byok_cred
             elif mcp_server.is_byok:

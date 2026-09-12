@@ -8,11 +8,15 @@ use super::registry::OcrProvider;
 use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrResponseFormat};
 use super::wire::DecodedOcrResponse;
 
-mod azure_mistral;
+mod azure;
 mod mistral;
+mod reducto;
+mod vertex;
 
-pub(crate) use azure_mistral::AzureMistralAdapter;
+pub(crate) use azure::{AzureDocumentIntelligenceAdapter, AzureMistralAdapter};
 pub(crate) use mistral::MistralAdapter;
+pub(crate) use reducto::{ReductoLegacyAdapter, ReductoV3Adapter};
+pub(crate) use vertex::{VertexDeepSeekAdapter, VertexMistralAdapter};
 
 /// Converts a complete LiteLLM OCR call to provider HTTP and normalizes its response.
 pub(crate) trait OcrAdapter: Send + Sync + Sized + 'static {
@@ -65,6 +69,11 @@ macro_rules! for_each_ocr_adapter {
         $callback! {
             Mistral, $crate::ocr::adapters::MistralAdapter, $crate::ocr::adapters::MistralAdapter, Mistral;
             AzureMistral, $crate::ocr::adapters::AzureMistralAdapter, $crate::ocr::adapters::AzureMistralAdapter, AzureAi;
+            AzureDocumentIntelligence, $crate::ocr::adapters::AzureDocumentIntelligenceAdapter, $crate::ocr::adapters::AzureDocumentIntelligenceAdapter, AzureAi;
+            ReductoLegacy, $crate::ocr::adapters::ReductoLegacyAdapter, $crate::ocr::adapters::ReductoLegacyAdapter, Reducto;
+            ReductoV3, $crate::ocr::adapters::ReductoV3Adapter, $crate::ocr::adapters::ReductoV3Adapter, Reducto;
+            VertexMistral, $crate::ocr::adapters::VertexMistralAdapter, $crate::ocr::adapters::VertexMistralAdapter, VertexAi;
+            VertexDeepSeek, $crate::ocr::adapters::VertexDeepSeekAdapter, $crate::ocr::adapters::VertexDeepSeekAdapter, VertexAi;
         }
     };
 }

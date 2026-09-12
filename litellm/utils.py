@@ -2227,25 +2227,39 @@ def uses_anthropic_tokenizer(model: str) -> bool:
     return model in litellm.anthropic_models and "claude-3" not in model
 
 
-def _return_huggingface_tokenizer(model: str) -> SelectTokenizerResponse | None:
+HuggingFaceTokenizerKind = Literal["cohere", "anthropic", "llama2", "llama3"]
+
+
+def huggingface_tokenizer_kind(model: str) -> HuggingFaceTokenizerKind | None:
+    """Which HuggingFace tokenizer `token_counter` selects for a model; `None` means tiktoken."""
     if model in litellm.cohere_models and "command-r" in model:
-        # cohere
-        cohere_tokenizer: Final = Tokenizer.from_pretrained("Xenova/c4ai-command-r-v01-tokenizer")
-        return {"type": "huggingface_tokenizer", "tokenizer": cohere_tokenizer}
-    # anthropic
-    elif uses_anthropic_tokenizer(model):
-        claude_tokenizer: Final = Tokenizer.from_str(claude_json_str)
-        return {"type": "huggingface_tokenizer", "tokenizer": claude_tokenizer}
-    # llama2
-    elif "llama-2" in model.lower() or "replicate" in model.lower():
-        tokenizer = Tokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
-        return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
-    # llama3
-    elif "llama-3" in model.lower():
-        tokenizer = Tokenizer.from_pretrained("Xenova/llama-3-tokenizer")
-        return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
-    else:
+        return "cohere"
+    if uses_anthropic_tokenizer(model):
+        return "anthropic"
+    if "llama-2" in model.lower() or "replicate" in model.lower():
+        return "llama2"
+    if "llama-3" in model.lower():
+        return "llama3"
+    return None
+
+
+def _return_huggingface_tokenizer(model: str) -> SelectTokenizerResponse | None:
+    kind: Final = huggingface_tokenizer_kind(model)
+    if kind is None:
         return None
+    return {"type": "huggingface_tokenizer", "tokenizer": _load_huggingface_tokenizer(kind)}
+
+
+def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind) -> Tokenizer:
+    match kind:
+        case "cohere":
+            return Tokenizer.from_pretrained("Xenova/c4ai-command-r-v01-tokenizer")
+        case "anthropic":
+            return Tokenizer.from_str(claude_json_str)
+        case "llama2":
+            return Tokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
+        case "llama3":
+            return Tokenizer.from_pretrained("Xenova/llama-3-tokenizer")
 
 
 def encode(model="", text="", custom_tokenizer: dict | None = None):
@@ -9400,11 +9414,9 @@ class ProviderConfigManager:
                 ReductoParseV3Config,
             )
 
-            if model == "parse-v3":
-                return ReductoParseV3Config()
             if model == "parse-legacy":
                 return ReductoParseLegacyConfig()
-            return None
+            return ReductoParseV3Config()
 
         MistralOCRConfig: Final = litellm_utils.MistralOCRConfig
         PROVIDER_TO_CONFIG_MAP: Final = {

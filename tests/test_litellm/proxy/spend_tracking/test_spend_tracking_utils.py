@@ -20,6 +20,7 @@ from litellm.constants import (
     SESSION_ID_OMITTED_METADATA_KEY,
     UNKNOWN_MODEL_SPEND_LOG_MODEL,
 )
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
@@ -2753,6 +2754,31 @@ def test_sanitize_error_information_redacts_pydantic_assignment_form(
 
 
 # ── _redact_logged_api_key unit tests ──────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("original_exception", "expected_error_message"),
+    [
+        (
+            ProxyModelNotFoundError(route="/chat/completions", model_name=_RAW_MODEL_WITH_PROMPT),
+            "/chat/completions: Invalid model name passed in. Call `/v1/models` to view available models for your key.",
+        ),
+        (ValueError("provider timed out"), "provider timed out"),
+    ],
+)
+def test_sanitize_error_information_persists_no_raw_model_for_an_unknown_model_rejection(
+    original_exception: Exception, expected_error_message: str
+):
+    error_information: Final = StandardLoggingPayloadSetup.get_error_information(original_exception=original_exception)
+
+    sanitized: Final = _sanitize_error_information_for_spend_logs(
+        error_information, original_exception=original_exception
+    )
+
+    assert sanitized is not None
+    assert sanitized["error_message"] == expected_error_message
+    assert "medical records" not in json.dumps(sanitized)
+    assert sanitized["error_class"] == type(original_exception).__name__
 
 
 def test_redact_logged_api_key_none_returns_none():

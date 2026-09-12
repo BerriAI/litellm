@@ -3377,10 +3377,8 @@ async def _increment_spend_counter_cache(counter_key: str, increment: float):
         )
         return current_value
 
-    return await spend_counter_cache.async_increment_cache(
-        key=counter_key,
-        value=increment,
-        refresh_ttl=True,
+    return await SpendCounterReseed.increment_in_memory(
+        spend_counter_cache=spend_counter_cache, counter_key=counter_key, increment=increment
     )
 
 
@@ -3403,10 +3401,8 @@ async def _apply_spend_counter_increments(pending: Sequence[_PendingSpendIncreme
     redis_cache: Final = spend_counter_cache.redis_cache
     if redis_cache is None:
         for item in pending:
-            await spend_counter_cache.async_increment_cache(
-                key=item.counter_key,
-                value=item.increment,
-                refresh_ttl=True,
+            await SpendCounterReseed.increment_in_memory(
+                spend_counter_cache=spend_counter_cache, counter_key=item.counter_key, increment=item.increment
             )
         return
     ttl: Final = redis_cache.get_ttl()

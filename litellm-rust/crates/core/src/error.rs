@@ -22,11 +22,17 @@ pub enum Error {
     )]
     MissingApiKey { provider: &'static str },
     #[error(
-        "Missing Azure AI credentials - set AZURE_AI_API_KEY or provide an Authorization header"
+        "invalid authentication configuration: Missing Azure AI credentials - set AZURE_AI_API_KEY or configure Entra ID"
     )]
     MissingAzureAiCredentials,
-    #[error("Missing Azure AI credentials - set AZURE_AI_API_KEY or provide azure_ad_token")]
-    MissingAzureAiCredentialsOrAdToken,
+    #[error(
+        "invalid authentication configuration: Missing Azure Document Intelligence credentials - set AZURE_DOCUMENT_INTELLIGENCE_API_KEY or configure Entra ID"
+    )]
+    MissingAzureDocumentIntelligenceCredentials,
+    #[error(
+        "Missing REDUCTO_API_KEY - set it in the environment or pass api_key to litellm.ocr()/litellm.aocr()"
+    )]
+    MissingReductoApiKey,
     #[error("upstream request failed with status {status}: {body}")]
     Http { status: u16, body: String },
     #[error("upstream network error: {0}")]
@@ -121,6 +127,15 @@ impl From<TransportError> for Error {
     }
 }
 
+impl From<crate::AuthError> for Error {
+    fn from(error: crate::AuthError) -> Self {
+        match error {
+            crate::AuthError::MissingApiKey { provider } => Self::MissingApiKey { provider },
+            error => Self::Auth(error.to_string()),
+        }
+    }
+}
+
 pub fn json_type_name(value: &serde_json::Value) -> &'static str {
     match value {
         serde_json::Value::Null => "null",
@@ -135,6 +150,14 @@ pub fn json_type_name(value: &serde_json::Value) -> &'static str {
 #[cfg(test)]
 mod transport_tests {
     use super::*;
+
+    #[test]
+    fn missing_auth_key_preserves_provider_in_public_error() {
+        assert_eq!(
+            Error::from(crate::AuthError::MissingApiKey { provider: "Vertex" }),
+            Error::MissingApiKey { provider: "Vertex" }
+        );
+    }
 
     #[tokio::test]
     async fn transport_errors_remove_urls_and_keep_dispatch_context() {

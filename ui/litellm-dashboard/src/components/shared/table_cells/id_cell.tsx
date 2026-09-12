@@ -3,6 +3,7 @@
 import { Copy } from "lucide-react";
 import * as React from "react";
 
+import { useEntityLinkClick } from "@/components/shared/EntityLink";
 import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
 
@@ -13,6 +14,7 @@ export type IdCellVariant = "pill" | "plain";
 interface IdCellProps {
   value: string | null | undefined;
   variant?: IdCellVariant;
+  href?: string;
   onClick?: (value: string) => void;
   copyable?: boolean;
   copyLabel?: string;
@@ -38,6 +40,7 @@ const VARIANT_CLASS: Record<IdCellVariant, { base: string; clickable: string }> 
 export function IdCell({
   value,
   variant = "pill",
+  href,
   onClick,
   copyable = false,
   copyLabel = "Copy ID",
@@ -52,16 +55,17 @@ export function IdCell({
     return <span className="text-muted-foreground">{fallback}</span>;
   }
 
+  const linked = !!href && !disabled;
   const clickable = !!onClick && !disabled;
   const classes = cn(
     VARIANT_CLASS[variant].base,
-    clickable && VARIANT_CLASS[variant].clickable,
+    (linked || clickable) && VARIANT_CLASS[variant].clickable,
     truncate && "block max-w-[15ch] truncate",
     disabled && "opacity-50",
     className,
   );
 
-  const idElement = clickable ? (
+  const unlinkedElement = clickable ? (
     <button type="button" className={classes} data-testid={dataTestId} onClick={() => onClick(value)}>
       {value}
     </button>
@@ -69,6 +73,14 @@ export function IdCell({
     <span className={classes} data-testid={dataTestId}>
       {value}
     </span>
+  );
+
+  const idElement = linked ? (
+    <IdLink href={href} className={classes} dataTestId={dataTestId}>
+      {value}
+    </IdLink>
+  ) : (
+    unlinkedElement
   );
 
   const withTooltip = <CellTooltip content={tooltip ?? value} trigger={idElement} />;
@@ -94,3 +106,21 @@ export function IdCell({
     </span>
   );
 }
+
+interface IdLinkProps extends React.ComponentPropsWithoutRef<"a"> {
+  href: string;
+  dataTestId?: string;
+}
+
+const IdLink = React.forwardRef<HTMLAnchorElement, IdLinkProps>(function IdLink(
+  { href, dataTestId, children, ...props },
+  ref,
+) {
+  const handleClick = useEntityLinkClick(href);
+
+  return (
+    <a {...props} ref={ref} href={href} data-testid={dataTestId} onClick={handleClick}>
+      {children}
+    </a>
+  );
+});

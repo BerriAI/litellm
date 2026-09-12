@@ -511,7 +511,6 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                 m = cast(dict, message)
                 m.pop("provider_specific_fields", None)
                 m.pop("thinking_blocks", None)
-                m.pop("reasoning_content", None)
 
         return messages
 

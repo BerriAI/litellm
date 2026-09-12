@@ -735,6 +735,121 @@ async def test_perform_health_check_and_save_forwards_skip_disabled_background_f
     assert call_kwargs["health_check_skip_disabled_background_models"] is True
 
 
+@pytest.mark.asyncio
+async def test_perform_health_check_narrows_to_a_team_deployment_by_its_public_name():
+    """``/health?model=<team_public_model_name>`` must probe the team deployment, not an empty list."""
+    from litellm.proxy.health_check import perform_health_check
+
+    team_deployment = {
+        "model_name": "bedrock-nova_team-b_9f2c",
+        "litellm_params": {"model": "bedrock/us.amazon.nova-2-lite-v1:0"},
+        "model_info": {"id": "id-team-b", "team_id": "team-b", "team_public_model_name": "bedrock-nova"},
+    }
+    other_deployment = {
+        "model_name": "gpt-5.4-mini",
+        "litellm_params": {"model": "openai/gpt-5.4-mini"},
+        "model_info": {"id": "id-openai"},
+    }
+    probe = AsyncMock(return_value=([{"model": "bedrock/us.amazon.nova-2-lite-v1:0", "model_id": "id-team-b"}], [], {}))
+
+    with patch(  # test-quality-ok: the deployments handed to the probe are the assertion; no injection seam
+        "litellm.proxy.health_check._perform_health_check", probe
+    ):
+        healthy, unhealthy, _ = await perform_health_check(
+            model_list=[team_deployment, other_deployment], model="bedrock-nova", team_id="team-b"
+        )
+
+    assert [m["model_info"]["id"] for m in probe.call_args.args[0]] == ["id-team-b"]
+    assert [ep["model_id"] for ep in healthy] == ["id-team-b"]
+    assert unhealthy == []
+
+
+@pytest.mark.asyncio
+async def test_perform_health_check_keeps_a_public_name_off_another_team():
+    """A team's public model name is not a global alias: a caller from another team must not probe its deployment."""
+    from litellm.proxy.health_check import perform_health_check
+
+    team_deployment = {
+        "model_name": "bedrock-nova_team-b_9f2c",
+        "litellm_params": {"model": "bedrock/us.amazon.nova-2-lite-v1:0"},
+        "model_info": {"id": "id-team-b", "team_id": "team-b", "team_public_model_name": "bedrock-nova"},
+    }
+    probe = AsyncMock(return_value=([{"model": "bedrock/us.amazon.nova-2-lite-v1:0", "model_id": "id-team-b"}], [], {}))
+
+    with patch(  # test-quality-ok: the deployments handed to the probe are the assertion; no injection seam
+        "litellm.proxy.health_check._perform_health_check", probe
+    ):
+        healthy, unhealthy, _ = await perform_health_check(
+            model_list=[team_deployment], model="bedrock-nova", team_id="team-a"
+        )
+
+    probe.assert_not_awaited()
+    assert healthy == []
+    assert unhealthy == []
+
+
+_GLOBAL_DEPLOYMENT = {
+    "model_name": "bedrock-nova",
+    "litellm_params": {"model": "bedrock/us.amazon.nova-2-lite-v1:0"},
+    "model_info": {"id": "id-bedrock"},
+}
+_TEAM_B_COPY = {
+    "model_name": "bedrock-nova_team-b_9f2c",
+    "litellm_params": {"model": "bedrock/us.amazon.nova-2-lite-v1:0"},
+    "model_info": {"id": "id-team-b", "team_id": "team-b", "team_public_model_name": "bedrock-nova"},
+}
+_GLOBAL_BARE_NAME = {
+    "model_name": "gpt-5.4-nano",
+    "litellm_params": {"model": "gpt-5.4-nano"},
+    "model_info": {"id": "id-nano"},
+}
+_TEAM_B_BARE_COPY = {
+    "model_name": "gpt-5.4-nano_team-b_7c3d",
+    "litellm_params": {"model": "gpt-5.4-nano"},
+    "model_info": {"id": "id-nano-team-b", "team_id": "team-b", "team_public_model_name": "gpt-5.4-nano"},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_id", "model", "model_list", "expected_ids"),
+    [
+        (None, "bedrock-nova", [_TEAM_B_COPY], ["id-team-b"]),
+        (None, "bedrock-nova", [_GLOBAL_DEPLOYMENT, _TEAM_B_COPY], ["id-bedrock"]),
+        ("team-b", "bedrock-nova", [_GLOBAL_DEPLOYMENT, _TEAM_B_COPY], ["id-team-b"]),
+        ("team-b", "gpt-5.4-nano", [_GLOBAL_BARE_NAME, _TEAM_B_BARE_COPY], ["id-nano-team-b"]),
+        (None, "gpt-5.4-nano", [_GLOBAL_BARE_NAME, _TEAM_B_BARE_COPY], ["id-nano"]),
+        (None, "bedrock/us.amazon.nova-2-lite-v1:0", [_GLOBAL_DEPLOYMENT, _TEAM_B_COPY], ["id-bedrock", "id-team-b"]),
+    ],
+    ids=[
+        "a team-less caller reaches a public name nothing else carries",
+        "model_name wins over a public name for a team-less caller",
+        "a team's own copy wins over the global model_name",
+        "a team's own copy wins over a litellm_params.model equal to the public name",
+        "model_name wins over a litellm_params.model equal to it for a team-less caller",
+        "a provider model string no name carries still matches litellm_params.model",
+    ],
+)
+async def test_perform_health_check_targets_a_name_the_way_a_request_for_it_routes(
+    team_id, model, model_list, expected_ids
+):
+    """``/health?model=<name>`` probes the deployments a request for that name from the same caller would route to."""
+    from litellm.proxy.health_check import perform_health_check
+
+    probe = AsyncMock(
+        return_value=([{"model": "bedrock/us.amazon.nova-2-lite-v1:0", "model_id": i} for i in expected_ids], [], {})
+    )
+
+    with patch(  # test-quality-ok: the deployments handed to the probe are the assertion; no injection seam
+        "litellm.proxy.health_check._perform_health_check", probe
+    ):
+        healthy, unhealthy, _ = await perform_health_check(model_list=model_list, model=model, team_id=team_id)
+
+    assert [m["model_info"]["id"] for m in probe.call_args.args[0]] == expected_ids
+    assert [ep["model_id"] for ep in healthy] == expected_ids
+    assert unhealthy == []
+
+
 def test_parse_background_health_check_model_groups_unset_returns_none():
     from litellm.proxy.health_check import parse_background_health_check_model_groups
 
