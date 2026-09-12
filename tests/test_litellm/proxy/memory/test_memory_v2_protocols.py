@@ -11,6 +11,37 @@ from litellm.litellm_core_utils.prompt_templates.server_tools import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.memory.policy import MemoryIdentity
+from litellm.utils import get_optional_params
+
+
+@pytest.mark.parametrize("choice", [None, "auto", "none"])
+def test_structured_output_keeps_memory_tools_selectable(choice: str | None) -> None:
+    original: Final = {
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "port",
+                "schema": {"type": "object", "properties": {"port": {"type": "integer"}}},
+            },
+        },
+        **({"tool_choice": choice} if choice is not None else {}),
+    }
+    prepared: Final = inject_server_tools(
+        original,
+        "acompletion",
+        ({"name": "memory_search", "description": "Search", "parameters": {"type": "object"}},),
+        "Search memory before answering",
+    )
+    provider: Final = get_optional_params(
+        model="claude-sonnet-5",
+        custom_llm_provider="vertex_ai",
+        response_format=prepared["response_format"],
+        tools=prepared["tools"],
+        tool_choice=prepared.get("tool_choice"),
+    )
+    assert provider["tool_choice"] == {"type": choice or "auto"}
+    assert {tool["name"] for tool in provider["tools"]} == {"memory_search", "json_tool_call"}
+    assert original.get("tool_choice") == choice
 
 
 @pytest.mark.parametrize("route", ["acompletion", "aresponses", "anthropic_messages"])

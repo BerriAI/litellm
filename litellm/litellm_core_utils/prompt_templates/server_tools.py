@@ -85,6 +85,7 @@ def inject_server_tools(
     data: Mapping[str, object], route: ServerToolRoute, functions: Sequence[Mapping[str, object]], instructions: str
 ) -> Mapping[str, object]:
     client_tools: Final = _items(data.get("tools"))
+    tool_choice: Final = data.get("tool_choice")
     names: Final = frozenset(str(function["name"]) for function in functions)
     if any(_tool_name(tool) in names for tool in client_tools):
         raise ValueError("A client tool conflicts with a gateway memory tool name")
@@ -109,6 +110,15 @@ def inject_server_tools(
     return append_server_instructions(
         {  # mutable-ok: Native provider JSON containers.
             **data,
+            "tool_choice": tool_choice
+            if tool_choice is not None
+            else (
+                {  # mutable-ok: Native provider tool-choice JSON.
+                    "type": "auto"
+                }
+                if route == "anthropic_messages"
+                else "auto"
+            ),
             "tools": [  # mutable-ok: Native provider JSON containers.
                 *client_tools,
                 *tools,
