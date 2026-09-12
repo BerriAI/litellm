@@ -15226,7 +15226,9 @@ def _list_team_a_keys_as(user_role, members_with_roles, query):
     test_app = FastAPI()
     test_app.include_router(router)
     test_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=user_role, user_id="alice")
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+    with patch(  # test-quality-ok: /key/list reads the prisma client from the proxy_server module global, no injection point
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+    ):
         response = TestClient(test_app).get(
             f"/key/list?team_id=team-a&include_team_keys=true&include_created_by_keys=true&{query}"
         )
