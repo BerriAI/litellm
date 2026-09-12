@@ -4,7 +4,7 @@ import re
 from abc import abstractmethod
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, TypeAlias
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -78,6 +78,38 @@ def logged_relay_shape(
         shape.call_type.value
     )  # rebind-ok: routes cost calculation to the relayed shape's pricing path
     return parsed
+
+
+class PassthroughStreamCollector(Protocol):
+    """Consumes relayed stream bytes as they arrive and builds the response logged for spend tracking."""
+
+    def add(self, chunk: bytes) -> None: ...
+
+    def build_logged_response(self, litellm_logging_obj: LiteLLMLoggingObj) -> LoggedRelayResponse | None: ...
+
+
+class RawBytesStreamCollector:
+    def __init__(
+        self, provider_config: BasePassthroughConfig, model: str, custom_llm_provider: str, endpoint: str
+    ) -> None:
+        self._provider_config = provider_config
+        self._model = model
+        self._custom_llm_provider = custom_llm_provider
+        self._endpoint = endpoint
+        self._raw_bytes: list[bytes] = []  # mutable-ok: instance buffer for streaming chunks
+
+    def add(self, chunk: bytes) -> None:
+        self._raw_bytes.append(chunk)
+
+    def build_logged_response(self, litellm_logging_obj: LiteLLMLoggingObj) -> LoggedRelayResponse | None:
+        all_chunks: Final = self._provider_config._convert_raw_bytes_to_str_lines(self._raw_bytes)
+        return self._provider_config.handle_logging_collected_chunks(
+            all_chunks=all_chunks,
+            litellm_logging_obj=litellm_logging_obj,
+            model=self._model,
+            custom_llm_provider=self._custom_llm_provider,
+            endpoint=self._endpoint,
+        )
 
 
 class BasePassthroughConfig(BaseLLMModelInfo):
@@ -181,6 +213,13 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         endpoint: str,
     ) -> LoggedRelayResponse | None:
         return None
+
+    def create_stream_collector(
+        self, model: str, custom_llm_provider: str, endpoint: str
+    ) -> PassthroughStreamCollector:
+        return RawBytesStreamCollector(
+            provider_config=self, model=model, custom_llm_provider=custom_llm_provider, endpoint=endpoint
+        )
 
     def _convert_raw_bytes_to_str_lines(self, raw_bytes: list[bytes]) -> list[str]:
         """

@@ -5,11 +5,18 @@ from typing import Final
 
 import pytest
 
+from litellm.proxy.client.cli.commands import claude_settings
+
 REAL_CLAUDE_SETTINGS: Final = Path(os.path.expanduser("~")) / ".claude" / "settings.json"
 
 
 def _current_bytes() -> bytes | None:
     return REAL_CLAUDE_SETTINGS.read_bytes() if REAL_CLAUDE_SETTINGS.exists() else None
+
+
+@pytest.fixture(autouse=True)
+def _statusline_script_under_tmp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(claude_settings, "STATUSLINE_SCRIPT_PATH", tmp_path / "litellm-home" / "statusline.py")
 
 
 @pytest.fixture(autouse=True)

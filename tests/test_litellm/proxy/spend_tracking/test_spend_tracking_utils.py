@@ -1020,6 +1020,11 @@ _OVERLONG_MODEL: Final = "m" * (MAX_SPEND_LOG_MODEL_NAME_LENGTH + 1)
         ),
         ("gpt-5.2", ValueError("provider timed out"), "gpt-5.2"),
         (_BEDROCK_INFERENCE_PROFILE_ARN, ValueError("provider timed out"), _BEDROCK_INFERENCE_PROFILE_ARN),
+        (
+            "MCP: deepwiki-ask_question",
+            ValueError("Content blocked: keyword 'confidential' detected"),
+            "MCP: deepwiki-ask_question",
+        ),
     ],
 )
 def test_get_logging_payload_replaces_rejected_or_prompt_shaped_models_with_the_placeholder(
