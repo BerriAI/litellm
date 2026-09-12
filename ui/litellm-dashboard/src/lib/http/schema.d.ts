@@ -28374,6 +28374,8 @@ export interface components {
             team_id?: string | null;
             /** User Email */
             user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
         };
         /**
          * KeyMetricWithMetadata
