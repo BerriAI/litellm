@@ -97,3 +97,53 @@ class TestOpenRouterNativeModelRouting:
         )
         assert provider == "openrouter"
         assert result_model == "anthropic/claude-3.5-sonnet"
+
+
+class TestOpenRouterLiveModelDiscovery:
+    """get_valid_models(check_provider_endpoint=True) must hit the live catalog."""
+
+    def test_get_valid_models_uses_openrouter_catalog(self):
+        from unittest.mock import MagicMock, patch
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "data": [
+                {"id": "anthropic/claude-sonnet-4"},
+                {"id": "openai/gpt-5"},
+            ]
+        }
+
+        with patch("litellm.module_level_client.get", return_value=mock_response) as mock_get:
+            models = litellm.get_valid_models(
+                check_provider_endpoint=True,
+                custom_llm_provider="openrouter",
+                api_key="sk-or-test",
+            )
+
+        assert models == ["anthropic/claude-sonnet-4", "openai/gpt-5"]
+        assert mock_get.call_args.kwargs["url"] == "https://openrouter.ai/api/v1/models"
+        assert mock_get.call_args.kwargs["headers"] == {"Authorization": "Bearer sk-or-test"}
+
+    def test_get_models_defaults_api_base_and_omits_auth_without_key(self):
+        from unittest.mock import MagicMock, patch
+
+        from litellm.llms.openrouter.chat.transformation import OpenrouterConfig
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"data": [{"id": "m1"}]}
+
+        with (
+            patch("litellm.module_level_client.get", return_value=mock_response) as mock_get,
+            patch.dict("os.environ", {}, clear=False),
+        ):
+            import os
+
+            os.environ.pop("OPENROUTER_API_KEY", None)
+            os.environ.pop("OPENAI_API_KEY", None)
+            models = OpenrouterConfig().get_models()
+
+        assert models == ["m1"]
+        assert mock_get.call_args.kwargs["url"] == "https://openrouter.ai/api/v1/models"
+        assert mock_get.call_args.kwargs["headers"] == {}

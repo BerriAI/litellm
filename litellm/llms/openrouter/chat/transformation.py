@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 import httpx
 
 import litellm
+from litellm.secret_managers.main import get_secret_str
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -53,6 +54,16 @@ class OpenrouterConfig(OpenAIGPTConfig):
         except Exception:
             pass
         return list(dict.fromkeys(supported_params))
+
+    @staticmethod
+    def get_api_key(api_key: str | None = None) -> str | None:
+        return api_key or litellm.openrouter_key or get_secret_str("OPENROUTER_API_KEY")
+
+    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
+        return super().get_models(
+            api_key=api_key,
+            api_base=api_base or "https://openrouter.ai/api/v1",
+        )
 
     def map_openai_params(
         self,

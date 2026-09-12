@@ -756,8 +756,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
         if api_base is None:
             api_base = "https://api.openai.com"
-        if api_key is None:
-            api_key = get_secret_str("OPENAI_API_KEY")
+        api_key = self.get_api_key(api_key)
 
         parsed_url: Final = httpx.URL(api_base)
         if parsed_url.path and parsed_url.path != "/":
@@ -765,9 +764,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         else:
             models_url: Final = f"{api_base.rstrip('/')}/v1/models"
 
+        headers: Final = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         response: Final = litellm.module_level_client.get(
             url=models_url,
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers=headers,
         )
 
         if response.status_code != 200:

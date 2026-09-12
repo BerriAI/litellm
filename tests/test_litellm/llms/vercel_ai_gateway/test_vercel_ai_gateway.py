@@ -278,6 +278,28 @@ def test_vercel_ai_gateway_models_endpoint_failure():
             config.get_models()
 
 
+def test_vercel_ai_gateway_get_valid_models_uses_live_catalog():
+    """get_valid_models(check_provider_endpoint=True) must hit the live catalog."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "data": [
+            {"id": "openai/gpt-5"},
+            {"id": "anthropic/claude-sonnet-4"},
+        ]
+    }
+
+    with patch("litellm.module_level_client.get", return_value=mock_response) as mock_get:
+        models = litellm.get_valid_models(
+            check_provider_endpoint=True,
+            custom_llm_provider="vercel_ai_gateway",
+            api_base="https://ai-gateway.vercel.sh/v1",
+        )
+
+    assert models == ["openai/gpt-5", "anthropic/claude-sonnet-4"]
+    assert mock_get.call_args.kwargs["url"] == "https://ai-gateway.vercel.sh/v1/models"
+
+
 def test_vercel_ai_gateway_glm46_cost_math():
     """Test the cost math for glm-4.6"""
 
