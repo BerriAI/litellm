@@ -1,0 +1,5 @@
+{"expected":"http://localhost:47078/mcp/example","result":"PASS","issuer":"http://localhost:47078/mcp/example"}
+{"expected":"http://localhost:47078/example/mcp","result":"PASS","issuer":"http://localhost:47078/example/mcp"}
+{"expected":"http://localhost:47078/example","result":"PASS","issuer":"http://localhost:47078/example"}
+{"expected":"http://localhost:47078/mcp","result":"PASS","issuer":"http://localhost:47078/mcp"}
+{"expected":"http://localhost:47078/","result":"PASS","issuer":"http://localhost:47078"}

@@ -1,0 +1,22 @@
+{
+  "version": "3.8.8",
+  "dist": {
+    "shasum": "05b47975cb621cdfd5dad35cecfaf41170e15c79",
+    "tarball": "https://registry.npmjs.org/oauth4webapi/-/oauth4webapi-3.8.8.tgz",
+    "fileCount": 6,
+    "integrity": "sha512-8N28E+a/oxfXWBgOMt+ZP/JUf/XR+IFbvkAEPP3gznXOMv9BpAAwiIj0TFNz3tGTPc0ZQ8zmWBNgN1nAys0gng==",
+    "signatures": [
+      {
+        "sig": "MEUCIGDEAoUQIUtvfIOyFLqi06DR4D5aBVtITVFETk8ihS1rAiEAjMJGKQBq46EzJiPYgOaFQ7kh+p74Il/U8IQS7pUflD8=",
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+      }
+    ],
+    "attestations": {
+      "url": "https://registry.npmjs.org/-/npm/v1/attestations/oauth4webapi@3.8.8",
+      "provenance": {
+        "predicateType": "https://slsa.dev/provenance/v1"
+      }
+    },
+    "unpackedSize": 326361
+  }
+}
