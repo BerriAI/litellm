@@ -9266,15 +9266,22 @@ def _agent_prisma(object_permission_id=None, side_effect=None):
 
 
 @contextlib.contextmanager
-def _entitlement_fault_globals(prisma_client=None):
+def _entitlement_fault_globals(prisma_client=None, user_api_key_cache=None):
     from litellm.caching.dual_cache import DualCache
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma_client or MagicMock()),
-        patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
-        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache or DualCache()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", _proxy_logging_with_awaitable_hooks()),
     ):
         yield
+
+
+def _proxy_logging_with_awaitable_hooks():
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
+    proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock()
+    return proxy_logging_obj
 
 
 @pytest.mark.asyncio
@@ -9410,6 +9417,71 @@ class TestEntitlementFaultSemantics:
             ):
                 allowed = await MCPRequestHandler.get_allowed_mcp_servers(auth)
         assert set(allowed) == {"srv1"}
+
+
+async def _cache_with_end_user(end_user_id, *, mcp_tool_permissions=None, object_permission_id=None):
+    """A real DualCache already holding the end user row, so ``get_end_user_object`` answers from
+    cache and no ``litellm.`` internal has to be patched. ``object_permission_id`` without a
+    permission body models a row that NAMES an entitlement the DB then fails to serve."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.models.end_user import LiteLLM_EndUserTable
+    from litellm.proxy.common_utils.user_api_key_cache import end_user_cache_key
+
+    cache = DualCache()
+    await cache.async_set_cache(
+        key=end_user_cache_key(end_user_id),
+        value=LiteLLM_EndUserTable(
+            user_id=end_user_id,
+            blocked=False,
+            object_permission_id=object_permission_id or ("op-eu" if mcp_tool_permissions else None),
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="op-eu", mcp_tool_permissions=mcp_tool_permissions
+            )
+            if mcp_tool_permissions
+            else None,
+        ),
+    )
+    return cache
+
+
+@pytest.mark.asyncio
+class TestEndUserToolCeiling:
+    """The end user (customer) level narrows the TOOLS axis exactly as it narrows the servers axis,
+    so `object_permission.mcp_tool_permissions` on `/customer/new` is enforced, not just stored."""
+
+    async def test_end_user_tool_permissions_intersect_key_tools(self):
+        auth = _key_auth_reaching("srv1", tools=["tool_a", "tool_b"], end_user_id="eu-1")
+        cache = await _cache_with_end_user("eu-1", mcp_tool_permissions={"srv1": ["tool_a"]})
+        with _entitlement_fault_globals(user_api_key_cache=cache):
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("srv1", auth)
+        assert tools == ["tool_a"]
+
+    async def test_end_user_tool_permissions_become_allowlist_when_key_is_unrestricted(self):
+        auth = _key_auth_reaching("srv1", end_user_id="eu-1")
+        cache = await _cache_with_end_user("eu-1", mcp_tool_permissions={"srv1": ["tool_a"]})
+        with _entitlement_fault_globals(user_api_key_cache=cache):
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("srv1", auth)
+        assert tools == ["tool_a"]
+
+    async def test_end_user_tool_permissions_on_another_server_place_no_ceiling(self):
+        auth = _key_auth_reaching("srv1", tools=["tool_a", "tool_b"], end_user_id="eu-1")
+        cache = await _cache_with_end_user("eu-1", mcp_tool_permissions={"srv2": ["tool_z"]})
+        with _entitlement_fault_globals(user_api_key_cache=cache):
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("srv1", auth)
+        assert sorted(tools) == ["tool_a", "tool_b"]
+
+    async def test_end_user_named_but_unloadable_permission_denies_tools(self):
+        auth = _key_auth_reaching("srv1", tools=["tool_a"], end_user_id="eu-1")
+        cache = await _cache_with_end_user("eu-1", object_permission_id="op-eu")
+        with _entitlement_fault_globals(user_api_key_cache=cache):
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("srv1", auth)
+        assert tools == [], "an end-user entitlement we know exists but cannot read must deny its tools"
+
+    async def test_no_end_user_row_places_no_tool_ceiling(self):
+        auth = _key_auth_reaching("srv1", tools=["tool_a"], end_user_id="eu-1")
+        with _entitlement_fault_globals(user_api_key_cache=await _cache_with_end_user("someone-else")):
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("srv1", auth)
+        assert tools == ["tool_a"]
 
 
 @pytest.mark.asyncio

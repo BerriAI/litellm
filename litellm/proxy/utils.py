@@ -121,11 +121,22 @@ from litellm.proxy.db.create_views import (
     should_create_missing_views,
 )
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.db_url_settings import (
+    DatabaseURLSettings,
+    add_missing_query_params,
+    token_refresh_params_from_url,
+)
 from litellm.proxy.db.exception_handler import (
     PrismaDBExceptionHandler,
     call_with_db_reconnect_retry,
 )
+from litellm.proxy.db.health_check_latest import (
+    LatestHealthCheckRow,
+    fetch_latest_health_checks,
+    fetch_latest_health_checks_for_models,
+)
 from litellm.proxy.db.log_db_metrics import log_db_metrics
+from litellm.proxy.db.pgbouncer import database_url_is_pooled
 from litellm.proxy.db.prisma_client import (
     PrismaWrapper,
     parse_iam_endpoint_from_url,
@@ -871,9 +882,10 @@ _EMPTY_LIFT: Final = MappingProxyType({})
 def _failure_fields_to_lift(request_data: Mapping[str, object]) -> Mapping[str, object]:
     """Failure-path callbacks run after ``litellm_logging_obj`` is popped from
     request_data (it is not serialisable), so the caller merges these fields
-    onto request_data first: the first-handoff instant for preprocessing
-    latency, recovered or estimated usage for token counts, and the standard
-    logging object for deployment attribution on failed-request spend logs."""
+    onto request_data first: the request start and first-handoff instants for
+    duration and preprocessing latency, the call type, recovered or estimated
+    usage for token counts, and the standard logging object for deployment
+    attribution on failed-request spend logs."""
     _logging_obj: Final = request_data.get("litellm_logging_obj")
     if _logging_obj is None:
         return _EMPTY_LIFT
@@ -885,7 +897,9 @@ def _failure_fields_to_lift(request_data: Mapping[str, object]) -> Mapping[str, 
         dispatched=_first_handoff is not None,
     )
     _entries: Final = (
+        ("start_time", _model_call_details.get("start_time")),
         ("first_api_call_start_time", _first_handoff),
+        ("call_type", _model_call_details.get("call_type")),
         ("combined_usage_object", None if _usage_to_lift is None else _usage_to_lift[0]),
         ("response_cost", None if _usage_to_lift is None else (_usage_to_lift[1] or 0.0)),
         ("standard_logging_object", _model_call_details.get("standard_logging_object")),
@@ -4002,6 +4016,7 @@ class PrismaClient:
             verbose_proxy_logger.error("Please run 'prisma generate' to generate the Prisma client.")
             raise Exception("Unable to find Prisma binaries. Please run 'prisma generate' first.")
         token_auth: Final = self.token_auth
+        writer_token_auth: Final = None if database_url_is_pooled() else token_auth
         # When read-replica routing is on, tag log lines with [writer]/[reader]
         # so the two wrappers' interleaved token refresh logs can be told apart.
         # Single-DB deployments get an empty prefix (logs unchanged).
@@ -4010,13 +4025,13 @@ class PrismaClient:
         if http_client is not None:
             writer_wrapper = PrismaWrapper(
                 original_prisma=Prisma(http=http_client),
-                token_auth=token_auth,
+                token_auth=writer_token_auth,
                 log_prefix=writer_log_prefix,
             )
         else:
             writer_wrapper = PrismaWrapper(
                 original_prisma=Prisma(),
-                token_auth=token_auth,
+                token_auth=writer_token_auth,
                 log_prefix=writer_log_prefix,
             )
 
@@ -4044,7 +4059,10 @@ class PrismaClient:
                 # loop and times out after 30s.
                 if token_auth is not None and reader_iam_endpoint is not None:
                     reader_token: Final = mint_database_token(token_auth, reader_iam_endpoint)
-                    read_replica_url = reader_iam_endpoint.build_url(reader_token)
+                    read_replica_url = add_missing_query_params(
+                        reader_iam_endpoint.build_url(reader_token),
+                        token_refresh_params_from_url(read_replica_url),
+                    )
                     os.environ["DATABASE_URL_READ_REPLICA"] = read_replica_url
                 reader_kwargs: Final[dict[str, Any]] = {"datasource": {"url": read_replica_url}}
                 if http_client is not None:
@@ -6462,48 +6480,13 @@ class PrismaClient:
             verbose_proxy_logger.error("Error getting health check history: %s", e)
             return []
 
-    async def get_all_latest_health_checks(self) -> "Sequence[prisma_models.LiteLLM_HealthCheckTable]":
-        """
-        Get the latest health check for each model.
+    async def get_all_latest_health_checks(self) -> tuple[LatestHealthCheckRow, ...]:
+        """Latest health check per (model_id, model_name), deduplicated in Postgres."""
+        return await fetch_latest_health_checks(self)
 
-        Uses DB-level DISTINCT ON (model_id, model_name) with ORDER BY checked_at DESC
-        (via Prisma ``distinct`` + ``order``) so we never load the full history into memory.
-        """
-        try:
-            return await HealthCheckRepository(self).table.find_many(
-                distinct=["model_id", "model_name"],
-                order=[
-                    {"model_id": "asc"},
-                    {"model_name": "asc"},
-                    {"checked_at": "desc"},
-                ],
-            )
-        except Exception as e:
-            verbose_proxy_logger.error("Error getting all latest health checks: %s", e)
-            return []
-
-    async def get_latest_health_checks_for_models(
-        self, model_names: "Sequence[str]"
-    ) -> "Sequence[prisma_models.LiteLLM_HealthCheckTable]":
-        """
-        Get the latest health check for each of the named models.
-
-        Same DISTINCT ON as ``get_all_latest_health_checks``, bounded to the models asked
-        about, so a paged caller reads health for its page instead of for the whole table.
-        """
-        if not model_names:
-            return ()
-        latest_first: Final = (("model_id", "asc"), ("model_name", "asc"), ("checked_at", "desc"))
-        order: Final = [{field: direction} for field, direction in latest_first]  # mutable-ok: prisma order is a list
-        try:
-            return await HealthCheckRepository(self).table.find_many(
-                where={"model_name": {"in": list(model_names)}},  # mutable-ok: prisma filters are dicts and lists
-                distinct=["model_id", "model_name"],  # mutable-ok: prisma distinct takes a list
-                order=order,
-            )
-        except Exception as e:  # noqa: BLE001  # health decorates a list; a driver error must not fail the page
-            verbose_proxy_logger.error("Error getting latest health checks for models: %s", e)
-            return ()
+    async def get_latest_health_checks_for_models(self, model_names: Sequence[str]) -> tuple[LatestHealthCheckRow, ...]:
+        """Same as ``get_all_latest_health_checks``, bounded to the named models."""
+        return await fetch_latest_health_checks_for_models(self, model_names)
 
 
 ### HELPER FUNCTIONS ###
@@ -7832,7 +7815,7 @@ def construct_database_url_from_env_vars() -> str | None:
         if database_schema:
             database_url += f"?schema={database_schema}"
 
-        return database_url
+        return add_missing_query_params(database_url, DatabaseURLSettings.from_env().tls_params())
 
     return None
 
@@ -8023,6 +8006,88 @@ async def get_available_models_for_user(
     return all_models
 
 
+def _safe_get_model_info(model: str, get_model_info: Callable[[str], ModelInfo]) -> ModelInfo | None:
+    try:
+        return get_model_info(model)
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "create_model_info_response: cost map lookup failed for %s: %s",
+            model,
+            e,
+        )
+        return None
+
+
+def _resolve_listing_model_info(
+    deployment_model: str | None,
+    listed_model: str,
+    listed_info: ModelInfo | None,
+    get_model_info: Callable[[str], ModelInfo],
+) -> tuple[ModelInfo, ...]:
+    """
+    Cost-map entries describing one deployment behind a listed model, best source first.
+
+    The name a model is listed under is an arbitrary public alias, so it often misses the
+    cost map and lands on a fallback-generalization rule that answers with a conservative
+    family baseline instead of the real model's limits; the deployment's underlying model
+    is what the request actually reaches. Both names are kept because either can
+    generalize, and because a deployment's own model is registered into the cost map as a
+    stub that carries no limits of its own. Exact entries are consulted before generalized
+    ones, and each field is then taken from the first entry that has it.
+
+    ``listed_info`` is resolved once by the caller, since a group with several distinct
+    underlying models resolves the same alias for each of them.
+    """
+    # Fast path, and the only one a wildcard-expanded name takes: with a single name
+    # there is nothing to order, so skip the generalization test entirely. This keeps
+    # the per-model cost of the listing on the hot path #33721 exists to protect.
+    if deployment_model is None or deployment_model == listed_model:
+        return () if listed_info is None else (listed_info,)
+
+    deployment_info: Final = _safe_get_model_info(deployment_model, get_model_info)
+    if deployment_info is None:
+        return () if listed_info is None else (listed_info,)
+    if listed_info is None:
+        return (deployment_info,)
+
+    from litellm.utils import is_generalized_model_info
+
+    # Both names resolved: the deployment's model leads unless it only generalized
+    # while the listed name is an exact cost-map entry.
+    if is_generalized_model_info(deployment_info) and not is_generalized_model_info(listed_info):
+        return (listed_info, deployment_info)
+    return (deployment_info, listed_info)
+
+
+def _first_token_limit(candidates: tuple[ModelInfo, ...], field: str) -> int | None:
+    return next(
+        (limit for limit in (coerce_token_limit(info.get(field)) for info in candidates) if limit is not None),
+        None,
+    )
+
+
+def _group_token_limit(candidate_sets: tuple[tuple[ModelInfo, ...], ...], field: str) -> int | None:
+    """The widest limit any deployment behind the listed name declares for ``field``.
+
+    A model group is normally one model behind several interchangeable deployments, so
+    there is a single value to report and the choice of aggregate does not arise.
+
+    When a group genuinely mixes models no single number is right, and the widest is the
+    deliberate pick over the narrowest for two reasons. It is what ``/model_group/info``
+    has long reported to the Admin UI, so the two surfaces agree; disagreeing is the very
+    complaint this resolution path exists to fix. And of the two ways to be wrong,
+    under-advertising is worse: a client that trusts a narrowed window silently refuses
+    prompts the group would have served, while an over-long prompt that reaches a smaller
+    deployment comes back as a legible context-length error -- and does not reach one at
+    all when ``enable_pre_call_checks`` is set, which filters deployments the prompt does
+    not fit.
+    """
+    limits: Final = tuple(
+        limit for limit in (_first_token_limit(candidates, field) for candidates in candidate_sets) if limit is not None
+    )
+    return max(limits) if limits else None
+
+
 def create_model_info_response(
     model_id: str,
     provider: str,
@@ -8047,31 +8112,48 @@ def create_model_info_response(
         "owned_by": provider,
     }
 
-    try:
-        model_cost_info: ModelInfo | None = get_model_info(model_id)
-    except Exception as e:
-        verbose_proxy_logger.debug(
-            "create_model_info_response: cost map lookup failed for %s: %s",
-            model_id,
-            e,
-        )
-        model_cost_info = None
+    listing_info: Final = llm_router.get_model_listing_info(model_id) if llm_router is not None else None
 
-    max_input_tokens: int | None = None
-    max_output_tokens: int | None = None
-    if model_cost_info is not None:
-        max_input_tokens = coerce_token_limit(model_cost_info.get("max_input_tokens"))
-        max_output_tokens = coerce_token_limit(model_cost_info.get("max_output_tokens"))
-        mode: Final = model_cost_info.get("mode")
-        if isinstance(mode, str):
-            base["mode"] = mode
+    # One entry per distinct model behind the listed name; (None,) when the router knows
+    # nothing about it, so the listed name is resolved on its own as before.
+    deployment_models: Final[tuple[str | None, ...]] = (
+        listing_info.cost_map_keys if listing_info is not None and listing_info.cost_map_keys else (None,)
+    )
+    listed_info: Final = _safe_get_model_info(model_id, get_model_info)
+    candidate_sets: Final = tuple(
+        _resolve_listing_model_info(
+            deployment_model=deployment_model,
+            listed_model=model_id,
+            listed_info=listed_info,
+            get_model_info=get_model_info,
+        )
+        for deployment_model in deployment_models
+    )
+
+    max_input_tokens: int | None = _group_token_limit(candidate_sets, "max_input_tokens")
+    max_output_tokens: int | None = _group_token_limit(candidate_sets, "max_output_tokens")
+    mode: Final = next(
+        (
+            m
+            for m in (
+                cast("Mapping[str, object]", info).get("mode")  # cast-ok: an entry need not carry "mode"
+                for candidates in candidate_sets
+                for info in candidates
+            )
+            if isinstance(m, str)
+        ),
+        None,
+    )
+    if mode is not None:
+        base["mode"] = mode
+
+    if listing_info is not None:
+        if listing_info.max_input_tokens is not None:
+            max_input_tokens = listing_info.max_input_tokens
+        if listing_info.max_output_tokens is not None:
+            max_output_tokens = listing_info.max_output_tokens
 
     if llm_router is not None:
-        configured_input, configured_output = llm_router.get_configured_token_limits(model_id)
-        if configured_input is not None:
-            max_input_tokens = configured_input
-        if configured_output is not None:
-            max_output_tokens = configured_output
         configured_mode: Final = llm_router.get_configured_mode(model_id)
         if isinstance(configured_mode, str):
             base["mode"] = configured_mode

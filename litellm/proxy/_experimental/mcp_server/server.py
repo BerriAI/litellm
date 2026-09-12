@@ -56,6 +56,7 @@ from litellm.proxy._experimental.mcp_server.mcp_debug import (
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     _redact_mcp_resource_url,
+    get_byok_www_authenticate,
     get_passthrough_www_authenticate,
     get_route_relative_request_path,
     well_known_root_suffix,
@@ -2852,7 +2853,7 @@ if MCP_AVAILABLE:
                     "server_name": mcp_server.server_name or mcp_server.name,
                     "message": "User identity is required for BYOK servers",
                 },
-                headers={"WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'},
+                headers={"WWW-Authenticate": get_byok_www_authenticate()},
             )
 
         # Check shared credential cache before hitting the DB.
@@ -2873,9 +2874,7 @@ if MCP_AVAILABLE:
                                 "Complete the OAuth authorization flow to provide your API key."
                             ),
                         },
-                        headers={
-                            "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
-                        },
+                        headers={"WWW-Authenticate": get_byok_www_authenticate()},
                     )
                 return
 
@@ -2914,7 +2913,7 @@ if MCP_AVAILABLE:
                         "Complete the OAuth authorization flow to provide your API key."
                     ),
                 },
-                headers={"WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'},
+                headers={"WWW-Authenticate": get_byok_www_authenticate()},
             )
 
     async def execute_mcp_tool(
@@ -3068,9 +3067,7 @@ if MCP_AVAILABLE:
                                 "Complete the OAuth authorization flow to provide your API key."
                             ),
                         },
-                        headers={
-                            "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
-                        },
+                        headers={"WWW-Authenticate": get_byok_www_authenticate()},
                     )
                 mcp_auth_header = byok_cred
             elif mcp_server.is_byok:
@@ -3339,6 +3336,43 @@ if MCP_AVAILABLE:
             )
         return result
 
+    async def fire_mcp_tool_call_failure_logging(
+        logging_obj: LiteLLMLoggingObj | None,
+        exception: Exception,
+        start_time: datetime,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        request_data: Mapping[str, object],
+    ) -> None:
+        """Failure logging shared by the ``/mcp`` path and the REST endpoint. Call from
+        inside the ``except`` block so the traceback is still available.
+
+        The failure handlers run first because ``_ProxyDBLogger.async_post_call_failure_hook``
+        builds the failure spend-log row from the ``standard_logging_object`` they produce;
+        both gate on ``should_run_logging``, so the ``@client`` wrapper does not log twice.
+        A relayed upstream 401 (``MCPUpstreamAuthError``) is an expected caller-must-reauth
+        signal and skips ``post_call_failure_hook``, which fires the ``llm_exceptions`` alert.
+        """
+        from litellm.proxy.proxy_server import proxy_logging_obj
+
+        traceback_str: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
+        if logging_obj is not None:
+            end_time: Final = datetime.now()  # noqa: DTZ005  # naive to match `start_time`, which it is subtracted from
+            logging_obj.failure_handler(exception, traceback_str, start_time, end_time)
+            await logging_obj.async_failure_handler(exception, traceback_str, start_time, end_time)
+
+        if isinstance(exception, MCPUpstreamAuthError) or not proxy_logging_obj or user_api_key_auth is None:
+            return
+        sanitized_request_data: Final = {
+            key: value for key, value in request_data.items() if key not in _MCP_CREDENTIAL_REQUEST_FIELDS
+        }
+        await proxy_logging_obj.post_call_failure_hook(
+            request_data=sanitized_request_data,
+            original_exception=exception,
+            user_api_key_dict=user_api_key_auth,
+            route="/mcp/call_tool",
+            traceback_str=traceback_str,
+        )
+
     @client
     async def call_mcp_tool(
         name: str,
@@ -3405,40 +3439,8 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
                 **kwargs,
             )
-        except MCPUpstreamAuthError:
-            # A client-forwarded pass-through upstream 401 is an expected caller-must-reauth signal, so
-            # re-raise it without post_call_failure_hook, which fires the proxy's llm_exceptions alert.
-            # mcp_server_tool_call then downgrades it to an informational isError result for the
-            # streamable client. Note: this function is @client-decorated, so the decorator's standard
-            # failure logging still records the event (spend log / OTel); only the extra alert sink is
-            # skipped here.
-            raise
         except Exception as e:
-            traceback_str: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
-            from litellm.proxy.proxy_server import proxy_logging_obj
-
-            # Ordering is load-bearing. ``_ProxyDBLogger.async_post_call_failure_hook``,
-            # reached below, writes the failure spend-log row from this logger's
-            # ``standard_logging_object``, which only exists once the failure handlers
-            # have run. Flush them first or the row lands with
-            # ``guardrail_information=None`` and a guardrail block is never counted.
-            #
-            # Not double-logged: both handlers gate on ``should_run_logging`` and then
-            # mark it, so the ``@client`` wrapper's own post-raise logging no-ops on this
-            # logger, same as ``_fire_mcp_tool_call_logging`` does for ``isError=True``.
-            if litellm_logging_obj is not None:
-                end_time: Final = datetime.now()  # noqa: DTZ005  # naive to match `start_time`, which it is subtracted from
-                litellm_logging_obj.failure_handler(e, traceback_str, start_time, end_time)
-                await litellm_logging_obj.async_failure_handler(e, traceback_str, start_time, end_time)
-
-            if proxy_logging_obj and user_api_key_auth:
-                await proxy_logging_obj.post_call_failure_hook(
-                    request_data=kwargs,
-                    original_exception=e,
-                    user_api_key_dict=user_api_key_auth,
-                    route="/mcp/call_tool",
-                    traceback_str=traceback_str,
-                )
+            await fire_mcp_tool_call_failure_logging(litellm_logging_obj, e, start_time, user_api_key_auth, kwargs)
             raise
 
         if litellm_logging_obj:

@@ -35,6 +35,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    JsonValue,
     PrivateAttr,
     SkipValidation,
     field_serializer,
@@ -2925,6 +2926,7 @@ RoutingDecisionCause = Literal[
     # same tier served instead. The displaced group rides in signals. Reported even on a kept
     # session pin, since the pinned model did not serve the request.
     "health_failover",
+    "health_default_fallback",
     "session_affinity_pin",
     "session_affinity_escalation",
     # classification_mode 'user_turn': the request is an agent loop's continuation turn (no new
@@ -3379,7 +3381,12 @@ class StandardAuditLogPayload(TypedDict):
     updated_values: str | None
 
 
-class StandardLoggingPayload(TypedDict):
+class ClassifierAudit(TypedDict, total=False):
+    classifier_input: ReadOnly[Mapping[str, JsonValue]]
+    originating_request_masked: ReadOnly[Mapping[str, JsonValue]]
+
+
+class StandardLoggingPayload(ClassifierAudit):
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
     session_id: str  # End-user/conversation session id (litellm_session_id), independent of trace_id

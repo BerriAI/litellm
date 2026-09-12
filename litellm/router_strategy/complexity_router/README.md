@@ -270,6 +270,18 @@ change or default takeover records `cause: modality_escalation` with the displac
 pinned by session affinity, and by default a KEPT session pin bypasses the gate: a session pinned
 to a text-only model keeps it even when an image arrives.
 
+Context-window and modality recovery take priority over the default model. If a compatible tier
+cannot serve, the router checks the remaining compatible recovery tiers before using `default_model`.
+A capacity failure without those constraints tries the selected tier's peers, then the default
+
+The default must fit the context and accept the request's modality. It cannot bypass routing plugins
+or a plan-mode floor. Context fit uses the auto-router's existing buffer even when Router-wide pre-call
+checks are off. Missing context metadata retains the existing unknown-window behavior
+
+Health fallback records `cause: health_default_fallback` and `health_displaced:<MODEL>` in `signals`.
+It does not replace the session's tier pin. Adaptive feedback retains the model that actually served,
+but a default outside the adaptive candidate pool does not become a normal candidate
+
 Add `modality_pin_override: true` to lift that last exemption. The image turn is then re-placed
 the same way every other decision is, and records `cause: modality_pin_override` whether or not
 the tier moved, since the model left the pin either way. The pin itself is untouched: the session
@@ -454,6 +466,13 @@ If 2+ reasoning markers are detected in the user message, the request is promote
 ### System Prompt Handling
 
 Reasoning markers in the system prompt do **not** trigger the reasoning override. This prevents system prompts like "Think step by step before answering" from forcing all requests to the reasoning tier.
+
+For requests identified by a `claude-cli/` or `claude-code/` user agent, the LLM classifier omits caller system
+text to avoid classifying environment, agent, and skill catalogs. The current ask, configured prior-turn context,
+and trajectory signal remain unchanged. The routed completion still receives the original system text. This
+also excludes genuine task constraints supplied only in Claude Code system messages. Other clients keep the
+existing system-context behavior. The browser routing preview has no client-identity field and retains that
+generic behavior; use the real client when checking Claude Code routing.
 
 ### Harness Reminder Blocks
 

@@ -24,6 +24,7 @@ from starlette.exceptions import WebSocketException
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     GLOBAL_PROXY_SPEND_CACHE_KEY,
     INVALID_VIRTUAL_KEY_ERROR_MARKER,
@@ -63,6 +64,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_method import AuthMethod
+from litellm.proxy.auth.auth_object_prefetch import AuthObjectRefs, prefetch_auth_objects
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
     get_end_user_id_from_request_body,
@@ -101,6 +103,12 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.spend_tracking.carried_budget_state import carry_team_and_user_budget_state
+from litellm.proxy.spend_tracking.spend_counter_batch import (
+    bind_admission_counter_keys,
+    release_spend_counter_batch,
+    spend_counter_batch_scope,
+)
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
@@ -1970,6 +1978,9 @@ async def _user_api_key_auth_builder(
                 llm_model_list=llm_model_list,
                 llm_router=llm_router,
             )
+            await _prefetch_referenced_auth_objects(
+                valid_token, end_user_id=end_user_id, user_api_key_cache=user_api_key_cache, prisma_client=prisma_client
+            )
 
             # Check 2. If user_id for this token is in budget - done in common_checks()
             if valid_token.user_id is not None:
@@ -2621,6 +2632,11 @@ async def _run_centralized_common_checks(
         None if isinstance(end_user_result, BaseException) else end_user_result
     )
     global_proxy_spend: float | None = None if isinstance(global_spend_result, BaseException) else global_spend_result
+    carry_team_and_user_budget_state(
+        valid_token=user_api_key_auth_obj,
+        team_object=team_object,
+        user_object=user_object,
+    )
 
     if user_api_key_auth_obj.org_id is None and team_object is not None and team_object.organization_id is not None:
         user_api_key_auth_obj.org_id = team_object.organization_id
@@ -2672,21 +2688,25 @@ async def _run_centralized_common_checks(
         user_api_key_dict=user_api_key_auth_obj,
     )
 
-    _ = await common_checks(
-        request=request,
-        request_body=request_data,
-        team_object=team_object,
-        user_object=user_object,
-        end_user_object=end_user_object,
-        general_settings=general_settings,
-        global_proxy_spend=global_proxy_spend,
-        route=route,
-        llm_router=llm_router,
-        proxy_logging_obj=proxy_logging_obj,
-        valid_token=user_api_key_auth_obj,
-        skip_budget_checks=skip_budget_checks,
-        project_object=project_object,
-    )
+    bind_admission_counter_keys(user_api_key_auth_obj, end_user_id=end_user_id)
+    try:
+        _ = await common_checks(
+            request=request,
+            request_body=request_data,
+            team_object=team_object,
+            user_object=user_object,
+            end_user_object=end_user_object,
+            general_settings=general_settings,
+            global_proxy_spend=global_proxy_spend,
+            route=route,
+            llm_router=llm_router,
+            proxy_logging_obj=proxy_logging_obj,
+            valid_token=user_api_key_auth_obj,
+            skip_budget_checks=skip_budget_checks,
+            project_object=project_object,
+        )
+    finally:
+        release_spend_counter_batch()
 
     await _reserve_budget_after_common_checks(
         user_api_key_auth_obj=user_api_key_auth_obj,
@@ -2864,6 +2884,28 @@ async def _authorize_authenticated_request(
     return None
 
 
+def _spend_counter_redis_cache() -> RedisCache | None:
+    from litellm.proxy.proxy_server import spend_counter_cache
+
+    return spend_counter_cache.redis_cache
+
+
+async def _prefetch_referenced_auth_objects(
+    valid_token: UserAPIKeyAuth,
+    end_user_id: str | None,
+    user_api_key_cache: UserApiKeyCache,
+    prisma_client: PrismaClient | None,
+) -> None:
+    """Warm every object and spend counter the checks below will read, in one MGET each (one DB query when cold).
+    Runs after the key's model access check so a denied request costs no more than it did before."""
+    bind_admission_counter_keys(valid_token, end_user_id=end_user_id or None)
+    await prefetch_auth_objects(
+        refs=AuthObjectRefs.from_token(valid_token),
+        user_api_key_cache=user_api_key_cache,
+        prisma_client=prisma_client,
+    )
+
+
 def _seed_request_destinations(user_api_key_dict: UserAPIKeyAuth, request: Request | None = None) -> None:
     """Anchor the OTLP destinations this key or team overrides its traces to.
 
@@ -2928,7 +2970,7 @@ async def user_api_key_auth(
     # Run the whole auth phase inside a live ``auth`` span so the DB lookups it
     # triggers (key/user/team object reads) nest under it instead of flattening
     # onto the server span. No-op when OTel V2 isn't active.
-    with phase_span(f"auth {route}"):
+    with phase_span(f"auth {route}"), spend_counter_batch_scope(_spend_counter_redis_cache()):
         try:
             user_api_key_auth_obj: Final = await _user_api_key_auth_builder(
                 request=request,

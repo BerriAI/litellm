@@ -497,9 +497,14 @@ class OpenAIResponsesHandler(BaseTranslation):
             guardrailed_texts: Final = guardrailed_inputs.get("texts") or ()
             data["input"] = guardrailed_texts[0] if guardrailed_texts else input_data  # rebind-ok: data is an out-param
         else:
+            rewritten_texts: Final = guardrailed_inputs.get("texts") or ()
+            if len(rewritten_texts) != len(extracted.task_mappings):
+                from litellm.proxy.policy_engine.pipeline_executor import UnappliableRequestRewrite
+
+                raise UnappliableRequestRewrite(guardrail_to_apply.guardrail_name or "unknown")
             await self._apply_guardrail_responses_to_input(
                 messages=input_data,
-                responses=guardrailed_inputs.get("texts") or (),
+                responses=rewritten_texts,
                 task_mappings=extracted.task_mappings,
             )
         verbose_proxy_logger.debug("OpenAI Responses API: Processed input messages: %s", data.get("input"))
@@ -635,10 +640,12 @@ class OpenAIResponsesHandler(BaseTranslation):
         """
         Apply guardrail responses back to input messages.
 
+        ``responses`` pairs positionally with ``task_mappings``; the caller rejects
+        the request when the two disagree, so this never has to guess an alignment.
+
         Override this method to customize how responses are applied.
         """
-        for task_idx, guardrail_response in enumerate(responses):
-            mapping = task_mappings[task_idx]
+        for guardrail_response, mapping in zip(responses, task_mappings):
             msg_idx = cast(int, mapping[0])
             content_idx_optional = cast(int | None, mapping[1])
 

@@ -1715,7 +1715,7 @@ def test_generic_cost_per_token_gpt55(_local_model_cost_map):
 
 
 def test_generic_cost_per_token_gpt55_pro(_local_model_cost_map):
-    """gpt-5.5-pro: responses-only model — $30/1M input, $180/1M output, $3/1M cached input."""
+    """gpt-5.5-pro: responses-only model, $30/1M input, $180/1M output, no cached input rate published."""
     model = "gpt-5.5-pro"
     custom_llm_provider = "openai"
 
@@ -1724,7 +1724,7 @@ def test_generic_cost_per_token_gpt55_pro(_local_model_cost_map):
     # Sanity-check the map values match OpenAI's published pricing.
     assert model_cost_map["input_cost_per_token"] == 3e-5
     assert model_cost_map["output_cost_per_token"] == 1.8e-4
-    assert model_cost_map["cache_read_input_token_cost"] == 3e-6
+    assert "cache_read_input_token_cost" not in model_cost_map
     assert model_cost_map["litellm_provider"] == "openai"
     # gpt-5.5-pro is a responses-only model (no /v1/chat/completions endpoint).
     assert model_cost_map["mode"] == "responses"

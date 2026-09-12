@@ -4335,7 +4335,7 @@
       "/anthropic/{endpoint}": {
         "delete": {
           "description": "[Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)",
-          "operationId": "anthropic_proxy_route_anthropic__endpoint__delete",
+          "operationId": "anthropic_proxy_route_anthropic__endpoint__delete_2",
           "parameters": [
             {
               "in": "path",
@@ -4379,7 +4379,7 @@
         },
         "get": {
           "description": "[Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)",
-          "operationId": "anthropic_proxy_route_anthropic__endpoint__get",
+          "operationId": "anthropic_proxy_route_anthropic__endpoint__get_2",
           "parameters": [
             {
               "in": "path",
@@ -4423,7 +4423,7 @@
         },
         "patch": {
           "description": "[Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)",
-          "operationId": "anthropic_proxy_route_anthropic__endpoint__patch",
+          "operationId": "anthropic_proxy_route_anthropic__endpoint__patch_2",
           "parameters": [
             {
               "in": "path",
@@ -4467,7 +4467,7 @@
         },
         "post": {
           "description": "[Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)",
-          "operationId": "anthropic_proxy_route_anthropic__endpoint__post",
+          "operationId": "anthropic_proxy_route_anthropic__endpoint__post_2",
           "parameters": [
             {
               "in": "path",
@@ -4511,7 +4511,7 @@
         },
         "put": {
           "description": "[Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)",
-          "operationId": "anthropic_proxy_route_anthropic__endpoint__put",
+          "operationId": "anthropic_proxy_route_anthropic__endpoint__put_2",
           "parameters": [
             {
               "in": "path",
@@ -15836,6 +15836,4976 @@
       }
     }
   },
+  "llm_passthrough": {
+    "components": {
+      "schemas": {
+        "Body_image_edit_api_openai_deployments__model__images_edits_post": {
+          "properties": {
+            "image": {
+              "anyOf": [
+                {
+                  "items": {
+                    "contentMediaType": "application/octet-stream",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Image"
+            },
+            "image[]": {
+              "anyOf": [
+                {
+                  "items": {
+                    "contentMediaType": "application/octet-stream",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Image[]"
+            },
+            "mask": {
+              "anyOf": [
+                {
+                  "items": {
+                    "contentMediaType": "application/octet-stream",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mask"
+            },
+            "mask[]": {
+              "anyOf": [
+                {
+                  "items": {
+                    "contentMediaType": "application/octet-stream",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mask[]"
+            }
+          },
+          "title": "Body_image_edit_api_openai_deployments__model__images_edits_post",
+          "type": "object"
+        },
+        "ErrorResponse": {
+          "properties": {
+            "detail": {
+              "additionalProperties": true,
+              "example": {
+                "error": {
+                  "code": "error_code",
+                  "message": "Error message",
+                  "param": "error_param",
+                  "type": "error_type"
+                }
+              },
+              "title": "Detail",
+              "type": "object"
+            }
+          },
+          "required": [
+            "detail"
+          ],
+          "title": "ErrorResponse",
+          "type": "object"
+        },
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "RealtimeClientSecretResponse": {
+          "description": "Response from POST /v1/realtime/client_secrets.\n\nBoth the top-level `value` and `session.client_secret.value`\nwill contain the encrypted token instead of the raw ephemeral key.\nThe `session` field is kept as a raw dict so unknown fields pass through.",
+          "properties": {
+            "expires_at": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expires At"
+            },
+            "session": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session"
+            },
+            "value": {
+              "title": "Value",
+              "type": "string"
+            }
+          },
+          "required": [
+            "value"
+          ],
+          "title": "RealtimeClientSecretResponse",
+          "type": "object"
+        },
+        "RealtimeTranscriptionSessionResponse": {
+          "additionalProperties": true,
+          "description": "Response from POST /v1/realtime/transcription_sessions.\n\n`client_secret.value` contains the encrypted token instead of the raw\nephemeral key. Unknown fields pass through unchanged.",
+          "properties": {
+            "client_secret": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Secret"
+            }
+          },
+          "title": "RealtimeTranscriptionSessionResponse",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        }
+      }
+    },
+    "paths": {
+      "/anthropic/{endpoint}": {
+        "delete": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)",
+          "operationId": "anthropic_proxy_route_anthropic__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Anthropic Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)",
+          "operationId": "anthropic_proxy_route_anthropic__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Anthropic Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)",
+          "operationId": "anthropic_proxy_route_anthropic__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Anthropic Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)",
+          "operationId": "anthropic_proxy_route_anthropic__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Anthropic Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)",
+          "operationId": "anthropic_proxy_route_anthropic__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Anthropic Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/assemblyai/{endpoint}": {
+        "delete": {
+          "operationId": "assemblyai_proxy_route_assemblyai__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Assemblyai Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "operationId": "assemblyai_proxy_route_assemblyai__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Assemblyai Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "operationId": "assemblyai_proxy_route_assemblyai__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Assemblyai Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "operationId": "assemblyai_proxy_route_assemblyai__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Assemblyai Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "operationId": "assemblyai_proxy_route_assemblyai__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Assemblyai Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/azure/{endpoint}": {
+        "delete": {
+          "description": "Call any azure endpoint using the proxy.\n\nJust use `{PROXY_BASE_URL}/azure/{endpoint:path}`\n\nChecks if the deployment id in the url is a litellm model name. If so, it will route using the llm_router.allm_passthrough_route.",
+          "operationId": "azure_proxy_route_azure__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Azure Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "description": "Call any azure endpoint using the proxy.\n\nJust use `{PROXY_BASE_URL}/azure/{endpoint:path}`\n\nChecks if the deployment id in the url is a litellm model name. If so, it will route using the llm_router.allm_passthrough_route.",
+          "operationId": "azure_proxy_route_azure__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Azure Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "description": "Call any azure endpoint using the proxy.\n\nJust use `{PROXY_BASE_URL}/azure/{endpoint:path}`\n\nChecks if the deployment id in the url is a litellm model name. If so, it will route using the llm_router.allm_passthrough_route.",
+          "operationId": "azure_proxy_route_azure__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Azure Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "description": "Call any azure endpoint using the proxy.\n\nJust use `{PROXY_BASE_URL}/azure/{endpoint:path}`\n\nChecks if the deployment id in the url is a litellm model name. If so, it will route using the llm_router.allm_passthrough_route.",
+          "operationId": "azure_proxy_route_azure__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Azure Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "description": "Call any azure endpoint using the proxy.\n\nJust use `{PROXY_BASE_URL}/azure/{endpoint:path}`\n\nChecks if the deployment id in the url is a litellm model name. If so, it will route using the llm_router.allm_passthrough_route.",
+          "operationId": "azure_proxy_route_azure__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Azure Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/azure_ai/{endpoint}": {
+        "delete": {
+          "description": "Call any azure endpoint using the proxy.\n\nJust use `{PROXY_BASE_URL}/azure/{endpoint:path}`\n\nChecks if the deployment id in the url is a litellm model name. If so, it will route using the llm_router.allm_passthrough_route.",
+          "operationId": "azure_proxy_route_azure_ai__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Azure Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "description": "Call any azure endpoint using the proxy.\n\nJust use `{PROXY_BASE_URL}/azure/{endpoint:path}`\n\nChecks if the deployment id in the url is a litellm model name. If so, it will route using the llm_router.allm_passthrough_route.",
+          "operationId": "azure_proxy_route_azure_ai__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Azure Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "description": "Call any azure endpoint using the proxy.\n\nJust use `{PROXY_BASE_URL}/azure/{endpoint:path}`\n\nChecks if the deployment id in the url is a litellm model name. If so, it will route using the llm_router.allm_passthrough_route.",
+          "operationId": "azure_proxy_route_azure_ai__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Azure Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "description": "Call any azure endpoint using the proxy.\n\nJust use `{PROXY_BASE_URL}/azure/{endpoint:path}`\n\nChecks if the deployment id in the url is a litellm model name. If so, it will route using the llm_router.allm_passthrough_route.",
+          "operationId": "azure_proxy_route_azure_ai__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Azure Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "description": "Call any azure endpoint using the proxy.\n\nJust use `{PROXY_BASE_URL}/azure/{endpoint:path}`\n\nChecks if the deployment id in the url is a litellm model name. If so, it will route using the llm_router.allm_passthrough_route.",
+          "operationId": "azure_proxy_route_azure_ai__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Azure Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/bedrock/{endpoint}": {
+        "delete": {
+          "description": "This is the v1 passthrough for Bedrock.\nV2 is handled by the `/bedrock/v2` endpoint.\n[Docs](https://docs.litellm.ai/docs/pass_through/bedrock)",
+          "operationId": "bedrock_proxy_route_bedrock__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Bedrock Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "description": "This is the v1 passthrough for Bedrock.\nV2 is handled by the `/bedrock/v2` endpoint.\n[Docs](https://docs.litellm.ai/docs/pass_through/bedrock)",
+          "operationId": "bedrock_proxy_route_bedrock__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Bedrock Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "description": "This is the v1 passthrough for Bedrock.\nV2 is handled by the `/bedrock/v2` endpoint.\n[Docs](https://docs.litellm.ai/docs/pass_through/bedrock)",
+          "operationId": "bedrock_proxy_route_bedrock__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Bedrock Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "description": "This is the v1 passthrough for Bedrock.\nV2 is handled by the `/bedrock/v2` endpoint.\n[Docs](https://docs.litellm.ai/docs/pass_through/bedrock)",
+          "operationId": "bedrock_proxy_route_bedrock__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Bedrock Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "description": "This is the v1 passthrough for Bedrock.\nV2 is handled by the `/bedrock/v2` endpoint.\n[Docs](https://docs.litellm.ai/docs/pass_through/bedrock)",
+          "operationId": "bedrock_proxy_route_bedrock__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Bedrock Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/cohere/{endpoint}": {
+        "delete": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/cohere)",
+          "operationId": "cohere_proxy_route_cohere__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Cohere Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/cohere)",
+          "operationId": "cohere_proxy_route_cohere__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Cohere Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/cohere)",
+          "operationId": "cohere_proxy_route_cohere__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Cohere Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/cohere)",
+          "operationId": "cohere_proxy_route_cohere__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Cohere Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/cohere)",
+          "operationId": "cohere_proxy_route_cohere__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Cohere Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/comprehendmedical": {
+        "post": {
+          "description": "AWS-SDK-shaped pass-through for Amazon Comprehend Medical: point the SDK's\n`endpoint_url` at `/comprehendmedical` and the operation is read from the\n`X-Amz-Target` header, per the AWS JSON 1.1 protocol.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/comprehend_medical)",
+          "operationId": "comprehend_medical_sdk_proxy_route_comprehendmedical_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Comprehend Medical Sdk Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/comprehendmedical/{operation}": {
+        "post": {
+          "description": "Pass-through for Amazon Comprehend Medical, e.g. `POST /comprehendmedical/DetectEntitiesV2`.\n\nThe request body is forwarded as-is to the AWS JSON 1.1 API and signed with SigV4\nusing the proxy's AWS credentials.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/comprehend_medical)",
+          "operationId": "comprehend_medical_proxy_route_comprehendmedical__operation__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "operation",
+              "required": true,
+              "schema": {
+                "title": "Operation",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Comprehend Medical Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/cursor/chat/completions": {
+        "post": {
+          "description": "Cursor BYOK endpoint. Accepts both request shapes Cursor sends to its OpenAI-compatible\nbase URL and always answers in chat completions format.\n\nCursor agent mode sends Responses API format bodies (`input`, flat tool defs, `reasoning`,\ncustom tools) to the chat/completions path while expecting chat completions responses;\nthose are routed through the Responses API pipeline and converted back. Genuine chat\ncompletions bodies (`messages` present) are routed through the standard chat completions\npipeline, after normalizing each level of the `tools` array and `tool_choice` to the chat\ncompletions shapes OpenAI requires. Cursor mixes Responses API shapes into chat bodies\nper level, independently: a flat tool def (`{\"type\": \"custom\", \"name\": \"ApplyPatch\", ...}`)\ngets nested under `custom`, and a flat grammar format\n(`{\"type\": \"grammar\", \"definition\", \"syntax\"}`) gets wrapped as\n`{\"type\": \"grammar\", \"grammar\": {...}}` wherever it appears, including inside tool defs\nCursor already sent pre-nested.\n\n```bash\ncurl -X POST http://localhost:4000/cursor/chat/completions     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer sk-1234\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": [{\"role\": \"user\", \"content\": \"Hello\"}]\n}'\nResponds back in chat completions format.\n```",
+          "operationId": "cursor_chat_completions_cursor_chat_completions_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Cursor Chat Completions",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/cursor/models": {
+        "get": {
+          "description": "OpenAI-compatible model listing for the Cursor BYOK base URL.\n\nClients pointed at `<proxy>/cursor` as an OpenAI-compatible base URL resolve and\nverify models via `GET {base}/models` (the OpenAI SDK contract). Without this\nroute those requests fall through to the Cursor Cloud Agents passthrough, which\ndemands a Cursor API key and 401s, so key verification silently fails before any\nchat request is ever sent. Delegates to the standard `/v1/models` handler.",
+          "operationId": "cursor_model_list_cursor_models_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Cursor Model List",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/cursor/v1/models": {
+        "get": {
+          "description": "OpenAI-compatible model listing for the Cursor BYOK base URL.\n\nClients pointed at `<proxy>/cursor` as an OpenAI-compatible base URL resolve and\nverify models via `GET {base}/models` (the OpenAI SDK contract). Without this\nroute those requests fall through to the Cursor Cloud Agents passthrough, which\ndemands a Cursor API key and 401s, so key verification silently fails before any\nchat request is ever sent. Delegates to the standard `/v1/models` handler.",
+          "operationId": "cursor_model_list_cursor_v1_models_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Cursor Model List",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/cursor/{endpoint}": {
+        "delete": {
+          "description": "Pass-through endpoint for the Cursor Cloud Agents API.\n\nSupports all Cursor Cloud Agents endpoints:\n- GET    /v0/agents         \u2014 List agents\n- POST   /v0/agents         \u2014 Launch an agent\n- GET    /v0/agents/{id}    \u2014 Agent status\n- GET    /v0/agents/{id}/conversation \u2014 Agent conversation\n- POST   /v0/agents/{id}/followup    \u2014 Add follow-up\n- POST   /v0/agents/{id}/stop        \u2014 Stop an agent\n- DELETE /v0/agents/{id}    \u2014 Delete an agent\n- GET    /v0/me             \u2014 API key info\n- GET    /v0/models         \u2014 List models\n- GET    /v0/repositories   \u2014 List GitHub repositories\n\nUses Basic Authentication (base64-encoded `API_KEY:`).\n\nCredential lookup order:\n1. passthrough_endpoint_router (config.yaml deployments with use_in_pass_through)\n2. litellm.credential_list (credentials added via UI)\n3. CURSOR_API_KEY environment variable",
+          "operationId": "cursor_proxy_route_cursor__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Cursor Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "description": "Pass-through endpoint for the Cursor Cloud Agents API.\n\nSupports all Cursor Cloud Agents endpoints:\n- GET    /v0/agents         \u2014 List agents\n- POST   /v0/agents         \u2014 Launch an agent\n- GET    /v0/agents/{id}    \u2014 Agent status\n- GET    /v0/agents/{id}/conversation \u2014 Agent conversation\n- POST   /v0/agents/{id}/followup    \u2014 Add follow-up\n- POST   /v0/agents/{id}/stop        \u2014 Stop an agent\n- DELETE /v0/agents/{id}    \u2014 Delete an agent\n- GET    /v0/me             \u2014 API key info\n- GET    /v0/models         \u2014 List models\n- GET    /v0/repositories   \u2014 List GitHub repositories\n\nUses Basic Authentication (base64-encoded `API_KEY:`).\n\nCredential lookup order:\n1. passthrough_endpoint_router (config.yaml deployments with use_in_pass_through)\n2. litellm.credential_list (credentials added via UI)\n3. CURSOR_API_KEY environment variable",
+          "operationId": "cursor_proxy_route_cursor__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Cursor Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "description": "Pass-through endpoint for the Cursor Cloud Agents API.\n\nSupports all Cursor Cloud Agents endpoints:\n- GET    /v0/agents         \u2014 List agents\n- POST   /v0/agents         \u2014 Launch an agent\n- GET    /v0/agents/{id}    \u2014 Agent status\n- GET    /v0/agents/{id}/conversation \u2014 Agent conversation\n- POST   /v0/agents/{id}/followup    \u2014 Add follow-up\n- POST   /v0/agents/{id}/stop        \u2014 Stop an agent\n- DELETE /v0/agents/{id}    \u2014 Delete an agent\n- GET    /v0/me             \u2014 API key info\n- GET    /v0/models         \u2014 List models\n- GET    /v0/repositories   \u2014 List GitHub repositories\n\nUses Basic Authentication (base64-encoded `API_KEY:`).\n\nCredential lookup order:\n1. passthrough_endpoint_router (config.yaml deployments with use_in_pass_through)\n2. litellm.credential_list (credentials added via UI)\n3. CURSOR_API_KEY environment variable",
+          "operationId": "cursor_proxy_route_cursor__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Cursor Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "description": "Pass-through endpoint for the Cursor Cloud Agents API.\n\nSupports all Cursor Cloud Agents endpoints:\n- GET    /v0/agents         \u2014 List agents\n- POST   /v0/agents         \u2014 Launch an agent\n- GET    /v0/agents/{id}    \u2014 Agent status\n- GET    /v0/agents/{id}/conversation \u2014 Agent conversation\n- POST   /v0/agents/{id}/followup    \u2014 Add follow-up\n- POST   /v0/agents/{id}/stop        \u2014 Stop an agent\n- DELETE /v0/agents/{id}    \u2014 Delete an agent\n- GET    /v0/me             \u2014 API key info\n- GET    /v0/models         \u2014 List models\n- GET    /v0/repositories   \u2014 List GitHub repositories\n\nUses Basic Authentication (base64-encoded `API_KEY:`).\n\nCredential lookup order:\n1. passthrough_endpoint_router (config.yaml deployments with use_in_pass_through)\n2. litellm.credential_list (credentials added via UI)\n3. CURSOR_API_KEY environment variable",
+          "operationId": "cursor_proxy_route_cursor__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Cursor Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "description": "Pass-through endpoint for the Cursor Cloud Agents API.\n\nSupports all Cursor Cloud Agents endpoints:\n- GET    /v0/agents         \u2014 List agents\n- POST   /v0/agents         \u2014 Launch an agent\n- GET    /v0/agents/{id}    \u2014 Agent status\n- GET    /v0/agents/{id}/conversation \u2014 Agent conversation\n- POST   /v0/agents/{id}/followup    \u2014 Add follow-up\n- POST   /v0/agents/{id}/stop        \u2014 Stop an agent\n- DELETE /v0/agents/{id}    \u2014 Delete an agent\n- GET    /v0/me             \u2014 API key info\n- GET    /v0/models         \u2014 List models\n- GET    /v0/repositories   \u2014 List GitHub repositories\n\nUses Basic Authentication (base64-encoded `API_KEY:`).\n\nCredential lookup order:\n1. passthrough_endpoint_router (config.yaml deployments with use_in_pass_through)\n2. litellm.credential_list (credentials added via UI)\n3. CURSOR_API_KEY environment variable",
+          "operationId": "cursor_proxy_route_cursor__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Cursor Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/eu.assemblyai/{endpoint}": {
+        "delete": {
+          "operationId": "assemblyai_proxy_route_eu_assemblyai__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Assemblyai Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "operationId": "assemblyai_proxy_route_eu_assemblyai__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Assemblyai Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "operationId": "assemblyai_proxy_route_eu_assemblyai__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Assemblyai Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "operationId": "assemblyai_proxy_route_eu_assemblyai__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Assemblyai Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "operationId": "assemblyai_proxy_route_eu_assemblyai__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Assemblyai Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/gemini/{endpoint}": {
+        "delete": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/google_ai_studio)",
+          "operationId": "gemini_proxy_route_gemini__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Gemini Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/google_ai_studio)",
+          "operationId": "gemini_proxy_route_gemini__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Gemini Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/google_ai_studio)",
+          "operationId": "gemini_proxy_route_gemini__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Gemini Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/google_ai_studio)",
+          "operationId": "gemini_proxy_route_gemini__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Gemini Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/google_ai_studio)",
+          "operationId": "gemini_proxy_route_gemini__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Gemini Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/gigachat/{endpoint}": {
+        "delete": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/gigachat)",
+          "operationId": "gigachat_proxy_route_gigachat__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Gigachat Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/gigachat)",
+          "operationId": "gigachat_proxy_route_gigachat__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Gigachat Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/gigachat)",
+          "operationId": "gigachat_proxy_route_gigachat__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Gigachat Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/gigachat)",
+          "operationId": "gigachat_proxy_route_gigachat__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Gigachat Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/gigachat)",
+          "operationId": "gigachat_proxy_route_gigachat__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Gigachat Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/milvus/{endpoint}": {
+        "delete": {
+          "description": "Enable using Milvus `/vectors` endpoint as a pass-through endpoint.",
+          "operationId": "milvus_proxy_route_milvus__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Milvus Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "description": "Enable using Milvus `/vectors` endpoint as a pass-through endpoint.",
+          "operationId": "milvus_proxy_route_milvus__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Milvus Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "description": "Enable using Milvus `/vectors` endpoint as a pass-through endpoint.",
+          "operationId": "milvus_proxy_route_milvus__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Milvus Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "description": "Enable using Milvus `/vectors` endpoint as a pass-through endpoint.",
+          "operationId": "milvus_proxy_route_milvus__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Milvus Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "description": "Enable using Milvus `/vectors` endpoint as a pass-through endpoint.",
+          "operationId": "milvus_proxy_route_milvus__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Milvus Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/mistral/{endpoint}": {
+        "delete": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/mistral)",
+          "operationId": "mistral_proxy_route_mistral__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Mistral Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/mistral)",
+          "operationId": "mistral_proxy_route_mistral__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Mistral Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/mistral)",
+          "operationId": "mistral_proxy_route_mistral__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Mistral Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/mistral)",
+          "operationId": "mistral_proxy_route_mistral__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Mistral Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/mistral)",
+          "operationId": "mistral_proxy_route_mistral__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Mistral Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai/deployments/{model}/chat/completions": {
+        "post": {
+          "description": "Follows the exact same API spec as `OpenAI's Chat API https://platform.openai.com/docs/api-reference/chat`\n\n```bash\ncurl -X POST http://localhost:4000/v1/chat/completions \n-H \"Content-Type: application/json\" \n-H \"Authorization: Bearer sk-1234\" \n-d '{\n    \"model\": \"gpt-4o\",\n    \"messages\": [\n        {\n            \"role\": \"user\",\n            \"content\": \"Hello!\"\n        }\n    ]\n}'\n```",
+          "operationId": "chat_completion_openai_deployments__model__chat_completions_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "model",
+              "required": true,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Model"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful response"
+            },
+            "400": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              },
+              "description": "ContentPolicyViolationError"
+            },
+            "401": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              },
+              "description": "AuthenticationError"
+            },
+            "403": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              },
+              "description": "PermissionDeniedError"
+            },
+            "404": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              },
+              "description": "NotFoundError"
+            },
+            "408": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              },
+              "description": "Timeout"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              },
+              "description": "UnprocessableEntityError"
+            },
+            "429": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              },
+              "description": "\n    Unified rate-limit error.\n\n    Every rate-limit condition surfaced by litellm \u2014 whether it originated from\n    an upstream LLM provider, a vendor batch endpoint, or one of litellm's own\n    proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,\n    max-iterations, etc.) \u2014 is raised as an instance of this class.\n\n    The :attr:`category` attribute lets callers distinguish the source. See\n    :class:`RateLimitErrorCategory` for the available values.\n    "
+            },
+            "500": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              },
+              "description": "JSONSchemaValidationError"
+            },
+            "503": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+              },
+              "description": "APIConnectionError"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Chat Completion",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai/deployments/{model}/completions": {
+        "post": {
+          "description": "Follows the exact same API spec as `OpenAI's Completions API https://platform.openai.com/docs/api-reference/completions`\n\n```bash\ncurl -X POST http://localhost:4000/v1/completions \n-H \"Content-Type: application/json\" \n-H \"Authorization: Bearer sk-1234\" \n-d '{\n    \"model\": \"gpt-3.5-turbo-instruct\",\n    \"prompt\": \"Once upon a time\",\n    \"max_tokens\": 50,\n    \"temperature\": 0.7\n}'\n```",
+          "operationId": "completion_openai_deployments__model__completions_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "model",
+              "required": true,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Model"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Completion",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai/deployments/{model}/embeddings": {
+        "post": {
+          "description": "Follows the exact same API spec as `OpenAI's Embeddings API https://platform.openai.com/docs/api-reference/embeddings`\n\n```bash\ncurl -X POST http://localhost:4000/v1/embeddings \n-H \"Content-Type: application/json\" \n-H \"Authorization: Bearer sk-1234\" \n-d '{\n    \"model\": \"text-embedding-ada-002\",\n    \"input\": \"The quick brown fox jumps over the lazy dog\"\n}'\n```",
+          "operationId": "embeddings_openai_deployments__model__embeddings_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "model",
+              "required": true,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Model"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Embeddings",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai/deployments/{model}/images/edits": {
+        "post": {
+          "description": "Follows the OpenAI Images API spec: https://platform.openai.com/docs/api-reference/images/create\n\n```bash\ncurl -s -D >(grep -i x-request-id >&2)     -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png)     -X POST \"http://localhost:4000/v1/images/edits\"     -H \"Authorization: Bearer sk-1234\"         -F \"model=gpt-image-1\"         -F \"image[]=@soap.png\"         -F 'prompt=Create a studio ghibli image of this'\n```",
+          "operationId": "image_edit_api_openai_deployments__model__images_edits_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "model",
+              "required": true,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Model"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "multipart/form-data": {
+                "schema": {
+                  "$ref": "#/components/schemas/Body_image_edit_api_openai_deployments__model__images_edits_post"
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Image Edit Api",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai/deployments/{model}/images/generations": {
+        "post": {
+          "operationId": "image_generation_openai_deployments__model__images_generations_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "model",
+              "required": true,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Model"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Image Generation",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai/v1/realtime/calls": {
+        "post": {
+          "operationId": "proxy_realtime_calls_openai_v1_realtime_calls_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Proxy Realtime Calls",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai/v1/realtime/client_secrets": {
+        "post": {
+          "operationId": "create_realtime_client_secret_openai_v1_realtime_client_secrets_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RealtimeClientSecretResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Realtime Client Secret",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai/v1/realtime/transcription_sessions": {
+        "post": {
+          "description": "Create an ephemeral Realtime transcription session\n(POST /v1/realtime/transcription_sessions) for the WebRTC/WebSocket flow.\n\nMirrors the client_secrets route but targets the transcription_sessions\nendpoint and encrypts the ephemeral key returned under `client_secret.value`.",
+          "operationId": "create_realtime_transcription_session_openai_v1_realtime_transcription_sessions_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RealtimeTranscriptionSessionResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Realtime Transcription Session",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai/v1/responses": {
+        "post": {
+          "description": "Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses\n\nSupports background mode with polling_via_cache for partial response retrieval.\nWhen background=true and polling_via_cache is enabled, returns a polling_id immediately\nand streams the response in the background, updating Redis cache.\n\n```bash\n# Normal request\ncurl -X POST http://localhost:4000/v1/responses     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer sk-1234\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": \"Tell me about AI\"\n}'\n\n# Background request with polling\ncurl -X POST http://localhost:4000/v1/responses     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer sk-1234\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": \"Tell me about AI\",\n    \"background\": true\n}'\n```",
+          "operationId": "responses_api_openai_v1_responses_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Responses Api",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai/v1/responses/compact": {
+        "post": {
+          "description": "Compact a response by running a compaction pass over a conversation.\n\nReturns encrypted, opaque items that can be used to reduce context size.\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/compact\n\n```bash\ncurl -X POST http://localhost:4000/v1/responses/compact     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer sk-1234\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": [{\"role\": \"user\", \"content\": \"Hello\"}]\n}'\n```",
+          "operationId": "compact_response_openai_v1_responses_compact_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Compact Response",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai/v1/responses/input_tokens": {
+        "post": {
+          "description": "Count the input tokens of a Responses API request without calling the model.\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/input-tokens\n\n```bash\ncurl -X POST http://localhost:4000/v1/responses/input_tokens     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer sk-1234\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": \"Hello, how are you?\"\n}'\n```\n\nReturns: `{\"object\": \"response.input_tokens\", \"input_tokens\": <count>}`",
+          "operationId": "responses_input_tokens_openai_v1_responses_input_tokens_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Responses Input Tokens",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai/v1/responses/{response_id}": {
+        "delete": {
+          "description": "Delete a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Deletes from Redis cache\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/delete\n\n```bash\ncurl -X DELETE http://localhost:4000/v1/responses/resp_abc123     -H \"Authorization: Bearer sk-1234\"\n```",
+          "operationId": "delete_response_openai_v1_responses__response_id__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "response_id",
+              "required": true,
+              "schema": {
+                "title": "Response Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Delete Response",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "description": "Get a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Returns cumulative cached content from background responses\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/get\n\n```bash\n# Get polling response\ncurl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H \"Authorization: Bearer sk-1234\"\n\n# Get provider response\ncurl -X GET http://localhost:4000/v1/responses/resp_abc123     -H \"Authorization: Bearer sk-1234\"\n```",
+          "operationId": "get_response_openai_v1_responses__response_id__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "response_id",
+              "required": true,
+              "schema": {
+                "title": "Response Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Response",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai/v1/responses/{response_id}/cancel": {
+        "post": {
+          "description": "Cancel a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Cancels background response and updates status in Redis\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/cancel\n\n```bash\n# Cancel polling response\ncurl -X POST http://localhost:4000/v1/responses/litellm_poll_abc123/cancel     -H \"Authorization: Bearer sk-1234\"\n\n# Cancel provider response\ncurl -X POST http://localhost:4000/v1/responses/resp_abc123/cancel     -H \"Authorization: Bearer sk-1234\"\n```",
+          "operationId": "cancel_response_openai_v1_responses__response_id__cancel_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "response_id",
+              "required": true,
+              "schema": {
+                "title": "Response Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Cancel Response",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai/v1/responses/{response_id}/input_items": {
+        "get": {
+          "description": "List input items for a response.",
+          "operationId": "get_response_input_items_openai_v1_responses__response_id__input_items_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "response_id",
+              "required": true,
+              "schema": {
+                "title": "Response Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Response Input Items",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai/{endpoint}": {
+        "delete": {
+          "description": "Pass-through endpoint for OpenAI API calls.\n\nAvailable on both routes:\n- /openai/{endpoint:path} - Standard OpenAI passthrough route\n- /openai_passthrough/{endpoint:path} - Dedicated passthrough route (recommended for Responses API)\n\nUse /openai_passthrough/* when you need guaranteed passthrough to OpenAI without conflicts\nwith LiteLLM's native implementations (e.g., for the Responses API at /v1/responses).\n\nExamples:\n    Standard route:\n    - /openai/v1/chat/completions\n    - /openai/v1/assistants\n    - /openai/v1/threads\n\n    Dedicated passthrough (for Responses API):\n    - /openai_passthrough/v1/responses\n    - /openai_passthrough/v1/responses/{response_id}\n    - /openai_passthrough/v1/responses/{response_id}/input_items\n\n[Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)",
+          "operationId": "openai_proxy_route_openai__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Openai Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "description": "Pass-through endpoint for OpenAI API calls.\n\nAvailable on both routes:\n- /openai/{endpoint:path} - Standard OpenAI passthrough route\n- /openai_passthrough/{endpoint:path} - Dedicated passthrough route (recommended for Responses API)\n\nUse /openai_passthrough/* when you need guaranteed passthrough to OpenAI without conflicts\nwith LiteLLM's native implementations (e.g., for the Responses API at /v1/responses).\n\nExamples:\n    Standard route:\n    - /openai/v1/chat/completions\n    - /openai/v1/assistants\n    - /openai/v1/threads\n\n    Dedicated passthrough (for Responses API):\n    - /openai_passthrough/v1/responses\n    - /openai_passthrough/v1/responses/{response_id}\n    - /openai_passthrough/v1/responses/{response_id}/input_items\n\n[Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)",
+          "operationId": "openai_proxy_route_openai__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Openai Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "description": "Pass-through endpoint for OpenAI API calls.\n\nAvailable on both routes:\n- /openai/{endpoint:path} - Standard OpenAI passthrough route\n- /openai_passthrough/{endpoint:path} - Dedicated passthrough route (recommended for Responses API)\n\nUse /openai_passthrough/* when you need guaranteed passthrough to OpenAI without conflicts\nwith LiteLLM's native implementations (e.g., for the Responses API at /v1/responses).\n\nExamples:\n    Standard route:\n    - /openai/v1/chat/completions\n    - /openai/v1/assistants\n    - /openai/v1/threads\n\n    Dedicated passthrough (for Responses API):\n    - /openai_passthrough/v1/responses\n    - /openai_passthrough/v1/responses/{response_id}\n    - /openai_passthrough/v1/responses/{response_id}/input_items\n\n[Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)",
+          "operationId": "openai_proxy_route_openai__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Openai Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "description": "Pass-through endpoint for OpenAI API calls.\n\nAvailable on both routes:\n- /openai/{endpoint:path} - Standard OpenAI passthrough route\n- /openai_passthrough/{endpoint:path} - Dedicated passthrough route (recommended for Responses API)\n\nUse /openai_passthrough/* when you need guaranteed passthrough to OpenAI without conflicts\nwith LiteLLM's native implementations (e.g., for the Responses API at /v1/responses).\n\nExamples:\n    Standard route:\n    - /openai/v1/chat/completions\n    - /openai/v1/assistants\n    - /openai/v1/threads\n\n    Dedicated passthrough (for Responses API):\n    - /openai_passthrough/v1/responses\n    - /openai_passthrough/v1/responses/{response_id}\n    - /openai_passthrough/v1/responses/{response_id}/input_items\n\n[Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)",
+          "operationId": "openai_proxy_route_openai__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Openai Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "description": "Pass-through endpoint for OpenAI API calls.\n\nAvailable on both routes:\n- /openai/{endpoint:path} - Standard OpenAI passthrough route\n- /openai_passthrough/{endpoint:path} - Dedicated passthrough route (recommended for Responses API)\n\nUse /openai_passthrough/* when you need guaranteed passthrough to OpenAI without conflicts\nwith LiteLLM's native implementations (e.g., for the Responses API at /v1/responses).\n\nExamples:\n    Standard route:\n    - /openai/v1/chat/completions\n    - /openai/v1/assistants\n    - /openai/v1/threads\n\n    Dedicated passthrough (for Responses API):\n    - /openai_passthrough/v1/responses\n    - /openai_passthrough/v1/responses/{response_id}\n    - /openai_passthrough/v1/responses/{response_id}/input_items\n\n[Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)",
+          "operationId": "openai_proxy_route_openai__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Openai Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai_passthrough/{endpoint}": {
+        "delete": {
+          "description": "Dedicated pass-through to the OpenAI API with no overlap with LiteLLM's native\nimplementations (e.g. the Responses API at /v1/responses).\n\nExamples:\n    - /openai_passthrough/v1/responses\n    - /openai_passthrough/v1/responses/{response_id}\n    - /openai_passthrough/v1/responses/{response_id}/input_items\n\n[Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)",
+          "operationId": "openai_passthrough_route_openai_passthrough__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Openai Passthrough Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "description": "Dedicated pass-through to the OpenAI API with no overlap with LiteLLM's native\nimplementations (e.g. the Responses API at /v1/responses).\n\nExamples:\n    - /openai_passthrough/v1/responses\n    - /openai_passthrough/v1/responses/{response_id}\n    - /openai_passthrough/v1/responses/{response_id}/input_items\n\n[Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)",
+          "operationId": "openai_passthrough_route_openai_passthrough__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Openai Passthrough Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "description": "Dedicated pass-through to the OpenAI API with no overlap with LiteLLM's native\nimplementations (e.g. the Responses API at /v1/responses).\n\nExamples:\n    - /openai_passthrough/v1/responses\n    - /openai_passthrough/v1/responses/{response_id}\n    - /openai_passthrough/v1/responses/{response_id}/input_items\n\n[Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)",
+          "operationId": "openai_passthrough_route_openai_passthrough__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Openai Passthrough Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "description": "Dedicated pass-through to the OpenAI API with no overlap with LiteLLM's native\nimplementations (e.g. the Responses API at /v1/responses).\n\nExamples:\n    - /openai_passthrough/v1/responses\n    - /openai_passthrough/v1/responses/{response_id}\n    - /openai_passthrough/v1/responses/{response_id}/input_items\n\n[Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)",
+          "operationId": "openai_passthrough_route_openai_passthrough__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Openai Passthrough Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "description": "Dedicated pass-through to the OpenAI API with no overlap with LiteLLM's native\nimplementations (e.g. the Responses API at /v1/responses).\n\nExamples:\n    - /openai_passthrough/v1/responses\n    - /openai_passthrough/v1/responses/{response_id}\n    - /openai_passthrough/v1/responses/{response_id}/input_items\n\n[Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)",
+          "operationId": "openai_passthrough_route_openai_passthrough__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Openai Passthrough Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/vertex_ai/discovery/{endpoint}": {
+        "delete": {
+          "description": "Call any vertex discovery endpoint using the proxy.\n\nJust use `{PROXY_BASE_URL}/vertex_ai/discovery/{endpoint:path}`\n\nTarget url: `https://discoveryengine.googleapis.com`",
+          "operationId": "vertex_discovery_proxy_route_vertex_ai_discovery__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Vertex Discovery Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "description": "Call any vertex discovery endpoint using the proxy.\n\nJust use `{PROXY_BASE_URL}/vertex_ai/discovery/{endpoint:path}`\n\nTarget url: `https://discoveryengine.googleapis.com`",
+          "operationId": "vertex_discovery_proxy_route_vertex_ai_discovery__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Vertex Discovery Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "description": "Call any vertex discovery endpoint using the proxy.\n\nJust use `{PROXY_BASE_URL}/vertex_ai/discovery/{endpoint:path}`\n\nTarget url: `https://discoveryengine.googleapis.com`",
+          "operationId": "vertex_discovery_proxy_route_vertex_ai_discovery__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Vertex Discovery Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "description": "Call any vertex discovery endpoint using the proxy.\n\nJust use `{PROXY_BASE_URL}/vertex_ai/discovery/{endpoint:path}`\n\nTarget url: `https://discoveryengine.googleapis.com`",
+          "operationId": "vertex_discovery_proxy_route_vertex_ai_discovery__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Vertex Discovery Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "description": "Call any vertex discovery endpoint using the proxy.\n\nJust use `{PROXY_BASE_URL}/vertex_ai/discovery/{endpoint:path}`\n\nTarget url: `https://discoveryengine.googleapis.com`",
+          "operationId": "vertex_discovery_proxy_route_vertex_ai_discovery__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Vertex Discovery Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/vertex_ai/{endpoint}": {
+        "delete": {
+          "description": "Call LiteLLM proxy via Vertex AI SDK.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)",
+          "operationId": "vertex_proxy_route_vertex_ai__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Vertex Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "description": "Call LiteLLM proxy via Vertex AI SDK.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)",
+          "operationId": "vertex_proxy_route_vertex_ai__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Vertex Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "description": "Call LiteLLM proxy via Vertex AI SDK.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)",
+          "operationId": "vertex_proxy_route_vertex_ai__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Vertex Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "description": "Call LiteLLM proxy via Vertex AI SDK.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)",
+          "operationId": "vertex_proxy_route_vertex_ai__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Vertex Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "description": "Call LiteLLM proxy via Vertex AI SDK.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)",
+          "operationId": "vertex_proxy_route_vertex_ai__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Vertex Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/vllm/{endpoint}": {
+        "delete": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/vllm)",
+          "operationId": "vllm_proxy_route_vllm__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Vllm Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/vllm)",
+          "operationId": "vllm_proxy_route_vllm__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Vllm Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/vllm)",
+          "operationId": "vllm_proxy_route_vllm__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Vllm Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/vllm)",
+          "operationId": "vllm_proxy_route_vllm__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Vllm Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/vllm)",
+          "operationId": "vllm_proxy_route_vllm__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Vllm Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/watsonx/{endpoint}": {
+        "delete": {
+          "description": "Watsonx pass-through endpoint.\nAllows using Watsonx APIs with automatic IAM token management and version parameter injection.\n\nExample:\n    POST /watsonx/ml/v1/text/tokenization\n    POST /watsonx/ml/v1/text/generation",
+          "operationId": "watsonx_proxy_route_watsonx__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Watsonx Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "description": "Watsonx pass-through endpoint.\nAllows using Watsonx APIs with automatic IAM token management and version parameter injection.\n\nExample:\n    POST /watsonx/ml/v1/text/tokenization\n    POST /watsonx/ml/v1/text/generation",
+          "operationId": "watsonx_proxy_route_watsonx__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Watsonx Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "description": "Watsonx pass-through endpoint.\nAllows using Watsonx APIs with automatic IAM token management and version parameter injection.\n\nExample:\n    POST /watsonx/ml/v1/text/tokenization\n    POST /watsonx/ml/v1/text/generation",
+          "operationId": "watsonx_proxy_route_watsonx__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Watsonx Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "description": "Watsonx pass-through endpoint.\nAllows using Watsonx APIs with automatic IAM token management and version parameter injection.\n\nExample:\n    POST /watsonx/ml/v1/text/tokenization\n    POST /watsonx/ml/v1/text/generation",
+          "operationId": "watsonx_proxy_route_watsonx__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Watsonx Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "description": "Watsonx pass-through endpoint.\nAllows using Watsonx APIs with automatic IAM token management and version parameter injection.\n\nExample:\n    POST /watsonx/ml/v1/text/tokenization\n    POST /watsonx/ml/v1/text/generation",
+          "operationId": "watsonx_proxy_route_watsonx__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Watsonx Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      }
+    }
+  },
   "mcp_app": {
     "components": {
       "schemas": {
@@ -17445,47 +22415,34 @@
       },
       "/.well-known/oauth-protected-resource": {
         "get": {
-          "description": "OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.\n\nLegacy pattern: /{server_name}/mcp\nDiscovery path: /.well-known/oauth-protected-resource/{server_name}/mcp\n\nThis endpoint is kept for backward compatibility. New integrations should\nuse the standard MCP pattern (/mcp/{server_name}) instead.",
-          "operationId": "oauth_protected_resource_mcp__well_known_oauth_protected_resource_get",
-          "parameters": [
-            {
-              "in": "query",
-              "name": "mcp_server_name",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Mcp Server Name"
-              }
-            }
-          ],
+          "operationId": "oauth_protected_resource_root__well_known_oauth_protected_resource_get",
           "responses": {
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      ]
+                    },
+                    "title": "Response Oauth Protected Resource Root  Well Known Oauth Protected Resource Get",
+                    "type": "object"
                   }
                 }
               },
-              "description": "Validation Error"
+              "description": "Successful Response"
             }
           },
-          "summary": "Oauth Protected Resource Mcp",
+          "summary": "Oauth Protected Resource Root",
           "tags": [
             "mcp_byok_oauth"
           ]
@@ -19666,47 +24623,34 @@
       },
       "/.well-known/oauth-protected-resource": {
         "get": {
-          "description": "OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.\n\nLegacy pattern: /{server_name}/mcp\nDiscovery path: /.well-known/oauth-protected-resource/{server_name}/mcp\n\nThis endpoint is kept for backward compatibility. New integrations should\nuse the standard MCP pattern (/mcp/{server_name}) instead.",
-          "operationId": "oauth_protected_resource_mcp__well_known_oauth_protected_resource_get_2",
-          "parameters": [
-            {
-              "in": "query",
-              "name": "mcp_server_name",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Mcp Server Name"
-              }
-            }
-          ],
+          "operationId": "oauth_protected_resource_root__well_known_oauth_protected_resource_get_2",
           "responses": {
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      ]
+                    },
+                    "title": "Response Oauth Protected Resource Root  Well Known Oauth Protected Resource Get",
+                    "type": "object"
                   }
                 }
               },
-              "description": "Validation Error"
+              "description": "Successful Response"
             }
           },
-          "summary": "Oauth Protected Resource Mcp",
+          "summary": "Oauth Protected Resource Root",
           "tags": [
             "mcp_discoverable"
           ]
@@ -20077,6 +25021,129 @@
             }
           },
           "summary": "Authorize Flow",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/authorize/mcp-session": {
+        "get": {
+          "operationId": "authorize_mcp_session_authorize_mcp_session_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "redirect_uri",
+              "required": true,
+              "schema": {
+                "title": "Redirect Uri",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "client_id",
+              "required": true,
+              "schema": {
+                "title": "Client Id",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "state",
+              "required": false,
+              "schema": {
+                "default": "",
+                "title": "State",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "code_challenge",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Code Challenge"
+              }
+            },
+            {
+              "in": "query",
+              "name": "code_challenge_method",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Code Challenge Method"
+              }
+            },
+            {
+              "in": "query",
+              "name": "response_type",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Response Type"
+              }
+            },
+            {
+              "in": "query",
+              "name": "resource",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Resource"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Authorize Mcp Session",
           "tags": [
             "mcp_discoverable"
           ]
@@ -31965,7 +37032,7 @@
     "paths": {
       "/openai/v1/realtime/calls": {
         "post": {
-          "operationId": "proxy_realtime_calls_openai_v1_realtime_calls_post",
+          "operationId": "proxy_realtime_calls_openai_v1_realtime_calls_post_2",
           "responses": {
             "200": {
               "content": {
@@ -31984,7 +37051,7 @@
       },
       "/openai/v1/realtime/client_secrets": {
         "post": {
-          "operationId": "create_realtime_client_secret_openai_v1_realtime_client_secrets_post",
+          "operationId": "create_realtime_client_secret_openai_v1_realtime_client_secrets_post_2",
           "responses": {
             "200": {
               "content": {
@@ -32011,7 +37078,7 @@
       "/openai/v1/realtime/transcription_sessions": {
         "post": {
           "description": "Create an ephemeral Realtime transcription session\n(POST /v1/realtime/transcription_sessions) for the WebRTC/WebSocket flow.\n\nMirrors the client_secrets route but targets the transcription_sessions\nendpoint and encrypts the ephemeral key returned under `client_secret.value`.",
-          "operationId": "create_realtime_transcription_session_openai_v1_realtime_transcription_sessions_post",
+          "operationId": "create_realtime_transcription_session_openai_v1_realtime_transcription_sessions_post_2",
           "responses": {
             "200": {
               "content": {
