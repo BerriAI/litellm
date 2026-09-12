@@ -76,9 +76,9 @@ def _register(proxy: ProxyClient, resources: ResourceManager) -> tuple[str, str]
     return model, resources.key()
 
 
-def _assert_input_error(result: StreamingResponse, field: str) -> None:
+def _assert_input_error(result: StreamingResponse, expected_detail: str) -> None:
     assert result.status_code == 400, f"expected Bedrock validation error, got {result.status_code}: {result.body[:500]}"
-    assert field in result.body.lower(), f"validation error did not name {field}: {result.body[:500]}"
+    assert expected_detail in result.body.lower(), f"validation error did not name {expected_detail}: {result.body[:500]}"
 
 
 def _default_converse() -> ConverseBody:
@@ -163,7 +163,7 @@ class TestBedrockNative:
             headers=proxy.transport.bearer(key),
             json=ConverseBody(messages=[]),
         )
-        _assert_input_error(result, "messages")
+        _assert_input_error(result, "user message")
 
     @pytest.mark.covers("llm.bedrock_native.bedrock_converse.input_validation.nonstream.works")
     def test_converse_invalid_model_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
