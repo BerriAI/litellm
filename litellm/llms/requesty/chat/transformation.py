@@ -47,21 +47,21 @@ class RequestyConfig(OpenrouterConfig):
         except Exception:
             return False
 
-    def get_supported_openai_params(self, model: str) -> list[str]:
-        supported_params: Final[list[str]] = super(OpenrouterConfig, self).get_supported_openai_params(model=model)
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: OpenrouterConfig signature
+        supported_params: Final[list[str]] = super(OpenrouterConfig, self).get_supported_openai_params(model=model)  # mutable-ok: OpenrouterConfig.get_supported_openai_params returns a list
         if not self._supports_reasoning(model):
             return supported_params
-        return list(dict.fromkeys((*supported_params, *REQUESTY_REASONING_PARAMS)))
+        return list(dict.fromkeys((*supported_params, *REQUESTY_REASONING_PARAMS)))  # mutable-ok: OpenrouterConfig.get_supported_openai_params returns a list
 
     def map_openai_params(
         self,
-        non_default_params: dict[str, object],
-        optional_params: dict,
+        non_default_params: dict[str, object],  # mutable-ok: OpenrouterConfig signature
+        optional_params: dict,  # mutable-ok: OpenrouterConfig signature
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict:  # mutable-ok: OpenrouterConfig signature
         mapped_params: Final = (
-            {**non_default_params, "reasoning_effort": "xhigh"}
+            {**non_default_params, "reasoning_effort": "xhigh"}  # mutable-ok: optional params are plain JSON dicts the base transform mutates
             if non_default_params.get("reasoning_effort") == "max"
             else non_default_params
         )
@@ -70,18 +70,18 @@ class RequestyConfig(OpenrouterConfig):
     def transform_request(
         self,
         model: str,
-        messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        messages: list[AllMessageValues],  # mutable-ok: OpenrouterConfig signature
+        optional_params: dict,  # mutable-ok: OpenrouterConfig signature
+        litellm_params: dict,  # mutable-ok: OpenrouterConfig signature
+        headers: dict,  # mutable-ok: OpenrouterConfig signature
+    ) -> dict:  # mutable-ok: OpenrouterConfig signature
         transformed_messages: Final = (
             self._move_cache_control_to_content(messages)
             if self._supports_cache_control_in_content(model)
             else messages
         )
 
-        extra_body: Final = optional_params.pop("extra_body", {})
+        extra_body: Final = optional_params.pop("extra_body", {})  # mutable-ok: extra_body is a JSON dict from the caller
         response: Final = super(OpenrouterConfig, self).transform_request(
             model, transformed_messages, optional_params, litellm_params, headers
         )
@@ -90,9 +90,9 @@ class RequestyConfig(OpenrouterConfig):
         # `messages`), otherwise a caller could route to an unauthorized model after
         # model-authorization and request-inspection checks have run.
         protected_fields: Final = frozenset({"model", "messages"})
-        return {**response, **{key: value for key, value in extra_body.items() if key not in protected_fields}}
+        return {**response, **{key: value for key, value in extra_body.items() if key not in protected_fields}}  # mutable-ok: request body is a plain JSON dict
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:  # mutable-ok: OpenrouterConfig signature
         return RequestyException(
             message=error_message,
             status_code=status_code,
@@ -113,19 +113,19 @@ class RequestyConfig(OpenrouterConfig):
 
 
 class RequestyChatCompletionStreamingHandler(BaseModelResponseIterator):
-    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:  # mutable-ok: OpenrouterConfig signature
         try:
             if "error" in chunk:
                 error_chunk: Final = chunk["error"]
                 raise RequestyException(
-                    message="Message: {}, Metadata: {}".format(error_chunk["message"], error_chunk.get("metadata", {})),
+                    message="Message: {}, Metadata: {}".format(error_chunk["message"], error_chunk.get("metadata", {})),  # mutable-ok: error metadata is a plain JSON dict
                     status_code=error_chunk["code"],
-                    headers=error_chunk.get("metadata", {}).get("headers", {}),
+                    headers=error_chunk.get("metadata", {}).get("headers", {}),  # mutable-ok: headers are a plain JSON dict
                 )
 
-            choices: Final = [
+            choices: Final = [  # mutable-ok: StreamingChoices expects a list
                 StreamingChoices(
-                    **{**choice, "delta": {**choice["delta"], "reasoning_content": choice["delta"].get("reasoning")}}
+                    **{**choice, "delta": {**choice["delta"], "reasoning_content": choice["delta"].get("reasoning")}}  # mutable-ok: wire delta is a plain JSON dict
                 )
                 for choice in chunk["choices"]
             ]
@@ -141,5 +141,5 @@ class RequestyChatCompletionStreamingHandler(BaseModelResponseIterator):
             raise RequestyException(
                 message=f"KeyError: {e}, Got unexpected response from Requesty: {chunk}",
                 status_code=400,
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json"},  # mutable-ok: headers are a plain JSON dict
             )
