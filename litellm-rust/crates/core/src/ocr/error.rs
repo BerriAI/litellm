@@ -20,7 +20,9 @@ pub enum OcrRequestError {
     MissingField(&'static str),
     #[error("invalid OCR document data URI")]
     InvalidDataUri,
-    #[error("Reducto requires a reducto:// id or a data URI")]
+    #[error(
+        "Reducto requires a reducto:// id or a data URI; plain HTTP URLs are not supported, upload the file first"
+    )]
     ReductoSource,
     #[error("inline OCR document exceeds the size limit")]
     InlineDocumentTooLarge,

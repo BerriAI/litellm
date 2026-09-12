@@ -78,12 +78,7 @@ pub(crate) fn resolve_wire_adapter(
         OcrProvider::Reducto if provider.model.eq_ignore_ascii_case("parse-v3") => {
             OcrAdapterKind::ReductoV3
         }
-        OcrProvider::Reducto => {
-            return Err(Error::InvalidRequest(format!(
-                "unsupported Reducto OCR model: {}",
-                provider.model
-            )));
-        }
+        OcrProvider::Reducto => OcrAdapterKind::ReductoV3,
         OcrProvider::VertexAi if provider.model.to_ascii_lowercase().contains("deepseek") => {
             OcrAdapterKind::VertexDeepSeek
         }
@@ -117,11 +112,10 @@ mod tests {
     }
 
     #[test]
-    fn unknown_reducto_models_are_rejected() {
-        assert!(matches!(
-            resolve_wire_adapter("reducto/future-parse-model", None),
-            Err(Error::InvalidRequest(_))
-        ));
+    fn unknown_reducto_models_use_the_current_protocol() {
+        let (model, adapter) = resolve_wire_adapter("reducto/future-parse-model", None).unwrap();
+        assert_eq!(model, "future-parse-model");
+        assert_eq!(adapter, OcrAdapterKind::ReductoV3);
     }
 
     #[test]
