@@ -1938,6 +1938,76 @@ async def test_standard_jwt_auth_propagates_user_email():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("is_proxy_admin", [False, True], ids=["standard_jwt", "proxy_admin_jwt"])
+async def test_jwt_auth_propagates_agent_id_to_user_api_key_auth(is_proxy_admin: bool):
+    """The agent id resolved by auth_builder must land on UserAPIKeyAuth.agent_id so
+    agent-scoped checks (trace id requirement, MCP server/tool restrictions, spend
+    attribution) apply to JWT callers the same way they apply to agent-bound keys."""
+    jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
+    general_settings = {"enable_jwt_auth": True}
+    user_api_key_cache = DualCache()
+    jwt_handler = MagicMock()
+    jwt_handler.is_jwt.return_value = True
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(agent_id_jwt_field="azp")
+
+    user_object = LiteLLM_UserTable(user_id="sp-object-id-1234", user_role="internal_user")
+    mock_jwt_result = {
+        "is_proxy_admin": is_proxy_admin,
+        "team_object": None,
+        "user_object": user_object,
+        "end_user_object": None,
+        "org_object": None,
+        "token": jwt_token,
+        "team_id": None,
+        "user_id": "sp-object-id-1234",
+        "user_email": None,
+        "end_user_id": None,
+        "org_id": None,
+        "team_membership": None,
+        "jwt_claims": {"sub": "sp-object-id-1234", "azp": "2f5c9b1e-6a4d-4c8e-9f0b-7d1a3e5c9b21"},
+        "agent_id": "canonical-agent-id",
+    }
+
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/chat/completions"
+    mock_request.method = "POST"
+    mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
+    mock_request.query_params = {}
+    mock_request.state = SimpleNamespace()
+
+    with (
+        patch.multiple(  # test-quality-ok: production auth reads these module globals; no dependency injection seam exists
+            "litellm.proxy.proxy_server",
+            general_settings=general_settings,
+            premium_user=True,
+            master_key="sk-master",
+            prisma_client=None,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=MagicMock(),
+            jwt_handler=jwt_handler,
+        ),
+        patch(  # test-quality-ok: the builder calls this static method directly; no dependency injection seam exists
+            "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
+            new_callable=AsyncMock,
+            return_value=mock_jwt_result,
+        ),
+    ):
+        result = await _user_api_key_auth_builder(
+            request=mock_request,
+            api_key=jwt_token,
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={"model": "gpt-5.6"},
+        )
+
+    assert result.agent_id == "canonical-agent-id"
+    assert result.user_id == "sp-object-id-1234"
+    assert result.api_key is None
+
+
+@pytest.mark.asyncio
 async def test_auto_register_binds_api_key_to_token_hash():
     """
     The first auto-registered JWT request must return a UserAPIKeyAuth whose
