@@ -8,6 +8,8 @@ from fastapi import HTTPException
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UI_TEAM_ID, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.config_sync_pubsub import coordination_redis_cache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper, WriterPinnedClient
 from litellm.repositories.table_repositories import MemoryPolicyRepository, MemoryPreferenceRepository
 from litellm.types.memory_v2 import MemoryPolicy, MemoryScope, MemoryStatus
@@ -25,24 +27,34 @@ async def gateway_memory_is_configured(prisma_client: object, cache: DualCache) 
     cached: Final = await cache.async_get_cache(key=_CONFIGURED_CACHE_KEY)
     if cached is True:
         return True
+    redis_cache: Final = cache.redis_cache or coordination_redis_cache()
+    # An empty local view reads shared Redis through DualCache's existing
+    # circuit-breaker/error handling, falling back to the primary on a miss.
+    shared_cache: Final = DualCache(redis_cache=redis_cache) if redis_cache is not None else None
     if cached is False:
-        if cache.redis_cache is None:
+        if shared_cache is None:
             return False
         # A backend mutation evicts Redis, but another worker can still hold
         # a negative local hint (Redis Cluster may not support pub/sub).
-        shared: Final = await cache.redis_cache.async_get_cache(key=_CONFIGURED_CACHE_KEY)
+        shared: Final = await shared_cache.async_get_cache(key=_CONFIGURED_CACHE_KEY)
         if shared is False:
             return False
     rows: Final = await MemoryPolicyRepository(memory_primary_client(prisma_client)).table.find_many(take=1)
     configured: Final = bool(rows)
     await cache.async_set_cache(key=_CONFIGURED_CACHE_KEY, value=configured, ttl=30)
+    if shared_cache is not None and cache.redis_cache is None:
+        await shared_cache.async_set_cache(key=_CONFIGURED_CACHE_KEY, value=configured, ttl=30)
     return configured
 
 
 async def invalidate_memory_configuration() -> None:
     from litellm.proxy.proxy_server import user_api_key_cache
 
-    await evict_and_broadcast(cache_keys=(_CONFIGURED_CACHE_KEY,), user_api_key_cache=user_api_key_cache)
+    cache: Final = UserApiKeyCache(
+        in_memory_cache=user_api_key_cache.in_memory_cache,
+        redis_cache=user_api_key_cache.redis_cache or coordination_redis_cache(),
+    )
+    await evict_and_broadcast(cache_keys=(_CONFIGURED_CACHE_KEY,), user_api_key_cache=cache)
 
 
 def memory_primary_client(prisma_client: object) -> WriterPinnedClient:
