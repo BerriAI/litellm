@@ -142,20 +142,50 @@ def test_anthropic_experimental_pass_through_messages_handler_dynamic_api_key_an
     [
         (None, True),
         ("https://api.openai.com/v1", True),
+        ("api.openai.com", True),
+        ("HTTPS://API.OPENAI.COM/v1", True),
         ("http://localhost:8000/v1", False),
         ("http://vllm-host:8000/v1", False),
+        ("https://api.openai.com.evil.example/v1", False),
+        ("https://not-api.openai.com.internal/v1", False),
     ],
 )
 def test_should_route_to_responses_api_considers_api_base_for_openai(api_base, expected):
     """Regression test for #40780. A self-hosted OpenAI-compatible backend declared as
     ``openai/<model>`` with a custom api_base must not be routed to the OpenAI Responses API
     (which reshapes images into ``input_image`` items the backend rejects); only real OpenAI
-    (api_base unset or api.openai.com) keeps the Responses API path."""
+    (api_base unset or the api.openai.com host) keeps the Responses API path. Hostname matching
+    is normalized, so case variants resolve to OpenAI while lookalike hosts that merely contain
+    the string do not."""
     from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
         _should_route_to_responses_api,
     )
 
     assert _should_route_to_responses_api("openai", "openai/model", "model", api_base) is expected
+
+
+def test_openai_custom_api_base_forwards_messages_to_chat_completions():
+    """Regression test for #40780 at the request-path level: driving the real handler, an
+    ``openai/`` deployment with a custom api_base must forward /v1/messages to chat/completions
+    (``litellm.completion``) rather than the Responses API, guarding the api_base wiring at the
+    call site, not just the routing helper."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    with patch("litellm.completion") as mock_completion:  # test-quality-ok: routes via real handler; no injection seam
+        try:
+            anthropic_messages_handler(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                model="openai/my-local-model",
+                api_base="http://localhost:8000/v1",
+                api_key="sk-noauth",
+            )
+        except (ValueError, TypeError, AttributeError) as e:
+            print(f"Error: {e}")
+        mock_completion.assert_called_once()
+        assert mock_completion.call_args.kwargs["api_base"] == "http://localhost:8000/v1"
 
 
 @pytest.mark.asyncio

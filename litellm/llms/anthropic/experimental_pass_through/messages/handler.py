@@ -77,7 +77,10 @@ def _points_at_openai_backend(api_base: str | None) -> bool:
     """
     if not api_base:
         return True
-    return "api.openai.com" in api_base
+    from urllib.parse import urlparse
+
+    parsed = urlparse(api_base if "://" in api_base else f"//{api_base}")
+    return (parsed.hostname or "").lower() == "api.openai.com"
 
 
 def _should_route_to_responses_api(
