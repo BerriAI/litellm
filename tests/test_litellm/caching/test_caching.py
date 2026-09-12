@@ -1,5 +1,6 @@
 import logging
 import re
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -252,3 +253,33 @@ def test_exact_cache_key_includes_anthropic_messages_params(anthropic_param):
     assert baseline != cache.get_cache_key(
         model="claude-sonnet-4-5", messages=messages, **anthropic_param
     )
+
+
+def test_sync_get_cache_forwards_metadata_subset_to_backend():
+    """
+    Regression test for #31260: the sync cache read path used to flatten
+    metadata to {}, so semantic-cache backends never saw the caller's auth
+    context (team id / user_api_key_auth) on a get, while the write path and
+    the async read path forwarded full metadata. The metadata subset must be
+    preserved so sync semantic-cache lookups can scope and authenticate the
+    same way async ones do.
+    """
+    cache = Cache(type=LiteLLMCacheType.LOCAL)
+    backend = MagicMock()
+    backend.get_cache.return_value = None
+
+    cache.get_cache(
+        dynamic_cache_object=backend,
+        cache={"use-cache": True},
+        model="text-embedding-3-small",
+        input=["hello"],
+        metadata={
+            "user_api_key_team_id": "team-a",
+            "user_api_key": "k-abc",
+        },
+    )
+
+    assert backend.get_cache.called
+    sent_metadata = backend.get_cache.call_args.kwargs["metadata"]
+    assert sent_metadata["user_api_key_team_id"] == "team-a"
+    assert sent_metadata["user_api_key"] == "k-abc"

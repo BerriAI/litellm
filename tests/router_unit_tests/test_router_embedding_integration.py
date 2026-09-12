@@ -6,6 +6,7 @@ need to be properly propagated through the router to the LLM API.
 """
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -382,6 +383,57 @@ class TestRouterEmbeddingIntegration:
 
             # The call should succeed
             mock_aembedding.assert_called_once()
+
+    def test_sync_embedding_respects_model_access_group_scoping(self):
+        """
+        Regression test for #31260: sync Router._embedding must forward the
+        caller's request_kwargs to deployment selection. Without the forward,
+        _filter_deployments_by_model_access_groups short-circuits
+        (request_kwargs is None) and every deployment in the model group is
+        treated as globally accessible. random.choice is forced to the last
+        candidate so an unfiltered deployment list fails this test
+        deterministically instead of on 50% of runs.
+        """
+        model_list = [
+            {
+                "model_name": "grouped-embed",
+                "litellm_params": {
+                    "model": "text-embedding-3-small",
+                    "api_key": "eng-key",
+                },
+                "model_info": {"access_groups": ["engineering"]},
+            },
+            {
+                "model_name": "grouped-embed",
+                "litellm_params": {
+                    "model": "text-embedding-3-small",
+                    "api_key": "fin-key",
+                },
+                "model_info": {"access_groups": ["finance"]},
+            },
+        ]
+
+        router = Router(model_list=model_list)
+        engineering_auth = SimpleNamespace(models=["engineering"], team_models=[])
+
+        fake_random = MagicMock()
+        fake_random.choice.side_effect = lambda seq: seq[-1]
+
+        with (
+            patch("litellm.embedding") as mock_embedding,
+            patch("litellm.router_strategy.simple_shuffle.random", fake_random),
+        ):
+            mock_embedding.return_value = MagicMock(data=[{"embedding": [0.1, 0.2]}])
+
+            router.embedding(
+                model="grouped-embed",
+                input=["hello"],
+                metadata={"user_api_key_auth": engineering_auth},
+            )
+
+            # The finance deployment must have been filtered out; only the
+            # engineering deployment can be selected.
+            assert mock_embedding.call_args[1]["api_key"] == "eng-key"
 
     def test_embedding_with_timeout_from_router(self):
         """
