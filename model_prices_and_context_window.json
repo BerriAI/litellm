@@ -65075,7 +65075,9 @@
         "output_cost_per_token": 2.8e-07,
         "source": "https://prisminference.com/pricing",
         "supported_endpoints": [
-            "/v1/chat/completions"
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
         ],
         "supports_function_calling": true,
         "supports_native_streaming": true,

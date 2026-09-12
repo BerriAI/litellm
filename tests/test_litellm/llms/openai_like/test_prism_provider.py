@@ -83,8 +83,8 @@ def test_prism_supported_endpoints():
 
     assert providers["prism"]["endpoints"] == {
         "chat_completions": True,
-        "messages": False,
-        "responses": False,
+        "messages": True,
+        "responses": True,
         "embeddings": False,
         "image_generations": False,
         "audio_transcriptions": False,
@@ -94,3 +94,35 @@ def test_prism_supported_endpoints():
         "rerank": False,
         "a2a": False,
     }
+
+
+def test_prism_resolves_responses_and_messages_configs():
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+    from litellm.llms.openai_like.messages.transformation import (
+        JSONProviderAnthropicMessagesConfig,
+    )
+    from litellm.utils import ProviderConfigManager
+
+    assert JSONProviderRegistry.supports_responses_api("prism") is True
+    responses_config = ProviderConfigManager.get_provider_responses_api_config(
+        provider="prism",
+        model="deepseek-v4-flash",
+    )
+    messages_config = ProviderConfigManager.get_provider_anthropic_messages_config(
+        provider=litellm.LlmProviders.PRISM,
+        model="deepseek-v4-flash",
+    )
+
+    assert responses_config is not None
+    assert responses_config.custom_llm_provider == "prism"
+    assert isinstance(messages_config, JSONProviderAnthropicMessagesConfig)
+    assert (
+        messages_config.get_complete_url(
+            api_base=None,
+            api_key="prism-test-key",
+            model="deepseek-v4-flash",
+            optional_params={},
+            litellm_params={},
+        )
+        == "https://api.prisminference.com/v1/messages"
+    )
