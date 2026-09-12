@@ -22,7 +22,7 @@ from typing import Any, Final, Literal, Protocol, cast, overload
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -88,6 +88,7 @@ from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIM_ENTITLEMENTS_METADATA_KEY,
     SCIM_ROLES_METADATA_KEY,
 )
+from litellm.types.utils import BudgetConfig
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -98,7 +99,8 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import ProxyLogging
 
 router: Final = APIRouter()
-_USER_MODEL_BUDGET_ADAPTER: Final = TypeAdapter(GenericBudgetConfigType)
+_USER_MODEL_BUDGET_ADAPTER: Final = TypeAdapter(dict[str, float | BudgetConfig])
+_USER_BUDGET_CACHE_INVALIDATION_BATCH_SIZE: Final = 50
 
 
 def _user_table(
@@ -1257,7 +1259,10 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
                 non_default_values[k] = v
         elif k == "model_max_budget":
             if k in fields_set:
-                _USER_MODEL_BUDGET_ADAPTER.validate_python({} if v is None else v)
+                try:
+                    _USER_MODEL_BUDGET_ADAPTER.validate_python({} if v is None else v)
+                except ValidationError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
                 non_default_values[k] = {} if v is None else v
         elif (
             v is not None
@@ -1888,10 +1893,13 @@ async def bulk_user_update(
             )
 
             if "model_max_budget" in non_default_values:
-                await evict_and_broadcast(
-                    cache_keys=tuple(user.user_id for user in all_users_in_db),
-                    user_api_key_cache=user_api_key_cache,
-                )
+                for start in range(0, len(all_users_in_db), _USER_BUDGET_CACHE_INVALIDATION_BATCH_SIZE):
+                    await asyncio.gather(
+                        *(
+                            evict_and_broadcast(cache_keys=(user.user_id,), user_api_key_cache=user_api_key_cache)
+                            for user in all_users_in_db[start : start + _USER_BUDGET_CACHE_INVALIDATION_BATCH_SIZE]
+                        )
+                    )
 
             # Create individual success results
             for user in all_users_in_db:

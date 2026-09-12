@@ -5,7 +5,7 @@ from typing import Final
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
+from fastapi import HTTPException
 from pytest_mock import MockerFixture
 
 
@@ -2147,7 +2147,7 @@ def test_update_internal_user_params_preserves_model_budget_presence_and_neighbo
         "user_alias": "Spruce",
     }
 
-    replacement: Final = {"model-spruce": {"budget_limit": 0, "time_period": "1d"}}
+    replacement: Final = {"model-spruce": {"budget_limit": 0, "time_period": "1d"}, "model-birch": 5.0, "model-cedar": 0}
     request: Final = UpdateUserRequest(
         user_id="user-spruce",
         model_max_budget=replacement,
@@ -2168,8 +2168,9 @@ def test_update_internal_user_params_preserves_model_budget_presence_and_neighbo
 def test_update_internal_user_params_rejects_invalid_model_budget(invalid_budget: dict[str, object]) -> None:
     request: Final = UpdateUserRequest(user_id="user-spruce", model_max_budget=invalid_budget)
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(HTTPException) as exc:
         _update_internal_user_params(data_json=request.model_dump(exclude_unset=True), data=request)
+    assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio
@@ -2227,6 +2228,16 @@ async def test_bulk_user_model_budget_clear_serializes_and_refreshes_cache(mocke
         "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
         new_callable=mocker.AsyncMock,
     )
+
+    with pytest.raises(HTTPException) as exc:
+        await bulk_user_update(
+            data=BulkUpdateUserRequest(all_users=True, user_updates={"model_max_budget": {"model-spruce": "invalid"}}),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN),
+            litellm_changed_by=None,
+        )
+    assert exc.value.status_code == 400
+    prisma_client.db.litellm_usertable.update_many.assert_not_called()
+    assert await cache.async_get_cache(key=saved_user.user_id, model_type=LiteLLM_UserTable) == saved_user
 
     response: Final = await bulk_user_update(
         data=BulkUpdateUserRequest(all_users=True, user_updates={"model_max_budget": None}),
