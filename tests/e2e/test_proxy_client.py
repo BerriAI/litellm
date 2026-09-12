@@ -121,6 +121,13 @@ def caller_boundary(
 
 
 class TestBoundManagementCaller:
+    def test_strict_key_cleanup_accepts_missing_only_when_requested(self) -> None:
+        with caller_boundary(delete_status=404) as (bootstrap, received), without_retries():
+            with pytest.raises(AssertionError):
+                bootstrap.delete_key_strict("owned")
+            bootstrap.delete_key_strict("owned", missing_ok=True)
+            assert (received.get_nowait(), received.get_nowait()) == ("Bearer bootstrap", "Bearer bootstrap")
+
     def test_actor_key_cleanup_reports_failure_and_continues(self) -> None:
         with caller_boundary(delete_status=500) as (bootstrap, received), without_retries():
             resources: Final = ResourceManager(client=bootstrap.proxy, strict_cleanup=True)

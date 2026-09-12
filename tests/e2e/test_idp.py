@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -148,16 +149,27 @@ def test_partial_provisioning_removes_the_group_when_user_creation_fails() -> No
         assert deletions.empty()
 
 
-@pytest.mark.parametrize("exit_mode", ("normal", "parent", "group"))
+@pytest.mark.parametrize(
+    ("exit_mode", "ignore_termination"), (("normal", False), ("parent", False), ("group", False), ("parent", True))
+)
 def test_oidc_launcher_removes_client_on_exit_and_termination(
-    tmp_path: Path, exit_mode: Literal["normal", "parent", "group"]
+    tmp_path: Path, exit_mode: Literal["normal", "parent", "group"], ignore_termination: bool
 ) -> None:
     ready: Final = tmp_path / "ready"
+    descendant_command: Final = (
+        "import signal,socket,time; from pathlib import Path; "
+        + ("signal.signal(signal.SIGTERM, signal.SIG_IGN); " if ignore_termination else "")
+        + "listener=socket.socket(); listener.bind(('127.0.0.1',0)); listener.listen(); "
+        f"Path({str(ready)!r}).write_text(str(listener.getsockname()[1])); time.sleep(120)"
+    )
     child_command: Final = (
-        "import os,time; from pathlib import Path; "
+        "import os,subprocess,sys,time; from pathlib import Path; "
         'assert os.environ["GENERIC_CLIENT_SECRET"]; '
         'assert os.environ["GENERIC_CLIENT_USE_PKCE"] == "true"; '
-        f"Path({str(ready)!r}).touch(); " + ("raise SystemExit(7)" if exit_mode == "normal" else "time.sleep(120)")
+        f"subprocess.Popen([sys.executable, '-c', {descendant_command!r}]); "
+        f"ready=Path({str(ready)!r})\n"
+        "while not ready.exists(): time.sleep(0.05)\n"
+        + ("raise SystemExit(7)" if exit_mode == "normal" else "time.sleep(120)")
     )
     with _idp_server() as (idp, deletions):
         with subprocess.Popen(
@@ -187,7 +199,10 @@ def test_oidc_launcher_removes_client_on_exit_and_termination(
                     process.terminate()
                 elif exit_mode == "group":
                     os.killpg(process.pid, signal.SIGTERM)
-                assert process.wait(timeout=10) == (7 if exit_mode == "normal" else 143)
+                assert process.wait(timeout=15) == (7 if exit_mode == "normal" else 143)
+                with socket.socket() as connection:
+                    connection.settimeout(1)
+                    assert connection.connect_ex(("127.0.0.1", int(ready.read_text()))) != 0
             finally:
                 if process.poll() is None:
                     os.killpg(process.pid, signal.SIGKILL)

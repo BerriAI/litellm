@@ -8,6 +8,7 @@ import secrets
 import signal
 import subprocess
 import sys
+import time
 import warnings
 from collections.abc import Callable
 from contextlib import ExitStack
@@ -426,6 +427,36 @@ def token_claims(token: str) -> TokenClaims:
     return TokenClaims.model_validate_json(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
 
 
+def _signal_process_group(process_id: int, signum: int) -> bool:
+    try:
+        os.killpg(process_id, signum)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _stop_process_group(child: subprocess.Popen[bytes]) -> None:
+    _signal_process_group(child.pid, signal.SIGTERM)
+    deadline: Final = time.monotonic() + 5
+    while _process_group_exists(child.pid):
+        child.poll()
+        if time.monotonic() >= deadline:
+            _signal_process_group(child.pid, signal.SIGKILL)
+            break
+        time.sleep(0.05)
+    child.wait()
+
+
+def _process_group_exists(process_id: int) -> bool:
+    try:
+        os.killpg(process_id, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def run_oidc_profile(proxy_url: str, command: list[str]) -> int:
     idp: Final = keycloak_from_env().with_strict_cleanup()
     with ExitStack() as cleanup:
@@ -441,17 +472,11 @@ def run_oidc_profile(proxy_url: str, command: list[str]) -> int:
 
         client: Final = idp.browser_client(callback_url=f"{proxy_url.rstrip('/')}/sso/callback", defer=defer)
         environment: Final = {**os.environ, **client.environment(idp.discovery()), "PROXY_BASE_URL": proxy_url}
-        with subprocess.Popen(command, env=environment) as child:
+        with subprocess.Popen(command, env=environment, start_new_session=True) as child:
             try:
                 return child.wait()
             finally:
-                if child.poll() is None:
-                    child.terminate()
-                    try:
-                        child.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        child.kill()
-                        child.wait()
+                _stop_process_group(child)
 
 
 if __name__ == "__main__":

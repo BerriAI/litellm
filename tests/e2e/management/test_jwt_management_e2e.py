@@ -102,31 +102,29 @@ class TestJwtManagement:
     @pytest.mark.parametrize("credential_kind", ("direct_jwt", "virtual_key"))
     def test_admin_creates_reads_updates_clears_and_deletes_a_key(
         self,
-        client: ManagementClient,
-        idp: Keycloak,
-        jwt_identity: Identity,
-        resources: ResourceManager,
         actor_factory: ActorFactory,
         credential_kind: Literal["direct_jwt", "virtual_key"],
     ) -> None:
-        actor: Final = actor_factory.create("proxy_admin")
+        tenant: Final = actor_factory.tenant()
+        actor: Final = actor_factory.create("proxy_admin", tenants=(tenant,), profile="group_scoped")
         virtual_key: Final = (
             actor_factory.key(user_id=actor.identity.user_id).key if credential_kind == "virtual_key" else None
         )
-        admin: Final = (
-            virtual_key if virtual_key is not None else idp.access_token(jwt_identity, client_id=ADMIN_CLIENT_ID)
+        admin: Final = virtual_key if virtual_key is not None else actor.mint_caller(actor_factory.idp).credential
+        bound: Final = actor_factory.bootstrap.with_caller(
+            Caller(credential=admin, kind=credential_kind, role="proxy_admin")
         )
-        bound: Final = client.with_caller(Caller(credential=admin, kind=credential_kind, role="proxy_admin"))
+        assert bound.user_info().user_id == actor.identity.user_id
         alias: Final = f"e2e-jwt-key-{unique_marker()}"
         created: Final = unwrap(
             bound.generate_key(
-                KeyGenerateBody(key_alias=alias, team_id=jwt_identity.group, models=[CHEAP_OPENAI_MODEL]),
+                KeyGenerateBody(key_alias=alias, team_id=tenant.team_id, models=[CHEAP_OPENAI_MODEL]),
             )
         )
-        resources.defer(lambda: client.proxy.delete_key(created.key))
+        actor_factory.resources.defer(lambda: actor_factory.bootstrap.delete_key_strict(created.key, missing_ok=True))
 
         original: Final = unwrap(bound.key_info_as(created.key)).info
-        assert original.key_alias == alias and original.team_id == jwt_identity.group
+        assert original.key_alias == alias and original.team_id == tenant.team_id
         assert original.models == [CHEAP_OPENAI_MODEL]
 
         updated_alias: Final = f"{alias}-updated"
