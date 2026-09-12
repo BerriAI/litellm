@@ -13,7 +13,7 @@ from typing import Final, Literal, TypeAlias
 
 import click
 import requests
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from .auth import CliContextObj, context_secret_vault, get_stored_api_key, login
 from .claude_settings import ClaudeSettingsError, install_statusline_script
@@ -398,13 +398,13 @@ class _CodexTruncationPolicy(BaseModel):
 
 
 class _CodexModel(BaseModel):
-    """One `ModelInfo` entry of a Codex model catalog.
+    """One `ModelInfo` entry of a Codex model catalog for a model the installed Codex does not know.
 
     Every field that some Codex release since `model_catalog_json` appeared
     (0.105.0) deserializes without a default is spelled out here, so one catalog
     parses on all of them; the values match the fallback metadata Codex uses for
-    a model slug it does not know, so picking a proxy model behaves the same as
-    `codex -m` did.
+    a model slug it does not know, so picking such a proxy model behaves the
+    same as `codex -m` did.
     """
 
     slug: str
@@ -428,31 +428,77 @@ class _CodexModel(BaseModel):
     base_instructions: str
 
 
+class _StockCodexUpgrade(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    model: str
+
+
+class _StockCodexModel(BaseModel):
+    """One `ModelInfo` entry as the installed Codex prints it from `codex debug models`.
+
+    Only the fields the sync rewrites are named; everything else that release
+    knows about the model (its reasoning levels, prompt, tool support) rides
+    along untouched, whatever the release's schema.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    slug: str
+    priority: int
+    visibility: str
+    upgrade: _StockCodexUpgrade | None = None
+
+
+class _StockCodexCatalog(BaseModel):
+    models: tuple[_StockCodexModel, ...]
+
+
 class _CodexCatalog(BaseModel):
-    models: tuple[_CodexModel, ...]
+    models: tuple[_CodexModel | _StockCodexModel, ...]
 
 
-def codex_model_catalog(models: Sequence[ListedModel], instructions: str) -> str | None:
+def _codex_catalog_entry(
+    priority: int,
+    listed: ListedModel,
+    stock: _StockCodexModel | None,
+    served: frozenset[str],
+    instructions: str,
+) -> _CodexModel | _StockCodexModel:
+    if stock is None:
+        return _CodexModel(
+            slug=listed.id,
+            display_name=listed.id,
+            priority=priority,
+            context_window=listed.max_input_tokens,
+            base_instructions=instructions,
+        )
+    upgrade: Final = stock.upgrade if stock.upgrade is not None and stock.upgrade.model in served else None
+    return stock.model_copy(update={"priority": priority, "visibility": "list", "upgrade": upgrade})
+
+
+def codex_model_catalog(
+    models: Sequence[ListedModel], stock: Sequence[_StockCodexModel], instructions: str
+) -> str | None:
     """The `model_catalog_json` body listing the proxy's chat models, or None if there are none.
 
     Codex refuses an empty catalog, hence None instead of `{"models": []}`.
-    Passing a catalog replaces Codex's built-in one, so every entry carries the
-    same base instructions Codex itself uses, otherwise the agent would run
-    without a system prompt.
+    Passing a catalog replaces Codex's built-in one, so a proxy model the
+    installed Codex knows keeps that Codex's own entry and the proxy only
+    decides its place in the picker: the listing orders it, lists it even when
+    Codex hides it, and keeps Codex's upgrade nudge only when the model it
+    points at is served too. A model Codex does not know gets the fallback
+    entry, with the same base instructions Codex itself uses so the agent never
+    runs without a system prompt.
     """
     chat_models: Final = _chat_models(models)
     if not chat_models:
         return None
+    served: Final = frozenset(m.id for m in chat_models)
+    known: Final = MappingProxyType({m.slug: m for m in stock})
     catalog: Final = _CodexCatalog(
         models=tuple(
-            _CodexModel(
-                slug=m.id,
-                display_name=m.id,
-                priority=index,
-                context_window=m.max_input_tokens,
-                base_instructions=instructions,
-            )
-            for index, m in enumerate(chat_models)
+            _codex_catalog_entry(index, m, known.get(m.id), served, instructions) for index, m in enumerate(chat_models)
         )
     )
     return catalog.model_dump_json()
@@ -465,7 +511,6 @@ def codex_model_catalog_path(env: Mapping[str, str], *, home: Callable[[], Path]
 
 
 def _replace_file(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as tmp:
         _ = tmp.write(text)
     try:
@@ -475,23 +520,23 @@ def _replace_file(path: Path, text: str) -> None:
         raise
 
 
-def _codex_catalog_rejection(
+def _codex_debug_models(
     binary: str,
-    override: str,
+    args: Sequence[str],
     env: Mapping[str, str],
     *,
     run: Callable[..., subprocess.CompletedProcess[str]],
-) -> str | None:
-    """Why the installed Codex refuses the catalog, or None once it reads the file back.
+) -> str | ModelSyncSkipped:
+    """What `codex debug models` prints with `args` in front, or why the installed Codex could not run it.
 
-    `codex debug models` parses the catalog the way a launch does, so a Codex
-    whose ModelInfo schema disagrees with the one written here fails now, with
-    the sync skipped, instead of exiting on startup. Releases before 0.130.0
-    have no `debug models` and fail the same way. A batch shim goes through
+    The command prints the catalog Codex would launch with, without touching
+    the network, so it lists the installed Codex's own models and parses a
+    catalog override the way a launch does. Releases before 0.130.0 have no
+    such command and are reported the same way. A batch shim goes through
     cmd.exe exactly as the launch will.
     """
     name: Final = os.path.basename(binary)
-    command: Final = _windows_command(binary, (binary, "-c", override, "debug", "models"))
+    command: Final = _windows_command(binary, (binary, *args, "debug", "models"))
     try:
         completed: Final = run(
             command,
@@ -502,11 +547,25 @@ def _codex_catalog_rejection(
             timeout=_CODEX_PREFLIGHT_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired) as e:
-        return f"`{name} debug models` failed: {e}"
+        return ModelSyncSkipped(f"`{name} debug models` failed: {e}")
     if completed.returncode == 0:
-        return None
+        return completed.stdout
     lines: Final = completed.stderr.strip().splitlines()
-    return f"`{name} debug models` exited {completed.returncode}: {lines[0] if lines else 'no output'}"
+    detail: Final = lines[0] if lines else "no output"
+    return ModelSyncSkipped(f"`{name} debug models` exited {completed.returncode}: {detail}")
+
+
+def _stock_codex_models(
+    binary: str, env: Mapping[str, str], *, run: Callable[..., subprocess.CompletedProcess[str]]
+) -> tuple[_StockCodexModel, ...] | ModelSyncSkipped:
+    printed: Final = _codex_debug_models(binary, (), env, run=run)
+    if isinstance(printed, ModelSyncSkipped):
+        return printed
+    try:
+        return _StockCodexCatalog.model_validate_json(printed).models
+    except ValidationError as e:
+        name: Final = os.path.basename(binary)
+        return ModelSyncSkipped(f"`{name} debug models` printed no model catalog: {e.errors()[0]['msg']}")
 
 
 def codex_model_sync_args(
@@ -524,11 +583,13 @@ def codex_model_sync_args(
 
     Codex has no env or inline equivalent of OPENCODE_CONFIG_CONTENT: the catalog
     must be a file, so it is written under $CODEX_HOME (default ~/.codex) and
-    atomically replaced on every launch, then read back once through the Codex
-    at `binary` before it is handed over. The key never lands in the file. A
-    failed fetch, read, write or read-back is reported rather than raised: Codex
-    still launches with its built-in catalog and takes a proxy model by name via
-    -m, and a rejected file stays on disk to be looked at.
+    atomically replaced on every launch. The Codex at `binary` first lists its
+    own models, so the ones the proxy serves keep that Codex's entries, and then
+    reads the file back once before it is handed over. The key never lands in
+    the file. A failed fetch, read, listing, write or read-back is reported
+    rather than raised: Codex still launches with its built-in catalog and takes
+    a proxy model by name via -m, and a rejected file stays on disk to be looked
+    at.
     """
     listing: Final = _fetch_model_listing(base_url, api_key, get=get)
     if isinstance(listing, ModelSyncSkipped):
@@ -537,18 +598,25 @@ def codex_model_sync_args(
         instructions: Final = instructions_path.read_text(encoding="utf-8")
     except OSError as e:
         return ModelSyncSkipped(f"could not read {instructions_path}: {e}")
-    catalog: Final = codex_model_catalog(listing, instructions)
+    path: Final = codex_model_catalog_path(base_env, home=home)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return ModelSyncSkipped(f"could not write {path}: {e}")
+    stock: Final = _stock_codex_models(binary, base_env, run=run)
+    if isinstance(stock, ModelSyncSkipped):
+        return stock
+    catalog: Final = codex_model_catalog(listing, stock, instructions)
     if catalog is None:
         return ModelSyncSkipped(f"{base_url.rstrip('/')}/v1/models lists no chat models")
-    path: Final = codex_model_catalog_path(base_env, home=home)
     try:
         _replace_file(path, catalog)
     except OSError as e:
         return ModelSyncSkipped(f"could not write {path}: {e}")
     override: Final = f"model_catalog_json={json.dumps(str(path))}"
-    rejection: Final = _codex_catalog_rejection(binary, override, base_env, run=run)
-    if rejection is not None:
-        return ModelSyncSkipped(rejection)
+    read_back: Final = _codex_debug_models(binary, ("-c", override), base_env, run=run)
+    if isinstance(read_back, ModelSyncSkipped):
+        return read_back
     return ModelSyncArgs(("-c", override))
 
 

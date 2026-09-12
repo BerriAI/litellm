@@ -57,14 +57,109 @@ class _Recorder:
         return self.returns
 
 
+_STOCK_REASONING_LEVELS = [
+    {"effort": "low", "description": "Fast responses with lighter reasoning"},
+    {"effort": "medium", "description": "Balances speed and reasoning depth for everyday tasks"},
+    {"effort": "high", "description": "Greater reasoning depth for complex problems"},
+]
+
+_STOCK_MODELS = {
+    "gpt-5.6-terra": {
+        "slug": "gpt-5.6-terra",
+        "display_name": "GPT-5.6 Terra",
+        "description": "Balanced agentic coding model for everyday work.",
+        "default_reasoning_level": "medium",
+        "supported_reasoning_levels": _STOCK_REASONING_LEVELS,
+        "shell_type": "unified_exec",
+        "visibility": "list",
+        "supported_in_api": True,
+        "priority": 7,
+        "availability_nux": None,
+        "upgrade": None,
+        "base_instructions": "You are Codex, a coding agent based on GPT-5.6.",
+        "apply_patch_tool_type": "freeform",
+        "supports_parallel_tool_calls": True,
+        "context_window": 272000,
+        "comp_hash": "terra-hash",
+    },
+    "gpt-5.5": {
+        "slug": "gpt-5.5",
+        "display_name": "GPT-5.5",
+        "description": "Frontier model for complex coding, research, and real-world work.",
+        "default_reasoning_level": "medium",
+        "supported_reasoning_levels": _STOCK_REASONING_LEVELS,
+        "shell_type": "unified_exec",
+        "visibility": "list",
+        "supported_in_api": True,
+        "priority": 12,
+        "availability_nux": None,
+        "upgrade": None,
+        "base_instructions": "You are Codex, a coding agent based on GPT-5.",
+        "apply_patch_tool_type": "freeform",
+        "supports_parallel_tool_calls": True,
+        "context_window": 272000,
+        "comp_hash": "gpt-5.5-hash",
+    },
+    "gpt-5.4": {
+        "slug": "gpt-5.4",
+        "display_name": "GPT-5.4",
+        "description": "Strong model for everyday coding.",
+        "default_reasoning_level": "medium",
+        "supported_reasoning_levels": _STOCK_REASONING_LEVELS,
+        "shell_type": "unified_exec",
+        "visibility": "hide",
+        "supported_in_api": True,
+        "priority": 16,
+        "availability_nux": None,
+        "upgrade": {
+            "model": "gpt-5.6-terra",
+            "migration_markdown": "GPT-5.4 is no longer available. Switch to GPT-5.6 Terra to continue.",
+            "retirement_at": "2026-08-31T19:00:00Z",
+        },
+        "base_instructions": "You are Codex, a coding agent based on GPT-5.",
+        "apply_patch_tool_type": "freeform",
+        "supports_parallel_tool_calls": True,
+        "context_window": 272000,
+        "comp_hash": "gpt-5.4-hash",
+    },
+    "codex-auto-review": {
+        "slug": "codex-auto-review",
+        "display_name": "Codex Auto Review",
+        "description": None,
+        "supported_reasoning_levels": [],
+        "shell_type": "unified_exec",
+        "visibility": "hide",
+        "supported_in_api": False,
+        "priority": 43,
+        "availability_nux": None,
+        "upgrade": None,
+        "base_instructions": "You are Codex, reviewing a change.",
+        "apply_patch_tool_type": None,
+        "supports_parallel_tool_calls": True,
+        "context_window": 272000,
+        "comp_hash": "review-hash",
+    },
+}
+
+_STOCK_CATALOG = json.dumps({"models": list(_STOCK_MODELS.values())})
+
+
 class _FakeRun:
-    def __init__(self, returncode=0, stderr=""):
+    """A `codex` that prints `stock` from a bare `debug models` and answers a catalog override with `returncode`.
+
+    `stock=None` is a Codex with no `debug models` at all: every call answers with `returncode` and `stderr`.
+    """
+
+    def __init__(self, returncode=0, stderr="", stock=_STOCK_CATALOG):
         self.returncode = returncode
         self.stderr = stderr
+        self.stock = stock
         self.calls = []
 
     def __call__(self, args, **kwargs):
         self.calls.append((args, kwargs))
+        if self.stock is not None and "model_catalog_json=" not in str(args):
+            return subprocess.CompletedProcess(args, 0, self.stock, "")
         return subprocess.CompletedProcess(args, self.returncode, "", self.stderr)
 
 
@@ -415,10 +510,36 @@ class TestCodexModelSync:
         assert "sk-key" not in text
         catalog = json.loads(text)
         assert [m["slug"] for m in catalog["models"]] == ["gpt-5.5", "claude-opus-4-7"]
-        assert [m["display_name"] for m in catalog["models"]] == ["gpt-5.5", "claude-opus-4-7"]
+        assert [m["display_name"] for m in catalog["models"]] == ["GPT-5.5", "claude-opus-4-7"]
         assert [m["priority"] for m in catalog["models"]] == [0, 1]
 
-    def test_every_entry_has_the_fields_codex_requires(self, tmp_path):
+    def _entries(self, codex_home):
+        return {m["slug"]: m for m in json.loads((codex_home / "litellm-models.json").read_text())["models"]}
+
+    def test_known_model_keeps_the_installed_codex_entry(self, tmp_path):
+        self._sync(self._listing(self._row("gpt-5.5", mode="chat")), tmp_path)
+        assert self._entries(tmp_path)["gpt-5.5"] == {**_STOCK_MODELS["gpt-5.5"], "priority": 0}
+
+    def test_hidden_stock_model_is_listed_when_the_proxy_serves_it(self, tmp_path):
+        self._sync(self._listing(self._row("gpt-5.4")), tmp_path)
+        entry = self._entries(tmp_path)["gpt-5.4"]
+        assert entry["visibility"] == "list"
+        assert entry["upgrade"] is None
+        assert entry["supported_reasoning_levels"] == _STOCK_REASONING_LEVELS
+
+    def test_stock_upgrade_nudge_survives_when_its_target_is_listed(self, tmp_path):
+        self._sync(self._listing(self._row("gpt-5.4"), self._row("gpt-5.6-terra")), tmp_path)
+        entries = self._entries(tmp_path)
+        assert entries["gpt-5.4"]["upgrade"] == _STOCK_MODELS["gpt-5.4"]["upgrade"]
+        assert [entries["gpt-5.4"]["priority"], entries["gpt-5.6-terra"]["priority"]] == [0, 1]
+
+    def test_unparseable_stock_catalog_is_reported(self, tmp_path):
+        _, result = self._sync(self._listing(self._row("m")), tmp_path, run=_FakeRun(stock="not json"))
+        assert isinstance(result, ModelSyncSkipped)
+        assert result.reason.startswith("`codex debug models` printed no model catalog: ")
+        assert not (tmp_path / "litellm-models.json").exists()
+
+    def test_unknown_model_gets_the_fields_codex_requires(self, tmp_path):
         _, result = self._sync(self._listing(self._row("m")), tmp_path)
         entry = json.loads((tmp_path / "litellm-models.json").read_text())["models"][0]
 
@@ -435,12 +556,17 @@ class TestCodexModelSync:
             assert nullable in entry and entry[nullable] is None
         assert entry["base_instructions"].startswith("You are a coding agent running in the Codex CLI")
 
-    def test_context_window_comes_from_max_input_tokens(self, tmp_path):
-        listing = self._listing(self._row("big", max_input_tokens=400000), self._row("unknown"))
-        _, result = self._sync(listing, tmp_path)
-        models = {m["slug"]: m for m in json.loads((tmp_path / "litellm-models.json").read_text())["models"]}
+    def test_context_window_comes_from_max_input_tokens_for_unknown_models_only(self, tmp_path):
+        listing = self._listing(
+            self._row("big", max_input_tokens=400000),
+            self._row("unknown"),
+            self._row("gpt-5.5", max_input_tokens=400000),
+        )
+        self._sync(listing, tmp_path)
+        models = self._entries(tmp_path)
         assert models["big"]["context_window"] == 400000
         assert models["unknown"]["context_window"] is None
+        assert models["gpt-5.5"]["context_window"] == 272000
 
     def test_non_chat_models_are_left_out(self, tmp_path):
         listing = self._listing(
@@ -544,7 +670,8 @@ class TestCodexModelSync:
             run=run,
         )
         assert self._catalog_path(result) == str(tmp_path / "litellm-models.json")
-        assert binary in run.calls[0][0]
+        assert len(run.calls) == 2
+        assert all(binary in command for command, _ in run.calls)
 
     def test_opencode_dispatch_never_runs_codex(self):
         def boom(*a, **k):
@@ -561,19 +688,21 @@ class TestCodexModelSync:
         )
         assert "OPENCODE_CONFIG_CONTENT" in result
 
-    def test_catalog_is_read_back_through_codex_before_launch(self, tmp_path):
+    def test_codex_lists_its_own_models_then_reads_the_catalog_back_before_launch(self, tmp_path):
         run = _FakeRun()
         _, result = self._sync(self._listing(self._row("m")), tmp_path, run=run)
         path = self._catalog_path(result)
 
-        assert len(run.calls) == 1
-        command, options = run.calls[0]
-        assert command == ("codex", "-c", f"model_catalog_json={json.dumps(path)}", "debug", "models")
-        assert options["env"] == {"CODEX_HOME": str(tmp_path)}
-        assert options["stdin"] is subprocess.DEVNULL
-        assert options["capture_output"] is True
-        assert options["text"] is True
-        assert options["timeout"] == 10
+        assert [command for command, _ in run.calls] == [
+            ("codex", "debug", "models"),
+            ("codex", "-c", f"model_catalog_json={json.dumps(path)}", "debug", "models"),
+        ]
+        for _, options in run.calls:
+            assert options["env"] == {"CODEX_HOME": str(tmp_path)}
+            assert options["stdin"] is subprocess.DEVNULL
+            assert options["capture_output"] is True
+            assert options["text"] is True
+            assert options["timeout"] == 10
 
     def test_codex_rejecting_the_catalog_skips_the_sync_and_keeps_the_file(self, tmp_path):
         stderr = (
@@ -591,9 +720,12 @@ class TestCodexModelSync:
 
     def test_codex_without_debug_models_skips_the_sync(self, tmp_path):
         stderr = "error: unrecognized subcommand 'models'\n\nUsage: codex debug [OPTIONS] <COMMAND>\n"
-        _, result = self._sync(self._listing(self._row("m")), tmp_path, run=_FakeRun(2, stderr))
+        run = _FakeRun(2, stderr, stock=None)
+        _, result = self._sync(self._listing(self._row("m")), tmp_path, run=run)
         assert isinstance(result, ModelSyncSkipped)
         assert result.reason == "`codex debug models` exited 2: error: unrecognized subcommand 'models'"
+        assert len(run.calls) == 1
+        assert not (tmp_path / "litellm-models.json").exists()
 
     def test_codex_failing_silently_is_reported(self, tmp_path):
         _, result = self._sync(self._listing(self._row("m")), tmp_path, run=_FakeRun(1))
@@ -625,7 +757,10 @@ class TestCodexModelSync:
         )
         override = f"model_catalog_json={json.dumps(self._catalog_path(result))}"
         doubled = override.replace('"', '""')
-        assert run.calls[0][0] == f'{_CMD_PREFIX}""{shim}" "-c" "{doubled}" "debug" "models""'
+        assert [command for command, _ in run.calls] == [
+            f'{_CMD_PREFIX}""{shim}" "debug" "models""',
+            f'{_CMD_PREFIX}""{shim}" "-c" "{doubled}" "debug" "models""',
+        ]
 
     def test_default_binary_is_codex_on_path(self):
         assert _default_of(codex_model_sync_args, "binary") == "codex"
