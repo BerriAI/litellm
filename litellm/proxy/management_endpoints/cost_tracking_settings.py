@@ -28,6 +28,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_endpoints.prompt_cache_prediction import router as prompt_cache_prediction_router
 from litellm.types.utils import (
     CostBreakdown,
     CostPerToken,
@@ -39,6 +40,7 @@ from litellm.types.utils import (
 )
 
 router: Final = APIRouter()
+router.include_router(prompt_cache_prediction_router)
 
 
 @dataclass(frozen=True, slots=True)

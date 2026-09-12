@@ -878,6 +878,7 @@ async def common_checks(
         request_query_params=_safe_get_request_query_params(request=request),
         llm_router=llm_router,
         request=request,
+        team_id=valid_token.team_id if valid_token is not None else None,
     )
 
     skip_all_budget_checks: Final = skip_budget_checks or (
@@ -4356,7 +4357,7 @@ async def stamp_matched_model_access_groups(
 
 async def can_key_call_model(
     model: str | list[str],
-    llm_model_list: list | None,
+    llm_model_list: Sequence[object] | None,
     valid_token: UserAPIKeyAuth,
     llm_router: litellm.Router | None,
 ) -> Literal[True]:
@@ -4403,7 +4404,7 @@ async def can_key_call_model(
 
 async def can_key_call_resolved_model(
     model: str,
-    llm_model_list: list | None,
+    llm_model_list: Sequence[object] | None,
     valid_token: UserAPIKeyAuth,
     llm_router: litellm.Router | None,
 ) -> None:
