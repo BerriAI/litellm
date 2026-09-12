@@ -159,8 +159,8 @@ export function MemoryPolicies({
           Automatic gateway memory
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Enable storage and recall for existing clients. No developer installation is needed. Memory preparation uses
-          the selected model and adds model calls, latency, and spend.
+          Give existing clients memory search, reading, and saving through the gateway. No developer installation is
+          needed. Memory tools use the selected model and can add model calls, latency, and spend.
         </p>
       </div>
       <form

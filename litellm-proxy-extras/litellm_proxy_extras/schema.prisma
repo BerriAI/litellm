@@ -1463,6 +1463,17 @@ model LiteLLM_MemoryPreference {
   updated_at DateTime @default(now()) @updatedAt
 }
 
+model LiteLLM_MemoryContinuation {
+  id         String   @id
+  namespace  String
+  key_id     String
+  payload    Json
+  expires_at DateTime
+
+  @@index([namespace, key_id, expires_at])
+  @@index([expires_at])
+}
+
 // Per-(router, request_type, model) Beta posterior for the adaptive router.
 model LiteLLM_AdaptiveRouterState {
   router_name     String

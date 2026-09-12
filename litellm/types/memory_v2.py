@@ -58,6 +58,11 @@ class MemoryCapture(BaseModel):
     content: str = Field(min_length=1, max_length=8000)
     evidence: str = Field(min_length=1, max_length=2000)
     expected_revision: datetime | None = None
+    when_to_use: str = Field(default="", max_length=700)
+    scope: str = Field(default="", max_length=200)
+    kind: Literal["workflow", "decision", "correction", "learning", "context", "disagreement"] = "context"
+    certainty: Literal["user_stated", "observed", "inferred"] = "observed"
+    source: str = Field(default="", max_length=1000)
 
 
 class MemoryEntry(BaseModel):
@@ -69,6 +74,13 @@ class MemoryEntry(BaseModel):
     content: str
     evidence: str
     updated_at: datetime
+    created_at: datetime | None = None
+    actor: str | None = None
+    when_to_use: str = ""
+    scope: str = ""
+    kind: str = "context"
+    certainty: str = "observed"
+    source: str = ""
 
 
 class MemorySearch(BaseModel):
@@ -83,3 +95,44 @@ class MemoryRead(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     memory_id: str = Field(min_length=1, max_length=64)
+
+
+class MemoryObservation(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    title: str = Field(min_length=3, max_length=180)
+    when_to_use: str = Field(min_length=5, max_length=700)
+    content: str = Field(min_length=10, max_length=6000)
+    kind: Literal["workflow", "decision", "correction", "learning", "context", "disagreement"]
+    scope: str = Field(min_length=1, max_length=200)
+    certainty: Literal["user_stated", "observed", "inferred"]
+    evidence: str = Field(min_length=5, max_length=2000)
+    source: str = Field(min_length=3, max_length=1000)
+
+
+class MemoryObservationCapture(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    observations: tuple[MemoryObservation, ...] = Field(max_length=8)
+    checkpoint: str | None = Field(default=None, max_length=200)
+
+
+class MemoryCatalogRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=50, ge=1, le=100)
+
+
+class MemoryRecallRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    query: str = Field(default="", max_length=2000)
+    scope: str | None = Field(default=None, max_length=200)
+    limit: int = Field(default=8, ge=1, le=30)
+
+
+class MemoryReadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")

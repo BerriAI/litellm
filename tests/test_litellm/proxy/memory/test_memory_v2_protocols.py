@@ -7,14 +7,14 @@ from litellm.litellm_core_utils.prompt_templates.server_tools import (
     ServerToolRoute,
     append_server_reference,
     continue_server_tools,
-    prepare_server_tools,
+    inject_server_tools,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.memory.policy import MemoryIdentity
 
 
 @pytest.mark.parametrize("route", ["acompletion", "aresponses", "anthropic_messages"])
-def test_preparation_does_not_inherit_client_forced_tool_or_short_output_limit(route: ServerToolRoute) -> None:
+def test_memory_injection_preserves_client_tools_output_constraints_and_streaming(route: ServerToolRoute) -> None:
     original: Final = {
         "model": "test-model",
         "messages": [{"role": "user", "content": "Remember my preference"}],
@@ -25,17 +25,18 @@ def test_preparation_does_not_inherit_client_forced_tool_or_short_output_limit(r
         "max_output_tokens": 1,
         "stream": True,
     }
-    prepared: Final = prepare_server_tools(
+    prepared: Final = inject_server_tools(
         original,
         route,
         ({"name": "memory_search", "description": "Search", "parameters": {"type": "object"}},),
-        "Prepare memory",
+        "Use memory throughout the task",
     )
     output_field: Final = "max_output_tokens" if route == "aresponses" else "max_tokens"
-    assert prepared[output_field] == 2048
-    assert prepared["stream"] is False
-    assert "tool_choice" not in prepared
-    assert prepared["tools"] != original["tools"]
+    assert prepared[output_field] == 1
+    assert prepared["stream"] is True
+    assert prepared["tool_choice"] == original["tool_choice"]
+    assert prepared["tools"][0] == original["tools"][0]
+    assert len(prepared["tools"]) == 2
     final: Final = append_server_reference(original, route, "Stored preference")
     assert final["tools"] == original["tools"]
     assert final["tool_choice"] == original["tool_choice"]

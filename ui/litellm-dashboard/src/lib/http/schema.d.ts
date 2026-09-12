@@ -31910,6 +31910,12 @@ export interface components {
         };
         /** MemoryCapture */
         MemoryCapture: {
+            /**
+             * Certainty
+             * @default observed
+             * @enum {string}
+             */
+            certainty: "user_stated" | "observed" | "inferred";
             /** Content */
             content: string;
             /** Evidence */
@@ -31918,8 +31924,29 @@ export interface components {
             expected_revision?: string | null;
             /** Key */
             key: string;
+            /**
+             * Kind
+             * @default context
+             * @enum {string}
+             */
+            kind: "workflow" | "decision" | "correction" | "learning" | "context" | "disagreement";
+            /**
+             * Scope
+             * @default
+             */
+            scope: string;
+            /**
+             * Source
+             * @default
+             */
+            source: string;
             /** Title */
             title: string;
+            /**
+             * When To Use
+             * @default
+             */
+            when_to_use: string;
         };
         /** MemoryCreateRequest */
         MemoryCreateRequest: {
@@ -31958,14 +31985,38 @@ export interface components {
         };
         /** MemoryEntry */
         MemoryEntry: {
+            /** Actor */
+            actor?: string | null;
+            /**
+             * Certainty
+             * @default observed
+             */
+            certainty: string;
             /** Content */
             content: string;
+            /** Created At */
+            created_at?: string | null;
             /** Evidence */
             evidence: string;
             /** Key */
             key: string;
+            /**
+             * Kind
+             * @default context
+             */
+            kind: string;
             /** Memory Id */
             memory_id: string;
+            /**
+             * Scope
+             * @default
+             */
+            scope: string;
+            /**
+             * Source
+             * @default
+             */
+            source: string;
             /** Title */
             title: string;
             /**
@@ -31973,6 +32024,11 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /**
+             * When To Use
+             * @default
+             */
+            when_to_use: string;
         };
         /** MemoryListResponse */
         MemoryListResponse: {

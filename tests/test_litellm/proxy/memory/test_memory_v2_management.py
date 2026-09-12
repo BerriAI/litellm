@@ -232,7 +232,7 @@ async def test_entry_endpoints_apply_namespace_and_delete_after_disable(database
     database.db.litellm_memorypolicy.find_many.return_value = [policy()]
     namespace = MemoryIdentity.from_auth(auth()).namespace("key")
     table = database.db.litellm_memorytable
-    assert await management.list_entries("demo", 2, 4, None, auth()) == []
+    assert not await management.list_entries("demo", 2, 4, None, auth())
     assert table.find_many.call_args.kwargs["where"]["namespace"] == namespace
     now = datetime(2026, 9, 12, tzinfo=timezone.utc)
     table.create.return_value = SimpleNamespace(
@@ -242,6 +242,8 @@ async def test_entry_endpoints_apply_namespace_and_delete_after_disable(database
         value="Use port 8347",
         metadata={"title": "Demo", "evidence": "User said so"},
         updated_at=now,
+        created_at=now,
+        created_by="owner",
     )
     saved = await management.capture_entry(
         MemoryCapture(key="demo", title="Demo", content="Use port 8347", evidence="User said so"), None, auth()

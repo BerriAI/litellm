@@ -1,9 +1,10 @@
 import hashlib
+import os
 from dataclasses import dataclass
 from typing import Final
 
 import pytest
-from e2e_config import CHEAP_ANTHROPIC_MODEL, CHEAP_OPENAI_MODEL, unique_marker
+from e2e_config import unique_marker
 from e2e_http import Success, unwrap
 from lifecycle import ResourceManager
 from management_client import ManagementClient
@@ -17,6 +18,7 @@ from models import (
     ChatToolFunction,
     ChatToolResultTurn,
     KeyGenerateBody,
+    LiteLLMParamsBody,
     MemoryCaptureBody,
     MemoryEntriesData,
     MemoryEntryParams,
@@ -25,6 +27,7 @@ from models import (
     MemoryPolicyBody,
     MemoryResponsesBody,
     MemoryStreamEvent,
+    MemoryWireResponse,
     TeamNewBody,
     UserNewBody,
 )
@@ -39,6 +42,39 @@ class MemorySubjects:
     outsider: str
     user_id: str
     team_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryModels:
+    chat: str
+    messages: str
+
+
+@pytest.fixture
+def memory_models(client: ManagementClient, resources: ResourceManager) -> MemoryModels:
+    def register(name: str, model: str, credential: str) -> str:
+        alias: Final = f"e2e-memory-{name}-{unique_marker()}"
+        identifier: Final = client.proxy.create_model(
+            alias,
+            LiteLLMParamsBody(
+                model=model,
+                api_key=credential,
+                api_base=os.environ.get("E2E_MEMORY_API_BASE"),
+            ),
+        )
+        resources.defer(lambda: client.proxy.delete_model(identifier))
+        return alias
+
+    return MemoryModels(
+        chat=register(
+            "chat", os.environ.get("E2E_MEMORY_CHAT_MODEL", "openai/gpt-5.6-sol"), "os.environ/OPENAI_API_KEY"
+        ),
+        messages=register(
+            "messages",
+            os.environ.get("E2E_MEMORY_MESSAGES_MODEL", "anthropic/claude-haiku-4-5"),
+            "os.environ/ANTHROPIC_API_KEY",
+        ),
+    )
 
 
 @pytest.fixture
@@ -104,14 +140,20 @@ class TestMemoryV2:
     @pytest.mark.parametrize("endpoint", ["chat", "responses", "messages"])
     @pytest.mark.parametrize("stream", [False, True])
     def test_gateway_stores_and_recalls_without_client_memory_tools(
-        self, client: ManagementClient, memory: MemoryClient, subjects: MemorySubjects, endpoint: str, stream: bool
+        self,
+        client: ManagementClient,
+        memory: MemoryClient,
+        subjects: MemorySubjects,
+        memory_models: MemoryModels,
+        endpoint: str,
+        stream: bool,
     ) -> None:
         marker: Final = f"copper-{unique_marker()}"
         seed: Final = unwrap(
             client.proxy.chat(
                 subjects.owner,
                 ChatBody(
-                    model=CHEAP_OPENAI_MODEL,
+                    model=memory_models.chat,
                     max_tokens=1200,
                     messages=[
                         ChatMessage(
@@ -126,7 +168,7 @@ class TestMemoryV2:
         stored: Final = memory.entries(subjects.owner)
         assert any(marker in entry.content for entry in stored), stored
         prompt: Final = "What is my demo project codename? Return the exact word only."
-        model: Final = CHEAP_ANTHROPIC_MODEL if endpoint == "messages" else CHEAP_OPENAI_MODEL
+        model: Final = memory_models.messages if endpoint == "messages" else memory_models.chat
         body: Final = (
             AnthropicMessagesBody(
                 model=model, messages=[ChatMessage(role="user", content=prompt)], max_tokens=1200, stream=stream
@@ -152,16 +194,29 @@ class TestMemoryV2:
             else response.body
         )
         assert marker in output, output
-        assert "litellm_memory_" not in "".join(response.stream_events) + response.body
         if stream:
             assert response.is_streaming
             assert response.chunks > 1
+            events: Final = tuple(MemoryStreamEvent.model_validate_json(event) for event in response.stream_events)
+            assert not any(event.has_memory_tools for event in events)
+            if endpoint == "responses":
+                assert all(event.response.instructions is None for event in events if event.response)
+        else:
+            public: Final = MemoryWireResponse.model_validate_json(response.body)
+            assert not public.has_memory_tools
+            if endpoint == "responses":
+                assert public.instructions is None
         assert memory.entries(subjects.sibling) == []
         assert memory.entries(subjects.outsider) == []
 
     @pytest.mark.covers("mgmt.memory_v2.policy.opt_in")
     def test_admin_selects_opt_in_or_automatic_and_key_override_wins(
-        self, client: ManagementClient, memory: MemoryClient, subjects: MemorySubjects, resources: ResourceManager
+        self,
+        client: ManagementClient,
+        memory: MemoryClient,
+        subjects: MemorySubjects,
+        resources: ResourceManager,
+        memory_models: MemoryModels,
     ) -> None:
         unwrap(memory.set_policy(MemoryPolicyBody(target_type="team", target_id=subjects.team_id, activation="opt_in")))
         assert not memory.status(subjects.owner).active
@@ -170,7 +225,7 @@ class TestMemoryV2:
             client.proxy.chat(
                 subjects.owner,
                 ChatBody(
-                    model=CHEAP_OPENAI_MODEL,
+                    model=memory_models.chat,
                     max_tokens=100,
                     messages=[
                         ChatMessage(
@@ -235,7 +290,7 @@ class TestMemoryV2:
 
     @pytest.mark.covers("mgmt.memory_v2.entries.correction_delete")
     def test_corrections_require_current_revision_and_deleted_memory_is_not_recalled(
-        self, client: ManagementClient, memory: MemoryClient, subjects: MemorySubjects
+        self, client: ManagementClient, memory: MemoryClient, subjects: MemorySubjects, memory_models: MemoryModels
     ) -> None:
         original: Final = _fact(unique_marker())
         saved: Final = unwrap(memory.capture(subjects.owner, original))
@@ -261,7 +316,7 @@ class TestMemoryV2:
             client.proxy.chat(
                 subjects.owner,
                 ChatBody(
-                    model=CHEAP_OPENAI_MODEL,
+                    model=memory_models.chat,
                     max_tokens=200,
                     messages=[
                         ChatMessage(
@@ -275,7 +330,7 @@ class TestMemoryV2:
 
     @pytest.mark.covers("mgmt.memory_v2.gateway.client_tools")
     def test_client_tool_call_and_continuation_remain_owned_by_client(
-        self, client: ManagementClient, memory: MemoryClient, subjects: MemorySubjects
+        self, client: ManagementClient, memory: MemoryClient, subjects: MemorySubjects, memory_models: MemoryModels
     ) -> None:
         marker: Final = unique_marker()
         unwrap(memory.capture(subjects.owner, _fact(marker)))
@@ -288,13 +343,13 @@ class TestMemoryV2:
         )
         prompt: Final = ChatMessage(
             role="user",
-            content="Use verify_release with my demo project codename. After the tool returns, report its result.",
+            content="Use verify_release with my demo project codename. After the tool returns, save its verification result in memory with the tool as your evidence, then report it.",
         )
         response: Final = unwrap(
             client.proxy.chat(
                 subjects.owner,
                 ChatBody(
-                    model=CHEAP_OPENAI_MODEL, messages=[prompt], tools=[tool], tool_choice="required", max_tokens=1200
+                    model=memory_models.chat, messages=[prompt], tools=[tool], tool_choice="required", max_tokens=1200
                 ),
             )
         )
@@ -311,29 +366,32 @@ class TestMemoryV2:
             client.proxy.chat(
                 subjects.owner,
                 ChatBody(
-                    model=CHEAP_OPENAI_MODEL,
+                    model=memory_models.chat,
                     max_tokens=1200,
                     tools=[tool],
                     messages=[
                         prompt,
-                        ChatAssistantTurn(tool_calls=calls),
+                        ChatAssistantTurn(
+                            content=message.content, reasoning_content=message.reasoning_content, tool_calls=calls
+                        ),
                         ChatToolResultTurn(tool_call_id=call.id, content=result_marker),
                     ],
                 ),
             )
         )
         assert result_marker in followup.model_dump_json()
+        assert any(result_marker in entry.content for entry in memory.entries(subjects.owner))
 
     @pytest.mark.covers("mgmt.memory_v2.gateway.billing")
-    def test_preparation_and_answer_are_charged_once_to_the_calling_key(
-        self, client: ManagementClient, memory: MemoryClient, subjects: MemorySubjects
+    def test_memory_tool_rounds_are_charged_once_to_the_calling_key(
+        self, client: ManagementClient, memory: MemoryClient, subjects: MemorySubjects, memory_models: MemoryModels
     ) -> None:
         marker: Final = unique_marker()
         response: Final = unwrap(
             client.proxy.chat(
                 subjects.owner,
                 ChatBody(
-                    model=CHEAP_OPENAI_MODEL,
+                    model=memory_models.chat,
                     max_tokens=1200,
                     messages=[
                         ChatMessage(
@@ -346,7 +404,7 @@ class TestMemoryV2:
         assert response.choices
         assert any(marker in row.content for row in memory.entries(subjects.owner))
         rows: Final = client.proxy.poll_logs_for_key(subjects.owner, min_rows=2)
-        assert 2 <= len(rows) <= 4, rows
+        assert 2 <= len(rows) <= 8, rows
         assert len({row.request_id for row in rows}) == len(rows), rows
         assert all(row.api_key == hashlib.sha256(subjects.owner.encode()).hexdigest() for row in rows), rows
         assert all(row.user == subjects.user_id and row.team_id == subjects.team_id for row in rows), rows

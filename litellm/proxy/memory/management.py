@@ -246,7 +246,7 @@ async def list_entries(
     offset: int = Query(0, ge=0),
     key_id: str | None = Query(None, pattern=r"^[a-f0-9]{64}$"),
     auth: UserAPIKeyAuth = _AUTH,
-) -> list[MemoryEntry]:
+) -> tuple[MemoryEntry, ...]:
     prisma: Final = memory_primary_client(require_memory_prisma())
     access: Final = await access_for_key(auth, key_id)
     return await MemoryStore(prisma, access).search(

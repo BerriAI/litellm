@@ -15,10 +15,12 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.prompt_templates.server_tool_responses import object_value
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import UI_TEAM_ID, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 from litellm.proxy.auth.user_api_key_auth import _get_bearer_token_or_received_api_key
+from litellm.proxy.memory.transport import in_gateway_round
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.utils import CallTypesLiteral
@@ -38,7 +40,24 @@ class ForwardCredential(CustomLogger):
         credential: Final = _CREDENTIAL.get()
         if credential is None:
             raise HTTPException(status_code=403, detail="Use your upstream gateway key for model calls")
-        return {**data, "api_key": credential, "api_base": _UPSTREAM}
+        return {  # mutable-ok: The gateway hook returns native provider request JSON.
+            **data,
+            "api_key": credential,
+            "api_base": _UPSTREAM,
+            **(
+                {  # mutable-ok: The second gateway must receive its own cache controls in the provider body.
+                    "extra_body": {  # mutable-ok: The proxy provider forwards this JSON unchanged.
+                        **object_value(data.get("extra_body")),
+                        "cache": {
+                            "no-cache": True,
+                            "no-store": True,
+                        },  # mutable-ok: Native upstream gateway cache controls.
+                    },
+                }
+                if in_gateway_round()
+                else {}
+            ),  # mutable-ok: Hook payload is native JSON.
+        }
 
 
 forward_credential: Final = ForwardCredential()
@@ -91,8 +110,13 @@ class PilotGateway:
             await self.app(scope, receive, send)
             return
         path: Final = request.url.path.rstrip("/")
-        if path not in _INFERENCE | _SELF_SERVICE | {"/models", "/v1/models"} and not path.startswith(
-            "/v2/memory/entries/"
+        memory_response: Final = request.method in ("GET", "DELETE") and path.startswith(
+            ("/v1/responses/resp_litellm_memory_", "/responses/resp_litellm_memory_")
+        )
+        if (
+            path not in _INFERENCE | _SELF_SERVICE | {"/models", "/v1/models"}
+            and not path.startswith("/v2/memory/entries/")
+            and not memory_response
         ):
             await JSONResponse(
                 {"error": "Upstream keys can only use inference and their own memories"}, status_code=403

@@ -94,8 +94,12 @@ def _handle_content_block_start(data: dict, content_blocks: dict[int, dict]) -> 
     block_type: Final = block.get("type", "text")
 
     _BLOCK_TEMPLATES: Final[dict[str, dict]] = {
-        "text": {"type": "text", "text": ""},
-        "thinking": {"type": "thinking", "thinking": "", "signature": ""},
+        "text": {"type": "text", "text": block.get("text", "")},
+        "thinking": {
+            "type": "thinking",
+            "thinking": block.get("thinking", ""),
+            "signature": block.get("signature", ""),
+        },
         "redacted_thinking": {
             "type": "redacted_thinking",
             "data": block.get("data", ""),
@@ -106,7 +110,7 @@ def _handle_content_block_start(data: dict, content_blocks: dict[int, dict]) -> 
             "type": "tool_use",
             "id": block.get("id", ""),
             "name": block.get("name", ""),
-            "input": {},
+            "input": block.get("input", {}),
             "_partial_json": "",
         }
     elif block_type in _BLOCK_TEMPLATES:

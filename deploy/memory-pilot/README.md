@@ -5,7 +5,7 @@ upstream LiteLLM key and model name and change only their gateway base URL. They
 need no plugin or client-side memory tools. Choosing the pilot URL opts them into
 the pilot; returning to the original URL stops using and collecting pilot memory.
 
-Every preparation and answer call uses that caller's upstream key. The upstream
+Every model call uses that caller's upstream key. The upstream
 gateway continues to enforce its model permissions, budgets, rate limits, and
 guardrails. The pilot checks the key against the upstream model catalog, then
 registers its hash as a local virtual key so LiteLLM's normal authentication and
@@ -16,7 +16,12 @@ The forwarding pilot isolates memories by virtual key. Upstream management APIs
 may deny ordinary keys access to user/team/org details, so the pilot does not
 infer those identities from client metadata. Install the feature directly in an
 organization's gateway to use its existing user/team/project/org policies.
-Never connect this pilot to an older gateway's production database.
+A regular gateway deployment reuses its existing PostgreSQL database with normal
+schema migrations. It does not need a separate memory database or vector service.
+This forwarding pilot has a separate database for isolation. Its memories are not
+automatically available on the original gateway. Sharing requires both deployments
+to run this feature against the same database and authenticated namespace; the
+pilot must not be connected to an older gateway's production database.
 
 ## Create the service
 
@@ -76,13 +81,29 @@ correct, or delete entries in Memory; callers can use the self-service API.
 
 - Supported surfaces: Chat Completions, Responses, and Anthropic Messages,
   including their native streaming responses and client tool continuation.
-- The selected model must support function calling. Memory preparation adds up
-  to three billed model calls before the visible answer, with a 60-second bound.
-  It uses the original conversation, so long coding sessions can add substantial
-  prompt-token usage and latency. Existing upstream quotas apply to these calls.
-- Preparation stores durable facts supported by the conversation, then searches
-  and reads relevant entries. Search is bounded keyword matching in Postgres.
-  There is no vector database, extraction model, scheduler, or nightly process.
+- The selected model must support function calling. The actual answering model
+  receives catalog, fuzzy search, full-read, and observation-capture tools beside
+  its normal client tools. The gateway executes only its own memory tools.
+- A request allows at most eight model rounds and sixteen memory calls per round.
+  One final reflection round can acknowledge an empty observation batch. Additional
+  rounds use the same model and caller budget, and add latency and token spend.
+- Captures are immediately visible after a confirmed save. Each observation keeps
+  its title, relevance guidance, scope, kind, certainty, evidence, source, and actor.
+  Corrections append observations. Agents receive no memory deletion tool.
+- Search uses weighted fuzzy matching over the authorized scope. There is no vector
+  database, extraction model, or nightly consolidation.
+- Fixed instructions and tool definitions preserve prompt-prefix caching after
+  warm-up. Dynamic catalogs and checkpoint IDs stay at the conversation tail.
+  Complete-response caching is bypassed for memory rounds on both gateways so
+  permission checks, retrieval, and capture execute against current state.
+- Hidden tool continuations expire after 24 hours, hold at most one megabyte each,
+  and are limited to 1,000 per key and scope. They contain gateway-added fragments,
+  not another copy of the complete incoming transcript. Responses retrieval and
+  continuation use gateway-owned response IDs; deleting one removes its model
+  responses and temporary continuation records, not saved memories.
+- Foreground requests with one completion are supported. Use modern tools instead
+  of legacy functions. The special Cursor conversion route, background responses,
+  multiple completions, and WebSocket inference are outside this implementation.
 - On gateway/backend deployments without shared Redis, first-time activation
   can take up to 30 seconds to reach another process. Policy revocation is
   checked against the primary database before memory operations.
@@ -91,8 +112,8 @@ correct, or delete entries in Memory; callers can use the self-service API.
 - Stored references are untrusted data. They cannot grant API permissions or
   change the namespace derived from authentication. Current user corrections
   take precedence. Replacements require the current revision.
-- Memory/model preparation errors fail the request rather than silently claiming
-  successful memory. Administrators can disable memory to restore ordinary calls.
+- Invalid tool arguments return errors to the model. Infrastructure and model
+  failures fail the request or stream instead of reporting a successful save. Administrators can disable memory to restore ordinary calls.
 - Switching away or disabling memory stops automatic use; it does not delete
   existing entries. Delete memories explicitly through Memory or the API.
 - Shared upstream keys share a pilot namespace. Give each person a distinct key

@@ -1385,18 +1385,67 @@ class MemoryResponsesBody(BaseModel):
     cache: dict[str, bool] = {"no-cache": True}
 
 
+class MemoryWireTool(BaseModel):
+    name: str | None = None
+    function: ToolCallFunction = ToolCallFunction()
+
+    @property
+    def is_gateway_memory(self) -> bool:
+        return (self.name or self.function.name or "").startswith("litellm_memory_")
+
+
 class MemoryStreamDelta(BaseModel):
     content: str | None = None
     text: str | None = None
+    tool_calls: tuple[MemoryWireTool, ...] | None = None
 
 
 class MemoryStreamChoice(BaseModel):
     delta: MemoryStreamDelta = MemoryStreamDelta()
+    message: MemoryStreamDelta = MemoryStreamDelta()
+
+
+class MemoryWireResponse(BaseModel):
+    instructions: str | None = None
+    tools: tuple[MemoryWireTool, ...] = ()
+    output: tuple[MemoryWireTool, ...] = ()
+    content: tuple[MemoryWireTool, ...] = ()
+    choices: tuple[MemoryStreamChoice, ...] = ()
+
+    @property
+    def has_memory_tools(self) -> bool:
+        return any(
+            tool.is_gateway_memory
+            for tool in (
+                *self.tools,
+                *self.output,
+                *self.content,
+                *(
+                    tool
+                    for choice in self.choices
+                    for part in (choice.delta, choice.message)
+                    for tool in part.tool_calls or ()
+                ),
+            )
+        )
 
 
 class MemoryStreamEvent(BaseModel):
     delta: MemoryStreamDelta | str | None = None
     choices: list[MemoryStreamChoice] = []
+    response: MemoryWireResponse | None = None
+    item: MemoryWireTool = MemoryWireTool()
+    content_block: MemoryWireTool = MemoryWireTool()
+
+    @property
+    def has_memory_tools(self) -> bool:
+        return bool(
+            self.response
+            and self.response.has_memory_tools
+            or self.item.is_gateway_memory
+            or self.content_block.is_gateway_memory
+            or any(tool.is_gateway_memory for choice in self.choices for tool in choice.delta.tool_calls or ())
+        )
 
     @property
     def text(self) -> str:

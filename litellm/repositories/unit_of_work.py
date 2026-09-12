@@ -16,12 +16,32 @@ carrying fields the update input type rejects (see #27730).
 """
 
 from collections.abc import AsyncGenerator, Callable, Mapping
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Final
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    cast,  # noqa: TID251  # Prisma wrappers dynamically forward tx, so runtime protocols cannot recognize this SDK factory.
+)
 
 from litellm.repositories.prisma_protocols import BatchTable, PrismaBatch
+
+if TYPE_CHECKING:
+    from prisma import Prisma
+
+
+def prisma_transaction(client: object) -> AbstractAsyncContextManager["Prisma"]:
+    db: Final[object] = getattr(client, "db", None)
+    factory: Final[object] = getattr(db, "tx", None)
+    if not callable(factory):
+        raise TypeError("A transactional Prisma client is required")
+    transaction_factory: Final = (
+        cast(  # cast-ok: The callable is Prisma's tx factory, dynamically forwarded by supported database wrappers.
+            Callable[[], AbstractAsyncContextManager["Prisma"]], factory
+        )
+    )
+    return transaction_factory()
 
 
 def _spend_reset_data(budget_reset_at: datetime | None, spend_decrement: float | None) -> Mapping[str, object]:

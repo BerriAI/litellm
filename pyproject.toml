@@ -77,6 +77,7 @@ proxy = [
     "soundfile>=0.12.1,<1.0",
     "pyroscope-io>=0.8.16,<1.0; sys_platform != 'win32'",
     "expression>=5.6.0,<6.0",
+    "rapidfuzz>=3.14.3,<4.0",
 ]
 # Thin client install for the `lite` CLI on developer laptops. The CLI's heavy
 # imports are all guarded, so it runs on the base SDK plus these packages, and

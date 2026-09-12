@@ -7,27 +7,26 @@ from pydantic import TypeAdapter
 from litellm.litellm_core_utils.prompt_templates.factory import NormalizedToolCall
 
 ServerToolRoute: TypeAlias = Literal["acompletion", "aresponses", "anthropic_messages"]
-_LIST: Final = TypeAdapter(list[object])
+_LIST: Final = TypeAdapter(tuple[object, ...])
 _OBJECT: Final = TypeAdapter(dict[str, object])
 
 
-def _items(value: object) -> list[object]:
-    if isinstance(value, list):
+def _items(value: object) -> tuple[object, ...]:
+    if isinstance(value, (list, tuple)):
         return _LIST.validate_python(value)
     if isinstance(value, str):
-        return [  # mutable-ok: Provider wire format requires native JSON containers.
-            {  # mutable-ok: Provider wire format requires native JSON containers.
+        return (
+            {  # mutable-ok: Native provider JSON containers.
                 "role": "user",
                 "content": value,
-            }
-        ]
-    return [  # mutable-ok: Provider wire format requires native JSON containers.
-    ]
+            },
+        )
+    return ()
 
 
 def append_server_instructions(
     data: Mapping[str, object], route: ServerToolRoute, instructions: str
-) -> dict[str, object]:
+) -> Mapping[str, object]:
     if route == "aresponses":
         previous: Final = data.get("instructions")
         return {  # mutable-ok: Provider wire format requires native JSON containers.
@@ -59,19 +58,76 @@ def append_server_instructions(
                 },
             ],
         }
+    messages: Final = _items(data.get("messages"))
+    insertion: Final = next(
+        (
+            index
+            for index, message in enumerate(messages)
+            if not isinstance(message, dict)
+            or _OBJECT.validate_python(message).get("role") not in ("system", "developer")
+        ),
+        len(messages),
+    )
     return {  # mutable-ok: Provider wire format requires native JSON containers.
         **data,
         "messages": [  # mutable-ok: Provider wire format requires native JSON containers.
-            *_items(data.get("messages")),
+            *messages[:insertion],
             {  # mutable-ok: Provider wire format requires native JSON containers.
                 "role": "system",
                 "content": instructions,
             },
+            *messages[insertion:],
         ],
     }
 
 
-def append_server_reference(data: Mapping[str, object], route: ServerToolRoute, reference: str) -> dict[str, object]:
+def inject_server_tools(
+    data: Mapping[str, object], route: ServerToolRoute, functions: Sequence[Mapping[str, object]], instructions: str
+) -> Mapping[str, object]:
+    client_tools: Final = _items(data.get("tools"))
+    names: Final = frozenset(str(function["name"]) for function in functions)
+    if any(_tool_name(tool) in names for tool in client_tools):
+        raise ValueError("A client tool conflicts with a gateway memory tool name")
+    tools: Final = tuple(
+        {  # mutable-ok: Native provider JSON containers.
+            "name": f["name"],
+            "description": f["description"],
+            "input_schema": f["parameters"],
+        }
+        if route == "anthropic_messages"
+        else {  # mutable-ok: Native provider JSON containers.
+            "type": "function",
+            **f,
+        }
+        if route == "aresponses"
+        else {  # mutable-ok: Native provider JSON containers.
+            "type": "function",
+            "function": f,
+        }
+        for f in functions
+    )
+    return append_server_instructions(
+        {  # mutable-ok: Native provider JSON containers.
+            **data,
+            "tools": [  # mutable-ok: Native provider JSON containers.
+                *client_tools,
+                *tools,
+            ],
+        },
+        route,
+        instructions,
+    )
+
+
+def _tool_name(tool: object) -> object:
+    if not isinstance(tool, dict):
+        return None
+    definition: Final = _OBJECT.validate_python(tool)
+    function: Final = definition.get("function") or definition.get("custom")
+    return _OBJECT.validate_python(function).get("name") if isinstance(function, dict) else definition.get("name")
+
+
+def append_server_reference(data: Mapping[str, object], route: ServerToolRoute, reference: str) -> Mapping[str, object]:
     field: Final = "input" if route == "aresponses" else "messages"
     return {  # mutable-ok: Provider wire format requires native JSON containers.
         **data,
@@ -85,108 +141,13 @@ def append_server_reference(data: Mapping[str, object], route: ServerToolRoute, 
     }
 
 
-def prepare_server_tools(
-    data: Mapping[str, object], route: ServerToolRoute, functions: Sequence[Mapping[str, object]], instructions: str
-) -> dict[str, object]:
-    tools: Final = (
-        [  # mutable-ok: Provider wire format requires native JSON containers.
-            {  # mutable-ok: Provider wire format requires native JSON containers.
-                "name": f["name"],
-                "description": f["description"],
-                "input_schema": f["parameters"],
-            }
-            for f in functions
-        ]
-        if route == "anthropic_messages"
-        else [  # mutable-ok: Provider wire format requires native JSON containers.
-            {  # mutable-ok: Provider wire format requires native JSON containers.
-                "type": "function",
-                **f,
-            }
-            for f in functions
-        ]
-        if route == "aresponses"
-        else [  # mutable-ok: Provider wire format requires native JSON containers.
-            {  # mutable-ok: Provider wire format requires native JSON containers.
-                "type": "function",
-                "function": f,
-            }
-            for f in functions
-        ]
-    )
-    omitted: Final = frozenset(
-        (
-            "tools",
-            "tool_choice",
-            "functions",
-            "function_call",
-            "stream_options",
-            "response_format",
-            "text",
-            "n",
-            "stop",
-            "stop_sequences",
-            "background",
-            "output_config",
-            "idempotency_key",
-            "litellm_call_id",
-        )
-    )
-    output_field: Final = (
-        "max_output_tokens"
-        if route == "aresponses"
-        else "max_completion_tokens"
-        if "max_completion_tokens" in data
-        else "max_tokens"
-    )
-    thinking: Final = data.get("thinking")
-    thinking_budget: Final = (
-        _OBJECT.validate_python(thinking).get("budget_tokens") if isinstance(thinking, dict) else None
-    )
-    minimum: Final = max(2048, thinking_budget + 2048) if isinstance(thinking_budget, int) else 2048
-    limit: Final = data.get(output_field)
-    header_fields: Final = {  # mutable-ok: The proxy accepts native provider header dictionaries.
-        field: {  # mutable-ok: These headers are sent through HTTP JSON serialization.
-            key: value
-            for key, value in _OBJECT.validate_python(data[field]).items()
-            if key.lower() not in ("idempotency-key", "x-request-id", "x-litellm-call-id")
-        }
-        for field in ("headers", "extra_headers")
-        if isinstance(data.get(field), dict)
-    }
-    base: Final = {  # mutable-ok: Provider wire format requires native JSON containers.
-        **{  # mutable-ok: Provider wire format requires native JSON containers.
-            key: value for key, value in data.items() if key not in omitted
-        },
-        output_field: max(minimum, limit) if isinstance(limit, int) else minimum,
-        **header_fields,
-    }
-    return append_server_instructions(
-        {  # mutable-ok: Provider wire format requires native JSON containers.
-            **base,
-            "tools": tools,
-            "stream": False,
-            **(
-                {  # mutable-ok: Provider wire format requires native JSON containers.
-                    "store": False
-                }
-                if route == "aresponses"
-                else {  # mutable-ok: Provider wire format requires native JSON containers.
-                }
-            ),
-        },
-        route,
-        instructions,
-    )
-
-
 def continue_server_tools(
     data: Mapping[str, object],
     route: ServerToolRoute,
     response: Mapping[str, object],
     calls: Sequence[NormalizedToolCall],
     results: Sequence[object],
-) -> dict[str, object]:
+) -> Mapping[str, object]:
     if len(calls) != len(results) or any(not call["id"] for call in calls):
         raise ValueError("Server tool results must match every tool call")
     if route == "aresponses":
@@ -241,7 +202,7 @@ def continue_server_tools(
         **data,
         "messages": [  # mutable-ok: Provider wire format requires native JSON containers.
             *_items(data.get("messages")),
-            message,
+            _OBJECT.validate_python(message),
             *[  # mutable-ok: Provider wire format requires native JSON containers.
                 {  # mutable-ok: Provider wire format requires native JSON containers.
                     "role": "tool",
