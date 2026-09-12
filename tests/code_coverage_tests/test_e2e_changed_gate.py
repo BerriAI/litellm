@@ -81,6 +81,25 @@ def test_missing_execution_evidence_fails(tmp_path: Path, contents: str) -> None
     assert result.returncode == 1
 
 
+@pytest.mark.parametrize("omitted_role", ("proxy_admin", "team_member", "internal_user_viewer"))
+def test_one_passing_management_case_cannot_hide_a_missing_actor(tmp_path: Path, omitted_role: str) -> None:
+    suite: Final = ET.Element("testsuite")
+    path: Final = "tests/e2e/management/test_jwt_management_e2e.py"
+    case: Final = ET.SubElement(suite, "testcase", file=path)
+    properties: Final = ET.SubElement(case, "properties")
+    _ = ET.SubElement(
+        properties,
+        "property",
+        name="management_node",
+        value=f"{path}::TestJwtManagement::test_actor_subject_and_database_role[proxy_admin_viewer]",
+    )
+    report: Final = tmp_path / "report.xml"
+    ET.ElementTree(suite).write(report)
+    result: Final = subprocess.run([sys.executable, str(GATE), str(report), path], capture_output=True, text=True)
+    assert result.returncode == 1
+    assert f"test_actor_subject_and_database_role[{omitted_role}]" in result.stdout
+
+
 def test_short_values_are_written_without_masking_every_digit_in_the_log(tmp_path: Path) -> None:
     env_path: Final = tmp_path / ".env"
 
@@ -141,6 +160,10 @@ def test_changed_suite_files_are_selected_unless_the_stack_cannot_run_them(
     (
         "tests/e2e/proxy_client.py",
         "tests/e2e/conftest.py",
+        "tests/e2e/management/management_client.py",
+        "tests/e2e/management/jwt_actors.py",
+        "tests/e2e/management/conftest.py",
+        "tests/e2e/coverage_registry/management_cases.py",
         "tests/e2e/pytest.ini",
         "tests/e2e/gateway/stage_mirror_ci_config.yml",
         ".github/e2e-stack/up.sh",
