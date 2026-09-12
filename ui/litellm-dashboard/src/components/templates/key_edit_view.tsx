@@ -1,6 +1,6 @@
+import { canDetachKeyProject, KeyProjectField } from "./KeyProjectField";
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
-import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import PolicySelector from "@/components/policies/PolicySelector";
 import { Button } from "@/components/ui/button";
@@ -119,17 +119,12 @@ export function KeyEditView({
   const modelBudget = useModelMaxBudgetField(keyData.token, keyData.model_max_budget);
   const routerSettingsRef = useRef<RouterSettingsAccordionRef>(null);
   const keyTypeFieldId = React.useId();
-  const projectFieldId = React.useId();
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
-  const { data: projects } = useProjects();
   const { data: uiSettingsData } = useUISettings();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const hasProject = Boolean(keyData.project_id);
-  const projectDisplay = (() => {
-    if (!keyData.project_id) return null;
-    const project = projects?.find((p) => p.project_id === keyData.project_id);
-    return project?.project_alias ? `${project.project_alias} (${keyData.project_id})` : keyData.project_id;
-  })();
+  const detachProject = hasProject && form.watch("project_id") === null;
+  const canDetachProject = canDetachKeyProject(team, organizations, userID, userRole);
 
   const allowedRoutesValue = form.watch("allowed_routes");
   const selectedModels = (form.watch("models") as string[] | undefined) ?? [];
@@ -296,7 +291,12 @@ export function KeyEditView({
         values.router_settings = routerSettings;
       }
 
-      await onSubmit(withNormalizedEstimates(values));
+      await onSubmit(
+        withNormalizedEstimates({
+          ...values,
+          ...(detachProject && enableProjectsUI && canDetachProject ? { project_id: null } : {}),
+        }),
+      );
     } finally {
       setIsKeySaving(false);
     }
@@ -813,10 +813,13 @@ export function KeyEditView({
           </FormField>
 
           {enableProjectsUI && hasProject && (
-            <Field>
-              <FieldLabel htmlFor={projectFieldId}>Project</FieldLabel>
-              <Input id={projectFieldId} value={projectDisplay ?? ""} disabled readOnly />
-            </Field>
+            <KeyProjectField
+              projectId={keyData.project_id}
+              canDetach={canDetachProject}
+              pending={detachProject}
+              disabled={isKeySaving}
+              onToggle={() => form.setValue("project_id", detachProject ? keyData.project_id : null)}
+            />
           )}
 
           <Field>

@@ -8089,6 +8089,7 @@ export interface paths {
          *     - user_id: Optional[str] - User ID associated with key
          *     - team_id: Optional[str] - Team ID associated with key
          *     - agent_id: Optional[str] - The agent id associated with the key.
+         *     - project_id: Optional[str] - Omit to retain the project, or send null to detach. A different project ID is rejected.
          *     - organization_id: Optional[str] - The organization id of the key.
          *     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
          *     - models: Optional[list] - Model_name's a user is allowed to call
@@ -37991,6 +37992,11 @@ export interface components {
             } | null;
             /** Policies */
             policies?: string[] | null;
+            /**
+             * Project Id
+             * @description Omit to retain the project, or send null to detach. Assigning a different project is not supported.
+             */
+            project_id?: string | null;
             /** Prompts */
             prompts?: string[] | null;
             /** Rotation Interval */
