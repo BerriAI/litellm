@@ -447,6 +447,7 @@ class _StockCodexModel(BaseModel):
     slug: str
     priority: int
     visibility: str
+    supported_in_api: bool = True
     upgrade: _StockCodexUpgrade | None = None
 
 
@@ -474,7 +475,9 @@ def _codex_catalog_entry(
             base_instructions=instructions,
         )
     upgrade: Final = stock.upgrade if stock.upgrade is not None and stock.upgrade.model in served else None
-    return stock.model_copy(update={"priority": priority, "visibility": "list", "upgrade": upgrade})
+    return stock.model_copy(
+        update={"priority": priority, "visibility": "list", "supported_in_api": True, "upgrade": upgrade}
+    )
 
 
 def codex_model_catalog(
@@ -486,8 +489,8 @@ def codex_model_catalog(
     Passing a catalog replaces Codex's built-in one, so a proxy model the
     installed Codex knows keeps that Codex's own entry and the proxy only
     decides its place in the picker: the listing orders it, lists it even when
-    Codex hides it, and keeps Codex's upgrade nudge only when the model it
-    points at is served too. A model Codex does not know gets the fallback
+    Codex hides it or keeps it off the API, and keeps Codex's upgrade nudge only
+    when the model it points at is served too. A model Codex does not know gets the fallback
     entry, with the same base instructions Codex itself uses so the agent never
     runs without a system prompt.
     """
