@@ -663,6 +663,116 @@ async def test_gateway_rounds_keep_separate_limiter_contexts_and_original_client
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("between_rounds", [False, True])
+@pytest.mark.parametrize("disconnect", [False, True])
+async def test_silent_memory_rounds_keep_the_client_alive_and_cancel_upstream(
+    prisma_edge: MagicMock, between_rounds: bool, disconnect: bool
+) -> None:
+    import asyncio
+    from unittest.mock import patch
+
+    from starlette.responses import StreamingResponse
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.memory.gateway import process_gateway_memory
+
+    waiting = asyncio.Event()
+    cancelled = asyncio.Event()
+    release = asyncio.Event()
+    calls = []
+
+    async def provider(scope: Scope, receive: Receive, send: Send) -> None:
+        calls.append(await receive())
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        frames = (
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_slow",
+                    "role": "assistant",
+                    "model": "test",
+                    "content": [],
+                    "usage": {"input_tokens": 10, "output_tokens": 0},
+                },
+            },
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "search",
+                    "name": "litellm_memory_search",
+                    "input": {"query": "demo"},
+                },
+            },
+            {"type": "content_block_stop", "index": 0},
+            {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 20}},
+            {"type": "message_stop"},
+        )
+        if len(calls) == 1:
+            for frame in frames if between_rounds else frames[:1]:
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": b"data: " + json.dumps(frame).encode() + b"\n\n",
+                        "more_body": True,
+                    }
+                )
+            if between_rounds:
+                await send({"type": "http.response.body", "body": b"", "more_body": False})
+                return
+        waiting.set()
+        try:
+            await release.wait()
+            raise RuntimeError("private upstream failure")
+        finally:
+            cancelled.set()
+
+    with (
+        patch("litellm.sse_keepalive_ping_interval_seconds", 0.01),  # test-quality-ok: Set the real operator configuration.
+        patch.multiple(  # test-quality-ok: Replace the model HTTP boundary, preserving the real internal ASGI transport.
+            "litellm.proxy.proxy_server", app=provider, llm_router=None
+        ),
+        patch(  # test-quality-ok: Inject authorized database edge; execute the real loop, SSE serialization and teardown.
+            "litellm.proxy.memory.gateway.gateway_memory_store", new=AsyncMock(return_value=store(prisma_edge))
+        ),
+    ):
+        response = await process_gateway_memory(
+            {"model": "test", "stream": True, "messages": []}, request(), UserAPIKeyAuth(), "anthropic_messages"
+        )
+        assert isinstance(response, StreamingResponse)
+        public = response.body_iterator
+        assert b"message_start" in await anext(public)
+        next_chunk = asyncio.create_task(anext(public))
+        await asyncio.wait_for(waiting.wait(), timeout=1)
+        assert await asyncio.wait_for(next_chunk, timeout=0.5) == b": ping\n\n"
+        if disconnect:
+            await public.aclose()
+        else:
+            release.set()
+            remaining = b"".join([chunk async for chunk in public])
+            assert remaining.count(b"event: error") == 1
+            assert b"private upstream failure" not in remaining and b"message_stop" not in remaining
+    assert cancelled.is_set() and len(calls) == (2 if between_rounds else 1)
+    prisma_edge.db.litellm_memorycontinuation.upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_gateway_preserves_upstream_retry_delay_without_exposing_provider_details(prisma_edge: MagicMock) -> None:
+    async def provider(scope: Scope, receive: Receive, send: Send) -> None:
+        await JSONResponse({"error": "private provider detail"}, status_code=429, headers={"Retry-After": "17"})(
+            scope, receive, send
+        )
+
+    loop = GatewayMemoryLoop(provider, request(), {"messages": []}, "anthropic_messages", store(prisma_edge))
+    with pytest.raises(HTTPException) as exc:
+        async for _ in loop.run():
+            pass
+    assert exc.value.status_code == 429 and exc.value.headers == {"retry-after": "17"}
+    assert "private provider detail" not in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("share_auth_cache", [False, True])
 async def test_backend_activation_invalidates_a_gateway_negative_hint_without_pubsub(
     prisma_edge: MagicMock, share_auth_cache: bool

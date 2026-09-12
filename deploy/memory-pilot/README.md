@@ -33,6 +33,8 @@ pilot must not be connected to an older gateway's production database.
 3. Set the build command to `bash deploy/memory-pilot/build.sh`, the start command
    to `bash deploy/memory-pilot/start.sh`, and the health path to
    `/health/readiness`. The build includes the dashboard from this branch.
+   Set the service's maximum shutdown delay to 300 seconds so active requests
+   can drain during a deployment. Uvicorn allows 290 seconds before cleanup
 4. Set these environment variables in Render:
 
    | Variable | Value |
@@ -79,6 +81,14 @@ correct, or delete entries in Memory; callers can use the self-service API.
 
 ## Behavior and limits
 
+- Streaming keeps LiteLLM's configured SSE keepalives across silent memory
+  rounds. The pilot sends comments every 15 seconds of silence and disables
+  proxy buffering. A failure after streaming starts arrives as a native SSE
+  error; before streaming starts, HTTP errors retain their retry delay
+- Model calls retain LiteLLM's normal timeout and retry settings. The separate
+  upstream credential check has a 20-second timeout. Deployments drain existing
+  requests for up to five minutes; requests still running after that can be
+  interrupted. Schedule pilot updates outside active office usage
 - Supported surfaces: Chat Completions, Responses, and Anthropic Messages,
   including their native streaming responses and client tool continuation.
 - The selected model must support function calling. The actual answering model

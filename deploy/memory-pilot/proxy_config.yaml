@@ -10,6 +10,7 @@ litellm_settings:
     - hooks.forward_credential
   drop_params: true
   turn_off_message_logging: true
+  sse_keepalive_ping_interval_seconds: 15
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   store_model_in_db: true
