@@ -39,6 +39,7 @@ from litellm.proxy.db.db_url_settings import (
     unsupported_db_scheme,
     unsupported_db_scheme_message,
 )
+from litellm.proxy.db.pgbouncer import PgBouncerPlan, PgBouncerSettings, plan_pgbouncer
 from litellm.proxy.db.token_auth import AzureEntraTokenAuth, RdsIamTokenAuth
 
 
@@ -835,13 +836,43 @@ def test_tls_env_vars_apply_to_the_password_writer_and_the_assembled_reader(monk
     assert _query(os.environ["DATABASE_URL_READ_REPLICA"]) == expected
 
 
+def test_sslrootcert_env_var_alone_means_verify_full_for_prisma_and_pgbouncer(monkeypatch: pytest.MonkeyPatch):
+    """Under libpq's default ``prefer`` a root cert is never consulted, so a URL
+    carrying only ``sslrootcert`` would leave PgBouncer on ``prefer`` with the CA
+    loaded but unused. Supplying a CA and nothing else must verify."""
+    _tls_env(monkeypatch)
+    monkeypatch.delenv("DATABASE_SSLMODE")
+    monkeypatch.setenv("DATABASE_PASSWORD", "s3cr3t")
+
+    assert _apply() is True
+
+    url: Final = os.environ["DATABASE_URL"]
+    assert _query(url) == {
+        "sslmode": ["require"],
+        "sslcert": ["/certs/rds-bundle.pem"],
+        "sslaccept": ["strict"],
+        "max_idle_connection_lifetime": ["60"],
+    }
+    plan: Final = plan_pgbouncer(url, PgBouncerSettings(enabled=True), Path("/run/pgb"), None)
+    assert isinstance(plan, PgBouncerPlan), plan
+    assert "server_tls_sslmode = verify-full" in plan.ini
+    assert "server_tls_ca_file = /run/pgb/server-ca.pem" in plan.ini
+
+
 def test_tls_env_vars_never_override_a_pinned_database_url(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql://pinned:url@db.example.com:5432/litellm_db?sslmode=disable")
+    writer: Final = (
+        "postgresql://pinned:url@db.example.com:5432/litellm_db?sslmode=disable&max_idle_connection_lifetime=60"
+    )
+    reader: Final = "postgresql://pinned:url@reader.example.com:5432/litellm_db?max_idle_connection_lifetime=60"
+    monkeypatch.setenv("DATABASE_URL", writer)
+    monkeypatch.setenv("DATABASE_URL_READ_REPLICA", reader)
+    monkeypatch.setenv("DATABASE_HOST_READ_REPLICA", "reader.example.com")
     _tls_env(monkeypatch)
 
     assert _apply() is False
 
-    assert _query(os.environ["DATABASE_URL"]) == {"sslmode": ["disable"], "max_idle_connection_lifetime": ["60"]}
+    assert os.environ["DATABASE_URL"] == writer
+    assert os.environ["DATABASE_URL_READ_REPLICA"] == reader
 
 
 def test_token_refresh_params_keep_the_prisma_tls_dialect_but_not_the_schema():

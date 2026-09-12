@@ -373,12 +373,18 @@ class DatabaseURLSettings(BaseSettings):
         )
 
     def tls_params(self) -> Mapping[str, str]:
-        """``sslmode`` / ``sslrootcert`` query params for every URL assembled from the discrete vars."""
+        """``sslmode`` / ``sslrootcert`` query params for every URL assembled from the discrete vars.
+
+        A root cert on its own means ``verify-full``: under libpq's default
+        ``prefer`` the CA would never be consulted, and PgBouncer would dial
+        Postgres unverified with the bundle loaded.
+        """
+        sslmode: Final = self.database_sslmode or ("verify-full" if self.database_sslrootcert else None)
         return MappingProxyType(
             {
                 key: value
                 for key, value in (
-                    ("sslmode", self.database_sslmode),
+                    ("sslmode", sslmode),
                     ("sslrootcert", self.database_sslrootcert),
                 )
                 if value
