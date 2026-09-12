@@ -53,9 +53,11 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         api_url=getattr(litellm_params, "api_base", None),
         agent_token=getattr(litellm_params, "api_key", None),
         workspace_id=getattr(litellm_params, "workspace_id", None),
-        # Conduct's constructor argument is still ``fail_mode`` — mapped
-        # from the typed LiteLLM field above.
-        fail_mode=unreachable_fallback,
+        # Direct pass-through since conduct-litellm-guard 0.2.5 — the
+        # standalone package renamed ``fail_mode`` to ``unreachable_fallback``
+        # so the shim no longer needs to name-map (which would trigger the
+        # plugin's DeprecationWarning on every init in 0.2.5+).
+        unreachable_fallback=unreachable_fallback,
         timeout=timeout,
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,

@@ -13,7 +13,7 @@ BerriAI/litellm#38143 CI regression: registry iteration expects every
 registered class to expose the hooks classmethod). Instantiation of
 the stub raises ``ImportError`` via ``raise_if_missing_package``.
 
-Install: ``pip install "conduct-litellm-guard>=0.2.4"``
+Install: ``pip install "conduct-litellm-guard>=0.2.5"``
 Source:  https://github.com/sseshachala/conductai/tree/main/packages/conduct-litellm-guard
 Docs:    https://conductai.ai/guard
 """
@@ -27,7 +27,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 
 _import_error_message = (
     "conduct-litellm-guard is required for the Conduct guardrail. "
-    'Install it with: pip install "conduct-litellm-guard>=0.2.4"'
+    'Install it with: pip install "conduct-litellm-guard>=0.2.5"'
 )
 
 
