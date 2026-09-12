@@ -9,9 +9,9 @@ reads them back with ``from_metadata``. ``None`` means this request never carrie
 from collections.abc import Mapping
 from datetime import datetime
 from types import MappingProxyType
-from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from typing_extensions import Self
 
 
 class _BudgetSnapshot(BaseModel):
