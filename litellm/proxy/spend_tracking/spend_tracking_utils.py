@@ -1182,10 +1182,6 @@ def _sanitize_error_information_for_spend_logs(
       ``'input'`` / ``'messages'`` / ``'prompt'`` values *and* Pydantic v2
       ``input_value=...`` assignments inside both ``error_message`` and
       ``traceback`` so prompts cannot leak through either field.
-    - An unknown-model rejection (``ProxyModelNotFoundError``) persists its
-      ``spend_log_error_message``, which names the route and the rejection
-      without the raw client ``model`` string, matching the ``unknown-model``
-      placeholder in the row's ``model`` column.
 
     Scoped to the spend-log path — OTEL/Datadog/etc. callbacks still receive
     the untruncated error per ``LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE``.
