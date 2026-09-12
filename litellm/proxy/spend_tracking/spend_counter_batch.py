@@ -1,8 +1,9 @@
-"""One Redis MGET for every spend counter the admission checks read, instead of one GET per counter."""
+"""One Redis MGET per phase (admission, reservation, post-call) for the spend counters it reads, not one GET each."""
 
 import asyncio
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextvars import ContextVar, Token
+from dataclasses import dataclass
 from types import MappingProxyType, TracebackType
 from typing import Final
 
@@ -11,9 +12,16 @@ from pydantic import TypeAdapter
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import RedisCache
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import model_access_group_spend_counter_key
 
 _CounterValues: Final = TypeAdapter(dict[str, float | None])
 _NO_VALUES: Final[Mapping[str, float | None]] = MappingProxyType({})
+
+
+@dataclass(frozen=True, slots=True)
+class PendingSpendIncrement:
+    counter_key: str
+    increment: float
 
 
 class SpendCounterBatch:
@@ -35,6 +43,10 @@ class SpendCounterBatch:
     def counter_keys(self) -> frozenset[str]:
         return self._keys
 
+    @property
+    def is_open(self) -> bool:
+        return self._open
+
     def bind(self, counter_keys: frozenset[str]) -> None:
         if self._open:
             self._keys = self._keys | counter_keys
@@ -52,12 +64,29 @@ class SpendCounterBatch:
             return None
         return loaded[counter_key], True
 
+    def record(self, counter_key: str, value: float) -> None:
+        """A write returned the counter's new value; later reads in this scope see it instead of the MGET value."""
+        if not self._open:
+            return
+        key: Final = frozenset((counter_key,))
+        self._keys = self._keys | key
+        self._fetched = self._fetched | key
+        self._loaded = MappingProxyType({**self._loaded, counter_key: value})
+
+    def forget(self, counter_key: str) -> None:
+        """A write left the counter's value unknown; later reads in this scope go to Redis."""
+        key: Final = frozenset((counter_key,))
+        self._keys = self._keys - key
+        self._fetched = self._fetched - key
+        self._loaded = MappingProxyType({k: v for k, v in self._loaded.items() if k != counter_key})
+
     async def _load(self) -> Mapping[str, float | None]:
         async with self._lock:
             pending: Final = self._keys - self._fetched
             if pending:
                 self._fetched = self._fetched | pending
-                self._loaded = MappingProxyType({**self._loaded, **await self._fetch(pending)})
+                fetched: Final = await self._fetch(pending)
+                self._loaded = MappingProxyType({**fetched, **self._loaded})
             return self._loaded
 
     async def _fetch(self, keys: frozenset[str]) -> Mapping[str, float | None]:
@@ -78,17 +107,26 @@ def active_spend_counter_batch() -> SpendCounterBatch | None:
 
 
 class spend_counter_batch_scope:
-    """Reads inside the scope share one MGET once ``bind_admission_counter_keys`` has run."""
+    """Reads inside the scope share one MGET for the keys bound here or by ``bind_*`` calls inside it.
+    Opened inside a scope whose batch is still open, it binds into that batch so both phases share the MGET."""
 
-    __slots__ = ("_redis_cache", "_token")
+    __slots__ = ("_counter_keys", "_redis_cache", "_token")
 
-    def __init__(self, redis_cache: RedisCache | None) -> None:
+    def __init__(self, redis_cache: RedisCache | None, counter_keys: frozenset[str] = frozenset()) -> None:
         self._redis_cache: Final = redis_cache
+        self._counter_keys: Final = counter_keys
         self._token: Token[SpendCounterBatch | None] | None = None
 
     def __enter__(self) -> None:
-        if self._redis_cache is not None:
-            self._token = _active_batch.set(SpendCounterBatch(self._redis_cache))
+        if self._redis_cache is None:
+            return
+        outer: Final = _active_batch.get()
+        if outer is not None and outer.is_open:
+            outer.bind(self._counter_keys)
+            return
+        batch: Final = SpendCounterBatch(self._redis_cache)
+        batch.bind(self._counter_keys)
+        self._token = _active_batch.set(batch)
 
     def __exit__(
         self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
@@ -122,9 +160,58 @@ def admission_counter_keys(token: UserAPIKeyAuth, end_user_id: str | None) -> fr
     return frozenset(_iter_admission_counter_keys(token, end_user_id))
 
 
+def post_call_counter_keys(
+    token: str | None,
+    team_id: str | None,
+    user_id: str | None,
+    org_id: str | None,
+    end_user_id: str | None,
+    tags: Sequence[object] | None,
+    model_access_groups: Sequence[object] | None,
+) -> frozenset[str]:
+    """Every counter ``increment_spend_counters`` warm-checks, except budget windows which bind on read."""
+    entity_keys: Final = admission_counter_keys(
+        UserAPIKeyAuth(token=token, team_id=team_id, user_id=user_id, org_id=org_id), end_user_id
+    )
+    tag_keys: Final = frozenset(f"spend:tag:{tag}" for tag in tags or () if tag and isinstance(tag, str))
+    group_keys: Final = frozenset(
+        model_access_group_spend_counter_key(group)
+        for group in model_access_groups or ()
+        if group and isinstance(group, str)
+    )
+    return entity_keys | tag_keys | group_keys
+
+
 def bind_admission_counter_keys(token: UserAPIKeyAuth, end_user_id: str | None) -> None:
     """Idempotent: call again after the token gains ids (end user, team org) so those counters join the MGET."""
+    bind_spend_counter_keys(admission_counter_keys(token, end_user_id))
+
+
+def bind_spend_counter_keys(counter_keys: frozenset[str]) -> None:
     batch: Final = _active_batch.get()
     if batch is None:
         return
-    batch.bind(admission_counter_keys(token, end_user_id))
+    batch.bind(counter_keys)
+
+
+def record_spend_counter_value(counter_key: str, value: float) -> None:
+    batch: Final = _active_batch.get()
+    if batch is None:
+        return
+    batch.record(counter_key, value)
+
+
+def forget_spend_counter(counter_key: str) -> None:
+    batch: Final = _active_batch.get()
+    if batch is None:
+        return
+    batch.forget(counter_key)
+
+
+async def read_batched_spend_counter(counter_key: str) -> tuple[float | None, bool] | None:
+    """Bind-on-read for counters only known at read time (budget windows); the first reader pays the MGET."""
+    batch: Final = _active_batch.get()
+    if batch is None:
+        return None
+    batch.bind(frozenset((counter_key,)))
+    return await batch.read(counter_key)
