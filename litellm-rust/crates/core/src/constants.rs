@@ -46,9 +46,10 @@ pub const FUNCTION_TRACE_TARGET: &str = "litellm::function_trace";
 
 pub(crate) const MEDIA_CONNECT_TIMEOUT_SECS: u64 = 10;
 
+pub(crate) const OCR_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
 pub(crate) const OCR_HTTP_TIMEOUT_SECS: u64 = 600;
 pub(crate) const OCR_CONNECT_TIMEOUT_SECS: u64 = 10;
-pub(crate) const OCR_INLINE_MAX_BYTES: usize = 50 * 1024 * 1024;
+pub const OCR_INLINE_MAX_BYTES: usize = 50 * 1024 * 1024;
 pub(crate) const OCR_DOWNLOAD_MAX_BYTES: u64 = 50 * 1024 * 1024;
 pub(crate) const OCR_MAX_FETCH_REDIRECTS: usize = 10;
 pub(crate) const OCR_POLL_TIMEOUT_SECS: u64 = 120;
@@ -63,3 +64,6 @@ pub(crate) const REDUCTO_API_KEY_ENV: &str = "REDUCTO_API_KEY";
 pub(crate) const REDUCTO_ID_PREFIX: &str = "reducto://";
 pub(crate) const AZURE_AI_OCR_PATH: &str = "/providers/mistral/azure/ocr";
 pub(crate) const MISTRAL_OCR_API_BASE: &str = "https://api.mistral.ai/v1";
+
+pub(crate) const COHERE_PARSE_API_BASE: &str = "https://api.cohere.com";
+pub(crate) const COHERE_API_KEY_ENV: &str = "COHERE_API_KEY";

@@ -164,6 +164,30 @@ mod tests {
     }
 
     #[rstest]
+    #[case(json!([0, 1, 2]), Some("1,2,3"))]
+    #[case(json!([2, 0, 0, 1]), Some("1,2,3"))]
+    #[case(json!([]), None)]
+    #[case(json!("3-9"), Some("3-9"))]
+    #[case(json!("1-3, 5"), Some("1-3,5"))]
+    #[case(json!(["1", "3-5"]), Some("1,3-5"))]
+    fn page_mapping_matches_python(#[case] input: Value, #[case] expected: Option<&str>) {
+        assert_eq!(
+            map(json!({"pages": input})).unwrap().pages.as_deref(),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case(json!("a,b"))]
+    #[case(json!([-1]))]
+    #[case(json!([true, false]))]
+    #[case(json!([1, "2"]))]
+    #[case(json!(5))]
+    fn invalid_page_mapping_matches_python(#[case] input: Value) {
+        assert!(map(json!({"pages": input})).is_err());
+    }
+
+    #[rstest]
     #[case(json!(["keyValuePairs"]), "keyValuePairs")]
     #[case(json!(["keyValuePairs", "languages"]), "keyValuePairs,languages")]
     #[case(json!("keyValuePairs"), "keyValuePairs")]

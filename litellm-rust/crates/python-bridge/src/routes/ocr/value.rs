@@ -1,12 +1,11 @@
 use litellm_core::Error;
 use std::future::Future;
 
-use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
-use litellm_core::ocr::wire::{OcrWireRequest, decode_request, is_supported_request};
+use litellm_core::ocr::wire::{OcrWireRequest, decode_request};
 use pyo3::prelude::*;
 use serde_json::Value;
 
-use crate::errors::ocr_error_to_pyerr;
+use super::errors::to_pyerr as ocr_error_to_pyerr;
 use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty};
 
 fn prepare_ocr(
@@ -38,37 +37,20 @@ fn prepare_ocr(
             extra_headers,
             timeout,
         } = options;
-        if is_supported_request(&model, custom_llm_provider.as_deref()) {
-            let request = decode_request(OcrWireRequest {
-                model,
-                document,
-                api_key,
-                api_base,
-                custom_llm_provider,
-                extra_headers,
-                optional_params,
-                input_sources,
-                timeout_seconds: timeout.map(|value| value.as_secs_f64()),
-            })?;
-            return litellm_core::ocr::ocr(request)
-                .await
-                .map(|response| response.into_json());
-        }
-        run_ocr(OcrRequest {
-            model: &model,
+        let request = decode_request(OcrWireRequest {
+            model,
             document,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
+            api_key,
+            api_base,
+            custom_llm_provider,
             extra_headers,
             optional_params,
-            timeout,
-            callbacks: Vec::new(),
-            guardrails: Vec::new(),
-            request_metadata: Default::default(),
-            litellm_call_id: None,
-        })
-        .await
+            input_sources,
+            timeout_seconds: timeout.map(|value| value.as_secs_f64()),
+        })?;
+        litellm_core::ocr::ocr(request)
+            .await
+            .map(|response| response.into_json())
     })
 }
 
@@ -95,23 +77,4 @@ bridge_route! {
     },
     prepare = prepare_ocr,
     errors = ocr_error_to_pyerr,
-}
-
-#[cfg(test)]
-mod tests {
-    use litellm_core::ocr::wire::is_supported_request;
-
-    #[test]
-    fn native_activation_includes_migrated_providers() {
-        assert!(is_supported_request("model", Some("mistral")));
-        assert!(is_supported_request("pixtral-12b", Some("azure_ai")));
-        assert!(is_supported_request(
-            "documentintelligence/prebuilt-read",
-            Some("azure_ai")
-        ));
-        assert!(is_supported_request("parse-v3", Some("reducto")));
-        assert!(is_supported_request("parse-legacy", Some("reducto")));
-        assert!(is_supported_request("mistral-ocr", Some("vertex_ai")));
-        assert!(is_supported_request("deepseek-ocr", Some("vertex_ai")));
-    }
 }
