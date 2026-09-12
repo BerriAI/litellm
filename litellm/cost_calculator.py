@@ -2326,33 +2326,29 @@ def _combine_cached_tokens_details(
     )
 
 
-def _combine_prompt_tokens_details(combined: Usage, usage: Usage) -> None:
-    if not (hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details):
-        return
-    if not hasattr(combined, "prompt_tokens_details") or not combined.prompt_tokens_details:
-        combined.prompt_tokens_details = PromptTokensDetailsWrapper()
-
-    for attr in _summable_prompt_token_fields(usage.prompt_tokens_details):
-        if (
-            hasattr(usage.prompt_tokens_details, attr)
-            and not attr.startswith("_")
-            and not callable(_attribute_value(usage.prompt_tokens_details, attr))
-        ):
-            current_val = getattr(combined.prompt_tokens_details, attr, 0) or 0
-            new_val = getattr(usage.prompt_tokens_details, attr, 0) or 0
-            if new_val is not None and isinstance(new_val, (int, float)):
-                setattr(
-                    combined.prompt_tokens_details,
-                    attr,
-                    current_val + new_val,
-                )
-
-    new_cached_tokens_details: Final = getattr(usage.prompt_tokens_details, "cached_tokens_details", None)
-    if isinstance(new_cached_tokens_details, CachedTokensDetails):
-        combined.prompt_tokens_details.cached_tokens_details = _combine_cached_tokens_details(
-            getattr(combined.prompt_tokens_details, "cached_tokens_details", None),
-            new_cached_tokens_details,
-        )
+def _combine_prompt_tokens_details(
+    current: PromptTokensDetailsWrapper | None, new: PromptTokensDetailsWrapper
+) -> PromptTokensDetailsWrapper:
+    base: Final = current if current is not None else PromptTokensDetailsWrapper()
+    base_values: Final = MappingProxyType(
+        {attr: getattr(base, attr) for attr in type(base).model_fields if hasattr(base, attr)}
+    )
+    summed: Final = MappingProxyType(
+        {
+            attr: (getattr(base, attr, 0) or 0) + (getattr(new, attr) or 0)
+            for attr in _summable_prompt_token_fields(new)
+            if hasattr(new, attr) and isinstance(getattr(new, attr) or 0, (int, float))
+        }
+    )
+    new_cached_tokens_details: Final = getattr(new, "cached_tokens_details", None)
+    cached_tokens_details: Final = (
+        _combine_cached_tokens_details(getattr(base, "cached_tokens_details", None), new_cached_tokens_details)
+        if isinstance(new_cached_tokens_details, CachedTokensDetails)
+        else getattr(base, "cached_tokens_details", None)
+    )
+    return PromptTokensDetailsWrapper(
+        **MappingProxyType({**base_values, **summed, "cached_tokens_details": cached_tokens_details})
+    )
 
 
 class BaseTokenUsageProcessor:
@@ -2381,7 +2377,10 @@ class BaseTokenUsageProcessor:
                         and isinstance(current_val, (int, float))
                     ):
                         setattr(combined, attr, current_val + new_val)
-            _combine_prompt_tokens_details(combined, usage)
+            if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details:
+                combined.prompt_tokens_details = _combine_prompt_tokens_details(
+                    getattr(combined, "prompt_tokens_details", None), usage.prompt_tokens_details
+                )
 
             # Handle nested completion_tokens_details
             if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details:
