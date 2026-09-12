@@ -659,6 +659,7 @@ from litellm.proxy.route_priority import hot_routes_first
 from litellm.proxy.search_endpoints.endpoints import router as search_router
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
+from litellm.proxy.spend_tracking.spend_counter_batch import active_spend_counter_batch
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
@@ -2724,6 +2725,12 @@ async def read_spend_counter_cache_value(counter_key: str) -> tuple[float | None
     """Return (value, authoritative) for the live counter, None when absent. A clean
     Redis miss is final: the per-pod in-memory copy outlives the Redis TTL and only
     holds this pod's writes, so it is consulted only when Redis is unreachable."""
+    batch: Final = active_spend_counter_batch()
+    if batch is not None:
+        batched: Final = await batch.read(counter_key)
+        if batched is not None:
+            return batched
+
     if spend_counter_cache.redis_cache is not None:
         try:
             redis_val: Final = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)

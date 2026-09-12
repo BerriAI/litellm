@@ -1647,6 +1647,95 @@ async def test_db_virtual_key_auth_sets_via_virtual_key_marker():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("model_allowed", [True, False])
+async def test_auth_prefetches_referenced_objects_only_after_the_key_may_call_the_model(model_allowed):
+    """A request denied by the key's model list must not pay for the team/user/org MGET or DB join."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.proxy_server import hash_token
+
+    api_key = "sk-prefetch-order-test"
+    valid_token = UserAPIKeyAuth(api_key=api_key, token=hash_token(api_key), user_id="u1", team_id="t1")
+
+    mock_cache = AsyncMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.delete_cache = MagicMock()
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    _attrs_to_set = {
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": mock_cache,
+        "proxy_logging_obj": mock_proxy_logging_obj,
+        "master_key": "sk-master-key",
+        "general_settings": {},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": None,
+        "jwt_handler": None,
+        "litellm_proxy_admin_name": "admin",
+    }
+    _original_values = {attr: getattr(_proxy_server_mod, attr, None) for attr in _attrs_to_set}
+    denied = ProxyException(
+        message="Key not allowed to access model",
+        type=ProxyErrorTypes.key_model_access_denied,
+        param="model",
+        code=401,
+    )
+    try:
+        for attr, val in _attrs_to_set.items():
+            setattr(_proxy_server_mod, attr, val)
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        with (
+            patch(  # test-quality-ok: the builder has no DI seam for the key lookup; stands in for the DB
+                "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
+                new_callable=AsyncMock,
+                return_value=valid_token,
+            ),
+            patch(  # test-quality-ok: the observable is whether the prefetch runs before or after this check
+                "litellm.proxy.auth.user_api_key_auth._enforce_key_and_fallback_model_access",
+                new_callable=AsyncMock,
+                side_effect=None if model_allowed else denied,
+            ),
+            patch(  # test-quality-ok: counting prefetch calls on a denied request IS the regression being pinned
+                "litellm.proxy.auth.user_api_key_auth.prefetch_auth_objects", new_callable=AsyncMock
+            ) as mock_prefetch,
+            patch(  # test-quality-ok: no DB in this test; the user lookup must not fail the allowed path
+                "litellm.proxy.auth.user_api_key_auth.get_user_object", new_callable=AsyncMock, return_value=None
+            ),
+        ):
+            call = _user_api_key_auth_builder(
+                request=request,
+                api_key=f"Bearer {api_key}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={"model": "gpt-4o"},
+            )
+            if model_allowed:
+                assert isinstance(await call, UserAPIKeyAuth)
+                mock_prefetch.assert_awaited_once()
+                assert mock_prefetch.await_args.kwargs["refs"].team_id == "t1"
+            else:
+                with pytest.raises(ProxyException) as exc:
+                    await call
+                assert exc.value.type == ProxyErrorTypes.key_model_access_denied
+                mock_prefetch.assert_not_awaited()
+    finally:
+        for attr, val in _original_values.items():
+            setattr(_proxy_server_mod, attr, val)
+
+
+@pytest.mark.asyncio
 async def test_return_user_api_key_auth_obj_user_spend_and_budget():
     """
     Test that _return_user_api_key_auth_obj correctly sets user_spend and user_max_budget
