@@ -666,7 +666,7 @@ def entra_assertion(value: object) -> str | None:
 
 def agent_365_subject_token_present(oauth2_headers: Mapping[str, str] | None) -> bool:
     """Whether the request's ``Authorization`` carries an Entra assertion the guardrail can exchange."""
-    authorization: Final = (oauth2_headers or {}).get("Authorization", "")
+    authorization: Final = oauth2_headers.get("Authorization", "") if oauth2_headers else ""
     if not authorization.lower().startswith("bearer "):
         return False
     return entra_assertion(authorization[len("bearer ") :].strip()) is not None
