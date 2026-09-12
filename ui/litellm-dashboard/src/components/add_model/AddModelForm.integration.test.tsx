@@ -164,7 +164,7 @@ const createTestProps = (userRole = "proxy_admin", userId = "user-1", isTeamAdmi
     handleOk: vi.fn().mockResolvedValue(true),
     setSelectedProvider: vi.fn(),
     setProviderModelsFn: vi.fn(),
-    getPlaceholder: vi.fn((provider: Providers) => `Enter ${provider} model name`),
+    getPlaceholder: vi.fn((provider: string) => `Enter ${provider} model name`),
     setShowAdvancedSettings: vi.fn(),
     selectedProvider: Providers.OpenAI,
     providerModels: ["gpt-4", "gpt-3.5-turbo"],
