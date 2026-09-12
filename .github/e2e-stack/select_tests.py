@@ -11,6 +11,7 @@ UNSUPPORTED: Final = re.compile(
 )
 HARNESS: Final = re.compile(
     r"^tests/e2e/[A-Za-z0-9_.-]+\.(py|ini)$"
+    r"|^tests/e2e/idp_realm\.json$"
     r"|^tests/e2e/gateway/"
     r"|^\.github/e2e-stack/"
     r"|^\.github/workflows/test-e2e-changed\.yml$"
