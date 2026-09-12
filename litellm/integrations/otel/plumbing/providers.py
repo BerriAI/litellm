@@ -41,7 +41,7 @@ from opentelemetry.util.types import Attributes, AttributeValue
 
 from litellm._logging import verbose_logger
 from litellm._version import version as litellm_version
-from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
+from litellm.integrations.otel.model.config import ExporterOwner, ExporterSpec, OpenTelemetryV2Config
 from litellm.integrations.otel.model.semconv import (
     DB,
     MCP,
@@ -377,6 +377,7 @@ _CAPTURED_HEADER_PREFIXES: Final = ("http.request.header.", "http.response.heade
 # ``?key=`` query parameter.
 _URL_KEYS: Final = frozenset({"http.url", "http.target", "url.full"})
 _URL_QUERY_KEY: Final = "url.query"
+_LANGFUSE_ATTRIBUTE_PREFIX: Final = "langfuse."
 
 
 class _TenantSpanView(ReadableSpan):
@@ -418,8 +419,10 @@ def _guardrail_unreachable(attributes: Mapping[str, AttributeValue]) -> bool:
     return attributes.get(LiteLLM.GUARDRAIL_STATUS) in _GUARDRAIL_UNREACHABLE_STATUSES
 
 
-def _tenant_visible(key: str, database: bool, owned: bool, unreachable_guardrail: bool) -> bool:
+def _tenant_visible(key: str, database: bool, owned: bool, unreachable_guardrail: bool, langfuse: bool) -> bool:
     if key.startswith(_CAPTURED_HEADER_PREFIXES) or key in (LiteLLMError.STACK_TRACE, _URL_QUERY_KEY):
+        return False
+    if not langfuse and key.startswith(_LANGFUSE_ATTRIBUTE_PREFIX):
         return False
     if database and key in _DATASTORE_ENDPOINT_KEYS:
         return False
@@ -470,11 +473,12 @@ def _for_destination(span: ReadableSpan, destination: "OtelDestination") -> Read
     database: Final = _is_database_span(attributes)
     owned: Final = _is_tenant_owned_span(attributes)
     unreachable: Final = _guardrail_unreachable(attributes)
+    langfuse: Final = destination.callback_name == ExporterOwner.LANGFUSE_OTEL.value
     kept: Final = MappingProxyType(
         {
             key: _without_query(key, value)
             for key, value in attributes.items()
-            if _tenant_visible(key, database, owned, unreachable)
+            if _tenant_visible(key, database, owned, unreachable, langfuse)
         }
     )
     recorded: Final = span.events
@@ -485,6 +489,30 @@ def _for_destination(span: ReadableSpan, destination: "OtelDestination") -> Read
     resource: Final = span.resource.merge(Resource(extra)) if extra else span.resource
     status: Final = span.status if owned else Status(span.status.status_code)
     return _TenantSpanView(span, resource, kept, events, status)
+
+
+def _without_langfuse_attributes(span: ReadableSpan) -> ReadableSpan:
+    attributes: Final = span.attributes or _NO_ATTRIBUTES
+    kept: Final = MappingProxyType(
+        {key: value for key, value in attributes.items() if not key.startswith(_LANGFUSE_ATTRIBUTE_PREFIX)}
+    )
+    if len(kept) == len(attributes):
+        return span
+    return _TenantSpanView(span, span.resource, kept, span.events, span.status)
+
+
+def _reads_langfuse_attributes(spec: ExporterSpec, config: OpenTelemetryV2Config) -> bool:
+    """Whether ``spec`` is the sink the ``langfuse.*`` attributes on a span are meant for.
+
+    An unowned exporter is the operator's generic collector, unless the config runs the
+    ``langfuse`` mapper with no Langfuse-owned exporter to deliver it (the mapper pointed
+    at ``OTEL_EXPORTER_*`` directly).
+    """
+    if spec.owner is not None:
+        return spec.owner is ExporterOwner.LANGFUSE_OTEL
+    return "langfuse" in config.mapper_names and all(
+        other.owner is not ExporterOwner.LANGFUSE_OTEL for other in config.exporters
+    )
 
 
 class TenantFanOutSpanProcessor(SpanProcessor):
@@ -766,6 +794,26 @@ class _OverriddenBackendFilter(SpanProcessor):
         if self._owner in suppressed_backends():
             return
         self._inner.on_end(span)
+
+    def shutdown(self) -> None:
+        self._inner.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self._inner.force_flush(timeout_millis)
+
+
+class _LangfuseAttributeFilter(SpanProcessor):
+    """Strip the ``langfuse.*`` attributes a Langfuse callback stamps on the shared spans
+    before they reach an exporter that is not a Langfuse sink."""
+
+    def __init__(self, inner: SpanProcessor) -> None:
+        self._inner: Final = inner
+
+    def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
+        self._inner.on_start(span, parent_context)
+
+    def on_end(self, span: ReadableSpan) -> None:
+        self._inner.on_end(_without_langfuse_attributes(span))
 
     def shutdown(self) -> None:
         self._inner.shutdown()
@@ -1060,9 +1108,10 @@ def build_tracer_provider(
             exp,
             (spec.use_simple_processor if spec.use_simple_processor is not None else use_simple_processor),
         )
+        sink = processor if _reads_langfuse_attributes(spec, config) else _LangfuseAttributeFilter(processor)
         owner = spec.owner.value if spec.owner is not None else None
         provider.add_span_processor(
-            _OverriddenBackendFilter(processor, owner) if tenant_overrides and owner is not None else processor
+            _OverriddenBackendFilter(sink, owner) if tenant_overrides and owner is not None else sink
         )
     return provider
 

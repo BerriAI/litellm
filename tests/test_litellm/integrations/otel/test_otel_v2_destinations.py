@@ -516,6 +516,34 @@ class TestFanOut:
         assert [s.name for s in langfuse.get_finished_spans()] == ["chat gpt-4"]
         assert [s.name for s in arize.get_finished_spans()] == ["chat gpt-4"]
 
+    def test_only_the_langfuse_destination_receives_the_langfuse_attributes(self):
+        langfuse, arize = InMemorySpanExporter(), InMemorySpanExporter()
+        by_endpoint = {"http://a.local": langfuse, "http://b.local": arize}
+        provider = TracerProvider()
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(processor_factory=lambda d: SimpleSpanProcessor(by_endpoint[d.endpoint]))
+        )
+
+        def run():
+            set_request_destinations(
+                (
+                    OtelDestination(endpoint="http://a.local", callback_name="langfuse_otel"),
+                    OtelDestination(endpoint="http://b.local", callback_name="arize"),
+                )
+            )
+            span = get_tracer(provider, "litellm").start_span("chat gpt-4")
+            span.set_attribute("gen_ai.request.model", "gpt-4")
+            span.set_attribute("langfuse.trace.name", "private-langfuse-only-name")
+            span.end()
+
+        in_fresh_context(run)
+
+        (langfuse_span,) = langfuse.get_finished_spans()
+        (arize_span,) = arize.get_finished_spans()
+        assert langfuse_span.attributes["langfuse.trace.name"] == "private-langfuse-only-name"
+        assert arize_span.attributes["gen_ai.request.model"] == "gpt-4"
+        assert [k for k in arize_span.attributes if k.startswith("langfuse.")] == []
+
     def test_a_destination_carries_the_tenants_service_name(self):
         """An overridden backend skips per-request tracer routing, so the service name
         that route used to apply has to travel on the destination instead."""
