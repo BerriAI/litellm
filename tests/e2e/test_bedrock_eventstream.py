@@ -4,14 +4,17 @@ import struct
 import zlib
 from collections.abc import Iterator
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 from types import MappingProxyType
 from typing import Final
 
 import pytest
 from bedrock_eventstream import decode_bedrock_stream
 from botocore.eventstream import ChecksumMismatch
-from e2e_http import StreamingResponse, streaming_outcome
+from e2e_http import URL, NoBody, StreamingResponse, require_successful_call, send, streaming_outcome
 from llm_translation.bedrock_stream import assert_converse_stream, assert_invoke_stream
+from provider_diagnostics import NetworkFailureError, ProviderUnavailableError
 from pydantic import JsonValue, TypeAdapter
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
@@ -52,7 +55,13 @@ class _BinaryResponse:
     chunks: tuple[bytes, ...]
     status_code: int = 200
     text: str = ""
-    headers = MappingProxyType({"content-type": "application/vnd.amazon.eventstream"})
+    headers = MappingProxyType(
+        {
+            "content-type": "application/vnd.amazon.eventstream",
+            "x-amzn-requestid": "stream-request",
+            "x-litellm-call-id": "stream-call",
+        }
+    )
 
     def iter_content(self, chunk_size: int | None = 1) -> Iterator[bytes]:
         return iter(self.chunks)
@@ -96,8 +105,20 @@ class TestBedrockEventStream:
         wire: Final = _frame('{"message":"unavailable"}', "serviceUnavailableException", "exception")
         result: Final = streaming_outcome(_BinaryResponse((wire,)), True, sent_at=0.0)
         assert result.stream_error == 'serviceUnavailableException: {"message":"unavailable"}'
-        with pytest.raises(AssertionError, match="serviceUnavailableException"):
+        with pytest.raises(ProviderUnavailableError) as caught:
             assert_converse_stream(result)
+        assert caught.value.failure.status_code == 200
+        assert caught.value.failure.evidence == "stream_event"
+        assert caught.value.failure.request_id == "stream-request"
+        assert caught.value.failure.call_id == "stream-call"
+
+    @pytest.mark.parametrize("code", ["validationException", "throttlingException", "internalServerException"])
+    def test_other_stream_exceptions_do_not_qualify_for_the_availability_retry(self, code: str) -> None:
+        wire: Final = _frame('{"message":"provider rejected the request"}', code, "exception")
+        result: Final = streaming_outcome(_BinaryResponse((wire,)), True, sent_at=0.0)
+        with pytest.raises(AssertionError, match=code) as caught:
+            assert_converse_stream(result)
+        assert not isinstance(caught.value, ProviderUnavailableError)
 
     def test_corrupt_binary_frame_is_rejected(self) -> None:
         wire: Final = _frame('{"role":"assistant"}', "messageStart")
@@ -125,3 +146,46 @@ class TestNativeStreamAssertions:
     def test_converse_rejects_content_after_the_stop_event(self) -> None:
         with pytest.raises(AssertionError, match="event order"):
             assert_converse_stream(_stream((_CONVERSE[0], _CONVERSE[3], _CONVERSE[1], _CONVERSE[4])))
+
+
+class _InterruptedStream(BaseHTTPRequestHandler):
+    def do_POST(self) -> None:
+        _ = self.rfile.read(int(self.headers.get("content-length", "0")))
+        binary: Final = self.path == "/binary"
+        data: Final = (
+            _frame('{"role":"assistant"}', "messageStart") if binary else b'data: {"text":"Hello"}\n\n'
+        )
+        self.send_response(200)
+        self.send_header("content-type", "application/vnd.amazon.eventstream" if binary else "text/event-stream")
+        self.send_header("transfer-encoding", "chunked")
+        self.send_header("x-amzn-requestid", "interrupted-request")
+        self.send_header("x-litellm-call-id", "interrupted-call")
+        self.end_headers()
+        _ = self.wfile.write(f"{len(data):x}\r\n".encode() + data + b"\r\n")
+        self.wfile.flush()
+        self.close_connection = True
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+@pytest.mark.parametrize("path", ["binary", "sse"])
+def test_interrupted_http_stream_preserves_network_classification_and_ids(path: str) -> None:
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), _InterruptedStream)
+    worker: Final = Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        result: Final = send(
+            URL(f"http://127.0.0.1:{server.server_port}/{path}"), headers=NoBody(), json=NoBody(), stream=True, timeout=5
+        )
+        assert result.status_code == 200 and not result.ok
+        assert result.network_error is not None and result.network_error.kind == "network"
+        with pytest.raises(NetworkFailureError, match="kind='network'") as caught:
+            require_successful_call(result)
+        assert caught.value.failure.provider is None
+        assert caught.value.failure.request_id == "interrupted-request"
+        assert caught.value.failure.call_id == "interrupted-call"
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)

@@ -29,7 +29,7 @@ from idp import Identity, Keycloak, keycloak_from_env
 from junit_properties import attach_result_properties
 from lifecycle import ProxyClientProvider, ResourceManager
 from models import TeamNewBody, UserNewBody, UserNewResponse
-from provider_diagnostics import ProviderUnavailableError
+from provider_diagnostics import NetworkFailureError, ProviderUnavailableError
 from provider_edge import replay_leftover_error
 from proxy_client import ProxyClient, build_proxy_client
 
@@ -183,7 +183,7 @@ def pytest_runtest_makereport(
     report = yield
     if report.when == "call":
         item.stash[_CALL_PASSED] = report.passed
-        if call.excinfo is not None and isinstance(call.excinfo.value, ProviderUnavailableError):
+        if call.excinfo is not None and isinstance(call.excinfo.value, (ProviderUnavailableError, NetworkFailureError)):
             failure: Final = call.excinfo.value.failure
             item.user_properties.extend(failure.junit_properties())
             report.user_properties = list(item.user_properties)

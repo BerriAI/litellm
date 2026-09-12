@@ -23,7 +23,7 @@ from typing import Final, Generator, Generic, Iterator, Literal, NewType, Protoc
 import pytest
 import requests
 from bedrock_eventstream import decode_bedrock_stream
-from provider_diagnostics import raise_if_provider_unavailable
+from provider_diagnostics import NetworkFailureError, provider_failure, raise_if_provider_unavailable
 from pydantic import BaseModel, ConfigDict, Field
 
 URL = NewType("URL", str)
@@ -165,11 +165,13 @@ class StreamingResponse(BaseModel):
     # quota) arrive as SSE error events inside an otherwise-successful response;
     # the consumed body is elided, so this is the only place they surface.
     stream_error: str | None = None
+    stream_error_code: str | None = None
+    network_error: NetworkError | None = None
     stream_done: bool = False
 
     @property
     def ok(self) -> bool:
-        return 200 <= self.status_code < 300
+        return 200 <= self.status_code < 300 and self.network_error is None
 
     @property
     def is_streaming(self) -> bool:
@@ -259,9 +261,19 @@ def is_ok[R: BaseModel](result: Result[R]) -> bool:
 def require_successful_call(result: StreamingResponse, *, expected_provider: Literal["bedrock"] | None = None) -> None:
     """A call that should have succeeded but didn't is a hard failure, never a skip:
     if the proxy can't make a call it's expected to, the test must fail."""
+    if result.network_error is not None:
+        raise NetworkFailureError(
+            provider_failure(result.status_code, "", result.headers), result.network_error.message
+        )
+    raise_if_provider_unavailable(
+        result.status_code,
+        result.stream_error or result.body,
+        result.headers,
+        expected_provider=expected_provider,
+        stream_error_code=result.stream_error_code,
+    )
     if result.ok:
         return
-    raise_if_provider_unavailable(result.status_code, result.body, result.headers, expected_provider=expected_provider)
     pytest.fail(
         f"upstream call failed (status {result.status_code}); headers={result.headers}; body={result.body[:1000]}"
     )
@@ -612,6 +624,22 @@ def _is_stream_error_line(line: bytes) -> bool:
 def streaming_outcome(
     resp: SseResponse, stream: bool, *, sent_at: float, clock: Callable[[], float] = time.monotonic
 ) -> StreamingResponse:
+    try:
+        return _streaming_outcome(resp, stream, sent_at=sent_at, clock=clock)
+    except requests.RequestException as exc:
+        return StreamingResponse(
+            status_code=resp.status_code,
+            call_id=_hdr(resp, "x-litellm-call-id"),
+            content_type=_hdr(resp, "content-type"),
+            headers={name.lower(): value for name, value in resp.headers.items()},
+            body=str(exc),
+            network_error=NetworkError(message=str(exc)),
+        )
+
+
+def _streaming_outcome(
+    resp: SseResponse, stream: bool, *, sent_at: float, clock: Callable[[], float]
+) -> StreamingResponse:
     call_id: Final = _hdr(resp, "x-litellm-call-id")
     response_cost: Final = _parse_response_cost(resp)
     content_type: Final = _hdr(resp, "content-type")
@@ -640,6 +668,7 @@ def streaming_outcome(
             stream_events=[event.payload for event, _ in bedrock_events],
             stream_event_arrivals=[arrived for _, arrived in bedrock_events],
             stream_error=next((event.error for event, _ in bedrock_events if event.error is not None), None),
+            stream_error_code=next((event.error_code for event, _ in bedrock_events if event.error is not None), None),
         )
     stamped: Final = tuple((line, clock() - sent_at) for line in resp.iter_lines() if line)
     payloads: Final = tuple(
@@ -692,7 +721,7 @@ def send(
             )
         )
     except requests.RequestException as exc:
-        return StreamingResponse(status_code=-1, body=str(exc))
+        return StreamingResponse(status_code=-1, body=str(exc), network_error=NetworkError(message=str(exc)))
     return streaming_outcome(resp, stream, sent_at=sent_at)
 
 

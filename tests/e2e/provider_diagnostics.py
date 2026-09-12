@@ -10,7 +10,7 @@ class ProviderFailure(BaseModel):
     error_code: str | None = None
     request_id: str | None = None
     call_id: str | None = None
-    evidence: Literal["headers", "body"] | None = None
+    evidence: Literal["headers", "body", "stream_event"] | None = None
 
     def junit_properties(self) -> tuple[tuple[str, str], ...]:
         fields: Final = (
@@ -28,6 +28,12 @@ class ProviderUnavailableError(AssertionError):
     def __init__(self, failure: ProviderFailure, body: str) -> None:
         self.failure: Final = failure
         super().__init__(f"{failure.model_dump_json(exclude_none=True)}; body={body[:1000]}")
+
+
+class NetworkFailureError(AssertionError):
+    def __init__(self, failure: ProviderFailure, message: str) -> None:
+        self.failure: Final = failure
+        super().__init__(f"kind='network'; {failure.model_dump_json(exclude_none=True)}; body={message[:1000]}")
 
 
 class _ErrorMessage(BaseModel):
@@ -67,11 +73,25 @@ def provider_failure(
     headers: Mapping[str, str],
     *,
     expected_provider: Literal["bedrock"] | None = None,
+    stream_error_code: str | None = None,
 ) -> ProviderFailure:
     normalized: Final = {key.lower(): value for key, value in headers.items()}
     request_id: Final = normalized.get("llm_provider-x-amzn-requestid") or normalized.get("x-amzn-requestid")
     error_code: Final = normalized.get("llm_provider-x-amzn-errortype") or normalized.get("x-amzn-errortype")
     call_id: Final = normalized.get("x-litellm-call-id")
+    if (
+        200 <= status_code < 300
+        and expected_provider == "bedrock"
+        and stream_error_code == "serviceUnavailableException"
+    ):
+        return ProviderFailure(
+            status_code=status_code,
+            provider="bedrock",
+            error_code="ServiceUnavailableException",
+            request_id=request_id,
+            call_id=call_id,
+            evidence="stream_event",
+        )
     if status_code == 503:
         bedrock_body: Final = _bedrock_unavailable_body(body, expected_provider)
         if (
@@ -106,7 +126,10 @@ def raise_if_provider_unavailable(
     headers: Mapping[str, str],
     *,
     expected_provider: Literal["bedrock"] | None = None,
+    stream_error_code: str | None = None,
 ) -> None:
-    failure: Final = provider_failure(status_code, body, headers, expected_provider=expected_provider)
+    failure: Final = provider_failure(
+        status_code, body, headers, expected_provider=expected_provider, stream_error_code=stream_error_code
+    )
     if failure.provider is not None:
         raise ProviderUnavailableError(failure, body)

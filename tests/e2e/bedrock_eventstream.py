@@ -21,6 +21,7 @@ class _InvokeChunk(BaseModel):
 class BedrockEvent:
     payload: str
     error: str | None = None
+    error_code: str | None = None
 
 
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
@@ -32,6 +33,7 @@ def _decode_event(event: EventStreamMessage) -> BedrockEvent:
         return BedrockEvent(
             payload=event.payload.decode(),
             error=f"{headers.exception_type or headers.message_type}: {event.payload.decode()}",
+            error_code=headers.exception_type or headers.message_type,
         )
     if headers.event_type == "chunk":
         encoded: Final = _InvokeChunk.model_validate_json(event.payload)

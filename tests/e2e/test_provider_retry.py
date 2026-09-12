@@ -53,6 +53,29 @@ def test_native():
     require_successful_call(StreamingResponse(status_code=503, body="unavailable", headers={
         "x-amzn-requestid": "native-request", "x-amzn-errortype": "ServiceUnavailableException",
     }), expected_provider="bedrock")
+
+def streamed_unavailable():
+    require_successful_call(StreamingResponse(
+        status_code=200, body="<streamed>", stream_error="serviceUnavailableException: unavailable",
+        stream_error_code="serviceUnavailableException", headers={
+            "x-amzn-requestid": "stream-request", "x-litellm-call-id": "stream-call",
+        },
+    ), expected_provider="bedrock")
+
+def test_stream_recovers():
+    if attempt("stream_recovers") == 1:
+        streamed_unavailable()
+
+def test_stream_persistent():
+    attempt("stream_persistent")
+    streamed_unavailable()
+
+def test_stream_transport():
+    attempt("stream_transport")
+    require_successful_call(StreamingResponse(
+        status_code=200, body="connection interrupted", network_error=NetworkError(message="connection interrupted"),
+        headers={"x-amzn-requestid": "transport-request", "x-litellm-call-id": "transport-call"},
+    ))
 """,
         encoding="utf-8",
     )
@@ -84,7 +107,7 @@ def test_native():
         check=False,
     )
     assert result.returncode == 1, result.stdout + result.stderr
-    assert "5 failed, 1 passed, 4 rerun" in result.stdout, result.stdout
+    assert "7 failed, 2 passed, 7 rerun" in result.stdout, result.stdout
     assert {path.stem: int(path.read_text()) for path in tmp_path.glob("*.attempts")} == {
         "recovers": 2,
         "persistent": 2,
@@ -92,6 +115,9 @@ def test_native():
         "auth": 1,
         "network": 2,
         "native": 2,
+        "stream_recovers": 2,
+        "stream_persistent": 2,
+        "stream_transport": 2,
     }
     cases: Final = ET.parse(tmp_path / "results.xml").getroot()
     recovered: Final = cases.find(".//testcase[@name='test_recovers']")
@@ -99,3 +125,13 @@ def test_native():
     assert recovered.find("failure") is None
     assert recovered.find("properties/property[@name='upstream_request_id'][@value='aws-first-attempt']") is not None
     assert recovered.find("properties/property[@name='upstream_call_id'][@value='proxy-first-attempt']") is not None
+    streamed: Final = cases.find(".//testcase[@name='test_stream_recovers']")
+    assert streamed is not None and streamed.find("failure") is None
+    assert streamed.find("properties/property[@name='upstream_status_code'][@value='200']") is not None
+    assert streamed.find("properties/property[@name='upstream_evidence'][@value='stream_event']") is not None
+    assert streamed.find("properties/property[@name='upstream_request_id'][@value='stream-request']") is not None
+    assert streamed.find("properties/property[@name='upstream_call_id'][@value='stream-call']") is not None
+    transport: Final = cases.find(".//testcase[@name='test_stream_transport']")
+    assert transport is not None and transport.find("failure") is not None
+    assert transport.find("properties/property[@name='upstream_request_id'][@value='transport-request']") is not None
+    assert transport.find("properties/property[@name='upstream_call_id'][@value='transport-call']") is not None
