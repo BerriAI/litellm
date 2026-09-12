@@ -4245,6 +4245,209 @@ def test_deepseek_flash_completion_cost():
     assert cost == pytest.approx(1.50, abs=1e-9)
 
 
+_FIREWORKS_MODELS = [
+    (
+        "accounts/fireworks/models/glm-5p2",
+        1048576,
+        131072,
+        False,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/glm-5p1",
+        202800,
+        131072,
+        False,
+        True,
+    ),
+    (
+        "accounts/fireworks/routers/glm-5p1-fast",
+        202800,
+        131072,
+        False,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/qwen3p7-plus",
+        262144,
+        65536,
+        True,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/minimax-m3",
+        512000,
+        512000,
+        True,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/minimax-m2p7",
+        196608,
+        196608,
+        False,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/kimi-k2p7-code",
+        262144,
+        32768,
+        True,
+        True,
+    ),
+    (
+        "accounts/fireworks/routers/kimi-k2p7-code-fast",
+        262144,
+        32768,
+        True,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/kimi-k2p6",
+        262144,
+        32768,
+        True,
+        True,
+    ),
+    (
+        "accounts/fireworks/routers/kimi-k2p6-fast",
+        262144,
+        32768,
+        True,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/gpt-oss-120b",
+        131072,
+        32768,
+        False,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/gpt-oss-20b",
+        131072,
+        32768,
+        False,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/deepseek-v4-pro",
+        1048576,
+        384000,
+        False,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/deepseek-v4-flash",
+        1048576,
+        384000,
+        False,
+        True,
+    ),
+]
+
+_FIREWORKS_SHORT_FORMS = [
+    "glm-5p2",
+    "glm-5p1",
+    "qwen3p7-plus",
+    "minimax-m3",
+    "minimax-m2p7",
+    "kimi-k2p7-code",
+    "kimi-k2p6",
+    "gpt-oss-120b",
+    "gpt-oss-20b",
+    "deepseek-v4-pro",
+    "deepseek-v4-flash",
+]
+
+_FIREWORKS_ROUTER_SHORT_FORMS = [
+    "glm-5p1-fast",
+    "kimi-k2p6-fast",
+    "kimi-k2p7-code-fast",
+]
+
+
+def _assert_fireworks_entry(
+    model_cost,
+    model_path,
+    expected_max_input,
+    expected_max_output,
+    expected_vision,
+    expected_reasoning,
+):
+    info = model_cost.get(f"fireworks_ai/{model_path}")
+    assert info is not None, f"fireworks_ai/{model_path} missing from model cost map"
+    assert info["litellm_provider"] == "fireworks_ai"
+    assert info["mode"] == "chat"
+    assert info["input_cost_per_token"] > 0
+    assert info["output_cost_per_token"] > 0
+    assert "cache_read_input_token_cost" in info
+    assert info["max_input_tokens"] == expected_max_input
+    assert info["max_output_tokens"] == expected_max_output
+    assert info["max_tokens"] == expected_max_output
+    assert info["supports_function_calling"] is True
+    assert info["supports_tool_choice"] is True
+    assert info["supports_reasoning"] is expected_reasoning
+    assert info["supports_response_schema"] is True
+    assert info["supports_vision"] is expected_vision
+
+
+def test_fireworks_models_in_cost_map():
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    for entry in _FIREWORKS_MODELS:
+        _assert_fireworks_entry(model_cost, *entry)
+
+    for short in _FIREWORKS_SHORT_FORMS:
+        long_key = f"fireworks_ai/accounts/fireworks/models/{short}"
+        short_key = f"fireworks_ai/{short}"
+        assert model_cost.get(short_key) == model_cost.get(
+            long_key
+        ), f"short-form {short_key} does not match long-form {long_key}"
+
+    for short in _FIREWORKS_ROUTER_SHORT_FORMS:
+        long_key = f"fireworks_ai/accounts/fireworks/routers/{short}"
+        short_key = f"fireworks_ai/{short}"
+        assert model_cost.get(short_key) == model_cost.get(
+            long_key
+        ), f"short-form {short_key} does not match long-form {long_key}"
+
+
+def test_fireworks_models_in_backup_cost_map():
+    import json
+    from pathlib import Path
+
+    json_path = (
+        Path(__file__).parents[2]
+        / "litellm"
+        / "model_prices_and_context_window_backup.json"
+    )
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    for entry in _FIREWORKS_MODELS:
+        _assert_fireworks_entry(model_cost, *entry)
+
+    for short in _FIREWORKS_SHORT_FORMS:
+        long_key = f"fireworks_ai/accounts/fireworks/models/{short}"
+        short_key = f"fireworks_ai/{short}"
+        assert model_cost.get(short_key) == model_cost.get(
+            long_key
+        ), f"short-form {short_key} does not match long-form {long_key}"
+
+    for short in _FIREWORKS_ROUTER_SHORT_FORMS:
+        long_key = f"fireworks_ai/accounts/fireworks/routers/{short}"
+        short_key = f"fireworks_ai/{short}"
+        assert model_cost.get(short_key) == model_cost.get(
+            long_key
+        ), f"short-form {short_key} does not match long-form {long_key}"
+
+
 class TestBedrockBaseModelLabelKeepsTools:
     """Regression for #29618: a Bedrock deployment whose ``base_model`` is a friendly
     label must not silently drop ``tools``/``tool_choice`` under ``drop_params``."""
