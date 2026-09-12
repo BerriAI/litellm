@@ -224,7 +224,7 @@ def test_native_ocr_rejects_invalid_input_before_network(ocr_server, custom_prov
     from litellm.rust_bridge import _native
 
     server, requests = ocr_server
-    with pytest.raises(ValueError, match=r"invalid (OCR request field|provider)|invalid request"):
+    with pytest.raises(ValueError, match="Document URL is required"):
         _native.ocr(
             model="mistral-ocr-latest",
             custom_llm_provider=custom_provider,
