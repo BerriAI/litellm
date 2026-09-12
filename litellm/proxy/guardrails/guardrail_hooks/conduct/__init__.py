@@ -29,7 +29,7 @@ def initialize_guardrail(
         agent_token=litellm_params.api_key,
         workspace_id=extras.get("workspace_id"),
         tool_name=extras.get("tool_name", "llm_call"),
-        fail_mode=litellm_params.unreachable_fallback,
+        unreachable_fallback=litellm_params.unreachable_fallback,
         timeout=DEFAULT_TIMEOUT_SECONDS if litellm_params.timeout is None else litellm_params.timeout,
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,

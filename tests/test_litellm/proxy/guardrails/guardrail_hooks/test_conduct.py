@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Final, Literal
@@ -49,16 +50,24 @@ class _RecordingGuardrail(CustomGuardrail):
         api_url: str | None = None,
         agent_token: str | None = None,
         workspace_id: str | None = None,
-        fail_mode: str = "fail_closed",
+        unreachable_fallback: str | None = None,
         tool_name: str = "llm_call",
         timeout: float = 8.0,
-        **kwargs: object,
+        guardrail_name: str | None = None,
+        event_hook: str | None = None,
+        default_on: bool = False,
+        supported_event_hooks: list[GuardrailEventHooks] | None = None,
     ) -> None:
-        super().__init__(**kwargs)  # pyright: ignore[reportArgumentType]  # CustomGuardrail.__init__ is untyped
+        super().__init__(
+            guardrail_name=guardrail_name,
+            event_hook=event_hook,  # pyright: ignore[reportArgumentType]  # CustomGuardrail coerces the str at runtime
+            default_on=default_on,
+            supported_event_hooks=supported_event_hooks,
+        )
         self.api_url = api_url
         self.agent_token = agent_token
         self.workspace_id = workspace_id
-        self.fail_mode = fail_mode
+        self.unreachable_fallback = unreachable_fallback or "fail_closed"
         self.tool_name = tool_name
         self.timeout = timeout
 
@@ -142,7 +151,7 @@ def test_maps_typed_fields_and_extras_onto_plugin_kwargs() -> None:
 
     assert callback.api_url == "https://guard.example.test"
     assert callback.agent_token == "cond_agt_test"
-    assert callback.fail_mode == "fail_open"
+    assert callback.unreachable_fallback == "fail_open"
     assert callback.timeout == 3.0
     assert callback.workspace_id == "ws_123"
     assert callback.tool_name == "workflow"
@@ -155,7 +164,7 @@ def test_maps_typed_fields_and_extras_onto_plugin_kwargs() -> None:
 def test_defaults_when_optional_config_is_omitted() -> None:
     callback: Final = _init(_params())
 
-    assert callback.fail_mode == "fail_closed"
+    assert callback.unreachable_fallback == "fail_closed"
     assert callback.timeout == DEFAULT_TIMEOUT_SECONDS
     assert callback.workspace_id is None
     assert callback.tool_name == "llm_call"
@@ -169,7 +178,7 @@ def test_ui_form_defaults_match_what_the_initializer_forwards() -> None:
     )
 
     assert callback.api_url == model.api_base
-    assert callback.fail_mode == optional.unreachable_fallback
+    assert callback.unreachable_fallback == optional.unreachable_fallback
     assert callback.timeout == optional.timeout
     assert callback.workspace_id == optional.workspace_id
     assert callback.tool_name == optional.tool_name
@@ -353,6 +362,28 @@ async def test_apply_guardrail_logs_warning_verdict_once() -> None:
     assert await callback.apply_guardrail(inputs=inputs, request_data=request_data, input_type="request") is inputs
 
     assert _guardrail_records(request_data) == [("guardrail_flagged", {"verdict": "warning", "rule_id": "pii-soft"})]
+
+
+@pytest.mark.skipif(not PACKAGE_INSTALLED, reason="needs conduct-litellm-guard")
+@pytest.mark.parametrize(("fallback", "blocks"), [("fail_open", False), ("fail_closed", True)])
+@pytest.mark.asyncio
+@respx.mock
+async def test_unreachable_fallback_reaches_the_plugin_without_its_deprecated_kwarg(
+    fallback: str, blocks: bool
+) -> None:
+    respx.post("https://guard.example.test/mcp").mock(side_effect=httpx.ConnectError("refused"))
+    params: Final = _params(api_base="https://guard.example.test", unreachable_fallback=fallback)
+    inputs: Final = GenericGuardrailAPIInputs(texts=["ping"])
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        callback: Final = initialize_guardrail(params, _guardrail(params))
+
+    if blocks:
+        with pytest.raises(HTTPException):
+            await callback.apply_guardrail(inputs, {"model": "gpt-5-mini"}, "request")
+        return
+    assert await callback.apply_guardrail(inputs, {"model": "gpt-5-mini"}, "request") is inputs
 
 
 @pytest.mark.skipif(not PACKAGE_INSTALLED, reason="needs conduct-litellm-guard")

@@ -1,6 +1,6 @@
 """Conduct Guard as a LiteLLM guardrail, backed by the ``conduct-litellm-guard`` PyPI package.
 
-Install: ``pip install "conduct-litellm-guard>=0.2.4"``
+Install: ``pip install "conduct-litellm-guard>=0.2.5"``
 Source:  https://github.com/sseshachala/conductai/tree/main/packages/conduct-litellm-guard
 """
 
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 MISSING_PACKAGE_MESSAGE: Final = (
     "conduct-litellm-guard is required for the Conduct guardrail. "
-    'Install it with: pip install "conduct-litellm-guard>=0.2.4"'
+    'Install it with: pip install "conduct-litellm-guard>=0.2.5"'
 )
 
 BLOCKING_VERDICTS: Final = frozenset({"block", "approval"})
