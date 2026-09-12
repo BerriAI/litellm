@@ -6632,6 +6632,39 @@ class TestMCPServerManager:
         listed = manager.get_listed_tool(server, "echo")
         assert listed is not None and listed.description == "shared"
 
+    def test_per_caller_server_keeps_listed_tools_per_identity(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="srv",
+            name="srv",
+            transport=MCPTransport.http,
+            url="http://srv",
+            auth_type=MCPAuth.oauth2_token_exchange,
+        )
+        alice = UserAPIKeyAuth(user_id="alice", api_key="hashed-alice")
+        bob = UserAPIKeyAuth(user_id="bob", api_key="hashed-bob")
+        alice_schema = {"type": "object", "properties": {"path": {"type": "string"}}}
+        bob_schema = {"type": "object", "properties": {"path": {"type": "string"}, "site": {"type": "string"}}}
+        manager._create_prefixed_tools(
+            [MCPTool(name="read", description="alice view", inputSchema=alice_schema)], server, user_api_key_auth=alice
+        )
+        manager._create_prefixed_tools(
+            [MCPTool(name="read", description="bob view", inputSchema=bob_schema)], server, user_api_key_auth=bob
+        )
+
+        alice_tool = manager.get_listed_tool(server, "srv-read", alice)
+        bob_tool = manager.get_listed_tool(server, "srv-read", bob)
+        assert alice_tool is not None and (alice_tool.description, alice_tool.inputSchema) == ("alice view", alice_schema)
+        assert bob_tool is not None and (bob_tool.description, bob_tool.inputSchema) == ("bob view", bob_schema)
+        assert manager.get_listed_tool(server, "srv-read", UserAPIKeyAuth(user_id="carol", api_key="k")) is None
+
+        shared = MCPServer(server_id="shared", name="shared", transport=MCPTransport.http, url="http://shared")
+        manager._create_prefixed_tools(
+            [MCPTool(name="echo", description="everyone", inputSchema={})], shared, user_api_key_auth=alice
+        )
+        for_bob = manager.get_listed_tool(shared, "echo", bob)
+        assert for_bob is not None and for_bob.description == "everyone"
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("add_prefix", [True, False])
     async def test_openapi_listing_records_listed_tools(self, add_prefix):
