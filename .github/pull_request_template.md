@@ -129,6 +129,23 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
      human reader
      Leave this section empty if there are none -->
 
+## Assumptions
+
+<!-- One bullet per claim this PR relies on that you did not actually test, each written as the claim
+     followed by what breaks if it turns out to be wrong. Write it for a reviewer who wants to attack
+     the weakest one, not to reassure them
+     Anything that narrows the scope of a bug belongs here unless you ran the test that proves it:
+     "only reproduces with X on", "no user-observable behavior difference", "this path is debug-only",
+     "no caller passes that shape". A claim you did verify is not an assumption; put the proof in
+     Screenshots / Proof of Fix instead
+     If the linked issue or ticket recorded something as untested or unverified, carry it into this
+     section or say here which run closed it out. Do not drop it silently
+     Example:
+     - The alert path is debug-only, so the growth cannot be hit at default log level. If a second
+       caller stringifies the same structure without a level gate, this ships the bug to every
+       deployment. Not tested: no run with the debug flag off
+     Write "None" if the change rests on nothing untested -->
+
 ## QA runbook
 
 <!-- Only needed when your PR edits tests/e2e; delete this section otherwise
