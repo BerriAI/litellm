@@ -517,7 +517,6 @@ class MuseEventTransformer:
     def _speech_end(self, message: Mapping[str, JsonValue]) -> _TurnState:
         turn: Final = self._turn(_required_turn_id(message, "speechEnd"))
         turn.stopped = True
-        self._release_active(turn)
         return turn
 
     def _speech_complete(self, message: Mapping[str, JsonValue]) -> _TurnState:
