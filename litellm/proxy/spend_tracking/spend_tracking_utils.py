@@ -19,6 +19,7 @@ from litellm.constants import (
     LITTELM_CLI_SERVICE_ACCOUNT_NAME,
     LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     MAX_SPEND_LOG_MODEL_NAME_LENGTH,
+    MCP_SPEND_LOG_MODEL_PREFIX,
     REDACTED_BY_LITELM_STRING,
     SESSION_ID_OMITTED_METADATA_KEY,
     UNKNOWN_MODEL_SPEND_LOG_MODEL,
@@ -338,7 +339,8 @@ def _sl_attribution_fallback(
 
 
 def _looks_like_model_name(model: str) -> bool:
-    return len(model) <= MAX_SPEND_LOG_MODEL_NAME_LENGTH and not any(char.isspace() for char in model)
+    candidate: Final = model.removeprefix(MCP_SPEND_LOG_MODEL_PREFIX)
+    return len(candidate) <= MAX_SPEND_LOG_MODEL_NAME_LENGTH and not any(char.isspace() for char in candidate)
 
 
 def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogsPayload:
@@ -1165,6 +1167,7 @@ def _redact_prompt_fields_in_guardrail_entry(
 
 def _sanitize_error_information_for_spend_logs(
     error_information: StandardLoggingPayloadErrorInformation | None,
+    original_exception: BaseException | None = None,
 ) -> StandardLoggingPayloadErrorInformation | None:
     """
     Sanitize ``error_information`` before it lands in ``LiteLLM_SpendLogs.metadata``.
@@ -1186,7 +1189,12 @@ def _sanitize_error_information_for_spend_logs(
     if error_information is None:
         return None
 
-    sanitized = cast(dict, {**error_information})
+    persisted: Final = (
+        {**error_information, "error_message": original_exception.spend_log_error_message}
+        if isinstance(original_exception, ProxyModelNotFoundError)
+        else error_information
+    )
+    sanitized = cast(dict, {**persisted})
 
     if not should_store_prompts_and_responses_in_spend_logs():
         for field in ("error_message", "traceback"):

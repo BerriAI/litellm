@@ -339,8 +339,11 @@ instead of the Unix socket helm uses; the proxy rejects any non-loopback
 address. The sidecar runs the same Redis CA + `DATABASE_URL` bootstrap as
 the gateway container, gets the same database, Redis, master-key, license,
 proxy config, and `gateway_extra_env` / `gateway_extra_secrets` values, and
-runs with `LITELLM_JOB_ROLE=collector`. When it is unreachable the
-gateway falls back to in-process spend tracking.
+runs with `LITELLM_JOB_ROLE=collector`. With `gateway_connection_pool_enabled`
+it also gets the `LITELLM_PGBOUNCER_*` env, so its Prisma client goes through
+the instance-local PgBouncer instead of opening a second pool straight to the
+database. When it is unreachable the gateway falls back to in-process spend
+tracking.
 
 ```hcl
 collector_enabled = true
