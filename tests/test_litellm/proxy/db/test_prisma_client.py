@@ -2,17 +2,15 @@ import json
 import os
 import signal
 import sys
+import urllib.parse
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 
-from litellm.proxy.db.prisma_client import PrismaWrapper, should_update_prisma_schema
+from litellm.proxy.db.prisma_client import PrismaManager, PrismaWrapper, should_update_prisma_schema
 
 
 @pytest.fixture(autouse=True)
@@ -193,3 +191,262 @@ async def test_recreate_prisma_client_recovers_from_disconnected_client(
     mock_kill.assert_not_called()
     assert wrapper._original_prisma is mock_new_prisma
     mock_new_prisma.connect.assert_awaited_once()
+
+
+DB_PUSH_ARGV = ["db", "push", "--accept-data-loss", "--skip-generate"]
+
+
+def test_db_push_applies_replica_identity_full_when_requested(monkeypatch, fake_prisma_cli, unset_database_url):
+    """`prisma db push` bypasses litellm-proxy-extras, so it needs its own call
+    into the opt-in REPLICA IDENTITY FULL step."""
+    from litellm.proxy.db.prisma_client import PrismaManager
+    from litellm_proxy_extras.replica_identity import REPLICA_IDENTITY_FULL_ENV_VAR
+    from litellm_proxy_extras.utils import ProxyExtrasDBManager
+
+    monkeypatch.setenv(REPLICA_IDENTITY_FULL_ENV_VAR, "true")
+    applied = []
+    monkeypatch.setattr(
+        ProxyExtrasDBManager,
+        "apply_replica_identity_full_if_requested",
+        staticmethod(lambda: applied.append(True)),
+    )
+
+    assert PrismaManager.setup_database(use_migrate=False) is True
+
+    assert fake_prisma_cli.calls == [DB_PUSH_ARGV]
+    assert applied == [True]
+
+
+def test_db_push_is_rejected_when_spend_logs_is_partitioned(monkeypatch, fake_prisma_cli, unset_database_url):
+    """A doc-partitioned LiteLLM_SpendLogs makes `prisma db push` rewrite the
+    primary key back to ("request_id"), which Postgres rejects; the guard must
+    fail fast with guidance instead of running the push."""
+    from litellm.proxy.db.prisma_client import PrismaManager
+    from litellm_proxy_extras.utils import (
+        PARTITIONED_SPEND_LOGS_PUSH_ERROR,
+        ProxyExtrasDBManager,
+    )
+
+    monkeypatch.setattr(
+        ProxyExtrasDBManager, "spend_logs_is_partitioned", staticmethod(lambda: True)
+    )
+    with pytest.raises(RuntimeError) as err:
+        PrismaManager.setup_database(use_migrate=False)
+
+    assert str(err.value) == PARTITIONED_SPEND_LOGS_PUSH_ERROR
+    assert fake_prisma_cli.calls == []
+
+
+def test_db_push_proceeds_when_spend_logs_is_not_partitioned(monkeypatch, fake_prisma_cli, unset_database_url):
+    from litellm.proxy.db.prisma_client import PrismaManager
+    from litellm_proxy_extras.utils import ProxyExtrasDBManager
+
+    monkeypatch.setattr(
+        ProxyExtrasDBManager, "spend_logs_is_partitioned", staticmethod(lambda: False)
+    )
+    assert PrismaManager.setup_database(use_migrate=False) is True
+
+    assert fake_prisma_cli.calls == [DB_PUSH_ARGV]
+
+
+def _entra_jwt(expires_in_seconds: int) -> str:
+    """A JWT shaped like a real Entra access token, expiring ``expires_in_seconds`` from now."""
+    import base64
+    from datetime import datetime, timedelta, timezone
+
+    exp = int((datetime.now(tz=timezone.utc) + timedelta(seconds=expires_in_seconds)).timestamp())
+    payload = base64.urlsafe_b64encode(json.dumps({"exp": exp}).encode()).rstrip(b"=").decode()
+    return f"aGVhZGVy.{payload}.c2ln"
+
+
+@pytest.fixture
+def azure_env(monkeypatch, unset_database_url):
+    monkeypatch.setenv("DATABASE_HOST", "pg.postgres.database.azure.com")
+    monkeypatch.setenv("DATABASE_PORT", "5432")
+    monkeypatch.setenv("DATABASE_USER", "litellm@contoso.onmicrosoft.com")
+    monkeypatch.setenv("DATABASE_NAME", "litellm_db")
+
+
+def _azure_wrapper(token: str, **kwargs):
+    from litellm.proxy.db.token_auth import AzureEntraTokenAuth
+
+    return PrismaWrapper(
+        original_prisma=MagicMock(),
+        token_auth=AzureEntraTokenAuth(token_provider=lambda: token),
+        **kwargs,
+    )
+
+
+def test_azure_entra_mint_writes_an_encoded_url_into_the_db_url_env_var(azure_env):
+    """The UPN user and the JWT both have to survive being embedded in a URL."""
+    token = _entra_jwt(3600)
+    wrapper = _azure_wrapper(token)
+
+    db_url = wrapper.get_rds_iam_token()
+
+    assert db_url == (
+        f"postgresql://litellm%40contoso.onmicrosoft.com:{urllib.parse.quote(token, safe='')}"
+        "@pg.postgres.database.azure.com:5432/litellm_db"
+    )
+    assert os.environ["DATABASE_URL"] == db_url
+
+
+@pytest.mark.parametrize(
+    ("previous_query", "expected_query"),
+    [
+        ("max_idle_connection_lifetime=60", {"max_idle_connection_lifetime": ["60"]}),
+        (
+            "connection_limit=20&pgbouncer=true&max_idle_connection_lifetime=45",
+            {"connection_limit": ["20"], "pgbouncer": ["true"], "max_idle_connection_lifetime": ["45"]},
+        ),
+    ],
+)
+def test_token_refresh_keeps_the_connection_params_of_the_url_it_replaces(
+    azure_env, monkeypatch, previous_query, expected_query
+):
+    old_token = _entra_jwt(60)
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        f"postgresql://litellm%40contoso.onmicrosoft.com:{urllib.parse.quote(old_token, safe='')}"
+        f"@pg.postgres.database.azure.com:5432/litellm_db?{previous_query}",
+    )
+    new_token = _entra_jwt(3600)
+
+    db_url = _azure_wrapper(new_token).get_rds_iam_token()
+
+    assert db_url is not None
+    assert os.environ["DATABASE_URL"] == db_url
+    assert urllib.parse.quote(new_token, safe="") in db_url
+    assert urllib.parse.parse_qs(urllib.parse.urlsplit(db_url).query) == expected_query
+
+
+def test_token_refresh_keeps_the_reader_url_params_separate_from_the_writer(azure_env, monkeypatch):
+    from litellm.proxy.db.token_auth import IAMEndpoint
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://w:t@pg:5432/litellm_db?max_idle_connection_lifetime=45")
+    monkeypatch.setenv(
+        "DATABASE_URL_READ_REPLICA", "postgresql://r:t@replica:5432/litellm_db?max_idle_connection_lifetime=60"
+    )
+    reader = _azure_wrapper(
+        _entra_jwt(3600),
+        db_url_env_var="DATABASE_URL_READ_REPLICA",
+        iam_endpoint=IAMEndpoint(host="replica", port="5432", user="r", name="litellm_db", schema=None),
+    )
+
+    reader_url = reader.get_rds_iam_token()
+
+    assert reader_url is not None
+    assert reader_url.startswith("postgresql://r:")
+    assert urllib.parse.parse_qs(urllib.parse.urlsplit(reader_url).query) == {"max_idle_connection_lifetime": ["60"]}
+    assert os.environ["DATABASE_URL"].endswith("?max_idle_connection_lifetime=45")
+
+
+def test_azure_entra_refresh_is_scheduled_off_the_jwt_expiry(azure_env):
+    """Without reading `exp` this falls back to a fixed 600s interval, which silently
+    outlives a token and breaks every reconnect after it lapses (issue #29661)."""
+    wrapper = _azure_wrapper(_entra_jwt(3600))
+    wrapper.get_rds_iam_token()
+
+    seconds = wrapper._calculate_seconds_until_refresh()
+
+    expected = 3600 - PrismaWrapper.TOKEN_REFRESH_BUFFER_SECONDS
+    assert seconds != PrismaWrapper.FALLBACK_REFRESH_INTERVAL_SECONDS
+    assert expected - 5 <= seconds <= expected
+
+
+def test_a_token_whose_expiry_never_advances_cannot_spin_the_refresh_loop(azure_env):
+    """azure-identity hands back its cached token when a renewal attempt fails inside its
+    own window, so a transient Entra or IMDS problem in the last 3 minutes of a token
+    yields a successful refresh whose `exp` has not moved. With no floor on the sleep the
+    loop then re-mints and recreates the query engine on every pass, with nothing in
+    between, for as long as Entra stays sick."""
+    wrapper = _azure_wrapper(_entra_jwt(60))
+    wrapper.get_rds_iam_token()
+    first = wrapper._calculate_seconds_until_refresh()
+
+    wrapper.get_rds_iam_token()
+    second = wrapper._calculate_seconds_until_refresh()
+
+    assert first == second == PrismaWrapper.TOKEN_REFRESH_MIN_SLEEP_SECONDS
+
+
+def test_azure_entra_token_expiry_is_detected(azure_env):
+    wrapper = _azure_wrapper(_entra_jwt(3600))
+    fresh_url = wrapper.get_rds_iam_token()
+    expired_url = _azure_wrapper(_entra_jwt(-1)).get_rds_iam_token()
+
+    assert wrapper.is_token_expired(fresh_url) is False
+    assert wrapper.is_token_expired(expired_url) is True
+
+
+@pytest.mark.asyncio
+async def test_azure_entra_strategy_starts_the_refresh_task(azure_env):
+    """The refresh loop is gated on the legacy boolean, so an Azure strategy has to
+    get past that gate; a password-auth wrapper still must not start a task."""
+    wrapper = _azure_wrapper(_entra_jwt(3600))
+    wrapper.get_rds_iam_token()
+    password_wrapper = PrismaWrapper(original_prisma=MagicMock())
+
+    await wrapper.start_token_refresh_task()
+    await password_wrapper.start_token_refresh_task()
+    try:
+        assert wrapper._token_refresh_task is not None
+        assert not wrapper._token_refresh_task.done()
+        assert password_wrapper._token_refresh_task is None
+    finally:
+        await wrapper.stop_token_refresh_task()
+
+
+def test_azure_entra_strategy_reads_as_token_auth_enabled(azure_env):
+    """`routing_prisma_wrapper` gates the reader's refresh on this flag, so an Azure
+    reader has to answer True to it."""
+    wrapper = _azure_wrapper(_entra_jwt(3600))
+
+    assert wrapper.iam_token_db_auth is True
+    assert wrapper.token_label == "Azure Entra token"
+
+
+def test_the_token_strategy_cannot_be_swapped_after_construction(azure_env):
+    """Assigning the legacy boolean used to replace a configured Entra strategy with the
+    RDS one, which points boto at an Azure host."""
+    wrapper = _azure_wrapper(_entra_jwt(3600))
+
+    with pytest.raises(AttributeError):
+        wrapper.iam_token_db_auth = True
+
+
+def test_minting_without_the_database_env_vars_names_them(azure_env, monkeypatch):
+    """A blank host used to produce `postgresql://:<token>@:5432/`, which fails deep
+    inside Prisma instead of at the misconfiguration."""
+    monkeypatch.delenv("DATABASE_HOST")
+    wrapper = _azure_wrapper(_entra_jwt(3600))
+
+    with pytest.raises(RuntimeError, match="DATABASE_HOST"):
+        wrapper.get_rds_iam_token()
+
+
+@pytest.mark.timeout(45)
+def test_db_push_timeout_takes_its_process_tree_with_it(fake_prisma_cli, unset_database_url, monkeypatch):
+    """
+    A timed-out `db push` used to leave Node and the schema engine writing the schema,
+    so the next attempt pushed into a database the abandoned one was still mutating.
+    """
+    monkeypatch.delenv("LITELLM_SET_REPLICA_IDENTITY_FULL", raising=False)
+    monkeypatch.setenv("FAKE_PRISMA_HANG_FIRST", "1")
+
+    assert PrismaManager.setup_database(use_migrate=False) is True
+    assert fake_prisma_cli.calls == [DB_PUSH_ARGV, DB_PUSH_ARGV]
+    assert fake_prisma_cli.grandchild_is_gone(within_seconds=5)
+
+
+def test_db_push_without_the_prisma_runner_fails_the_migration_instead_of_crashing_boot(
+    fake_prisma_cli, unset_database_url, monkeypatch
+):
+    """
+    An ImportError out of setup_database escapes the caller's RuntimeError handler and
+    kills boot, bypassing the operator's enforce_prisma_migration_check choice.
+    """
+    monkeypatch.setitem(sys.modules, "litellm_proxy_extras.prisma_toolchain", None)
+
+    assert PrismaManager.setup_database(use_migrate=False) is False
+    assert fake_prisma_cli.calls == []

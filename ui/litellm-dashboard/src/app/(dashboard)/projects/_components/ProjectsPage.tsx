@@ -1,47 +1,26 @@
-import { useProjects, ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
+import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
-import { DateCell, IdCell } from "@/components/shared/table_cells";
-import { LoadingOutlined, PlusOutlined } from "@ant-design/icons";
-import {
-  Button,
-  Card,
-  Flex,
-  Input,
-  Layout,
-  Pagination,
-  Space,
-  Spin,
-  Table,
-  Tag,
-  theme,
-  Tooltip,
-  Typography,
-} from "antd";
-import type { ColumnsType } from "antd/es/table";
-import { LayersIcon, SearchIcon } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Folder, Plus, SearchIcon, X } from "lucide-react";
+import { parseAsString, useQueryState } from "nuqs";
+import { useMemo, useState } from "react";
+import { PageHeader } from "@/components/shared/PageHeader";
+import { Button } from "@/components/ui/button";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { CreateProjectModal } from "./ProjectModals/CreateProjectModal";
 import { ProjectDetail } from "./ProjectDetailsPage";
-
-const { Title, Text } = Typography;
-const { Content } = Layout;
+import { ProjectsTable } from "./ProjectsTable";
 
 export function ProjectsPage() {
-  const { token } = theme.useToken();
   const { data: projects, isLoading } = useProjects();
   const { data: teams, isLoading: isTeamsLoading } = useTeams();
 
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useQueryState(
+    "project",
+    parseAsString.withOptions({ history: "push" }),
+  );
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
   const [searchText, setSearchText] = useState("");
-  const [currentPage, setCurrentPage] = useState(1);
-  const pageSize = 10;
 
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchText]);
-
-  // Build a team_id → team_alias lookup from the teams list
   const teamAliasMap = useMemo(() => {
     const map = new Map<string, string>();
     for (const team of teams ?? []) {
@@ -50,7 +29,6 @@ export function ProjectsPage() {
     return map;
   }, [teams]);
 
-  // ---------- filtered data ----------
   const filteredProjects = useMemo(() => {
     const list = projects ?? [];
     if (!searchText) return list;
@@ -66,126 +44,59 @@ export function ProjectsPage() {
     });
   }, [projects, searchText, teamAliasMap]);
 
-  // ---------- Ant Design columns ----------
-  const columns: ColumnsType<ProjectResponse> = [
-    {
-      title: "ID",
-      dataIndex: "project_id",
-      key: "project_id",
-      width: 170,
-      render: (id: string) => <IdCell value={id} onClick={setSelectedProjectId} />,
-    },
-    {
-      title: "Name",
-      dataIndex: "project_alias",
-      key: "project_alias",
-      sorter: (a, b) => (a.project_alias ?? "").localeCompare(b.project_alias ?? ""),
-      render: (alias: string | null) => alias ?? "—",
-    },
-    {
-      title: "Team",
-      key: "team",
-      sorter: (a, b) => {
-        const aAlias = teamAliasMap.get(a.team_id ?? "") ?? "";
-        const bAlias = teamAliasMap.get(b.team_id ?? "") ?? "";
-        return aAlias.localeCompare(bAlias);
-      },
-      render: (_: unknown, record: ProjectResponse) => {
-        if (!record.team_id) return "—";
-        const alias = teamAliasMap.get(record.team_id);
-        if (alias) return alias;
-        if (isTeamsLoading) return <Spin indicator={<LoadingOutlined spin />} size="small" />;
-        return record.team_id;
-      },
-    },
-    {
-      title: "Models",
-      key: "models",
-      render: (_: unknown, record: ProjectResponse) => {
-        const models = record.models ?? [];
-        return (
-          <Tooltip title={models.length > 0 ? models.join(", ") : "No models"}>
-            <Tag color="blue" style={{ fontSize: 14, padding: "2px 8px", margin: 0 }}>
-              <Flex align="center" gap={6}>
-                <LayersIcon size={14} />
-                {models.length}
-              </Flex>
-            </Tag>
-          </Tooltip>
-        );
-      },
-    },
-    {
-      title: "Status",
-      dataIndex: "blocked",
-      key: "status",
-      render: (blocked: boolean) => <Tag color={blocked ? "red" : "green"}>{blocked ? "Blocked" : "Active"}</Tag>,
-    },
-    {
-      title: "Created",
-      dataIndex: "created_at",
-      key: "created_at",
-      sorter: (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
-      responsive: ["lg"],
-      render: (date: string) => <DateCell value={date} precision="date" />,
-    },
-    {
-      title: "Updated",
-      dataIndex: "updated_at",
-      key: "updated_at",
-      responsive: ["xl"],
-      render: (date: string) => <DateCell value={date} precision="date" />,
-    },
-  ];
-
   if (selectedProjectId) {
-    return <ProjectDetail projectId={selectedProjectId} onBack={() => setSelectedProjectId(null)} />;
+    return (
+      <ProjectDetail
+        projectId={selectedProjectId}
+        onBack={() => void setSelectedProjectId(null, { history: "replace" })}
+      />
+    );
   }
 
   return (
-    <Content style={{ padding: token.paddingLG, paddingInline: token.paddingLG * 2 }}>
-      <Flex justify="space-between" align="center" style={{ marginBottom: 16 }}>
-        <Space direction="vertical" size={0}>
-          <Title level={2} style={{ margin: 0 }}>
-            Projects
-          </Title>
-          <Text type="secondary">Manage projects within your teams</Text>
-        </Space>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setIsCreateModalVisible(true)}>
-          Create Project
-        </Button>
-      </Flex>
+    <div className="p-8">
+      <PageHeader
+        icon={<Folder />}
+        title="Projects"
+        subtitle="Manage projects within your teams"
+        primaryAction={
+          <Button onClick={() => setIsCreateModalVisible(true)}>
+            <Plus className="size-4" />
+            Create Project
+          </Button>
+        }
+      />
 
-      <Card styles={{ body: { padding: 0 } }}>
-        <Flex justify="space-between" align="center" style={{ padding: "12px 16px" }}>
-          <Input
-            prefix={<SearchIcon size={16} />}
+      <div className="mt-6 mb-3 flex items-center">
+        <InputGroup className="max-w-[400px]">
+          <InputGroupAddon>
+            <SearchIcon className="size-4 text-muted-foreground" />
+          </InputGroupAddon>
+          <InputGroupInput
             placeholder="Search projects by name, ID, description, or team..."
-            style={{ maxWidth: 400 }}
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
-            allowClear
           />
-          <Pagination
-            current={currentPage}
-            total={filteredProjects.length}
-            pageSize={pageSize}
-            onChange={(page) => setCurrentPage(page)}
-            size="small"
-            showTotal={(total) => `${total} projects`}
-            showSizeChanger={false}
-          />
-        </Flex>
-        <Table
-          columns={columns}
-          dataSource={filteredProjects.slice((currentPage - 1) * pageSize, currentPage * pageSize)}
-          rowKey="project_id"
-          loading={isLoading}
-          pagination={false}
-        />
-      </Card>
+          {searchText && (
+            <InputGroupAddon align="inline-end">
+              <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => setSearchText("")}>
+                <X />
+              </InputGroupButton>
+            </InputGroupAddon>
+          )}
+        </InputGroup>
+      </div>
+
+      <ProjectsTable
+        projects={filteredProjects}
+        isLoading={isLoading}
+        isFiltered={searchText.trim().length > 0}
+        onProjectClick={(id) => void setSelectedProjectId(id)}
+        teamAliasMap={teamAliasMap}
+        isTeamsLoading={isTeamsLoading}
+      />
 
       <CreateProjectModal isOpen={isCreateModalVisible} onClose={() => setIsCreateModalVisible(false)} />
-    </Content>
+    </div>
   );
 }

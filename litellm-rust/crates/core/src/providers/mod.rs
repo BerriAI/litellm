@@ -1,4 +1,5 @@
+pub mod anthropic;
 pub mod azure_ai;
-pub mod mistral;
+#[cfg(feature = "bedrock-auth")]
+pub mod bedrock;
 pub mod openai;
-pub mod vertex_ai;

@@ -5,7 +5,7 @@ Verifies that _init_cache attaches Redis to user_api_key_cache only when
 the flag is explicitly set to True, and leaves it in-memory-only otherwise.
 """
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import json
 from unittest.mock import MagicMock, patch
 
@@ -29,7 +29,7 @@ class _FakeRedisCache(RedisCache):
     network calls are made.
     """
 
-    def __init__(self):  # noqa: super().__init__ skipped intentionally
+    def __init__(self):  # super().__init__ skipped intentionally
         self._store = {}
 
     def set_cache(self, key, value, **kwargs):  # type: ignore[override]
@@ -54,8 +54,8 @@ def _patched_init_cache(litellm_settings: dict, cache_params: dict):
        _FakeRedisCache (passes the isinstance guard in _init_cache).
     3. Extracts enable_redis_auth_cache from litellm_settings and passes it
        as the second argument to _init_cache (matching production behaviour).
-    4. Yields (user_api_key_cache, spend_counter_cache) after calling
-       _init_cache, then restores everything.
+    4. Yields (user_api_key_cache, spend_counter_cache, cli_sso_session_cache)
+       after calling _init_cache, then restores everything.
     """
     fake_redis = _FakeRedisCache()
 
@@ -64,19 +64,21 @@ def _patched_init_cache(litellm_settings: dict, cache_params: dict):
 
     fresh_user_cache = DualCache()
     fresh_spend_cache = DualCache()
+    fresh_cli_sso_cache = DualCache()
 
     enable_redis_auth_cache = litellm_settings.get("enable_redis_auth_cache", False)
 
     with (
         patch.object(ps, "user_api_key_cache", fresh_user_cache),
         patch.object(ps, "spend_counter_cache", fresh_spend_cache),
+        patch.object(ps, "cli_sso_session_cache", fresh_cli_sso_cache),
         patch.object(ps, "llm_router", None),
         # Cache is locally imported inside _init_cache: patch it at source.
         patch("litellm.Cache", return_value=mock_litellm_cache),
     ):
         litellm.cache = None
         ps.ProxyConfig()._init_cache(cache_params, enable_redis_auth_cache)
-        yield fresh_user_cache, fresh_spend_cache
+        yield fresh_user_cache, fresh_spend_cache, fresh_cli_sso_cache
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +92,7 @@ class TestRedisAuthCacheFlag:
         with _patched_init_cache(
             litellm_settings={"enable_redis_auth_cache": True},
             cache_params={"type": "redis", "host": "localhost", "port": 6379},
-        ) as (user_cache, _):
+        ) as (user_cache, _, _cli_sso_cache):
             assert user_cache.redis_cache is not None, (
                 "Redis should be attached to user_api_key_cache when "
                 "enable_redis_auth_cache=True"
@@ -101,7 +103,7 @@ class TestRedisAuthCacheFlag:
         with _patched_init_cache(
             litellm_settings={"enable_redis_auth_cache": False},
             cache_params={"type": "redis", "host": "localhost", "port": 6379},
-        ) as (user_cache, _):
+        ) as (user_cache, _, _cli_sso_cache):
             assert user_cache.redis_cache is None, (
                 "user_api_key_cache must remain in-memory-only when "
                 "enable_redis_auth_cache=False"
@@ -112,7 +114,7 @@ class TestRedisAuthCacheFlag:
         with _patched_init_cache(
             litellm_settings={},
             cache_params={"type": "redis", "host": "localhost", "port": 6379},
-        ) as (user_cache, _):
+        ) as (user_cache, _, _cli_sso_cache):
             assert user_cache.redis_cache is None, (
                 "user_api_key_cache must remain in-memory-only when "
                 "enable_redis_auth_cache is absent from litellm_settings"
@@ -129,7 +131,7 @@ class TestRedisAuthCacheFlag:
             with _patched_init_cache(
                 litellm_settings=ls,
                 cache_params={"type": "redis", "host": "localhost", "port": 6379},
-            ) as (_, spend_cache):
+            ) as (_, spend_cache, _cli_sso_cache):
                 assert spend_cache.redis_cache is not None, (
                     f"spend_counter_cache must always get Redis "
                     f"(enable_redis_auth_cache={flag_value!r})"
@@ -140,6 +142,50 @@ class TestRedisAuthCacheFlag:
         with _patched_init_cache(
             litellm_settings={"enable_redis_auth_cache": False},
             cache_params={"type": "redis", "host": "localhost", "port": 6379},
-        ) as (user_cache, spend_cache):
+        ) as (user_cache, spend_cache, _cli_sso_cache):
             assert spend_cache.redis_cache is not None
             assert user_cache.redis_cache is None
+
+    def test_cli_sso_session_cache_always_gets_redis_regardless_of_flag(self):
+        """
+        cli_sso_session_cache must receive Redis regardless of the auth-cache
+        flag so that `lite login` works on multi-worker deployments without
+        enable_redis_auth_cache (regression for the CLI SSO "Invalid CLI login
+        session" bug)
+        """
+        for flag_value in (True, False, None):
+            ls = (
+                {"enable_redis_auth_cache": flag_value}
+                if flag_value is not None
+                else {}
+            )
+            with _patched_init_cache(
+                litellm_settings=ls,
+                cache_params={"type": "redis", "host": "localhost", "port": 6379},
+            ) as (_, _, cli_sso_cache):
+                assert cli_sso_cache.redis_cache is not None, (
+                    f"cli_sso_session_cache must always get Redis "
+                    f"(enable_redis_auth_cache={flag_value!r})"
+                )
+
+    def test_flag_absent_still_shares_the_model_budget_counters_over_redis(self):
+        """
+        Per-model budget counters are spend counters: the limiter must be able to
+        push and read them through Redis without the auth-cache opt-in, or every
+        worker enforces and reports its own share of a key's spend
+        """
+        fake_redis = _FakeRedisCache()
+        limiter_cache = ps.model_max_budget_limiter.dual_cache
+        touched_caches = (
+            limiter_cache,
+            ps.spend_counter_cache,
+            ps.cli_sso_session_cache,
+            ps.user_api_key_cache,
+            ps.litellm_config_cache,
+        )
+        with ExitStack() as detached:
+            for cache in touched_caches:
+                detached.enter_context(patch.object(cache, "redis_cache", None))
+            ps._attach_redis_usage_cache(fake_redis, enable_redis_auth_cache=False)
+            assert limiter_cache.redis_cache is fake_redis
+            assert ps.user_api_key_cache.redis_cache is None

@@ -59,6 +59,32 @@ async def test_localhost_retry_reuses_stashed_httpx_client():
 
 
 @pytest.mark.asyncio
+async def test_localhost_retry_carries_the_agents_call_context_onto_the_new_client():
+    """Per-caller headers ride on the call context now, not on the shared httpx client,
+    so a retry that drops the context would replay the request unauthenticated."""
+    stashed_context = object()
+    a2a_client = MagicMock()
+    a2a_client._litellm_httpx_client = object()
+    a2a_client._litellm_call_context = stashed_context
+    new_client = MagicMock()
+
+    with (
+        patch.object(emu, "A2A_SDK_AVAILABLE", True),
+        patch.object(emu, "set_agent_card_url"),
+        patch.object(emu, "ClientConfig", side_effect=lambda **_: MagicMock()),
+        patch.object(emu, "create_client", new=AsyncMock(return_value=new_client)),
+    ):
+        result = await emu.handle_a2a_localhost_retry(
+            error=_localhost_error(),
+            agent_card=MagicMock(),
+            a2a_client=a2a_client,
+            is_streaming=False,
+        )
+
+    assert result._litellm_call_context is stashed_context
+
+
+@pytest.mark.asyncio
 async def test_localhost_retry_raises_when_no_stashed_client():
     """An externally-supplied client has no LiteLLM httpx handle; the retry must fail
     with a clear error instead of excavating a2a-sdk internals."""
@@ -145,9 +171,12 @@ async def test_stream_with_retry_raises_after_localhost_retries_exhausted():
             api_base="https://agent.example",
             agent_name="test-agent",
         )
+        async def _drain():
+            async for _chunk in stream:
+                pytest.fail("expected retry exhaustion to raise before yielding")
+
         with pytest.raises(
             RuntimeError,
             match="no response received after retry attempts",
         ):
-            async for _chunk in stream:
-                pytest.fail("expected retry exhaustion to raise before yielding")
+            await _drain()

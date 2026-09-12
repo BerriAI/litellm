@@ -8,7 +8,6 @@ Covers:
 """
 
 import asyncio
-import sys
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,7 +15,6 @@ import httpx
 import pytest
 from fastapi import HTTPException, Request
 
-sys.path.insert(0, "../../../../../")
 
 
 from litellm.proxy._experimental.mcp_server import discoverable_endpoints
@@ -108,6 +106,42 @@ def test_is_oauth_passthrough_false_without_authorization_header():
         oauth_passthrough=True,
     )
     assert server.is_oauth_passthrough is False
+
+
+@pytest.mark.parametrize("auth_type", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
+def test_is_dcr_bridge_true_for_flagged_client_forwarded_modes(auth_type):
+    server = MCPServer(
+        server_id="s1",
+        name="s1",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+        dcr_bridge=True,
+    )
+    assert server.is_dcr_bridge is True
+
+
+@pytest.mark.parametrize("auth_type", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
+def test_is_dcr_bridge_false_when_flag_unset(auth_type):
+    server = MCPServer(
+        server_id="s1",
+        name="s1",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+    )
+    assert server.dcr_bridge is None
+    assert server.is_dcr_bridge is False
+
+
+@pytest.mark.parametrize("auth_type", [MCPAuth.oauth2, MCPAuth.none, MCPAuth.api_key, None])
+def test_is_dcr_bridge_false_for_non_client_forwarded_auth_types(auth_type):
+    server = MCPServer(
+        server_id="s1",
+        name="s1",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+        dcr_bridge=True,
+    )
+    assert server.is_dcr_bridge is False
 
 
 def test_is_oauth_passthrough_false_without_extra_headers():
@@ -406,7 +440,10 @@ async def test_fetch_upstream_metadata_returns_none_when_not_all_candidates_netw
 
 @pytest.mark.asyncio
 async def test_oauth_protected_resource_gateway_managed_unchanged():
-    """Regression guard: OAuth2 servers still advertise the gateway as AS."""
+    """Regression guard: gateway-managed OAuth2 servers advertise the gateway as AS and
+    never fetch upstream metadata. Since LIT-4864 the advertised document is the gateway's
+    own aggregate authorization server ({base}/mcp), which serves the keyless DCR flow for
+    per-server URLs; the per-server relay endpoints remain for the keyed flow."""
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
@@ -441,7 +478,7 @@ async def test_oauth_protected_resource_gateway_managed_unchanged():
         )
 
     mock_client.get.assert_not_awaited()
-    assert result["authorization_servers"] == ["https://gateway.example.com/keycloak_whoami"]
+    assert result["authorization_servers"] == ["https://gateway.example.com/mcp"]
     assert result["scopes_supported"] == ["read"]
 
 
@@ -535,3 +572,53 @@ async def test_oauth_protected_resource_true_passthrough_returns_upstream_metada
         assert result["resource"] == "https://upstream.example.com/mcp"
     finally:
         global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_type", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
+@pytest.mark.parametrize("use_standard_pattern", [True, False])
+async def test_oauth_protected_resource_dcr_bridge_returns_gateway_facade(auth_type, use_standard_pattern):
+    """With dcr_bridge on, discovery flips from the upstream-verbatim contract to the gateway
+    facade: resource is the gateway URL the client dialed and authorization_servers names the
+    gateway's per-server AS, so DCR-only clients (which enforce the RFC 9728 resource match)
+    can register and sign in through the gateway. No upstream metadata fetch happens."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    global_mcp_server_manager.registry.clear()
+    bridge_server = MCPServer(
+        server_id="bridge-1",
+        name="sample_docs",
+        server_name="sample_docs",
+        alias="sample_docs",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+        dcr_bridge=True,
+        scopes=["read"],
+        registration_url="https://okta.example.com/register",
+    )
+    global_mcp_server_manager.registry[bridge_server.server_id] = bridge_server
+
+    try:
+        with patch.object(discoverable_endpoints, "get_async_httpx_client") as mock_client_factory:
+            result = await _build_oauth_protected_resource_response(
+                request=_make_request(),
+                mcp_server_name="sample_docs",
+                use_standard_pattern=use_standard_pattern,
+            )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    expected_resource = (
+        "https://gateway.example.com/mcp/sample_docs"
+        if use_standard_pattern
+        else "https://gateway.example.com/sample_docs/mcp"
+    )
+    assert result == {
+        "authorization_servers": ["https://gateway.example.com/sample_docs"],
+        "resource": expected_resource,
+        "scopes_supported": ["read"],
+    }
+    mock_client_factory.assert_not_called()

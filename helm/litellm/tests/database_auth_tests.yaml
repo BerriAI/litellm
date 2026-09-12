@@ -1,0 +1,116 @@
+suite: test database token auth env vars
+templates:
+  - gateway/deployment.yaml
+  - gateway/configmap.yaml
+  - backend/deployment.yaml
+  - backend/configmap.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: writer emits DATABASE_PASSWORD and no token toggle by default
+    template: gateway/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: litellm-writer-secret
+                key: password
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: IAM_TOKEN_DB_AUTH
+            value: "true"
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AZURE_POSTGRESQL_AUTH
+            value: "true"
+          any: true
+
+  - it: writer emits AZURE_POSTGRESQL_AUTH and omits DATABASE_PASSWORD under Entra auth
+    template: gateway/deployment.yaml
+    set:
+      database.writer.useAzureEntraAuth: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AZURE_POSTGRESQL_AUTH
+            value: "true"
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_PASSWORD
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: IAM_TOKEN_DB_AUTH
+            value: "true"
+          any: true
+
+  - it: backend gets the same Entra toggle as the gateway
+    template: backend/deployment.yaml
+    set:
+      database.writer.useAzureEntraAuth: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AZURE_POSTGRESQL_AUTH
+            value: "true"
+          any: true
+
+  - it: writer rejects both token sources at once
+    template: gateway/deployment.yaml
+    set:
+      database.writer.useIAMAuth: true
+      database.writer.useAzureEntraAuth: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "database.writer.useIAMAuth and database.writer.useAzureEntraAuth are mutually exclusive: the database password can only come from one token source"
+
+  - it: reader Entra auth without writer Entra auth is rejected
+    template: gateway/deployment.yaml
+    set:
+      database.reader.host: reader.example.com
+      database.reader.dbname: litellm
+      database.reader.useAzureEntraAuth: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "database.reader.useAzureEntraAuth requires database.writer.useAzureEntraAuth: true (the proxy gates Entra URL minting on AZURE_POSTGRESQL_AUTH, which is only set by the writer)"
+
+  - it: reader under Entra auth omits DATABASE_PASSWORD_READ_REPLICA
+    template: gateway/deployment.yaml
+    set:
+      database.writer.useAzureEntraAuth: true
+      database.reader.host: reader.example.com
+      database.reader.dbname: litellm
+      database.reader.useAzureEntraAuth: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_HOST_READ_REPLICA
+            value: reader.example.com
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_USER_READ_REPLICA
+            valueFrom:
+              secretKeyRef:
+                name: litellm-reader-secret
+                key: username
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_PASSWORD_READ_REPLICA
+          any: true
