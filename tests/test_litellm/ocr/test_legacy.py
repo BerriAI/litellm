@@ -14,6 +14,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.custom_httpx import llm_http_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.ocr.legacy import _prepare_ocr_request
 from litellm.rust_bridge import bindings, configuration
 from litellm.rust_bridge.ocr_lifecycle import NATIVE_OCR_LIFECYCLE
 
@@ -133,3 +134,66 @@ async def test_python_provider_errors_keep_public_exception(provider: Mock, asyn
     assert error.value.model == "mistral-ocr-latest"
     assert error.value.llm_provider == "mistral"
     assert provider.call_count == 1
+
+
+def test_document_intelligence_environment_key_is_not_replaced_by_generic_azure_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AZURE_AI_API_KEY", "generic-key")
+    monkeypatch.setenv("AZURE_DOCUMENT_INTELLIGENCE_API_KEY", "document-key")
+    prepared: Final = _prepare_ocr_request(
+        model="azure_ai/doc-intelligence/prebuilt-layout",
+        document={"type": "document_url", "document_url": "https://example.com/file.pdf"},
+        api_key=None,
+        api_base=None,
+        timeout=None,
+        custom_llm_provider=None,
+        extra_headers=None,
+        kwargs={"litellm_logging_obj": Mock()},
+    )
+
+    assert prepared.api_key is None
+    headers: Final = prepared.provider_config.validate_environment(
+        headers={},
+        model=prepared.model,
+        api_key=prepared.api_key,
+        api_base=prepared.api_base,
+        litellm_params=prepared.litellm_params,
+    )
+    assert headers["Ocp-Apim-Subscription-Key"] == "document-key"
+
+
+def test_document_intelligence_explicit_connection_is_preserved(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AZURE_AI_API_KEY", "generic-key")
+    monkeypatch.setenv("AZURE_AI_API_BASE", "https://generic.example.com")
+    prepared: Final = _prepare_ocr_request(
+        model="azure_ai/doc-intelligence/prebuilt-layout",
+        document={"type": "document_url", "document_url": "https://example.com/file.pdf"},
+        api_key="explicit-key",
+        api_base="https://document.example.com",
+        timeout=None,
+        custom_llm_provider=None,
+        extra_headers=None,
+        kwargs={"litellm_logging_obj": Mock()},
+    )
+
+    assert prepared.api_key == "explicit-key"
+    assert prepared.api_base == "https://document.example.com"
+
+
+def test_generic_azure_connection_still_applies_to_foundry_ocr(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AZURE_AI_API_KEY", "generic-key")
+    monkeypatch.setenv("AZURE_AI_API_BASE", "https://generic.example.com")
+    prepared: Final = _prepare_ocr_request(
+        model="azure_ai/mistral-document-ai-2505",
+        document={"type": "document_url", "document_url": "https://example.com/file.pdf"},
+        api_key=None,
+        api_base=None,
+        timeout=None,
+        custom_llm_provider=None,
+        extra_headers=None,
+        kwargs={"litellm_logging_obj": Mock()},
+    )
+
+    assert prepared.api_key == "generic-key"
+    assert prepared.api_base == "https://generic.example.com"
