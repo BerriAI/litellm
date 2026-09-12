@@ -886,12 +886,16 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             return LITELLM_METADATA_FIELD
         return OLD_LITELLM_METADATA_FIELD
 
+    def redacts_messages_itself(self) -> bool:
+        return False
+
     def redact_standard_logging_payload_from_model_call_details(self, model_call_details: dict) -> dict:
         """
         Redacts or excludes fields from StandardLoggingPayload before callbacks receive it.
 
         This method handles two features:
-        1. turn_off_message_logging: When True, redacts messages and responses
+        1. turn_off_message_logging: When True, redacts messages and responses (unless the callback
+           redacts them itself, see `redacts_messages_itself`)
         2. standard_logging_payload_excluded_fields: Removes specified fields entirely
 
         Return a modified copy of the provided logging payload.
@@ -921,7 +925,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         }
 
         # Handle turn_off_message_logging - redact messages and responses (if not already excluded)
-        if turn_off_message_logging:
+        if turn_off_message_logging and not self.redacts_messages_itself():
             redacted_str: Final = "redacted-by-litellm"
 
             if "messages" not in (excluded_fields or ()) and standard_logging_object_copy.get("messages") is not None:

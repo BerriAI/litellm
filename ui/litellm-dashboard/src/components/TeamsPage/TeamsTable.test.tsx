@@ -34,6 +34,10 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   teamsTableKeys: { all: ["teamsTable"] },
 }));
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganizations: vi.fn().mockReturnValue({
     data: [{ organization_id: "org-1", organization_alias: "Test Organization" }],
@@ -306,10 +310,30 @@ describe("column rendering details", () => {
     });
   });
 
+  it("points the organization cell at the org's detail page, aliased or not", async () => {
+    mockUseTeamsTable.mockReturnValue(
+      teamsResult([
+        { ...mockTeam, team_id: "a", organization_id: "org-1" },
+        { ...mockTeam, team_id: "b", team_alias: "Orphan Team", organization_id: "org-unknown" },
+      ]),
+    );
+    renderTable();
+
+    expect(await screen.findByRole("link", { name: "Test Organization" })).toHaveAttribute(
+      "href",
+      "/ui/organizations?org=org-1",
+    );
+    expect(screen.getByRole("link", { name: "org-unknown" })).toHaveAttribute(
+      "href",
+      "/ui/organizations?org=org-unknown",
+    );
+  });
+
   it("renders an em dash for a team with no organization", () => {
     mockUseTeamsTable.mockReturnValue(teamsResult([{ ...mockTeam, organization_id: null as unknown as string }]));
     renderTable();
     expect(screen.getByText("—")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /organization/i })).not.toBeInTheDocument();
   });
 
   it("falls back to keys.length when keys_count is absent", () => {

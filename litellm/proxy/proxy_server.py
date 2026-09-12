@@ -304,7 +304,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
-from litellm.proxy._lazy_features import attach_lazy_features
+from litellm.proxy._lazy_features import attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import *
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
@@ -639,13 +639,8 @@ from litellm.proxy.openai_files_endpoints.files_endpoints import (
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     set_files_config,
 )
-from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-    openai_passthrough_router,
-    passthrough_endpoint_router,
-    vertex_ai_live_websocket_passthrough,
-)
-from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-    router as llm_passthrough_router,
+from litellm.proxy.pass_through_endpoints.openai_passthrough_endpoints import (
+    router as openai_passthrough_router,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     initialize_pass_through_endpoints,
@@ -660,6 +655,7 @@ from litellm.proxy.rag_endpoints.endpoints import router as rag_router
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
 from litellm.proxy.response_api_endpoints.endpoints import router as response_router
 from litellm.proxy.route_llm_request import route_request
+from litellm.proxy.route_priority import hot_routes_first
 from litellm.proxy.search_endpoints.endpoints import router as search_router
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
@@ -3374,10 +3370,8 @@ async def _increment_spend_counter_cache(counter_key: str, increment: float):
         )
         return current_value
 
-    return await spend_counter_cache.async_increment_cache(
-        key=counter_key,
-        value=increment,
-        refresh_ttl=True,
+    return await SpendCounterReseed.increment_in_memory(
+        spend_counter_cache=spend_counter_cache, counter_key=counter_key, increment=increment
     )
 
 
@@ -3400,10 +3394,8 @@ async def _apply_spend_counter_increments(pending: Sequence[_PendingSpendIncreme
     redis_cache: Final = spend_counter_cache.redis_cache
     if redis_cache is None:
         for item in pending:
-            await spend_counter_cache.async_increment_cache(
-                key=item.counter_key,
-                value=item.increment,
-                refresh_ttl=True,
+            await SpendCounterReseed.increment_in_memory(
+                spend_counter_cache=spend_counter_cache, counter_key=item.counter_key, increment=item.increment
             )
         return
     ttl: Final = redis_cache.get_ttl()
@@ -5813,6 +5805,16 @@ class ProxyConfig:
                     default_redis_ttl=ttl,
                 )
 
+            ### USER API KEY CACHE MAX SIZE (in-memory tier shared by keys, teams, users, end users, ...) ###
+            if "user_api_key_cache_max_size" in general_settings:
+                user_api_key_cache.update_in_memory_max_size(
+                    ConfigGeneralSettings.model_validate(
+                        MappingProxyType(
+                            {"user_api_key_cache_max_size": general_settings["user_api_key_cache_max_size"]}
+                        )
+                    ).user_api_key_cache_max_size
+                )
+
             ### PKCE MULTI-INSTANCE PREREQUISITE CHECK ###
             # PKCE verifiers are stored in redis_usage_cache when available so they can
             # be read back by any instance (not just the one that started the auth flow).
@@ -6047,6 +6049,10 @@ class ProxyConfig:
         set_files_config(config=files_config)
 
         ## default config for vertex ai routes
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            passthrough_endpoint_router,
+        )
+
         default_vertex_config: Final = config.get("default_vertex_config", None)
         passthrough_endpoint_router.set_default_vertex_config(config=default_vertex_config)
 
@@ -7058,6 +7064,23 @@ class ProxyConfig:
             general_settings["enable_openai_websocket_passthrough"] = _general_settings.get(
                 "enable_openai_websocket_passthrough"
             )
+
+        if "user_api_key_cache_max_size" not in self._yaml_general_settings_keys:
+            db_cache_max_size: Final = _general_settings.get("user_api_key_cache_max_size")
+            try:
+                cache_max_size: Final = ConfigGeneralSettings.model_validate(
+                    MappingProxyType({"user_api_key_cache_max_size": db_cache_max_size})
+                ).user_api_key_cache_max_size
+            except ValidationError:
+                verbose_proxy_logger.warning(
+                    "Ignoring invalid general_settings.user_api_key_cache_max_size=%r from the DB", db_cache_max_size
+                )
+            else:
+                if cache_max_size is None:
+                    general_settings.pop("user_api_key_cache_max_size", None)
+                else:
+                    general_settings["user_api_key_cache_max_size"] = cache_max_size
+                user_api_key_cache.update_in_memory_max_size(cache_max_size)
 
         ## STORE MODEL IN DB ##
         if "store_model_in_db" in _general_settings:
@@ -10830,14 +10853,14 @@ async def model_info(
     # Use the actual litellm model from the deployment to get provider info
     _, provider, _, _ = litellm.get_llm_provider(model=deployment.litellm_params.model)
 
-    response_id: Final = internal_to_public.get(resolved_model_id, model_id)
-    return create_model_info_response(
-        model_id=response_id,
+    response: Final = create_model_info_response(
+        model_id=resolved_model_id,
         provider=provider,
         include_metadata=False,
         fallback_type=None,
         llm_router=llm_router,
     )
+    return {**response, "id": internal_to_public.get(resolved_model_id, model_id)}  # mutable-ok: response id differs
 
 
 def _blocked_response_usage(original_response: object | None) -> "litellm.Usage":
@@ -11763,6 +11786,10 @@ async def vertex_ai_live_passthrough_endpoint(
 
     This endpoint delegates to the WebSocket function defined in llm_passthrough_endpoints.py
     """
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        vertex_ai_live_websocket_passthrough,
+    )
+
     return await vertex_ai_live_websocket_passthrough(
         websocket=websocket,
         model=model,
@@ -16967,6 +16994,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "cancel_on_disconnect": "Boolean",
         "disable_auto_add_proxy_admin_to_teams": "Boolean",
         "apply_user_budget_to_team_keys": "Boolean",
+        "user_api_key_cache_max_size": "Integer",
     }
 )
 
@@ -18668,7 +18696,7 @@ app.include_router(credential_router)
 app.include_router(openai_passthrough_router)
 app.include_router(batches_router)
 app.include_router(openai_files_router)
-app.include_router(llm_passthrough_router)
+reserve_lazy_slot(app, "llm_passthrough")
 app.include_router(pass_through_router)
 app.include_router(health_router)
 app.include_router(key_management_router)
@@ -18708,6 +18736,7 @@ app.include_router(ui_discovery_endpoints_router)
 app.include_router(google_router)
 
 attach_lazy_features(app)
+app.router.routes = hot_routes_first(app.router.routes)
 app.add_middleware(
     RequestSizeLimitMiddleware,
     get_max_request_size_mb=lambda: general_settings.get("max_request_size_mb"),
