@@ -3419,16 +3419,16 @@ async def test_oauth_protected_resource_gateway_managed_oauth2_advertises_gatewa
         relay_response = await _build_oauth_protected_resource_response(
             request=mock_request, mcp_server_name="relay_mcp", use_standard_pattern=True
         )
-        assert relay_response["authorization_servers"] == ["https://litellm.example.com/mcp/relay_mcp"]
+        assert relay_response["authorization_servers"] == ["https://litellm.example.com/relay_mcp"]
         relay_legacy_response = await _build_oauth_protected_resource_response(
             request=mock_request, mcp_server_name="relay_mcp", use_standard_pattern=False
         )
-        assert relay_legacy_response["authorization_servers"] == ["https://litellm.example.com/relay_mcp/mcp"]
+        assert relay_legacy_response["authorization_servers"] == ["https://litellm.example.com/relay_mcp"]
 
         delegated_response = await _build_oauth_protected_resource_response(
             request=mock_request, mcp_server_name="delegated_mcp", use_standard_pattern=True
         )
-        assert delegated_response["authorization_servers"] == ["https://litellm.example.com/mcp/delegated_mcp"]
+        assert delegated_response["authorization_servers"] == ["https://litellm.example.com/delegated_mcp"]
     finally:
         global_mcp_server_manager.registry.clear()
 
@@ -9120,8 +9120,8 @@ async def test_named_discovery_issuer_matches_protected_resource_authorization_s
     from fastapi import Request
 
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_oauth_authorization_server_response,
         _build_oauth_protected_resource_response,
-        oauth_authorization_server_mcp_standard,
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
@@ -9139,10 +9139,10 @@ async def test_named_discovery_issuer_matches_protected_resource_authorization_s
         resource_response = await _build_oauth_protected_resource_response(
             request=mock_request, mcp_server_name="test_oauth", use_standard_pattern=True
         )
-        authorization_response = await oauth_authorization_server_mcp_standard(
+        authorization_response = _build_oauth_authorization_server_response(
             request=mock_request, mcp_server_name="test_oauth"
         )
-        assert resource_response["authorization_servers"] == ["https://llm.example.com/mcp/test_oauth"]
+        assert resource_response["authorization_servers"] == ["https://llm.example.com/test_oauth"]
         assert authorization_response["issuer"] == resource_response["authorization_servers"][0]
     finally:
         global_mcp_server_manager.registry.clear()
@@ -11228,7 +11228,7 @@ def test_named_resource_discovery_follows_matching_authorization_issuer(
     response = client.get(f"{prefix}/.well-known/oauth-protected-resource/{path}")
     assert response.status_code == 200
     resource = response.json()
-    issuer_path = path if relay else "mcp"
+    issuer_path = server.server_name if relay else "mcp"
     assert resource["resource"] == f"http://testserver{prefix}/{path}"
     assert resource["authorization_servers"] == [f"http://testserver{prefix}/{issuer_path}"]
     authorization = client.get(f"{prefix}/.well-known/oauth-authorization-server/{issuer_path}")
