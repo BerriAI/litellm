@@ -32,7 +32,7 @@ class RequestyConfig(OpenrouterConfig):
     def custom_llm_provider(self) -> str | None:
         return "requesty"
 
-    def _get_openai_compatible_provider_info(
+    def get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
         resolved_api_base: Final = api_base or get_secret_str("REQUESTY_API_BASE") or "https://router.requesty.ai/v1"

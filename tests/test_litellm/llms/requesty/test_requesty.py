@@ -29,9 +29,7 @@ def test_requesty_in_provider_registries():
 
 def test_requesty_config_default_base_url():
     """RequestyConfig exposes the fixed Requesty router base URL."""
-    api_base, _dynamic_api_key = RequestyConfig()._get_openai_compatible_provider_info(
-        api_base=None, api_key="test-key"
-    )
+    api_base, _dynamic_api_key = RequestyConfig().get_openai_compatible_provider_info(api_base=None, api_key="test-key")
     assert api_base == "https://router.requesty.ai/v1"
 
 
@@ -158,7 +156,7 @@ def test_requesty_config_reads_base_url_and_key_from_env(monkeypatch):
     monkeypatch.setenv("REQUESTY_API_BASE", "https://router.eu.requesty.ai/v1")
     monkeypatch.setenv("REQUESTY_API_KEY", "env-test-key")
 
-    api_base, dynamic_api_key = RequestyConfig()._get_openai_compatible_provider_info(api_base=None, api_key=None)
+    _model, _custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model="requesty/openai/gpt-4o-mini")
 
     assert api_base == "https://router.eu.requesty.ai/v1"
     assert dynamic_api_key == "env-test-key"
@@ -172,7 +170,10 @@ def test_supports_reasoning_swallows_lookup_errors(monkeypatch):
 
     monkeypatch.setattr(litellm, "supports_reasoning", _boom)
 
-    assert RequestyConfig()._supports_reasoning("acme/unknown-1") is False
+    supported_params = RequestyConfig().get_supported_openai_params("acme/unknown-1")
+
+    assert "reasoning_effort" not in supported_params
+    assert "thinking" not in supported_params
 
 
 def test_map_openai_params_translates_max_reasoning_effort_to_xhigh():

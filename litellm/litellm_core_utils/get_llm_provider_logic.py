@@ -846,7 +846,7 @@ def _get_openai_compatible_provider_info(
         (
             api_base,  # rebind-ok: provider resolution
             dynamic_api_key,  # rebind-ok: provider resolution
-        ) = litellm.RequestyConfig()._get_openai_compatible_provider_info(api_base, api_key)
+        ) = litellm.RequestyConfig().get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "vercel_ai_gateway":
         (
             api_base,
