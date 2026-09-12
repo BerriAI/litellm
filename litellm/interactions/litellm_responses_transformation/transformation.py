@@ -129,7 +129,7 @@ class LiteLLMResponsesInteractionsConfig:
                 schema=response_format,
             )
 
-        entries: Final = response_format if isinstance(response_format, list) else [response_format]
+        entries: Final = response_format if isinstance(response_format, list) else (response_format,)
         text_entry: Final = next(
             (entry for entry in entries if isinstance(entry, Mapping) and entry.get("type") == "text"),
             None,
@@ -146,16 +146,16 @@ class LiteLLMResponsesInteractionsConfig:
         if mime_type is not None and mime_type != _JSON_MIME_TYPE:
             return None
         if isinstance(schema, Mapping) and schema:
-            return {
-                "format": {
+            return {  # mutable-ok: litellm_completion_transformation reads this back with isinstance(..., dict)
+                "format": {  # mutable-ok: and checks this field the same way
                     "type": "json_schema",
                     "name": "response_schema",
-                    "schema": dict(schema),
+                    "schema": dict(schema),  # mutable-ok: shallow copy of the caller's top-level keys
                     "strict": False,
                 }
             }
         if mime_type == _JSON_MIME_TYPE:
-            return {"format": {"type": "json_object"}}
+            return {"format": {"type": "json_object"}}  # mutable-ok: same isinstance(..., dict) round trip
         return None
 
     @staticmethod
