@@ -14,7 +14,7 @@ trap 'rm -rf "${WORKDIR}"' EXIT
 echo "resolving newest non-expired '${ARTIFACT_NAME}' artifact on ${REPO}@${BASE_BRANCH}"
 
 SELECTED="$(
-  gh api "repos/${REPO}/actions/artifacts" -X GET -f per_page=100 --paginate \
+  gh api "repos/${REPO}/actions/artifacts" -X GET -f name="${ARTIFACT_NAME}" -f per_page=100 --paginate \
     --jq ".artifacts[] | select(.name == \"${ARTIFACT_NAME}\" and .expired == false and .workflow_run.head_branch == \"${BASE_BRANCH}\") | {id, digest, created_at, run_id: .workflow_run.id, run_number: .workflow_run.run_number}" \
     | jq -s 'sort_by(.created_at) | reverse | .[0] // empty'
 )"
