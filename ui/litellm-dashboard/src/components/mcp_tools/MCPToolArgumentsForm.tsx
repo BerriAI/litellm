@@ -358,7 +358,9 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
                             aria-invalid={field["aria-invalid"]}
                             className="w-full"
                           >
-                            <SelectValue placeholder={`Select ${key}`} />
+                            <SelectValue placeholder={`Select ${key}`}>
+                              {field.value === "" ? "Empty string" : undefined}
+                            </SelectValue>
                           </SelectTrigger>
                           <SelectContent>
                             {!required && <SelectItem value={null}>Select {key}</SelectItem>}
