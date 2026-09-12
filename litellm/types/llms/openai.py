@@ -2203,7 +2203,6 @@ class OpenAIRealtimeInputAudioTranscriptionCompleted(TypedDict):
     content_index: ReadOnly[int]
     transcript: ReadOnly[str]
     usage: NotRequired[ReadOnly[Mapping[str, object]]]
-    speaker: NotRequired[ReadOnly[str]]
 
 
 class OpenAIRealtimeUsageTokenDetails(TypedDict):

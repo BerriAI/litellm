@@ -1,20 +1,51 @@
-from __future__ import annotations
-
+import asyncio
+import base64
+import binascii
 import json
 import math
-import uuid
-from collections import OrderedDict, deque
-from collections.abc import Mapping
+import time
+from collections import deque
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Final, Literal, TypeAlias
+from types import MappingProxyType
+from typing import Final, Literal, cast
+from urllib.parse import urlparse, urlunparse
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
-from litellm.types.realtime import RealtimeInputAudioTranscriptionUsage
+from litellm import verbose_logger
+from litellm._uuid import uuid
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.meta import (
+    MuseAudioEncoding,
+    MuseHandshake,
+    MuseMode,
+    MuseSampleRate,
+    MuseSessionCreatedEvent,
+    MuseTranscriptionSession,
+    MuseTranscriptionSettings,
+    MuseTurnDetection,
+)
+from litellm.types.llms.openai import (
+    OpenAIRealtimeEvents,
+    OpenAIRealtimeInputAudioBufferSpeechEvent,
+    OpenAIRealtimeInputAudioTranscriptionCompleted,
+    OpenAIRealtimeInputAudioTranscriptionDelta,
+)
+from litellm.types.realtime import (
+    RealtimeErrorDetail,
+    RealtimeErrorEvent,
+    RealtimeInputAudioTranscriptionDurationUsage,
+    RealtimeInputAudioTranscriptionUsage,
+    RealtimeResponseTransformInput,
+    RealtimeResponseTypedDict,
+)
 
 MUSE_MODEL: Final = "muse-voice-transcribe-1.0"
+DEFAULT_MUSE_REALTIME_URL: Final = "wss://api.meta.ai/v1/asr/realtime"
 SUPPORTED_SAMPLE_RATES: Final = frozenset((16_000, 24_000))
-SUPPORTED_MODES: Final = frozenset(("PUSH_TO_TALK", "ENDPOINTING", "DIARIZATION"))
 SUPPORTED_LANGUAGES: Final = (
     "Arabic",
     "Bengali",
@@ -42,40 +73,46 @@ SUPPORTED_LANGUAGES: Final = (
     "Turkish",
     "Vietnamese",
 )
-_LANGUAGE_NAMES: Final = {  # mutable-ok: immutable-by-convention language lookup table
-    language.casefold(): language for language in SUPPORTED_LANGUAGES
-}
-_LANGUAGE_CODES: Final = {  # mutable-ok: immutable-by-convention language lookup table
-    "ar": "Arabic",
-    "bn": "Bengali",
-    "de": "German",
-    "en": "English",
-    "es": "Spanish",
-    "fil": "Tagalog",
-    "fr": "French",
-    "he": "Hebrew",
-    "hi": "Hindi",
-    "id": "Indonesian",
-    "it": "Italian",
-    "iw": "Hebrew",
-    "ja": "Japanese",
-    "kn": "Kannada",
-    "ko": "Korean",
-    "ms": "Malay",
-    "mr": "Marathi",
-    "nl": "Dutch",
-    "pl": "Polish",
-    "pt": "Portuguese",
-    "ta": "Tamil",
-    "te": "Telugu",
-    "th": "Thai",
-    "tl": "Tagalog",
-    "tr": "Turkish",
-    "vi": "Vietnamese",
-    "zh": "Mandarin Chinese",
-}
+_LANGUAGE_NAMES: Final = MappingProxyType({language.casefold(): language for language in SUPPORTED_LANGUAGES})
+_LANGUAGE_CODES: Final = MappingProxyType(
+    {
+        "ar": "Arabic",
+        "bn": "Bengali",
+        "de": "German",
+        "en": "English",
+        "es": "Spanish",
+        "fil": "Tagalog",
+        "fr": "French",
+        "he": "Hebrew",
+        "hi": "Hindi",
+        "id": "Indonesian",
+        "it": "Italian",
+        "iw": "Hebrew",
+        "ja": "Japanese",
+        "kn": "Kannada",
+        "ko": "Korean",
+        "ms": "Malay",
+        "mr": "Marathi",
+        "nl": "Dutch",
+        "pl": "Polish",
+        "pt": "Portuguese",
+        "ta": "Tamil",
+        "te": "Telugu",
+        "th": "Thai",
+        "tl": "Tagalog",
+        "tr": "Turkish",
+        "vi": "Vietnamese",
+        "zh": "Mandarin Chinese",
+    }
+)
+_SUPPORTED_TRANSCRIPTION_KEYS: Final = frozenset(("model", "language"))
+_MAX_AUDIO_BACKLOG_SECONDS: Final = 4
+_PACKET_MS: Final = 80
+_END_STREAM: Final = '{"type":"endStream"}'
+_PROVIDER_ERROR_MESSAGE: Final = "Meta Muse realtime transcription failed"
 _JSON_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
-OpenAIEvent: TypeAlias = Mapping[str, object]
+_EMPTY_OBJECT: Final[Mapping[str, JsonValue]] = MappingProxyType({})
+_SERVER_VAD: Final[MuseTurnDetection] = {"type": "server_vad"}
 
 
 class MuseProtocolError(ValueError):
@@ -85,13 +122,12 @@ class MuseProtocolError(ValueError):
 @dataclass(frozen=True, slots=True)
 class MuseSessionConfig:
     model: str
-    mode: Literal["PUSH_TO_TALK", "ENDPOINTING", "DIARIZATION"]
-    sample_rate: Literal[16000, 24000]
-    keywords: tuple[str, ...]
+    mode: MuseMode
+    sample_rate: MuseSampleRate
     language_bias: tuple[str, ...]
 
     @property
-    def audio_encoding(self) -> Literal["PCM_16KHZ", "PCM_24KHZ"]:
+    def audio_encoding(self) -> MuseAudioEncoding:
         return "PCM_16KHZ" if self.sample_rate == 16_000 else "PCM_24KHZ"
 
     @property
@@ -100,66 +136,52 @@ class MuseSessionConfig:
 
     @property
     def packet_bytes(self) -> int:
-        return self.bytes_per_second * 80 // 1000
+        return self.bytes_per_second * _PACKET_MS // 1000
 
-    def handshake(self, access_token: str) -> Mapping[str, object]:
-        base: Final[Mapping[str, object]] = {  # mutable-ok: JSON wire payload
-            "mode": self.mode,
-            "authorization": {"accessToken": access_token},  # mutable-ok: JSON wire payload
+    @property
+    def max_encoded_append_bytes(self) -> int:
+        return 4 * ((self.bytes_per_second * _MAX_AUDIO_BACKLOG_SECONDS + 2) // 3)
+
+    def handshake(self, access_token: str) -> MuseHandshake:
+        base: Final[MuseHandshake] = {
+            "authorization": {"accessToken": access_token},
             "audioEncoding": self.audio_encoding,
             "model": self.model,
+            "mode": self.mode,
             "partialMode": "CUMULATIVE",
             "emitAudioProgress": True,
         }
-        payload: dict[str, object] = dict(base)  # mutable-ok: incrementally builds JSON wire payload
-        if self.keywords:
-            payload["keywords"] = list(self.keywords)  # mutable-ok: JSON arrays require concrete lists
-        if self.language_bias:
-            payload["languageBias"] = list(self.language_bias)  # mutable-ok: JSON arrays require concrete lists
-        return payload
+        if not self.language_bias:
+            return base
+        biased: Final[MuseHandshake] = {**base, "languageBias": self.language_bias}
+        return biased
 
-    def openai_session(self, session_id: str) -> Mapping[str, object]:
-        turn_detection: Final[Mapping[str, object] | None] = (
-            None if self.mode == "PUSH_TO_TALK" else {"type": "server_vad"}  # mutable-ok: JSON wire payload
-        )
-        transcription: dict[str, object] = {  # mutable-ok: incrementally builds JSON wire payload
-            "model": self.model,
-        }
-        if self.language_bias:
-            transcription["language"] = self.language_bias[0]
-            transcription["language_bias"] = list(  # mutable-ok: JSON arrays require concrete lists
-                self.language_bias
-            )
-        if self.keywords:
-            transcription["keywords"] = list(self.keywords)  # mutable-ok: JSON arrays require concrete lists
-        return {  # mutable-ok: JSON wire payload
+    def openai_session(self, session_id: str) -> MuseTranscriptionSession:
+        session: Final[MuseTranscriptionSession] = {
             "id": session_id,
             "object": "realtime.transcription_session",
             "type": "transcription",
-            "model": self.model,
-            "audio": {  # mutable-ok: JSON wire payload
-                "input": {  # mutable-ok: JSON wire payload
-                    "format": {"type": "audio/pcm", "rate": self.sample_rate},  # mutable-ok: JSON wire payload
-                    "transcription": transcription,
-                    "turn_detection": turn_detection,
+            "audio": {
+                "input": {
+                    "format": {"type": "audio/pcm", "rate": self.sample_rate},
+                    "transcription": self._transcription_settings(),
+                    "turn_detection": None if self.mode == "PUSH_TO_TALK" else _SERVER_VAD,
                 }
             },
         }
+        return session
+
+    def _transcription_settings(self) -> MuseTranscriptionSettings:
+        base: Final[MuseTranscriptionSettings] = {"model": self.model}
+        if not self.language_bias:
+            return base
+        localized: Final[MuseTranscriptionSettings] = {**base, "language": self.language_bias[0]}
+        return localized
 
 
-@dataclass(slots=True)
-class _TurnState:
-    item_id: str | None = None
-    started: bool = False
-    start_emitted: bool = False
-    latest_partial: str | None = None
-    emitted_partial: str = ""
-    final_text: str | None = None
-    completed_signal: bool = False
-    completed_emitted: bool = False
-    stopped: bool = False
-    stopped_emitted: bool = False
-    speaker: str | None = None
+_DEFAULT_SESSION_CONFIG: Final = MuseSessionConfig(
+    model=MUSE_MODEL, mode="ENDPOINTING", sample_rate=24_000, language_bias=()
+)
 
 
 def _json_object(payload: str) -> Mapping[str, JsonValue]:
@@ -174,7 +196,7 @@ def _json_object(payload: str) -> Mapping[str, JsonValue]:
 
 def _mapping(value: JsonValue | None, name: str) -> Mapping[str, JsonValue]:
     if value is None:
-        return {}  # mutable-ok: empty JSON object
+        return _EMPTY_OBJECT
     if not isinstance(value, dict):
         raise MuseProtocolError(f"{name} must be an object")
     return value
@@ -192,6 +214,10 @@ def _normalize_model(model: str) -> str:
     return model.removeprefix("meta/").strip()
 
 
+def _event_id() -> str:
+    return f"event_{uuid.uuid4().hex}"
+
+
 def normalize_language(language: str) -> str:
     value: Final = language.strip()
     if not value:
@@ -206,26 +232,36 @@ def normalize_language(language: str) -> str:
     return mapped_name
 
 
-def _normalize_string_sequence(value: JsonValue | None, name: str) -> tuple[str, ...]:
-    if value is None:
-        return ()
-    if not isinstance(value, list):
-        raise MuseProtocolError(f"{name} must be an array of strings")
-    normalized: list[str] = []  # mutable-ok: deduplicates validated language hints before freezing
-    for entry in value:
-        if not isinstance(entry, str) or not entry.strip():
-            raise MuseProtocolError(f"{name} entries must be non-empty strings")
-        item: str = entry.strip()  # rebind-ok: normalized once for each hint
-        if item not in normalized:
-            normalized.append(item)
-    return tuple(normalized)
+def normalize_access_token(api_key: str) -> str:
+    stripped: Final = api_key.strip()
+    if not stripped:
+        raise ValueError("Meta API key is required")
+    parts: Final = stripped.split(None, 1)
+    if parts[0].casefold() != "bearer":
+        return f"Bearer {stripped}"
+    if len(parts) != 2 or not parts[1].strip():
+        raise ValueError("Meta API key must include a token after Bearer")
+    return f"Bearer {parts[1].strip()}"
 
 
-def _normalize_language_sequence(value: JsonValue | None) -> tuple[str, ...]:
-    return tuple(dict.fromkeys(normalize_language(item) for item in _normalize_string_sequence(value, "language_bias")))
+def build_muse_realtime_url(api_base: str | None) -> str:
+    if api_base is None:
+        return DEFAULT_MUSE_REALTIME_URL
+    parsed: Final = urlparse(api_base.strip())
+    scheme: Final = "wss" if parsed.scheme == "https" else parsed.scheme
+    if (
+        scheme != "wss"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+    ):
+        raise ValueError("Meta api_base must be an absolute wss:// or https:// URL without credentials or a fragment")
+    netloc: Final = f"{parsed.hostname}:{parsed.port}" if parsed.port is not None else parsed.hostname
+    return urlunparse((scheme, netloc, "/v1/asr/realtime", "", "", ""))
 
 
-def _parse_sample_rate(session: Mapping[str, JsonValue]) -> Literal[16000, 24000]:
+def _parse_sample_rate(session: Mapping[str, JsonValue]) -> MuseSampleRate:
     beta_format: Final = session.get("input_audio_format")
     audio: Final = _mapping(session.get("audio"), "session.audio")
     audio_input: Final = _mapping(audio.get("input"), "session.audio.input")
@@ -251,22 +287,10 @@ def _parse_sample_rate(session: Mapping[str, JsonValue]) -> Literal[16000, 24000
     rate: Final = format_mapping.get("rate", 24_000)
     if isinstance(rate, bool) or not isinstance(rate, int) or rate not in SUPPORTED_SAMPLE_RATES:
         raise MuseProtocolError("Muse Voice supports PCM16 at 16000 Hz or 24000 Hz")
-    return rate
+    return 16_000 if rate == 16_000 else 24_000
 
 
-def _parse_mode(
-    session: Mapping[str, JsonValue], audio_input: Mapping[str, JsonValue]
-) -> Literal["PUSH_TO_TALK", "ENDPOINTING", "DIARIZATION"]:
-    explicit: Final = session.get("mode")
-    if explicit is not None:
-        if not isinstance(explicit, str) or explicit.upper() not in SUPPORTED_MODES:
-            raise MuseProtocolError("unsupported Muse Voice mode")
-        normalized_mode: Final = explicit.upper()
-        if normalized_mode == "PUSH_TO_TALK":
-            return "PUSH_TO_TALK"
-        if normalized_mode == "DIARIZATION":
-            return "DIARIZATION"
-        return "ENDPOINTING"
+def _parse_mode(session: Mapping[str, JsonValue], audio_input: Mapping[str, JsonValue]) -> MuseMode:
     turn_detection_present: Final = "turn_detection" in session or "turn_detection" in audio_input
     turn_detection: Final = session.get("turn_detection", audio_input.get("turn_detection"))
     if turn_detection_present and turn_detection is None:
@@ -286,8 +310,7 @@ def parse_session_update(payload: str, expected_model: str) -> MuseSessionConfig
     session: Final = _mapping(message.get("session"), "session")
     if not session:
         raise MuseProtocolError("session.update requires a session object")
-    session_type: Final = session.get("type")
-    if session_type not in (None, "transcription", "realtime"):
+    if session.get("type") not in (None, "transcription", "realtime"):
         raise MuseProtocolError("Muse Voice supports transcription sessions only")
     audio: Final = _mapping(session.get("audio"), "session.audio")
     audio_input: Final = _mapping(audio.get("input"), "session.audio.input")
@@ -299,88 +322,144 @@ def parse_session_update(payload: str, expected_model: str) -> MuseSessionConfig
         beta_transcription if beta_transcription is not None else ga_transcription,
         "input audio transcription",
     )
+    unsupported: Final = tuple(sorted(key for key in transcription if key not in _SUPPORTED_TRANSCRIPTION_KEYS))
+    if unsupported:
+        verbose_logger.warning("Meta realtime: dropping unsupported transcription settings %s", unsupported)
     requested_model: Final = _string(transcription.get("model"), "transcription model")
     normalized_model: Final = _normalize_model(expected_model)
     if normalized_model != MUSE_MODEL:
         raise MuseProtocolError("unsupported Meta realtime model")
     if requested_model is not None and _normalize_model(requested_model) != normalized_model:
         raise MuseProtocolError("realtime session model cannot be changed")
-    language_value: Final = _string(transcription.get("language"), "language")
-    explicit_bias: Final = _normalize_language_sequence(transcription.get("language_bias"))
-    language_bias: Final = tuple(
-        dict.fromkeys((normalize_language(language_value), *explicit_bias))
-        if language_value is not None
-        else explicit_bias
-    )
-    keywords: Final = _normalize_string_sequence(transcription.get("keywords"), "keywords")
+    language: Final = _string(transcription.get("language"), "language")
     return MuseSessionConfig(
         model=normalized_model,
         mode=_parse_mode(session, audio_input),
         sample_rate=_parse_sample_rate(session),
-        keywords=keywords,
-        language_bias=language_bias,
+        language_bias=() if language is None else (normalize_language(language),),
     )
 
 
-def session_created_event(model: str, session_id: str) -> OpenAIEvent:
-    normalized_model: Final = _normalize_model(model)
-    default_config: Final = MuseSessionConfig(
-        model=normalized_model,
-        mode="ENDPOINTING",
-        sample_rate=24_000,
-        keywords=(),
-        language_bias=(),
-    )
-    return {  # mutable-ok: OpenAI-compatible JSON event
+def session_created_event(config: MuseSessionConfig, session_id: str) -> MuseSessionCreatedEvent:
+    event: Final[MuseSessionCreatedEvent] = {
         "type": "session.created",
-        "event_id": f"event_{uuid.uuid4().hex}",
-        "session": default_config.openai_session(session_id),
-    }
-
-
-def session_updated_event(config: MuseSessionConfig, session_id: str) -> OpenAIEvent:
-    return {  # mutable-ok: OpenAI-compatible JSON event
-        "type": "session.updated",
-        "event_id": f"event_{uuid.uuid4().hex}",
+        "event_id": _event_id(),
         "session": config.openai_session(session_id),
     }
+    return event
 
 
-def error_event(error_type: str, code: str, message: str) -> OpenAIEvent:
-    return {  # mutable-ok: OpenAI-compatible JSON event
-        "type": "error",
-        "event_id": f"event_{uuid.uuid4().hex}",
-        "error": {  # mutable-ok: nested OpenAI-compatible error object
-            "type": error_type,
-            "code": code,
-            "message": message,
-        },
+def error_event(message: str) -> OpenAIRealtimeEvents:
+    detail: Final[RealtimeErrorDetail] = {"type": "server_error", "message": message}
+    event: Final[RealtimeErrorEvent] = {"type": "error", "error": detail}
+    return cast(OpenAIRealtimeEvents, event)  # cast-ok: the union has no error member; the relay only serializes it
+
+
+def _speech_event(
+    event_type: Literal["input_audio_buffer.speech_started", "input_audio_buffer.speech_stopped"], item_id: str
+) -> OpenAIRealtimeInputAudioBufferSpeechEvent:
+    event: Final[OpenAIRealtimeInputAudioBufferSpeechEvent] = {
+        "type": event_type,
+        "event_id": _event_id(),
+        "item_id": item_id,
     }
+    return event
+
+
+def _delta_event(item_id: str, delta: str) -> OpenAIRealtimeInputAudioTranscriptionDelta:
+    event: Final[OpenAIRealtimeInputAudioTranscriptionDelta] = {
+        "type": "conversation.item.input_audio_transcription.delta",
+        "event_id": _event_id(),
+        "item_id": item_id,
+        "content_index": 0,
+        "delta": delta,
+    }
+    return event
+
+
+def _completed_event(
+    item_id: str, transcript: str, usage: RealtimeInputAudioTranscriptionUsage | None
+) -> OpenAIRealtimeInputAudioTranscriptionCompleted:
+    event: Final[OpenAIRealtimeInputAudioTranscriptionCompleted] = {
+        "type": "conversation.item.input_audio_transcription.completed",
+        "event_id": _event_id(),
+        "item_id": item_id,
+        "content_index": 0,
+        "transcript": transcript,
+    }
+    if usage is None:
+        return event
+    billed: Final[OpenAIRealtimeInputAudioTranscriptionCompleted] = {**event, "usage": usage}
+    return billed
+
+
+def _required_turn_id(message: Mapping[str, JsonValue], event: str) -> str:
+    value: Final = message.get("turnId")
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        raise MuseProtocolError(f"{event} event has invalid turnId")
+    turn_id: Final = str(value).strip()
+    if not turn_id:
+        raise MuseProtocolError(f"{event} event has invalid turnId")
+    return turn_id
+
+
+def _new_suffix(previous: str, current: str) -> str:
+    return current[len(previous) :] if current.startswith(previous) else ""
+
+
+@dataclass(slots=True)
+class _TurnState:
+    item_id: str
+    started: bool = False
+    start_emitted: bool = False
+    latest_partial: str | None = None
+    emitted_partial: str = ""
+    final_text: str | None = None
+    completed_signal: bool = False
+    completed_emitted: bool = False
+    stopped: bool = False
+    stopped_emitted: bool = False
+
+    @property
+    def settled(self) -> bool:
+        return self.completed_emitted and (self.stopped or self.completed_signal)
+
+    def drain(
+        self, take_usage: Callable[[], RealtimeInputAudioTranscriptionUsage | None]
+    ) -> Iterator[OpenAIRealtimeEvents]:
+        has_content: Final = self.latest_partial is not None or self.final_text is not None
+        if (self.started or has_content) and not self.start_emitted:
+            self.start_emitted = True
+            yield _speech_event("input_audio_buffer.speech_started", self.item_id)
+        if self.latest_partial is not None and self.final_text is None:
+            delta: Final = _new_suffix(self.emitted_partial, self.latest_partial)
+            if delta:
+                self.emitted_partial = self.latest_partial
+                yield _delta_event(self.item_id, delta)
+        if self.stopped and not self.stopped_emitted:
+            self.stopped_emitted = True
+            yield _speech_event("input_audio_buffer.speech_stopped", self.item_id)
+        if self.final_text is not None and self.stopped_emitted and not self.completed_emitted:
+            self.completed_emitted = True
+            yield _completed_event(self.item_id, self.final_text, take_usage())
 
 
 class MuseEventTransformer:
     def __init__(self, *, completed_turn_limit: int = 128) -> None:
-        self._turns: OrderedDict[str, _TurnState] = OrderedDict()  # mutable-ok: ordered active-turn state
+        self._turns: dict[str, _TurnState] = {}  # mutable-ok: insertion-ordered live turn state machine
+        self._completed_turns: deque[str] = deque(maxlen=completed_turn_limit)  # mutable-ok: bounded tombstones
         self._active_turn_id: str | None = None
-        self._mode: Literal["PUSH_TO_TALK", "ENDPOINTING", "DIARIZATION"] = "ENDPOINTING"
-        self._completed_turn_ids: set[str] = set()  # mutable-ok: bounded completed-turn membership
-        self._completed_turn_order: deque[str] = deque(  # mutable-ok: bounded completion eviction order
-            maxlen=completed_turn_limit
-        )
-        self._completed_turn_limit: Final = completed_turn_limit
-        self._pending_item_ids: deque[str] = deque()  # mutable-ok: FIFO commit correlation state
-        self._last_committed_item_id: str | None = None
+        self._mode: MuseMode = "ENDPOINTING"
         self._last_audio_processed_ms: float = 0.0
-        self._unassigned_usage_seconds: float = 0.0
+        self._unbilled_seconds: float = 0.0
 
     def configure(self, config: MuseSessionConfig) -> None:
         self._mode = config.mode
 
-    def transform(self, payload: str) -> tuple[OpenAIEvent, ...]:
-        message: Final = _json_object(payload)
+    def transform(self, message: Mapping[str, JsonValue]) -> tuple[OpenAIRealtimeEvents, ...]:
         event_type: Final = message.get("type")
         if event_type == "error":
-            return (error_event("server_error", "provider_error", "Meta Muse realtime transcription failed"),)
+            return (error_event(_PROVIDER_ERROR_MESSAGE),)
         if event_type == "audioProgress":
             self._update_audio_progress(message)
             return ()
@@ -388,57 +467,38 @@ class MuseEventTransformer:
             self._speech_start(message)
         elif event_type == "transcript":
             self._transcript(message)
-        elif event_type == "speaker":
-            self._speaker(message)
         elif event_type == "speechEnd":
             self._speech_end(message)
         elif event_type == "speechComplete":
             self._speech_complete(message)
         else:
             return ()
-        return self._drain()
-
-    def commit_item(self) -> tuple[str | None, str]:
-        previous_item_id: Final = self._last_committed_item_id
-        provider_turn_id: Final = self._active_turn_id
-        active_turn: Final = self._turns.get(provider_turn_id) if provider_turn_id is not None else None
-        item_id: Final = (
-            active_turn.item_id or provider_turn_id
-            if active_turn is not None and provider_turn_id is not None
-            else f"item_{uuid.uuid4().hex}"
-        )
-        if active_turn is not None:
-            active_turn.item_id = item_id
-        else:
-            self._pending_item_ids.append(item_id)
-        self._last_committed_item_id = item_id
-        return previous_item_id, item_id
+        return tuple(self._drained_events())
 
     def take_unbilled_usage(self) -> RealtimeInputAudioTranscriptionUsage | None:
-        seconds: Final = self._unassigned_usage_seconds
+        seconds: Final = self._unbilled_seconds
         if seconds <= 0:
             return None
-        self._unassigned_usage_seconds = 0.0
-        return {"type": "duration", "seconds": seconds}  # mutable-ok: typed usage wire payload
+        self._unbilled_seconds = 0.0
+        usage: Final[RealtimeInputAudioTranscriptionDurationUsage] = {"type": "duration", "seconds": seconds}
+        return usage
 
-    def _turn(self, turn_id: str) -> _TurnState:
-        if turn_id in self._completed_turn_ids:
-            raise _CompletedTurn
-        turn: Final = self._turns.get(turn_id)
-        if turn is not None:
-            return turn
-        created: Final = _TurnState(item_id=self._pending_item_ids.popleft() if self._pending_item_ids else turn_id)
+    def _turn(self, turn_id: str) -> _TurnState | None:
+        if turn_id in self._completed_turns:
+            return None
+        existing: Final = self._turns.get(turn_id)
+        if existing is not None:
+            return existing
+        created: Final = _TurnState(item_id=turn_id)
         self._turns[turn_id] = created
         return created
 
     def _speech_start(self, message: Mapping[str, JsonValue]) -> None:
-        turn_id: Final = self._required_turn_id(message, "speechStart")
-        try:
-            turn: Final = self._turn(turn_id)
-        except _CompletedTurn:
+        turn: Final = self._turn(_required_turn_id(message, "speechStart"))
+        if turn is None:
             return
         turn.started = True
-        self._active_turn_id = turn_id
+        self._active_turn_id = turn.item_id
 
     def _transcript(self, message: Mapping[str, JsonValue]) -> None:
         transcript: Final = message.get("transcript")
@@ -446,56 +506,34 @@ class MuseEventTransformer:
             raise MuseProtocolError("transcript event has invalid transcript")
         if not transcript and message.get("turnId") is None and self._active_turn_id is None:
             return
-        turn_id: Final = self._transcript_turn_id(message)
-        try:
-            turn: Final = self._turn(turn_id)
-        except _CompletedTurn:
+        turn: Final = self._turn(self._transcript_turn_id(message))
+        if turn is None:
             return
-        final: Final = message.get("final") is True
-        if final:
-            turn.final_text = transcript
-            turn.completed_signal = True
-            if self._mode == "PUSH_TO_TALK":
-                turn.stopped = True
-                if self._active_turn_id == turn_id:
-                    self._active_turn_id = None
+        if message.get("final") is not True:
+            if turn.final_text is None:
+                turn.latest_partial = transcript
             return
-        if turn.final_text is None:
-            turn.latest_partial = transcript
-
-    def _speaker(self, message: Mapping[str, JsonValue]) -> None:
-        turn_id: Final = (
-            self._required_turn_id(message, "speaker") if message.get("turnId") is not None else self._active_turn_id
-        )
-        if turn_id is None:
-            raise MuseProtocolError("speaker event arrived outside an active turn")
-        label: Final = message.get("label")
-        if not isinstance(label, str) or not label.strip():
-            raise MuseProtocolError("speaker event has invalid label")
-        try:
-            turn: Final = self._turn(turn_id)
-        except _CompletedTurn:
-            return
-        turn.speaker = label.strip()
+        turn.final_text = transcript
+        turn.completed_signal = True
+        if self._mode == "PUSH_TO_TALK":
+            turn.stopped = True
+            if self._active_turn_id == turn.item_id:
+                self._active_turn_id = None
 
     def _speech_end(self, message: Mapping[str, JsonValue]) -> None:
-        turn_id: Final = self._required_turn_id(message, "speechEnd")
-        try:
-            turn: Final = self._turn(turn_id)
-        except _CompletedTurn:
+        turn: Final = self._turn(_required_turn_id(message, "speechEnd"))
+        if turn is None:
             return
         turn.stopped = True
-        if self._active_turn_id == turn_id:
+        if self._active_turn_id == turn.item_id:
             self._active_turn_id = None
 
     def _speech_complete(self, message: Mapping[str, JsonValue]) -> None:
-        turn_id: Final = self._required_turn_id(message, "speechComplete")
         transcript: Final = message.get("transcript")
         if not isinstance(transcript, str):
             raise MuseProtocolError("speechComplete event has invalid transcript")
-        try:
-            turn: Final = self._turn(turn_id)
-        except _CompletedTurn:
+        turn: Final = self._turn(_required_turn_id(message, "speechComplete"))
+        if turn is None:
             return
         turn.final_text = transcript
         turn.completed_signal = True
@@ -511,73 +549,21 @@ class MuseEventTransformer:
             raise MuseProtocolError("audioProgress event has invalid audioProcessedMs")
         if processed_ms <= self._last_audio_processed_ms:
             return
-        self._unassigned_usage_seconds += (float(processed_ms) - self._last_audio_processed_ms) / 1000
+        self._unbilled_seconds += (float(processed_ms) - self._last_audio_processed_ms) / 1000
         self._last_audio_processed_ms = float(processed_ms)
 
-    def _drain(self) -> tuple[OpenAIEvent, ...]:
-        events: list[OpenAIEvent] = []  # mutable-ok: ordered events are frozen to a tuple before return
+    def _drained_events(self) -> Iterator[OpenAIRealtimeEvents]:
         while self._turns:
-            turn_id: str = next(iter(self._turns))  # rebind-ok: selects the next ordered turn
-            turn: _TurnState = self._turns[turn_id]  # rebind-ok: state for the selected turn
-            has_content: bool = (  # rebind-ok: evaluated for the selected turn
-                turn.latest_partial is not None or turn.final_text is not None
-            )
-            item_id: str = turn.item_id or turn_id  # rebind-ok: selected for each ordered turn
-            if (turn.started or has_content) and not turn.start_emitted:
-                turn.start_emitted = True
-                events.append(self._speech_event("input_audio_buffer.speech_started", item_id))
-            if turn.latest_partial is not None and turn.final_text is None:
-                delta: str = self._new_suffix(  # rebind-ok: computed for the selected turn
-                    turn.emitted_partial, turn.latest_partial
-                )
-                if delta:
-                    turn.emitted_partial = turn.latest_partial
-                    events.append(
-                        {  # mutable-ok: OpenAI-compatible JSON event
-                            "type": "conversation.item.input_audio_transcription.delta",
-                            "event_id": f"event_{uuid.uuid4().hex}",
-                            "item_id": item_id,
-                            "content_index": 0,
-                            "delta": delta,
-                        }
-                    )
-            if turn.stopped and not turn.stopped_emitted:
-                turn.stopped_emitted = True
-                events.append(self._speech_event("input_audio_buffer.speech_stopped", item_id))
-            if turn.final_text is not None and turn.stopped_emitted and not turn.completed_emitted:
-                turn.completed_emitted = True
-                usage: RealtimeInputAudioTranscriptionUsage | None = (  # rebind-ok: usage assigned per turn
-                    self.take_unbilled_usage()
-                )
-                completed_event: dict[str, object] = {  # mutable-ok: incrementally builds OpenAI JSON event
-                    "type": "conversation.item.input_audio_transcription.completed",
-                    "event_id": f"event_{uuid.uuid4().hex}",
-                    "item_id": item_id,
-                    "content_index": 0,
-                    "transcript": turn.final_text,
-                }
-                if turn.speaker is not None:
-                    completed_event["speaker"] = turn.speaker
-                if usage is not None:
-                    completed_event["usage"] = usage
-                events.append(completed_event)
-            if not (turn.completed_emitted and (turn.stopped or turn.completed_signal)):
-                break
+            turn_id, turn = next(iter(self._turns.items()))
+            yield from turn.drain(self.take_unbilled_usage)
+            if not turn.settled:
+                return
             del self._turns[turn_id]
-            self._remember_completed(turn_id)
-        return tuple(events)
-
-    def _remember_completed(self, turn_id: str) -> None:
-        if turn_id in self._completed_turn_ids:
-            return
-        if len(self._completed_turn_order) >= self._completed_turn_limit:
-            self._completed_turn_ids.discard(self._completed_turn_order.popleft())
-        self._completed_turn_order.append(turn_id)
-        self._completed_turn_ids.add(turn_id)
+            self._completed_turns.append(turn_id)
 
     def _transcript_turn_id(self, message: Mapping[str, JsonValue]) -> str:
         if message.get("turnId") is not None:
-            return self._required_turn_id(message, "transcript")
+            return _required_turn_id(message, "transcript")
         if self._active_turn_id is not None:
             return self._active_turn_id
         if self._mode != "PUSH_TO_TALK":
@@ -586,34 +572,162 @@ class MuseEventTransformer:
         self._active_turn_id = turn_id
         return turn_id
 
-    @staticmethod
-    def _required_turn_id(message: Mapping[str, JsonValue], event: str) -> str:
-        value: Final = message.get("turnId")
-        if isinstance(value, bool) or not isinstance(value, (str, int)):
-            raise MuseProtocolError(f"{event} event has invalid turnId")
-        turn_id: Final = str(value).strip()
-        if not turn_id:
-            raise MuseProtocolError(f"{event} event has invalid turnId")
-        return turn_id
 
-    @staticmethod
-    def _speech_event(event_type: str, turn_id: str) -> OpenAIEvent:
-        return {  # mutable-ok: OpenAI-compatible JSON event
-            "type": event_type,
-            "event_id": f"event_{uuid.uuid4().hex}",
-            "item_id": turn_id,
+class MetaRealtimeConfig(BaseRealtimeConfig):
+    def __init__(
+        self,
+        *,
+        monotonic: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        self._monotonic: Final = monotonic
+        self._sleep: Final = sleep
+        self._transformer: Final = MuseEventTransformer()
+        self._access_token: str | None = None
+        self._config: MuseSessionConfig | None = None
+        self._pending_audio: bytes = b""
+        self._end_stream_sent: bool = False
+        self._pacing_origin: float | None = None
+        self._sent_duration: float = 0.0
+
+    def validate_environment(
+        self,
+        headers: dict[str, str],  # mutable-ok: BaseRealtimeConfig contract
+        model: str,
+        api_key: str | None = None,
+    ) -> dict[str, str]:  # mutable-ok: BaseRealtimeConfig contract
+        token: Final = api_key or get_secret_str("META_API_KEY")
+        if token is None:
+            raise ValueError("api_key is required for Meta API calls")
+        self._access_token = normalize_access_token(token)
+        return headers
+
+    def get_complete_url(self, api_base: str | None, model: str, api_key: str | None = None) -> str:
+        if _normalize_model(model) != MUSE_MODEL:
+            raise ValueError(f"Unsupported Meta realtime model: {model}")
+        return build_muse_realtime_url(api_base)
+
+    def is_setup_message(self, msg_obj: Mapping[str, object]) -> bool:
+        return "authorization" in msg_obj
+
+    def transform_session_created_event(
+        self,
+        model: str,
+        logging_session_id: str,
+        session_configuration_request: str | None = None,
+    ) -> MuseSessionCreatedEvent:
+        return session_created_event(_DEFAULT_SESSION_CONFIG, logging_session_id)
+
+    def transform_realtime_request(
+        self,
+        message: str,
+        model: str,
+        session_configuration_request: str | None = None,
+    ) -> tuple[str | bytes, ...]:
+        request: Final = _json_object(message)
+        event_type: Final = request.get("type")
+        if event_type in ("session.update", "transcription_session.update"):
+            return self._configure(message, model)
+        if event_type == "input_audio_buffer.append":
+            return self._append_audio(request)
+        if event_type == "input_audio_buffer.commit":
+            return self._flush_audio(end_stream=self._require_config().mode == "PUSH_TO_TALK")
+        if event_type == "input_audio_buffer.end":
+            return self._flush_audio(end_stream=True)
+        if event_type == "input_audio_buffer.clear":
+            self._pending_audio = b""
+            return ()
+        verbose_logger.debug("Meta realtime: dropping unsupported client event %s", event_type)
+        return ()
+
+    async def pace_backend_send(self, message: bytes) -> None:
+        now: Final = self._monotonic()
+        origin: Final = self._pacing_origin
+        effective_origin: Final = (
+            now - self._sent_duration if origin is None or now > origin + self._sent_duration else origin
+        )
+        delay: Final = effective_origin + self._sent_duration - now
+        if delay > 0:
+            await self._sleep(delay)
+        self._pacing_origin = effective_origin
+        self._sent_duration += len(message) / self._require_config().bytes_per_second
+
+    def unbilled_usage_on_session_close(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
+        return self._transformer.take_unbilled_usage()
+
+    def transform_realtime_response(
+        self,
+        message: str | bytes,
+        model: str,
+        logging_obj: LiteLLMLoggingObj,
+        realtime_response_transform_input: RealtimeResponseTransformInput,
+    ) -> RealtimeResponseTypedDict:
+        payload: Final = message.decode("utf-8") if isinstance(message, bytes) else message
+        result: Final[RealtimeResponseTypedDict] = {
+            "response": list(self._backend_events(payload)),  # mutable-ok: RealtimeResponseTypedDict.response is a list
+            "current_output_item_id": realtime_response_transform_input.get("current_output_item_id"),
+            "current_response_id": realtime_response_transform_input.get("current_response_id"),
+            "current_delta_chunks": realtime_response_transform_input.get("current_delta_chunks"),
+            "current_conversation_id": realtime_response_transform_input.get("current_conversation_id"),
+            "current_item_chunks": realtime_response_transform_input.get("current_item_chunks"),
+            "current_delta_type": realtime_response_transform_input.get("current_delta_type"),
+            "session_configuration_request": realtime_response_transform_input.get("session_configuration_request"),
         }
+        return result
 
-    @staticmethod
-    def _new_suffix(previous: str, current: str) -> str:
-        if current.startswith(previous):
-            return current[len(previous) :]
-        return ""
+    def _backend_events(self, payload: str) -> tuple[OpenAIRealtimeEvents, ...]:
+        frame: Final = _json_object(payload)
+        session_id: Final = frame.get("sessionId")
+        if session_id is None:
+            return self._transformer.transform(frame)
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise MuseProtocolError("provider returned an invalid handshake response")
+        created: Final = session_created_event(self._require_config(), session_id.strip())
+        event: Final = cast(OpenAIRealtimeEvents, created)  # cast-ok: ReadOnly Muse session vs writable OpenAI fields
+        return (event,)
 
+    def _configure(self, message: str, model: str) -> tuple[str, ...]:
+        if self._config is not None:
+            verbose_logger.debug("Meta realtime: ignoring session.update after the Muse handshake was sent")
+            return ()
+        access_token: Final = self._access_token
+        if access_token is None:
+            raise MuseProtocolError("Meta API key was not validated before the session was configured")
+        config: Final = parse_session_update(message, model)
+        self._config = config
+        self._transformer.configure(config)
+        return (json.dumps(config.handshake(access_token), separators=(",", ":")),)
 
-class _CompletedTurn(Exception):
-    pass
+    def _append_audio(self, request: Mapping[str, JsonValue]) -> tuple[bytes, ...]:
+        config: Final = self._require_config()
+        encoded: Final = request.get("audio")
+        if not isinstance(encoded, str):
+            raise MuseProtocolError("Audio must be a base64 string")
+        if len(encoded) > config.max_encoded_append_bytes:
+            raise MuseProtocolError("Audio append exceeds the four-second backlog limit")
+        try:
+            audio: Final = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError):
+            raise MuseProtocolError("Audio must be valid base64") from None
+        if len(audio) % 2:
+            raise MuseProtocolError("PCM16 audio must contain complete samples")
+        buffered: Final = self._pending_audio + audio
+        packet_end: Final = len(buffered) - len(buffered) % config.packet_bytes
+        self._pending_audio = buffered[packet_end:]
+        return tuple(
+            buffered[start : start + config.packet_bytes] for start in range(0, packet_end, config.packet_bytes)
+        )
 
+    def _flush_audio(self, *, end_stream: bool) -> tuple[str | bytes, ...]:
+        remainder: Final = self._pending_audio
+        self._pending_audio = b""
+        frames: Final[tuple[bytes, ...]] = (remainder,) if remainder else ()
+        if not end_stream or self._end_stream_sent:
+            return frames
+        self._end_stream_sent = True
+        return (*frames, _END_STREAM)
 
-def encode_event(event: Mapping[str, object]) -> str:
-    return json.dumps(event, separators=(",", ":"))
+    def _require_config(self) -> MuseSessionConfig:
+        if self._config is None:
+            raise MuseProtocolError("session.update must configure the Muse session before audio is sent")
+        return self._config

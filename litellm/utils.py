@@ -9285,6 +9285,10 @@ class ProviderConfigManager:
             from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 
             return GeminiRealtimeConfig()
+        if LlmProviders.META == provider:
+            from litellm.llms.meta.realtime.transformation import MetaRealtimeConfig
+
+            return MetaRealtimeConfig()
         return None
 
     @staticmethod

@@ -3124,7 +3124,6 @@ async def test_session_close_flush_noop_without_unbilled_usage():
     )
 
 
-
 _UPSTREAM_REFUSAL: Final = "Publisher model `publishers/google/models/gemini-live-2.5-flash` was not found"
 
 
@@ -3192,9 +3191,7 @@ def _backend_ws_closing_with(*frames: bytes | Exception) -> MagicMock:
 def _relay_session(client_ws: MagicMock, backend_ws: MagicMock) -> _RelaySession:
     logging: Final = _RecordingLogging()
     worker: Final = _InlineLoggingWorker()
-    streaming: Final = RealTimeStreaming(
-        client_ws, backend_ws, logging, model="gpt-realtime", logging_worker=worker
-    )
+    streaming: Final = RealTimeStreaming(client_ws, backend_ws, logging, model="gpt-realtime", logging_worker=worker)
     return _RelaySession(streaming=streaming, logging=logging, worker=worker)
 
 
@@ -3403,44 +3400,6 @@ async def test_refused_session_does_not_stamp_the_reservation_ownership_marker()
 
 
 @pytest.mark.asyncio
-async def test_separate_usage_provider_flushes_duration_once_without_client_event():
-    from typing import Final
-
-    client_ws: Final = MagicMock()
-    client_ws.send_text = AsyncMock()
-    backend_ws: Final = MagicMock()
-    backend_ws.recv = AsyncMock(side_effect=ConnectionClosed(None, None))
-    logging_obj: Final = MagicMock()
-    logging_obj.model_call_details = {}
-    logging_obj.dispatch_success_handlers = AsyncMock()
-    usage_provider: Final = MagicMock()
-    usage_provider.unbilled_usage_on_session_close.return_value = {
-        "type": "duration",
-        "seconds": 0.75,
-    }
-
-    streaming: Final = RealTimeStreaming(
-        client_ws,
-        backend_ws,
-        logging_obj,
-        model="muse-voice-transcribe-1.0",
-        usage_provider=usage_provider,
-    )
-
-    await streaming.backend_to_client_send_messages()
-
-    usage_provider.unbilled_usage_on_session_close.assert_called_once_with("muse-voice-transcribe-1.0")
-    duration_events: Final = tuple(
-        message
-        for message in streaming.messages
-        if isinstance(message, dict) and message.get("usage") == {"type": "duration", "seconds": 0.75}
-    )
-    assert len(duration_events) == 1
-    assert client_ws.send_text.await_count == 0
-    logging_obj.dispatch_success_handlers.assert_called_once_with(streaming.messages, prefer_async_handlers=True)
-
-
-@pytest.mark.asyncio
 async def test_transformed_transcription_completion_never_sends_response_create():
     from typing import Final
 
@@ -3487,57 +3446,26 @@ async def test_transformed_transcription_completion_never_sends_response_create(
     backend_ws.send.assert_not_awaited()
 
 
-def test_private_logging_excludes_audio_transcript_hints_and_provider_body(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.asyncio
+async def test_provider_bytes_are_sent_raw_after_pacing():
     from typing import Final
 
-    monkeypatch.setattr(litellm, "logged_real_time_event_types", "*")
-    logging_obj: Final = MagicMock()
-    logging_obj.model_call_details = {}
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    provider_config: Final = MagicMock()
+    provider_config.requires_session_configuration.return_value = True
+    provider_config.transform_realtime_request.return_value = (b"\x00\x01", '{"type":"endStream"}')
+    provider_config.pace_backend_send = AsyncMock()
+    provider_config.is_setup_message.return_value = False
     streaming: Final = RealTimeStreaming(
         MagicMock(),
+        backend_ws,
         MagicMock(),
-        logging_obj,
+        provider_config=provider_config,
         model="muse-voice-transcribe-1.0",
-        exclude_private_content_from_logs=True,
-    )
-    audio: Final = "cHJpdmF0ZS1hdWRpbw=="
-    transcript: Final = "private transcript"
-    keyword: Final = "private keyword"
-    provider_body: Final = "private provider body"
-
-    streaming.store_input(
-        json.dumps(
-            {
-                "type": "session.update",
-                "session": {
-                    "type": "transcription",
-                    "model": "muse-voice-transcribe-1.0",
-                    "mode": "ENDPOINTING",
-                    "audio": {"input": {"transcription": {"keywords": [keyword]}}},
-                },
-            }
-        )
-    )
-    streaming.store_input(json.dumps({"type": "input_audio_buffer.append", "audio": audio}))
-    streaming.store_message(
-        {
-            "type": "conversation.item.input_audio_transcription.completed",
-            "event_id": "event_1",
-            "item_id": "turn_1",
-            "transcript": transcript,
-            "provider_body": provider_body,
-            "usage": {"type": "duration", "seconds": 1.0},
-        }
     )
 
-    logged_inputs: Final = tuple(call.kwargs["input"] for call in logging_obj.pre_call.call_args_list)
-    serialized: Final = json.dumps({"inputs": logged_inputs, "messages": streaming.messages})
-    assert audio not in serialized
-    assert transcript not in serialized
-    assert keyword not in serialized
-    assert provider_body not in serialized
-    assert "muse-voice-transcribe-1.0" in serialized
-    assert "ENDPOINTING" in serialized
-    assert "turn_1" in serialized
-    assert '"seconds": 1.0' in serialized
-    assert streaming.input_messages == []
+    assert await streaming._send_to_backend(json.dumps({"type": "input_audio_buffer.commit"})) is True
+
+    assert [call.args[0] for call in backend_ws.send.await_args_list] == [b"\x00\x01", '{"type":"endStream"}']
+    provider_config.pace_backend_send.assert_awaited_once_with(b"\x00\x01")

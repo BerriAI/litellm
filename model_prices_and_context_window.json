@@ -34718,6 +34718,7 @@
         "supports_xhigh_reasoning_effort": true
     },
     "meta/muse-voice-transcribe-1.0": {
+        "input_cost_per_second": 0.00005,
         "litellm_provider": "meta",
         "mode": "audio_transcription",
         "source": "https://dev.meta.ai/docs/speech-to-text",
