@@ -52,8 +52,6 @@ def create_bad_base_deployment(proxy: ProxyClient, name: str) -> str:
 
 
 def create_never_benched_refusing_deployment(proxy: ProxyClient, name: str) -> str:
-    """cooldown_time 0 keeps the router retrying this deployment instead of benching it
-    after allowed_fails, which would skip the retry loop the memory test measures."""
     return proxy.create_model(
         name,
         LiteLLMParamsBody(model=REAL_MODEL, api_key=REAL_KEY, api_base="http://127.0.0.1:9/v1", cooldown_time=0),

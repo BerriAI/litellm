@@ -219,44 +219,45 @@ def _stored_request_kb(proxy: ProxyClient, call: FailedCall) -> float:
     return len(json.dumps(snapshot).encode()) / 1024
 
 
-@pytest.mark.covers("reliability.perf.memory.under_slo")
-def test_failing_requests_do_not_grow_rss_or_stored_request(
-    client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
-) -> None:
-    marker: Final = unique_marker()
-    primary: Final = f"reliability-memory-{marker}"
-    fallback: Final = f"reliability-memory-fb-{marker}"
-    _register_refusing_group(client.proxy, resources, primary)
-    _register_refusing_group(client.proxy, resources, fallback)
-    override: Final = RouterSettingsOverride(
-        num_retries=MEMORY_RETRIES_PER_REQUEST, fallbacks=[{primary: [fallback]}]
-    )
+class TestReliabilityMemory:
+    @pytest.mark.covers("reliability.perf.memory.under_slo")
+    def test_failing_requests_do_not_grow_rss_or_stored_request(
+        self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        marker: Final = unique_marker()
+        primary: Final = f"reliability-memory-{marker}"
+        fallback: Final = f"reliability-memory-fb-{marker}"
+        _register_refusing_group(client.proxy, resources, primary)
+        _register_refusing_group(client.proxy, resources, fallback)
+        override: Final = RouterSettingsOverride(
+            num_retries=MEMORY_RETRIES_PER_REQUEST, fallbacks=[{primary: [fallback]}]
+        )
 
-    probe: Final = _fail_once(client.proxy, scoped_key, primary, override)
-    _assert_every_call_failed_through_fallback((probe,), fallback)
-    stored_kb: Final = _stored_request_kb(client.proxy, probe)
-    assert stored_kb <= MEMORY_STORED_REQUEST_BUDGET_KB, (
-        f"the spend log of one failing request stored a {stored_kb:.0f} KB request body, past the "
-        f"{MEMORY_STORED_REQUEST_BUDGET_KB:.0f} KB budget for a {len(TRANSCRIPT)}-message transcript with "
-        f"{MEMORY_RETRIES_PER_REQUEST} retries and a fallback; the retry breadcrumbs are copying the whole "
-        f"request into the stored snapshot the way the v1.100.0 ones did"
-    )
+        probe: Final = _fail_once(client.proxy, scoped_key, primary, override)
+        _assert_every_call_failed_through_fallback((probe,), fallback)
+        stored_kb: Final = _stored_request_kb(client.proxy, probe)
+        assert stored_kb <= MEMORY_STORED_REQUEST_BUDGET_KB, (
+            f"the spend log of one failing request stored a {stored_kb:.0f} KB request body, past the "
+            f"{MEMORY_STORED_REQUEST_BUDGET_KB:.0f} KB budget for a {len(TRANSCRIPT)}-message transcript with "
+            f"{MEMORY_RETRIES_PER_REQUEST} retries and a fallback; the retry breadcrumbs are copying the whole "
+            f"request into the stored snapshot the way the v1.100.0 ones did"
+        )
 
-    warmup: Final = _fail_many(client.proxy, scoped_key, primary, override)
-    _assert_every_call_failed_through_fallback(warmup, fallback)
-    warm: Final = _settled_rss_per_worker(client.proxy)
+        warmup: Final = _fail_many(client.proxy, scoped_key, primary, override)
+        _assert_every_call_failed_through_fallback(warmup, fallback)
+        warm: Final = _settled_rss_per_worker(client.proxy)
 
-    measured: Final = _fail_many(client.proxy, scoped_key, primary, override)
-    _assert_every_call_failed_through_fallback(measured, fallback)
-    after: Final = _settled_rss_per_worker(client.proxy)
+        measured: Final = _fail_many(client.proxy, scoped_key, primary, override)
+        _assert_every_call_failed_through_fallback(measured, fallback)
+        after: Final = _settled_rss_per_worker(client.proxy)
 
-    heaviest: Final = _heaviest_worker_growth(warm, after)
-    assert heaviest.growth_mb <= MEMORY_RSS_BUDGET_MB, (
-        f"proxy RSS grew {heaviest.growth_mb:.1f} MB over a second batch of {MEMORY_REQUESTS_PER_PHASE} failing "
-        f"requests ({MEMORY_RETRIES_PER_REQUEST} retries each plus a fallback) after an identical warmup batch, "
-        f"past the {MEMORY_RSS_BUDGET_MB:.0f} MB budget: worker pid {heaviest.warm.worker_pid} on "
-        f"{heaviest.warm.hostname or 'an unnamed host'} behind {heaviest.warm.replica} settled at "
-        f"{heaviest.warm.ram_usage_mb:.1f} MB warm and "
-        f"{heaviest.after.ram_usage_mb:.1f} MB after; failing requests are leaking memory the way the "
-        f"v1.100.0 retry breadcrumbs did"
-    )
+        heaviest: Final = _heaviest_worker_growth(warm, after)
+        assert heaviest.growth_mb <= MEMORY_RSS_BUDGET_MB, (
+            f"proxy RSS grew {heaviest.growth_mb:.1f} MB over a second batch of {MEMORY_REQUESTS_PER_PHASE} failing "
+            f"requests ({MEMORY_RETRIES_PER_REQUEST} retries each plus a fallback) after an identical warmup batch, "
+            f"past the {MEMORY_RSS_BUDGET_MB:.0f} MB budget: worker pid {heaviest.warm.worker_pid} on "
+            f"{heaviest.warm.hostname or 'an unnamed host'} behind {heaviest.warm.replica} settled at "
+            f"{heaviest.warm.ram_usage_mb:.1f} MB warm and "
+            f"{heaviest.after.ram_usage_mb:.1f} MB after; failing requests are leaking memory the way the "
+            f"v1.100.0 retry breadcrumbs did"
+        )

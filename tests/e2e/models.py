@@ -1273,19 +1273,12 @@ class TagListResponse(RootModel[list[TagListEntry]]):
 
 
 class ProcessMemory(BaseModel):
-    """The `memory` block of GET /debug/memory/summary: the serving worker's resident
-    set in MB, or `error` when the proxy has no psutil to read it with."""
-
     ram_usage_mb: float | None = None
     system_memory_percent: float | None = None
     error: str | None = None
 
 
 class MemorySummaryResponse(BaseModel):
-    """GET /debug/memory/summary (master key). One worker's resident memory, keyed by
-    its hostname (the pod name on Kubernetes) and pid so readings behind a load
-    balancer can be told apart per worker; older proxies omit the hostname."""
-
     worker_pid: int
     hostname: str | None = None
     status: str
