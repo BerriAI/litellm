@@ -122,11 +122,11 @@ describe("CacheLeakageCard", () => {
     expect(firstDataRow()).toHaveTextContent("alpha");
   });
 
-  it("switches to the model view and lists only Anthropic models", () => {
+  it("switches to the model view and lists models from every provider", () => {
     renderWith([
       dayWithModels("2026-07-12", {
         "claude-sonnet-5": { prompt_tokens: 5000, cache_read_input_tokens: 0 },
-        "gpt-4o": { prompt_tokens: 8000, cache_read_input_tokens: 0 },
+        "vertex_ai/gemini-2.5-pro": { prompt_tokens: 8000, cache_read_input_tokens: 2000 },
       }),
     ]);
 
@@ -134,7 +134,7 @@ describe("CacheLeakageCard", () => {
 
     expect(screen.getByText("Cache leakage by model")).toBeInTheDocument();
     expect(screen.getByText("claude-sonnet-5")).toBeInTheDocument();
-    expect(screen.queryByText("gpt-4o")).not.toBeInTheDocument();
+    expect(screen.getByText("vertex_ai/gemini-2.5-pro")).toBeInTheDocument();
   });
 
   it("shows an empty state when no key used tokens in the range", () => {
