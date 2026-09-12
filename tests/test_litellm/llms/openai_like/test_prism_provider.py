@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 
 import litellm
@@ -58,3 +61,36 @@ def test_prism_model_cost_and_capabilities():
     assert model_info["supports_native_streaming"] is True
     assert model_info["supports_reasoning"] is True
     assert model_info["supports_response_schema"] is True
+
+
+def test_prism_is_available_in_add_model_form():
+    fields_path = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
+    providers = json.loads(fields_path.read_text())
+    prism = next(provider for provider in providers if provider["litellm_provider"] == "prism")
+
+    assert prism["provider"] == "PRISM"
+    assert prism["provider_display_name"] == "Prism"
+    assert prism["default_model_placeholder"] == "prism/deepseek-v4-flash"
+    assert {field["key"]: field["required"] for field in prism["credential_fields"]} == {
+        "api_base": False,
+        "api_key": True,
+    }
+
+
+def test_prism_supported_endpoints():
+    matrix_path = Path(litellm.__file__).parent / "provider_endpoints_support_backup.json"
+    providers = json.loads(matrix_path.read_text())["providers"]
+
+    assert providers["prism"]["endpoints"] == {
+        "chat_completions": True,
+        "messages": False,
+        "responses": False,
+        "embeddings": False,
+        "image_generations": False,
+        "audio_transcriptions": False,
+        "audio_speech": False,
+        "moderations": False,
+        "batches": False,
+        "rerank": False,
+        "a2a": False,
+    }
