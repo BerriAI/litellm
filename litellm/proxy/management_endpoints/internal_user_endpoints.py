@@ -1254,8 +1254,8 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
     fields_set: Final = data.fields_set() if hasattr(data, "fields_set") else set()
 
     for k, v in data_json.items():
-        if k == "max_budget":
-            if "max_budget" in fields_set:
+        if k in ("max_budget", "budget_duration"):
+            if k in fields_set:
                 non_default_values[k] = v
         elif k == "model_max_budget":
             if k in fields_set:
@@ -1283,8 +1283,10 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
         from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
         validate_budget_duration(non_default_values["budget_duration"])
-        non_default_values["budget_reset_at"] = get_budget_reset_time(
-            budget_duration=non_default_values["budget_duration"]
+        non_default_values["budget_reset_at"] = (
+            get_budget_reset_time(budget_duration=non_default_values["budget_duration"])
+            if non_default_values["budget_duration"] is not None
+            else None
         )
 
     if "max_budget" not in non_default_values:
