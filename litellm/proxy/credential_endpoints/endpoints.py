@@ -17,6 +17,7 @@ from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
+from litellm.repositories.base_repository import is_unique_violation
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.types.utils import CreateCredentialItem, CredentialItem
 
@@ -38,6 +39,15 @@ class CredentialHelperUtils:
             credential_values=encrypted_credential_values,
             credential_info=credential.credential_info or {},
         )
+
+
+def _credential_exists_detail(credential_name: str) -> dict[str, str]:
+    return {
+        "error": (
+            f"Credential '{credential_name}' already exists. "
+            f"Update it with PATCH /credentials/{credential_name}, or delete it first."
+        )
+    }
 
 
 @router.post(
@@ -64,6 +74,9 @@ async def create_credential(
                 status_code=500,
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
+        credentials_repository: Final = CredentialsRepository(prisma_client)
+        if await credentials_repository.find_by_name(credential.credential_name) is not None:
+            raise HTTPException(status_code=409, detail=_credential_exists_detail(credential.credential_name))
         if credential.model_id:
             if llm_router is None:
                 raise HTTPException(
@@ -94,13 +107,18 @@ async def create_credential(
         credentials_dict_jsonified: Final = cast(  # cast-ok: deep-copies a model_dump, so keys are str
             "dict[str, object]", jsonify_object(credentials_dict)
         )
-        await CredentialsRepository(prisma_client).create(
-            data={
-                **credentials_dict_jsonified,
-                "created_by": user_api_key_dict.user_id,
-                "updated_by": user_api_key_dict.user_id,
-            }
-        )
+        try:
+            await credentials_repository.create(
+                data={
+                    **credentials_dict_jsonified,
+                    "created_by": user_api_key_dict.user_id,
+                    "updated_by": user_api_key_dict.user_id,
+                }
+            )
+        except Exception as e:
+            if not is_unique_violation(e):
+                raise
+            raise HTTPException(status_code=409, detail=_credential_exists_detail(credential.credential_name))
 
         ## ADD TO LITELLM ##
         CredentialAccessor.upsert_credentials([processed_credential])

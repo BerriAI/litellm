@@ -195,3 +195,81 @@ def test_get_credentials_answers_an_error_status_when_the_listing_fails(credenti
 
     assert response.status_code == 500, f"failed listing answered {response.status_code}: {response.text}"
     assert response.json().get("success") is not True
+
+
+def _create_credential(body: dict):
+    return _call_as_admin("POST", "/credentials", body)
+
+
+def test_create_credential_answers_409_when_the_name_is_already_taken(credential_store):
+    """Regression: create used to let the insert hit the unique index and surface Prisma's
+    ``Unique constraint failed on the fields: (credential_name)`` as a 500, so every caller
+    had to string-match that message to tell a name collision from a real server fault. The
+    Terraform provider did exactly that. A taken name is the caller's mistake, so it answers
+    409 and names the route that updates the existing credential."""
+    stored = CredentialItem(
+        credential_name="aws_bedrock",
+        credential_values={"aws_access_key_id": "old"},
+        credential_info={"custom_llm_provider": "bedrock"},
+    )
+    create = AsyncMock()
+    credential_store(find_by_name=AsyncMock(return_value=stored), create=create)
+
+    response = _create_credential(
+        {"credential_name": "aws_bedrock", "credential_values": {"aws_access_key_id": "new"}, "credential_info": {}},
+    )
+
+    assert response.status_code == 409, f"name collision answered {response.status_code}: {response.text}"
+    detail = response.json()["error"]["message"]
+    assert "aws_bedrock" in str(detail)
+    assert "PATCH /credentials/aws_bedrock" in str(detail)
+    assert "Unique constraint" not in response.text, f"the Prisma internals must not leak: {response.text}"
+    create.assert_not_awaited(), "the guard must reject before writing"
+
+
+def test_create_credential_answers_409_when_a_concurrent_create_wins_the_race(credential_store):
+    """The existence check above is advisory: two creates of the same name can both pass it,
+    and the loser's insert is what the unique index rejects. That loser must answer the same
+    409 as the guard rather than falling through to a 500."""
+
+    class _UniqueViolation(Exception):
+        code = "P2002"
+
+    credential_store(
+        find_by_name=AsyncMock(return_value=None),
+        create=AsyncMock(side_effect=_UniqueViolation("Unique constraint failed on the fields: (`credential_name`)")),
+    )
+
+    response = _create_credential(
+        {"credential_name": "aws_bedrock", "credential_values": {"aws_access_key_id": "new"}, "credential_info": {}},
+    )
+
+    assert response.status_code == 409, f"the losing racer answered {response.status_code}: {response.text}"
+    assert "Unique constraint" not in response.text, f"the Prisma internals must not leak: {response.text}"
+
+
+def test_create_credential_still_answers_500_when_the_write_fails_for_another_reason(credential_store):
+    """Only a unique-index collision becomes a 409; a genuine database fault must stay a 500
+    so it is not mistaken for a caller error and quietly retried as an update."""
+    credential_store(
+        find_by_name=AsyncMock(return_value=None),
+        create=AsyncMock(side_effect=Exception("connection reset by peer")),
+    )
+
+    response = _create_credential(
+        {"credential_name": "aws_bedrock", "credential_values": {"aws_access_key_id": "new"}, "credential_info": {}},
+    )
+
+    assert response.status_code == 500, f"database fault answered {response.status_code}: {response.text}"
+
+
+def test_create_credential_still_answers_200_for_a_name_that_is_free(credential_store):
+    """The guard must not cost the happy path: a free name still creates."""
+    credential_store(find_by_name=AsyncMock(return_value=None), create=AsyncMock(return_value=None))
+
+    response = _create_credential(
+        {"credential_name": "brand_new", "credential_values": {"aws_access_key_id": "new"}, "credential_info": {}},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["success"] is True
