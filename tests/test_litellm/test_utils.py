@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import contextvars
 import json
 import logging
 import os
@@ -7,6 +8,7 @@ import queue
 import threading
 from datetime import datetime, timedelta, timezone
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -58,6 +60,36 @@ from litellm.utils import (
 )
 
 # Adds the parent directory to the system path
+
+
+def test_non_ocr_wrapper_preserves_logging_executor_and_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    marker: Final = contextvars.ContextVar("non-ocr-logging-context", default="missing")
+    token: Final = marker.set("caller-context")
+    caller_thread: Final = threading.get_ident()
+    response: Final = object()
+    logger: Final = MagicMock()
+    observed: Final = queue.Queue[tuple[object, str, int]]()
+
+    def record_success(result: object, start_time: datetime, end_time: datetime) -> None:
+        observed.put((result, marker.get(), threading.get_ident()))
+
+    def embedding(**kwargs: object) -> object:
+        return response
+
+    logger.success_handler.side_effect = record_success
+    monkeypatch.setattr("litellm.utils.function_setup", MagicMock(return_value=(logger, {})))
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            monkeypatch.setattr("litellm.utils.executor", executor)
+            result: Final = client(embedding)()
+        logged_response, context, worker_thread = observed.get_nowait()
+        assert result is response
+        assert logged_response is response
+        assert context == "caller-context"
+        assert worker_thread != caller_thread
+        assert observed.empty()
+    finally:
+        marker.reset(token)
 
 
 def test_cloudflare_model_info_includes_rpm(local_model_cost_map: None) -> None:

@@ -16,7 +16,7 @@ Streaming: CSW.__anext__ stores args on logging_obj at stream end.
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -296,6 +296,38 @@ async def test_no_flag_fires_create_task_normally():
 # ---------------------------------------------------------------------------
 # 4. Non-streaming: deferred success log is suppressed when guardrail raises
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("call_type", ["ocr", "aocr", "completion", "acompletion", "embedding", "responses"])
+@pytest.mark.parametrize("exception_raised", [False, True])
+def test_native_pending_logging_is_released_only_for_ocr(call_type: str, exception_raised: bool) -> None:
+    pending: Final = MagicMock()
+    enqueue: Final = MagicMock()
+    logger: Final = MagicMock(
+        call_type=call_type,
+        _native_pending_logging=pending,
+        _enqueue_deferred_logging=enqueue,
+    )
+
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
+        logging_obj=logger,
+        exception_raised=exception_raised,
+    )
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
+        logging_obj=logger,
+        exception_raised=exception_raised,
+    )
+
+    if call_type in ("ocr", "aocr"):
+        pending.release.assert_called_once_with(not exception_raised)
+        assert logger._native_pending_logging is None
+    else:
+        pending.release.assert_not_called()
+        assert logger._native_pending_logging is pending
+    if exception_raised:
+        enqueue.assert_not_called()
+    else:
+        enqueue.assert_called_once_with()
 
 
 def test_flush_deferred_async_logging_fires_on_success():

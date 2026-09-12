@@ -1,8 +1,7 @@
-import json
-
 import pytest
 
 import litellm
+from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 
 
 def _reducto_parse_response() -> dict:
@@ -69,11 +68,11 @@ def disable_aiohttp_transport():
 
 
 @pytest.mark.asyncio
-async def test_parse_v3_file_upload_and_response_mapping(disable_aiohttp_transport, respx_mock):
-    upload_route = respx_mock.post("https://platform.reducto.ai/upload").respond(
-        json={"file_id": "reducto://uploaded.pdf"}
-    )
-    parse_route = respx_mock.post("https://platform.reducto.ai/parse").respond(json=_reducto_parse_response())
+async def test_parse_v3_file_upload_and_response_mapping(disable_aiohttp_transport, reducto_server: RecordingServer):
+    reducto_server.expected_requests = 2
+    provider_response = _reducto_parse_response()
+    reducto_server.enqueue(ResponseSpec(body={"file_id": "reducto://uploaded.pdf"}))
+    reducto_server.enqueue(ResponseSpec(body=provider_response))
 
     response = await litellm.aocr(
         model="reducto/parse-v3",
@@ -83,25 +82,24 @@ async def test_parse_v3_file_upload_and_response_mapping(disable_aiohttp_transpo
             "mime_type": "application/pdf",
         },
         api_key="test-key",
-        api_base="https://platform.reducto.ai",
+        api_base=reducto_server.base_url,
         formatting={"table_output_format": "html"},
         retrieval={"chunk_mode": "section"},
         settings={"ocr_system": "standard"},
+        req_format="native",
     )
 
-    assert upload_route.called
-    assert parse_route.called
-    assert len(upload_route.calls) == 1
-    assert len(parse_route.calls) == 1
-
-    upload_request = upload_route.calls[0].request
+    upload_request, parse_request = reducto_server.requests
+    assert upload_request.path == "/upload"
+    assert parse_request.path == "/parse"
     assert upload_request.headers["authorization"] == "Bearer test-key"
     assert "application/json" not in upload_request.headers["content-type"]
-    upload_body = upload_request.read()
+    upload_body = upload_request.raw_body
     assert b'filename="document"' in upload_body
     assert b"application/pdf" in upload_body
 
-    parse_request_body = json.loads(parse_route.calls[0].request.read())
+    assert isinstance(parse_request.body, dict)
+    parse_request_body = parse_request.body
     assert parse_request_body["input"] == "reducto://uploaded.pdf"
     assert parse_request_body["formatting"] == {"table_output_format": "html"}
     assert parse_request_body["retrieval"] == {"chunk_mode": "section"}
@@ -116,15 +114,12 @@ async def test_parse_v3_file_upload_and_response_mapping(disable_aiohttp_transpo
     assert getattr(response.pages[0], "blocks")[0]["bbox"]["page"] == 1
     assert response.pages[1].markdown == "Page 2 block A"
     assert response.pages[2].markdown == "Page 3 block A"
-    assert response._hidden_params["reducto_raw"]["usage"]["credits"] == 3
+    assert response.get_provider_native_response() == provider_response
 
 
 @pytest.mark.asyncio
-async def test_parse_v3_reducto_id_passthrough_skips_upload(disable_aiohttp_transport, respx_mock):
-    upload_route = respx_mock.post("https://platform.reducto.ai/upload").respond(
-        json={"file_id": "reducto://should-not-upload.pdf"}
-    )
-    parse_route = respx_mock.post("https://platform.reducto.ai/parse").respond(json=_reducto_parse_response())
+async def test_parse_v3_reducto_id_passthrough_skips_upload(disable_aiohttp_transport, reducto_server: RecordingServer):
+    reducto_server.enqueue(ResponseSpec(body=_reducto_parse_response()))
 
     response = await litellm.aocr(
         model="reducto/parse-v3",
@@ -133,13 +128,15 @@ async def test_parse_v3_reducto_id_passthrough_skips_upload(disable_aiohttp_tran
             "document_url": "reducto://already-uploaded.pdf",
         },
         api_key="test-key",
-        api_base="https://platform.reducto.ai",
+        api_base=reducto_server.base_url,
         retrieval={"chunk_mode": "section"},
     )
 
-    assert not upload_route.called
-    assert parse_route.called
-    parse_request_body = json.loads(parse_route.calls[0].request.read())
+    assert len(reducto_server.requests) == 1
+    parse_request = reducto_server.requests[0]
+    assert parse_request.path == "/parse"
+    assert isinstance(parse_request.body, dict)
+    parse_request_body = parse_request.body
     assert parse_request_body["input"] == "reducto://already-uploaded.pdf"
     assert parse_request_body["retrieval"]["chunk_mode"] == "section"
     assert response.pages[0].markdown.startswith("Page 1 block A")
@@ -147,11 +144,9 @@ async def test_parse_v3_reducto_id_passthrough_skips_upload(disable_aiohttp_tran
 
 @pytest.mark.asyncio
 async def test_unknown_model_uses_current_protocol_without_local_rejection(
-    disable_aiohttp_transport, respx_mock
+    disable_aiohttp_transport, reducto_server: RecordingServer
 ):
-    parse_route = respx_mock.post("https://platform.reducto.ai/parse").respond(
-        json=_reducto_parse_response()
-    )
+    reducto_server.enqueue(ResponseSpec(body=_reducto_parse_response()))
 
     response = await litellm.aocr(
         model="reducto/future-parse-model",
@@ -160,11 +155,9 @@ async def test_unknown_model_uses_current_protocol_without_local_rejection(
             "document_url": "reducto://already-uploaded.pdf",
         },
         api_key="test-key",
-        api_base="https://platform.reducto.ai",
+        api_base=reducto_server.base_url,
     )
 
-    assert parse_route.called
-    assert json.loads(parse_route.calls[0].request.read()) == {
-        "input": "reducto://already-uploaded.pdf"
-    }
+    assert reducto_server.requests[0].path == "/parse"
+    assert reducto_server.requests[0].body == {"input": "reducto://already-uploaded.pdf"}
     assert response.model == "future-parse-model"
