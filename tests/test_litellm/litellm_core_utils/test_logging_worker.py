@@ -597,3 +597,102 @@ class TestLoggingWorker:
         assert errors[0].exc_info is not None, "the traceback must be preserved"
         assert warnings == [], "a single real error is not a timeout summary"
         assert worker._timeout_summary_task is None
+
+    @pytest.mark.asyncio
+    async def test_callback_raised_timeout_keeps_traceback(self):
+        """A callback that raises TimeoutError on its own did not hit the worker's deadline,
+        so it is a real failure and must keep its traceback rather than being folded into the
+        bounded burst summary.
+        """
+        worker = LoggingWorker(timeout=5.0, max_queue_size=10, timeout_summary_window=1.0)
+
+        async def raises_own_timeout() -> None:
+            raise asyncio.TimeoutError("callback's own downstream timeout")
+
+        logger = logging.getLogger("LiteLLM")
+        collector = _RecordCollector()
+        previous_level = logger.level
+        logger.addHandler(collector)
+        logger.setLevel(logging.DEBUG)
+        try:
+            worker.start()
+            worker.enqueue(raises_own_timeout())
+
+            await worker.flush()
+            await worker.stop()
+        finally:
+            logger.removeHandler(collector)
+            logger.setLevel(previous_level)
+
+        errors = [r for r in collector.records if r.levelno >= logging.ERROR]
+        warnings = [r for r in collector.records if r.levelno == logging.WARNING]
+        assert len(errors) == 1, "a callback-raised TimeoutError must still be logged once"
+        assert errors[0].exc_info is not None, "the traceback must be preserved"
+        assert warnings == [], "a callback-raised TimeoutError is not a worker-deadline timeout"
+        assert worker._timeout_summary_task is None
+
+    @pytest.mark.asyncio
+    async def test_stop_flushes_pending_timeout_summary(self):
+        """A burst still inside its summary window when the worker stops must still emit its one
+        summary, instead of losing it when the event loop tears down.
+        """
+        worker = LoggingWorker(
+            timeout=0.05,
+            max_queue_size=10,
+            concurrency=10,
+            timeout_summary_window=30.0,
+        )
+
+        async def slow_callback() -> None:
+            await asyncio.sleep(10)
+
+        logger = logging.getLogger("LiteLLM")
+        collector = _RecordCollector()
+        previous_level = logger.level
+        logger.addHandler(collector)
+        logger.setLevel(logging.DEBUG)
+        try:
+            worker.start()
+            for _ in range(3):
+                worker.enqueue(slow_callback())
+
+            await worker.flush()
+            assert worker._timeout_summary_task is not None
+            assert not worker._timeout_summary_task.done(), "precondition: the summary window has not elapsed"
+            await worker.stop()
+        finally:
+            logger.removeHandler(collector)
+            logger.setLevel(previous_level)
+
+        warnings = [r for r in collector.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1, "stop must flush the pending summary exactly once"
+        assert "3 callback(s) timed out" in warnings[0].getMessage()
+        assert worker._timeout_summary_task is None
+
+    def test_loop_change_resets_timeout_summary_state(self):
+        """On an event-loop change the summary task is bound to the dead loop; it and the pending
+        burst count must reset so timeouts on the new loop arm a fresh summary rather than a stale,
+        stuck one that silently drops later summaries.
+        """
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10, timeout_summary_window=30.0)
+
+        async def timed_out_callback() -> None:
+            await asyncio.sleep(10)
+
+        async def arm_on_first_loop() -> None:
+            worker._ensure_queue()
+            coro = timed_out_callback()
+            worker._record_callback_timeout(coro)
+            coro.close()
+            assert worker._timeout_summary_task is not None
+            assert worker._timeout_burst_count == 1
+
+        asyncio.run(arm_on_first_loop())
+        assert worker._timeout_summary_task is not None
+
+        async def rebind_on_second_loop() -> None:
+            worker._ensure_queue()
+            assert worker._timeout_summary_task is None, "stale summary task must drop on loop change"
+            assert worker._timeout_burst_count == 0, "stale burst count must reset on loop change"
+
+        asyncio.run(rebind_on_second_loop())
