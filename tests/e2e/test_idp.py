@@ -4,12 +4,19 @@ these carry no `e2e` marker and run everywhere."""
 
 from __future__ import annotations
 
+import os
+import signal
+import subprocess
+import sys
+import time
+from builtins import ExceptionGroup
 from collections.abc import Callable, Generator
 from contextlib import ExitStack, contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from queue import SimpleQueue
 from threading import Thread
-from typing import Final
+from typing import Final, Literal
 
 import pytest
 from e2e_http import ExternalWrite
@@ -18,6 +25,8 @@ from idp import (
     KEYCLOAK_ADMIN_USER_ENV,
     KEYCLOAK_REALM_ENV,
     KEYCLOAK_URL_ENV,
+    BrowserClientBody,
+    Discovery,
     Keycloak,
     PasswordCredential,
     UserCreateBody,
@@ -60,23 +69,47 @@ def _idp_server(
 ) -> Generator[tuple[Keycloak, SimpleQueue[str]]]:
     """Exercise provisioning failures through the same HTTP transport as live tests."""
     deletions: SimpleQueue[str] = SimpleQueue()
+    clients: SimpleQueue[BrowserClientBody] = SimpleQueue()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: object) -> None:
             pass
 
         def do_POST(self) -> None:
-            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            body: Final = self.rfile.read(int(self.headers.get("Content-Length", "0")))
             if self.path.endswith("/token"):
                 self.send_response(admin_status)
                 self.end_headers()
                 self.wfile.write(b'{"access_token":"synthetic-harness-token"}')
             else:
+                if self.path.endswith("/clients"):
+                    clients.put(BrowserClientBody.model_validate_json(body))
                 self.send_response(user_status if self.path.endswith("/users") else 201)
                 self.send_header("Location", f"{self.path}/resource-1")
                 self.end_headers()
                 if user_status != 201 and self.path.endswith("/users"):
                     self.wfile.write(b"injected create failure")
+
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.end_headers()
+            if "/clients/" in self.path:
+                client: Final = clients.get_nowait()
+                clients.put(client)
+                self.wfile.write(client.model_dump_json(by_alias=True).encode())
+            else:
+                issuer: Final = f"http://127.0.0.1:{server.server_port}/realms/test"
+                self.wfile.write(
+                    Discovery(
+                        issuer=issuer,
+                        authorization_endpoint=f"{issuer}/auth",
+                        token_endpoint=f"{issuer}/token",
+                        userinfo_endpoint=f"{issuer}/userinfo",
+                        jwks_uri=f"{issuer}/certs",
+                    )
+                    .model_dump_json()
+                    .encode()
+                )
 
         def do_DELETE(self) -> None:
             deletions.put(self.path)
@@ -115,6 +148,54 @@ def test_partial_provisioning_removes_the_group_when_user_creation_fails() -> No
         assert deletions.empty()
 
 
+@pytest.mark.parametrize("exit_mode", ("normal", "parent", "group"))
+def test_oidc_launcher_removes_client_on_exit_and_termination(
+    tmp_path: Path, exit_mode: Literal["normal", "parent", "group"]
+) -> None:
+    ready: Final = tmp_path / "ready"
+    child_command: Final = (
+        "import os,time; from pathlib import Path; "
+        'assert os.environ["GENERIC_CLIENT_SECRET"]; '
+        'assert os.environ["GENERIC_CLIENT_USE_PKCE"] == "true"; '
+        f"Path({str(ready)!r}).touch(); " + ("raise SystemExit(7)" if exit_mode == "normal" else "time.sleep(120)")
+    )
+    with _idp_server() as (idp, deletions):
+        with subprocess.Popen(
+            [
+                sys.executable,
+                str(Path(__file__).with_name("idp.py")),
+                "http://127.0.0.1:9999",
+                sys.executable,
+                "-c",
+                child_command,
+            ],
+            env={
+                **os.environ,
+                KEYCLOAK_URL_ENV: idp.base_url,
+                KEYCLOAK_REALM_ENV: idp.realm,
+                KEYCLOAK_ADMIN_USER_ENV: idp.admin_username,
+                KEYCLOAK_ADMIN_PASSWORD_ENV: idp.admin_password,
+            },
+            start_new_session=True,
+        ) as process:
+            try:
+                deadline: Final = time.monotonic() + 15
+                while not ready.exists() and time.monotonic() < deadline and process.poll() is None:
+                    time.sleep(0.05)
+                assert ready.exists(), "OIDC child did not start"
+                if exit_mode == "parent":
+                    process.terminate()
+                elif exit_mode == "group":
+                    os.killpg(process.pid, signal.SIGTERM)
+                assert process.wait(timeout=10) == (7 if exit_mode == "normal" else 143)
+            finally:
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait(timeout=5)
+        assert deletions.get(timeout=5) == "/admin/realms/test/clients/resource-1"
+        assert deletions.empty()
+
+
 def test_successful_provisioning_cleans_up_user_before_group() -> None:
     with _idp_server() as (idp, deletions):
         with ExitStack() as cleanup:
@@ -132,6 +213,43 @@ def test_cleanup_failure_is_visible() -> None:
     with _idp_server(delete_status=500) as (idp, _):
         with pytest.warns(RuntimeWarning, match="cleanup failed.*HTTP 500"):
             idp.delete_group("group")
+
+
+def test_strict_cleanup_reports_each_failure_and_continues() -> None:
+    from lifecycle import ResourceManager
+    from proxy_client import build_proxy_client
+
+    with _idp_server(delete_status=500) as (idp, deletions):
+        resources: Final = ResourceManager(client=build_proxy_client(), strict_cleanup=True)
+        strict: Final = idp.with_strict_cleanup()
+        resources.defer(lambda: strict.delete_group("group"))
+        resources.defer(lambda: strict.delete_user("user"))
+        with pytest.raises(ExceptionGroup, match="Resource cleanup failed") as error:
+            resources.teardown()
+        assert len(error.value.exceptions) == 2
+        assert deletions.get_nowait() == "/admin/realms/test/users/user"
+        assert deletions.get_nowait() == "/admin/realms/test/groups/group"
+
+
+@pytest.mark.parametrize("groups", ((), ("one",), ("one", "two")))
+def test_provisioning_records_zero_one_or_multiple_groups(groups: tuple[str, ...]) -> None:
+    with _idp_server() as (idp, deletions):
+        with ExitStack() as cleanup:
+
+            def defer(callback: Callable[[], object]) -> None:
+                cleanup.callback(callback)
+
+            identity: Final = idp.provision_groups(
+                marker="memberships",
+                groups=groups,
+                defer=defer,
+            )
+            assert identity.groups == groups
+            assert len(identity.group_ids) == len(groups)
+        assert deletions.get_nowait() == "/admin/realms/test/users/resource-1"
+        for _ in groups:
+            assert deletions.get_nowait() == "/admin/realms/test/groups/resource-1"
+        assert deletions.empty()
 
 
 def test_expired_admin_credentials_do_not_abort_remaining_cleanups() -> None:
