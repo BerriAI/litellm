@@ -727,6 +727,7 @@ fn response_limit_is_validated_and_not_forwarded_to_the_provider() {
         json!(true),
         json!("123"),
         json!(1.5),
+        json!(crate::constants::OCR_RESPONSE_MAX_BYTES + 1),
         Value::Null,
     ] {
         let wire = serde_json::from_value(json!({

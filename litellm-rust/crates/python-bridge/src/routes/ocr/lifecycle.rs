@@ -22,7 +22,7 @@ struct PythonOcrHost {
 
 enum OcrHostData {
     Unprojected { request: Py<PyAny> },
-    Projected(ProjectedOcrHost),
+    Projected(Box<ProjectedOcrHost>),
     Released,
 }
 
@@ -192,13 +192,13 @@ impl PythonRoute for PythonOcrHost {
                 let projected = project_request(py, request.bind(py), self.state.kwargs.bind(py))?;
                 let has_token_provider = projected.fields.azure_ad_token_provider.is_some();
                 let request = projected.request;
-                self.data = OcrHostData::Projected(ProjectedOcrHost {
+                self.data = OcrHostData::Projected(Box::new(ProjectedOcrHost {
                     fields: projected.fields,
                     pre_call: None,
                     retained_fields: None,
                     body: None,
                     headers: None,
-                });
+                }));
                 OcrHostResult::Request(Ok((Box::new(request), has_token_provider)))
             }
             OcrHostOperation::AcquireAzureAdToken => {

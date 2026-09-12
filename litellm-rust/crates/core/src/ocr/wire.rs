@@ -174,7 +174,7 @@ pub fn decode_request(wire: OcrWireRequest) -> Result<LiteLLMOcrRequest, Error> 
             value
                 .as_u64()
                 .and_then(|value| usize::try_from(value).ok())
-                .filter(|value| *value > 0)
+                .filter(|value| *value > 0 && *value <= defaults.max_response_bytes)
                 .ok_or_else(|| OcrRequestError::RequestField {
                     path: "max_response_bytes".into(),
                 })

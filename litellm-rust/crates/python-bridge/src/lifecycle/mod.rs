@@ -45,17 +45,13 @@ pub(crate) trait PythonRoute: Send + Sync {
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError>;
 }
 
-type HostResumeStep<R> = HostStep<
-    NativeCallStep<
-        <<R as PythonRoute>::Call as NativeCall>::Operation,
-        <<R as PythonRoute>::Call as NativeCall>::Complete,
-    >,
-    Py<PyAny>,
->;
+type NativeStep<C> = NativeCallStep<<C as NativeCall>::Operation, <C as NativeCall>::Complete>;
+type NativeResult<C> = Result<NativeStep<C>, litellm_core::Error>;
+type HostResumeStep<R> = HostStep<NativeStep<<R as PythonRoute>::Call>, Py<PyAny>>;
 
 struct NativeCallState<C: NativeCall> {
     call: C,
-    result: Option<Result<NativeCallStep<C::Operation, C::Complete>, litellm_core::Error>>,
+    result: Option<NativeResult<C>>,
 }
 
 enum PendingOperation {
@@ -141,11 +137,7 @@ impl<R: PythonRoute> PythonLifecycle<R> {
         }
     }
 
-    fn take_native_result(
-        &self,
-    ) -> PyResult<
-        NativeCallStep<<R::Call as NativeCall>::Operation, <R::Call as NativeCall>::Complete>,
-    > {
+    fn take_native_result(&self) -> PyResult<NativeStep<R::Call>> {
         self.call
             .as_ref()
             .ok_or_else(missing_state)?
