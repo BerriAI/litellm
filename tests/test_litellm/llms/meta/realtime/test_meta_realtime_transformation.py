@@ -241,6 +241,25 @@ def test_speech_end_then_speech_complete_emits_stopped_then_completed():
     assert completed[0]["transcript"] == "done"
 
 
+def test_turnless_partial_between_speech_end_and_speech_complete_stays_on_that_turn():
+    transformer = MuseEventTransformer()
+    transformer.transform(json.loads(_event("speechStart", turnId="turn-1")))
+    transformer.transform(json.loads(_event("transcript", transcript="what is", final=False)))
+    transformer.transform(json.loads(_event("speechEnd", turnId="turn-1")))
+
+    post_processed = transformer.transform(
+        json.loads(_event("transcript", transcript="what is the weather", final=False))
+    )
+    completed = transformer.transform(
+        json.loads(_event("speechComplete", turnId="turn-1", transcript="What is the weather?"))
+    )
+
+    assert _typed(post_processed) == [("conversation.item.input_audio_transcription.delta", "turn-1")]
+    assert post_processed[0]["delta"] == " the weather"
+    assert _typed(completed) == [("conversation.item.input_audio_transcription.completed", "turn-1")]
+    assert completed[0]["transcript"] == "What is the weather?"
+
+
 def _typed(events: tuple[dict[str, object], ...]) -> list[tuple[object, object]]:
     return [(event["type"], event["item_id"]) for event in events]
 
