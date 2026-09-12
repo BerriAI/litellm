@@ -1,1 +1,1 @@
-# MCP_WRITE_TEST
+@file:/tmp/sh_content_only.txt
