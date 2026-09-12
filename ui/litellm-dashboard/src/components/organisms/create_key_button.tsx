@@ -1021,7 +1021,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                             value={control.value as string | null | undefined}
                             showNeverResets
                             placeholder="Not set"
-                            onChange={control.onChange}
+                            onChange={(next) => control.onChange(next ?? undefined)}
                           />
                         )}
                       </MountedFormField>
