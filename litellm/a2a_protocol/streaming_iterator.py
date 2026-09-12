@@ -148,9 +148,9 @@ class A2AStreamingIterator:
         except Exception as e:
             verbose_logger.debug("Error in A2A streaming completion handler: %s", e)
 
-    def _build_logging_result(self, usage: litellm.Usage) -> dict[str, Any]:
+    def _build_logging_result(self, usage: litellm.Usage) -> dict[str, object]:
         """Build a result dict for logging."""
-        result: Final[dict[str, Any]] = {
+        result: Final[dict[str, object]] = {
             "id": getattr(self.request, "id", "unknown"),
             "jsonrpc": "2.0",
             "usage": (usage.model_dump() if hasattr(usage, "model_dump") else dict(usage)),

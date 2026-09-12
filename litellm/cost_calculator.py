@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
     TranscriptionUsageObjectTransformation,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    BilledTokenRates,
     CostCalculatorUtils,
     _generic_cost_per_character,
     _get_regional_uplift_multiplier,
@@ -44,6 +45,9 @@ from litellm.llms.azure.cost_calculation import (
 )
 from litellm.llms.azure_ai.cost_calculator import (
     cost_per_token as azure_ai_cost_per_token,
+)
+from litellm.llms.azure_ai.cost_calculator import (
+    is_azure_model_router as azure_ai_is_model_router_name,
 )
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.llms.bedrock.cost_calculation import (
@@ -81,6 +85,7 @@ from litellm.llms.together_ai.cost_calculator import (
     get_model_params_and_category,
     has_together_registry_pricing,
 )
+from litellm.llms.vertex_ai.common_utils import get_vertex_ai_lyria_generation_cost
 from litellm.llms.vertex_ai.cost_calculator import (
     cost_per_character as google_cost_per_character,
 )
@@ -496,6 +501,13 @@ def cost_per_token(
 
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
     if call_type == "speech" or call_type == "aspeech":
+        lyria_generation_cost: Final = (
+            get_vertex_ai_lyria_generation_cost(model=model_without_prefix)
+            if custom_llm_provider in ("vertex_ai", "vertex_ai_beta")
+            else None
+        )
+        if lyria_generation_cost is not None:
+            return 0.0, lyria_generation_cost
         speech_model_info = litellm.get_model_info(model=model_without_prefix, custom_llm_provider=custom_llm_provider)
         cost_metric: Final = select_cost_metric_for_model(speech_model_info)
         prompt_cost: float = 0.0
@@ -1114,6 +1126,7 @@ def _store_cost_breakdown_in_logging_obj(
     service_tier: str | None = None,
     data_residency: str | None = None,
     vertex_location: str | None = None,
+    billed_token_rates: BilledTokenRates | None = None,
 ) -> None:
     """
     Helper function to store cost breakdown in the logging object.
@@ -1158,6 +1171,7 @@ def _store_cost_breakdown_in_logging_obj(
             service_tier=service_tier,
             data_residency=data_residency,
             vertex_location=vertex_location,
+            billed_token_rates=billed_token_rates,
         )
 
     except Exception as breakdown_error:
@@ -1651,11 +1665,10 @@ def completion_cost(
                     data_residency=data_residency,
                     vertex_location=vertex_location,
                     response=completion_response,
-                    request_model=request_model_for_cost,
                 )
 
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)
-                if custom_llm_provider == "azure_ai":
+                if custom_llm_provider == "azure_ai" and not azure_ai_is_model_router_name(model):
                     model_for_additional_costs = request_model_for_cost
                     if completion_response is not None:
                         hidden_params = getattr(completion_response, "_hidden_params", None) or {}
@@ -1727,6 +1740,7 @@ def completion_cost(
                     _reasoning_cost: float | None = None
                     _cache_read_cost: float | None = None
                     _cache_creation_cost: float | None = None
+                    _billed_token_rates: BilledTokenRates | None = None
                     if cost_per_token_usage_object is not None and model:
                         _breakdown_provider: str | None = (
                             custom_llm_provider if isinstance(custom_llm_provider, str) else None
@@ -1738,10 +1752,12 @@ def completion_cost(
                             service_tier=service_tier,
                             data_residency=data_residency,
                             vertex_location=vertex_location,
+                            custom_cost_per_token=custom_cost_per_token,
                         )
                         _reasoning_cost = _token_type_breakdown.reasoning_cost
                         _cache_read_cost = _token_type_breakdown.cache_read_cost
                         _cache_creation_cost = _token_type_breakdown.cache_creation_cost
+                        _billed_token_rates = _token_type_breakdown.rates
                     _store_cost_breakdown_in_logging_obj(
                         litellm_logging_obj=litellm_logging_obj,
                         prompt_tokens_cost_usd_dollar=prompt_tokens_cost_usd_dollar,
@@ -1761,6 +1777,7 @@ def completion_cost(
                         service_tier=service_tier,
                         data_residency=data_residency,
                         vertex_location=vertex_location,
+                        billed_token_rates=_billed_token_rates,
                     )
 
                 return _final_cost
@@ -2403,6 +2420,46 @@ class RealtimeAPITokenUsageProcessor(BaseTokenUsageProcessor):
         return LiteLLMRealtimeStreamLoggingObject(
             usage=usage,
             results=results,
+        )
+
+
+_RESPONSES_WS_BILLABLE_EVENT_TYPES: Final = frozenset({"response.completed", "response.incomplete"})
+
+
+class _ResponsesWsEventResponse(BaseModel):
+    usage: Mapping[str, object] | None = None
+
+
+class _ResponsesWsEvent(BaseModel):
+    type: str = ""
+    response: _ResponsesWsEventResponse | None = None
+
+
+class ResponsesWebSocketTokenUsageProcessor(BaseTokenUsageProcessor):
+    @staticmethod
+    def collect_usage_from_responses_ws_results(
+        results: Sequence[Mapping[str, object]],
+    ) -> tuple[Usage, ...]:
+        events: Final = tuple(_ResponsesWsEvent.model_validate(result) for result in results)
+        return tuple(
+            ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(  # pyright: ignore[reportPrivateUsage]  # same shared transform the realtime processor uses
+                event.response.usage
+            )
+            for event in events
+            if event.type in _RESPONSES_WS_BILLABLE_EVENT_TYPES
+            and event.response is not None
+            and event.response.usage is not None
+        )
+
+    @staticmethod
+    def collect_and_combine_usage_from_responses_ws_results(
+        results: Sequence[Mapping[str, object]],
+    ) -> Usage:
+        collected_usage_objects: Final = ResponsesWebSocketTokenUsageProcessor.collect_usage_from_responses_ws_results(
+            results
+        )
+        return ResponsesWebSocketTokenUsageProcessor.combine_usage_objects(
+            list(collected_usage_objects)  # mutable-ok: combine_usage_objects requires a list parameter
         )
 
 

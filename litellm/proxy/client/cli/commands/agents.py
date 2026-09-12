@@ -1,18 +1,32 @@
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeAlias
 
 import click
 import requests
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from .auth import context_secret_vault, get_stored_api_key, login
+from .auth import CliContextObj, context_secret_vault, get_stored_api_key, login
+from .claude_settings import ClaudeSettingsError, install_statusline_script
 from .cmd_quoting import quote_for_cmd
+from .pi import (
+    LITELLM_PROXY_API_KEY_ENV,
+    PI_PROVIDER_NAME,
+    ListingFailure,
+    PiSyncError,
+    fetch_model_ids,
+    fetch_model_limits,
+    models_json_path,
+    sync_models_json,
+)
 
 ANTHROPIC_BASE_URL_ENV: Final = "ANTHROPIC_BASE_URL"
 ANTHROPIC_AUTH_TOKEN_ENV: Final = "ANTHROPIC_AUTH_TOKEN"
@@ -32,18 +46,23 @@ _SKIP_VERIFY_FLAG: Final = "--skip-verify"
 
 PROFILE_ANTHROPIC: Final = "anthropic"
 PROFILE_OPENAI: Final = "openai"
+PROFILE_LITELLM: Final = "litellm"
 
 _KNOWN_AGENTS: Final[dict[str, tuple[str, frozenset[str]]]] = {
     "claude": ("Claude Code", frozenset({PROFILE_ANTHROPIC})),
     "codex": ("Codex", frozenset({PROFILE_OPENAI})),
     "opencode": ("OpenCode", frozenset({PROFILE_OPENAI})),
+    "pi": ("pi", frozenset({PROFILE_LITELLM})),
 }
 
 _INSTALL_DOCS: Final[dict[str, str]] = {
     "claude": "https://docs.claude.com/en/docs/claude-code/setup",
     "codex": "https://developers.openai.com/codex/cli",
     "opencode": "https://opencode.ai/docs",
+    "pi": "https://pi.dev",
 }
+
+_HIDDEN_AGENTS: Final = frozenset({"pi"})
 
 CODEX_PROXY_PROVIDER: Final = "litellm"
 
@@ -81,6 +100,8 @@ def build_agent_env(
     the environment is left alone. CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY
     defaults to 1 so Claude Code (v2.1.129+) fills its /model picker from the
     proxy's /v1/models; likewise left alone when already set.
+    pi ignores both base URL variables and instead resolves $LITELLM_PROXY_API_KEY
+    from its synced models.json provider entry.
     """
     env: Final = dict(base_env)
     root: Final = base_url.rstrip("/")
@@ -95,7 +116,21 @@ def build_agent_env(
     if PROFILE_OPENAI in profiles:
         env[OPENAI_BASE_URL_ENV] = root + "/v1"
         env[OPENAI_API_KEY_ENV] = api_key
+    if PROFILE_LITELLM in profiles:
+        env[LITELLM_PROXY_API_KEY_ENV] = api_key
     return env
+
+
+def codex_proxy_provider(base_url: str) -> Mapping[str, str | bool]:
+    return MappingProxyType(
+        {
+            "name": "LiteLLM proxy",
+            "base_url": base_url.rstrip("/") + "/v1",
+            "wire_api": "responses",
+            "supports_websockets": False,
+            "requires_openai_auth": False,
+        }
+    )
 
 
 def _codex_proxy_args(base_url: str) -> list[str]:
@@ -107,27 +142,103 @@ def _codex_proxy_args(base_url: str) -> list[str]:
     because the proxy does not speak the Responses WebSocket protocol. The key is
     read from OPENAI_API_KEY, which build_agent_env already exports.
     """
-    root: Final = base_url.rstrip("/") + "/v1"
     provider: Final = f"model_providers.{CODEX_PROXY_PROVIDER}"
     return [
         "-c",
         f'model_provider="{CODEX_PROXY_PROVIDER}"',
-        "-c",
-        f'{provider}.name="LiteLLM proxy"',
-        "-c",
-        f'{provider}.base_url="{root}"',
+        *(
+            argument
+            for key, value in codex_proxy_provider(base_url).items()
+            for argument in ("-c", f"{provider}.{key}={json.dumps(value)}")
+        ),
         "-c",
         f'{provider}.env_key="{OPENAI_API_KEY_ENV}"',
         "-c",
-        f'{provider}.wire_api="responses"',
-        "-c",
-        f"{provider}.supports_websockets=false",
+        f"{provider}.http_headers={{}}",
     ]
 
 
 _PROXY_ARGS: Final[dict[str, Callable[[str], list[str]]]] = {
     "codex": _codex_proxy_args,
 }
+
+
+def prepare_pi(
+    base_url: str,
+    api_key: str,
+    base_env: Mapping[str, str],
+    *,
+    get: Callable[..., requests.Response] = requests.get,
+) -> tuple[str, ...]:
+    """Sync the proxy's model list into pi's models.json before handoff.
+
+    pi has no base-URL env vars, so this file is the only way to point it at the
+    proxy. Only the litellm provider entry is touched; the synced entry references
+    the key as $LITELLM_PROXY_API_KEY, which build_agent_env exports. The returned
+    --model pin is needed because pi ignores a bare --provider when picking the
+    interactive startup model; a user-supplied --model comes later in argv and wins.
+    """
+    ids: Final = fetch_model_ids(base_url, api_key, get=get)
+    if isinstance(ids, PiSyncError):
+        raise AgentRunError(
+            f"{ids.message} pi would have nothing to run." if ids.kind is ListingFailure.EMPTY else ids.message
+        )
+    limits: Final = fetch_model_limits(base_url, api_key, get=get)
+    path: Final = models_json_path(base_env)
+    error: Final = sync_models_json(path, base_url, ids, limits)
+    if error is not None:
+        raise AgentRunError(error.message)
+    click.echo(f"litellm: synced {len(ids)} proxy models into {path}")
+    return ("--model", f"{PI_PROVIDER_NAME}/{ids[0]}")
+
+
+def _warn(message: str) -> None:
+    click.echo(message, err=True)
+
+
+_CODEX_STOP_HOOKS_DECLARED: Final = re.compile(
+    r"^\s*(\[\[\s*\"?hooks\"?\s*\.\s*\"?Stop\"?\s*\]\]|\"?hooks\"?(?:\s*\.\s*\"?Stop\"?)?\s*=|\[\s*\"?hooks\"?\s*\])",
+    re.MULTILINE,
+)
+
+
+def codex_config_path(base_env: Mapping[str, str]) -> Path:
+    return Path(base_env.get("CODEX_HOME") or Path.home() / ".codex") / "config.toml"
+
+
+def codex_declares_stop_hooks(config_path: Path) -> bool:
+    """A config that cannot be read or decoded declares nothing we can see; Codex reports its own
+    TOML failure at launch, so the pre-check must not be the thing that stops `lite codex`."""
+    try:
+        return _CODEX_STOP_HOOKS_DECLARED.search(config_path.read_text(encoding="utf-8")) is not None
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def prepare_codex(
+    base_url: str,
+    api_key: str,
+    base_env: Mapping[str, str],
+    *,
+    install: Callable[[], str] = install_statusline_script,
+    warn: Callable[[str], None] = _warn,
+) -> tuple[str, ...]:
+    """A `-c hooks.Stop=` session flag replaces the user's whole Stop list, so their own hooks win over ours."""
+    if codex_declares_stop_hooks(codex_config_path(base_env)):
+        warn("litellm: your Codex config already declares hooks; not adding the routed-model Stop hook")
+        return ()
+    try:
+        command: Final = install()
+    except ClaudeSettingsError as e:
+        raise AgentRunError(str(e)) from e
+    return ("-c", f'hooks.Stop=[{{hooks=[{{type="command",command={json.dumps(command)}}}]}}]')
+
+
+_Preparer: TypeAlias = Callable[[str, str, Mapping[str, str]], Sequence[str]]
+
+_PREPARERS: Final[Mapping[str, _Preparer]] = MappingProxyType(
+    {"pi": prepare_pi, "codex": prepare_codex}  # mutable-ok: MappingProxyType freezes the provider registry
+)
 
 
 def agent_launch_args(command: str, base_url: str) -> list[str]:
@@ -388,10 +499,6 @@ def _restore_controlling_terminal() -> None:
         os.close(fd)
 
 
-def _warn(message: str) -> None:
-    click.echo(message, err=True)
-
-
 def run_agent(
     base_url: str,
     api_key: str,
@@ -407,15 +514,14 @@ def run_agent(
     warn: Callable[[str], None] = _warn,
     launcher: Callable[[str, Sequence[str], Mapping[str, str]], None] = _hand_off,
     reattach_terminal: Callable[[], None] | None = None,
+    preparers: Mapping[str, _Preparer] = MappingProxyType(_PREPARERS),
 ) -> None:
     """Validate, wire the environment, and hand off to the agent.
 
-    On success this never returns: POSIX replaces the current process, Windows
-    waits on the agent and exits with its status. Raises AgentRunError for
-    missing binaries, an unreachable proxy, or a rejected key. The model list is
-    synced only once the key check passed, so an unreachable proxy costs one
-    timeout rather than two, and --skip-verify keeps the launch fully offline.
-    reattach_terminal, when given, runs just before handoff to restore stdin.
+    On success this replaces the current process and never returns. Raises
+    AgentRunError for missing binaries, an unreachable proxy, a rejected key, or
+    a failed pre-launch config sync (pi). reattach_terminal, when given, runs
+    just before handoff to restore stdin.
     """
     if not command:
         raise AgentRunError("Nothing to run.")
@@ -435,13 +541,16 @@ def run_agent(
     if isinstance(synced, ModelSyncSkipped):
         warn(f"litellm: not syncing {display_name} models from the proxy: {synced.reason}")
 
+    prepare: Final = preparers.get(os.path.basename(command[0]))
+    prepared_args: Final = tuple(prepare(base_url, api_key, env_before_sync)) if prepare is not None else ()
+
     env: Final = MappingProxyType(
         {
             **build_agent_env(env_before_sync, base_url, api_key, profiles),
             **(_NO_EXTRA_ENV if isinstance(synced, ModelSyncSkipped) else synced),
         }
     )
-    extra_args: Final = agent_launch_args(command[0], base_url)
+    extra_args: Final = (*agent_launch_args(command[0], base_url), *prepared_args)
     if reattach_terminal is not None:
         reattach_terminal()
     launcher(binary, [command[0], *extra_args, *command[1:]], env)
@@ -452,8 +561,9 @@ def _is_interactive() -> bool:
 
 
 def resolve_api_key(ctx: click.Context) -> str:
-    base_url: Final = ctx.obj["base_url"]
-    api_key = ctx.obj.get("api_key")
+    ctx_obj: Final[CliContextObj] = ctx.obj
+    base_url: Final = ctx_obj["base_url"]
+    api_key = ctx_obj.get("api_key")
     if api_key:
         return api_key
 
@@ -475,11 +585,12 @@ _SKIP_VERIFY_HELP: Final = "Skip the pre-launch key check against the proxy."
 
 
 def _launch(ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify: bool) -> None:
-    base_url: Final = ctx.obj["base_url"]
+    ctx_obj: Final[CliContextObj] = ctx.obj
+    base_url: Final = ctx_obj["base_url"]
     started_interactive: Final = _is_interactive()
     api_key: Final = resolve_api_key(ctx)
 
-    display_name, _ = agent_profile(binary)
+    display_name, _profiles = agent_profile(binary)
     click.echo(f"litellm: routing {display_name} through proxy at {base_url.rstrip('/')}")
 
     try:
@@ -499,6 +610,7 @@ def _make_agent_command(binary: str, display_name: str) -> click.Command:
         name=binary,
         context_settings={"ignore_unknown_options": True},
         short_help=f"Run {display_name} through your LiteLLM proxy",
+        hidden=binary in _HIDDEN_AGENTS,
     )
     @click.option("--skip-verify", is_flag=True, default=False, help=_SKIP_VERIFY_HELP)
     @click.argument("args", nargs=-1, type=click.UNPROCESSED)
@@ -531,6 +643,7 @@ __all__ = [
     "build_agent_env",
     "opencode_model_sync_env",
     "opencode_provider_config",
+    "prepare_pi",
     "resolve_api_key",
     "run_agent",
     "verify_proxy_key",

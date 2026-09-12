@@ -19,7 +19,8 @@ class _TraceEventPayload(BaseModel):
 
 class TraceResponsePayload(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
-    response: object
+    response: object = None
+    error: str | None = None
     trace: tuple[_TraceEventPayload, ...] | list[_TraceEventPayload]
 
 

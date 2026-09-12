@@ -445,6 +445,72 @@ class TestOCICohereToolCalls:
         assert result.choices[0].index == 0
         assert result.choices[0].finish_reason == "stop"  # COMPLETE is mapped to stop
 
+    _TOOL_TURN_TEXT = "I will use the tool to find out the weather in Paris."
+    _TOOL_TURN_DELTAS = [
+        "I", " will", " use", " the", " tool", " to", " find", " out", " the", " weather", " in", " Paris", ".",
+    ]
+    _TOOL_TURN_CALLS = [{"name": "get_weather", "parameters": {"city": "Paris"}}]
+    _TOOL_TURN_HISTORY = [
+        {"role": "USER", "message": "Briefly say what you will do, then find out the weather in Paris using the tool."},
+        {"role": "CHATBOT", "message": _TOOL_TURN_TEXT, "toolCalls": _TOOL_TURN_CALLS},
+    ]
+    _TOOL_TURN_TERMINAL_TOGETHER = [
+        {
+            "apiFormat": "COHERE",
+            "text": _TOOL_TURN_TEXT,
+            "chatHistory": _TOOL_TURN_HISTORY,
+            "finishReason": "COMPLETE",
+            "toolCalls": _TOOL_TURN_CALLS,
+        },
+    ]
+    _TOOL_TURN_TERMINAL_SPLIT = [
+        {
+            "apiFormat": "COHERE",
+            "text": _TOOL_TURN_TEXT,
+            "chatHistory": _TOOL_TURN_HISTORY,
+            "toolCalls": _TOOL_TURN_CALLS,
+        },
+        {"apiFormat": "COHERE", "finishReason": "COMPLETE"},
+    ]
+
+    @staticmethod
+    def _drain_cohere_stream(events):
+        wrapper = OCIStreamWrapper(
+            completion_stream=MagicMock(), model="cohere.command-a-03-2025", logging_obj=MagicMock()
+        )
+        chunks = [wrapper.chunk_creator(f"data: {json.dumps(event)}") for event in events]
+        content = "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+        tool_calls = [call for chunk in chunks for call in (chunk.choices[0].delta.tool_calls or [])]
+        finish_reasons = [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason]
+        return content, tool_calls, finish_reasons
+
+    @pytest.mark.parametrize("terminal_events", [_TOOL_TURN_TERMINAL_TOGETHER, _TOOL_TURN_TERMINAL_SPLIT])
+    def test_cohere_tool_turn_streams_the_answer_once(self, terminal_events):
+        """OCI restates the whole answer on the tool-calls chunk and again on the terminal chunk;
+        the client must read it exactly once, with one tool call and one finish reason."""
+        deltas = [{"apiFormat": "COHERE", "text": token} for token in self._TOOL_TURN_DELTAS]
+        tool_calls_event = {"apiFormat": "COHERE", "text": self._TOOL_TURN_TEXT, "toolCalls": self._TOOL_TURN_CALLS}
+
+        content, tool_calls, finish_reasons = self._drain_cohere_stream([*deltas, tool_calls_event, *terminal_events])
+
+        assert content == self._TOOL_TURN_TEXT
+        assert [(call["function"]["name"], call["function"]["arguments"]) for call in tool_calls] == [
+            ("get_weather", '{"city": "Paris"}')
+        ]
+        assert finish_reasons == ["stop"]
+
+    def test_cohere_tool_turn_without_preamble_deltas_keeps_the_only_text(self):
+        """When the tool-calls chunk carries the only copy of the text, dropping it would lose the answer."""
+        tool_calls_event = {"apiFormat": "COHERE", "text": self._TOOL_TURN_TEXT, "toolCalls": self._TOOL_TURN_CALLS}
+
+        content, tool_calls, finish_reasons = self._drain_cohere_stream(
+            [tool_calls_event, *self._TOOL_TURN_TERMINAL_TOGETHER]
+        )
+
+        assert content == self._TOOL_TURN_TEXT
+        assert len(tool_calls) == 1
+        assert finish_reasons == ["stop"]
+
     def test_cohere_parameter_mapping_excludes_tool_choice(self):
         """Test that tool_choice is excluded from Cohere parameter mapping"""
         config = OCIChatConfig()

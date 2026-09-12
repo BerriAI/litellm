@@ -39,7 +39,7 @@ def _is_form_content_type(content_type: str) -> bool:
     return _normalize_media_type(content_type) in _FORM_CONTENT_TYPES
 
 
-def _is_json_content_type(content_type: str) -> bool:
+def is_json_content_type(content_type: str) -> bool:
     """True iff the body should be parsed as JSON."""
     return _normalize_media_type(content_type) == "application/json"
 
@@ -213,6 +213,18 @@ async def _read_request_body(request: Request | None) -> dict:
         return {}
 
 
+async def read_raw_json_body(request: Request | None) -> bytes | None:
+    if request is None or _safe_get_request_parsed_body(request=request) is None:
+        return None
+    content_type: Final = _safe_get_request_headers(request=request).get("content-type", "")
+    if _is_form_content_type(content_type):
+        return None
+    try:
+        return await request.body()
+    except RuntimeError:
+        return None
+
+
 def _safe_get_request_parsed_body(request: Request | None) -> dict | None:
     if request is None:
         return None
@@ -257,7 +269,7 @@ def _safe_get_request_headers(request: Request | None) -> dict:
     if request is None:
         return {}
     state: Final = getattr(request, "state", None)
-    cached: Final = getattr(state, "_cached_headers", None)
+    cached: Final[object] = getattr(state, "_cached_headers", None)
     if isinstance(cached, dict):
         return cached
     if cached is not None:
@@ -406,7 +418,7 @@ async def get_request_body(request: Request) -> dict[str, Any]:
     """
     if request.method == "POST":
         content_type: Final = request.headers.get("content-type", "")
-        if _is_json_content_type(content_type):
+        if is_json_content_type(content_type):
             return await _read_request_body(request)
         elif _is_form_content_type(content_type):
             return await get_form_data(request)
@@ -415,7 +427,9 @@ async def get_request_body(request: Request) -> dict[str, Any]:
     return {}
 
 
-def extract_nested_form_metadata(form_data: dict[str, Any], prefix: str = "litellm_metadata[") -> dict[str, Any]:
+def extract_nested_form_metadata(
+    form_data: Mapping[str, object], prefix: str = "litellm_metadata["
+) -> dict[str, object]:
     """
     Extract nested metadata from form data with bracket notation.
 
@@ -453,7 +467,7 @@ def extract_nested_form_metadata(form_data: dict[str, Any], prefix: str = "litel
     if not form_data:
         return {}
 
-    metadata: Final[dict[str, Any]] = {}
+    metadata: Final[dict[str, object]] = {}
 
     for key, value in form_data.items():
         # Skip keys that don't start with the prefix
@@ -501,7 +515,7 @@ def extract_nested_form_metadata(form_data: dict[str, Any], prefix: str = "litel
     return metadata
 
 
-def get_tags_from_request_body(request_body: dict) -> list[str]:
+def get_tags_from_request_body(request_body: Mapping[str, object]) -> list[str]:
     """
     Extract tags from request body metadata.
 
@@ -518,12 +532,12 @@ def get_tags_from_request_body(request_body: dict) -> list[str]:
     if isinstance(metadata, str):
         from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
-        parsed: Final = safe_json_loads(metadata)
+        parsed: Final[object] = safe_json_loads(metadata)
         metadata = parsed if isinstance(parsed, dict) else {}
     elif not isinstance(metadata, dict):
         metadata = {}
-    tags_in_metadata: Final[Any] = metadata.get("tags", [])
-    tags_in_request_body: Final[Any] = request_body.get("tags", [])
+    tags_in_metadata: Final[object] = metadata.get("tags", [])
+    tags_in_request_body: Final[object] = request_body.get("tags", [])
     combined_tags: Final[list[str]] = []
 
     ######################################

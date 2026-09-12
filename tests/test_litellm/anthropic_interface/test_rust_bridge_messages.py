@@ -126,16 +126,6 @@ def test_load_rust_messages_returns_injected_impl():
     assert rust_messages.load_rust_messages() is bridge
 
 
-def test_bare_rust_still_toggles_ocr():
-    from litellm.rust_bridge.ocr import rust_ocr_enabled
-
-    litellm.rust(True)
-    assert rust_ocr_enabled() is True
-
-    litellm.rust(False)
-    assert rust_ocr_enabled() is False
-
-
 def test_load_rust_amessages_returns_injected_impl():
     bridge = RecordingAsyncMessages()
     litellm.rust(True)
@@ -214,7 +204,7 @@ async def test_amessages_wrapper_forwards_args():
 def _gate(**overrides):
     kwargs = {
         "custom_llm_provider": "azure_ai",
-        "litellm_params": GenericLiteLLMParams(api_key="sk-azure", rust=True),
+        "litellm_params": GenericLiteLLMParams(api_key="sk-azure"),
         "has_agentic_hook": False,
         "model": "claude-sonnet-4-5",
         "api_key": "sk-azure",
@@ -283,18 +273,6 @@ async def test_gate_uses_process_enable_without_request_override():
 
 
 @pytest.mark.asyncio
-async def test_gate_skips_rust_when_flag_false():
-    bridge = ExplodingAsyncMessages()
-    litellm.rust(True)
-    rust_messages.set_rust_messages(amessages=bridge)
-
-    response = await _gate(litellm_params=GenericLiteLLMParams(api_key="sk-azure", rust=False))
-
-    assert response is None
-    assert bridge.calls == 0
-
-
-@pytest.mark.asyncio
 async def test_gate_invokes_rust_for_native_anthropic_provider():
     bridge = RecordingAsyncMessages()
     litellm.rust(True)
@@ -302,7 +280,7 @@ async def test_gate_invokes_rust_for_native_anthropic_provider():
 
     response = await _gate(
         custom_llm_provider="anthropic",
-        litellm_params=GenericLiteLLMParams(api_key="sk-ant", rust=True),
+        litellm_params=GenericLiteLLMParams(api_key="sk-ant"),
         api_key="sk-ant",
         api_base="https://api.anthropic.com",
         headers={"x-api-key": "sk-ant", "anthropic-version": "2023-06-01"},

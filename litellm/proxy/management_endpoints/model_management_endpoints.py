@@ -50,7 +50,7 @@ from litellm.proxy._types import (
     TeamModelDeleteRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.litellm_license import HEURISTIC_V2_LICENSE_REMEDY
+from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
@@ -61,6 +61,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_endpoints.team_endpoints import (
     _refresh_cached_team,
@@ -98,15 +99,19 @@ from litellm.router_strategy.complexity_router import (
     normalize_classification_prompt,
 )
 from litellm.router_utils.auto_router_model_naming import (
+    GATED_AUTO_ROUTER_CAPABILITIES,
     STRATEGY_ROUTER_PARAM_FIELDS,
+    capability_limit_violation,
     carries_complexity_router_settings,
-    count_heuristic_v2_routers,
-    heuristic_v2_limit_violation,
-    uses_heuristic_v2_classifier,
+    count_capability_routers,
+    gated_capability_of,
+    is_complexity_router_model,
     validate_complexity_router_config_placement,
     validate_complexity_router_config_write,
     validate_strategy_router_model_write,
 )
+from litellm.router_utils.auto_router_tuning_baseline import is_mutable_tuned_candidate, tuning_quota_violation
+from litellm.types.llms.bedrock import AwsSessionTag
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     AutoRouterClassifierDefaultPromptResponse,
     UpdateUsefulLinksRequest,
@@ -237,11 +242,13 @@ def _strategy_router_write_violation(
     An auto-router deployment's ``litellm_params.model`` (``auto_router/...``) is
     the discriminator the router loads it by; a write that mangles it makes the
     router drop the deployment silently under ``ignore_invalid_deployments``.
-    Only writes that supply ``litellm_params.model`` are judged on the naming
-    contract, against the merged (stored + incoming) params, so partial patches
-    and restores of an already-corrupted row stay legal. A config is judged only
-    when the write carries one, for the same reason: a rename must not be held
-    hostage by a stored config it does not touch. Returns the violation, or None.
+    A patch adding auto-router settings is judged against the effective model,
+    decrypting the stored model when the patch omits it, so a regular deployment
+    cannot claim a strategy-router configuration. Unrelated partial patches and
+    restores that do not touch strategy-router settings stay legal. A config is
+    judged only when the write carries one, for the same reason: a rename must
+    not be held hostage by a stored config it does not touch. Returns the
+    violation, or None.
     """
     if incoming_params is None:
         return None
@@ -256,14 +263,18 @@ def _strategy_router_write_violation(
         for source in (incoming_params, existing_params)
         if source is not None and getattr(source, field, None) is not None
     )
-    # Scope reads the incoming model because the stored one is encrypted at rest.
-    if carries_complexity_router_settings(incoming_params.model, present_fields):
+    effective_params: Final = _effective_complexity_router_params(incoming_params, existing_params)
+    effective_model: Final = effective_params.get("model")
+    if carries_complexity_router_settings(
+        effective_model if isinstance(effective_model, str) else None, present_fields
+    ):
         placement_violation: Final = validate_complexity_router_config_placement(incoming_params.model_extra)
         if placement_violation is not None:
             return placement_violation
-    if incoming_params.model is None:
-        return None
-    return validate_strategy_router_model_write(model=incoming_params.model, present_fields=present_fields)
+    return validate_strategy_router_model_write(
+        model=effective_model if isinstance(effective_model, str) else "",
+        present_fields=present_fields,
+    )
 
 
 def _raise_on_strategy_router_write_violation(
@@ -281,14 +292,23 @@ def _raise_on_strategy_router_write_violation(
     )
 
 
-HEURISTIC_V2_SLOT_LOCK_KEY: Final = 5_872_301
-_HEURISTIC_V2_LOCK_SQL: Final = "SELECT 1 AS locked FROM pg_advisory_xact_lock($1)"
-_HEURISTIC_V2_DB_ROWS_SQL: Final = """
-SELECT count(*)::int AS held FROM "LiteLLM_ProxyModelTable"
+AUTO_ROUTER_CAPABILITY_SLOT_LOCK_KEY: Final = 5_872_301
+_CAPABILITY_LOCK_SQL: Final = "SELECT 1 AS locked FROM pg_advisory_xact_lock($1)"
+_STORED_LITELLM_PARAMS_SQL: Final = (
+    "(CASE jsonb_typeof(litellm_params) WHEN 'string' THEN (litellm_params #>> '{}')::jsonb ELSE litellm_params END)"
+)
+_STORED_COMPLEXITY_CONFIG_SQL: Final = f"{_STORED_LITELLM_PARAMS_SQL} -> 'complexity_router_config'"
+_CAPABILITY_DB_ROWS_SQL: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        capability.key: f"""
+SELECT {_STORED_LITELLM_PARAMS_SQL} ->> 'model' AS model
+FROM "LiteLLM_ProxyModelTable"
 WHERE model_id <> $1
-  AND (CASE jsonb_typeof(litellm_params) WHEN 'string' THEN (litellm_params #>> '{}')::jsonb ELSE litellm_params END)
-      -> 'complexity_router_config' ->> 'classifier_type' = 'heuristic_v2'
+  AND ({capability.sql_config_predicate.format(config=_STORED_COMPLEXITY_CONFIG_SQL)})
 """
+        for capability in GATED_AUTO_ROUTER_CAPABILITIES
+    }
+)
 
 
 def _effective_complexity_router_config(
@@ -301,13 +321,74 @@ def _effective_complexity_router_config(
     return existing_params.complexity_router_config
 
 
-@asynccontextmanager
-async def _heuristic_v2_slot(
-    prisma_client: PrismaClient, *, effective_config: object, model_id: str | None
-) -> AsyncGenerator[_ProxyModelTable, None]:
-    """Hand out the model table to write through while the row's claim on a heuristic_v2 slot is settled.
+def _effective_model(
+    incoming_params: GenericLiteLLMParams | None, existing_params: GenericLiteLLMParams | None
+) -> str | None:
+    """The model a write leaves on the row, decrypting an existing value only when the patch omits it."""
+    incoming: Final = None if incoming_params is None else incoming_params.model
+    if incoming is not None:
+        return incoming
+    existing: Final = None if existing_params is None else existing_params.model
+    if existing is None:
+        return None
+    decrypted: Final = decrypt_value_helper(
+        value=existing,
+        key="model",
+        exception_type="debug",
+        return_original_value=True,
+    )
+    return decrypted if isinstance(decrypted, str) else None
 
-    A write that leaves the row on classifier_type heuristic_v2 under a limited license runs
+
+def _effective_complexity_router_params(
+    incoming_params: GenericLiteLLMParams | None, existing_params: GenericLiteLLMParams | None
+) -> Mapping[str, object]:
+    """The model and complexity config a write leaves, for placement and capability decisions."""
+    return MappingProxyType(
+        {
+            "model": _effective_model(incoming_params, existing_params),
+            "complexity_router_config": _effective_complexity_router_config(incoming_params, existing_params),
+        }
+    )
+
+
+def _decrypted_model(stored_model: object) -> str | None:
+    if not isinstance(stored_model, str):
+        return None
+    decrypted: Final = decrypt_value_helper(
+        value=stored_model, key="model", exception_type="debug", return_original_value=True
+    )
+    return decrypted if isinstance(decrypted, str) else None
+
+
+def _tuning_candidate(effective_params: Mapping[str, object], model_id: str | None) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            "litellm_params": effective_params,
+            "model_info": MappingProxyType({"id": model_id, "db_model": True}),
+        }
+    )
+
+
+def _raise_on_tuning_quota_violation(
+    *,
+    candidate: Mapping[str, object],
+    others: Sequence[Mapping[str, object]],
+    baselines: Mapping[str, str],
+    limit: int | None,
+) -> None:
+    violation: Final = tuning_quota_violation(candidate=candidate, others=others, baselines=baselines, limit=limit)
+    if violation is not None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"{violation} {AUTO_ROUTER_LICENSE_REMEDY}")
+
+
+@asynccontextmanager
+async def _auto_router_capability_slot(
+    prisma_client: PrismaClient, *, effective_params: Mapping[str, object], model_id: str | None
+) -> AsyncGenerator[_ProxyModelTable, None]:
+    """Hand out the model table to write through while the row's claim on a licensed capability is settled.
+
+    A write that leaves the row claiming a licensed capability under a limited license runs
     inside one transaction that takes an advisory lock in its own statement before counting
     (a statement's snapshot predates anything it locks), so pods cannot both pass the count:
     the DB rows (any pod, either JSON shape) plus this proxy's config.yaml routers are judged
@@ -318,24 +399,55 @@ async def _heuristic_v2_slot(
     must wait until the transaction has committed and the lock is released. The transaction
     writes bypass the repository's publish-on-write, so the config change is published once
     after commit, the way delete_team_models does.
-    """
-    from litellm.proxy.proxy_server import _license_check, llm_router
 
-    limit: Final = _license_check.heuristic_v2_router_limit()
-    if limit is None or not uses_heuristic_v2_classifier(effective_config):
+    A heuristic-v1 router whose tuning has moved off its recorded baseline is judged the same
+    way under the same lock, against the DB rows plus this proxy's config.yaml routers.
+    """
+    from litellm.proxy.proxy_server import (
+        _license_check,  # pyright: ignore[reportPrivateUsage]  # existing capability slot reads the proxy license singleton
+        heuristic_v1_tuning_baselines,
+        llm_router,
+    )
+
+    limit: Final = _license_check.auto_router_capability_limit()
+    capability: Final = gated_capability_of(effective_params)
+    baselines: Final = heuristic_v1_tuning_baselines
+    tuning_candidate: Final = _tuning_candidate(effective_params, model_id=model_id)
+    judges_tuning: Final = baselines is not None and is_mutable_tuned_candidate(tuning_candidate, baselines)
+    if limit is None or (capability is None and not judges_tuning):
         yield _proxy_model_table(prisma_client)
         return
     async with prisma_client.db.tx() as tx_ctx:
         tables: Final[_TxModelTables] = tx_ctx
-        await tx_ctx.query_raw(_HEURISTIC_V2_LOCK_SQL, HEURISTIC_V2_SLOT_LOCK_KEY)
-        rows: Sequence[Mapping[str, object]] = await tx_ctx.query_raw(_HEURISTIC_V2_DB_ROWS_SQL, model_id or "")
-        db_held: Final = rows[0].get("held") if rows else 0
+        await tx_ctx.query_raw(_CAPABILITY_LOCK_SQL, AUTO_ROUTER_CAPABILITY_SLOT_LOCK_KEY)
         config_rows: Final = () if llm_router is None else tuple(llm_router.config_deployments())
-        held: Final = (db_held if isinstance(db_held, int) else 0) + count_heuristic_v2_routers(config_rows)
-        violation: Final = heuristic_v2_limit_violation(held=held + 1, limit=limit)
-        if violation is not None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail=f"{violation} {HEURISTIC_V2_LICENSE_REMEDY}"
+        if capability is not None:
+            rows: Sequence[Mapping[str, object]] = await tx_ctx.query_raw(
+                _CAPABILITY_DB_ROWS_SQL[capability.key], model_id or ""
+            )
+            db_held: Final = sum(1 for row in rows if is_complexity_router_model(_decrypted_model(row.get("model"))))
+            held: Final = db_held + count_capability_routers(config_rows, capability=capability)
+            violation: Final = capability_limit_violation(capability=capability, held=held + 1, limit=limit)
+            if violation is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN, detail=f"{violation} {AUTO_ROUTER_LICENSE_REMEDY}"
+                )
+        if judges_tuning and baselines is not None:
+            model_rows: Final = await ModelRepository(WriterPinnedClient(tx_ctx)).find_all_except(model_id or "")
+            _raise_on_tuning_quota_violation(
+                candidate=tuning_candidate,
+                others=tuple(
+                    MappingProxyType(
+                        {
+                            "litellm_params": row.litellm_params,
+                            "model_info": MappingProxyType({"id": row.model_id, "db_model": True}),
+                        }
+                    )
+                    for row in model_rows
+                )
+                + config_rows,
+                baselines=baselines,
+                limit=limit,
             )
         yield tables.litellm_proxymodeltable
     await publish_config_change(redis_cache=coordination_redis_cache(), object_type="litellm_proxymodeltable")
@@ -651,6 +763,15 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
             if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.litellm_params, field) is None:
                 merged_litellm_params.pop(field, None)
                 merged_model_info.pop(field, None)
+            elif (
+                field
+                in (
+                    "auto_router_routing_compression",
+                    "auto_router_model_compression",
+                )
+                and getattr(updated_patch.litellm_params, field) is None
+            ):
+                merged_litellm_params.pop(field, None)
     if updated_patch.model_info:
         for field in updated_patch.model_info.model_fields_set:
             if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.model_info, field) is None:
@@ -786,11 +907,20 @@ async def patch_model(
             existing_litellm_params=db_model.litellm_params,
         )
 
+        ModelManagementAuthChecks.can_user_set_aws_session_tags(
+            litellm_params=patch_data.litellm_params,
+            user_api_key_dict=user_api_key_dict,
+            existing_litellm_params=db_model.litellm_params,
+        )
+
         _raise_on_strategy_router_write_violation(
             incoming_params=patch_data.litellm_params,
             existing_params=db_model.litellm_params,
         )
 
+        effective_params: Final = _effective_complexity_router_params(
+            patch_data.litellm_params, db_model.litellm_params
+        )
         requested_model_name: Final = patch_data.model_name
         stored_model_name: str | None = None
 
@@ -799,11 +929,9 @@ async def patch_model(
             stored_model_name = update_data.get("model_name")
             update_data["updated_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name
             update_data["updated_at"] = cast(str, get_utc_datetime())
-            async with _heuristic_v2_slot(
+            async with _auto_router_capability_slot(
                 prisma_client,
-                effective_config=_effective_complexity_router_config(
-                    patch_data.litellm_params, db_model.litellm_params
-                ),
+                effective_params=effective_params,
                 model_id=model_id,
             ) as table:
                 return await table.update(where={"model_id": model_id}, data=update_data)
@@ -1538,6 +1666,10 @@ async def _update_existing_team_model_assignment(
     # No team_model_add/delete calls required; public name is already registered
 
 
+def _canonical_session_tags(tags: Sequence[AwsSessionTag]) -> tuple[tuple[str, str], ...]:
+    return tuple(sorted((tag["Key"], tag["Value"]) for tag in tags))
+
+
 class ModelManagementAuthChecks:
     """
     Common auth checks for model management endpoints
@@ -1590,6 +1722,28 @@ class ModelManagementAuthChecks:
             type=ProxyErrorTypes.auth_error.value,
             code=status.HTTP_403_FORBIDDEN,
             param="litellm_credential_name",
+        )
+
+    @staticmethod
+    def can_user_set_aws_session_tags(
+        litellm_params: GenericLiteLLMParams | None,
+        user_api_key_dict: UserAPIKeyAuth,
+        existing_litellm_params: GenericLiteLLMParams | None = None,
+    ) -> Literal[True]:
+        if litellm_params is None or litellm_params.aws_session_tags is None:
+            return True
+        if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+            return True
+        existing_tags: Final = existing_litellm_params.aws_session_tags if existing_litellm_params is not None else None
+        if existing_tags is not None and _canonical_session_tags(existing_tags) == _canonical_session_tags(
+            litellm_params.aws_session_tags
+        ):
+            return True
+        raise ProxyException(
+            message=f"Only a proxy admin can set aws_session_tags on a model. Your role={user_api_key_dict.user_role}.",
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param="aws_session_tags",
         )
 
     @staticmethod
@@ -1925,6 +2079,11 @@ async def add_new_model(
             user_api_key_dict=user_api_key_dict,
         )
 
+        ModelManagementAuthChecks.can_user_set_aws_session_tags(
+            litellm_params=model_params.litellm_params,
+            user_api_key_dict=user_api_key_dict,
+        )
+
         _raise_on_strategy_router_write_violation(
             incoming_params=model_params.litellm_params,
             existing_params=None,
@@ -1959,9 +2118,12 @@ async def add_new_model(
                     model_params=priced_model_params,
                     user_api_key_dict=user_api_key_dict,
                     prisma_client=prisma_client,
-                    slot=_heuristic_v2_slot(
+                    slot=_auto_router_capability_slot(
                         prisma_client,
-                        effective_config=priced_model_params.litellm_params.complexity_router_config,
+                        effective_params=_effective_complexity_router_params(
+                            priced_model_params.litellm_params,
+                            None,
+                        ),
                         model_id=priced_model_params.model_info.id,
                     ),
                 )
@@ -2106,9 +2268,18 @@ async def update_model(
             existing_litellm_params=deployment.litellm_params,
         )
 
+        ModelManagementAuthChecks.can_user_set_aws_session_tags(
+            litellm_params=model_params.litellm_params,
+            user_api_key_dict=user_api_key_dict,
+            existing_litellm_params=deployment.litellm_params,
+        )
+
         _raise_on_strategy_router_write_violation(
             incoming_params=model_params.litellm_params,
             existing_params=deployment.litellm_params,
+        )
+        effective_params: Final = _effective_complexity_router_params(
+            model_params.litellm_params, deployment.litellm_params
         )
 
         # update DB
@@ -2147,11 +2318,9 @@ async def update_model(
                 "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
                 **({} if renamed_to is None else {"model_name": renamed_to}),
             }
-            async with _heuristic_v2_slot(
+            async with _auto_router_capability_slot(
                 prisma_client,
-                effective_config=_effective_complexity_router_config(
-                    model_params.litellm_params, deployment.litellm_params
-                ),
+                effective_params=effective_params,
                 model_id=_model_id,
             ) as table:
                 model_response: Final = await table.update(

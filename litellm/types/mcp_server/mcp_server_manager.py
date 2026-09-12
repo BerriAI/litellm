@@ -1,7 +1,8 @@
 from datetime import datetime
 from typing import Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from typing_extensions import Self
 
 from litellm.types.mcp import (
     DEFAULT_SUBJECT_TOKEN_TYPE,
@@ -36,6 +37,26 @@ class MCPOAuthMetadata(BaseModel):
     """True when the metadata came from guessing the resource origin as its authorization
     server rather than from an RFC 9728/8414-advertised document. Guessed endpoints are
     usable in memory but must never be persisted as configuration."""
+
+
+class MCPOAuthIdentityBinding(BaseModel):
+    """Per-server policy binding stored per-user OAuth credentials to the authenticated LiteLLM caller.
+
+    When enabled for an interactive oauth2 server, the token relay validates the upstream OIDC
+    ``id_token`` (signature via the pinned issuer's JWKS, issuer, audience, expiry, nonce) and compares its
+    principal claim to the LiteLLM caller's trusted identity before the token is returned, stored,
+    or cached. ``audit`` logs mismatches without changing behavior; ``enforce`` fails closed with
+    403 ``oauth_principal_mismatch`` and disables the direct ``oauth-user-credential`` POST, which
+    would otherwise bypass validation with an arbitrary opaque token.
+    """
+
+    mode: Literal["disabled", "audit", "enforce"] = "disabled"
+    issuer: str
+    jwks_url: str | None = None
+    audiences: list[str] = Field(min_length=1)  # mutable-ok: public Pydantic schema requires list values
+    principal_claim: str = "email"
+    caller_field: Literal["user_email", "user_id"] = "user_email"
+    require_email_verified: bool = True
 
 
 class MCPServer(BaseModel):
@@ -158,6 +179,7 @@ class MCPServer(BaseModel):
     # be set explicitly to avoid regressing servers that did not opt in.
     oauth_passthrough: bool = False
     dcr_bridge: bool | None = None
+    per_server_oauth_discovery: bool = False
     is_byok: bool = False
     byok_description: list[str] = []
     byok_api_key_help_url: str | None = None
@@ -172,6 +194,7 @@ class MCPServer(BaseModel):
     # response (supports dot-notation for nested fields, e.g. "team.enterprise_id").
     # Tokens that fail validation are rejected before storage.
     token_validation: dict[str, Any] | None = None
+    oauth_identity_binding: MCPOAuthIdentityBinding | None = None
     # Optional TTL override (seconds) for the Redis per-user token cache, capped
     # at the token's expires_in minus the expiry buffer so a cached entry never
     # outlives the token. Defaults to the token's expires_in minus the expiry
@@ -224,6 +247,14 @@ class MCPServer(BaseModel):
         """
         return self.oauth2_flow == "client_credentials"
 
+    @model_validator(mode="after")
+    def validate_identity_binding_mode(self) -> Self:
+        binding: Final = self.oauth_identity_binding
+        if binding is not None and binding.mode != "disabled":
+            if not self.needs_user_oauth_token or self.delegate_auth_to_upstream:
+                raise ValueError("oauth_identity_binding requires gateway-managed per-user OAuth2 credentials")
+        return self
+
     @property
     def needs_user_oauth_token(self) -> bool:
         """True if this is an OAuth2 server that relies on per-user tokens (no client_credentials)."""
@@ -240,6 +271,32 @@ class MCPServer(BaseModel):
         DCR-bridge, and token-exchange servers are their own auth types and client-forwarded,
         so they are excluded by construction."""
         return self.auth_type == MCPAuth.oauth2 and not self.delegate_auth_to_upstream
+
+    @property
+    def uses_per_server_oauth_relay(self) -> bool:
+        """Whether named discovery should advertise the configured per-server OAuth relay."""
+        return self.per_server_oauth_discovery and self.auth_type == MCPAuth.oauth2 and not self.has_client_credentials
+
+    @property
+    def advertises_gateway_authorization_server(self) -> bool:
+        """Whether named discovery should advertise the aggregate gateway authorization server."""
+        if self.auth_type == MCPAuth.oauth2:
+            return self.is_gateway_managed_oauth2 and not self.uses_per_server_oauth_relay
+        if self.auth_type not in (
+            None,
+            MCPAuth.none,
+            MCPAuth.api_key,
+            MCPAuth.bearer_token,
+            MCPAuth.basic,
+            MCPAuth.authorization,
+            MCPAuth.token,
+            MCPAuth.aws_sigv4,
+        ):
+            return False
+        return not any(
+            header.lower() in ("authorization", "x-api-key", "api-key", "apikey")
+            for header in (self.extra_headers or ())
+        )
 
     @property
     def is_true_passthrough(self) -> bool:

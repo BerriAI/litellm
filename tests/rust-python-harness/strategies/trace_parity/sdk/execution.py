@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Protocol, cast
 
 from ....shared.parity.replay import replay_server
 from ....shared.reporting.models import Surface
-from ....shared.tracing.native import native_trace_events
+from ....shared.tracing.native import TraceResponsePayload, native_trace_events
 from ....shared.tracing.profiler import FunctionTraceEvent, profile_python
 from ....shared.tracing.steps import Engine, pipeline_projection
-from ..models import RouteSpec, TraceExecutionFailure, TraceMode, TraceScenario
+from ..models import RouteFixture, RouteSpec, TraceExecutionFailure, TraceMode, TraceScenario
 from ..reporting import TraceComparisonArtifact
 
 
@@ -18,9 +19,22 @@ class SdkCall(Protocol):
     def __call__(self, **kwargs: object) -> object: ...
 
 
+@dataclass(frozen=True, slots=True)
+class _CollectedTrace:
+    events: tuple[FunctionTraceEvent, ...]
+    error: str | None = None
+
+
 def _invoke(function: SdkCall, kwargs: dict[str, object], *, asynchronous: bool) -> object:
     async def invoke_async() -> object:
-        return await cast(Awaitable[object], function(**kwargs))
+        try:
+            return await cast(Awaitable[object], function(**kwargs))
+        finally:
+            await asyncio.sleep(0)
+            from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+            await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+            await GLOBAL_LOGGING_WORKER.stop()
 
     if asynchronous:
         return asyncio.run(invoke_async())
@@ -48,16 +62,30 @@ def _entrypoint(spec: RouteSpec, engine: Engine, *, asynchronous: bool) -> SdkCa
     return cast(SdkCall, getattr(owner, spec.python_entrypoints[int(asynchronous)]))
 
 
+def _python_invocation_error(function: SdkCall, kwargs: dict[str, object], *, asynchronous: bool) -> str | None:
+    try:
+        _invoke(function, kwargs, asynchronous=asynchronous)
+    except Exception as error:
+        return f"{type(error).__name__}: {error}"
+    return None
+
+
 def _collect(
-    function: SdkCall, kwargs: dict[str, object], engine: Engine, *, asynchronous: bool
-) -> tuple[FunctionTraceEvent, ...]:
+    function: SdkCall,
+    fixture: RouteFixture,
+    engine: Engine,
+    *,
+    asynchronous: bool,
+) -> _CollectedTrace:
+    kwargs: Final = fixture.kwargs
     if engine == "rust":
-        return native_trace_events(_invoke(function, kwargs, asynchronous=asynchronous))
+        payload: Final = TraceResponsePayload.model_validate(_invoke(function, kwargs, asynchronous=asynchronous))
+        return _CollectedTrace(native_trace_events(payload), payload.error)
     import litellm
 
     with profile_python(Path(litellm.__file__).parent, threads=True) as profiler:
-        _invoke(function, kwargs, asynchronous=asynchronous)
-    return tuple(profiler.events)
+        error: Final = _python_invocation_error(function, kwargs, asynchronous=asynchronous)
+    return _CollectedTrace(tuple(profiler.events), error)
 
 
 def collect_trace(
@@ -68,22 +96,30 @@ def collect_trace(
         return function
     try:
         with replay_server() as provider:
-            fixture: Final = spec.fixture(engine, provider.url)
-            for response in fixture.provider_responses:
+            base_fixture: Final = spec.fixture(engine, provider.url)
+            for response in base_fixture.provider_responses:
                 provider.enqueue_response(response)
-            kwargs: Final = {
-                **fixture.kwargs,
-                "api_key": "test-key",
-                "api_base": provider.url,
-                **({"timeout_seconds": 5} if engine == "rust" else {"timeout": 5}),
-            }
-            events: Final = _collect(function, kwargs, engine, asynchronous=asynchronous)
+            fixture: Final = RouteFixture(
+                kwargs={
+                    **base_fixture.kwargs,
+                    "api_key": "test-key",
+                    "api_base": provider.url,
+                    **({"timeout_seconds": 5} if engine == "rust" else {"timeout": 5}),
+                },
+                provider_responses=base_fixture.provider_responses,
+                expected_failure=base_fixture.expected_failure,
+            )
+            collected: Final = _collect(function, fixture, engine, asynchronous=asynchronous)
             provider.take_requests(len(fixture.provider_responses))
     except Exception as error:
         return TraceExecutionFailure(engine, f"{type(error).__name__}: {error}")
-    if not events:
+    if fixture.expected_failure and collected.error is None:
+        return TraceExecutionFailure(engine, "call succeeded but the scenario expects failure")
+    if not fixture.expected_failure and collected.error is not None:
+        return TraceExecutionFailure(engine, collected.error)
+    if not collected.events:
         return TraceExecutionFailure(engine, "trace is empty")
-    return events
+    return collected.events
 
 
 def _failure_message(result: tuple[FunctionTraceEvent, ...] | TraceExecutionFailure) -> str | None:

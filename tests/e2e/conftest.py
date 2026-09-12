@@ -30,15 +30,19 @@ from e2e_config import (
     MANAGED_FILES_OPT_IN_ENV,
     PROMPT_CACHING_OPT_IN_ENV,
     PROXY_BASE_URL,
+    REDIS_CHAOS_OPT_IN_ENV,
     WEEKLY_ANOMALY_OPT_IN_ENV,
+    unique_marker,
 )
 from e2e_db import RESET_OPT_IN_ENV, reset_spend_logs, run_spend_log_cleanup
+from e2e_http import unwrap
 from fixture_mode import fixture_mode_collection_error, fixture_report_lines
-from provider_edge import replay_leftover_error
+from idp import Identity, Keycloak, keycloak_from_env
 from junit_properties import attach_result_properties
 from lifecycle import ProxyClientProvider, ResourceManager
+from models import TeamNewBody, UserNewBody, UserNewResponse
+from provider_edge import replay_leftover_error
 from proxy_client import ProxyClient, build_proxy_client
-
 
 _E2E_TEST_RAN = pytest.StashKey[bool]()
 _CALL_PASSED = pytest.StashKey[bool]()
@@ -48,8 +52,36 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "weekly": WEEKLY_ANOMALY_OPT_IN_ENV,
         "managed_files": MANAGED_FILES_OPT_IN_ENV,
         "prompt_caching_stack": PROMPT_CACHING_OPT_IN_ENV,
+        "redis_chaos": REDIS_CHAOS_OPT_IN_ENV,
     }
 )
+
+
+@pytest.fixture(scope="session")
+def idp() -> Keycloak:
+    return keycloak_from_env()
+
+
+@pytest.fixture
+def jwt_identity(idp: Keycloak, resources: ResourceManager, proxy: ProxyClient) -> Identity:
+    marker: Final = unique_marker()
+    identity: Final = idp.provision(marker=marker, group=f"e2e-jwt-team-{marker}", defer=resources.defer)
+    resources.defer(lambda: proxy.delete_user(identity.user_id))
+    # Seed the canonical user before any JWT call populates the auth cache.
+    # Group claims grant team access; management membership is added by the test.
+    unwrap(
+        proxy.transport.post(
+            "/user/new",
+            headers=proxy.transport.master,
+            json=UserNewBody(
+                user_id=identity.user_id, user_email=f"{identity.username}@example.com", user_role="internal_user"
+            ),
+            response_type=UserNewResponse,
+        )
+    )
+    team_id: Final = proxy.create_team(TeamNewBody(team_alias=f"e2e-jwt-{marker}", team_id=identity.group))
+    resources.defer(lambda: proxy.delete_team(team_id))
+    return identity
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -82,6 +114,11 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "prompt_caching_stack: needs a proxy running with router_settings.optional_pre_call_checks including "
         "prompt_caching; deselected unless E2E_PROMPT_CACHING_STACK is set",
+    )
+    config.addinivalue_line(
+        "markers",
+        "redis_chaos: load test that pauses the proxy's Redis outright mid-run; needs a proxy booted from "
+        "gateway/redis_chaos_ci_config.yml on the same host, and is deselected unless E2E_REDIS_CHAOS is set",
     )
 
 

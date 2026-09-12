@@ -105,6 +105,27 @@ async def test_usage_units_rolled_up_by_guardrail_team_key_and_date():
     }
 
 
+@pytest.mark.asyncio
+async def test_flagged_status_counts_as_flagged_not_passed_or_blocked():
+    """LIT-6894: a custom code flag() verdict lands in flagged_count on the Monitor rollup."""
+    prisma = _prisma()
+    logs = [
+        _payload("r1", guardrail_status="success"),
+        _payload("r2", guardrail_status="guardrail_flagged"),
+        _payload("r3", guardrail_status="guardrail_intervened"),
+    ]
+
+    await process_spend_logs_guardrail_usage(prisma, logs)
+
+    create = prisma.db.litellm_dailyguardrailmetrics.upsert.call_args.kwargs["data"]["create"]
+    assert (create["requests_evaluated"], create["passed_count"], create["flagged_count"], create["blocked_count"]) == (
+        3,
+        1,
+        1,
+        1,
+    )
+
+
 def _fake_sleep() -> tuple[AsyncMock, list[float]]:
     delays: list[float] = []
     sleep = AsyncMock(side_effect=lambda delay: delays.append(delay))

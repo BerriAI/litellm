@@ -1738,3 +1738,44 @@ def test_vertex_text_embedding_request_includes_labels_from_metadata():
         },
     )
     assert req.get("labels") == {"project_id": "cost-center-1"}
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_api"),
+    [
+        ("lyria-002", "lyria_predict"),
+        ("vertex_ai/lyria-002", "lyria_predict"),
+        ("lyria-3-clip-preview", "lyria_interactions"),
+        ("lyria-3-pro-preview", "lyria_interactions"),
+    ],
+)
+def test_get_vertex_ai_lyria_model_info_resolves_audio_api(model, expected_api):
+    from litellm.llms.vertex_ai.common_utils import get_vertex_ai_lyria_model_info
+
+    model_info = get_vertex_ai_lyria_model_info(model=model)
+
+    assert model_info is not None
+    assert model_info["vertex_ai_audio_api"] == expected_api
+
+
+@pytest.mark.parametrize("model", ["en-US-Studio-O", "gemini-2.5-flash-preview-tts", "chirp-3-hd-charon"])
+def test_get_vertex_ai_lyria_model_info_is_none_for_non_lyria_speech_models(model):
+    from litellm.llms.vertex_ai.common_utils import get_vertex_ai_lyria_model_info
+
+    assert get_vertex_ai_lyria_model_info(model=model) is None
+
+
+def test_get_vertex_ai_lyria_model_info_falls_back_to_bundled_map(monkeypatch):
+    import litellm
+    from litellm.llms.vertex_ai.common_utils import get_vertex_ai_lyria_model_info
+
+    stale_runtime_model_cost = {
+        key: value for key, value in litellm.model_cost.items() if not key.startswith("vertex_ai/lyria")
+    }
+    monkeypatch.setattr(litellm, "model_cost", stale_runtime_model_cost)
+
+    model_info = get_vertex_ai_lyria_model_info(model="lyria-3-pro-preview")
+
+    assert model_info is not None
+    assert model_info["vertex_ai_audio_api"] == "lyria_interactions"
+    assert model_info["supported_audio_formats"] == ("mp3", "wav")

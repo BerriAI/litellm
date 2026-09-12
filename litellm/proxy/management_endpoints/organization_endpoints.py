@@ -46,6 +46,7 @@ from litellm.proxy.management_endpoints.common_utils import (
 from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
     prepare_object_permission_upsert,
+    reject_ambiguous_mcp_tool_permission_keys,
 )
 from litellm.proxy.management_helpers.utils import (
     get_new_internal_user_defaults,
@@ -79,7 +80,23 @@ if TYPE_CHECKING:
     from prisma.models import LiteLLM_OrganizationTable as PrismaOrganizationTable
     from prisma.models import LiteLLM_UserTable as PrismaUserTable
 
-router: Final = APIRouter()
+
+async def _enterprise_license_required(
+    _user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> None:
+    from litellm.proxy.proxy_server import premium_user
+
+    if not premium_user:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Organizations are only available for LiteLLM Enterprise users. "
+                f"{CommonProxyErrors.not_premium_user.value}"
+            },
+        )
+
+
+router: Final = APIRouter(dependencies=[Depends(_enterprise_license_required)])
 
 
 class _ObjectPermissionRow(Protocol):
@@ -606,6 +623,11 @@ async def _set_object_permission(
         return None
 
     if data.object_permission is not None:
+        await reject_ambiguous_mcp_tool_permission_keys(
+            new_mcp_tool_permissions=data.object_permission.mcp_tool_permissions,
+            existing_mcp_tool_permissions=None,
+            prisma_client=prisma_client,
+        )
         created_object_permission: Final = await _table(ObjectPermissionRepository(prisma_client)).create(
             data=data.object_permission.model_dump(exclude_none=True),
         )

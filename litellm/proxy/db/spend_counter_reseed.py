@@ -23,6 +23,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import Litellm_EntityType
+from litellm.proxy.db.db_lookup_gate import db_lookup_gate
+from litellm.proxy.spend_tracking.spend_counter_batch import read_batched_spend_counter, record_spend_counter_value
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.table_repositories import (
     BudgetWindowSpendRepository,
@@ -104,6 +106,15 @@ class SpendCounterReseed:
             return lock
 
     @staticmethod
+    async def increment_in_memory(spend_counter_cache: "DualCache", counter_key: str, increment: float) -> float | None:
+        """Apply local deltas after an in-flight reseed establishes the spend balance."""
+        lock: Final = await SpendCounterReseed._get_lock(counter_key)
+        async with lock:
+            return await spend_counter_cache.async_increment_cache(
+                key=counter_key, value=increment, local_only=True, refresh_ttl=True
+            )
+
+    @staticmethod
     async def from_db(prisma_client: Optional["PrismaClient"], counter_key: str) -> float | None:
         """
         Read the authoritative spend for a counter from the DB.
@@ -121,30 +132,33 @@ class SpendCounterReseed:
         if SpendCounterReseed._is_key_or_team_window_counter(counter_key):
             return None
         try:
-            if counter_key.startswith("spend:key:"):
-                token: Final = counter_key[len("spend:key:") :]
-                row = await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": token})
-            elif counter_key.startswith("spend:team_member:"):
-                suffix: Final = counter_key[len("spend:team_member:") :]
-                if ":" not in suffix:
+            async with db_lookup_gate.current():
+                if counter_key.startswith("spend:key:"):
+                    token: Final = counter_key[len("spend:key:") :]
+                    row = await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": token})
+                elif counter_key.startswith("spend:team_member:"):
+                    suffix: Final = counter_key[len("spend:team_member:") :]
+                    if ":" not in suffix:
+                        return None
+                    user_id, team_id = suffix.rsplit(":", 1)
+                    row = await TeamMembershipRepository(prisma_client).table.find_unique(
+                        where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}}
+                    )
+                elif counter_key.startswith("spend:team:"):
+                    team_id = counter_key[len("spend:team:") :]
+                    row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
+                elif counter_key.startswith("spend:user:"):
+                    user_id = counter_key[len("spend:user:") :]
+                    row = await UserRepository(prisma_client).table.find_unique(where={"user_id": user_id})
+                elif counter_key.startswith(END_USER_COUNTER_PREFIX) or counter_key.startswith("spend:tag:"):
                     return None
-                user_id, team_id = suffix.rsplit(":", 1)
-                row = await TeamMembershipRepository(prisma_client).table.find_unique(
-                    where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}}
-                )
-            elif counter_key.startswith("spend:team:"):
-                team_id = counter_key[len("spend:team:") :]
-                row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
-            elif counter_key.startswith("spend:user:"):
-                user_id = counter_key[len("spend:user:") :]
-                row = await UserRepository(prisma_client).table.find_unique(where={"user_id": user_id})
-            elif counter_key.startswith(END_USER_COUNTER_PREFIX) or counter_key.startswith("spend:tag:"):
-                return None
-            elif counter_key.startswith("spend:org:"):
-                org_id: Final = counter_key[len("spend:org:") :]
-                row = await OrganizationRepository(prisma_client).table.find_unique(where={"organization_id": org_id})
-            else:
-                return None
+                elif counter_key.startswith("spend:org:"):
+                    org_id: Final = counter_key[len("spend:org:") :]
+                    row = await OrganizationRepository(prisma_client).table.find_unique(
+                        where={"organization_id": org_id}
+                    )
+                else:
+                    return None
         except Exception:
             verbose_proxy_logger.exception("SpendCounterReseed.from_db: failed for %s", counter_key)
             return None
@@ -182,6 +196,11 @@ class SpendCounterReseed:
         return False
 
     @staticmethod
+    async def _read_active_batch(counter_key: str) -> tuple[float | None, bool] | None:
+        """The request's MGET answers for this counter; a Redis miss there is authoritative."""
+        return await read_batched_spend_counter(counter_key)
+
+    @staticmethod
     async def coalesced(
         prisma_client: Optional["PrismaClient"],
         spend_counter_cache: "DualCache",
@@ -198,10 +217,13 @@ class SpendCounterReseed:
         """
         lock: Final = await SpendCounterReseed._get_lock(counter_key)
         async with lock:
+            batched: Final = await SpendCounterReseed._read_active_batch(counter_key)
+            if batched is not None and batched[0] is not None:
+                return batched[0]
             # Re-check after acquiring the lock. Skip in-memory on a clean
             # Redis miss - in-memory is per-pod-stale.
-            redis_clean_miss = False
-            if spend_counter_cache.redis_cache is not None:
+            redis_clean_miss = batched is not None
+            if spend_counter_cache.redis_cache is not None and not redis_clean_miss:
                 try:
                     val = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
                     if val is not None:
@@ -240,8 +262,12 @@ class SpendCounterReseed:
                         key=counter_key,
                         value=current_value,
                     )
+                    record_spend_counter_value(counter_key, current_value)
                 else:
-                    await spend_counter_cache.async_increment_cache(key=counter_key, value=db_spend, refresh_ttl=True)
+                    cached_spend: Final = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+                    seeded_spend: Final = max(db_spend, float(cached_spend)) if cached_spend is not None else db_spend
+                    spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=seeded_spend)
+                    return seeded_spend
             except Exception:
                 verbose_proxy_logger.exception(
                     "SpendCounterReseed.coalesced: failed to warm counter %s",
@@ -388,8 +414,11 @@ class SpendCounterReseed:
     ) -> float | None:
         lock: Final = await SpendCounterReseed._get_lock(counter_key)
         async with lock:
-            redis_clean_miss = False
-            if spend_counter_cache.redis_cache is not None:
+            batched: Final = await SpendCounterReseed._read_active_batch(counter_key)
+            if batched is not None and batched[0] is not None:
+                return batched[0]
+            redis_clean_miss = batched is not None
+            if spend_counter_cache.redis_cache is not None and not redis_clean_miss:
                 try:
                     val = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
                     if val is not None:
@@ -433,12 +462,18 @@ class SpendCounterReseed:
                         key=counter_key,
                         value=current_value,
                     )
+                    record_spend_counter_value(counter_key, float(current_value))
                 else:
-                    await spend_counter_cache.async_increment_cache(key=counter_key, value=window_spend)
+                    cached_spend: Final = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+                    seeded_spend: Final = (
+                        max(window_spend, float(cached_spend)) if cached_spend is not None else window_spend
+                    )
+                    spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=seeded_spend)
+                    return seeded_spend
             except Exception:
                 verbose_proxy_logger.exception(
                     "SpendCounterReseed.coalesced_window: failed to warm counter %s",
                     counter_key,
                 )
                 raise
-            return window_spend
+            return current_value

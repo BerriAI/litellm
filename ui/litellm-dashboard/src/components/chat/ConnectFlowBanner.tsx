@@ -2,30 +2,18 @@
 
 import React from "react";
 import { CheckCircle } from "lucide-react";
-import { getProxyBaseUrl } from "@/components/networking";
+import { getProxyBaseUrl, ConnectFlowStatus } from "@/components/networking";
+import { OAuth2ConnectButton } from "@/components/chat/MCPAppsPanel";
 
 interface Props {
   flowHandle: string;
-  clientOrigin: string | null;
+  flow?: ConnectFlowStatus;
+  accessToken: string;
+  onConnected: () => void;
+  failed: boolean;
 }
 
-/**
- * The interlude shown when a DCR client (Claude Desktop, MCP Inspector) sends the user
- * through the gateway sign-in and lands them on the apps grid to authorize servers. The
- * grid below authorizes individual servers into the per-user vault; this banner is the
- * finish step that returns the user to the client.
- *
- * Finishing requires the explicit "Finish connecting" button: a native form POST to the proxy's
- * /authorize/complete, which mints the gateway authorization code and 303-redirects to the DCR
- * client's own redirect URI (the full-page navigation carries the HttpOnly per-flow cookie and
- * follows the cross-origin redirect to the client's loopback).
- *
- * The button press IS the consent gate and must not be bypassed. An earlier version auto-finished
- * on tab close via navigator.sendBeacon; that let an attacker who lured a signed-in victim to their
- * own client's authorize URL harvest a victim-bound code the moment the victim closed the tab
- * (no click). Merely visiting the authorize URL is attacker-inducible, so completion has to be a
- * deliberate user action, not a side effect of leaving the page.
- */
+/** Finish remains an explicit POST because a cross-site navigation must never mint a code. */
 export function isLoopbackOrigin(origin: string | null): boolean {
   if (!origin) return false;
   try {
@@ -36,10 +24,44 @@ export function isLoopbackOrigin(origin: string | null): boolean {
   }
 }
 
-const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, clientOrigin }) => {
+const copyFor = (flow: ConnectFlowStatus | undefined, failed: boolean): readonly [string, string] => {
+  const clientLabel = flow?.client_origin ?? "the application";
+  const serverLabel = flow?.server_name ?? "the requested MCP server";
+  if (failed || flow === undefined || flow.state === "stale") {
+    return [
+      "The connection cannot continue",
+      `The gateway could not validate this connection. Cancel to return to ${clientLabel}.`,
+    ];
+  }
+  if (flow.state === "unscoped") {
+    return [
+      `Connect your MCP servers to ${clientLabel}`,
+      `Authorize the servers you want to use below, then click Finish connecting to return to ${clientLabel}.`,
+    ];
+  }
+  if (flow.state === "interactive" && !flow.connected) {
+    return [
+      `Allow ${clientLabel} to use ${serverLabel}`,
+      `Authorize ${serverLabel} below to continue, or cancel to send ${clientLabel} away.`,
+    ];
+  }
+  return [
+    `Allow ${clientLabel} to use ${serverLabel}`,
+    `Click Finish connecting to give ${clientLabel} access to ${serverLabel} as you.`,
+  ];
+};
+
+const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, flow, accessToken, onConnected, failed }) => {
   const action = `${getProxyBaseUrl()}/authorize/complete`;
-  const clientLabel = clientOrigin ?? "the application";
-  const loopbackClient = isLoopbackOrigin(clientOrigin);
+  const state = failed || flow === undefined ? "stale" : flow.state;
+  const canFinish = state === "unscoped" || (state !== "stale" && flow?.connected === true);
+  const canCancel = state !== "unscoped";
+  const loopbackClient = isLoopbackOrigin(flow?.client_origin ?? null);
+  const vendorServer =
+    state === "interactive" && flow?.connected === false && flow.server_id !== null
+      ? { server_id: flow.server_id, server_name: flow.server_name }
+      : null;
+  const copy = copyFor(flow, failed);
 
   return (
     <div className="mb-6 rounded-lg border border-primary/30 bg-primary/5 px-5 py-4">
@@ -47,27 +69,48 @@ const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, clientOrigin }) => {
         <div className="flex items-start gap-3 min-w-0">
           <CheckCircle className="h-5 w-5 text-primary shrink-0 mt-0.5" />
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-foreground">Connect your MCP servers to {clientLabel}</p>
-            <p className="text-[13px] text-muted-foreground mt-0.5">
-              Authorize the servers you want to use below, then click Finish connecting to return to {clientLabel}.
-            </p>
+            <p className="text-sm font-semibold text-foreground">{copy[0]}</p>
+            <p className="text-[13px] text-muted-foreground mt-0.5">{copy[1]}</p>
           </div>
         </div>
-        <form method="POST" action={action} className="shrink-0">
-          <input type="hidden" name="flow" value={flowHandle} />
-          <button
-            type="submit"
-            className="h-[38px] rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
-          >
-            Finish connecting
-          </button>
-          {loopbackClient && (
-            <label className="mt-2 flex items-center gap-2 text-[13px] text-muted-foreground">
-              <input type="checkbox" name="delivery" value="manual" />
-              My client is on a remote or SSH machine
-            </label>
+        <div className="flex shrink-0 gap-2">
+          {vendorServer !== null && (
+            <OAuth2ConnectButton
+              server={vendorServer}
+              accessToken={accessToken}
+              onConnect={onConnected}
+              variant="button"
+              autoStartKey={`litellm-mcp-autostart:${flowHandle}`}
+            />
           )}
-        </form>
+          <form method="POST" action={action}>
+            <input type="hidden" name="flow" value={flowHandle} />
+            {canFinish && (
+              <button
+                type="submit"
+                className="h-[38px] rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+              >
+                Finish connecting
+              </button>
+            )}
+            {canCancel && (
+              <button
+                type="submit"
+                name="decision"
+                value="deny"
+                className="ml-2 h-[38px] rounded-md border px-4 text-sm font-semibold text-foreground hover:bg-accent/40"
+              >
+                Cancel
+              </button>
+            )}
+            {loopbackClient && (
+              <label className="mt-2 flex items-center gap-2 text-[13px] text-muted-foreground">
+                <input type="checkbox" name="delivery" value="manual" />
+                My client is on a remote or SSH machine
+              </label>
+            )}
+          </form>
+        </div>
       </div>
     </div>
   );

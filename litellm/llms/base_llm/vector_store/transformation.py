@@ -121,6 +121,9 @@ class RouterVectorStoreEmbeddingExecutor:
 
 
 class BaseVectorStoreConfig:
+    def validate_create_vector_store(self) -> None:
+        return None
+
     def get_supported_openai_params(self, model: str) -> list[VECTOR_STORE_OPENAI_PARAMS]:
         return []
 

@@ -1073,6 +1073,54 @@ async def test_messages_strips_provider_prefix_exactly_once(requested_model, exp
 
 
 @pytest.mark.asyncio
+async def test_native_messages_strips_replayed_provider_specific_fields_from_wire():
+    captured = {}
+
+    async def fake_send(self, request, **kwargs):
+        captured["body"] = json.loads(request.content)
+        raise httpx.ConnectError("cut at the wire", request=request)
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01",
+                    "name": "get_weather",
+                    "input": {"city": "Paris"},
+                    "provider_specific_fields": {"signature": "sig_abc"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01",
+                    "content": "Sunny",
+                }
+            ],
+        },
+    ]
+
+    with (
+        patch.object(httpx.AsyncClient, "send", fake_send),
+        pytest.raises(litellm.exceptions.InternalServerError),
+    ):
+        await litellm.anthropic.messages.acreate(
+            max_tokens=100,
+            messages=messages,
+            model="anthropic/claude-haiku-4-5-20251001",
+            api_key="test-api-key",
+        )
+
+    assert "provider_specific_fields" in messages[0]["content"][0]
+    assert "provider_specific_fields" not in captured["body"]["messages"][0]["content"][0]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "requested_model, expected_reported_model",
     [

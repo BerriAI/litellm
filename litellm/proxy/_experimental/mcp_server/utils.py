@@ -752,7 +752,7 @@ def interpolate_headers(headers: Mapping[str, str], variables: Mapping[str, str]
 def build_env_var_setup_url(server_id: str) -> str:
     """The frontend URL where a user can fill in their per-user env vars."""
     base: Final = os.environ.get("PROXY_BASE_URL", "").rstrip("/")
-    path: Final = f"/ui/?page=mcp-servers&fill_env_vars={quote(server_id, safe='')}"
+    path: Final = f"/ui/mcp-servers?fill_env_vars={quote(server_id, safe='')}"
     return f"{base}{path}" if base else path
 
 

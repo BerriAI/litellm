@@ -1,7 +1,8 @@
 import asyncio
 import json
 from litellm._uuid import uuid
-from typing import Optional, cast
+from types import MappingProxyType
+from typing import Final, Mapping, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1181,3 +1182,128 @@ async def test_find_member_if_email_missing_row_raises_documented_400():
             "non-existent user_email in LiteLLM_UserTable. Use 'user_id' instead."
         )
     }
+
+
+@pytest.mark.asyncio
+async def test_new_organization_rejects_shared_alias_tool_permission_key():
+    """/organization/new creates its permission row through its own helper, so the
+    ambiguous mcp_tool_permissions key check (LIT-4982) has to run there too."""
+    from litellm.proxy._types import LiteLLM_ObjectPermissionBase, NewOrganizationRequest
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        _set_object_permission,
+    )
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(
+        return_value=[
+            MagicMock(server_id="wiki-a-id", alias="wiki", server_name="wiki_a"),
+            MagicMock(server_id="wiki-b-id", alias="wiki", server_name="wiki_b"),
+        ]
+    )
+    prisma_client.db.litellm_objectpermissiontable.create = AsyncMock()
+    data = NewOrganizationRequest(
+        organization_alias="org",
+        object_permission=LiteLLM_ObjectPermissionBase(mcp_tool_permissions={"wiki": ["ask_question"]}),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _set_object_permission(data=data, prisma_client=prisma_client)
+
+    assert exc_info.value.status_code == 400
+    assert "wiki-a-id" in str(exc_info.value.detail)
+    assert "wiki-b-id" in str(exc_info.value.detail)
+    prisma_client.db.litellm_objectpermissiontable.create.assert_not_called()
+
+
+def test_v2_update_organization_is_in_openapi_schema():
+    """PATCH /v2/organization/{organization_id} is documented in the generated OpenAPI spec."""
+    from fastapi import FastAPI
+
+    from litellm.proxy.management_endpoints.organization_endpoints import router
+
+    app = FastAPI()
+    app.include_router(router)
+
+    v2_path = app.openapi()["paths"]["/v2/organization/{organization_id}"]
+    assert v2_path["patch"]["tags"] == ["organization management"]
+    assert "OrganizationUpdateRequestV2" in json.dumps(v2_path["patch"]["requestBody"])
+
+
+def _organization_route_targets() -> list[tuple[str, str]]:
+    from fastapi.routing import APIRoute
+
+    from litellm.proxy.management_endpoints.organization_endpoints import router
+
+    return [
+        (method, route.path.replace("{organization_id}", "org-under-test"))
+        for route in router.routes
+        if isinstance(route, APIRoute)
+        for method in sorted(route.methods - {"HEAD", "OPTIONS"})
+    ]
+
+
+_ORGANIZATION_ROUTE_REQUESTS: Final[Mapping[tuple[str, str], Mapping[str, object]]] = MappingProxyType(
+    {
+        ("POST", "/organization/new"): {"json": {"organization_alias": "org-under-test"}},
+        ("DELETE", "/organization/delete"): {"json": {"organization_ids": ["org-under-test"]}},
+        ("GET", "/organization/info"): {"params": {"organization_id": "org-under-test"}},
+        ("POST", "/organization/info"): {"json": {"organizations": ["org-under-test"]}},
+        ("POST", "/organization/member_add"): {
+            "json": {"organization_id": "org-under-test", "member": {"user_id": "user-1", "role": "internal_user"}}
+        },
+        ("PATCH", "/organization/member_update"): {"json": {"organization_id": "org-under-test", "user_id": "user-1"}},
+        ("DELETE", "/organization/member_delete"): {"json": {"organization_id": "org-under-test", "user_id": "user-1"}},
+    }
+)
+
+
+def _organization_request(method: str, path: str) -> Mapping[str, object]:
+    return _ORGANIZATION_ROUTE_REQUESTS.get((method, path), {"json": {}})
+
+
+def _organization_test_client() -> TestClient:
+    from fastapi import FastAPI
+
+    from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.management_endpoints.organization_endpoints import router
+    from litellm.proxy.proxy_server import openai_exception_handler
+
+    app = FastAPI()
+    app.include_router(router)
+    app.add_exception_handler(ProxyException, openai_exception_handler)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="sk-test", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    return TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.mark.parametrize(("method", "path"), _organization_route_targets())
+def test_organization_routes_are_blocked_without_enterprise_license(monkeypatch, method, path):
+    """Every /organization route is enterprise-only, even for a proxy admin sending a valid request."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "premium_user", False, raising=False)
+    monkeypatch.setattr(proxy_server, "prisma_client", None, raising=False)
+
+    response = _organization_test_client().request(method, path, **_organization_request(method, path))
+
+    assert response.status_code == 403
+    assert "Organizations" in response.json()["detail"]["error"]
+
+
+@pytest.mark.parametrize(("method", "path"), _organization_route_targets())
+def test_organization_routes_reach_their_handler_with_enterprise_license(monkeypatch, method, path):
+    """The same request a license refuses above now reaches the handler, which is the code reporting the missing database."""
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import CommonProxyErrors
+
+    monkeypatch.setattr(proxy_server, "premium_user", True, raising=False)
+    monkeypatch.setattr(proxy_server, "prisma_client", None, raising=False)
+
+    response = _organization_test_client().request(method, path, **_organization_request(method, path))
+
+    assert response.status_code == 500
+    assert any(
+        message in response.text for message in (CommonProxyErrors.db_not_connected_error.value, "No db connected")
+    )

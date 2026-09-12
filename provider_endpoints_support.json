@@ -594,6 +594,7 @@
         "moderations": false,
         "batches": false,
         "rerank": true,
+        "ocr": true,
         "a2a": true,
         "interactions": true
       }

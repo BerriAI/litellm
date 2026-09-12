@@ -23,7 +23,7 @@ from botocore.exceptions import (
     ProfileNotFound,
 )
 
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, SignsRequestsWithAWS
 from litellm.secret_managers.main import get_secret_str
 
 BEDROCK_MANTLE_DEFAULT_REGION: Final = "us-east-1"
@@ -55,7 +55,7 @@ def resolve_mantle_region(params: Mapping[str, object]) -> str:
     )
 
 
-class BedrockMantleAuthMixin:
+class BedrockMantleAuthMixin(SignsRequestsWithAWS):
     _aws_signer: BaseAWSLLM
 
     @staticmethod

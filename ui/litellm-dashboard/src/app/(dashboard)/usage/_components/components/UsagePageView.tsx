@@ -573,7 +573,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               <CardContent>
                                 <h3 className="text-lg font-medium text-foreground">Total Requests</h3>
                                 <p className="text-2xl font-bold mt-2">
-                                  {userSpendData.metadata?.total_api_requests?.toLocaleString() || 0}
+                                  {(gatewayActivity
+                                    ? gatewayActivity.total_successful_requests + gatewayActivity.total_failed_requests
+                                    : userSpendData.metadata?.total_api_requests
+                                  )?.toLocaleString() || 0}
                                 </p>
                               </CardContent>
                             </ShadcnCard>

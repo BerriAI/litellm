@@ -412,6 +412,10 @@ class BaseConfig(ABC):
         return False
 
     @property
+    def uses_async_transform_request(self) -> bool:
+        return False
+
+    @property
     def supports_stream_param_in_request_body(self) -> bool:
         """
         Some providers like Bedrock invoke do not support the stream parameter in the request body.

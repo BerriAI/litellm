@@ -34,6 +34,8 @@ interface ModelsInfoArgs {
   sortBy?: string;
   sortOrder?: string;
   modelName?: string;
+  accessGroup?: string;
+  wildcardOnly?: boolean;
 }
 
 const modelsInfoCalls: ModelsInfoArgs[] = [];
@@ -50,12 +52,24 @@ type UseModelsInfoArgs = [
   sortOrder?: string,
   excludeAutoRouters?: boolean,
   modelName?: string,
+  accessGroup?: string,
+  wildcardOnly?: boolean,
 ];
 
 vi.mock("../../hooks/models/useModels", () => ({
   useModelsInfo: (...args: UseModelsInfoArgs) => {
-    const [page, size, search, , teamId, sortBy, sortOrder, , modelName] = args;
-    const call: ModelsInfoArgs = { page, size, search, teamId, sortBy, sortOrder, modelName };
+    const [page, size, search, , teamId, sortBy, sortOrder, , modelName, accessGroup, wildcardOnly] = args;
+    const call: ModelsInfoArgs = {
+      page,
+      size,
+      search,
+      teamId,
+      sortBy,
+      sortOrder,
+      modelName,
+      accessGroup,
+      wildcardOnly,
+    };
     modelsInfoCalls.push(call);
     return { ...modelsInfoResult, refetch: mockRefetch };
   },
@@ -254,13 +268,38 @@ describe("AllModelsTab", () => {
     });
   });
 
-  it("filters the fetched page down to the selected model group", () => {
-    setModelsInfo([makeRow(), { ...makeRow(), model_name: "claude-opus" }], 2);
+  it("renders every row the server returned for the selected model group so rows match the footer total", () => {
+    setModelsInfo([makeRow(), { ...makeRow({ model_info: { id: "model-2" } }), model_name: "claude-opus" }], 2);
     render(<AllModelsTab {...defaultProps} selectedModelGroup="claude-opus" />);
 
     const table = screen.getByRole("table");
     expect(within(table).getByText("claude-opus")).toBeInTheDocument();
-    expect(within(table).queryByText("gpt-4")).not.toBeInTheDocument();
+    expect(within(table).getByText("gpt-4")).toBeInTheDocument();
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-2 of 2");
+  });
+
+  it("asks the server for wildcard deployments instead of hiding rows client-side", () => {
+    setModelsInfo([makeRow(), { ...makeRow({ model_info: { id: "model-2" } }), model_name: "openai/*" }], 2);
+    render(<AllModelsTab {...defaultProps} selectedModelGroup="wildcard" />);
+
+    expect(lastModelsInfoCall().wildcardOnly).toBe(true);
+    expect(within(screen.getByRole("table")).getByText("gpt-4")).toBeInTheDocument();
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-2 of 2");
+  });
+
+  it("asks the server for the selected access group instead of hiding rows client-side", async () => {
+    const user = userEvent.setup();
+    render(<AllModelsTab {...defaultProps} />);
+    expect(lastModelsInfoCall().wildcardOnly).toBe(false);
+
+    await user.click(screen.getByTestId("datatable-filters-trigger"));
+    await user.click(await screen.findByPlaceholderText("Filter by Model Access Group"));
+    await user.click(await screen.findByRole("option", { name: "sales-team" }));
+    await user.click(screen.getByTestId("filter-drawer-apply"));
+
+    await waitFor(() => expect(lastModelsInfoCall().accessGroup).toBe("sales-team"));
+    expect(within(screen.getByRole("table")).getByText("gpt-4")).toBeInTheDocument();
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-1 of 1");
   });
 
   it("asks the server for the exact selected model group so deployments beyond the first page are found", () => {
