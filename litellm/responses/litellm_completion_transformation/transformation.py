@@ -2273,9 +2273,7 @@ class LiteLLMCompletionResponsesConfig:
             finish_reason = choices[0].finish_reason
 
         status: Final[ResponsesAPIStatus] = (
-            LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
-                finish_reason
-            )
+            LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(finish_reason)
         )
         incomplete_details = getattr(chat_completion_response, "incomplete_details", None)
         if incomplete_details is None and status == "incomplete":
