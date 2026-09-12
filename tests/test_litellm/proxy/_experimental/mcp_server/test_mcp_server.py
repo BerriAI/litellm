@@ -8963,7 +8963,11 @@ class TestAgent365ChallengeAtConnect:
             )
 
     async def _connect(
-        self, server: MCPServer, oauth2_headers: dict[str, str] | None, path: str = "/mcp/tools"
+        self,
+        server: MCPServer,
+        oauth2_headers: dict[str, str] | None,
+        path: str = "/mcp/tools",
+        mount_scope: dict[str, str] | None = None,
     ) -> HTTPException | None:
         from litellm.proxy._experimental.mcp_server import server as server_module
 
@@ -8984,6 +8988,7 @@ class TestAgent365ChallengeAtConnect:
                         "scheme": "https",
                         "server": ("gw.example.com", 443),
                         "headers": [],
+                        **(mount_scope or {}),
                     },
                     mcp_servers=["tools"],
                     oauth2_headers=oauth2_headers,
@@ -9018,6 +9023,29 @@ class TestAgent365ChallengeAtConnect:
         assert (
             'resource_metadata="https://gw.example.com/.well-known/oauth-protected-resource/tools/mcp"'
             in www_authenticate
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "server_root, mount_scope",
+        [
+            ("", {"root_path": "/mcp", "app_root_path": ""}),
+            ("/litellm", {"root_path": "/litellm/mcp", "app_root_path": "/litellm"}),
+        ],
+    )
+    async def test_mounted_standard_route_is_challenged(self, agent_365_guardrail, server_root, mount_scope):
+        """``/mcp/{server}`` is served by the ``/mcp`` Mount, which moves the mount prefix into
+        ``root_path`` and leaves the app root (empty or SERVER_ROOT_PATH) in ``app_root_path``."""
+        with patch.dict(os.environ, {"SERVER_ROOT_PATH": server_root}):
+            challenge = await self._connect(
+                self._server([self.GATEWAY_SCOPE]), None, path=f"{server_root}/mcp/tools", mount_scope=mount_scope
+            )
+
+        assert challenge is not None and challenge.status_code == 401
+        www_authenticate = (challenge.headers or {}).get("WWW-Authenticate", "")
+        assert (
+            f'resource_metadata="https://gw.example.com{server_root}'
+            f'/.well-known/oauth-protected-resource{server_root}/mcp/tools"' in www_authenticate
         )
 
     @pytest.mark.asyncio
