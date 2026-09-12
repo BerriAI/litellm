@@ -624,3 +624,215 @@ async fn missing_host_result_preserves_pending_operation() {
         OcrCallStep::Host(OcrHostOperation::Lifecycle(HostPhase::Prepare))
     ));
 }
+
+async fn read_bounded_response(
+    response: Vec<u8>,
+    limit: usize,
+) -> Result<bytes::Bytes, super::error::OcrError> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0; 4096];
+        assert!(socket.read(&mut request).await.unwrap() > 0);
+        socket.write_all(&response).await.unwrap();
+        std::future::pending::<()>().await;
+    });
+    let response = reqwest::Client::new()
+        .get(format!("http://{address}"))
+        .send()
+        .await
+        .unwrap();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        super::client::read_response_bytes(response, limit),
+    )
+    .await;
+    server.abort();
+    let _ = server.await;
+    result.expect("bounded reads must finish without waiting for the rest of an oversized body")
+}
+
+#[tokio::test]
+async fn response_limit_accepts_exact_size_and_rejects_declared_and_chunked_overflow() {
+    use super::error::{OcrError, OcrResponseError};
+
+    for response in [
+        "HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\nabcdefgh",
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nabcd\r\n4\r\nefgh\r\n0\r\n\r\n",
+    ] {
+        assert_eq!(
+            read_bounded_response(response.as_bytes().to_vec(), 8)
+                .await
+                .unwrap(),
+            "abcdefgh"
+        );
+    }
+    for response in [
+        "HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\n",
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nabcd\r\n5\r\nefghi\r\n",
+    ] {
+        assert!(matches!(
+            read_bounded_response(response.as_bytes().to_vec(), 8).await,
+            Err(OcrError::Response(OcrResponseError::TooLarge { limit: 8 }))
+        ));
+    }
+}
+
+#[tokio::test]
+async fn oversized_error_retains_http_status_and_bounded_diagnostics_without_draining() {
+    let prefix = "x".repeat(4 * (crate::constants::UPSTREAM_ERROR_BODY_MAX_CHARS + 1));
+    for headers in ["Content-Length: 1000000", "Transfer-Encoding: chunked"] {
+        let body = if headers.starts_with("Transfer") {
+            format!("{:x}\r\n{prefix}\r\n", prefix.len())
+        } else {
+            prefix.clone()
+        };
+        let response = format!("HTTP/1.1 429 Too Many Requests\r\n{headers}\r\n\r\n{body}");
+        let error = read_bounded_response(response.into_bytes(), 4096)
+            .await
+            .unwrap_err();
+        match error {
+            super::error::OcrError::Transport(crate::error::TransportError::Http {
+                status,
+                body,
+            }) => {
+                assert_eq!(status, 429);
+                assert_eq!(
+                    body,
+                    format!(
+                        "{}... (truncated)",
+                        "x".repeat(crate::constants::UPSTREAM_ERROR_BODY_MAX_CHARS)
+                    )
+                );
+            }
+            error => panic!("unexpected error: {error}"),
+        }
+    }
+}
+
+#[test]
+fn response_limit_is_validated_and_not_forwarded_to_the_provider() {
+    let request = wire_request(
+        "mistral/model",
+        "http://localhost",
+        json!({"max_response_bytes": 123}),
+    );
+    assert_eq!(request.connection.max_response_bytes, 123);
+    assert!(!request.optional_params.contains_key("max_response_bytes"));
+    for value in [
+        json!(0),
+        json!(-1),
+        json!(true),
+        json!("123"),
+        json!(1.5),
+        Value::Null,
+    ] {
+        let wire = serde_json::from_value(json!({
+            "model": "mistral/model", "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
+            "optional_params": {"max_response_bytes": value}
+        })).unwrap();
+        let Err(error) = decode_request(wire) else {
+            panic!("invalid response limit accepted")
+        };
+        assert!(error.to_string().contains("max_response_bytes"));
+    }
+}
+
+#[derive(Debug)]
+struct PendingToken {
+    entered: Arc<tokio::sync::Notify>,
+    dropped: Arc<std::sync::atomic::AtomicBool>,
+}
+
+struct TokenFutureDrop(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for TokenFutureDrop {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl crate::auth::TokenProvider for PendingToken {
+    fn acquire(&self) -> crate::auth::TokenFuture<'_> {
+        Box::pin(async move {
+            let _guard = TokenFutureDrop(self.dropped.clone());
+            self.entered.notify_one();
+            std::future::pending().await
+        })
+    }
+}
+
+#[tokio::test]
+async fn cancellation_waits_for_provider_capture_drop_even_when_acknowledgement_is_cancelled() {
+    use crate::call_lifecycle::host::HostFailure;
+    use std::future::Future;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::task::Poll;
+
+    for interrupt_acknowledgement in [false, true] {
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let dropped = Arc::new(AtomicBool::new(false));
+        let request = wire_request("azure_ai/mistral-ocr", "https://example.invalid", json!({}));
+        let request = super::LiteLLMOcrRequest {
+            connection: super::OcrConnection {
+                extra_headers: vec![("authorization".into(), "Bearer test-key".into())],
+                ..request.connection
+            },
+            azure_ad_token_provider: Some(crate::auth::TokenProviderHandle::new(Arc::new(
+                PendingToken {
+                    entered: entered.clone(),
+                    dropped: dropped.clone(),
+                },
+            ))),
+            ..request
+        };
+        let NativeOutcome::Completed(mut call) =
+            OcrCall::admit(super::test_support::ocr_client(), OcrAdmission::all())
+        else {
+            panic!("supported call declined")
+        };
+        let mut request = Some(request);
+        let mut result = None;
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                tokio::select! {
+                    _ = entered.notified() => break,
+                    step = call.resume(result.take()) => {
+                        result = Some(match step.unwrap() {
+                            OcrCallStep::Host(OcrHostOperation::ProjectRequest) => OcrHostResult::Request(Ok((Box::new(request.take().unwrap()), false))),
+                            OcrCallStep::Host(operation) => NoopOcrHost.invoke(operation).await,
+                            OcrCallStep::Complete(_) => panic!("pending provider completed"),
+                        });
+                    }
+                }
+            }
+        }).await.unwrap();
+        assert!(!dropped.load(Ordering::SeqCst));
+        let selected = crate::Error::InvalidRequest("cancelled".into());
+        if interrupt_acknowledgement {
+            let mut acknowledgement =
+                Box::pin(call.interrupt(HostFailure::Cancelled(selected.clone())));
+            std::future::poll_fn(|cx| {
+                assert!(acknowledgement.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            drop(acknowledgement);
+            assert!(!dropped.load(Ordering::SeqCst));
+        }
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            call.interrupt(HostFailure::Cancelled(selected.clone())),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(result, Err(error) if error == selected));
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "cancellation returned while provider captures were still alive"
+        );
+    }
+}

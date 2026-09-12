@@ -1,5 +1,7 @@
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
+use std::pin::Pin;
+use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use futures_util::FutureExt;
@@ -94,6 +96,24 @@ where
     F: Future<Output = PyResult<T>> + Send + 'static,
 {
     pyo3_async_runtimes::tokio::future_into_py(py, async move { catch_future_panic(future).await? })
+}
+
+pub(crate) fn poll_async_value<T, F>(py: Python<'_>, future: Pin<&mut F>) -> PyResult<Poll<T>>
+where
+    T: Send,
+    F: Future<Output = PyResult<T>> + Send,
+{
+    let result = release_gil(py, || {
+        let _runtime = pyo3_async_runtimes::tokio::get_runtime().enter();
+        std::panic::catch_unwind(AssertUnwindSafe(|| {
+            future.poll(&mut Context::from_waker(Waker::noop()))
+        }))
+        .map_err(panic_to_pyerr)
+    })?;
+    match result {
+        Poll::Ready(result) => result.map(Poll::Ready),
+        Poll::Pending => Ok(Poll::Pending),
+    }
 }
 
 fn map_core_result<T, E>(result: Result<T, E>, map_error: fn(E) -> PyErr) -> PyResult<T> {
@@ -221,6 +241,76 @@ mod tests {
             .bind(py)
             .extract()
             .expect("result should convert")
+    }
+
+    #[test]
+    fn inline_poll_releases_gil_and_enters_runtime() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (sender, receiver) = mpsc::sync_channel(1);
+            let worker = thread::spawn(move || Python::attach(|_| sender.send(()).unwrap()));
+            let mut future = Box::pin(async move {
+                receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+                Ok(Handle::try_current().is_ok())
+            });
+            assert_eq!(
+                poll_async_value(py, future.as_mut()).unwrap(),
+                Poll::Ready(true)
+            );
+            worker.join().unwrap();
+        });
+    }
+
+    #[test]
+    fn inline_poll_contains_panics_and_preserves_python_errors() {
+        Python::initialize();
+        Python::attach(|py| {
+            let mut panicking = Box::pin(poll_fn(|_| -> Poll<PyResult<()>> {
+                panic!("inline native panic")
+            }));
+            let error = poll_async_value(py, panicking.as_mut()).unwrap_err();
+            assert!(error.is_instance_of::<PanicException>(py));
+            let original = PyRuntimeError::new_err("inline failure");
+            let identity = original.value(py).clone().unbind();
+            let mut failing = Box::pin(async move { Err::<(), _>(original) });
+            let error = poll_async_value(py, failing.as_mut()).unwrap_err();
+            assert!(error.value(py).is(identity.bind(py)));
+        });
+    }
+
+    #[pyfunction]
+    fn pending_after_inline_poll(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        let starts = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&starts);
+        let mut future = Box::pin(async move {
+            starts.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            Ok(starts.load(Ordering::SeqCst))
+        });
+        assert!(poll_async_value(py, future.as_mut())?.is_pending());
+        assert_eq!(observed.load(Ordering::SeqCst), 1);
+        run_async_value(py, future)
+    }
+
+    #[test]
+    fn inline_pending_future_resumes_on_tokio_without_restarting() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals
+                .set_item(
+                    "pending",
+                    wrap_pyfunction!(pending_after_inline_poll, py).unwrap(),
+                )
+                .unwrap();
+            py.run(
+                pyo3::ffi::c_str!(
+                    "import asyncio\nasync def exercise():\n    assert await asyncio.wait_for(pending(), 2) == 1\nasyncio.run(exercise())"
+                ),
+                Some(&locals),
+                Some(&locals),
+            ).unwrap();
+        });
     }
 
     #[test]

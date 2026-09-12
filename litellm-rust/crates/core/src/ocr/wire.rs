@@ -13,7 +13,7 @@ use serde::{
 };
 use serde_json::{Map, Value};
 
-const COMMON_OPTION_FIELDS: &[&str] = &["req_format", "extra_body"];
+const COMMON_OPTION_FIELDS: &[&str] = &["req_format", "extra_body", "max_response_bytes"];
 const MISTRAL_OPTION_FIELDS: &[&str] = &[
     "pages",
     "include_image_base64",
@@ -140,11 +140,28 @@ pub fn decode_request(wire: OcrWireRequest) -> Result<LiteLLMOcrRequest, Error> 
         })
         .transpose()?;
     let defaults = OcrConnection::default();
+    let max_response_bytes = wire
+        .optional_params
+        .get("max_response_bytes")
+        .map(|value| {
+            value
+                .as_u64()
+                .and_then(|value| usize::try_from(value).ok())
+                .filter(|value| *value > 0)
+                .ok_or_else(|| OcrRequestError::RequestField {
+                    path: "max_response_bytes".into(),
+                })
+        })
+        .transpose()?
+        .unwrap_or(defaults.max_response_bytes);
     let request = LiteLLMOcrRequest::new(
         wire.model,
         document,
         wire.custom_llm_provider.as_deref(),
-        wire.optional_params,
+        wire.optional_params
+            .into_iter()
+            .filter(|(name, _)| name != "max_response_bytes")
+            .collect(),
     )?;
     let connection = OcrConnection {
         api_key: nonblank(wire.api_key),
@@ -155,6 +172,7 @@ pub fn decode_request(wire: OcrWireRequest) -> Result<LiteLLMOcrRequest, Error> 
         extra_headers_source,
         timeout: timeout.unwrap_or(defaults.timeout),
         max_download_bytes: defaults.max_download_bytes,
+        max_response_bytes,
         poll_timeout: defaults.poll_timeout,
     };
     Ok(LiteLLMOcrRequest {

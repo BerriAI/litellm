@@ -24,7 +24,9 @@ pub(super) async fn read_operation_response(
     hooks: &Arc<dyn OcrHooks>,
 ) -> Result<DecodedOcrResponse<AzureDocumentIntelligenceOperation>, OcrError> {
     if response.status() != reqwest::StatusCode::ACCEPTED {
-        let bytes = crate::ocr::client::read_response_bytes(response).await?;
+        let bytes =
+            crate::ocr::client::read_response_bytes(response, connection.max_response_bytes)
+                .await?;
         crate::ocr::handler::post_call(hooks, &bytes).await?;
         return Ok(crate::ocr::wire::decode_response(&bytes, native)?);
     }
@@ -42,7 +44,8 @@ pub(super) async fn read_operation_response(
     {
         return Err(OcrPollingError::PollOrigin.into());
     }
-    let bytes = crate::ocr::client::read_response_bytes(response).await?;
+    let bytes =
+        crate::ocr::client::read_response_bytes(response, connection.max_response_bytes).await?;
     crate::ocr::handler::post_call(hooks, &bytes).await?;
     poll_operation(http_client, operation, headers, connection, native, hooks).await
 }
@@ -84,7 +87,11 @@ async fn poll_operation(
             .max(1);
         let decoded = tokio::time::timeout_at(
             deadline,
-            read_json_response::<AzureDocumentIntelligenceOperation>(response, native),
+            read_json_response::<AzureDocumentIntelligenceOperation>(
+                response,
+                native,
+                connection.max_response_bytes,
+            ),
         )
         .await
         .map_err(|_| OcrPollingError::PollTimeout)??;

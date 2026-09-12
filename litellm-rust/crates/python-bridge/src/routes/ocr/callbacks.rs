@@ -9,12 +9,28 @@ use litellm_python_interop::to_py_preserving_errors as to_py;
 
 use crate::lifecycle::PythonLogger;
 
+pub(super) struct OcrLoggingFields {
+    model: String,
+    custom_llm_provider: String,
+    optional_params: Value,
+}
+
+impl From<&OcrPreCallRequest> for OcrLoggingFields {
+    fn from(request: &OcrPreCallRequest) -> Self {
+        Self {
+            model: request.model.clone(),
+            custom_llm_provider: request.custom_llm_provider.clone(),
+            optional_params: request.optional_params.clone(),
+        }
+    }
+}
+
 impl PythonLogger {
-    pub(crate) fn update_ocr(
+    pub(super) fn update_ocr(
         &self,
         py: Python<'_>,
         kwargs: &Py<PyDict>,
-        pre_call: &OcrPreCallRequest,
+        pre_call: &OcrLoggingFields,
         url: &str,
     ) -> PyResult<()> {
         let redact = py

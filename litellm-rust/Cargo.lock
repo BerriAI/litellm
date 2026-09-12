@@ -1948,6 +1948,7 @@ dependencies = [
  "azure_core",
  "azure_identity",
  "base64 0.22.1",
+ "bytes",
  "data-url",
  "gcp_auth",
  "mime_guess",

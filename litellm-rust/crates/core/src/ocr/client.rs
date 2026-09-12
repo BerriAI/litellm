@@ -1,9 +1,10 @@
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use bytes::{Bytes, BytesMut};
 use serde::de::DeserializeOwned;
 
-use super::error::OcrError;
+use super::error::{OcrError, OcrResponseError};
 use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
 use super::wire::{DecodedOcrResponse, decode_response};
 use crate::Error;
@@ -128,14 +129,40 @@ pub async fn ocr(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error
 pub async fn read_json_response<T: DeserializeOwned>(
     response: reqwest::Response,
     native: bool,
+    max_response_bytes: usize,
 ) -> Result<DecodedOcrResponse<T>, OcrError> {
-    let bytes = read_response_bytes(response).await?;
+    let bytes = read_response_bytes(response, max_response_bytes).await?;
     Ok(decode_response(&bytes, native)?)
 }
 
-pub(crate) async fn read_response_bytes(response: reqwest::Response) -> Result<Vec<u8>, OcrError> {
+pub(crate) async fn read_response_bytes(
+    mut response: reqwest::Response,
+    max_response_bytes: usize,
+) -> Result<Bytes, OcrError> {
     let status = response.status();
-    let bytes = response.bytes().await.map_err(transport_error)?;
+    let limit = if status.is_success() {
+        max_response_bytes
+    } else {
+        max_response_bytes.min(4 * (crate::constants::UPSTREAM_ERROR_BODY_MAX_CHARS + 1))
+    };
+    if status.is_success()
+        && response
+            .content_length()
+            .is_some_and(|length| length > limit as u64)
+    {
+        return Err(OcrResponseError::TooLarge { limit }.into());
+    }
+    let mut bytes = BytesMut::new();
+    while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
+        let remaining = limit.saturating_sub(bytes.len());
+        if status.is_success() && chunk.len() > remaining {
+            return Err(OcrResponseError::TooLarge { limit }.into());
+        }
+        bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+        if !status.is_success() && bytes.len() == limit {
+            break;
+        }
+    }
     if !status.is_success() {
         return Err(crate::error::TransportError::Http {
             status: status.as_u16(),
@@ -143,7 +170,7 @@ pub(crate) async fn read_response_bytes(response: reqwest::Response) -> Result<V
         }
         .into());
     }
-    Ok(bytes.to_vec())
+    Ok(bytes.freeze())
 }
 
 pub(crate) fn transport_error(error: reqwest::Error) -> Error {

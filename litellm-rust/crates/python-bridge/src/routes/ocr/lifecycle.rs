@@ -27,7 +27,7 @@ use crate::marshal::{project_optional_fields, python_timeout_seconds, request_in
 struct PythonOcrHost {
     state: PythonCallState,
     request: Option<Py<PyAny>>,
-    pre_call: Option<OcrPreCallRequest>,
+    pre_call: Option<callbacks::OcrLoggingFields>,
     document: Option<Py<PyAny>>,
     api_key: Option<Py<PyAny>>,
     azure_ad_token_provider: Option<PythonTokenProvider>,
@@ -68,7 +68,7 @@ impl PythonOcrHost {
             self.document.as_ref().ok_or_else(missing_state)?,
         )?;
         self.retained_fields = Some(retained_fields.unbind());
-        self.pre_call = Some(request.clone());
+        self.pre_call = Some((&request).into());
         Ok(request)
     }
 

@@ -44,6 +44,8 @@ pub enum OcrRequestError {
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum OcrResponseError {
+    #[error("OCR response exceeds the size limit of {limit} bytes")]
+    TooLarge { limit: usize },
     #[error("invalid OCR response field: {path}")]
     ResponseField { path: String },
     #[error("OCR response is missing non-empty content")]

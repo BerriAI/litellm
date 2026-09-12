@@ -797,3 +797,28 @@ async def test_shared_call_limits_still_reject_before_reading_ocr_file(
         await call_aocr(ocr_server, **arguments) if asynchronous else call_ocr(ocr_server, **arguments)
     assert reads == []
     assert ocr_server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("extra_bytes", [0, 1])
+async def test_response_limit_is_enforced_at_the_public_boundary(
+    ocr_server: RecordingServer, asynchronous: bool, extra_bytes: int
+) -> None:
+    limit: Final = len(json.dumps(OCR_RESPONSE).encode()) - extra_bytes
+    if extra_bytes:
+        with pytest.raises(litellm.APIConnectionError, match="OCR response exceeds the size limit"):
+            await call_aocr(ocr_server, max_response_bytes=limit) if asynchronous else call_ocr(
+                ocr_server, max_response_bytes=limit
+            )
+    else:
+        response: Final = (
+            await call_aocr(ocr_server, max_response_bytes=limit)
+            if asynchronous
+            else call_ocr(ocr_server, max_response_bytes=limit)
+        )
+        assert response.pages[0].markdown == "native OCR response"
+    assert len(ocr_server.requests) == 1
+    body: Final = ocr_server.requests[0].body
+    assert isinstance(body, dict)
+    assert "max_response_bytes" not in body

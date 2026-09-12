@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::Poll;
 
 use futures_util::future::{AbortHandle, Abortable};
 use litellm_core::call_lifecycle::host::{HostFailure, HostPhase, HostStep};
@@ -10,7 +11,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 use tokio::sync::Mutex;
 
-use crate::execution::{run_async_value, run_sync_value};
+use crate::execution::{poll_async_value, run_async_value, run_sync_value};
 
 mod bindings;
 mod handle;
@@ -129,6 +130,10 @@ impl<R: PythonRoute> PythonLifecycle<R> {
             Ok(())
         };
         if self.route.state().asynchronous {
+            let mut future = Box::pin(future);
+            if let Poll::Ready(()) = poll_async_value(py, future.as_mut())? {
+                return Ok(HostStep::Ready(self.take_native_result()?));
+            }
             let (abort, registration) = AbortHandle::new_pair();
             self.native_abort = Some(abort);
             self.pending = Some(PendingOperation::Native);
@@ -752,6 +757,51 @@ mod tests {
                 .extract(py)
                 .unwrap();
             assert_eq!(value, "shared lifecycle");
+        });
+    }
+
+    #[test]
+    fn ready_native_lifecycle_completes_without_scheduling() {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        Python::initialize();
+        Python::attach(|py| {
+            let source = std::ffi::CString::new(include_str!(
+                "../../../../../litellm/rust_bridge/lifecycle.py"
+            ))
+            .unwrap();
+            PyModule::from_code(
+                py,
+                &source,
+                pyo3::ffi::c_str!("lifecycle.py"),
+                pyo3::ffi::c_str!("litellm.rust_bridge.lifecycle"),
+            )
+            .unwrap();
+            let route = SyntheticRoute(
+                PythonCallState::new(
+                    py,
+                    PyTuple::empty(py).unbind(),
+                    PyDict::new(py).unbind(),
+                    true,
+                    "synthetic",
+                )
+                .unwrap(),
+            );
+            let coroutine = run_call(py, SyntheticCall(false), route).unwrap();
+            let completed = coroutine
+                .call_method1(py, "send", (py.None(),))
+                .unwrap_err();
+            assert!(completed.is_instance_of::<pyo3::exceptions::PyStopIteration>(py));
+            assert_eq!(
+                completed
+                    .value(py)
+                    .getattr("value")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "shared lifecycle",
+            );
         });
     }
 

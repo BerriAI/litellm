@@ -60,7 +60,9 @@ pub(crate) trait OcrAdapter: Send + Sync + Sized + 'static {
         Output = Result<super::wire::DecodedOcrResponse<Self::ProviderResponse>, OcrError>,
     > + Send {
         async move {
-            let bytes = super::client::read_response_bytes(response).await?;
+            let bytes =
+                super::client::read_response_bytes(response, request.connection.max_response_bytes)
+                    .await?;
             super::handler::post_call(&request.hooks, &bytes).await?;
             Ok(super::wire::decode_response(
                 &bytes,

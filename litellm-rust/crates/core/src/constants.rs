@@ -46,6 +46,7 @@ pub const FUNCTION_TRACE_TARGET: &str = "litellm::function_trace";
 
 pub(crate) const MEDIA_CONNECT_TIMEOUT_SECS: u64 = 10;
 
+pub(crate) const OCR_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
 pub(crate) const OCR_HTTP_TIMEOUT_SECS: u64 = 600;
 pub(crate) const OCR_CONNECT_TIMEOUT_SECS: u64 = 10;
 pub const OCR_INLINE_MAX_BYTES: usize = 50 * 1024 * 1024;
