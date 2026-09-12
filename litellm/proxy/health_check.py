@@ -296,9 +296,10 @@ def _deployments_routed_by_name(
 def deployments_targeted_by_name(
     model_list: Sequence[Mapping[str, object]], model: str, team_id: str | None
 ) -> tuple[Mapping[str, object], ...]:
-    """``model`` targets deployments by ``litellm_params.model`` first, then the way a request for it routes."""
-    by_param: Final = tuple(x for x in model_list if _deployment_model(x) == model)
-    return by_param or _deployments_routed_by_name(model_list, model, team_id)
+    """``model`` targets deployments the way a request for it routes, else by ``litellm_params.model``."""
+    return _deployments_routed_by_name(model_list, model, team_id) or tuple(
+        x for x in model_list if _deployment_model(x) == model
+    )
 
 
 def _narrow_to_target(
@@ -865,7 +866,8 @@ async def perform_health_check(
     When model (name) is provided, the deployments a request for that name from the
     caller (``team_id``) would route to are checked: the caller's team copies published
     under that name, else the deployments named that way, else a public name that only
-    another team's deployment carries.
+    another team's deployment carries, else the deployments whose ``litellm_params.model``
+    is that string.
 
     When ``health_check_skip_disabled_background_models`` is True (via
     ``general_settings.health_check_skip_disabled_background_models``), deployments

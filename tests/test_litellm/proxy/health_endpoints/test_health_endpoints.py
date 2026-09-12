@@ -3028,6 +3028,23 @@ async def test_health_endpoint_hides_team_deployments_from_a_key_with_no_team_on
 
 
 _TEAM_ONLY_MODEL_LIST = [_TEAM_MODEL_LIST[1]]
+_BARE_NAME_MODEL_LIST = [
+    {"model_name": "gpt-5.4-nano", "litellm_params": {"model": "gpt-5.4-nano"}, "model_info": {"id": "id-nano"}},
+    {
+        "model_name": "gpt-5.4-nano_team-b_7c3d",
+        "litellm_params": {"model": "gpt-5.4-nano"},
+        "model_info": {"id": "id-nano-team-b", "team_id": "team-b", "team_public_model_name": "gpt-5.4-nano"},
+    },
+]
+_BARE_NAME_CACHED_RESULTS = {
+    "healthy_endpoints": [
+        {"model": "gpt-5.4-nano", "model_id": "id-nano"},
+        {"model": "gpt-5.4-nano", "model_id": "id-nano-team-b"},
+    ],
+    "unhealthy_endpoints": [],
+    "healthy_count": 2,
+    "unhealthy_count": 0,
+}
 
 
 @pytest.mark.asyncio
@@ -3143,6 +3160,40 @@ async def test_health_endpoint_probes_only_the_owning_teams_copy_behind_a_shared
     )
 
     assert probed == {"id-team-b"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_probes_only_the_teams_copy_when_provider_model_equals_public_name():
+    """A bare provider model equal to the public name must not pull the global copy into the team's probe."""
+    probed = await _live_narrowed_model_ids(
+        _BARE_NAME_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=["gpt-5.4-nano"], team_id="team-b"),
+        model="gpt-5.4-nano",
+    )
+
+    assert probed == {"id-nano-team-b"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_returns_only_the_teams_copy_when_provider_model_equals_public_name_on_cache_path():
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _BARE_NAME_MODEL_LIST,
+        _router_for(_BARE_NAME_MODEL_LIST),
+        use_background_health_checks=True,
+        health_check_results=_BARE_NAME_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["gpt-5.4-nano"], team_id="team-b"),
+            model="gpt-5.4-nano",
+            model_id=None,
+        )
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-nano-team-b"]
 
 
 @pytest.mark.asyncio
