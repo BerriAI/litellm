@@ -130,6 +130,7 @@ The following arguments are supported:
 * `credential_values` - (Required, Sensitive) Map of sensitive credential values such as API keys, tokens, etc.
 * `model_id` - (Optional) Model ID associated with this credential.
 * `credential_info` - (Optional) Map of additional non-sensitive information about the credential.
+* `adopt_existing` - (Optional, default `false`) Take over a credential of this name that already exists on the proxy instead of failing. See [Credentials that already exist](#credentials-that-already-exist).
 
 ## Attributes Reference
 
@@ -144,6 +145,31 @@ Credentials can be imported using their name:
 ```shell
 terraform import litellm_credential.example "credential-name"
 ```
+
+## Credentials that already exist
+
+Applying a `litellm_credential` whose name is already taken on the proxy fails, because create will not take over a credential this configuration never made. That happens when someone created the credential by hand, or when Terraform state was lost while the credential stayed behind. The error names the import command that adopts it:
+
+```shell
+terraform import litellm_credential.example "credential-name"
+```
+
+The next apply then updates the imported credential to match your configuration.
+
+Set `adopt_existing = true` to have create take it over instead, without the import step:
+
+```terraform
+resource "litellm_credential" "openai_cred" {
+  credential_name = "openai-api-key"
+  adopt_existing  = true
+
+  credential_values = {
+    api_key = var.openai_api_key
+  }
+}
+```
+
+Be deliberate about it: adoption overwrites the existing credential's values with the ones configured here, and because `credential_values` is never read back from the API, a value set out of band that your configuration does not mention is not visible in any plan.
 
 ## Security Considerations
 

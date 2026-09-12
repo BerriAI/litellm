@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -202,8 +203,15 @@ func isCredentialNotFoundError(errResp ErrorResponse) bool {
 	return false
 }
 
+// errCredentialConflict signals that a credential of that name already exists.
+// Sentinel rather than a bare string so callers can use errors.Is; its message
+// is unchanged so existing string comparisons keep working.
+var errCredentialConflict = errors.New("credential_conflict")
+
 // isCredentialConflictError checks if the error response indicates a credential
-// name collision. LiteLLM surfaces this as a 500 carrying the underlying Prisma
+// name collision. Proxies from v1.87.2 return a 409 handled by status code in
+// handleCredentialAPIResponse; this string matching is the fallback for older
+// proxies, which surface the conflict as a 500 carrying the underlying Prisma
 // unique-constraint message on credential_name. See
 // https://github.com/BerriAI/terraform-provider-litellm/issues/8.
 func isCredentialConflictError(errResp ErrorResponse) bool {
@@ -242,6 +250,10 @@ func handleCredentialAPIResponse(resp *http.Response, result interface{}, client
 		return fmt.Errorf("credential_not_found")
 	}
 
+	if resp.StatusCode == http.StatusConflict {
+		return errCredentialConflict
+	}
+
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		var errResp ErrorResponse
 		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
@@ -249,7 +261,7 @@ func handleCredentialAPIResponse(resp *http.Response, result interface{}, client
 				return fmt.Errorf("credential_not_found")
 			}
 			if isCredentialConflictError(errResp) {
-				return fmt.Errorf("credential_conflict")
+				return errCredentialConflict
 			}
 		}
 		return fmt.Errorf("API request failed: Status: %s, Response: %s",

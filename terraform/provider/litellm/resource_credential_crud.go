@@ -1,6 +1,7 @@
 package litellm
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -88,25 +89,8 @@ func resourceLiteLLMCredentialCreate(d *schema.ResourceData, m interface{}) erro
 
 	err = handleCredentialAPIResponse(resp, nil, client)
 	if err != nil {
-		// If a credential with this name already exists, adopt it instead of
-		// failing: take ownership and update the existing credential's
-		// values (merged onto whatever it already had - not a full replace)
-		// rather than erroring on the unique-constraint conflict. See
-		// https://github.com/BerriAI/terraform-provider-litellm/issues/8.
-		if err.Error() == "credential_conflict" {
-			log.Printf("[WARN] Credential %q already exists; adopting it and updating to match configuration.", credentialName)
-			d.SetId(credentialName)
-			if updateErr := resourceLiteLLMCredentialUpdate(d, m); updateErr != nil {
-				// Adoption failed before this run took ownership of
-				// anything real. Clear the ID so create is reported as
-				// failed outright (matching pre-adoption behavior) instead
-				// of tainting state for a credential this run doesn't own -
-				// state that would otherwise get destroyed on the next
-				// apply.
-				d.SetId("")
-				return fmt.Errorf("failed to adopt existing credential %q: %w", credentialName, updateErr)
-			}
-			return nil
+		if errors.Is(err, errCredentialConflict) {
+			return handleCredentialNameConflict(d, m, credentialName)
 		}
 		return fmt.Errorf("failed to create credential: %w", err)
 	}
@@ -116,6 +100,37 @@ func resourceLiteLLMCredentialCreate(d *schema.ResourceData, m interface{}) erro
 
 	log.Printf("[INFO] Credential created with name %s. Starting retry mechanism to read the credential...", credentialName)
 	return retryCredentialRead(d, m, 5)
+}
+
+// handleCredentialNameConflict resolves a create that collided with a credential
+// of the same name already on the proxy. Terraform's convention is that create
+// does not seize a resource it did not make, so the default is to fail with the
+// import command that adopts it explicitly, and adopt_existing opts into taking
+// it over in place. See
+// https://github.com/BerriAI/terraform-provider-litellm/issues/8.
+func handleCredentialNameConflict(d *schema.ResourceData, m interface{}, credentialName string) error {
+	if !d.Get("adopt_existing").(bool) {
+		return fmt.Errorf(
+			"credential %q already exists on the proxy but is not in Terraform state. "+
+				"Import it to manage it here:\n\n"+
+				"  terraform import litellm_credential.<this resource's name in your config> %s\n\n"+
+				"The next apply then updates it to match this configuration. To take it over during "+
+				"create instead, set adopt_existing = true on this resource, which overwrites the "+
+				"existing credential's values with the ones configured here",
+			credentialName, credentialName,
+		)
+	}
+
+	log.Printf("[WARN] Credential %q already exists; adopt_existing is set, so taking it over and updating it to match configuration.", credentialName)
+	d.SetId(credentialName)
+	if updateErr := resourceLiteLLMCredentialUpdate(d, m); updateErr != nil {
+		// Clear the ID so a failed adopt reports as an outright create failure
+		// rather than tainting state for a credential this run never took
+		// ownership of - state the next apply would destroy.
+		d.SetId("")
+		return fmt.Errorf("failed to adopt existing credential %q: %w", credentialName, updateErr)
+	}
+	return nil
 }
 
 func resourceLiteLLMCredentialRead(d *schema.ResourceData, m interface{}) error {
