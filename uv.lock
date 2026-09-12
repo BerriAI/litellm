@@ -10,7 +10,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-09-07T23:09:03.362777Z"
+exclude-newer = "2026-09-09T18:34:50.321749501Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -4559,6 +4559,7 @@ e2e-dev = [
     { name = "locust" },
     { name = "mcp" },
     { name = "playwright" },
+    { name = "psutil" },
     { name = "websockets" },
 ]
 healthcheck = [
@@ -4747,6 +4748,7 @@ e2e-dev = [
     { name = "locust", specifier = "==2.45.0" },
     { name = "mcp", specifier = ">=1.28.1,<2.0" },
     { name = "playwright", specifier = "==1.61.0" },
+    { name = "psutil", specifier = "==7.2.2" },
     { name = "websockets", specifier = ">=15.0.1,<16.0" },
 ]
 healthcheck = [

@@ -60,6 +60,11 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "managed_files: needs a proxy running with require_managed_files enabled; deselected unless E2E_MANAGED_FILES_STACK is set",
     )
+    config.addinivalue_line(
+        "markers",
+        "redis_chaos: load test that pauses the proxy's Redis outright mid-run; needs a proxy booted from "
+        "gateway/redis_chaos_ci_config.yml on the same host, and is deselected unless E2E_REDIS_CHAOS is set",
+    )
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
