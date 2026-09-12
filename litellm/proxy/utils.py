@@ -2850,6 +2850,7 @@ class ProxyLogging:
         error_type: ProxyErrorTypes | None = None,
         route: str | None = None,
         traceback_str: str | None = None,
+        client_exception: Exception | None = None,
     ) -> HTTPException | None:
         """
         Allows users to raise custom exceptions/log when a call fails, without having to deal with parsing Request body.
@@ -2867,6 +2868,8 @@ class ProxyLogging:
             - error_type: Optional[ProxyErrorTypes] - The error type.
             - route: Optional[str] - The route.
             - traceback_str: Optional[str] - The traceback string, sometimes upstream endpoints might need to send the upstream traceback. In which case we use this
+            - client_exception: Optional[Exception] - The status-bearing exception the client receives. Recorded in the
+                                 spend log instead of original_exception; callbacks still get original_exception.
 
         Returns:
             - Optional[HTTPException]: If any callback returns or raises an HTTPException, the first one found is returned.
@@ -2912,7 +2915,7 @@ class ProxyLogging:
                 request_data=request_data,
                 user_api_key_dict=user_api_key_dict,
                 route=route,
-                original_exception=original_exception,
+                original_exception=client_exception if client_exception is not None else original_exception,
             )
 
         request_data.update(await offload_token_count(_failure_fields_to_lift)(request_data))

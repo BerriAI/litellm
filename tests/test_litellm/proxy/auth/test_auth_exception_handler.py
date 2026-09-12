@@ -445,7 +445,7 @@ async def test_handle_authentication_error_budget_exceeded():
     assert int(exc_info.value.code) == status.HTTP_429_TOO_MANY_REQUESTS
 
 
-async def _exception_logged_for(raised: Exception) -> Exception:
+async def _failure_hook_kwargs_for(raised: Exception) -> dict:
     handler = UserAPIKeyAuthExceptionHandler()
     with patch(  # test-quality-ok: the handler imports proxy_logging_obj from proxy_server with no injection seam
         "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
@@ -454,14 +454,17 @@ async def _exception_logged_for(raised: Exception) -> Exception:
     ) as mock_post_call_failure_hook:
         with pytest.raises(ProxyException):
             await handler._handle_authentication_error(raised, MagicMock(), {}, "/v1/chat/completions", None, "sk-bad")
-    return mock_post_call_failure_hook.call_args.kwargs["original_exception"]
+    return mock_post_call_failure_hook.call_args.kwargs
 
 
 @pytest.mark.asyncio
 async def test_bare_auth_exception_is_logged_with_the_public_401():
-    """Regression for LIT-5884: failure logs record the client-facing 401, not an empty error code."""
-    logged = await _exception_logged_for(Exception("Invalid proxy server token passed"))
+    """Regression for LIT-5884: the spend log records the client-facing 401 while callbacks keep the raw exception."""
+    raised = Exception("Invalid proxy server token passed")
+    hook_kwargs = await _failure_hook_kwargs_for(raised)
+    logged = hook_kwargs["client_exception"]
 
+    assert hook_kwargs["original_exception"] is raised
     assert isinstance(logged, ProxyException)
     assert int(logged.code) == status.HTTP_401_UNAUTHORIZED
     assert "Invalid proxy server token passed" in logged.message
@@ -477,7 +480,9 @@ async def test_bare_auth_exception_is_logged_with_the_public_401():
     ],
 )
 async def test_status_bearing_auth_exceptions_are_logged_unchanged(raised):
-    assert await _exception_logged_for(raised) is raised
+    hook_kwargs = await _failure_hook_kwargs_for(raised)
+    assert hook_kwargs["original_exception"] is raised
+    assert hook_kwargs["client_exception"] is raised
 
 
 @pytest.mark.asyncio

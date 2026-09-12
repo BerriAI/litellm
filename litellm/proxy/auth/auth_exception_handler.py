@@ -208,10 +208,11 @@ class UserAPIKeyAuthExceptionHandler:
             # Allow callbacks to transform the error response
             transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
                 request_data=_with_requester_ip_address(request_data, requester_ip),
-                original_exception=_exception_for_failure_logging(e),
+                original_exception=e,
                 user_api_key_dict=user_api_key_dict,
                 error_type=ProxyErrorTypes.auth_error,
                 route=route,
+                client_exception=_exception_for_failure_logging(e),
             )
             # Use transformed exception if callback returned one, otherwise use original
             if transformed_exception is not None:

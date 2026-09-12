@@ -299,6 +299,38 @@ async def test_post_call_failure_hook_lifts_route_call_type_for_gate_rejections(
 
 
 @pytest.mark.asyncio
+async def test_post_call_failure_hook_logs_client_exception_but_callbacks_get_the_original(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """Regression for LIT-5884: the spend log records the status-bearing client exception while
+    custom failure callbacks keep receiving the exception auth raised."""
+    seen: list[Exception] = []
+
+    class _Cb(CustomLogger):
+        async def async_post_call_failure_hook(self, original_exception, **kwargs):  # type: ignore[override]
+            seen.append(original_exception)
+
+    monkeypatch.setattr(litellm, "callbacks", [_Cb()])
+    proxy_logging.alert_types = []
+    logging_obj = MagicMock()
+    logging_obj.call_type = "acompletion"
+    logging_obj.model_call_details = {}
+    logging_obj.async_failure_handler = AsyncMock()
+    raised = ValueError("tenant disabled")
+    client_exception = HTTPException(status_code=401, detail="Authentication Error, tenant disabled")
+    await proxy_logging.post_call_failure_hook(
+        request_data={"litellm_logging_obj": logging_obj, "model": "m"},
+        original_exception=raised,
+        user_api_key_dict=make_user_api_key_auth(request_route="/chat/completions"),
+        error_type=ProxyErrorTypes.auth_error,
+        route="/chat/completions",
+        client_exception=client_exception,
+    )
+    assert logging_obj.async_failure_handler.call_args.kwargs["exception"] is client_exception
+    assert seen == [raised]
+
+
+@pytest.mark.asyncio
 async def test_post_call_failure_hook_falls_back_to_body_shape_without_a_route(proxy_logging, make_user_api_key_auth):
     proxy_logging.alert_types = []
     request_data = {"model": "m", "messages": [{"role": "user", "content": "hi"}]}
