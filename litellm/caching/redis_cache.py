@@ -16,8 +16,9 @@ import inspect
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast
 
@@ -196,7 +197,13 @@ class RedisCircuitBreaker:
         self._timeout_streak_started_at: float | None = None
         self._opened_at: float | None = None
         self._state = self.CLOSED
+        self._generation = 0
         _breaker_metrics().record_state_change(None, self._state)
+
+    @property
+    def generation(self) -> int:
+        """Counts state transitions, so a call can tell whether the breaker moved while it ran."""
+        return self._generation
 
     def is_open(self) -> bool:
         """Returns True if Redis calls should be skipped."""
@@ -250,7 +257,7 @@ class RedisCircuitBreaker:
             self._set_state(self.OPEN)
 
     def record_success(self) -> None:
-        if not self.enabled:
+        if not self.enabled or self._state == self.OPEN:
             return
         if self._state == self.HALF_OPEN:
             verbose_logger.info("Redis circuit breaker CLOSED — Redis recovered")
@@ -266,6 +273,7 @@ class RedisCircuitBreaker:
         _breaker_metrics().record_transition(state)
         _breaker_metrics().record_state_change(self._state, state)
         self._state = state
+        self._generation += 1
 
 
 _RedisCallResult = TypeVar("_RedisCallResult")
@@ -309,19 +317,37 @@ def _is_redis_health_failure(exc: BaseException) -> bool:
 def _redis_timeout_error_types() -> tuple[type, ...]:
     """Health failures that are timeouts rather than unambiguous connectivity errors.
 
-    ``builtins.TimeoutError`` covers ``asyncio.TimeoutError`` and ``socket.timeout``
-    (aliases since py3.11 / py3.10). ``redis.exceptions.TimeoutError`` does not subclass
-    either, so it is listed explicitly.
+    ``builtins.TimeoutError`` covers ``socket.timeout`` (an alias since py3.10) and, from
+    py3.11, ``asyncio.TimeoutError``; on py3.10 ``asyncio.TimeoutError`` is still its own
+    class, so it is listed explicitly. ``redis.exceptions.TimeoutError`` subclasses neither.
     """
     try:
         from redis.exceptions import TimeoutError as RedisTimeoutError
     except ImportError:
-        return (TimeoutError,)
-    return (RedisTimeoutError, TimeoutError)
+        return (TimeoutError, asyncio.TimeoutError)
+    return (RedisTimeoutError, TimeoutError, asyncio.TimeoutError)
+
+
+_MAX_EXCEPTION_CAUSE_DEPTH: Final = 20
+
+
+def _explicit_causes(exc: BaseException) -> Iterator[BaseException]:
+    current = exc  # rebind-ok: advances one link per iteration of the bounded walk
+    for _ in range(_MAX_EXCEPTION_CAUSE_DEPTH):
+        yield current
+        if current.__cause__ is None:
+            return
+        current = current.__cause__
 
 
 def _is_redis_timeout_failure(exc: BaseException) -> bool:
-    return isinstance(exc, _redis_timeout_error_types())
+    """True when ``exc`` or any exception it was explicitly raised ``from`` is a timeout.
+
+    redis-py's blocking pool reports a pool wait timeout as ``ConnectionError`` chained from
+    ``asyncio.TimeoutError``, which is a busy pool rather than an unreachable Redis.
+    """
+    timeout_types: Final = _redis_timeout_error_types()
+    return any(isinstance(link, timeout_types) for link in _explicit_causes(exc))
 
 
 class _BreakerMetrics:
@@ -405,21 +431,33 @@ def log_redis_failure(
     logger.log(level, "%s: %s", message, exc, exc_info=exc if with_traceback else None)
 
 
-def _enter_circuit_breaker(breaker: RedisCircuitBreaker, name: str) -> int:
-    """Reject the call if the breaker is open, else return the swallowed-failure count to compare against."""
+@dataclass(frozen=True, slots=True)
+class _BreakerAdmission:
+    swallowed_before: int
+    generation: int
+
+
+def _enter_circuit_breaker(breaker: RedisCircuitBreaker, name: str) -> _BreakerAdmission:
+    """Reject the call if the breaker is open, else record what its success may later prove."""
     if breaker.is_open():
         raise RedisCircuitBreakerOpenError(f"Redis circuit breaker is open — skipping {name}")
-    return _swallowed_redis_failures.get()
+    return _BreakerAdmission(swallowed_before=_swallowed_redis_failures.get(), generation=breaker.generation)
 
 
-def _exit_circuit_breaker(breaker: RedisCircuitBreaker, swallowed_before: int) -> None:
-    """Record success only when nothing failed while the call ran.
+def _exit_circuit_breaker(breaker: RedisCircuitBreaker, admission: _BreakerAdmission) -> None:
+    """Record success only when nothing failed while the call ran and the breaker has not moved since.
 
     Several Redis methods catch their own connection errors and return a default, so a
-    method that returned is not on its own proof of a healthy Redis.
+    method that returned is not on its own proof of a healthy Redis. A success also vouches
+    only for the breaker state that admitted the call: a call admitted before the breaker
+    opened, or a probe admitted before a later failure reopened it, finishes knowing nothing
+    about whether Redis has recovered since, so only the current probe may close the breaker.
     """
-    if _swallowed_redis_failures.get() == swallowed_before:
-        breaker.record_success()
+    if _swallowed_redis_failures.get() != admission.swallowed_before:
+        return
+    if breaker.generation != admission.generation:
+        return
+    breaker.record_success()
 
 
 async def _run_under_circuit_breaker(
@@ -432,14 +470,14 @@ async def _run_under_circuit_breaker(
     Shared by the method decorator and the Lua script executor so both feed the same
     health signal.
     """
-    swallowed_before: Final = _enter_circuit_breaker(breaker, name)
+    admission: Final = _enter_circuit_breaker(breaker, name)
     try:
         result: Final = await call()
     except Exception as e:
         if _is_redis_health_failure(e):
             breaker.record_failure(is_timeout=_is_redis_timeout_failure(e))
         raise
-    _exit_circuit_breaker(breaker, swallowed_before)
+    _exit_circuit_breaker(breaker, admission)
     return result
 
 
@@ -449,14 +487,14 @@ def _run_under_circuit_breaker_sync(
     call: Callable[[], _RedisCallResult],
 ) -> _RedisCallResult:
     """Run one blocking Redis call under a circuit breaker, feeding the same health signal as the async path."""
-    swallowed_before: Final = _enter_circuit_breaker(breaker, name)
+    admission: Final = _enter_circuit_breaker(breaker, name)
     try:
         result: Final = call()
     except Exception as e:
         if _is_redis_health_failure(e):
             breaker.record_failure(is_timeout=_is_redis_timeout_failure(e))
         raise
-    _exit_circuit_breaker(breaker, swallowed_before)
+    _exit_circuit_breaker(breaker, admission)
     return result
 
 
@@ -1118,6 +1156,46 @@ class RedisCache(BaseCache):
             )
             _record_swallowed_redis_failure(self._circuit_breaker, e)
 
+    @_redis_circuit_breaker_guard
+    async def async_set_cache_pipeline_with_ttls(self, cache_list: Sequence[tuple[str, object, float | None]]) -> None:
+        """One round trip for writes whose TTLs differ; a ``None`` TTL falls back to the default TTL."""
+        if len(cache_list) == 0:
+            return
+        commands: Final = tuple(
+            (self.check_and_fix_namespace(key=cache_key), json.dumps(cache_value), self.get_ttl(ttl=ttl))
+            for cache_key, cache_value, ttl in cache_list
+        )
+        start_time: Final = time.time()
+        try:
+            async with self.init_async_client().pipeline(transaction=False) as pipe:
+                for cache_key, json_cache_value, ttl in commands:
+                    pipe.set(name=cache_key, value=json_cache_value, ex=None if ttl is None else timedelta(seconds=ttl))
+                await pipe.execute()
+            asyncio.create_task(
+                self.service_logger_obj.async_service_success_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=time.time() - start_time,
+                    call_type=f"async_set_cache_pipeline_with_ttls <- {_get_call_stack_info()}",
+                    start_time=start_time,
+                    end_time=time.time(),
+                )
+            )
+        except Exception as e:
+            asyncio.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=time.time() - start_time,
+                    error=e,
+                    call_type=f"async_set_cache_pipeline_with_ttls <- {_get_call_stack_info()}",
+                    start_time=start_time,
+                    end_time=time.time(),
+                )
+            )
+            verbose_logger.error(
+                "LiteLLM Redis Caching: async_set_cache_pipeline_with_ttls() - Got exception from REDIS %s", str(e)
+            )
+            _record_swallowed_redis_failure(self._circuit_breaker, e)
+
     async def _set_cache_sadd_helper(
         self,
         redis_client: async_redis_client,
@@ -1213,6 +1291,24 @@ class RedisCache(BaseCache):
         if len(self.redis_batch_writing_buffer) >= self.redis_flush_size:
             await self.flush_cache_buffer()  # logging done in here
 
+    @staticmethod
+    async def _incrbyfloat_with_ttl(
+        _redis_client: "Redis", key: str, value: float, ttl: int | None, refresh_ttl: bool
+    ) -> float:
+        """INCRBYFLOAT plus its TTL command in one round trip; a third only when an unexpiring key needs an EXPIRE."""
+        if ttl is None:
+            return await _redis_client.incrbyfloat(name=key, amount=value)
+        async with _redis_client.pipeline(transaction=False) as pipe:
+            pipe.incrbyfloat(name=key, amount=value)
+            if refresh_ttl:
+                pipe.expire(key, ttl)
+            else:
+                pipe.ttl(key)
+            result, ttl_or_expire = await pipe.execute()
+        if not refresh_ttl and ttl_or_expire == -1:
+            await _redis_client.expire(key, ttl)
+        return float(result)
+
     @_redis_circuit_breaker_guard
     async def async_increment(
         self,
@@ -1229,14 +1325,9 @@ class RedisCache(BaseCache):
         _used_ttl: Final = self.get_ttl(ttl=ttl)
         key = self.check_and_fix_namespace(key=key)
         try:
-            result: Final = await _redis_client.incrbyfloat(name=key, amount=value)
-            if _used_ttl is not None:
-                if refresh_ttl:
-                    await _redis_client.expire(key, _used_ttl)
-                else:
-                    current_ttl: Final = await _redis_client.ttl(key)
-                    if current_ttl == -1:
-                        await _redis_client.expire(key, _used_ttl)
+            result: Final = await self._incrbyfloat_with_ttl(
+                _redis_client, key=key, value=value, ttl=_used_ttl, refresh_ttl=refresh_ttl
+            )
 
             ## LOGGING ##
             end_time = time.time()
@@ -1337,6 +1428,7 @@ class RedisCache(BaseCache):
         except Exception:
             return ast.literal_eval(decoded)
 
+    @_redis_circuit_breaker_guard_sync
     def get_cache(self, key, parent_otel_span: Span | None = None, **kwargs):
         try:
             key = self.check_and_fix_namespace(key=key)
@@ -1356,8 +1448,8 @@ class RedisCache(BaseCache):
             print_verbose(f"Got Redis Cache: key: {key}, cached_response {cached_response}")
             return self._get_cache_logic(cached_response=cached_response)
         except Exception as e:
-            # NON blocking - notify users Redis is throwing an exception
-            verbose_logger.error("litellm.caching.caching: get() - Got exception from REDIS: ", e)
+            verbose_logger.error("litellm.caching.caching: get() - Got exception from REDIS: %s", e)
+            _record_swallowed_redis_failure(self._circuit_breaker, e)
 
     def _run_redis_mget_operation(self, keys: list[str]) -> Sequence[bytes | str | None]:
         """
@@ -1394,12 +1486,12 @@ class RedisCache(BaseCache):
         key_value_dict = {}
         _key_list: Final = [key for key in key_list if key is not None]
         start_time: Final = time.time()
+        admission: Final = _enter_circuit_breaker(self._circuit_breaker, "batch_get_cache")
 
         try:
-            swallowed_before: Final = _enter_circuit_breaker(self._circuit_breaker, "batch_get_cache")
             _keys: Final = [self.check_and_fix_namespace(key=cache_key or "") for cache_key in _key_list]
             results: Final = self._run_redis_mget_operation(keys=_keys)
-            _exit_circuit_breaker(self._circuit_breaker, swallowed_before)
+            _exit_circuit_breaker(self._circuit_breaker, admission)
             end_time: Final = time.time()
             _duration: Final = end_time - start_time
             self.service_logger_obj.service_success_hook(

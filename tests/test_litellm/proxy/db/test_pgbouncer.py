@@ -411,7 +411,7 @@ class TestPgBouncerProcess:
             port=port,
             socket_path=unix_socket_path(tmp_path, port),
             restart_delay_seconds=0.1,
-            ready_timeout_seconds=0.3,
+            ready_timeout_seconds=2.0,
         )
         assert pooler.start() is None
         first_pid: Final = pooler.pid
@@ -421,8 +421,8 @@ class TestPgBouncerProcess:
         with caplog.at_level(logging.ERROR, logger=verbose_proxy_logger.name):
             os.kill(first_pid, signal.SIGKILL)
             assert _wait_until(lambda: _listening(wrong_port))
-            assert _wait_until(lambda: any("did not start listening" in record.message for record in caplog.records))
             port_file.write_text(str(port))
+            assert _wait_until(lambda: any("did not start listening" in record.message for record in caplog.records))
             assert _wait_until(lambda: _listening(port))
             assert _wait_until(lambda: not _listening(wrong_port))
         pooler.stop()

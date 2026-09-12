@@ -1940,6 +1940,66 @@ class TestRunServerDbSetup:
                 use_migrate=False, use_v2_resolver=False
             )
 
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
+    @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
+    def test_migrations_run_when_the_prisma_cli_is_not_on_path(
+        self,
+        mock_should_update_schema,
+        mock_check_schema_diff,
+        mock_setup_database,
+        mock_atexit_register,
+        tmp_path,
+        capsys,
+    ):
+        from litellm.proxy.proxy_cli import run_server
+
+        mock_should_update_schema.return_value = True
+        empty_bin = tmp_path / "emptybin"
+        empty_bin.mkdir()
+
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
+        clean_env["PATH"] = str(empty_bin)
+
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch(  # test-quality-ok: same isolation as the sibling CLI tests above
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
+
+        assert "prisma CLI is neither on PATH" not in capsys.readouterr().out
+        mock_setup_database.assert_called_once_with(
+            use_migrate=True, use_v2_resolver=False
+        )
+
     @patch("subprocess.run")
     @patch("atexit.register")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")

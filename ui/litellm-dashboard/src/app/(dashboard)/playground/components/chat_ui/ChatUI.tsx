@@ -196,17 +196,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
     () => sessionStorage.getItem("customProxyBaseUrl") || "",
   );
   const [inputMessage, setInputMessage] = useState("");
-  const [selectedModel, setSelectedModel] = useState<string | undefined>(simplified ? fixedModel : undefined);
+  const [selectedModel, setSelectedModel] = useState<string | null | undefined>(simplified ? fixedModel : null);
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [modelLoadError, setModelLoadError] = useState(false);
   const [agentInfo, setAgentInfo] = useState<Agent[]>([]);
-  const [selectedAgent, setSelectedAgent] = useState<string | undefined>(undefined);
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const debouncedSetSelectedModel = useDebouncedCallback((value: string) => setSelectedModel(value), {
     wait: CUSTOM_MODEL_DEBOUNCE_WAIT_MS,
   });
-  const [endpointType, setEndpointType] = useState<string>(
+  const [endpointType, setEndpointType] = useState<string | null>(
     () => sessionStorage.getItem("endpointType") || EndpointType.CHAT,
   );
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -327,7 +327,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   };
 
   useEffect(() => {
-    if (isGetCodeModalVisible) {
+    if (isGetCodeModalVisible && endpointType !== null) {
       const code = generateCodeSnippet({
         apiKeySource,
         accessToken,
@@ -342,7 +342,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
         mcpServers,
         mcpServerToolRestrictions,
         endpointType,
-        selectedModel,
+        selectedModel: selectedModel ?? undefined,
         selectedSdk,
         selectedVoice,
         proxySettings,
@@ -376,7 +376,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
     } catch {
       // Storage full or unavailable — non-critical, skip persisting.
     }
-    sessionStorage.setItem("endpointType", endpointType);
+    if (endpointType === null) sessionStorage.removeItem("endpointType");
+    else sessionStorage.setItem("endpointType", endpointType);
     sessionStorage.setItem("selectedTags", JSON.stringify(selectedTags));
     sessionStorage.setItem("selectedVectorStores", JSON.stringify(selectedVectorStores));
     sessionStorage.setItem("selectedGuardrails", JSON.stringify(selectedGuardrails));
@@ -493,7 +494,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
         setAgentInfo(agents);
         // Clear selection if current agent not in list
         if (selectedAgent && !agents.some((a) => a.agent_name === selectedAgent)) {
-          setSelectedAgent(undefined);
+          setSelectedAgent(null);
         }
       } catch (error) {
         console.error("Error fetching agents:", error);
@@ -616,10 +617,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
     setUploadedAudio(file);
   };
 
-  const handleEndpointChange = (value: string) => {
+  const handleEndpointChange = (value: string | null) => {
     setEndpointType(value);
-    setSelectedModel(undefined);
-    setSelectedAgent(undefined);
+    setGeneratedCode("");
+    setSelectedModel(null);
+    setSelectedAgent(null);
     setShowCustomModelInput(false);
     setSelectedMCPDirectTool(undefined);
     if (value === EndpointType.MCP) {
@@ -710,6 +712,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
   };
 
   const handleSendMessage = async () => {
+    if (endpointType === null) {
+      toast.fromError("Please select an endpoint before sending a request");
+      return;
+    }
+
     if (inputMessage.trim() === "" && endpointType !== EndpointType.TRANSCRIPTION && endpointType !== EndpointType.MCP)
       return;
 
@@ -1152,7 +1159,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     toast.success("Chat history cleared.");
   };
 
-  const onModelChange = (value: string) => {
+  const onModelChange = (value: string | null) => {
     setSelectedModel(value);
     setShowCustomModelInput(value === "custom");
 
@@ -1210,6 +1217,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               : "Describe the image you want to generate...";
 
   const sendDisabled =
+    endpointType === null ||
     isLoading ||
     (endpointType === EndpointType.MCP
       ? !(selectedMCPServers.length === 1 && selectedMCPServers[0] !== "__all__" && selectedMCPDirectTool)
