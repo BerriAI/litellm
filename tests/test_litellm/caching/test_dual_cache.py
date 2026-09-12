@@ -704,3 +704,60 @@ async def test_open_breaker_keeps_async_batch_read_memory_hits_and_releases_rese
 
     assert list(await cache.async_batch_get_cache(["k1", "k2"])) == ["v1", None]
     assert "k2" not in cache.last_redis_batch_access_time
+
+
+@pytest.mark.asyncio
+async def test_redis_timeouts_falling_back_to_memory_log_once_per_interval(caplog, monkeypatch):
+    """The in-memory fallback WARNING must not repeat for every timed-out increment during a blip.
+
+    The rate limiter's pipeline increments and the dual cache increments each logged a WARNING per
+    call while Redis timed out, hundreds of lines per second before the breaker opened. The first
+    timeout of a streak keeps its WARNING, the rest are DEBUG until the summary interval passes.
+    """
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    from litellm.caching import redis_cache as redis_cache_module
+    from litellm.caching.redis_cache import _RedisTimeoutLogThrottle
+
+    clock = MagicMock(return_value=1_000.0)
+    monkeypatch.setattr(
+        redis_cache_module, "_redis_timeout_log_throttle", _RedisTimeoutLogThrottle(interval=5.0, clock=clock)
+    )
+
+    class _TimingOutRedis:
+        async def async_increment_pipeline(self, increment_list, **kwargs):
+            raise RedisTimeoutError("Timeout reading from 127.0.0.1:6379")
+
+        async def async_increment(self, key, value, **kwargs):
+            raise RedisTimeoutError("Timeout reading from 127.0.0.1:6379")
+
+    cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=_TimingOutRedis())  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    increments = [RedisPipelineIncrementOperation(key="k", increment_value=1.0, ttl=60)]
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        for _ in range(100):
+            await cache.async_increment_cache_pipeline(increment_list=increments)
+            await cache.async_increment_cache("k", 1.0)
+
+    visible = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert [(r.levelno, r.getMessage()) for r in visible] == [
+        (
+            logging.WARNING,
+            "Redis async_increment_cache_pipeline failed, falling back to in-memory result:"
+            " Timeout reading from 127.0.0.1:6379",
+        )
+    ]
+    assert visible[0].filename == "dual_cache.py"
+    assert sum("Timeout reading from" in r.getMessage() for r in caplog.records) == 200
+
+    caplog.clear()
+    clock.return_value += 5.0
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        await cache.async_increment_cache("k", 1.0)
+    assert [(r.levelno, r.getMessage()) for r in caplog.records] == [
+        (
+            logging.WARNING,
+            "Redis async_increment_cache failed, falling back to in-memory result: Timeout reading from 127.0.0.1:6379"
+            " (199 more Redis timeouts since the previous Redis timeout line were logged at DEBUG)",
+        )
+    ]
