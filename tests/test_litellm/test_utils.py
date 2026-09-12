@@ -967,9 +967,6 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_token_above_512k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_flex": {"type": "number"},
                 "cache_read_input_token_cost_priority": {"type": "number"},
-                "cache_read_input_token_cost_above_200k_tokens_flex": {
-                    "type": "number"
-                },
                 "cache_read_input_token_cost_above_200k_tokens_priority": {
                     "type": "number"
                 },
@@ -978,15 +975,12 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 },
                 "input_cost_per_token_flex": {"type": "number"},
                 "input_cost_per_token_priority": {"type": "number"},
-                "input_cost_per_token_above_200k_tokens_flex": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens_priority": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens_flex": {"type": "number"},
-                "input_cost_per_audio_token_flex": {"type": "number"},
                 "input_cost_per_audio_token_priority": {"type": "number"},
                 "output_cost_per_token_flex": {"type": "number"},
                 "output_cost_per_token_priority": {"type": "number"},
-                "output_cost_per_token_above_200k_tokens_flex": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_priority": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_flex": {"type": "number"},
@@ -4288,9 +4282,9 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/deepseek-v4-pro",
-        1.2e-06,
-        1.2e-06,
-        6e-07,
+        1.74e-06,
+        3.48e-06,
+        1.45e-07,
         1048576,
         384000,
         False,
