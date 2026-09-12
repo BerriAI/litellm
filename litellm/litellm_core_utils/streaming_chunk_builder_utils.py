@@ -160,6 +160,22 @@ class _UsageSummary(TypedDict):
     cost: float | None
 
 
+def _reports_prompt_side_usage(usage_summary: "_UsageSummary") -> bool:
+    """
+    Whether a usage event carries prompt-side counts, and so may overwrite the
+    cache counts a previous event reported, including with an explicit 0
+
+    Providers restate the prompt side on some events and zero the whole block on
+    others, where the zeros mean "nothing to report here" rather than "no cache
+    was used". Only an event that reports prompt-side input is authoritative
+    """
+    return (
+        (usage_summary["prompt_tokens"] or 0) > 0
+        or (usage_summary["cache_creation_input_tokens"] or 0) > 0
+        or (usage_summary["cache_read_input_tokens"] or 0) > 0
+    )
+
+
 def capture_cache_creation_token_details(
     prompt_tokens_details: PromptTokensDetailsWrapper | None,
     current: CacheCreationTokenDetails | None,
@@ -874,11 +890,11 @@ class ChunkProcessor:
                     completion_tokens = usage_chunk_dict["completion_tokens"]
                     completion_usage_updates += 1
                 if usage_chunk_dict["cache_creation_input_tokens"] is not None and (
-                    usage_chunk_dict["cache_creation_input_tokens"] > 0 or cache_creation_input_tokens is None
+                    _reports_prompt_side_usage(usage_chunk_dict) or cache_creation_input_tokens is None
                 ):
                     cache_creation_input_tokens = usage_chunk_dict["cache_creation_input_tokens"]
                 if usage_chunk_dict["cache_read_input_tokens"] is not None and (
-                    usage_chunk_dict["cache_read_input_tokens"] > 0 or cache_read_input_tokens is None
+                    _reports_prompt_side_usage(usage_chunk_dict) or cache_read_input_tokens is None
                 ):
                     cache_read_input_tokens = usage_chunk_dict["cache_read_input_tokens"]
                 if usage_chunk_dict["completion_tokens_details"] is not None:
