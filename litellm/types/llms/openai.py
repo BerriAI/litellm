@@ -2273,6 +2273,8 @@ class ImageGenerationRequestQuality(str, Enum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
+    XHIGH = "xhigh"
+    MAX = "max"
     AUTO = "auto"
     STANDARD = "standard"
     HD = "hd"

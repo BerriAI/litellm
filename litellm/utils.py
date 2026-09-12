@@ -5897,6 +5897,7 @@ def _get_model_info_helper(
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
                 input_cost_per_audio_token=_model_info.get("input_cost_per_audio_token", None),
                 input_cost_per_image_token=_model_info.get("input_cost_per_image_token", None),
+                cache_read_input_image_token_cost=_model_info.get("cache_read_input_image_token_cost", None),
                 input_cost_per_video_token=_model_info.get("input_cost_per_video_token", None),
                 input_cost_per_image=_model_info.get("input_cost_per_image", None),
                 input_cost_per_audio_per_second=_model_info.get("input_cost_per_audio_per_second", None),

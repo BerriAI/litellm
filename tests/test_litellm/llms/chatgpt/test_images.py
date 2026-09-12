@@ -1,4 +1,6 @@
 import base64
+import json
+from typing import Final
 
 import httpx
 import pytest
@@ -6,7 +8,85 @@ import pytest
 import litellm
 from litellm.llms.chatgpt.images import ChatGPTImageEditConfig, ChatGPTImageGenerationConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.llms.openai import ImageGenerationRequestQuality
 from litellm.types.router import GenericLiteLLMParams
+
+
+@pytest.mark.parametrize(
+    "model,quality",
+    [
+        ("gpt-image-2", ImageGenerationRequestQuality.AUTO),
+        ("gpt-image-2.5-flare", ImageGenerationRequestQuality.XHIGH),
+        ("gpt-image-2.5-flare", ImageGenerationRequestQuality.MAX),
+        ("gpt-image-2.5-sunburst", ImageGenerationRequestQuality.XHIGH),
+        ("gpt-image-2.5-sunburst", ImageGenerationRequestQuality.MAX),
+    ],
+)
+@pytest.mark.parametrize("editing", [False, True])
+def test_image_25_transmits_model_quality_and_transparency(model, quality, editing, chatgpt_tokens):
+    expected: Final = {
+        "model": model,
+        "prompt": "a red circle with transparent surroundings",
+        "quality": quality.value,
+        "background": "transparent",
+        "size": "2048x2048",
+        **({"images": [{"image_url": "data:image/png;base64,aGVsbG8="}]} if editing else {}),
+    }
+
+    def respond(request):
+        assert str(request.url) == "https://chatgpt.com/backend-api/codex/images/" + (
+            "edits" if editing else "generations"
+        )
+        assert request.headers["content-type"] == "application/json"
+        assert json.loads(request.content) == expected
+        return httpx.Response(
+            200,
+            json={"created": 1, "data": [{"b64_json": "aGVsbG8="}], "quality": quality.value},
+        )
+
+    client: Final = HTTPHandler()
+    client.client = httpx.Client(transport=httpx.MockTransport(respond))
+    operation: Final = litellm.image_edit if editing else litellm.image_generation
+    try:
+        response: Final = operation(
+            **{**expected, "model": "chatgpt/" + model, "quality": quality},
+            client=client,
+            chatgpt_token_dir=chatgpt_tokens,
+        )
+        assert response.data[0].b64_json == "aGVsbG8="
+        assert response.quality == quality.value
+    finally:
+        client.client.close()
+
+
+@pytest.mark.parametrize("model", ["gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"])
+def test_json_edit_preserves_provider_params_and_extra_body_precedence(model, chatgpt_tokens):
+    references: Final = [{"image_url": "data:image/png;base64,aGVsbG8="}]
+
+    def respond(request):
+        assert request.headers["content-type"] == "application/json"
+        assert json.loads(request.content) == {
+            "model": model,
+            "prompt": "red circle",
+            "images": references,
+            "seed": 7,
+            "provider_options": {"steps": 30, "enabled": True},
+            "output_compression": 90,
+        }
+        return httpx.Response(200, json={"created": 1, "data": [{"b64_json": "aGVsbG8="}]})
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http_client:
+        response: Final = litellm.image_edit(
+            model="chatgpt/" + model,
+            prompt="red circle",
+            images=references,
+            client=HTTPHandler(client=http_client),
+            chatgpt_token_dir=chatgpt_tokens,
+            seed=42,
+            output_compression=90,
+            extra_body={"seed": 7, "provider_options": {"steps": 30, "enabled": True}},
+        )
+        assert response.data[0].b64_json == "aGVsbG8="
 
 
 @pytest.mark.parametrize("api_base", [None, "https://image-gateway.test"])

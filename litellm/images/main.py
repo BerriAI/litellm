@@ -869,6 +869,8 @@ def image_edit(
                     non_default_params,
                     extra_body if isinstance(extra_body, dict) else None,
                 )
+                if image_edit_provider_config.use_multipart_form_data()
+                else {**non_default_params, **(extra_body if isinstance(extra_body, dict) else {})}
             )
 
         # Pre Call logging
