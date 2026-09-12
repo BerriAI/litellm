@@ -251,7 +251,7 @@ import litellm._redis
 from litellm import Router
 from litellm._logging import _redact_string, verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
-from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+from litellm.caching.redis_cache import RedisCircuitBreakerOpenError, is_redis_timeout_failure
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.constants import (
     _REALTIME_BODY_CACHE_SIZE,
@@ -3411,7 +3411,7 @@ async def _apply_spend_counter_increments(pending: Sequence[_PendingSpendIncreme
         results: Final = await redis_cache.async_increment_pipeline(increment_list=increment_list)
     except Exception as e:
         await asyncio.gather(*(_invalidate_spend_counter(counter_key=item.counter_key) for item in pending))
-        if isinstance(e, RedisCircuitBreakerOpenError):
+        if isinstance(e, RedisCircuitBreakerOpenError) or is_redis_timeout_failure(e):
             return
         raise
     for item, current_value in zip(pending, results or ()):

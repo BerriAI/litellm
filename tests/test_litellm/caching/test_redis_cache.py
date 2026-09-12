@@ -977,17 +977,17 @@ async def test_stale_timeout_does_not_let_sub_threshold_hard_failures_open_the_b
     from redis.exceptions import ConnectionError as RedisConnectionError
     from redis.exceptions import TimeoutError as RedisTimeoutError
 
-    from litellm.caching.redis_cache import RedisCircuitBreaker, _is_redis_timeout_failure
+    from litellm.caching.redis_cache import RedisCircuitBreaker, is_redis_timeout_failure
 
     breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, timeout_min_duration=0.05)
 
-    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisTimeoutError("read timed out")))
+    breaker.record_failure(is_timeout=is_redis_timeout_failure(RedisTimeoutError("read timed out")))
     await asyncio.sleep(0.06)
     for _ in range(breaker.failure_threshold - 1):
-        breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisConnectionError("refused")))
+        breaker.record_failure(is_timeout=is_redis_timeout_failure(RedisConnectionError("refused")))
     assert breaker.is_open() is False, "2 hard failures and 1 stale timeout are below both thresholds"
 
-    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisConnectionError("refused")))
+    breaker.record_failure(is_timeout=is_redis_timeout_failure(RedisConnectionError("refused")))
     assert breaker.is_open() is True, "the threshold-th hard failure must still open it"
 
 
@@ -999,19 +999,19 @@ async def test_hard_failure_resets_timeout_streak_so_a_later_burst_must_earn_its
     from redis.exceptions import ConnectionError as RedisConnectionError
     from redis.exceptions import TimeoutError as RedisTimeoutError
 
-    from litellm.caching.redis_cache import RedisCircuitBreaker, _is_redis_timeout_failure
+    from litellm.caching.redis_cache import RedisCircuitBreaker, is_redis_timeout_failure
 
     breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, timeout_min_duration=0.05)
 
-    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisTimeoutError("read timed out")))
-    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisConnectionError("refused")))
+    breaker.record_failure(is_timeout=is_redis_timeout_failure(RedisTimeoutError("read timed out")))
+    breaker.record_failure(is_timeout=is_redis_timeout_failure(RedisConnectionError("refused")))
     await asyncio.sleep(0.06)
     for _ in range(breaker.failure_threshold):
-        breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisTimeoutError("read timed out")))
+        breaker.record_failure(is_timeout=is_redis_timeout_failure(RedisTimeoutError("read timed out")))
     assert breaker.is_open() is False, "the burst is instantaneous, so the duration gate must hold it closed"
 
     await asyncio.sleep(0.06)
-    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisTimeoutError("read timed out")))
+    breaker.record_failure(is_timeout=is_redis_timeout_failure(RedisTimeoutError("read timed out")))
     assert breaker.is_open() is True, "the same run of timeouts persisting past the duration must open it"
 
 
@@ -1022,7 +1022,7 @@ async def test_breaker_metrics_track_state_and_failure_class():
     from redis.exceptions import ConnectionError as RedisConnectionError
     from redis.exceptions import TimeoutError as RedisTimeoutError
 
-    from litellm.caching.redis_cache import RedisCircuitBreaker, _is_redis_timeout_failure
+    from litellm.caching.redis_cache import RedisCircuitBreaker, is_redis_timeout_failure
 
     def sample(name, labels=None):
         return REGISTRY.get_sample_value(name, labels) or 0.0
@@ -1034,9 +1034,9 @@ async def test_breaker_metrics_track_state_and_failure_class():
     closed_gauge_before = sample("litellm_redis_circuit_breaker_state", {"state": "closed"})
 
     breaker = RedisCircuitBreaker(failure_threshold=2, recovery_timeout=60, timeout_min_duration=5.0)
-    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisTimeoutError("t")))
-    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisConnectionError("refused")))
-    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisConnectionError("refused")))
+    breaker.record_failure(is_timeout=is_redis_timeout_failure(RedisTimeoutError("t")))
+    breaker.record_failure(is_timeout=is_redis_timeout_failure(RedisConnectionError("refused")))
+    breaker.record_failure(is_timeout=is_redis_timeout_failure(RedisConnectionError("refused")))
 
     assert sample("litellm_redis_circuit_breaker_failures_total", {"failure_class": "timeout"}) == timeout_before + 1
     assert sample("litellm_redis_circuit_breaker_failures_total", {"failure_class": "connectivity"}) == hard_before + 2
