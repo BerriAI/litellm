@@ -6,6 +6,7 @@ import re
 from base64 import urlsafe_b64encode
 from datetime import datetime, timedelta, timezone
 from http.cookies import SimpleCookie
+from typing import Final
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -18,6 +19,7 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     GATEWAY_AUTH_CODE_PREFIX,
     GATEWAY_AUTH_CODE_TTL_SECONDS,
     MANUAL_DELIVERY_AUTH_CODE_TTL_SECONDS,
+    MAX_CLIENT_ID_LENGTH,
     ConsentTeam,
     MintedProxyCredential,
     _GatewayAuthCode,
@@ -53,6 +55,13 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token i
 
 MASTER_KEY = "sk-gateway-dcr-flow-tests"
 REDIRECT_URI = "https://claude.ai/api/mcp/auth_callback"
+VSCODE_REDIRECT_URIS: Final = (
+    "https://insiders.vscode.dev/redirect",
+    "https://vscode.dev/redirect",
+    "http://127.0.0.1/",
+    "http://127.0.0.1:33418/",
+)
+MAX_LENGTH_REDIRECT_URIS: Final = tuple(f"https://client.example/{index}/".ljust(256, "a") for index in range(4))
 CODE_VERIFIER = "verifier-" + "v" * 43
 CODE_CHALLENGE = urlsafe_b64encode(hashlib.sha256(CODE_VERIFIER.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
 
@@ -102,6 +111,58 @@ async def test_register_mints_stateless_public_client():
     record = open_gateway_dcr_client(body["client_id"])
     assert record is not None
     assert record.redirect_uris == (REDIRECT_URI,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("redirect_uris", [VSCODE_REDIRECT_URIS, MAX_LENGTH_REDIRECT_URIS])
+async def test_register_four_callbacks_preserves_metadata(redirect_uris: tuple[str, ...]) -> None:
+    response: Final = await register_aggregate_client(
+        request=_request(path="/register", method="POST"),
+        request_body={
+            "client_name": "Visual Studio Code",
+            "client_uri": "https://code.visualstudio.com",
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "redirect_uris": list(redirect_uris),
+            "token_endpoint_auth_method": "none",
+            "application_type": "native",
+        },
+    )
+    assert response.status_code == 201
+    body: Final = json.loads(response.body)
+    assert body["redirect_uris"] == list(redirect_uris)
+    assert body["token_endpoint_auth_method"] == "none"
+    assert "client_secret" not in body
+    assert len(body["client_id"]) <= MAX_CLIENT_ID_LENGTH
+    record: Final = open_gateway_dcr_client(body["client_id"])
+    assert record is not None
+    assert record.redirect_uris == redirect_uris
+
+
+@pytest.mark.asyncio
+async def test_register_rejects_five_valid_callbacks() -> None:
+    response: Final = await register_aggregate_client(
+        request=_request(path="/register", method="POST"),
+        request_body={"redirect_uris": [*VSCODE_REDIRECT_URIS, "http://127.0.0.1:33419/"]},
+    )
+    assert response.status_code == 400
+    assert json.loads(response.body) == {
+        "error": "invalid_redirect_uri",
+        "error_description": "redirect_uris must be a list of 1 to 4 URIs",
+    }
+
+
+@pytest.mark.asyncio
+async def test_register_four_callbacks_preserves_encoded_size_guard() -> None:
+    response: Final = await register_aggregate_client(
+        request=_request(path="/register", method="POST"),
+        request_body={"redirect_uris": [f"https://client.example/{index}/".ljust(256, "é") for index in range(4)]},
+    )
+    assert response.status_code == 400
+    assert json.loads(response.body) == {
+        "error": "invalid_client_metadata",
+        "error_description": "registered metadata is too large",
+    }
 
 
 @pytest.mark.asyncio
@@ -162,7 +223,6 @@ async def test_register_rejects_userinfo_spoofed_origin():
         ["https://claude.ai/cb#fragment"],
         ["ftp://claude.ai/cb"],
         ["https://a.example.com/" + "p" * 300],
-        ["https://a.example.com/1", "https://a.example.com/2", "https://a.example.com/3", "https://a.example.com/4"],
         [12345],
     ],
 )
@@ -248,12 +308,14 @@ def _flow_cookie_from(response) -> tuple:
 
 
 @pytest.mark.asyncio
-async def test_full_walk_register_authorize_complete_token_and_replay():
+@pytest.mark.parametrize("redirect_uris", [(REDIRECT_URI,), VSCODE_REDIRECT_URIS, MAX_LENGTH_REDIRECT_URIS])
+async def test_full_walk_register_authorize_complete_token_and_replay(redirect_uris: tuple[str, ...]):
     """The whole front door on one deterministic walk: register -> authorize ->
     complete -> token, then the security edges on the same artifacts (user mismatch,
     PKCE mismatch, single-use replay, refresh rotation, cross-client refresh)."""
-    client_id = (await _register([REDIRECT_URI]))["client_id"]
-    authorize_response = _authorize(client_id, session_user_id="u1")
+    redirect_uri: Final = redirect_uris[-1]
+    client_id = (await _register(list(redirect_uris)))["client_id"]
+    authorize_response = _authorize(client_id, session_user_id="u1", redirect_uri=redirect_uri)
     handle, cookies = _flow_cookie_from(authorize_response)
 
     denied = await complete_connect_flow(
@@ -280,7 +342,7 @@ async def test_full_walk_register_authorize_complete_token_and_replay():
     )
     assert completed.status_code == 303
     redirect = urlparse(completed.headers["location"])
-    assert f"{redirect.scheme}://{redirect.netloc}{redirect.path}" == REDIRECT_URI
+    assert f"{redirect.scheme}://{redirect.netloc}{redirect.path}" == redirect_uri
     params = parse_qs(redirect.query)
     assert params["state"] == ["client-state-123"]
     code = params["code"][0]
@@ -293,7 +355,7 @@ async def test_full_walk_register_authorize_complete_token_and_replay():
             "request": _request("/token", method="POST"),
             "grant_type": "authorization_code",
             "code": code,
-            "redirect_uri": REDIRECT_URI,
+            "redirect_uri": redirect_uri,
             "client_id": client_id,
             "code_verifier": CODE_VERIFIER,
             "refresh_token": None,

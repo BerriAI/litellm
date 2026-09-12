@@ -3,6 +3,7 @@ import json
 import logging
 import threading
 import time
+from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
@@ -20,7 +21,9 @@ from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
 from litellm.llms.bedrock.base_aws_llm import SignsRequestsWithAWS
+from litellm.llms.brave.search.transformation import BraveSearchConfig
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
@@ -36,6 +39,7 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_tran
 )
 from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
+from litellm.llms.tinyfish.search.transformation import TinyfishSearchConfig
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ImageObject, ImageResponse, ModelResponse, TranscriptionResponse
@@ -43,6 +47,95 @@ from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
 
 _ACTIVE_KEY = "_code_interpreter_interception_active"
 _SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
+
+
+async def _get_search_with_client(
+    client: HTTPHandler | AsyncHTTPHandler, provider_config: BaseSearchConfig | None = None
+) -> SearchResponse:
+    result: Final = BaseLLMHTTPHandler().search(
+        query="test",
+        optional_params={},
+        timeout=5,
+        logging_obj=Mock(),
+        api_key="test-key",
+        api_base="https://search.example.test/",
+        custom_llm_provider="tinyfish" if isinstance(provider_config, TinyfishSearchConfig) else "brave",
+        client=client,
+        asearch=isinstance(client, AsyncHTTPHandler),
+        provider_config=provider_config or BraveSearchConfig(),
+    )
+    return await result if asyncio.iscoroutine(result) else result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+@pytest.mark.parametrize("status_code", (400, 401, 403, 422, 429, 500))
+async def test_get_search_raises_provider_http_errors(is_async: bool, status_code: int) -> None:
+    upstream_response: Final = httpx.Response(
+        status_code, json={"error": "rejected request"}, headers={"retry-after": "7"}
+    )
+    transport: Final = httpx.MockTransport(lambda request: upstream_response)
+    async with httpx.AsyncClient(transport=transport) as async_client:
+        with httpx.Client(transport=transport) as sync_client:
+            client: Final = AsyncHTTPHandler() if is_async else HTTPHandler(client=sync_client)
+            if isinstance(client, AsyncHTTPHandler):
+                await client.close()
+                client.client = async_client
+            with pytest.raises(BaseLLMException) as error:
+                await _get_search_with_client(client)
+            assert error.value.status_code == status_code
+            assert "rejected request" in error.value.message
+            assert error.value.headers is not None
+            assert error.value.headers["retry-after"] == "7"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+@pytest.mark.parametrize("has_results", (False, True))
+async def test_get_search_preserves_successful_results(is_async: bool, has_results: bool) -> None:
+    results: Final = (
+        [{"title": "Example", "url": "https://example.com", "description": "Example snippet"}] if has_results else []
+    )
+    transport: Final = httpx.MockTransport(lambda request: httpx.Response(200, json={"web": {"results": results}}))
+    async with httpx.AsyncClient(transport=transport) as async_client:
+        with httpx.Client(transport=transport) as sync_client:
+            client: Final = AsyncHTTPHandler() if is_async else HTTPHandler(client=sync_client)
+            if isinstance(client, AsyncHTTPHandler):
+                await client.close()
+                client.client = async_client
+            response: Final = await _get_search_with_client(client)
+            assert response.object == "search"
+            assert len(response.results) == int(has_results)
+            if has_results:
+                assert response.results[0].title == "Example"
+                assert response.results[0].url == "https://example.com"
+                assert response.results[0].snippet == "Example snippet"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+async def test_get_search_preserves_tinyfish_http_error_formatting(is_async: bool) -> None:
+    upstream_response: Final = httpx.Response(
+        429,
+        json={"error": {"code": "RATE_LIMIT_EXCEEDED", "message": "rate limit exceeded"}},
+        headers={"retry-after": "7"},
+    )
+    transport: Final = httpx.MockTransport(lambda request: upstream_response)
+    async with httpx.AsyncClient(transport=transport) as async_client:
+        with httpx.Client(transport=transport) as sync_client:
+            client: Final = AsyncHTTPHandler() if is_async else HTTPHandler(client=sync_client)
+            if isinstance(client, AsyncHTTPHandler):
+                await client.close()
+                client.client = async_client
+            with pytest.raises(BaseLLMException) as error:
+                await _get_search_with_client(client, TinyfishSearchConfig())
+            assert error.value.status_code == 429
+            assert error.value.message == (
+                "TinyFish Search: rate limit exceeded. See https://docs.tinyfish.ai/search-api for details."
+            )
+            assert error.value.headers is not None
+            assert error.value.headers["retry-after"] == "7"
+
 
 OCR_RESPONSE = {
     "pages": [{"index": 0, "markdown": "OCR output", "images": []}],

@@ -541,24 +541,166 @@ def _span_json(logger_under_test: DataDogLLMObsLogger, payload: dict[str, Any]) 
     return json.loads(safe_dumps(span))
 
 
+SECRET_TOOL_RESULT: Final = '{"city": "Paris", "temp_c": 18, "account_secret": "SECRET-7545"}'
+TOOL_CONVERSATION: Final[list[dict[str, Any]]] = [
+    {"role": "user", "content": "secret prompt"},
+    {"role": "assistant", "content": None, "tool_calls": [ASSISTANT_TOOL_CALL]},
+    {"role": "tool", "tool_call_id": "call_abc123", "content": SECRET_TOOL_RESULT},
+]
+
+
+def _redacted_span_as_the_proxy_builds_it(payload: dict[str, Any]) -> dict[str, Any]:
+    logger_under_test = _redacting_logger(turn_off_message_logging=True)
+    return _span_json(
+        logger_under_test, logger_under_test.redact_standard_logging_payload_from_model_call_details(payload)
+    )
+
+
 def test_redaction_keeps_the_conversation_shape_without_its_content() -> None:
-    """Roles and message count survive so the trace stays legible; contents and tool payloads do not."""
-    result = _span_json(
-        _redacting_logger(turn_off_message_logging=True),
+    result = _redacted_span_as_the_proxy_builds_it(
+        build_payload(
+            messages=TOOL_CONVERSATION,
+            response_message={"role": "assistant", "content": "secret response", "tool_calls": [ASSISTANT_TOOL_CALL]},
+        )
+    )
+
+    redacted_call = {
+        "name": "get_weather",
+        "arguments": "redacted-by-litellm",
+        "tool_id": "call_abc123",
+        "type": "function",
+    }
+    assert result["meta"]["input"]["messages"] == [
+        {"role": "user", "content": "redacted-by-litellm"},
+        {"role": "assistant", "content": "redacted-by-litellm", "tool_calls": [redacted_call]},
+        {
+            "role": "tool",
+            "content": "redacted-by-litellm",
+            "tool_results": [
+                {"name": "get_weather", "result": "redacted-by-litellm", "tool_id": "call_abc123", "type": "function"}
+            ],
+        },
+    ]
+    assert result["meta"]["output"]["messages"] == [
+        {"role": "assistant", "content": "redacted-by-litellm", "tool_calls": [redacted_call]}
+    ]
+    serialized = safe_dumps(result)
+    assert "SECRET-7545" not in serialized
+    assert "Paris" not in serialized
+    assert "secret" not in serialized
+
+
+def test_redaction_counts_tool_result_tokens_before_replacing_them() -> None:
+    payload = build_payload(messages=TOOL_CONVERSATION)
+    payload["standard_logging_object"]["model"] = "claude-sonnet-5"
+
+    result = _redacted_span_as_the_proxy_builds_it(payload)
+
+    expected_tokens = litellm.token_counter(model="claude-sonnet-5", text=SECRET_TOOL_RESULT)
+    assert expected_tokens > 0
+    assert result["metrics"]["tool_output_tokens"] == float(expected_tokens)
+    assert result["metrics"]["input_tokens"] == 4447.0
+
+
+def test_tool_output_tokens_sum_every_result_in_the_request(logger: DataDogLLMObsLogger) -> None:
+    payload = build(
+        logger,
+        messages=[
+            {"role": "tool", "tool_call_id": "call_1", "content": "one two three"},
+            {"role": "tool", "tool_call_id": "call_2", "content": "four five six seven"},
+        ],
+    )
+
+    assert payload["metrics"]["tool_output_tokens"] == float(
+        litellm.token_counter(text="one two three") + litellm.token_counter(text="four five six seven")
+    )
+
+
+def test_a_request_without_tool_results_reports_no_tool_output_tokens(logger: DataDogLLMObsLogger) -> None:
+    payload = build(logger, messages=[{"role": "user", "content": "hi"}])
+
+    assert "tool_output_tokens" not in payload["metrics"]
+    assert "tool_output_tokens" not in _redacted_span_as_the_proxy_builds_it(build_payload())["metrics"]
+
+
+def test_a_tool_that_returned_nothing_still_counts_as_zero_tool_output_tokens(logger: DataDogLLMObsLogger) -> None:
+    payload = build(logger, messages=[{"role": "tool", "tool_call_id": "call_1", "content": ""}])
+
+    assert payload["metrics"]["tool_output_tokens"] == 0.0
+
+
+def test_redaction_keeps_anthropic_tool_blocks_as_structure_only() -> None:
+    result = _redacted_span_as_the_proxy_builds_it(
         build_payload(
             messages=[
-                {"role": "user", "content": "secret prompt"},
-                {"role": "assistant", "content": None, "tool_calls": [ASSISTANT_TOOL_CALL]},
-            ],
-            response_message={"role": "assistant", "content": "secret response"},
-        ),
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "Paris"}}
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": SECRET_TOOL_RESULT}],
+                },
+            ]
+        )
     )
 
     assert result["meta"]["input"]["messages"] == [
-        {"role": "user", "content": "redacted-by-litellm"},
-        {"role": "assistant", "content": "redacted-by-litellm"},
+        {
+            "role": "assistant",
+            "content": "redacted-by-litellm",
+            "tool_calls": [
+                {"name": "get_weather", "arguments": "redacted-by-litellm", "tool_id": "toolu_1", "type": "tool_use"}
+            ],
+        },
+        {
+            "role": "user",
+            "content": "redacted-by-litellm",
+            "tool_results": [
+                {"name": "get_weather", "result": "redacted-by-litellm", "tool_id": "toolu_1", "type": "function"}
+            ],
+        },
     ]
-    assert result["meta"]["output"]["messages"] == [{"role": "assistant", "content": "redacted-by-litellm"}]
+    assert "Paris" not in safe_dumps(result)
+
+
+def test_redaction_blanks_tool_identifiers_that_are_not_strings() -> None:
+    result = _redacted_span_as_the_proxy_builds_it(
+        build_payload(
+            messages=[
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": {"leak": "SECRET-7545"}, "type": ["SECRET-7545"], "function": {"name": ["SECRET-7545"]}}
+                    ],
+                }
+            ]
+        )
+    )
+
+    assert result["meta"]["input"]["messages"][0]["tool_calls"] == [
+        {"name": "", "arguments": "redacted-by-litellm", "tool_id": "", "type": ""}
+    ]
+    assert "SECRET-7545" not in safe_dumps(result)
+
+
+def test_the_shared_hook_still_strips_what_redaction_governs_besides_messages() -> None:
+    payload = build_payload(messages=TOOL_CONVERSATION)
+    payload["standard_logging_object"]["classifier_input"] = {"system": "SECRET-7545"}
+    logger_under_test = _redacting_logger(turn_off_message_logging=True)
+
+    with patch.object(  # test-quality-ok: the hook reads this module global with no injection seam
+        litellm, "standard_logging_payload_excluded_fields", ["response"]
+    ):
+        redacted = logger_under_test.redact_standard_logging_payload_from_model_call_details(payload)
+
+    assert "classifier_input" not in redacted["standard_logging_object"]
+    assert "response" not in redacted["standard_logging_object"]
+    assert redacted["standard_logging_object"]["messages"] == TOOL_CONVERSATION
+    assert payload["standard_logging_object"]["classifier_input"] == {"system": "SECRET-7545"}
 
 
 def test_redaction_drops_unrecognized_and_malformed_message_roles() -> None:
