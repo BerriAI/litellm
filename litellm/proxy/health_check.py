@@ -258,14 +258,47 @@ def _deployment_model(deployment: Mapping[str, object]) -> str | None:
     return params.get("model") if isinstance(params, Mapping) else None
 
 
-def deployment_answers_to(deployment: Mapping[str, object], model_name: str, team_id: str | None) -> bool:
-    """True when `model_name` is the deployment's model_name or the public name the caller's own team reaches it by."""
+def _owner_team_id(deployment: Mapping[str, object]) -> str | None:
     info: Final = deployment.get("model_info")
-    public_name: Final = info.get("team_public_model_name") if isinstance(info, Mapping) else None
-    owner_team_id: Final = info.get("team_id") if isinstance(info, Mapping) else None
-    return model_name == deployment.get("model_name") or (
-        model_name == public_name and team_id is not None and owner_team_id == team_id
+    owner: Final = info.get("team_id") if isinstance(info, Mapping) else None
+    return owner if isinstance(owner, str) else None
+
+
+def _team_public_model_name(deployment: Mapping[str, object]) -> str | None:
+    info: Final = deployment.get("model_info")
+    name: Final = info.get("team_public_model_name") if isinstance(info, Mapping) else None
+    return name if isinstance(name, str) else None
+
+
+def _deployments_routed_by_name(
+    model_list: Sequence[Mapping[str, object]], model_name: str, team_id: str | None
+) -> tuple[Mapping[str, object], ...]:
+    """The deployments a request for ``model_name`` from this caller routes to.
+
+    A team's own copies published under that name win, then deployments carrying it as
+    ``model_name``. A caller with no team reaches a public name only when nothing carries
+    it as ``model_name``, and only an admin still has another team's deployment in a
+    scoped ``model_list`` by then.
+    """
+    own_copies: Final = tuple(
+        x
+        for x in model_list
+        if team_id is not None and _owner_team_id(x) == team_id and _team_public_model_name(x) == model_name
     )
+    if own_copies:
+        return own_copies
+    by_name: Final = tuple(x for x in model_list if x.get("model_name") == model_name)
+    if by_name or team_id is not None:
+        return by_name
+    return tuple(x for x in model_list if _team_public_model_name(x) == model_name)
+
+
+def deployments_targeted_by_name(
+    model_list: Sequence[Mapping[str, object]], model: str, team_id: str | None
+) -> tuple[Mapping[str, object], ...]:
+    """``model`` targets deployments by ``litellm_params.model`` first, then the way a request for it routes."""
+    by_param: Final = tuple(x for x in model_list if _deployment_model(x) == model)
+    return by_param or _deployments_routed_by_name(model_list, model, team_id)
 
 
 def _narrow_to_target(
@@ -277,8 +310,7 @@ def _narrow_to_target(
         return by_id or tuple(model_list)
     if model is None:
         return tuple(model_list)
-    by_param: Final = tuple(x for x in model_list if _deployment_model(x) == model)
-    return by_param or tuple(x for x in model_list if deployment_answers_to(x, model, team_id))
+    return deployments_targeted_by_name(model_list, model, team_id)
 
 
 def _is_strategy_router_deployment(litellm_params: Mapping[str, object]) -> bool:
@@ -830,8 +862,10 @@ async def perform_health_check(
 
     When model_id is provided, only the deployment with that id is checked
     (so models that share the same name but have different ids are checked separately).
-    When model (name) is provided, all deployments matching that name are checked;
-    a team's public model name only matches for a caller from that team (``team_id``).
+    When model (name) is provided, the deployments a request for that name from the
+    caller (``team_id``) would route to are checked: the caller's team copies published
+    under that name, else the deployments named that way, else a public name that only
+    another team's deployment carries.
 
     When ``health_check_skip_disabled_background_models`` is True (via
     ``general_settings.health_check_skip_disabled_background_models``), deployments
