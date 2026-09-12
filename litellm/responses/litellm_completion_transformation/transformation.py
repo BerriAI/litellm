@@ -59,6 +59,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParamFunctionChunk,
     ChatCompletionUserMessage,
     GenericChatCompletionMessage,
+    IncompleteDetails,
     InputTokensDetails,
     OpenAIChatCompletionTextObject,
     OpenAIMcpServerTool,
@@ -2272,13 +2273,20 @@ class LiteLLMCompletionResponsesConfig:
         if choices and len(choices) > 0:
             finish_reason = choices[0].finish_reason
 
+        incomplete_details = getattr(chat_completion_response, "incomplete_details", None)
+        if incomplete_details is None and finish_reason:
+            if finish_reason == "length":
+                incomplete_details = IncompleteDetails(reason="max_output_tokens")
+            elif finish_reason in ["content_filter", "refusal"]:
+                incomplete_details = IncompleteDetails(reason="content_filter")
+
         responses_api_response: Final[ResponsesAPIResponse] = ResponsesAPIResponse(
             id=chat_completion_response.id,
             created_at=chat_completion_response.created,
             model=chat_completion_response.model,
             object="response",
             error=getattr(chat_completion_response, "error", None),
-            incomplete_details=getattr(chat_completion_response, "incomplete_details", None),
+            incomplete_details=incomplete_details,
             instructions=getattr(chat_completion_response, "instructions", None),
             metadata=getattr(chat_completion_response, "metadata", {}),
             output=LiteLLMCompletionResponsesConfig._transform_chat_completion_choices_to_responses_output(

@@ -224,6 +224,7 @@ _FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
     "IMAGE_PROHIBITED_CONTENT": "content_filter",
     "TOO_MANY_TOOL_CALLS": "stop",
     "MALFORMED_RESPONSE": "stop",
+    "NO_IMAGE": "content_filter",
     # Zhipu GLM
     "network_error": "stop",
     "sensitive": "content_filter",
