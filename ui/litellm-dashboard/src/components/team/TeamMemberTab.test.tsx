@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { fireEvent, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
@@ -166,6 +166,27 @@ describe("TeamMembersComponent", () => {
     const table = screen.getByRole("table");
     expect(table).toHaveTextContent("member");
     expect(table).toHaveTextContent("admin");
+  });
+
+  it("clears the member search when a different team is shown", () => {
+    const props = {
+      canEditTeam: false,
+      handleMemberDelete: mockHandleMemberDelete,
+      setSelectedEditMember: mockSetSelectedEditMember,
+      setIsEditMemberModalVisible: mockSetIsEditMemberModalVisible,
+      setIsAddMemberModalVisible: mockSetIsAddMemberModalVisible,
+    };
+    const { rerender } = renderWithProviders(<TeamMembersComponent teamData={createMockTeamData()} {...props} />);
+
+    fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "user2" } });
+    expect(screen.queryByText("user1@test.com")).not.toBeInTheDocument();
+
+    const otherTeam = createMockTeamData({ team_id: "team-456" });
+    rerender(<TeamMembersComponent teamData={otherTeam} {...props} />);
+
+    expect(screen.getByTestId("datatable-search")).toHaveValue("");
+    expect(screen.getAllByText("user1@test.com").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("user2@test.com").length).toBeGreaterThanOrEqual(1);
   });
 
   it("should render Add Member button", () => {

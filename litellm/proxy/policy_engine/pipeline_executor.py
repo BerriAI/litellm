@@ -58,6 +58,15 @@ class UndeliverableStreamRewrite(Exception):
         self.guardrail_name: Final = guardrail_name
 
 
+class UnappliableRequestRewrite(Exception):
+    def __init__(self, guardrail_name: str) -> None:
+        super().__init__(
+            f"Guardrail '{guardrail_name}' rewrote the request in a way this endpoint cannot apply, "
+            "so the request was rejected rather than sent unrewritten"
+        )
+        self.guardrail_name: Final = guardrail_name
+
+
 def _tool_call_shape(tool_call: object) -> tuple[object, object]:
     plain: Final = tool_call.model_dump() if isinstance(tool_call, BaseModel) else tool_call
     function: Final = plain.get("function") if isinstance(plain, Mapping) else None

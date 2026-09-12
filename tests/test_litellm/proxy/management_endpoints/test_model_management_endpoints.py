@@ -3,7 +3,7 @@ import asyncio
 import contextlib
 import json
 from collections.abc import Mapping
-from typing import Dict, Optional
+from typing import Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -3288,6 +3288,99 @@ def _build_db_model_with_pricing():
         ),
         model_info=ModelInfo(id="dep-pricing-0"),
     )
+
+
+class TestUpdateDBModelCompression:
+    @pytest.mark.parametrize(
+        "compression_patch, expected",
+        [
+            (
+                {},
+                {
+                    "auto_router_routing_compression": "routing-compressor",
+                    "auto_router_model_compression": "model-compressor",
+                },
+            ),
+            ({"auto_router_routing_compression": None}, {"auto_router_model_compression": "model-compressor"}),
+            ({"auto_router_model_compression": None}, {"auto_router_routing_compression": "routing-compressor"}),
+            (
+                {"auto_router_routing_compression": "none", "auto_router_model_compression": "none"},
+                {"auto_router_routing_compression": "none", "auto_router_model_compression": "none"},
+            ),
+            (
+                {
+                    "auto_router_routing_compression": "new-compressor",
+                    "auto_router_model_compression": "new-compressor",
+                },
+                {
+                    "auto_router_routing_compression": "new-compressor",
+                    "auto_router_model_compression": "new-compressor",
+                },
+            ),
+        ],
+    )
+    def test_compression_patch_preserves_omissions_and_explicit_choices(
+        self, monkeypatch: pytest.MonkeyPatch, compression_patch: dict[str, str | None], expected: dict[str, str]
+    ):
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "synthetic-compression-salt")
+        result: Final = update_db_model(
+            db_model=Deployment(
+                model_name="synthetic-router",
+                litellm_params=LiteLLM_Params(
+                    model="auto_router/complexity_router",
+                    auto_router_routing_compression=encrypt_value_helper("routing-compressor"),
+                    auto_router_model_compression=encrypt_value_helper("model-compressor"),
+                ),
+                model_info=ModelInfo(id="compression-router"),
+            ),
+            updated_patch=updateDeployment.model_validate({"litellm_params": compression_patch}),
+        )
+        params: Final = json.loads(result["litellm_params"])
+        assert {
+            key: decrypt_value_helper(value=val, key=key)
+            for key, val in params.items()
+            if key in ("auto_router_routing_compression", "auto_router_model_compression")
+        } == expected
+
+    def test_explicit_compression_clear_removes_both_saved_overrides(self):
+        from litellm.proxy.guardrails.auto_router_compression import policy_from_litellm_params
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+        db_model: Final = Deployment(
+            model_name="synthetic-router",
+            litellm_params=LiteLLM_Params(
+                model="auto_router/complexity_router",
+                auto_router_routing_compression="routing-compressor",
+                auto_router_model_compression="model-compressor",
+                api_base="http://127.0.0.1:9999/v1",
+                temperature=0,
+            ),
+            model_info=ModelInfo(id="compression-router", team_id="synthetic-team"),
+        )
+        result: Final = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment.model_validate(
+                {
+                    "litellm_params": {
+                        "auto_router_routing_compression": None,
+                        "auto_router_model_compression": None,
+                        "api_base": None,
+                    },
+                    "model_info": {"team_id": None},
+                }
+            ),
+        )
+
+        params: Final = json.loads(result["litellm_params"])
+        assert "auto_router_routing_compression" not in params
+        assert "auto_router_model_compression" not in params
+        assert policy_from_litellm_params(params) is None
+        assert params["api_base"] == "http://127.0.0.1:9999/v1"
+        assert params["temperature"] == 0
+        assert json.loads(result["model_info"])["team_id"] == "synthetic-team"
 
 
 class TestUpdateDBModelClearPricing:

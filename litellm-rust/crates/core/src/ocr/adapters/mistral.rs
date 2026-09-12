@@ -33,7 +33,7 @@ impl OcrAdapter for MistralAdapter {
         let url = get_complete_url(request.connection.api_base.as_deref())?;
         let body =
             mistral::transform_ocr_request(&request.model, request.document.clone(), &params)?;
-        transform_request_body(client, request, &url, &headers, body, |_| Ok(())).await
+        transform_request_body(client, request, &url, &headers, true, body, |_| Ok(())).await
     }
 
     fn transform_ocr_response(

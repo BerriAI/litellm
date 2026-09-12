@@ -8419,7 +8419,7 @@ async def test_increment_spend_counters_finalizes_after_unreserved_increments():
     async def assert_reservation_not_finalized_yet(**kwargs):
         assert budget_reservation["finalized"] is False
         incremented_counters.append(kwargs["counter_key"])
-        return ps._PendingSpendIncrement(
+        return ps.PendingSpendIncrement(
             counter_key=kwargs["counter_key"], increment=kwargs["increment"]
         )
 
