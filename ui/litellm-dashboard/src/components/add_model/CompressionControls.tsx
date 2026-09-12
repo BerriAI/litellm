@@ -20,8 +20,7 @@ const NONE_OPTION: SearchSelectOption = { label: "None (no compression)", value:
 
 const CompressionControls: React.FC<CompressionControlsProps> = ({ value, onChange }) => {
   const { routing, sameAsRouting, model } = value;
-  const onRoutingChange = (newRouting: string | undefined) =>
-    onChange({ ...value, routing: newRouting, sameAsRouting: newRouting === undefined ? true : sameAsRouting });
+  const onRoutingChange = (newRouting: string | undefined) => onChange({ ...value, routing: newRouting });
   const onSameAsRoutingChange = (newSameAsRouting: boolean) => onChange({ ...value, sameAsRouting: newSameAsRouting });
   const onModelChange = (newModel: string | undefined) => onChange({ ...value, model: newModel });
 

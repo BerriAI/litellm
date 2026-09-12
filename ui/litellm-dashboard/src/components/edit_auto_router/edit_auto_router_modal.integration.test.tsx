@@ -1064,6 +1064,55 @@ describe("EditAutoRouterModal prompt compression", () => {
       />,
     );
 
+  it("should clear both saved compression overrides when inheritance is selected", async () => {
+    const user = userEvent.setup();
+    renderWithStoredCompression({
+      auto_router_routing_compression: "routing-compressor",
+      auto_router_model_compression: "model-compressor",
+    });
+
+    await user.click(await screen.findByText("Advanced: Compression"));
+    await user.click(screen.getAllByRole("button", { name: "Clear", exact: true })[0]);
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(modelPatchUpdateCall).toHaveBeenCalledWith(
+        "token",
+        expect.objectContaining({
+          litellm_params: expect.objectContaining({
+            model: "auto_router/complexity_router",
+            auto_router_routing_compression: null,
+            auto_router_model_compression: null,
+          }),
+        }),
+        "auto-1",
+      ),
+    );
+  });
+
+  it("should discard a cancelled clear and preserve compression when the saved choice is restored", async () => {
+    const user = userEvent.setup();
+    const stored = { auto_router_routing_compression: "none", auto_router_model_compression: "model-compressor" };
+    const view = renderWithStoredCompression(stored);
+
+    await user.click(await screen.findByText("Advanced: Compression"));
+    await user.click(screen.getAllByRole("button", { name: "Clear", exact: true })[0]);
+    await user.click(screen.getByRole("button", { name: "Cancel", exact: true }));
+    expect(modelPatchUpdateCall).not.toHaveBeenCalled();
+    view.unmount();
+
+    renderWithStoredCompression(stored);
+    await user.click(await screen.findByText("Advanced: Compression"));
+    expect(screen.getByRole("combobox", { name: "Routing decision compression" })).toHaveValue("None (no compression)");
+    await user.click(screen.getAllByRole("button", { name: "Clear", exact: true })[0]);
+    await user.click(screen.getByRole("combobox", { name: "Routing decision compression" }));
+    await user.click(screen.getByRole("option", { name: "None (no compression)" }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedLitellmParams()).toMatchObject(stored);
+  });
+
   it("leaves both compression keys out of an untouched save when none were stored", async () => {
     const user = userEvent.setup();
     renderWithStoredCompression();
@@ -1075,18 +1124,24 @@ describe("EditAutoRouterModal prompt compression", () => {
     expect(savedLitellmParams()).not.toHaveProperty("auto_router_model_compression");
   });
 
-  it("preserves a stored same-as-routing compression through an untouched open-and-save", async () => {
+  it.each([
+    { auto_router_routing_compression: "headroom-a", auto_router_model_compression: "headroom-a" },
+    { auto_router_routing_compression: "routing-compressor" },
+    { auto_router_model_compression: "model-compressor" },
+  ])("should preserve the exact stored compression fields through an untouched save: %j", async (stored) => {
     const user = userEvent.setup();
-    renderWithStoredCompression({
-      auto_router_routing_compression: "headroom-a",
-      auto_router_model_compression: "headroom-a",
-    });
+    renderWithStoredCompression(stored);
 
     await user.click(await screen.findByRole("button", { name: /save changes/i }));
 
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
-    expect(savedLitellmParams()?.auto_router_routing_compression).toBe("headroom-a");
-    expect(savedLitellmParams()?.auto_router_model_compression).toBe("headroom-a");
+    expect(
+      Object.fromEntries(
+        Object.entries(savedLitellmParams()).filter(
+          ([key]) => key === "auto_router_routing_compression" || key === "auto_router_model_compression",
+        ),
+      ),
+    ).toEqual(stored);
   });
 
   it("shows a stored different-compression choice as Use a different compression, not Same", async () => {
