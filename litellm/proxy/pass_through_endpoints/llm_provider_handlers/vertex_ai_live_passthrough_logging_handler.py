@@ -314,14 +314,24 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         model: str,
         logging_obj: LiteLLMLoggingObj,
     ) -> float | None:
-        """Price each turn on its own tokens and grounding, so two grounded turns pay the query fee twice."""
+        """Price each turn on its own tokens and grounding, so two grounded turns pay the query fee twice.
+
+        The fixed cost margin is a flat per-request fee, so the session's single spend row carries it once
+        rather than once per turn.
+        """
         turn_costs: Final = tuple(self._turn_cost(turn, model, logging_obj) for turn in _turns(websocket_messages))
         priced: Final = tuple(turn_cost for turn_cost in turn_costs if turn_cost is not None)
         if not priced or len(priced) != len(turn_costs):
             return None
         breakdowns: Final = tuple(breakdown for _, breakdown in priced)
         first: Final = breakdowns[0]
-        total_cost: Final = sum(cost for cost, _ in priced)
+        fixed_margin: Final = first.get("margin_fixed_amount") or 0.0
+        duplicated_fixed_margin: Final = fixed_margin * (len(priced) - 1)
+        total_cost: Final = sum(cost for cost, _ in priced) - duplicated_fixed_margin
+        summed_margin_total: Final = _summed(breakdowns, "margin_total_amount")
+        margin_total_amount: Final = (
+            None if summed_margin_total is None else summed_margin_total - duplicated_fixed_margin
+        )
         logging_obj.set_cost_breakdown(
             input_cost=_summed(breakdowns, "input_cost") or 0.0,
             output_cost=_summed(breakdowns, "output_cost") or 0.0,
@@ -331,8 +341,8 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             discount_percent=first.get("discount_percent"),
             discount_amount=_summed(breakdowns, "discount_amount"),
             margin_percent=first.get("margin_percent"),
-            margin_fixed_amount=_summed(breakdowns, "margin_fixed_amount"),
-            margin_total_amount=_summed(breakdowns, "margin_total_amount"),
+            margin_fixed_amount=first.get("margin_fixed_amount"),
+            margin_total_amount=margin_total_amount,
             cache_read_cost=_summed(breakdowns, "cache_read_cost"),
             cache_creation_cost=_summed(breakdowns, "cache_creation_cost"),
             reasoning_cost=_summed(breakdowns, "reasoning_cost"),

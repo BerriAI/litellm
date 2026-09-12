@@ -13,6 +13,7 @@ from typing import Dict, List, Any, Optional
 
 import pytest
 import httpx
+import litellm
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 # Add the parent directory to the system path
@@ -532,6 +533,28 @@ class TestVertexAILivePassthroughLoggingHandler:
         assert two_cost - plain_cost == pytest.approx(2 * fee), "two grounded turns must pay the fee twice"
         assert two_breakdown["total_cost"] == pytest.approx(two_cost)
         assert two_breakdown["tool_usage_cost"] == pytest.approx(2 * one_breakdown["tool_usage_cost"])
+
+    def test_the_fixed_cost_margin_is_charged_once_per_session(self, handler):
+        """A fixed cost margin is a flat per-request fee, and a Live session is one spend row.
+
+        Pricing each turn on its own applied the fixed margin per turn, so a two-turn session paid it
+        twice. The session now carries the fixed margin once no matter how many turns it billed.
+        """
+        head, turn = self._live_messages(self.AUDIO_SESSION[:1])
+        grounding = self._grounding_frame({"webSearchQueries": ["q"]})
+        messages = [head, grounding, turn, grounding, turn]
+
+        plain_cost, _ = self._billed_session(handler, messages)
+
+        fixed_amount = 0.01
+        with patch.object(litellm, "cost_margin_config", {"vertex_ai": {"fixed_amount": fixed_amount}}):
+            margined_cost, breakdown = self._billed_session(handler, messages)
+
+        assert margined_cost - plain_cost == pytest.approx(
+            fixed_amount
+        ), "a two-turn session must add the fixed margin once, not once per billed turn"
+        assert breakdown["margin_fixed_amount"] == pytest.approx(fixed_amount)
+        assert breakdown["margin_total_amount"] == pytest.approx(fixed_amount)
 
     def test_reporting_tool_use_tokens_does_not_move_the_bill(self, handler, mock_logging_obj):
         """Deliberate boundary: these tokens are reported here, and priced nowhere.
