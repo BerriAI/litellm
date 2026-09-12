@@ -67,3 +67,4 @@
 /ui/litellm-dashboard/src/components/chat/MCP* @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
 /ui/litellm-dashboard/src/components/permissions/MCPServerPermissions* @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
 /ui/litellm-dashboard/src/components/permissions/AgentPermissions* @joshua-berri @yuneng-berri @ryan-crabbe-berri
+/mcp_servers.json @joshua-berri @tin-berri @yucheng-berri
