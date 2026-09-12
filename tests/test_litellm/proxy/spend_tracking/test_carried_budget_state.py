@@ -62,7 +62,7 @@ def test_organization_state_carries_alias_spend_and_max_budget():
     token = UserAPIKeyAuth(token="hashed", org_id="o1")
     org = LiteLLM_OrganizationTable(
         organization_id="o1",
-        organization_alias="acme-org",
+        organization_alias="platform-org",
         budget_id="b1",
         created_by="admin",
         updated_by="admin",
@@ -72,7 +72,7 @@ def test_organization_state_carries_alias_spend_and_max_budget():
 
     carry_organization_budget_state(valid_token=token, org_table=org)
 
-    assert token.organization_alias == "acme-org"
+    assert token.organization_alias == "platform-org"
     assert OrgBudgetSnapshot.from_metadata(carried_budget_metadata(token)) == OrgBudgetSnapshot(
         spend=12.5, max_budget=100.0
     )

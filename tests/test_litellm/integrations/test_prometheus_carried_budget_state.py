@@ -75,7 +75,7 @@ def getters():
         "get_org_object": AsyncMock(
             return_value=LiteLLM_OrganizationTable(
                 organization_id="o1",
-                organization_alias="acme-org",
+                organization_alias="platform-org",
                 budget_id="b1",
                 created_by="admin",
                 updated_by="admin",
@@ -121,7 +121,7 @@ def _authed_token() -> UserAPIKeyAuth:
         valid_token=token,
         org_table=LiteLLM_OrganizationTable(
             organization_id="o1",
-            organization_alias="acme-org",
+            organization_alias="platform-org",
             budget_id="b1",
             created_by="admin",
             updated_by="admin",

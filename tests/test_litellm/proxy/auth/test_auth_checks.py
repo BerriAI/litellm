@@ -5802,7 +5802,7 @@ async def test_organization_budget_check_carries_org_state_on_the_token():
 
     org_table = LiteLLM_OrganizationTable(
         organization_id="o1",
-        organization_alias="acme-org",
+        organization_alias="platform-org",
         budget_id="b1",
         created_by="admin",
         updated_by="admin",
@@ -5823,7 +5823,7 @@ async def test_organization_budget_check_carries_org_state_on_the_token():
         proxy_logging_obj=MagicMock(),
     )
 
-    assert token.organization_alias == "acme-org"
+    assert token.organization_alias == "platform-org"
     assert token.org_budget_snapshot == OrgBudgetSnapshot(spend=12.5, max_budget=100.0)
 
 
