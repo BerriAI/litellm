@@ -2490,11 +2490,7 @@ async def _build_oauth_protected_resource_response(
 
     return {
         "authorization_servers": [
-            resource_url
-            if explicitly_named
-            else f"{request_base_url}/{mcp_server_name}"
-            if mcp_server_name
-            else request_base_url
+            (f"{request_base_url}/{mcp_server_name}" if mcp_server_name else f"{request_base_url}")
         ],
         "resource": resource_url,
         "scopes_supported": (mcp_server.scopes if mcp_server and mcp_server.scopes else []),
