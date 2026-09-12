@@ -34,10 +34,12 @@ from pydantic import ValidationError
 from litellm.proxy.db.db_url_settings import (
     PG_SSL_REQUEST,
     DatabaseURLSettings,
+    token_refresh_params_from_url,
     translate_libpq_ssl_params,
     unsupported_db_scheme,
     unsupported_db_scheme_message,
 )
+from litellm.proxy.db.pgbouncer import PgBouncerPlan, PgBouncerSettings, plan_pgbouncer
 from litellm.proxy.db.token_auth import AzureEntraTokenAuth, RdsIamTokenAuth
 
 
@@ -51,6 +53,8 @@ _MANAGED_DB_ENV_VARS = (
     "AZURE_POSTGRESQL_AUTH",
     "DATABASE_DISABLE_PREPARED_STATEMENTS",
     "DATABASE_MAX_IDLE_CONNECTION_LIFETIME",
+    "DATABASE_SSLMODE",
+    "DATABASE_SSLROOTCERT",
     "DATABASE_URL",
     "DIRECT_URL",
     "DATABASE_URL_READ_REPLICA",
@@ -778,6 +782,109 @@ def test_libpq_verify_full_and_sslrootcert_become_prisma_strict_sslcert(monkeypa
         "sslcert": ["/certs/rds-bundle.pem"],
         "sslaccept": ["strict"],
         "max_idle_connection_lifetime": ["60"],
+    }
+
+
+def _tls_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_HOST", "writer.example.com")
+    monkeypatch.setenv("DATABASE_USER", "litellm")
+    monkeypatch.setenv("DATABASE_NAME", "litellm_db")
+    monkeypatch.setenv("DATABASE_SSLMODE", "verify-full")
+    monkeypatch.setenv("DATABASE_SSLROOTCERT", "/certs/rds-bundle.pem")
+
+
+def test_tls_env_vars_make_the_minted_iam_writer_url_verify_the_server(monkeypatch: pytest.MonkeyPatch):
+    """The supervisor starts PgBouncer from the URL assembled here, before any
+    config.yaml is read, so an IAM URL with no TLS params leaves PgBouncer on
+    ``prefer`` (no SNI, no verification) and the RDS handshake fails."""
+    monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "true")
+    _tls_env(monkeypatch)
+
+    with _stub_iam_token("WRITER_TOKEN"):
+        assert _apply() is True
+
+    url: Final = os.environ["DATABASE_URL"]
+    assert url.startswith("postgresql://litellm:WRITER_TOKEN@writer.example.com:5432/litellm_db?")
+    assert _query(url) == {
+        "sslmode": ["require"],
+        "sslcert": ["/certs/rds-bundle.pem"],
+        "sslaccept": ["strict"],
+        "max_idle_connection_lifetime": ["60"],
+    }
+
+
+def test_tls_env_vars_apply_to_the_password_writer_and_the_assembled_reader(monkeypatch: pytest.MonkeyPatch):
+    _tls_env(monkeypatch)
+    monkeypatch.setenv("DATABASE_PASSWORD", "s3cr3t")
+    monkeypatch.setenv("DATABASE_SCHEMA", "public")
+    monkeypatch.setenv("DATABASE_HOST_READ_REPLICA", "reader.example.com")
+
+    assert _apply() is True
+
+    expected: Final = {
+        "schema": ["public"],
+        "sslmode": ["require"],
+        "sslcert": ["/certs/rds-bundle.pem"],
+        "sslaccept": ["strict"],
+        "max_idle_connection_lifetime": ["60"],
+    }
+    assert os.environ["DATABASE_URL"].startswith("postgresql://litellm:s3cr3t@writer.example.com:5432/litellm_db?")
+    assert _query(os.environ["DATABASE_URL"]) == expected
+    assert os.environ["DATABASE_URL_READ_REPLICA"].startswith(
+        "postgresql://litellm:s3cr3t@reader.example.com:5432/litellm_db?"
+    )
+    assert _query(os.environ["DATABASE_URL_READ_REPLICA"]) == expected
+
+
+def test_sslrootcert_env_var_alone_means_verify_full_for_prisma_and_pgbouncer(monkeypatch: pytest.MonkeyPatch):
+    """Under libpq's default ``prefer`` a root cert is never consulted, so a URL
+    carrying only ``sslrootcert`` would leave PgBouncer on ``prefer`` with the CA
+    loaded but unused. Supplying a CA and nothing else must verify."""
+    _tls_env(monkeypatch)
+    monkeypatch.delenv("DATABASE_SSLMODE")
+    monkeypatch.setenv("DATABASE_PASSWORD", "s3cr3t")
+
+    assert _apply() is True
+
+    url: Final = os.environ["DATABASE_URL"]
+    assert _query(url) == {
+        "sslmode": ["require"],
+        "sslcert": ["/certs/rds-bundle.pem"],
+        "sslaccept": ["strict"],
+        "max_idle_connection_lifetime": ["60"],
+    }
+    plan: Final = plan_pgbouncer(url, PgBouncerSettings(enabled=True), Path("/run/pgb"), None)
+    assert isinstance(plan, PgBouncerPlan), plan
+    assert "server_tls_sslmode = verify-full" in plan.ini
+    assert "server_tls_ca_file = /run/pgb/server-ca.pem" in plan.ini
+
+
+def test_tls_env_vars_never_override_a_pinned_database_url(monkeypatch: pytest.MonkeyPatch):
+    writer: Final = (
+        "postgresql://pinned:url@db.example.com:5432/litellm_db?sslmode=disable&max_idle_connection_lifetime=60"
+    )
+    reader: Final = "postgresql://pinned:url@reader.example.com:5432/litellm_db?max_idle_connection_lifetime=60"
+    monkeypatch.setenv("DATABASE_URL", writer)
+    monkeypatch.setenv("DATABASE_URL_READ_REPLICA", reader)
+    monkeypatch.setenv("DATABASE_HOST_READ_REPLICA", "reader.example.com")
+    _tls_env(monkeypatch)
+
+    assert _apply() is False
+
+    assert os.environ["DATABASE_URL"] == writer
+    assert os.environ["DATABASE_URL_READ_REPLICA"] == reader
+
+
+def test_token_refresh_params_keep_the_prisma_tls_dialect_but_not_the_schema():
+    kept: Final = token_refresh_params_from_url(
+        "postgresql://u:TOKEN@db.example.com:5432/litellm_db"
+        "?schema=tenant&connection_limit=5&sslmode=require&sslcert=/certs/root.pem&sslaccept=strict"
+    )
+    assert dict(kept) == {
+        "connection_limit": "5",
+        "sslmode": "require",
+        "sslcert": "/certs/root.pem",
+        "sslaccept": "strict",
     }
 
 
