@@ -44,6 +44,7 @@ from litellm.caching.caching import (
     RedisCache,
     RedisClusterCache,
 )
+from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import (
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
@@ -12935,8 +12936,10 @@ class Router:
                 return await session_cache.async_get_cache(key=cache_key)
             return await session_cache.redis_cache.async_get_cache(key=cache_key)
         except Exception as e:  # noqa: BLE001  # an optional binding must not make routing depend on Redis
-            verbose_router_logger.warning(
-                "Failed to read Claude Code session router binding; using the requested model: %s",
+            log_redis_failure(
+                verbose_router_logger,
+                logging.WARNING,
+                "Failed to read Claude Code session router binding; using the requested model",
                 e,
             )
             return None

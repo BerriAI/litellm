@@ -54,6 +54,10 @@ Some suites need extra services the bare proxy does not start. The `logging/` OT
 
 A couple of logging destinations are configured on the proxy rather than by the test. The Weave tests scope their callback to the key they create, but litellm builds the `weave_otel` logger from `WANDB_API_KEY` and `WANDB_PROJECT_ID` before it applies the per-key vars, so the proxy needs both in its own environment or the key-scoped callback never initializes and nothing ships
 
+### Redis chaos load test
+
+The Redis chaos test under `load/` needs a proxy and its own Redis on the same host, using `gateway/redis_chaos_ci_config.yml`. `.github/workflows/test-e2e-redis-chaos.yml` boots that stack, and the Buildkite `e2e-redis-chaos` step in project-releaser runs the proxy, Postgres and Valkey together in an isolated pod. The test is deselected unless `E2E_REDIS_CHAOS` is set
+
 ### Record and replay
 
 Record/replay scopes to the proxy's provider-bound traffic only. In `E2E_FIXTURE_MODE=record` the harness boots a local provider-edge server, edge-wired tests register their deployments with an `api_base` pointing at it, and every provider call the proxy makes is forwarded verbatim and written to a fixture bundle (default `tests/e2e/.fixtures`, override with `E2E_FIXTURE_DIR`). `E2E_FIXTURE_MODE=replay` runs the same tests against the same live proxy and database, but the edge answers the proxy's provider calls from the bundle instead of the provider, so the run makes zero provider calls and spends nothing while key auth, routing, cost calculation, and spend-log writes all still execute for real. Unset (or `live`) behaves exactly as before the knob existed. Both record and replay need the proxy up; only the provider is taken out of the loop

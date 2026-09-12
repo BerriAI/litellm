@@ -7710,7 +7710,7 @@ async def test_increment_spend_counters_team_and_member():
 
 
 @pytest.mark.asyncio
-async def test_init_and_increment_spend_counter_reseeds_from_db_on_counter_miss():
+async def test_prepare_spend_counter_increment_reseeds_from_db_on_counter_miss():
     """When the Redis counter is missing, the reseed path reads the
     authoritative spend from the DB (not a stale cache), so the next
     increment continues from the correct base value."""
@@ -7723,8 +7723,17 @@ async def test_init_and_increment_spend_counter_reseeds_from_db_on_counter_miss(
         recorded_increments.append({"key": key, "value": value, "ttl": ttl})
         return value
 
+    async def record_pipeline(increment_list, **kwargs):
+        results = []
+        for op in increment_list:
+            await record_increment(key=op["key"], value=op["increment_value"], ttl=op["ttl"])
+            results.append(op["increment_value"])
+        return results
+
     fake_redis = AsyncMock()
     fake_redis.async_increment = AsyncMock(side_effect=record_increment)
+    fake_redis.async_increment_pipeline = AsyncMock(side_effect=record_pipeline)
+    fake_redis.get_ttl = MagicMock(return_value=None)
     fake_redis.async_get_cache = AsyncMock(return_value=None)  # counter missing
     fake_redis.async_set_cache = AsyncMock(return_value=True)  # SET NX wins
     counter_cache.redis_cache = fake_redis
@@ -7743,7 +7752,10 @@ async def test_init_and_increment_spend_counter_reseeds_from_db_on_counter_miss(
     stale_cache.in_memory_cache.set_cache(key="team_id:team-9", value=stale_team)
 
     import litellm.proxy.proxy_server as ps
-    from litellm.proxy.proxy_server import _init_and_increment_spend_counter
+    from litellm.proxy.proxy_server import (
+        _apply_spend_counter_increments,
+        _prepare_spend_counter_increment,
+    )
 
     orig_user, orig_counter, orig_prisma = (
         ps.user_api_key_cache,
@@ -7754,11 +7766,12 @@ async def test_init_and_increment_spend_counter_reseeds_from_db_on_counter_miss(
     ps.spend_counter_cache = counter_cache
     ps.prisma_client = fake_prisma
     try:
-        await _init_and_increment_spend_counter(
+        pending = await _prepare_spend_counter_increment(
             counter_key="spend:team:team-9",
             source_cache_key="team_id:team-9",
             increment=1.5,
         )
+        await _apply_spend_counter_increments(pending=(pending,))
 
         fake_prisma.db.litellm_teamtable.find_unique.assert_awaited_once_with(where={"team_id": "team-9"})
         # Seed uses SET NX with db_spend (42) — cross-pod safe, no INCR of 42.
@@ -7937,7 +7950,10 @@ async def test_reseed_spend_from_db_skips_window_variant_keys():
 @pytest.mark.asyncio
 async def test_window_spend_counter_reseeds_from_spend_logs_on_counter_miss():
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import _init_and_increment_window_spend_counter
+    from litellm.proxy.proxy_server import (
+        _apply_spend_counter_increments,
+        _prepare_window_spend_counter_increment,
+    )
 
     counter_cache = DualCache()
     window_start = datetime.now(timezone.utc) - timedelta(hours=1)
@@ -7953,7 +7969,7 @@ async def test_window_spend_counter_reseeds_from_spend_logs_on_counter_miss():
     ps.spend_counter_cache = counter_cache
     ps.prisma_client = fake_prisma
     try:
-        await _init_and_increment_window_spend_counter(
+        pending = await _prepare_window_spend_counter_increment(
             counter_key="spend:key:key-window:window:1h",
             entity_type="Key",
             entity_id="key-window",
@@ -7961,6 +7977,7 @@ async def test_window_spend_counter_reseeds_from_spend_logs_on_counter_miss():
             window_start=window_start,
             increment=0.5,
         )
+        await _apply_spend_counter_increments(pending=(pending,) if pending is not None else ())
 
         fake_prisma.db.litellm_spendlogs.group_by.assert_awaited_once_with(
             by=["api_key"],
@@ -7976,7 +7993,10 @@ async def test_window_spend_counter_reseeds_from_spend_logs_on_counter_miss():
 @pytest.mark.asyncio
 async def test_init_spend_counter_redis_clean_miss_skips_stale_in_memory():
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import _init_and_increment_spend_counter
+    from litellm.proxy.proxy_server import (
+        _apply_spend_counter_increments,
+        _prepare_spend_counter_increment,
+    )
 
     counter_cache = DualCache()
     counter_key = "spend:team:team-stale-local"
@@ -7998,6 +8018,15 @@ async def test_init_spend_counter_redis_clean_miss_skips_stale_in_memory():
     fake_redis.async_get_cache = AsyncMock(return_value=None)
     fake_redis.async_increment = AsyncMock(side_effect=redis_increment)
     fake_redis.async_set_cache = AsyncMock(side_effect=redis_set_cache)
+
+    async def redis_increment_pipeline(increment_list, **_):
+        results = []
+        for op in increment_list:
+            results.append(await redis_increment(key=op["key"], value=op["increment_value"]))
+        return results
+
+    fake_redis.async_increment_pipeline = AsyncMock(side_effect=redis_increment_pipeline)
+    fake_redis.get_ttl = MagicMock(return_value=None)
     counter_cache.redis_cache = fake_redis
 
     db_row = MagicMock()
@@ -8016,11 +8045,12 @@ async def test_init_spend_counter_redis_clean_miss_skips_stale_in_memory():
     ps.prisma_client = fake_prisma
     ps.user_api_key_cache = DualCache()
     try:
-        await _init_and_increment_spend_counter(
+        pending = await _prepare_spend_counter_increment(
             counter_key=counter_key,
             source_cache_key="team_id:team-stale-local",
             increment=1.5,
         )
+        await _apply_spend_counter_increments(pending=(pending,))
 
         fake_prisma.db.litellm_teamtable.find_unique.assert_awaited_once_with(where={"team_id": "team-stale-local"})
         # Seed via SET NX (42) + delta via INCRBYFLOAT (1.5) = 43.5.
@@ -8035,7 +8065,10 @@ async def test_init_spend_counter_redis_clean_miss_skips_stale_in_memory():
 @pytest.mark.asyncio
 async def test_window_spend_counter_redis_clean_miss_skips_stale_in_memory():
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import _init_and_increment_window_spend_counter
+    from litellm.proxy.proxy_server import (
+        _apply_spend_counter_increments,
+        _prepare_window_spend_counter_increment,
+    )
 
     counter_cache = DualCache()
     counter_key = "spend:key:key-window-stale-local:window:1h"
@@ -8058,6 +8091,15 @@ async def test_window_spend_counter_redis_clean_miss_skips_stale_in_memory():
     fake_redis.async_get_cache = AsyncMock(return_value=None)
     fake_redis.async_set_cache = AsyncMock(side_effect=redis_set_cache)
     fake_redis.async_increment = AsyncMock(side_effect=redis_increment)
+
+    async def redis_increment_pipeline(increment_list, **_):
+        results = []
+        for op in increment_list:
+            results.append(await redis_increment(key=op["key"], value=op["increment_value"]))
+        return results
+
+    fake_redis.async_increment_pipeline = AsyncMock(side_effect=redis_increment_pipeline)
+    fake_redis.get_ttl = MagicMock(return_value=None)
     counter_cache.redis_cache = fake_redis
 
     fake_prisma = MagicMock()
@@ -8072,7 +8114,7 @@ async def test_window_spend_counter_redis_clean_miss_skips_stale_in_memory():
     ps.spend_counter_cache = counter_cache
     ps.prisma_client = fake_prisma
     try:
-        await _init_and_increment_window_spend_counter(
+        pending = await _prepare_window_spend_counter_increment(
             counter_key=counter_key,
             entity_type="Key",
             entity_id="key-window-stale-local",
@@ -8080,6 +8122,7 @@ async def test_window_spend_counter_redis_clean_miss_skips_stale_in_memory():
             window_start=window_start,
             increment=0.5,
         )
+        await _apply_spend_counter_increments(pending=(pending,) if pending is not None else ())
 
         fake_prisma.db.litellm_spendlogs.group_by.assert_awaited_once_with(
             by=["api_key"],
@@ -8099,7 +8142,10 @@ async def test_window_spend_counter_redis_clean_miss_skips_stale_in_memory():
 @pytest.mark.asyncio
 async def test_window_spend_counter_redis_concurrent_seed_does_not_double_seed():
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import _init_and_increment_window_spend_counter
+    from litellm.proxy.proxy_server import (
+        _apply_spend_counter_increments,
+        _prepare_window_spend_counter_increment,
+    )
 
     counter_cache = DualCache()
     counter_key = "spend:key:key-window-concurrent-seed:window:1h"
@@ -8122,6 +8168,15 @@ async def test_window_spend_counter_redis_concurrent_seed_does_not_double_seed()
     fake_redis.async_get_cache = AsyncMock(side_effect=redis_get_cache)
     fake_redis.async_set_cache = AsyncMock(return_value=False)
     fake_redis.async_increment = AsyncMock(side_effect=redis_increment)
+
+    async def redis_increment_pipeline(increment_list, **_):
+        results = []
+        for op in increment_list:
+            results.append(await redis_increment(key=op["key"], value=op["increment_value"]))
+        return results
+
+    fake_redis.async_increment_pipeline = AsyncMock(side_effect=redis_increment_pipeline)
+    fake_redis.get_ttl = MagicMock(return_value=None)
     counter_cache.redis_cache = fake_redis
 
     fake_prisma = MagicMock()
@@ -8136,7 +8191,7 @@ async def test_window_spend_counter_redis_concurrent_seed_does_not_double_seed()
     ps.spend_counter_cache = counter_cache
     ps.prisma_client = fake_prisma
     try:
-        await _init_and_increment_window_spend_counter(
+        pending = await _prepare_window_spend_counter_increment(
             counter_key=counter_key,
             entity_type="Key",
             entity_id="key-window-concurrent-seed",
@@ -8144,6 +8199,7 @@ async def test_window_spend_counter_redis_concurrent_seed_does_not_double_seed()
             window_start=window_start,
             increment=0.5,
         )
+        await _apply_spend_counter_increments(pending=(pending,) if pending is not None else ())
 
         fake_redis.async_set_cache.assert_awaited_once_with(
             key=counter_key,
@@ -8160,7 +8216,7 @@ async def test_window_spend_counter_redis_concurrent_seed_does_not_double_seed()
 @pytest.mark.asyncio
 async def test_window_spend_counter_skips_invalid_window_start():
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import _init_and_increment_window_spend_counter
+    from litellm.proxy.proxy_server import _prepare_window_spend_counter_increment
 
     counter_cache = DualCache()
 
@@ -8169,7 +8225,7 @@ async def test_window_spend_counter_skips_invalid_window_start():
     orig_counter = ps.spend_counter_cache
     ps.spend_counter_cache = counter_cache
     try:
-        await _init_and_increment_window_spend_counter(
+        pending = await _prepare_window_spend_counter_increment(
             counter_key="spend:key:key-invalid-window:window:not-a-duration",
             entity_type="Key",
             entity_id="key-invalid-window",
@@ -8177,6 +8233,7 @@ async def test_window_spend_counter_skips_invalid_window_start():
             window_start=None,
             increment=0.5,
         )
+        assert pending is None
 
         assert counter_cache.in_memory_cache.get_cache(key="spend:key:key-invalid-window:window:not-a-duration") is None
     finally:
@@ -8240,6 +8297,9 @@ async def test_increment_spend_counters_finalizes_after_unreserved_increments():
     async def assert_reservation_not_finalized_yet(**kwargs):
         assert budget_reservation["finalized"] is False
         incremented_counters.append(kwargs["counter_key"])
+        return ps._PendingSpendIncrement(
+            counter_key=kwargs["counter_key"], increment=kwargs["increment"]
+        )
 
     import litellm.proxy.proxy_server as ps
 
@@ -8248,7 +8308,7 @@ async def test_increment_spend_counters_finalizes_after_unreserved_increments():
     ps.user_api_key_cache = DualCache()
     try:
         with patch(
-            "litellm.proxy.proxy_server._init_and_increment_spend_counter",
+            "litellm.proxy.proxy_server._prepare_spend_counter_increment",
             new=AsyncMock(side_effect=assert_reservation_not_finalized_yet),
         ):
             await increment_spend_counters(
@@ -8583,7 +8643,7 @@ async def test_get_current_spend_uses_db_zero_over_stale_fallback():
 async def test_concurrent_read_and_write_paths_share_one_db_query():
     """
     The read path (`get_current_spend`) and the write path
-    (`_init_and_increment_spend_counter`) both reseed cold counters from
+    (`_prepare_spend_counter_increment`) both reseed cold counters from
     the DB. They must share the per-counter lock so a concurrent pre-call
     enforcement read and post-call increment for the same counter collapse
     to one DB query, not two.
@@ -8592,7 +8652,7 @@ async def test_concurrent_read_and_write_paths_share_one_db_query():
 
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.proxy_server import (
-        _init_and_increment_spend_counter,
+        _prepare_spend_counter_increment,
         get_current_spend,
     )
 
@@ -8646,7 +8706,7 @@ async def test_concurrent_read_and_write_paths_share_one_db_query():
     try:
         results = await _asyncio.gather(
             get_current_spend(counter_key=counter_key, fallback_spend=0.0),
-            _init_and_increment_spend_counter(
+            _prepare_spend_counter_increment(
                 counter_key=counter_key,
                 source_cache_key="ignored",
                 increment=1.5,
