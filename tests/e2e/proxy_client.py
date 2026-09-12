@@ -63,6 +63,7 @@ from models import (
     ModelNewBody,
     ModelNewResponse,
     ModelsListParams,
+    MemorySummaryResponse,
     ModelsListResponse,
     ModelUpdateBody,
     OcrBody,
@@ -466,6 +467,17 @@ class ProxyClient:
                 response_type=KeyInfoResponse,
             )
         ).info
+
+    def memory_summary_everywhere(self) -> Mapping[str, Result[MemorySummaryResponse]]:
+        return {
+            url: transport.get(
+                "/debug/memory/summary",
+                headers=transport.master,
+                params=NoBody(),
+                response_type=MemorySummaryResponse,
+            )
+            for url, transport in self.replicas.items()
+        }
 
     def read_back_everywhere[R: BaseModel](
         self,
