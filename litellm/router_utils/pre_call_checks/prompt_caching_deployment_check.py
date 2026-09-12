@@ -98,7 +98,6 @@ class PromptCachingDeploymentCheck(CustomLogger):
                 request_kwargs.get("system") if request_kwargs is not None else None,
             )
 
-            # A cache miss must leave all healthy deployments eligible.
             model_id_dict: Final = await prompt_cache.async_get_model_id(
                 messages=affinity_messages,
                 tools=(
