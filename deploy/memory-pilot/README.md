@@ -86,6 +86,8 @@ correct, or delete entries in Memory; callers can use the self-service API.
 - On gateway/backend deployments without shared Redis, first-time activation
   can take up to 30 seconds to reach another process. Policy revocation is
   checked against the primary database before memory operations.
+- Each memory scope can hold up to 1,000 entries. Creation checks this limit
+  atomically; correction and deletion remain available when the scope is full.
 - Stored references are untrusted data. They cannot grant API permissions or
   change the namespace derived from authentication. Current user corrections
   take precedence. Replacements require the current revision.

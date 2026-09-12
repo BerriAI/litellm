@@ -1,4 +1,6 @@
 import json
+from contextlib import AbstractAsyncContextManager
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final
 
 from fastapi import HTTPException
@@ -9,9 +11,11 @@ from litellm.repositories.table_repositories import MemoryRepository
 from litellm.types.memory_v2 import MemoryCapture, MemoryEntry, MemorySearch
 
 if TYPE_CHECKING:
+    from prisma import Prisma
     from prisma.models import LiteLLM_MemoryTable
 
 _METADATA: Final = TypeAdapter(dict[str, object])
+_MAX_NAMESPACE_ENTRIES: Final = 1000
 
 
 def memory_entry(row: "LiteLLM_MemoryTable") -> MemoryEntry:
@@ -157,17 +161,29 @@ class MemoryStore:
         if capture.expected_revision is not None:
             raise HTTPException(status_code=409, detail="Memory no longer exists")
         try:
-            created: Final = await self.table.create(
-                data={  # mutable-ok: Prisma serializes these as native JSON containers.
-                    **data,
-                    "memory_id": memory_digest(namespace, capture.key),
-                    "key": key,
-                    "namespace": namespace,
-                    "user_id": self.access.identity.user_id,
-                    "team_id": self.access.identity.team_id,
-                    "created_by": self.access.identity.user_id or self.access.identity.key_id,
-                }
-            )
+            manager: Final[AbstractAsyncContextManager[Prisma]] = self.prisma_client.db.tx()
+            async with manager as transaction:
+                lock_key: Final = int(memory_digest("memory-quota", namespace)[:16], 16) - (1 << 63)
+                await transaction.execute_raw("SELECT pg_advisory_xact_lock($1::bigint)", lock_key)
+                table: Final = MemoryRepository(SimpleNamespace(db=transaction)).table
+                entries: Final = await table.count(
+                    where={"namespace": namespace}  # mutable-ok: Prisma accepts native query containers.
+                )
+                if entries >= _MAX_NAMESPACE_ENTRIES:
+                    raise HTTPException(
+                        status_code=429, detail="Memory scope has reached 1000 entries; delete unused memories first"
+                    )
+                created: Final = await table.create(
+                    data={  # mutable-ok: Prisma serializes these as native JSON containers.
+                        **data,
+                        "memory_id": memory_digest(namespace, capture.key),
+                        "key": key,
+                        "namespace": namespace,
+                        "user_id": self.access.identity.user_id,
+                        "team_id": self.access.identity.team_id,
+                        "created_by": self.access.identity.user_id or self.access.identity.key_id,
+                    }
+                )
         except UniqueViolationError as exc:
             raise HTTPException(status_code=409, detail="Memory changed; read it again before replacing it") from exc
         return memory_entry(created)

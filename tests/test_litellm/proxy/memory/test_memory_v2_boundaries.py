@@ -39,6 +39,9 @@ def prisma_edge() -> MagicMock:
     table.find_first = AsyncMock(return_value=None)
     table.find_many = AsyncMock(return_value=[])
     table.create = AsyncMock()
+    table.count = AsyncMock(return_value=0)
+    client.db.tx.return_value.__aenter__.return_value = client.db
+    client.db.execute_raw = AsyncMock()
     table.update_many = AsyncMock(return_value=1)
     table.delete_many = AsyncMock(return_value=1)
     return client
@@ -441,3 +444,29 @@ async def test_redis_circuit_breaker_falls_back_to_primary_configuration(prisma_
         await invalidate_memory_configuration()
     assert prisma_edge.db.litellm_memorypolicy.find_many.await_count == 2
     redis.async_get_cache.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_full_scope_blocks_creation_but_permits_correction_and_reclaimed_capacity(prisma_edge: MagicMock) -> None:
+    table = prisma_edge.db.litellm_memorytable
+    table.count.return_value = 1000
+    with pytest.raises(HTTPException) as full:
+        await store(prisma_edge).capture(_CAPTURE)
+    assert full.value.status_code == 429
+    table.create.assert_not_awaited()
+    assert table.count.call_args.kwargs["where"] == {"namespace": _IDENTITY.namespace("key")}
+    prisma_edge.db.execute_raw.assert_awaited_once()
+    assert "pg_advisory_xact_lock" in prisma_edge.db.execute_raw.call_args.args[0]
+    table.find_unique.return_value = row()
+    table.find_first.return_value = row(value="Corrected", updated_at=_NOW + timedelta(seconds=1))
+    corrected = await store(prisma_edge).capture(
+        _CAPTURE.model_copy(update={"content": "Corrected", "expected_revision": _NOW})
+    )
+    assert corrected.content == "Corrected"
+    table.count.assert_awaited_once()
+    assert await store(prisma_edge).delete("entry")
+    table.find_unique.return_value = None
+    table.count.return_value = 999
+    table.create.return_value = row()
+    assert (await store(prisma_edge).capture(_CAPTURE)).memory_id == "entry"
+    table.create.assert_awaited_once()
