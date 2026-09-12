@@ -2490,7 +2490,11 @@ async def _build_oauth_protected_resource_response(
 
     return {
         "authorization_servers": [
-            (f"{request_base_url}/{mcp_server_name}" if mcp_server_name else f"{request_base_url}")
+            resource_url
+            if explicitly_named
+            else f"{request_base_url}/{mcp_server_name}"
+            if mcp_server_name
+            else request_base_url
         ],
         "resource": resource_url,
         "scopes_supported": (mcp_server.scopes if mcp_server and mcp_server.scopes else []),
@@ -2666,6 +2670,8 @@ async def oauth_protected_resource_mcp(request: Request, mcp_server_name: str | 
 def _build_oauth_authorization_server_response(
     request: Request,
     mcp_server_name: str | None,
+    *,
+    issuer_path: str | None = None,
 ) -> dict:
     """Build OAuth authorization server metadata response (gateway-as-AS shape).
 
@@ -2694,7 +2700,13 @@ def _build_oauth_authorization_server_response(
 
     _raise_unless_oauth2_discovery_server(mcp_server, mcp_server_name, "not an OAuth authorization server")
 
-    issuer: Final = f"{request_base_url}/{mcp_server_name}" if explicitly_named else request_base_url
+    issuer: Final = (
+        f"{request_base_url}/{issuer_path}"
+        if issuer_path is not None
+        else f"{request_base_url}/{mcp_server_name}"
+        if explicitly_named
+        else request_base_url
+    )
 
     return {
         "issuer": issuer,
@@ -2724,6 +2736,7 @@ async def oauth_authorization_server_mcp_standard(request: Request, mcp_server_n
     return _build_oauth_authorization_server_response(
         request=request,
         mcp_server_name=mcp_server_name,
+        issuer_path=f"mcp/{mcp_server_name}",
     )
 
 
@@ -2802,7 +2815,7 @@ async def jwks_json(request: Request):
 
 
 # Additional legacy pattern support
-@router.get("/.well-known/oauth-authorization-server/{mcp_server_name}/mcp")
+@router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/{{mcp_server_name}}/mcp")
 async def oauth_authorization_server_legacy(request: Request, mcp_server_name: str):
     """
     OAuth authorization server discovery for legacy /{server_name}/mcp pattern.
@@ -2810,6 +2823,7 @@ async def oauth_authorization_server_legacy(request: Request, mcp_server_name: s
     return _build_oauth_authorization_server_response(
         request=request,
         mcp_server_name=mcp_server_name,
+        issuer_path=f"{mcp_server_name}/mcp",
     )
 
 
