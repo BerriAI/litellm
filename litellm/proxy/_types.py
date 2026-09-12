@@ -4388,7 +4388,12 @@ class TeamAccessGroupModelGrant(LiteLLMPydanticObjectBase):
     agent_ids: tuple[str, ...] = ()
 
 
+class TeamInfoMember(Member):
+    user_alias: str | None = None
+
+
 class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
+    members_with_roles: tuple[TeamInfoMember, ...] = ()
     team_member_budget_table: LiteLLM_BudgetTableFull | None = None
     # Resources inherited from access groups (separate from direct assignments)
     access_group_models: list[str] | None = None
