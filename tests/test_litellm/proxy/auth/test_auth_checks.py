@@ -5791,6 +5791,42 @@ async def test_budget_checks_only_run_on_llm_api_routes(scope, route, expect_blo
             assert await _run() is True
 
 
+@pytest.mark.asyncio
+async def test_organization_budget_check_carries_org_state_on_the_token():
+    """The org row auth already fetched is pinned on the token so the response path
+    (Prometheus org budget gauges) reads it from request metadata instead of calling
+    get_org_object again."""
+    from litellm.proxy._types import LiteLLM_OrganizationTable
+    from litellm.proxy.auth.auth_checks import _organization_max_budget_check
+    from litellm.types.proxy.carried_budget_state import OrgBudgetSnapshot
+
+    org_table = LiteLLM_OrganizationTable(
+        organization_id="o1",
+        organization_alias="platform-org",
+        budget_id="b1",
+        created_by="admin",
+        updated_by="admin",
+        spend=12.5,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=100.0),
+    )
+    token = UserAPIKeyAuth(token="k1", org_id="o1")
+    user_api_key_cache = UserApiKeyCache()
+    await user_api_key_cache.async_set_cache(
+        key="org_id:o1:with_budget", value=org_table, model_type=LiteLLM_OrganizationTable
+    )
+
+    await _organization_max_budget_check(
+        valid_token=token,
+        team_object=None,
+        prisma_client=MagicMock(),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert token.organization_alias == "platform-org"
+    assert token.org_budget_snapshot == OrgBudgetSnapshot(spend=12.5, max_budget=100.0)
+
+
 @pytest.mark.parametrize("route", ["/health", "/health/services", "/health/test_connection"])
 @pytest.mark.asyncio
 async def test_spend_capable_non_llm_routes_still_enforce_budget(route):

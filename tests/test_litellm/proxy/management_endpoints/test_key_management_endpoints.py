@@ -1,3 +1,4 @@
+from typing import Final
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -18129,3 +18130,59 @@ def test_key_generation_check_blank_team_id_uses_personal_permissions(monkeypatc
         )
         is True
     )
+
+
+@pytest.mark.asyncio
+async def test_project_detachment_preserves_omission_and_other_key_fields():
+    existing: Final = LiteLLM_VerificationToken(
+        token="project-detach-token", project_id="project-orbit", team_id="team-orbit",
+        organization_id="org-orbit", models=["model-orbit"], max_budget=5, rpm_limit=97,
+    )
+    omitted: Final = await prepare_key_update_data(
+        data=UpdateKeyRequest(key=existing.token, key_alias="renamed"), existing_key_row=existing,
+    )
+    assert "project_id" not in omitted
+    cleared: Final = await prepare_key_update_data(
+        data=UpdateKeyRequest(key=existing.token, project_id=None), existing_key_row=existing,
+    )
+    assert cleared == {"project_id": None, "metadata": {}}
+    assert existing.project_id == "project-orbit"
+
+
+@pytest.mark.parametrize("project_id", [None, "project-orbit", "project-other", ""])
+@pytest.mark.asyncio
+async def test_project_detachment_uses_effective_project_for_validation(project_id: str | None):
+    existing: Final = LiteLLM_VerificationToken(token="project-detach-token", project_id="project-orbit")
+    cache: Final = await _cache_with_project("project-orbit", ["model-orbit"])
+    data: Final = UpdateKeyRequest(key=existing.token, project_id=project_id, models=["model-other"])
+    if project_id is None:
+        await _validate_update_key_data(
+            data, existing, UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            None, False, MagicMock(), cache,
+        )
+    else:
+        with pytest.raises(HTTPException) as exc:
+            await _validate_update_key_data(
+                data, existing, UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+                None, False, MagicMock(), cache,
+            )
+        assert exc.value.status_code == 400
+        expected: Final = "not in project's allowed models" if project_id == "project-orbit" else "reassignment"
+        assert expected in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_key_creator_cannot_detach_project_without_admin_access():
+    existing: Final = LiteLLM_VerificationToken(
+        token="project-detach-token", project_id="project-orbit", user_id="user-orbit", created_by="user-orbit",
+    )
+    database: Final = MagicMock()
+    database.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=existing)
+    with pytest.raises(HTTPException) as exc:
+        await _validate_update_key_data(
+            UpdateKeyRequest(key=existing.token, project_id=None), existing,
+            UserAPIKeyAuth(user_id="user-orbit", user_role=LitellmUserRoles.INTERNAL_USER),
+            None, False, database, UserApiKeyCache(),
+        )
+    assert exc.value.status_code == 403
+    assert "Only proxy admins, team admins, or org admins" in str(exc.value.detail)
