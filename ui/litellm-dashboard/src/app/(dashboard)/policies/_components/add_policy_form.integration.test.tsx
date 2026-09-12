@@ -139,21 +139,6 @@ describe("AddPolicyForm", () => {
     expect(createPolicy).not.toHaveBeenCalled();
   });
 
-  it("clears saved inheritance and model conditions in the update payload", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<AddPolicyForm {...defaultProps} editingPolicy={EXISTING_POLICY} />);
-
-    await screen.findByLabelText("Model (Optional)");
-    await user.click(screen.getAllByRole("button", { name: "Clear" })[0]);
-    await user.click(screen.getByRole("button", { name: "Clear" }));
-    await user.click(screen.getByRole("button", { name: "Update Policy" }));
-
-    await waitFor(() => expect(updatePolicy).toHaveBeenCalled());
-    const payload = JSON.parse(JSON.stringify(updatePolicy.mock.calls[0][2]));
-    expect(payload.inherit).toBe("");
-    expect(payload.condition).toEqual({});
-  });
-
   it("should keep the policy name field disabled while editing", async () => {
     renderWithProviders(<AddPolicyForm {...defaultProps} editingPolicy={EXISTING_POLICY} />);
 
@@ -203,7 +188,7 @@ describe("AddPolicyForm", () => {
     await waitFor(() => {
       expect(updatePolicy).toHaveBeenCalled();
     });
-    expect(updatePolicy.mock.calls[0][2].condition).toEqual({});
+    expect(updatePolicy.mock.calls[0][2].condition).toBeUndefined();
   });
 
   it("should open the flow builder instead of the simple form when that mode is confirmed", async () => {

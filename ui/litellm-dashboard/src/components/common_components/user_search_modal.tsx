@@ -66,6 +66,8 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
 }) => {
   const emptyValues: FormValues = { user_email: undefined, user_id: undefined, role: defaultRole };
   const form = useForm<FormValues>({ defaultValues: emptyValues });
+  const selectedUserId = form.watch("user_id");
+  const selectedUserEmail = form.watch("user_email");
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [selectedField, setSelectedField] = useState<"user_email" | "user_id">("user_email");
@@ -236,7 +238,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
             </FieldGroup>
 
             <div className="mt-4 text-right">
-              <Button type="submit" disabled={isSubmitting}>
+              <Button type="submit" disabled={isSubmitting || (!selectedUserId && !selectedUserEmail)}>
                 {isSubmitting ? <UiLoadingSpinner className="size-4" /> : <UserPlus />}
                 {isSubmitting ? "Adding..." : "Add Member"}
               </Button>

@@ -72,20 +72,14 @@ const toFormValues = (policy: Policy): PolicyFormValues => ({
   model_condition: policy.condition?.model ?? null,
 });
 
-const buildPolicyRequest = (
-  values: PolicyFormValues,
-  isEditing: boolean,
-): PolicyCreateRequest | PolicyUpdateRequest => {
-  const clearedCondition = isEditing ? {} : undefined;
-  return {
-    policy_name: values.policy_name,
-    description: values.description || undefined,
-    inherit: values.inherit || (isEditing ? "" : undefined),
-    guardrails_add: values.guardrails_add,
-    guardrails_remove: values.guardrails_remove,
-    condition: values.model_condition ? { model: values.model_condition } : clearedCondition,
-  };
-};
+const buildPolicyRequest = (values: PolicyFormValues): PolicyCreateRequest | PolicyUpdateRequest => ({
+  policy_name: values.policy_name,
+  description: values.description || undefined,
+  inherit: values.inherit || undefined,
+  guardrails_add: values.guardrails_add,
+  guardrails_remove: values.guardrails_remove,
+  condition: values.model_condition ? { model: values.model_condition } : undefined,
+});
 
 const parentGuardrails = (policy: Policy, existingPolicies: Policy[]): string[] => {
   const inherited = policy.inherit
@@ -303,7 +297,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
         throw new Error("No access token available");
       }
 
-      const data = buildPolicyRequest(values, isEditing);
+      const data = buildPolicyRequest(values);
 
       if (isEditing && editingPolicy) {
         await updatePolicy(accessToken, editingPolicy.policy_id, data as PolicyUpdateRequest);
