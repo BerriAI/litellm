@@ -2,8 +2,8 @@ import asyncio
 import logging
 import os
 import sys
-from typing import Any, Dict
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Any, Dict, Final
+from unittest.mock import AsyncMock, MagicMock, call, patch
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -943,33 +943,22 @@ def test_prisma_client_init_keeps_reader_tls_params_on_the_minted_iam_url(
         "?schema=tenant&sslmode=require&sslcert=/certs/root.pem&sslaccept=strict",
     )
 
-    created: list[dict[str, Any]] = []
-
-    class FakePrisma:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-            created.append(kwargs)
-
-        async def connect(self):
-            return None
-
-    fake_prisma_module = MagicMock()
-    fake_prisma_module.Prisma = FakePrisma
+    prisma_factory: Final = MagicMock(name="Prisma")
+    fake_prisma_module: Final = MagicMock(Prisma=prisma_factory)
     monkeypatch.setitem(sys.modules, "prisma", fake_prisma_module)
 
-    fake_iam_module = MagicMock()
-    fake_iam_module.generate_iam_auth_token = lambda **_kwargs: "READER-TOKEN"
+    fake_iam_module: Final = MagicMock(generate_iam_auth_token=MagicMock(return_value="READER-TOKEN"))
     monkeypatch.setitem(sys.modules, "litellm.proxy.auth.rds_iam_token", fake_iam_module)
 
     from litellm.proxy.utils import PrismaClient
 
-    client = PrismaClient(
+    client: Final = PrismaClient(
         database_url="postgresql://writer@writer.aurora.local:5432/litellm",
         proxy_logging_obj=MagicMock(),
     )
 
     assert isinstance(client.db, RoutingPrismaWrapper)
-    reader_url = os.environ["DATABASE_URL_READ_REPLICA"]
+    reader_url: Final = os.environ["DATABASE_URL_READ_REPLICA"]
     assert reader_url.startswith("postgresql://reader_user:READER-TOKEN@reader.aurora.local:5432/litellm?")
     assert parse_qs(urlsplit(reader_url).query) == {
         "schema": ["tenant"],
@@ -977,7 +966,7 @@ def test_prisma_client_init_keeps_reader_tls_params_on_the_minted_iam_url(
         "sslcert": ["/certs/root.pem"],
         "sslaccept": ["strict"],
     }
-    assert [kwargs for kwargs in created if "datasource" in kwargs] == [{"datasource": {"url": reader_url}}]
+    assert prisma_factory.call_args_list == [call(), call(datasource={"url": reader_url})]
 
 
 @pytest.mark.asyncio
