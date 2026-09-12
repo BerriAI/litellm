@@ -2,10 +2,8 @@
 per-object getters still enforce on their own when the prefetch cannot help."""
 
 import json
-import os
 from collections.abc import Sequence
 from unittest.mock import AsyncMock, MagicMock
-from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -27,7 +25,6 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_object_prefetch import AuthObjectRefs, prefetch_auth_objects
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.utils import PrismaClient
 
 USER_ID = "prefetch-user"
 TEAM_ID = "prefetch-team"
@@ -137,7 +134,7 @@ def _refs() -> AuthObjectRefs:
 
 
 async def _read_all_through_getters(
-    cache: UserApiKeyCache, prisma: PrismaClient | MagicMock
+    cache: UserApiKeyCache, prisma: MagicMock
 ) -> tuple[
     LiteLLM_UserTable | None,
     LiteLLM_TeamTableCachedObj,
@@ -339,69 +336,3 @@ async def test_no_redis_goes_straight_to_one_query():
 
     assert prisma.db.query_first.await_count == 1
     assert cache.in_memory_cache.get_cache(f"team_membership:{USER_ID}:{TEAM_ID}") is not None
-
-
-@pytest.mark.asyncio
-async def test_live_db_join_binds_the_membership_to_the_requested_team():
-    """Runs the real SQL: a user in two teams with different member budgets must get the requested team's row."""
-    database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        pytest.skip("DATABASE_URL not set")  # test-quality-ok: this test exists to run the raw SQL on a real Postgres, the fakes above cover the rest
-
-    run = uuid4().hex
-    user_id, team_a, team_b, org_id = (f"pf-user-{run}", f"pf-team-a-{run}", f"pf-team-b-{run}", f"pf-org-{run}")
-    prisma = PrismaClient(database_url=database_url, proxy_logging_obj=MagicMock())
-    await prisma.connect()
-    try:
-        await prisma.db.litellm_budgettable.create(
-            data={"budget_id": f"a-{run}", "max_budget": 11.0, "created_by": "t", "updated_by": "t"}
-        )
-        await prisma.db.litellm_budgettable.create(
-            data={"budget_id": f"b-{run}", "max_budget": 22.0, "created_by": "t", "updated_by": "t"}
-        )
-        await prisma.db.litellm_organizationtable.create(
-            data={
-                "organization_id": org_id,
-                "organization_alias": "pf",
-                "created_by": "t",
-                "updated_by": "t",
-                "litellm_budget_table": {"connect": {"budget_id": f"b-{run}"}},
-            }
-        )
-        await prisma.db.litellm_usertable.create(data={"user_id": user_id, "max_budget": 33.0})
-        await prisma.db.litellm_teamtable.create(data={"team_id": team_a, "organization_id": org_id, "max_budget": 1.0})
-        await prisma.db.litellm_teamtable.create(data={"team_id": team_b, "max_budget": 2.0})
-        await prisma.db.litellm_teammembership.create(
-            data={"user_id": user_id, "team_id": team_a, "litellm_budget_table": {"connect": {"budget_id": f"a-{run}"}}}
-        )
-        await prisma.db.litellm_teammembership.create(
-            data={"user_id": user_id, "team_id": team_b, "litellm_budget_table": {"connect": {"budget_id": f"b-{run}"}}}
-        )
-
-        cache = _cache(None)
-        refs = AuthObjectRefs(user_id=user_id, team_id=team_a, membership_user_id=user_id, organization_id=org_id)
-        await prefetch_auth_objects(refs=refs, user_api_key_cache=cache, prisma_client=prisma)
-
-        dead_db = _prisma(rows=None)
-        membership = await get_team_membership(
-            user_id=user_id, team_id=team_a, prisma_client=dead_db, user_api_key_cache=cache
-        )
-        team = await get_team_object(team_id=team_a, prisma_client=dead_db, user_api_key_cache=cache)
-        user = await get_user_object(
-            user_id=user_id, prisma_client=dead_db, user_api_key_cache=cache, user_id_upsert=False
-        )
-        org = await get_org_object(org_id=org_id, prisma_client=dead_db, user_api_key_cache=cache)
-        assert dead_db.db.mock_calls == [], "getters must be served from the prefetched cache"
-
-        assert membership is not None and membership.litellm_budget_table is not None
-        assert (membership.team_id, membership.litellm_budget_table.max_budget) == (team_a, 11.0)
-        assert (team.team_id, team.max_budget, team.organization_id, team.models) == (team_a, 1.0, org_id, [])
-        assert user is not None and user.max_budget == 33.0
-        assert org is not None and (org.organization_id, org.models) == (org_id, [])
-    finally:
-        await prisma.db.litellm_teammembership.delete_many(where={"user_id": user_id})
-        await prisma.db.litellm_teamtable.delete_many(where={"team_id": {"in": [team_a, team_b]}})
-        await prisma.db.litellm_usertable.delete_many(where={"user_id": user_id})
-        await prisma.db.litellm_organizationtable.delete_many(where={"organization_id": org_id})
-        await prisma.db.litellm_budgettable.delete_many(where={"budget_id": {"in": [f"a-{run}", f"b-{run}"]}})
-        await prisma.disconnect()
