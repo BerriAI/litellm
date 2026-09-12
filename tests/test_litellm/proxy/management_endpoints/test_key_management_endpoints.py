@@ -18129,3 +18129,192 @@ def test_key_generation_check_blank_team_id_uses_personal_permissions(monkeypatc
         )
         is True
     )
+
+
+def test_personal_key_generation_allowed_user_roles_blocks_internal_user_and_allows_proxy_admin(monkeypatch):
+    """personal_key_generation.allowed_user_roles=["proxy_admin"] blocks
+    internal_user personal keys and still allows proxy_admin."""
+    from litellm.proxy._types import KeyManagementRoutes
+
+    monkeypatch.setattr(
+        litellm,
+        "key_generation_settings",
+        {
+            "personal_key_generation": {"allowed_user_roles": ["proxy_admin"]},
+        },
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        key_generation_check(
+            team_table=None,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-alice",
+                user_id="alice",
+            ),
+            data=GenerateKeyRequest(),
+            route=KeyManagementRoutes.KEY_GENERATE,
+        )
+    assert exc_info.value.status_code == 400
+    assert "Personal key creation has been restricted" in str(exc_info.value.detail)
+
+    assert (
+        key_generation_check(
+            team_table=None,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-admin",
+                user_id="admin",
+            ),
+            data=GenerateKeyRequest(),
+            route=KeyManagementRoutes.KEY_GENERATE,
+        )
+        is True
+    )
+
+
+def test_empty_allowed_team_member_roles_blocks_team_admin(monkeypatch):
+    """team_key_generation.allowed_team_member_roles=[] blocks even team admins."""
+    from litellm.proxy._types import KeyManagementRoutes
+
+    monkeypatch.setattr(
+        litellm,
+        "key_generation_settings",
+        {
+            "team_key_generation": {"allowed_team_member_roles": []},
+        },
+    )
+
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="team-1",
+        members_with_roles=[Member(role="admin", user_id="alice")],
+        team_member_permissions=None,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        key_generation_check(
+            team_table=team_table,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-alice",
+                user_id="alice",
+            ),
+            data=GenerateKeyRequest(team_id="team-1"),
+            route=KeyManagementRoutes.KEY_GENERATE,
+        )
+    assert exc_info.value.status_code == 400
+    assert "not in allowed_team_member_roles" in str(exc_info.value.detail)
+
+    assert (
+        key_generation_check(
+            team_table=team_table,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-admin",
+                user_id="admin",
+            ),
+            data=GenerateKeyRequest(team_id="team-1"),
+            route=KeyManagementRoutes.KEY_GENERATE,
+        )
+        is True
+    )
+
+
+def test_team_member_permissions_grant_does_not_override_allowed_team_member_roles(monkeypatch):
+    """Granting /key/generate via team_member_permissions does not bypass
+    team_key_generation.allowed_team_member_roles."""
+    from litellm.proxy._types import KeyManagementRoutes
+
+    monkeypatch.setattr(
+        litellm,
+        "key_generation_settings",
+        {
+            "team_key_generation": {"allowed_team_member_roles": ["admin"]},
+        },
+    )
+
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="team-1",
+        members_with_roles=[Member(role="user", user_id="alice")],
+        team_member_permissions=["/key/generate"],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        key_generation_check(
+            team_table=team_table,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-alice",
+                user_id="alice",
+            ),
+            data=GenerateKeyRequest(team_id="team-1"),
+            route=KeyManagementRoutes.KEY_GENERATE,
+        )
+    assert exc_info.value.status_code == 400
+    assert "not in allowed_team_member_roles" in str(exc_info.value.detail)
+
+
+def test_default_team_member_permissions_deny_key_generate_for_team_user(monkeypatch):
+    """With no key_generation_settings, a team 'user' member cannot call
+    /key/generate unless the team grants it via team_member_permissions;
+    team 'admin' members are always allowed."""
+    from litellm.proxy._types import KeyManagementRoutes
+
+    monkeypatch.setattr(litellm, "key_generation_settings", None)
+
+    team_table_no_perms = LiteLLM_TeamTableCachedObj(
+        team_id="team-1",
+        members_with_roles=[Member(role="user", user_id="alice")],
+        team_member_permissions=None,
+    )
+    with pytest.raises(ProxyException) as exc_info:
+        key_generation_check(
+            team_table=team_table_no_perms,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-alice",
+                user_id="alice",
+            ),
+            data=GenerateKeyRequest(team_id="team-1"),
+            route=KeyManagementRoutes.KEY_GENERATE,
+        )
+    assert exc_info.value.code == "401"
+    assert "does not have permissions for endpoint" in exc_info.value.message
+
+    team_table_with_perms = LiteLLM_TeamTableCachedObj(
+        team_id="team-1",
+        members_with_roles=[Member(role="user", user_id="alice")],
+        team_member_permissions=["/key/generate"],
+    )
+    assert (
+        key_generation_check(
+            team_table=team_table_with_perms,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-alice",
+                user_id="alice",
+            ),
+            data=GenerateKeyRequest(team_id="team-1"),
+            route=KeyManagementRoutes.KEY_GENERATE,
+        )
+        is True
+    )
+
+    team_table_admin = LiteLLM_TeamTableCachedObj(
+        team_id="team-1",
+        members_with_roles=[Member(role="admin", user_id="alice")],
+        team_member_permissions=None,
+    )
+    assert (
+        key_generation_check(
+            team_table=team_table_admin,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-alice",
+                user_id="alice",
+            ),
+            data=GenerateKeyRequest(team_id="team-1"),
+            route=KeyManagementRoutes.KEY_GENERATE,
+        )
+        is True
+    )
