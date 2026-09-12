@@ -350,7 +350,7 @@ async def test_cold_reseed_preserves_concurrent_local_increment(
 
     increment_task: Final = asyncio.create_task(
         proxy_server._apply_spend_counter_increments(
-            pending=(proxy_server._PendingSpendIncrement(counter_key=counter_key, increment=increment),)
+            pending=(proxy_server.PendingSpendIncrement(counter_key=counter_key, increment=increment),)
         )
         if batch
         else proxy_server._increment_spend_counter_cache(counter_key=counter_key, increment=increment)

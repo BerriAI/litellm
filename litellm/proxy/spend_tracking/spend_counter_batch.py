@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Iterator, Mapping, Sequence
 from contextvars import ContextVar, Token
+from dataclasses import dataclass
 from types import MappingProxyType, TracebackType
 from typing import Final
 
@@ -15,6 +16,12 @@ from litellm.proxy.common_utils.user_api_key_cache import model_access_group_spe
 
 _CounterValues: Final = TypeAdapter(dict[str, float | None])
 _NO_VALUES: Final[Mapping[str, float | None]] = MappingProxyType({})
+
+
+@dataclass(frozen=True, slots=True)
+class PendingSpendIncrement:
+    counter_key: str
+    increment: float
 
 
 class SpendCounterBatch:
@@ -35,6 +42,10 @@ class SpendCounterBatch:
     @property
     def counter_keys(self) -> frozenset[str]:
         return self._keys
+
+    @property
+    def is_open(self) -> bool:
+        return self._open
 
     def bind(self, counter_keys: frozenset[str]) -> None:
         if self._open:
@@ -96,7 +107,8 @@ def active_spend_counter_batch() -> SpendCounterBatch | None:
 
 
 class spend_counter_batch_scope:
-    """Reads inside the scope share one MGET for the keys bound here or by ``bind_*`` calls inside it."""
+    """Reads inside the scope share one MGET for the keys bound here or by ``bind_*`` calls inside it.
+    Opened inside a scope whose batch is still open, it binds into that batch so both phases share the MGET."""
 
     __slots__ = ("_counter_keys", "_redis_cache", "_token")
 
@@ -107,6 +119,10 @@ class spend_counter_batch_scope:
 
     def __enter__(self) -> None:
         if self._redis_cache is None:
+            return
+        outer: Final = _active_batch.get()
+        if outer is not None and outer.is_open:
+            outer.bind(self._counter_keys)
             return
         batch: Final = SpendCounterBatch(self._redis_cache)
         batch.bind(self._counter_keys)

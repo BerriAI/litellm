@@ -660,8 +660,8 @@ from litellm.proxy.search_endpoints.endpoints import router as search_router
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.spend_counter_batch import (
+    PendingSpendIncrement,
     active_spend_counter_batch,
-    bind_spend_counter_keys,
     forget_spend_counter,
     post_call_counter_keys,
     read_batched_spend_counter,
@@ -2777,12 +2777,6 @@ async def _read_spend_counter_estimate(counter_key: str, fallback_spend: float) 
     return fallback_spend, False
 
 
-@dataclass(frozen=True, slots=True)
-class _PendingSpendIncrement:
-    counter_key: str
-    increment: float
-
-
 async def increment_spend_counters(
     token: str | None,
     team_id: str | None,
@@ -2805,6 +2799,45 @@ async def increment_spend_counters(
     Awaited (not create_task) in the cost callback, so the counter is
     updated before the next request's auth check runs.
     """
+    with spend_counter_batch_scope(
+        spend_counter_cache.redis_cache,
+        counter_keys=post_call_counter_keys(
+            token=token,
+            team_id=team_id,
+            user_id=user_id,
+            org_id=org_id,
+            end_user_id=end_user_id,
+            tags=tags,
+            model_access_groups=model_access_groups,
+        ),
+    ):
+        await _increment_spend_counters_batched(
+            token=token,
+            team_id=team_id,
+            user_id=user_id,
+            response_cost=response_cost,
+            org_id=org_id,
+            budget_reservation=budget_reservation,
+            end_user_id=end_user_id,
+            tags=tags,
+            request_started_at=request_started_at,
+            model_access_groups=model_access_groups,
+        )
+
+
+async def _increment_spend_counters_batched(
+    token: str | None,
+    team_id: str | None,
+    user_id: str | None,
+    response_cost: float | None,
+    org_id: str | None,
+    budget_reservation: dict | None,
+    end_user_id: str | None,
+    tags: list[str] | None,
+    request_started_at: datetime | None,
+    model_access_groups: Sequence[str] | None,
+):
+    """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET."""
     reserved_counter_keys: Final = await _reconcile_budget_reservation_for_counter_update(
         budget_reservation=budget_reservation,
         response_cost=response_cost,
@@ -2817,7 +2850,7 @@ async def increment_spend_counters(
 
     cost: Final[float] = response_cost
 
-    async def _key_scope(key_token: str) -> tuple[_PendingSpendIncrement | BaseException, ...]:
+    async def _key_scope(key_token: str) -> tuple[PendingSpendIncrement | BaseException, ...]:
         # key_token arrives pre-hashed from metadata["user_api_key"] (auth flow
         # hashes raw "sk-..." keys before they reach the callback). The
         # startswith("sk-") check is a safety net matching update_cache —
@@ -2828,7 +2861,7 @@ async def increment_spend_counters(
             hash_token(token=key_token) if isinstance(key_token, str) and key_token.startswith("sk-") else key_token
         )
         key_counter_key: Final = f"spend:key:{hashed_token}"
-        key_pending: Final[tuple[_PendingSpendIncrement, ...]] = (
+        key_pending: Final[tuple[PendingSpendIncrement, ...]] = (
             ()
             if key_counter_key in reserved_counter_keys
             else (
@@ -2840,7 +2873,7 @@ async def increment_spend_counters(
             )
         )
 
-        async def _key_window_increment(window: object) -> _PendingSpendIncrement | None:
+        async def _key_window_increment(window: object) -> PendingSpendIncrement | None:
             duration = (
                 window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None)
             )
@@ -2887,9 +2920,9 @@ async def increment_spend_counters(
         )
         return key_pending + tuple(item for item in window_pending if item is not None)
 
-    async def _team_scope(scope_team_id: str) -> tuple[_PendingSpendIncrement | BaseException, ...]:
+    async def _team_scope(scope_team_id: str) -> tuple[PendingSpendIncrement | BaseException, ...]:
         team_counter_key: Final = f"spend:team:{scope_team_id}"
-        team_pending: Final[tuple[_PendingSpendIncrement, ...]] = (
+        team_pending: Final[tuple[PendingSpendIncrement, ...]] = (
             ()
             if team_counter_key in reserved_counter_keys
             else (
@@ -2901,7 +2934,7 @@ async def increment_spend_counters(
             )
         )
 
-        async def _team_window_increment(window: object) -> _PendingSpendIncrement | None:
+        async def _team_window_increment(window: object) -> PendingSpendIncrement | None:
             duration = (
                 window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None)
             )
@@ -2950,7 +2983,7 @@ async def increment_spend_counters(
 
     async def _team_member_scope(
         scope_user_id: str, scope_team_id: str
-    ) -> tuple[_PendingSpendIncrement | BaseException, ...]:
+    ) -> tuple[PendingSpendIncrement | BaseException, ...]:
         team_member_counter_key: Final = f"spend:team_member:{scope_user_id}:{scope_team_id}"
         if team_member_counter_key in reserved_counter_keys:
             return ()
@@ -2962,7 +2995,7 @@ async def increment_spend_counters(
             ),
         )
 
-    async def _user_scope(scope_user_id: str) -> tuple[_PendingSpendIncrement | BaseException, ...]:
+    async def _user_scope(scope_user_id: str) -> tuple[PendingSpendIncrement | BaseException, ...]:
         user_counter_key: Final = f"spend:user:{scope_user_id}"
         if user_counter_key in reserved_counter_keys:
             return ()
@@ -3010,20 +3043,7 @@ async def increment_spend_counters(
     # return_exceptions so a failing scope does not leave its siblings running
     # as orphaned tasks that race the caller's reservation-counter invalidation;
     # all scopes settle, then the first error propagates as before.
-    with spend_counter_batch_scope(spend_counter_cache.redis_cache):
-        bind_spend_counter_keys(
-            post_call_counter_keys(
-                token=token,
-                team_id=team_id,
-                user_id=user_id,
-                org_id=org_id,
-                end_user_id=end_user_id,
-                tags=tags,
-                model_access_groups=model_access_groups,
-            )
-            - reserved_counter_keys
-        )
-        scope_results: Final = await asyncio.gather(*scope_coros, return_exceptions=True)
+    scope_results: Final = await asyncio.gather(*scope_coros, return_exceptions=True)
     scope_errors: Final = tuple(
         item
         for scope in scope_results
@@ -3085,7 +3105,7 @@ async def _prepare_end_user_and_tag_spend_increments(
     tags: list[str] | None,
     response_cost: float,
     reserved_counter_keys: set[str],
-) -> tuple[_PendingSpendIncrement | BaseException, ...]:
+) -> tuple[PendingSpendIncrement | BaseException, ...]:
     unique_tags: Final = (
         tuple(dict.fromkeys(tag for tag in tags if tag and isinstance(tag, str))) if tags is not None else ()
     )
@@ -3122,7 +3142,7 @@ async def _prepare_model_access_group_spend_increments(
     model_access_groups: Sequence[object],
     response_cost: float,
     reserved_counter_keys: set[str],
-) -> tuple[_PendingSpendIncrement | BaseException, ...]:
+) -> tuple[PendingSpendIncrement | BaseException, ...]:
     """Charge the model access groups that authorized this request.
 
     Without this the counter auth reads is written only by the reservation path, so
@@ -3155,7 +3175,7 @@ async def _prepare_org_spend_increment(
     org_id: str | None,
     response_cost: float,
     reserved_counter_keys: set[str],
-) -> tuple[_PendingSpendIncrement, ...]:
+) -> tuple[PendingSpendIncrement, ...]:
     if org_id is None:
         return ()
 
@@ -3173,7 +3193,7 @@ async def _prepare_unreserved_spend_counter_increment(
     source_cache_key: str | list[str],
     increment: float,
     reserved_counter_keys: set[str],
-) -> _PendingSpendIncrement | None:
+) -> PendingSpendIncrement | None:
     if counter_key in reserved_counter_keys:
         return None
 
@@ -3188,7 +3208,7 @@ async def _prepare_spend_counter_increment(
     counter_key: str,
     source_cache_key: str | list[str],
     increment: float,
-) -> _PendingSpendIncrement:
+) -> PendingSpendIncrement:
     """
     Initialize counter from the authoritative DB spend value if not yet
     set, then return the pending increment for the caller to apply in one
@@ -3210,7 +3230,7 @@ async def _prepare_spend_counter_increment(
         counter_key=counter_key,
         source_cache_key=source_cache_key,
     )
-    return _PendingSpendIncrement(counter_key=counter_key, increment=increment)
+    return PendingSpendIncrement(counter_key=counter_key, increment=increment)
 
 
 async def _enqueue_window_spend_row_update(
@@ -3269,7 +3289,7 @@ async def _prepare_window_spend_counter_increment(
     window_duration: str | None,
     window_start: datetime | None,
     increment: float,
-) -> _PendingSpendIncrement | None:
+) -> PendingSpendIncrement | None:
     if window_start is None:
         verbose_proxy_logger.warning(
             "Skipping spend counter increment for invalid budget window %s",
@@ -3286,7 +3306,7 @@ async def _prepare_window_spend_counter_increment(
     )
     if initialized is False:
         return None
-    return _PendingSpendIncrement(counter_key=counter_key, increment=increment)
+    return PendingSpendIncrement(counter_key=counter_key, increment=increment)
 
 
 async def _ensure_spend_counter_initialized(
@@ -3427,7 +3447,16 @@ async def _invalidate_spend_counter(counter_key: str):
             )
 
 
-async def _apply_spend_counter_increments(pending: Sequence[_PendingSpendIncrement]) -> None:
+async def _apply_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) -> None:
+    try:
+        await increment_spend_counters_pipeline(pending=pending)
+    except RedisCircuitBreakerOpenError:
+        return
+
+
+async def increment_spend_counters_pipeline(pending: Sequence[PendingSpendIncrement]) -> None:
+    """One INCRBYFLOAT+EXPIRE pipeline for every pending counter; on failure every counter is invalidated
+    before the error propagates, so no caller can read a half-applied batch."""
     if not pending:
         return
     redis_cache: Final = spend_counter_cache.redis_cache
@@ -3444,10 +3473,8 @@ async def _apply_spend_counter_increments(pending: Sequence[_PendingSpendIncreme
     ]
     try:
         results: Final = await redis_cache.async_increment_pipeline(increment_list=increment_list)
-    except Exception as e:
+    except Exception:
         await asyncio.gather(*(_invalidate_spend_counter(counter_key=item.counter_key) for item in pending))
-        if isinstance(e, RedisCircuitBreakerOpenError):
-            return
         raise
     for item, current_value in zip(pending, results or ()):
         spend_counter_cache.in_memory_cache.set_cache(key=item.counter_key, value=current_value)
