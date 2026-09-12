@@ -1015,13 +1015,11 @@ class RealTimeStreaming:
                 self.store_message(event_str)
                 self._capture_transcription_usage(event)
                 await self._send_event_to_client(event, event_str)
-                if self._is_transcription_session:
-                    continue
                 blocked = await self.run_realtime_guardrails(
                     cast(str, transcript),
                     item_id=cast(str | None, event.get("item_id")),
                 )
-                if not blocked:
+                if not blocked and not self._is_transcription_session:
                     await self._send_to_backend(json.dumps({"type": "response.create"}))
                 continue
             ## LOGGING
