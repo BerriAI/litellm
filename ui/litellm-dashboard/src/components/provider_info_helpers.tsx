@@ -444,7 +444,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.RunwayML]: "runwayml/gen4_turbo",
   [Providers.SageMaker]: "sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b",
   [Providers.SCX_AI]: "scx-ai/GLM-5.2",
-  [Providers.GitGot]: "gitgot/openai/gpt-5-nano",
+  [Providers.GitGot]: "gitgot/openai/gpt-oss-120b",
   [Providers.Snowflake]: "snowflake/mistral-7b",
   [Providers.Vertex_AI]: "gemini-pro",
   [Providers.VolcEngine]: "volcengine/<any-model-on-volcengine>",
