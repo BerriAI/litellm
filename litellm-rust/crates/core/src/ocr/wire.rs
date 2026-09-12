@@ -13,10 +13,52 @@ use serde::{
 };
 use serde_json::{Map, Value};
 
+const COMMON_OPTION_FIELDS: &[&str] = &["req_format", "extra_body"];
+const MISTRAL_OPTION_FIELDS: &[&str] = &[
+    "pages",
+    "include_image_base64",
+    "image_limit",
+    "image_min_size",
+    "bbox_annotation_format",
+    "document_annotation_format",
+    "document_annotation_prompt",
+    "extract_header",
+    "extract_footer",
+    "table_format",
+    "confidence_scores_granularity",
+    "include_blocks",
+    "id",
+];
+const DEEPSEEK_OPTION_FIELDS: &[&str] =
+    &["stream", "temperature", "max_tokens", "top_p", "n", "stop"];
+const DOCUMENT_INTELLIGENCE_OPTION_FIELDS: &[&str] = &["pages", "features"];
+const REDUCTO_V3_OPTION_FIELDS: &[&str] = &["formatting", "retrieval", "settings"];
+const REDUCTO_LEGACY_OPTION_FIELDS: &[&str] = &["enhance"];
+const AZURE_AUTH_OPTION_FIELDS: &[&str] = &[
+    "azure_ad_token",
+    "tenant_id",
+    "client_id",
+    "client_secret",
+    "azure_scope",
+    "azure_authority_host",
+    "azure_credential",
+    "azure_federated_token_file",
+    "enable_azure_ad_token_refresh",
+];
+const VERTEX_AUTH_OPTION_FIELDS: &[&str] = &[
+    "vertex_credentials",
+    "vertex_ai_credentials",
+    "vertex_project",
+    "vertex_ai_project",
+    "vertex_location",
+    "vertex_ai_location",
+];
+
 #[derive(Debug)]
 pub struct DecodedOcrResponse<T> {
     pub data: T,
     pub native: Option<Value>,
+    pub text: String,
 }
 
 #[derive(Deserialize)]
@@ -37,6 +79,37 @@ pub struct OcrWireRequest {
 
 pub fn is_supported_request(model: &str, custom_llm_provider: Option<&str>) -> bool {
     super::registry::resolve_wire_adapter(model, custom_llm_provider).is_ok()
+}
+
+pub fn consumed_optional_param_names(
+    model: &str,
+    custom_llm_provider: Option<&str>,
+) -> Result<Vec<&'static str>, Error> {
+    use super::registry::OcrAdapterKind;
+
+    let (_, adapter) = super::registry::resolve_wire_adapter(model, custom_llm_provider)?;
+    let provider_fields: &[&str] = match adapter {
+        OcrAdapterKind::Mistral | OcrAdapterKind::AzureMistral | OcrAdapterKind::VertexMistral => {
+            MISTRAL_OPTION_FIELDS
+        }
+        OcrAdapterKind::AzureDocumentIntelligence => DOCUMENT_INTELLIGENCE_OPTION_FIELDS,
+        OcrAdapterKind::ReductoV3 => REDUCTO_V3_OPTION_FIELDS,
+        OcrAdapterKind::ReductoLegacy => REDUCTO_LEGACY_OPTION_FIELDS,
+        OcrAdapterKind::VertexDeepSeek => DEEPSEEK_OPTION_FIELDS,
+    };
+    let auth_fields: &[&str] = match adapter {
+        OcrAdapterKind::AzureMistral | OcrAdapterKind::AzureDocumentIntelligence => {
+            AZURE_AUTH_OPTION_FIELDS
+        }
+        OcrAdapterKind::VertexMistral | OcrAdapterKind::VertexDeepSeek => VERTEX_AUTH_OPTION_FIELDS,
+        _ => &[],
+    };
+    Ok(COMMON_OPTION_FIELDS
+        .iter()
+        .chain(provider_fields)
+        .chain(auth_fields)
+        .copied()
+        .collect())
 }
 
 pub fn decode_request(wire: OcrWireRequest) -> Result<LiteLLMOcrRequest, Error> {
@@ -134,7 +207,11 @@ pub fn decode_response<T: DeserializeOwned>(
     } else {
         None
     };
-    Ok(DecodedOcrResponse { data, native })
+    Ok(DecodedOcrResponse {
+        data,
+        native,
+        text: String::from_utf8_lossy(bytes).into_owned(),
+    })
 }
 
 pub fn decode_pre_call_result(
@@ -168,4 +245,23 @@ pub fn decode_during_call_result(
         body: changed.body,
         ..original
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn option_projection_is_provider_specific_and_excludes_opaque_fields() {
+        let mistral = consumed_optional_param_names("mistral/model", None).unwrap();
+        assert!(mistral.contains(&"pages"));
+        assert!(mistral.contains(&"req_format"));
+        assert!(!mistral.contains(&"vertex_project"));
+        assert!(!mistral.contains(&"opaque_extension"));
+
+        let vertex = consumed_optional_param_names("vertex_ai/deepseek-ocr", None).unwrap();
+        assert!(vertex.contains(&"temperature"));
+        assert!(vertex.contains(&"vertex_credentials"));
+        assert!(!vertex.contains(&"pages"));
+    }
 }

@@ -27,7 +27,7 @@ impl OcrAdapter for ReductoLegacyAdapter {
         } = _prepare_ocr_request::<ReductoLegacyParams>(request)?;
         let headers = super::validate_environment(&request.connection, &credential_env)?;
         let url = super::get_complete_url(request.connection.api_base.as_deref(), "parse")?;
-        let document = guardrail_document(request, &url).await?;
+        let (document, headers) = guardrail_document(request, &url, &headers).await?;
         let document =
             super::prepare_document(client, document, &request.connection, &headers).await?;
         let body = reducto::transform_legacy_ocr_request(&request.model, document, &params)?;

@@ -20,7 +20,7 @@ import orjson
 import pytest
 from starlette.datastructures import FormData
 
-from litellm.ocr.main import convert_file_document_to_url_document, get_mime_type
+from litellm.ocr.input import convert_file_document_to_url_document, get_mime_type
 
 
 class TestGetMimeType:

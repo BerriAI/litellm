@@ -28,6 +28,27 @@ where
     )
 }
 
+pub(crate) fn run_sync_value<T, F>(py: Python<'_>, future: F) -> PyResult<T>
+where
+    T: Send + 'static,
+    F: Future<Output = PyResult<T>> + Send + 'static,
+{
+    run_sync_value_on(py, pyo3_async_runtimes::tokio::get_runtime(), future)
+}
+
+fn run_sync_value_on<T, F>(py: Python<'_>, runtime: &Runtime, future: F) -> PyResult<T>
+where
+    T: Send + 'static,
+    F: Future<Output = PyResult<T>> + Send + 'static,
+{
+    if Handle::try_current().is_ok() {
+        return Err(PyRuntimeError::new_err(
+            "synchronous native routes cannot run from a Tokio context; use the async route",
+        ));
+    }
+    release_gil(py, move || runtime.block_on(wait_for_sync_result(future)))?
+}
+
 fn run_sync_on<T, E, F>(
     py: Python<'_>,
     runtime: &Runtime,
@@ -39,14 +60,9 @@ where
     E: Send + 'static,
     F: Future<Output = Result<T, E>> + Send + 'static,
 {
-    if Handle::try_current().is_ok() {
-        return Err(PyRuntimeError::new_err(
-            "synchronous native routes cannot run from a Tokio context; use the async route",
-        ));
-    }
-
-    let result = release_gil(py, move || runtime.block_on(wait_for_sync_result(future)))?;
-    let result = map_core_result(result, map_error)?;
+    let result = run_sync_value_on(py, runtime, async move {
+        map_core_result(future.await, map_error)
+    })?;
     Pythonized(result).into_pyobject(py).map(Bound::unbind)
 }
 
@@ -60,11 +76,18 @@ where
     E: Send + 'static,
     F: Future<Output = Result<T, E>> + Send + 'static,
 {
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let result = catch_future_panic(future).await?;
-        let result = map_core_result(result, map_error)?;
+    run_async_value(py, async move {
+        let result = map_core_result(future.await, map_error)?;
         Ok(Pythonized(result))
     })
+}
+
+pub(crate) fn run_async_value<T, F>(py: Python<'_>, future: F) -> PyResult<Bound<'_, PyAny>>
+where
+    T: for<'py> IntoPyObject<'py> + Send + 'static,
+    F: Future<Output = PyResult<T>> + Send + 'static,
+{
+    pyo3_async_runtimes::tokio::future_into_py(py, async move { catch_future_panic(future).await? })
 }
 
 fn map_core_result<T, E>(result: Result<T, E>, map_error: fn(E) -> PyErr) -> PyResult<T> {

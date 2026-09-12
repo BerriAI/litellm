@@ -1,4 +1,5 @@
 use serde_json::{Value, json};
+use std::sync::{Arc, Mutex};
 
 use super::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
 use super::wire::{OcrWireRequest, decode_request};
@@ -167,6 +168,46 @@ async fn accepted_response_polls_to_success_with_only_credentials() {
                 .contains("ocp-apim-subscription-key: test-key")
         );
     }
+}
+
+struct SubmissionBoundary {
+    request_count: Arc<Mutex<Vec<String>>>,
+}
+
+impl super::hooks::OcrHooks for SubmissionBoundary {
+    fn post_call(
+        &self,
+        request: super::hooks::OcrPostCallRequest,
+    ) -> super::hooks::OcrHookFuture<'_, super::hooks::OcrPostCallRequest> {
+        Box::pin(async move {
+            assert_eq!(self.request_count.lock().unwrap().len(), 1);
+            assert_eq!(request.original_response, json!(r#"{"submitted":true}"#));
+            Ok(request)
+        })
+    }
+}
+
+#[tokio::test]
+async fn accepted_response_runs_post_call_before_polling() {
+    let (base, seen, server) = mock_server(vec![
+        MockResponse {
+            status: 202,
+            headers: vec![("Operation-Location", "{base}/operation".into())],
+            body: json!({"submitted": true}),
+        },
+        MockResponse::json(json!({"status":"succeeded"})),
+    ])
+    .await;
+    let request = super::LiteLLMOcrRequest {
+        hooks: Arc::new(SubmissionBoundary {
+            request_count: seen.clone(),
+        }),
+        ..wire_request("azure_ai/doc-intelligence/prebuilt-read", &base, json!({}))
+    };
+
+    perform_ocr(request).await.unwrap();
+    server.await.unwrap();
+    assert_eq!(seen.lock().unwrap().len(), 2);
 }
 
 #[tokio::test]

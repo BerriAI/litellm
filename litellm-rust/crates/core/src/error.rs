@@ -1,6 +1,6 @@
 use thiserror::Error as ThisError;
 
-#[derive(Debug, ThisError, PartialEq, Eq)]
+#[derive(Clone, Debug, ThisError, PartialEq, Eq)]
 pub enum Error {
     #[error("expected {expected}, got {actual}")]
     InvalidType {

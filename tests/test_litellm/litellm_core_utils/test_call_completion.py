@@ -4,7 +4,6 @@ import datetime
 import weakref
 from collections.abc import Callable, Coroutine
 from concurrent.futures import Future, ThreadPoolExecutor
-from importlib import import_module
 from threading import get_ident
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -15,7 +14,6 @@ import litellm
 from litellm.litellm_core_utils import thread_pool_executor
 from litellm.litellm_core_utils.call_completion import CallCompletion, PythonCompletion
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.rust_bridge import ocr as rust_ocr_bridge
 from litellm.utils import client
 
 
@@ -313,7 +311,7 @@ async def test_async_ocr_wrapper_reports_metadata_failure_without_success(
 
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.asyncio
-async def test_ocr_completion_stays_separate_from_marshaled_provider_options(
+async def test_wrapper_completion_stays_separate_from_provider_options(
     monkeypatch: pytest.MonkeyPatch, asynchronous: bool
 ) -> None:
     native_completion: Final = RecordingCompletion()
@@ -321,45 +319,22 @@ async def test_ocr_completion_stays_separate_from_marshaled_provider_options(
     metadata: Final = {"request": "shared"}
     pages: Final = [0, 2]
 
-    def run(
-        request: rust_ocr_bridge.LiteLLMOcrRequest,
-        resolve_secret: Callable[[str], str | None],
-        convert_file_document: Callable[[dict[str, object]], dict[str, str]],
-    ) -> OCRResponse:
-        assert request.kwargs["metadata"] is metadata
-        assert "_litellm_call_completion" not in request.kwargs
-        marshalled: Final = rust_ocr_bridge._marshal(request, resolve_secret, convert_file_document)
-        assert "_litellm_call_completion" not in marshalled.kwargs
-        assert marshalled.kwargs["pages"] is pages
-        assert marshalled.call_completion is request.call_completion
-        assert marshalled.call_completion is not None
-        assert marshalled.call_completion.attach(native_completion)
+    def ocr(*, _litellm_call_completion: CallCompletion, **kwargs: object) -> OCRResponse:
+        assert kwargs["metadata"] is metadata
+        assert kwargs["pages"] is pages
+        assert "_litellm_call_completion" not in kwargs
+        assert _litellm_call_completion.attach(native_completion)
         return response
 
-    async def arun(
-        request: rust_ocr_bridge.LiteLLMOcrRequest,
-        resolve_secret: Callable[[str], str | None],
-        convert_file_document: Callable[[dict[str, object]], dict[str, str]],
-    ) -> OCRResponse:
-        return run(request, resolve_secret, convert_file_document)
+    async def aocr(*, _litellm_call_completion: CallCompletion, **kwargs: object) -> OCRResponse:
+        return ocr(_litellm_call_completion=_litellm_call_completion, **kwargs)
 
-    def run_bridge(
-        request: rust_ocr_bridge.LiteLLMOcrRequest,
-        resolve_api_key: Callable[[str], str | None],
-    ) -> OCRResponse:
-        return run(request, resolve_api_key, lambda document: {})
-
-    async def arun_bridge(
-        request: rust_ocr_bridge.LiteLLMOcrRequest,
-        resolve_api_key: Callable[[str], str | None],
-    ) -> OCRResponse:
-        return await arun(request, resolve_api_key, lambda document: {})
-
-    ocr_main: Final = import_module("litellm.ocr.main")
-    monkeypatch.setattr(ocr_main, "rust_enabled", lambda: True)
-    monkeypatch.setattr(ocr_main, "_rust_ocr_supported", lambda request: True)
-    monkeypatch.setattr(ocr_main, "_run_rust_ocr", run_bridge)
-    monkeypatch.setattr(ocr_main, "_run_rust_aocr", arun_bridge)
+    monkeypatch.setattr(
+        "litellm.utils.function_setup",
+        MagicMock(return_value=(MagicMock(), {"metadata": metadata, "pages": pages})),
+    )
+    monkeypatch.setattr("litellm.utils.load_credentials_from_list", MagicMock())
+    wrapped: Final = client(aocr if asynchronous else ocr)
     arguments: Final = {
         "model": "mistral/mistral-ocr-latest",
         "document": {"type": "document_url", "document_url": "https://example.com/doc.pdf"},
@@ -368,7 +343,7 @@ async def test_ocr_completion_stays_separate_from_marshaled_provider_options(
         "pages": pages,
     }
 
-    result: Final = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
+    result: Final = await wrapped(**arguments) if asynchronous else wrapped(**arguments)
 
     assert result is response
     assert native_completion.successes == [response]

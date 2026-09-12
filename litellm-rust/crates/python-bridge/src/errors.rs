@@ -69,9 +69,22 @@ pub(crate) fn ocr_error_to_pyerr(err: Error) -> PyErr {
         Error::MissingField("document_url" | "image_url") => {
             PyValueError::new_err("Document URL is required")
         }
-        Error::Http { status, body } => RustUpstreamError::new_err((status, body)),
+        Error::Http { status, body } => ocr_upstream_error(status, body),
+        Error::Network(message) if message.contains("timed out") => {
+            ocr_upstream_error(408, message)
+        }
         other => core_error_to_pyerr(other),
     }
+}
+
+fn ocr_upstream_error(status: u16, message: String) -> PyErr {
+    let error = RustUpstreamError::new_err((status, message.clone()));
+    Python::attach(|py| {
+        let value = error.value(py);
+        value.setattr("status_code", status).ok();
+        value.setattr("message", message).ok();
+    });
+    error
 }
 
 #[cfg(test)]

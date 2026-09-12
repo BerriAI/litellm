@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::Url;
@@ -9,6 +10,7 @@ use crate::ocr::codecs::document_intelligence::{
     AzureDocumentIntelligenceOperation, OperationStatus,
 };
 use crate::ocr::error::{OcrError, OcrPollingError, OcrResponseError};
+use crate::ocr::hooks::OcrHooks;
 use crate::ocr::types::OcrConnection;
 use crate::ocr::wire::DecodedOcrResponse;
 
@@ -19,23 +21,29 @@ pub(super) async fn read_operation_response(
     headers: &[(String, String)],
     connection: &OcrConnection,
     native: bool,
+    hooks: &Arc<dyn OcrHooks>,
 ) -> Result<DecodedOcrResponse<AzureDocumentIntelligenceOperation>, OcrError> {
     if response.status() != reqwest::StatusCode::ACCEPTED {
-        return read_json_response(response, native).await;
+        let bytes = crate::ocr::client::read_response_bytes(response).await?;
+        crate::ocr::handler::post_call(hooks, &bytes).await?;
+        return Ok(crate::ocr::wire::decode_response(&bytes, native)?);
     }
     let location = response
         .headers()
         .get("operation-location")
         .and_then(|value| value.to_str().ok())
-        .ok_or(OcrPollingError::PollLocation)?;
+        .ok_or(OcrPollingError::PollLocation)?
+        .to_string();
     let original = Url::parse(original_url).map_err(|_| OcrPollingError::PollOrigin)?;
-    let operation = Url::parse(location).map_err(|_| OcrPollingError::PollOrigin)?;
+    let operation = Url::parse(&location).map_err(|_| OcrPollingError::PollOrigin)?;
     if original.origin() != operation.origin()
         || !operation.username().is_empty()
         || operation.password().is_some()
     {
         return Err(OcrPollingError::PollOrigin.into());
     }
+    let bytes = crate::ocr::client::read_response_bytes(response).await?;
+    crate::ocr::handler::post_call(hooks, &bytes).await?;
     poll_operation(http_client, operation, headers, connection, native).await
 }
 

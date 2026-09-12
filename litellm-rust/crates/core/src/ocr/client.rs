@@ -4,7 +4,6 @@ use std::time::Duration;
 use serde::de::DeserializeOwned;
 
 use super::error::OcrError;
-use super::handler::perform_ocr_request;
 use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
 use super::wire::{DecodedOcrResponse, decode_response};
 use crate::Error;
@@ -32,6 +31,10 @@ impl OcrClient {
         })
     }
 
+    pub fn shared() -> Result<Self, Error> {
+        shared_client()
+    }
+
     #[tracing::instrument(
         name = "ocr",
         target = "litellm::function_trace",
@@ -39,7 +42,34 @@ impl OcrClient {
         skip_all
     )]
     pub async fn perform(&self, request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error> {
-        perform_ocr_request(self, request).await
+        use super::{
+            NativeOutcome, OcrAdmission, OcrCall, OcrCallStep, OcrHookHost, OcrHost,
+            OcrHostOperation, OcrHostResult,
+        };
+
+        let host = OcrHookHost::new(request.hooks.clone());
+        let mut request = Some(request);
+        let NativeOutcome::Completed(mut call) = OcrCall::admit(self.clone(), OcrAdmission::all())
+        else {
+            return Err(Error::InvalidRequest(
+                "native OCR host admission declined".into(),
+            ));
+        };
+        let mut result = None;
+        loop {
+            match call.resume(result.take()).await? {
+                OcrCallStep::Host(OcrHostOperation::ProjectRequest) => {
+                    result = Some(OcrHostResult::Request(Ok((
+                        Box::new(request.take().ok_or_else(|| {
+                            Error::InvalidRequest("OCR request was already projected".into())
+                        })?),
+                        false,
+                    ))))
+                }
+                OcrCallStep::Host(operation) => result = Some(host.invoke(operation).await),
+                OcrCallStep::Complete(response) => return Ok(response),
+            }
+        }
     }
 
     pub(crate) fn provider_http(&self) -> &reqwest::Client {
@@ -77,7 +107,7 @@ fn no_redirect_http() -> Result<reqwest::Client, TransportError> {
         .map_err(TransportError::from)
 }
 
-pub async fn ocr(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error> {
+pub(crate) fn shared_client() -> Result<OcrClient, Error> {
     static CLIENT: OnceLock<Result<OcrClient, TransportError>> = OnceLock::new();
     let client = CLIENT
         .get_or_init(|| {
@@ -88,18 +118,24 @@ pub async fn ocr(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error
                 .and_then(OcrClient::new)
         })
         .clone()?;
-    client.perform(request).await
+    Ok(client)
+}
+
+pub async fn ocr(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error> {
+    shared_client()?.perform(request).await
 }
 
 pub async fn read_json_response<T: DeserializeOwned>(
     response: reqwest::Response,
     native: bool,
 ) -> Result<DecodedOcrResponse<T>, OcrError> {
+    let bytes = read_response_bytes(response).await?;
+    Ok(decode_response(&bytes, native)?)
+}
+
+pub(crate) async fn read_response_bytes(response: reqwest::Response) -> Result<Vec<u8>, OcrError> {
     let status = response.status();
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(crate::error::TransportError::from)?;
+    let bytes = response.bytes().await.map_err(transport_error)?;
     if !status.is_success() {
         return Err(crate::error::TransportError::Http {
             status: status.as_u16(),
@@ -107,5 +143,15 @@ pub async fn read_json_response<T: DeserializeOwned>(
         }
         .into());
     }
-    Ok(decode_response(&bytes, native)?)
+    Ok(bytes.to_vec())
+}
+
+pub(crate) fn transport_error(error: reqwest::Error) -> Error {
+    if error.is_timeout() {
+        return Error::Http {
+            status: 408,
+            body: "OCR request timed out".into(),
+        };
+    }
+    crate::error::TransportError::from(error).into()
 }

@@ -5,8 +5,7 @@ use serde::de::DeserializeOwned;
 use super::OcrClient;
 use super::error::{OcrError, OcrResponseError};
 use super::registry::OcrProvider;
-use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrResponseFormat};
-use super::wire::DecodedOcrResponse;
+use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
 
 mod azure;
 mod mistral;
@@ -55,12 +54,12 @@ pub(crate) trait OcrAdapter: Send + Sync + Sized + 'static {
         _url: &str,
         _headers: &[(String, String)],
         request: &LiteLLMOcrRequest,
-    ) -> impl Future<Output = Result<DecodedOcrResponse<Self::ProviderResponse>, OcrError>> + Send
-    {
-        let retain_native = request
-            .response_format()
-            .map(|format| format == OcrResponseFormat::Native);
-        async move { super::client::read_json_response(response, retain_native?).await }
+    ) -> impl Future<Output = Result<Vec<u8>, OcrError>> + Send {
+        async move {
+            let bytes = super::client::read_response_bytes(response).await?;
+            super::handler::post_call(&request.hooks, &bytes).await?;
+            Ok(bytes)
+        }
     }
 }
 

@@ -4,6 +4,7 @@ mod errors;
 mod execution;
 #[cfg(feature = "trace-parity")]
 mod function_trace;
+mod lifecycle;
 mod marshal;
 mod routes;
 mod token_counter;
@@ -64,7 +65,7 @@ impl ResponsesWebSocketConnection {
     }
 }
 
-#[pymodule(gil_used = false)]
+#[pymodule(gil_used = true)]
 mod _native {
     use pyo3::prelude::*;
 

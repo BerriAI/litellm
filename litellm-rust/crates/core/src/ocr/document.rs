@@ -2,12 +2,70 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use data_url::mime::Mime;
 use data_url::{DataUrl, DataUrlError, forgiving_base64::DecodeError};
 use reqwest::Url;
+use serde_json::{Map, Value};
 
 use super::error::{OcrError, OcrRequestError, OcrResponseError};
 use super::types::{OcrConnection, OcrDocument};
 use crate::constants::OCR_MAX_FETCH_REDIRECTS;
 use crate::error::{MediaError, TransportError};
 use crate::media::{DownloadPolicy, MediaFetcher};
+
+pub fn encode_file_document(
+    bytes: &[u8],
+    file_name: Option<&str>,
+    mime_type: Option<&str>,
+) -> Result<Value, OcrRequestError> {
+    if bytes.is_empty() {
+        return Err(OcrRequestError::RequestField {
+            path: "document.file".into(),
+        });
+    }
+    let mime_type = mime_type.map(str::trim);
+    if mime_type.is_some_and(|value| !valid_mime_type(value)) {
+        return Err(OcrRequestError::RequestField {
+            path: "document.mime_type".into(),
+        });
+    }
+    let mime_type = mime_type
+        .map(str::to_string)
+        .or_else(|| file_name.and_then(mime_type_for_name).map(str::to_string))
+        .unwrap_or_else(|| "application/octet-stream".into());
+    let source = format!("data:{mime_type};base64,{}", STANDARD.encode(bytes));
+    let (kind, field) = if mime_type.starts_with("image/") {
+        ("image_url", "image_url")
+    } else {
+        ("document_url", "document_url")
+    };
+    Ok(Value::Object(Map::from_iter([
+        ("type".into(), Value::String(kind.into())),
+        (field.into(), Value::String(source)),
+    ])))
+}
+
+fn valid_mime_type(value: &str) -> bool {
+    let Some((kind, subtype)) = value.split_once('/') else {
+        return false;
+    };
+    !kind.is_empty()
+        && !subtype.is_empty()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'+' | b'-' | b'_')
+        })
+}
+
+fn mime_type_for_name(name: &str) -> Option<&'static str> {
+    let extension = name.rsplit_once('.')?.1;
+    match extension.to_ascii_lowercase().as_str() {
+        "pdf" => Some("application/pdf"),
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "tiff" | "tif" => Some("image/tiff"),
+        "bmp" => Some("image/bmp"),
+        _ => None,
+    }
+}
 
 pub(crate) struct InlineDocument<'a>(DataUrl<'a>);
 
@@ -112,6 +170,30 @@ mod tests {
             document_url: source.into(),
             extra_fields: Map::new(),
         }
+    }
+
+    #[test]
+    fn file_bytes_are_encoded_with_core_owned_mime_policy() {
+        assert_eq!(
+            encode_file_document(b"abc", Some("scan.png"), None).unwrap(),
+            serde_json::json!({
+                "type": "image_url",
+                "image_url": "data:image/png;base64,YWJj"
+            })
+        );
+        assert_eq!(
+            encode_file_document(b"abc", None, Some("application/pdf")).unwrap(),
+            serde_json::json!({
+                "type": "document_url",
+                "document_url": "data:application/pdf;base64,YWJj"
+            })
+        );
+    }
+
+    #[test]
+    fn file_encoding_rejects_empty_bytes_and_invalid_explicit_mime() {
+        assert!(encode_file_document(b"", None, None).is_err());
+        assert!(encode_file_document(b"abc", None, Some("text/plain;bad")).is_err());
     }
 
     #[test]

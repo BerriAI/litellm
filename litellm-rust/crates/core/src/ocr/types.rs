@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 use super::hooks::{NoopOcrHooks, OcrHooks};
 use super::registry::{OcrAdapterKind, resolve_wire_adapter};
 use crate::Error;
-use crate::auth::InputSource;
+use crate::auth::{InputSource, TokenProviderHandle};
 use crate::constants::OCR_HTTP_TIMEOUT_SECS;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -95,6 +95,7 @@ pub struct LiteLLMOcrRequest {
     pub litellm_call_id: Option<String>,
     pub optional_params: Map<String, Value>,
     pub input_sources: BTreeMap<String, InputSource>,
+    pub azure_ad_token_provider: Option<TokenProviderHandle>,
     pub(crate) adapter: OcrAdapterKind,
 }
 
@@ -115,6 +116,7 @@ impl LiteLLMOcrRequest {
             litellm_call_id: None,
             optional_params,
             input_sources: BTreeMap::new(),
+            azure_ad_token_provider: None,
             adapter: adapter_kind,
         })
     }
@@ -130,6 +132,10 @@ impl LiteLLMOcrRequest {
             })
             .transpose()
             .map(|format| format.unwrap_or_default())
+    }
+
+    pub fn provider_name(&self) -> &'static str {
+        self.adapter.provider().as_str()
     }
 
     pub fn with_host_hooks(

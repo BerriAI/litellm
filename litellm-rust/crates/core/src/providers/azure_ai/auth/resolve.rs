@@ -81,7 +81,7 @@ impl AzureAuthService {
             AzureCredentialPlan::Caller(caller) => {
                 let credential = caller.acquire().await?;
                 if credential.secret().expose().is_empty() {
-                    return Err(AuthError::EmptyAzureToken);
+                    return Ok(None);
                 }
                 Ok(Some(Sourced::new(credential, InputSource::Deployment)))
             }

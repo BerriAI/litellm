@@ -24,7 +24,15 @@ pub struct OcrDuringCallRequest {
     pub model: String,
     pub custom_llm_provider: String,
     pub url: String,
+    pub headers: Vec<(String, String)>,
     pub body: Value,
+    #[serde(skip)]
+    pub retained_fields: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct OcrPostCallRequest {
+    pub original_response: Value,
 }
 
 pub trait OcrHooks: Send + Sync {
@@ -38,6 +46,9 @@ pub trait OcrHooks: Send + Sync {
         &self,
         request: OcrDuringCallRequest,
     ) -> OcrHookFuture<'_, OcrDuringCallRequest> {
+        Box::pin(async move { Ok(request) })
+    }
+    fn post_call(&self, request: OcrPostCallRequest) -> OcrHookFuture<'_, OcrPostCallRequest> {
         Box::pin(async move { Ok(request) })
     }
     fn success<'a>(

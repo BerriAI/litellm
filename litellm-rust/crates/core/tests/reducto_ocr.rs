@@ -3,7 +3,7 @@ use std::sync::Arc;
 use rstest::rstest;
 use serde_json::{Value, json};
 
-use super::hooks::{OcrDuringCallRequest, OcrHookFuture, OcrHooks};
+use super::hooks::{OcrDuringCallRequest, OcrHookFuture, OcrHooks, OcrPostCallRequest};
 use super::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
 
 fn request_body(request: &str) -> Value {
@@ -98,6 +98,42 @@ async fn data_uri_upload_preserves_multipart_headers(#[case] model: &str) {
     assert!(requests[0].contains("application/pdf"));
     assert!(requests[0].contains("abc"));
     assert!(requests[1].starts_with("POST /parse "));
+}
+
+struct ParseBoundary {
+    request_count: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl OcrHooks for ParseBoundary {
+    fn post_call(&self, request: OcrPostCallRequest) -> OcrHookFuture<'_, OcrPostCallRequest> {
+        Box::pin(async move {
+            assert_eq!(self.request_count.lock().unwrap().len(), 2);
+            assert_eq!(
+                request.original_response,
+                json!(r#"{"result":{"chunks":[]}}"#)
+            );
+            Ok(request)
+        })
+    }
+}
+
+#[tokio::test]
+async fn post_call_stays_after_reducto_upload_and_parse() {
+    let (base, seen, server) = mock_server(vec![
+        MockResponse::json(json!({"file_id":"reducto://uploaded.pdf"})),
+        MockResponse::json(json!({"result":{"chunks":[]}})),
+    ])
+    .await;
+    let request = super::LiteLLMOcrRequest {
+        hooks: Arc::new(ParseBoundary {
+            request_count: seen.clone(),
+        }),
+        ..wire_request("reducto/parse-v3", &base, json!({}))
+    };
+
+    perform_ocr(request).await.unwrap();
+    server.await.unwrap();
+    assert_eq!(seen.lock().unwrap().len(), 2);
 }
 
 #[rstest]

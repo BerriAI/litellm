@@ -1,7 +1,6 @@
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use pyo3::exceptions::PyValueError;
 use pyo3::panic::PanicException;
 use pyo3::prelude::*;
 use serde::Serialize;
@@ -11,16 +10,21 @@ pub fn from_py<T>(value: &Bound<'_, PyAny>) -> PyResult<T>
 where
     T: DeserializeOwned,
 {
-    pythonize::depythonize(value).map_err(|error| PyValueError::new_err(error.to_string()))
+    pythonize::depythonize(value).map_err(PyErr::from)
 }
 
 pub fn to_py<T>(py: Python<'_>, value: &T) -> PyResult<Py<PyAny>>
 where
     T: Serialize + ?Sized,
 {
-    pythonize::pythonize(py, value)
-        .map(Bound::unbind)
-        .map_err(|error| PyValueError::new_err(error.to_string()))
+    pythonize_bound(py, value).map(Bound::unbind)
+}
+
+fn pythonize_bound<'py, T>(py: Python<'py>, value: &T) -> PyResult<Bound<'py, PyAny>>
+where
+    T: Serialize + ?Sized,
+{
+    pythonize::pythonize(py, value).map_err(PyErr::from)
 }
 
 pub struct Pythonized<T>(pub T);
@@ -34,9 +38,7 @@ where
     type Error = PyErr;
 
     fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
-        catch_unwind(AssertUnwindSafe(|| pythonize::pythonize(py, &self.0)))
-            .map_err(panic_to_pyerr)?
-            .map_err(|error| PyValueError::new_err(error.to_string()))
+        catch_unwind(AssertUnwindSafe(|| pythonize_bound(py, &self.0))).map_err(panic_to_pyerr)?
     }
 }
 
@@ -87,6 +89,43 @@ mod tests {
                 .expect_err("serializer panic should become a Python exception");
             assert!(error.is_instance_of::<PanicException>(py));
             assert_eq!(error.to_string(), "PanicException: serializer panicked");
+        });
+    }
+
+    #[test]
+    fn depythonize_preserves_python_exception_identity_and_traceback() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = pyo3::types::PyDict::new(py);
+            py.run(
+                pyo3::ffi::c_str!(
+                    r#"
+failure = LookupError('conversion failed')
+cause = ValueError('cause')
+class Broken:
+    def __index__(self):
+        raise failure from cause
+value = Broken()
+"#
+                ),
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+            let error = from_py::<i64>(&locals.get_item("value").unwrap().unwrap()).unwrap_err();
+            assert!(
+                error
+                    .value(py)
+                    .is(locals.get_item("failure").unwrap().unwrap())
+            );
+            assert!(
+                error
+                    .cause(py)
+                    .unwrap()
+                    .value(py)
+                    .is(locals.get_item("cause").unwrap().unwrap())
+            );
+            assert!(error.traceback(py).is_some());
         });
     }
 }
