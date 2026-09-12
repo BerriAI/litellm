@@ -4,7 +4,7 @@ import asyncio
 import os
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import litellm
 from litellm.constants import (
@@ -27,13 +27,13 @@ from litellm.types.realtime import (
     RealtimeTranscriptionSessionRequest,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import CallTypes, LlmProviders
 from litellm.utils import ProviderConfigManager
 
 from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..llms.azure.common_utils import get_azure_ad_token
-from ..llms.azure.realtime.handler import AzureOpenAIRealtime
+from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_protocol_for_client
 from ..llms.bedrock.realtime.handler import BedrockRealtime
 from ..llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from ..llms.openai.realtime.handler import OpenAIRealtime
@@ -41,6 +41,11 @@ from ..llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
 from ..llms.vertex_ai.vertex_llm_base import VertexBase
 from ..llms.xai.realtime.handler import XAIRealtime
 from ..utils import client as wrapper_client
+
+if TYPE_CHECKING:
+    from fastapi import WebSocket
+
+    from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
 
 azure_realtime: Final = AzureOpenAIRealtime()
 openai_realtime: Final = OpenAIRealtime()
@@ -51,7 +56,7 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 _EMPTY_MODEL_PARAMS: Final[Mapping[str, Any]] = MappingProxyType({})
 
 
-def _with_resolved_session_model(session: dict[str, Any], model_name: str) -> dict[str, Any]:
+def _with_resolved_session_model(session: dict[str, object], model_name: str) -> dict[str, object]:
     if "model" not in session:
         return session
     return {**session, "model": model_name}
@@ -71,7 +76,7 @@ def _get_realtime_http_provider_config(
     dynamic_api_base: str | None,
     dynamic_api_key: str | None,
     litellm_params: GenericLiteLLMParams,
-) -> tuple[Any, str, str]:
+) -> tuple["BaseRealtimeHTTPConfig | None", str, str]:
     """
     Return (provider_config, resolved_api_base, resolved_api_key) for the
     realtime HTTP endpoints (client_secrets / realtime_calls).
@@ -330,12 +335,12 @@ async def _resolve_vertex_access_token_bounded(
 @wrapper_client
 async def _arealtime(
     model: str,
-    websocket: Any,  # fastapi websocket
+    websocket: "WebSocket",  # fastapi websocket
     api_base: str | None = None,
     api_key: str | None = None,
     api_version: str | None = None,
     azure_ad_token: str | None = None,
-    client: Any | None = None,
+    client: object | None = None,
     timeout: float | None = None,
     query_params: RealtimeQueryParams | None = None,
     **kwargs,
@@ -355,7 +360,7 @@ async def _arealtime(
     user: Final = kwargs.get("user", None)
     litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
-    litellm_params_dict: Final = get_litellm_params(**kwargs)
+    litellm_params_dict: Final = {**get_litellm_params(**kwargs), CallTypes.arealtime.value: True}
 
     model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
         model=model,
@@ -408,14 +413,14 @@ async def _arealtime(
 
         api_version = api_version or litellm_params.api_version or "2024-10-01-preview"
 
-        realtime_protocol = (
+        configured_realtime_protocol: Final = (
             kwargs.get("realtime_protocol")
             or litellm_params.get("realtime_protocol")
             or os.environ.get("LITELLM_AZURE_REALTIME_PROTOCOL")
         )
-        if realtime_protocol is None and (query_params or {}).get("intent") == "transcription":
-            realtime_protocol = "GA"
-        realtime_protocol = realtime_protocol or "beta"
+        realtime_protocol: Final = azure_realtime_protocol_for_client(
+            configured_realtime_protocol, query_params=query_params, websocket=websocket
+        )
         resolved_azure_ad_token: Final = (
             None if api_key else get_azure_ad_token(GenericLiteLLMParams(**kwargs, azure_ad_token=azure_ad_token))
         )
@@ -572,7 +577,7 @@ _TRANSCRIPTION_QUERY_PARAMS: Final[RealtimeQueryParams] = {"intent": "transcript
 
 
 def _azure_realtime_health_protocol(
-    model: str, realtime_protocol: str | None, model_params: Mapping[str, Any]
+    model: str, realtime_protocol: str | None, model_params: Mapping[str, object]
 ) -> tuple[str, RealtimeQueryParams | None]:
     query_params: Final = _TRANSCRIPTION_QUERY_PARAMS if _is_transcription_only_realtime_model(model, "azure") else None
     configured_raw: Final = (
@@ -581,9 +586,7 @@ def _azure_realtime_health_protocol(
     configured: Final = configured_raw if isinstance(configured_raw, str) else None
     if configured is not None:
         return configured, query_params
-    if query_params is not None:
-        return "GA", query_params
-    return "beta", None
+    return "GA", query_params
 
 
 def _realtime_health_check_auth_headers(
@@ -616,8 +619,8 @@ async def _realtime_health_check(
         api_key: str - api key
         custom_llm_provider: str - custom llm provider
         realtime_protocol: Optional[str] - protocol version ("GA"/"v1" for GA path, "beta" for beta path);
-            None resolves it for Azure from model_params/env, with transcription-only models probing GA
-            plus intent=transcription the way real calls do
+            None resolves it for Azure from model_params/env and otherwise probes GA, the upstream a client
+            without the OpenAI-Beta header is bridged to, with transcription-only models adding intent=transcription
 
     Returns:
         bool - True if connection is successful, False otherwise

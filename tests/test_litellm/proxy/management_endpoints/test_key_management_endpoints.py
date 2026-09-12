@@ -1,3 +1,4 @@
+from typing import Final
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -963,6 +964,7 @@ async def test_key_generation_with_mcp_tool_permissions(monkeypatch):
     mock_prisma_client.db = MagicMock()
     mock_prisma_client.db.litellm_objectpermissiontable = MagicMock()
     mock_prisma_client.db.litellm_objectpermissiontable.create = mock_create
+    mock_prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
 
     async def _insert_data_side_effect(*args, **kwargs):
         table_name = kwargs.get("table_name")
@@ -5082,6 +5084,104 @@ async def test_delete_verification_tokens_persists_deleted_keys(monkeypatch):
     assert isinstance(result["deleted_keys"], list)
     assert set(result["deleted_keys"]) == {"hashed-token-1", "hashed-token-2"}
     assert len(deleted_keys) == 2
+
+
+class _JWTMappingRow:
+    def __init__(self, token, jwt_claim_name, jwt_claim_value):
+        self.token = token
+        self.jwt_claim_name = jwt_claim_name
+        self.jwt_claim_value = jwt_claim_value
+
+
+class _CascadingJWTMappingTable:
+    """Mapping rows that LiteLLM_JWTKeyMapping_token_fkey drops when their key is deleted."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    async def find_many(self, where, **kwargs):
+        return [row for row in self.rows if row.token == where["token"]]
+
+    def cascade(self, deleted_tokens):
+        self.rows = [row for row in self.rows if row.token not in deleted_tokens]
+
+
+class _RecordingEvict:
+    def __init__(self):
+        self.cache_keys = ()
+
+    async def __call__(self, cache_keys, user_api_key_cache):
+        self.cache_keys = tuple(cache_keys)
+
+
+@pytest.mark.asyncio
+async def test_delete_verification_tokens_evicts_jwt_key_mapping_cache(monkeypatch):
+    """Deleting a key must evict its jwt_key_mapping cache entries (LIT-5380).
+
+    The FK cascade removes the mapping rows, so a surviving cache entry would keep
+    resolving the deleted token hash and 401 every JWT call from that identity until
+    virtual_key_mapping_cache_ttl expires, instead of auto-registering again.
+    """
+    jwt_table = _CascadingJWTMappingTable(
+        [_JWTMappingRow("hashed-token-1", "email", "user@example.com")]
+    )
+
+    key1 = LiteLLM_VerificationToken(
+        token="hashed-token-1",
+        user_id="user-123",
+        team_id=None,
+        key_alias="jwt-mapped-key",
+        spend=0.0,
+        max_budget=None,
+        models=[],
+        aliases={},
+        config={},
+        permissions={},
+        metadata={},
+        model_max_budget={},
+        model_spend={},
+        soft_budget_cooldown=False,
+        allowed_routes=[],
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[key1]
+    )
+    mock_prisma_client.db.litellm_jwtkeymapping = jwt_table
+    mock_prisma_client.db.litellm_deletedverificationtoken.create_many = AsyncMock()
+
+    async def cascading_delete_data(tokens):
+        jwt_table.cascade(tokens)
+        return list(tokens)
+
+    mock_prisma_client.delete_data = AsyncMock(side_effect=cascading_delete_data)
+
+    recording_evict = _RecordingEvict()
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.evict_and_broadcast",
+        recording_evict,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
+        lambda token: token,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma_client,
+    )
+
+    await delete_verification_tokens(
+        tokens=["hashed-token-1"],
+        user_api_key_cache=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user",
+            api_key="sk-admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        ),
+    )
+
+    assert recording_evict.cache_keys == ("jwt_key_mapping:email:user@example.com",)
 
 
 @pytest.mark.asyncio
@@ -17691,6 +17791,253 @@ async def test_check_project_key_limits_still_rejects_real_model_outside_project
     assert "Model 'gpt-5.4-mini' not in project's allowed models" in exc_info.value.detail["error"]
 
 
+@pytest.mark.asyncio
+async def test_update_key_soft_budget_updates_existing_budget_row():
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _update_key_soft_budget,
+    )
+
+    existing_key = LiteLLM_VerificationToken(token="test-token", budget_id="budget-123")
+    mock_db = MagicMock()
+    mock_db.litellm_budgettable.update = AsyncMock()
+    mock_db.litellm_budgettable.create = AsyncMock()
+
+    result = await _update_key_soft_budget(
+        db=mock_db,
+        existing_key_row=existing_key,
+        soft_budget=25.0,
+        changed_by="user-1",
+    )
+
+    assert result == "budget-123"
+    mock_db.litellm_budgettable.update.assert_awaited_once_with(
+        where={"budget_id": "budget-123"},
+        data={"soft_budget": 25.0, "updated_by": "user-1"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_key_soft_budget_clears_existing_budget_row():
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _update_key_soft_budget,
+    )
+
+    existing_key = LiteLLM_VerificationToken(token="test-token", budget_id="budget-123")
+    mock_db = MagicMock()
+    mock_db.litellm_budgettable.update = AsyncMock()
+    mock_db.litellm_budgettable.create = AsyncMock()
+
+    result = await _update_key_soft_budget(
+        db=mock_db,
+        existing_key_row=existing_key,
+        soft_budget=None,
+        changed_by="user-1",
+    )
+
+    assert result == "budget-123"
+    mock_db.litellm_budgettable.update.assert_awaited_once_with(
+        where={"budget_id": "budget-123"},
+        data={"soft_budget": None, "updated_by": "user-1"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_key_soft_budget_creates_budget_row_when_key_has_none():
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _update_key_soft_budget,
+    )
+
+    existing_key = LiteLLM_VerificationToken(token="test-token", budget_id=None)
+    created_row = MagicMock()
+    created_row.budget_id = "budget-new"
+    mock_db = MagicMock()
+    mock_db.litellm_budgettable.create = AsyncMock(return_value=created_row)
+    mock_db.litellm_budgettable.update = AsyncMock()
+
+    result = await _update_key_soft_budget(
+        db=mock_db,
+        existing_key_row=existing_key,
+        soft_budget=10.5,
+        changed_by="user-1",
+    )
+
+    assert result == "budget-new"
+    mock_db.litellm_budgettable.create.assert_awaited_once_with(
+        data={"soft_budget": 10.5, "created_by": "user-1", "updated_by": "user-1"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_key_soft_budget_noop_when_clearing_without_budget_row():
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _update_key_soft_budget,
+    )
+
+    existing_key = LiteLLM_VerificationToken(token="test-token", budget_id=None)
+    mock_db = MagicMock()
+    mock_db.litellm_budgettable.create = AsyncMock()
+    mock_db.litellm_budgettable.update = AsyncMock()
+
+    result = await _update_key_soft_budget(
+        db=mock_db,
+        existing_key_row=existing_key,
+        soft_budget=None,
+        changed_by="user-1",
+    )
+
+    assert result is None
+    mock_db.litellm_budgettable.create.assert_not_awaited()
+    mock_db.litellm_budgettable.update.assert_not_awaited()
+
+
+def test_update_key_request_accepts_soft_budget():
+    request = UpdateKeyRequest(key="sk-test", soft_budget=42.0)
+    assert request.soft_budget == 42.0
+    assert "soft_budget" in request.model_fields_set
+
+
+@pytest.mark.parametrize("valid_value", [None, 0.0, 25.0])
+def test_validate_soft_budget_value_accepts_valid_values(valid_value):
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _validate_soft_budget_value,
+    )
+
+    assert _validate_soft_budget_value(valid_value) is None
+
+
+@pytest.mark.parametrize("invalid_value", [-5.0, float("nan"), float("inf")])
+def test_validate_soft_budget_value_rejects_invalid_values(invalid_value):
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _validate_soft_budget_value,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _validate_soft_budget_value(invalid_value)
+
+    assert exc_info.value.status_code == 400
+    assert "soft_budget must be a non-negative finite number" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_apply_soft_budget_update_adds_budget_id_for_new_budget_row():
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _apply_soft_budget_update,
+    )
+
+    existing_key = LiteLLM_VerificationToken(token="test-token", budget_id=None)
+    created_row = MagicMock()
+    created_row.budget_id = "budget-created-456"
+    mock_db = MagicMock()
+    mock_db.litellm_budgettable.create = AsyncMock(return_value=created_row)
+    mock_db.litellm_budgettable.update = AsyncMock()
+
+    result = await _apply_soft_budget_update(
+        data=UpdateKeyRequest(key="sk-test", soft_budget=25.0),
+        non_default_values={"soft_budget": 25.0},
+        db=mock_db,
+        existing_key_row=existing_key,
+        changed_by="user-1",
+    )
+
+    assert dict(result) == {"budget_id": "budget-created-456"}
+
+
+@pytest.mark.asyncio
+async def test_apply_soft_budget_update_keeps_existing_budget_id_out_of_token_update():
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _apply_soft_budget_update,
+    )
+
+    existing_key = LiteLLM_VerificationToken(token="test-token", budget_id="budget-123")
+    mock_db = MagicMock()
+    mock_db.litellm_budgettable.update = AsyncMock()
+    mock_db.litellm_budgettable.create = AsyncMock()
+
+    result = await _apply_soft_budget_update(
+        data=UpdateKeyRequest(key="sk-test", soft_budget=40.0),
+        non_default_values={"soft_budget": 40.0, "max_budget": 100.0},
+        db=mock_db,
+        existing_key_row=existing_key,
+        changed_by="user-1",
+    )
+
+    assert dict(result) == {"max_budget": 100.0}
+    mock_db.litellm_budgettable.update.assert_awaited_once_with(
+        where={"budget_id": "budget-123"},
+        data={"soft_budget": 40.0, "updated_by": "user-1"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_key_row_with_soft_budget_updates_budget_and_key_in_transaction():
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _update_key_row_with_soft_budget,
+    )
+
+    existing_key = LiteLLM_VerificationToken(token="test-token", budget_id=None)
+    created_row = MagicMock(budget_id="budget-new")
+    updated_row = MagicMock()
+    updated_row.model_dump.return_value = {"token": "hashed", "budget_id": "budget-new"}
+    tx = MagicMock()
+    tx.litellm_budgettable.create = AsyncMock(return_value=created_row)
+    tx.litellm_verificationtoken.update = AsyncMock(return_value=updated_row)
+    tx_context = MagicMock()
+    tx_context.__aenter__ = AsyncMock(return_value=tx)
+    tx_context.__aexit__ = AsyncMock(return_value=None)
+    prisma_client = MagicMock()
+    prisma_client.tx.return_value = tx_context
+    prisma_client.jsonify_object = lambda data: dict(data)
+
+    result = await _update_key_row_with_soft_budget(
+        prisma_client=prisma_client,
+        key="sk-test",
+        data=UpdateKeyRequest(key="sk-test", soft_budget=25.0),
+        non_default_values={"soft_budget": 25.0},
+        existing_key_row=existing_key,
+        changed_by="user-1",
+    )
+
+    assert set(result) == {"token", "data"}
+    assert result["data"] == {"token": "hashed", "budget_id": "budget-new"}
+    tx.litellm_verificationtoken.update.assert_awaited_once()
+    update_call = tx.litellm_verificationtoken.update.await_args
+    assert update_call.kwargs["where"] == {"token": result["token"]}
+    assert update_call.kwargs["data"]["budget_id"] == "budget-new"
+    assert "soft_budget" not in update_call.kwargs["data"]
+
+
+@pytest.mark.asyncio
+async def test_update_key_row_with_soft_budget_propagates_transaction_error():
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _update_key_row_with_soft_budget,
+    )
+
+    existing_key = LiteLLM_VerificationToken(token="test-token", budget_id=None)
+    created_row = MagicMock(budget_id="budget-new")
+    tx = MagicMock()
+    tx.litellm_budgettable.create = AsyncMock(return_value=created_row)
+    tx.litellm_verificationtoken.update = AsyncMock(side_effect=RuntimeError("update failed"))
+    tx_context = MagicMock()
+    tx_context.__aenter__ = AsyncMock(return_value=tx)
+    tx_context.__aexit__ = AsyncMock(return_value=None)
+    prisma_client = MagicMock()
+    prisma_client.tx.return_value = tx_context
+    prisma_client.jsonify_object = lambda data: dict(data)
+
+    with pytest.raises(RuntimeError, match="update failed"):
+        await _update_key_row_with_soft_budget(
+            prisma_client=prisma_client,
+            key="sk-test",
+            data=UpdateKeyRequest(key="sk-test", soft_budget=25.0),
+            non_default_values={"soft_budget": 25.0},
+            existing_key_row=existing_key,
+            changed_by="user-1",
+        )
+
+    tx_context.__aexit__.assert_awaited_once()
+    assert tx_context.__aexit__.await_args.args[0] is RuntimeError
+
+
 def test_generate_key_request_blank_team_id_is_personal():
     """The UI Team-field clear submits team_id=""; it must count as no team (LIT-3925)."""
     from litellm.proxy._types import RegenerateKeyRequest
@@ -17727,6 +18074,32 @@ def test_key_request_blank_organization_id_is_unset():
     assert UpdateKeyRequest(key="sk-1", organization_id="org-1").organization_id == "org-1"
 
 
+def test_update_key_request_blank_team_id_is_not_a_team_change():
+    from litellm.proxy._types import UpdateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        is_different_team,
+    )
+
+    blank = UpdateKeyRequest(key="sk-1", team_id="", key_alias="renamed")
+    assert blank.team_id is None
+    assert "team_id" not in blank.model_dump(exclude_unset=True)
+    assert blank.model_dump(exclude_unset=True) == {"key": "sk-1", "key_alias": "renamed"}
+    assert is_different_team(data=blank, existing_key_row=LiteLLM_VerificationToken(token="hashed")) is False
+    assert (
+        is_different_team(data=blank, existing_key_row=LiteLLM_VerificationToken(token="hashed", team_id="team-1"))
+        is False
+    )
+    assert "team_id" in UpdateKeyRequest(key="sk-1", team_id=None).model_dump(exclude_unset=True)
+    assert UpdateKeyRequest(key="sk-1", team_id="team-1").team_id == "team-1"
+    assert (
+        is_different_team(
+            data=UpdateKeyRequest(key="sk-1", team_id="team-1"),
+            existing_key_row=LiteLLM_VerificationToken(token="hashed"),
+        )
+        is True
+    )
+
+
 def test_key_generation_check_blank_team_id_uses_personal_permissions(monkeypatch):
     """key_generation_check with team_id="" must take the personal-key path instead
     of failing the team lookup with "Unable to find team object" (LIT-3925)."""
@@ -17757,3 +18130,59 @@ def test_key_generation_check_blank_team_id_uses_personal_permissions(monkeypatc
         )
         is True
     )
+
+
+@pytest.mark.asyncio
+async def test_project_detachment_preserves_omission_and_other_key_fields():
+    existing: Final = LiteLLM_VerificationToken(
+        token="project-detach-token", project_id="project-orbit", team_id="team-orbit",
+        organization_id="org-orbit", models=["model-orbit"], max_budget=5, rpm_limit=97,
+    )
+    omitted: Final = await prepare_key_update_data(
+        data=UpdateKeyRequest(key=existing.token, key_alias="renamed"), existing_key_row=existing,
+    )
+    assert "project_id" not in omitted
+    cleared: Final = await prepare_key_update_data(
+        data=UpdateKeyRequest(key=existing.token, project_id=None), existing_key_row=existing,
+    )
+    assert cleared == {"project_id": None, "metadata": {}}
+    assert existing.project_id == "project-orbit"
+
+
+@pytest.mark.parametrize("project_id", [None, "project-orbit", "project-other", ""])
+@pytest.mark.asyncio
+async def test_project_detachment_uses_effective_project_for_validation(project_id: str | None):
+    existing: Final = LiteLLM_VerificationToken(token="project-detach-token", project_id="project-orbit")
+    cache: Final = await _cache_with_project("project-orbit", ["model-orbit"])
+    data: Final = UpdateKeyRequest(key=existing.token, project_id=project_id, models=["model-other"])
+    if project_id is None:
+        await _validate_update_key_data(
+            data, existing, UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            None, False, MagicMock(), cache,
+        )
+    else:
+        with pytest.raises(HTTPException) as exc:
+            await _validate_update_key_data(
+                data, existing, UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+                None, False, MagicMock(), cache,
+            )
+        assert exc.value.status_code == 400
+        expected: Final = "not in project's allowed models" if project_id == "project-orbit" else "reassignment"
+        assert expected in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_key_creator_cannot_detach_project_without_admin_access():
+    existing: Final = LiteLLM_VerificationToken(
+        token="project-detach-token", project_id="project-orbit", user_id="user-orbit", created_by="user-orbit",
+    )
+    database: Final = MagicMock()
+    database.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=existing)
+    with pytest.raises(HTTPException) as exc:
+        await _validate_update_key_data(
+            UpdateKeyRequest(key=existing.token, project_id=None), existing,
+            UserAPIKeyAuth(user_id="user-orbit", user_role=LitellmUserRoles.INTERNAL_USER),
+            None, False, database, UserApiKeyCache(),
+        )
+    assert exc.value.status_code == 403
+    assert "Only proxy admins, team admins, or org admins" in str(exc.value.detail)

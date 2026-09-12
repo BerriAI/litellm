@@ -210,6 +210,11 @@ class TestQwenBrandDefaultUrls:
         assert url == "https://rerank.example.com/v1/reranks"
 
     @pytest.mark.parametrize("brand", BRAND_CASES)
+    def test_rerank_remaps_chat_shaped_default_base(self, brand):
+        url = brand["rerank_config"]().get_complete_url(api_base=brand["default_base"], model="gte-rerank-v2")
+        assert url == brand["default_rerank_base"]
+
+    @pytest.mark.parametrize("brand", BRAND_CASES)
     def test_image_generation_complete_url(self, brand):
         url = brand["image_config"]().get_complete_url(
             api_base=None,

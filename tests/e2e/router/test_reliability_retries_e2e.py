@@ -3,23 +3,24 @@ model group and still comes back a completion.
 
 Every model group is a pair: a deployment that always fails in one specific way
 and holds all of the group's shuffle weight, and a healthy backup at weight 0.
-The weighted pick always opens on the failing one, its first failure benches it
-(an `allowed_fails_policy` of zero for that error class), and the retry falls
-through to the only deployment left. So the customer sees a completion and the
-proxy reports that it took a retry to get there, with no random first pick in
-the middle of it.
+The weighted pick always opens on the failing one, so the customer sees a
+completion only if the retry lands on the backup, and the proxy reports that it
+took a retry to get there, with no random first pick in the middle of it.
 
 The failures are real. A timeout is a 1ms deadline on the real backend and a 401
 is a bogus key on it. A 500 and a 429 come from this same proxy standing in as
 the upstream: the failing deployment fronts a group of this proxy whose only
 deployment is unreachable (a real 500), or a healthy group called with a key that
 has already spent its one request per minute (a real 429), so the router sees the
-same statuses a customer's provider would send.
+same statuses a customer's provider would send. A context-window refusal is an
+oversized prompt on the smallest-context model OpenAI still serves.
 
-The context-window retry cell has no test on purpose: the router refuses to
-retry a 400-class error, and a context-window refusal is one, so the documented
-`ContextWindowExceededErrorRetries` policy never fires. That row stays uncovered
-until the product either retries it or drops it from the docs.
+The timeout, 5xx, 429, and auth pairs rely on cooldown: the first failure benches
+the failing deployment (an `allowed_fails_policy` of zero for that error class)
+and the retry falls through to the only deployment left. The context-window pair
+cannot: a 400 never benches a deployment, so the retry policy's
+`BadRequestErrorRetries` has to steer the retry off the deployment that just
+refused the prompt.
 """
 
 from __future__ import annotations
@@ -36,12 +37,14 @@ from reliability_support import (
     completion_tokens_of,
     content_of,
     create_always_5xx_deployment,
+    create_always_picked_small_context_deployment,
     create_always_rate_limited_deployment,
     create_always_timing_out_deployment,
     create_always_unauthorized_deployment,
     create_bad_base_deployment,
     create_zero_weight_backup_deployment,
     finish_reason_of,
+    oversized_prompt,
     spend_only_request_of,
 )
 
@@ -137,3 +140,26 @@ class TestReliabilityRetries:
         resources.defer(lambda: client.proxy.delete_model(backup))
 
         _assert_served_after_retry(_retry_once(client, scoped_key, group))
+
+    @pytest.mark.covers("reliability.retry.context_window.succeeds_within_retries")
+    def test_context_window_refusal_on_first_deployment_succeeds_on_retry(
+        self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        group = f"reliability-retry-context-{unique_marker()}"
+        small_context = create_always_picked_small_context_deployment(client.proxy, group)
+        resources.defer(lambda: client.proxy.delete_model(small_context))
+        backup = create_zero_weight_backup_deployment(client.proxy, group)
+        resources.defer(lambda: client.proxy.delete_model(backup))
+
+        resp = chat_override(
+            client.proxy,
+            scoped_key,
+            group,
+            oversized_prompt(unique_marker()),
+            override=RouterSettingsOverride(
+                num_retries=2,
+                model_group_retry_policy={group: {"BadRequestErrorRetries": 2}},
+            ),
+        )
+
+        _assert_served_after_retry(resp)

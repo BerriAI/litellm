@@ -1,11 +1,13 @@
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ChevronRight, Info, Plus, Trash2, X } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 
 import { AffinityControls } from "./AffinityControls";
+import NonReasoningTierToggle from "./NonReasoningTierToggle";
+import TierConfigIntro from "./TierConfigIntro";
+import TierRowSelect from "./TierRowSelect";
 import { ModalityRoutingControls } from "./ModalityRoutingControls";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -20,6 +22,7 @@ import {
   MAX_TIER_COUNT,
   MAX_TIER_DEFINITION_CHARS,
   MAX_TIER_NAME_CHARS,
+  ALL_BUILT_IN_TIERS,
   MIN_TIER_COUNT,
   TIER_ORDER,
   activeTierName,
@@ -50,6 +53,9 @@ import EscalationKeywords from "./EscalationKeywords";
 import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
 import { type DimensionWeights, type TierBoundaries, type TokenThresholds } from "./heuristic_scoring_knobs";
+import { type CustomDimensionRow } from "./custom_dimensions";
+import CompressionControls from "./CompressionControls";
+import { type AutoRouterCompressionState, DEFAULT_AUTO_ROUTER_COMPRESSION } from "./buildAutoRouterCompression";
 
 export type { DimensionWeights, TierBoundaries, TokenThresholds };
 export type { CustomTierSet, TierRow } from "./tier_rows";
@@ -73,11 +79,13 @@ export const DEFAULT_CLASSIFICATION_MODE: ClassificationMode = "every_request";
  */
 export type ClassificationFrequency = ClassificationMode | "session";
 
+/** NON_REASONING is optional: a router that never enabled it stores no such key. */
 export type ComplexityTiers = {
   SIMPLE: string[];
   MEDIUM: string[];
   COMPLEX: string[];
   REASONING: string[];
+  NON_REASONING?: string[];
 };
 
 export type ClassificationRubric = "legacy" | "agentic" | "chat" | "business";
@@ -193,33 +201,9 @@ const defaultModelPlaceholderFor = (derivedDefaultModel: string | undefined, isC
 };
 
 const builtInTierInfo = (rowId: string): { label: string; description: string; examples: string } | undefined => {
-  const builtIn = TIER_ORDER.find((tier) => tier === rowId);
+  const builtIn = ALL_BUILT_IN_TIERS.find((tier) => tier === rowId);
   return builtIn ? TIER_DESCRIPTIONS[builtIn] : undefined;
 };
-
-const tierConfigIntroText = (value: ComplexityRouterConfigValue): string => {
-  if (value.classifier_type === "heuristic_v2") {
-    return "The complexity router classifies each request with a calibrated local four-tier model (no API calls). Configure which model(s) handle each tier.";
-  }
-  if (heuristicScoringRole(value) === "never") {
-    return "The complexity router classifies each request with your classifier model and routes it to that tier. Configure which model(s) handle each tier.";
-  }
-  return "The complexity router automatically classifies requests by complexity using rule-based scoring (no API calls, <1ms latency). Configure which model(s) handle each tier.";
-};
-
-const TierConfigIntro: React.FC<{ value: ComplexityRouterConfigValue }> = ({ value }) => (
-  <>
-    <span className="block mb-6 text-muted-foreground">{tierConfigIntroText(value)}</span>
-
-    <span className="block mb-4 text-xs text-muted-foreground">
-      {restrictedBy(value, "displayNames")?.reason ??
-        "Rename a tier to use your own vocabulary in the dashboard and your spend logs. Renaming doesn't change how requests are classified, and callers never see these names."}
-      {!value.custom_tier_set &&
-        usesLlmClassifier(value.classifier_type) &&
-        " Your classifier model reads these names, so clearer ones can sharpen its choices."}
-    </span>
-  </>
-);
 
 const TierSetToolbar: React.FC<{
   editing: boolean;
@@ -370,33 +354,14 @@ const TierRowEditFields: React.FC<{
   </>
 );
 
-const TierRowSelect: React.FC<{
-  label: string;
-  options: { value: string; label: string }[];
-  value: string | null;
-  onValueChange: (rowId: string) => void;
-  placeholder?: string;
-}> = ({ label, options, value, onValueChange, placeholder }) => (
-  <Select items={options} value={value} onValueChange={(rowId: string | null) => rowId && onValueChange(rowId)}>
-    <SelectTrigger aria-label={label} className="w-full">
-      <SelectValue placeholder={placeholder} />
-    </SelectTrigger>
-    <SelectContent>
-      {options.map((option) => (
-        <SelectItem key={option.value} value={option.value}>
-          {option.label}
-        </SelectItem>
-      ))}
-    </SelectContent>
-  </Select>
-);
-
 export type AdaptiveEligible = "all" | "classified_tier";
 
 export type ComplexityTierLabels = Partial<Record<keyof ComplexityTiers, string>>;
 
 export interface ComplexityRouterConfigValue {
   tiers: ComplexityTiers;
+  /** Opt into the NON_REASONING tier below SIMPLE; off keeps the four-tier ladder. */
+  enable_non_reasoning_tier?: boolean;
   custom_tier_set?: CustomTierSet;
   tier_labels?: ComplexityTierLabels;
   /** An explicit pin. Unset means the default tracks the tiers - see resolveComplexityDefaultModel. */
@@ -452,6 +417,11 @@ export interface ComplexityRouterConfigValue {
   token_thresholds?: TokenThresholds;
   dimension_weights?: DimensionWeights;
   /**
+   * Operator-added scoring dimensions, each carrying its own inline weight. Undefined means the router has
+   * none and keeps the key out of the payload; an empty array is a real "the last row was removed" state.
+   */
+  custom_dimensions?: CustomDimensionRow[];
+  /**
    * Score floor the reasoning-marker override must clear. Undefined keeps the key out of the payload, so the
    * floor tracks tier_boundaries.simple_medium; an explicit 0 is a real floor that promotes on the markers alone.
    */
@@ -502,6 +472,10 @@ interface ComplexityRouterConfigProps {
   onMatchThresholdChange?: (threshold: number) => void;
   escalationKeywords?: string[];
   onEscalationKeywordsChange?: (keywords: string[]) => void;
+  // Optional: not part of complexity_router_config, since it applies to every
+  // pre-routing strategy, not just the complexity router.
+  autoRouterCompression?: AutoRouterCompressionState;
+  onAutoRouterCompressionChange?: (state: AutoRouterCompressionState) => void;
   showValidationErrors?: boolean;
 }
 
@@ -509,6 +483,11 @@ export const TIER_DESCRIPTIONS: Record<
   keyof ComplexityTiers,
   { label: string; description: string; examples: string }
 > = {
+  NON_REASONING: {
+    label: "Non-reasoning",
+    description: "Operational relay work: passing information along with no judgment about it",
+    examples: '"Reformat this tool output", "Acknowledge the write succeeded"',
+  },
   SIMPLE: {
     label: "Simple",
     description: "Basic questions, greetings, simple factual queries",
@@ -545,7 +524,7 @@ export const DEFAULT_HYBRID_BOUNDARY_MARGIN = 0.03;
  * Tiers the heuristic_first threshold may name. The top tier is excluded because it would short
  * circuit every request and leave the classifier unreachable, which the backend rejects.
  */
-export const HEURISTIC_FIRST_MAX_TIER_KEYS = TIER_KEYS.slice(0, -1);
+export const HEURISTIC_FIRST_MAX_TIER_KEYS = TIER_ORDER.slice(0, -1);
 
 const PlanModeOverrideControls: React.FC<{
   value: ComplexityRouterConfigValue;
@@ -604,6 +583,8 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   onMatchThresholdChange = () => {},
   escalationKeywords = [],
   onEscalationKeywordsChange,
+  autoRouterCompression = DEFAULT_AUTO_ROUTER_COMPRESSION,
+  onAutoRouterCompressionChange,
   showValidationErrors = false,
 }) => {
   const customTierSet = value.custom_tier_set;
@@ -651,7 +632,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
 
   // Clearing the select drops the key entirely rather than storing "", so an emptied pin reads as
   // "track the tiers" everywhere downstream instead of as a blank model name.
-  const handleDefaultModelChange = (model: string | undefined) => {
+  const handleDefaultModelChange = (model: string | null | undefined) => {
     onChange({ ...value, default_model: model || undefined });
   };
 
@@ -675,6 +656,10 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
 
       <Card>
         <CardContent>
+          {!customTierSet && (
+            <NonReasoningTierToggle value={value} onChange={onChange} available={value.classifier_type === "llm"} />
+          )}
+
           {tierRows.map((row, index) => {
             const tierInfo = builtInTierInfo(row.id);
             const label = tierRowLabel(row, value.tier_labels);
@@ -873,6 +858,17 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                     <Restricted by={restrictedBy(value, "escalation")}>
                       <EscalationKeywords keywords={escalationKeywords} onChange={onEscalationKeywordsChange} />
                     </Restricted>
+                  ),
+                },
+              ]
+            : []),
+          ...(onAutoRouterCompressionChange
+            ? [
+                {
+                  key: "compression",
+                  label: <strong className="text-foreground font-semibold">Advanced: Compression</strong>,
+                  children: (
+                    <CompressionControls value={autoRouterCompression} onChange={onAutoRouterCompressionChange} />
                   ),
                 },
               ]

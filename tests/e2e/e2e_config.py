@@ -10,9 +10,9 @@ import os
 import time
 import uuid
 from pathlib import Path
+from typing import Final
 
 from dotenv import load_dotenv
-
 from fixture_mode import deterministic_marker, parse_fixture_mode
 from provider_edge import provider_edge_api_base
 
@@ -31,6 +31,14 @@ MASTER_KEY = os.environ.get("LITELLM_MASTER_KEY", "sk-1234")
 CONTROL_PLANE_BASE_URL = os.environ.get(
     "LITELLM_CONTROL_PLANE_URL", PROXY_BASE_URL
 ).rstrip("/")
+
+
+def parse_replica_urls(raw: str, fallback: str) -> tuple[str, ...]:
+    urls: Final = tuple(url.strip().rstrip("/") for url in raw.split(",") if url.strip())
+    return urls or (fallback,)
+
+
+PROXY_REPLICA_URLS: Final = parse_replica_urls(os.environ.get("LITELLM_PROXY_REPLICA_URLS", ""), PROXY_BASE_URL)
 
 UI_USERNAME = os.environ.get("E2E_UI_USERNAME", "admin")
 UI_PASSWORD = os.environ.get("E2E_UI_PASSWORD", MASTER_KEY)
@@ -86,10 +94,11 @@ SLOW_PROVIDER_TIMEOUT_SECONDS = float(os.environ.get("E2E_SLOW_PROVIDER_TIMEOUT"
 # (`proxy_config_reload_interval_seconds`, 30s by default and 7s on the e2e stack)
 # plus margin.
 #
-# The barriers below wait this out instead of returning on first sight, because a
-# single successful read only proves ONE replica converged: every request opens a
-# fresh connection, so a load-balanced Service routes each one independently and
-# the next call re-rolls. See ProxyClient._await_model_servable.
+# The barriers below wait this out on top of polling /v1/models on every replica in
+# PROXY_REPLICA_URLS: that poll proves each addressed gateway converged, but not the
+# workers behind it, and behind a load balancer (PROXY_REPLICA_URLS unset) a
+# successful read only proves ONE replica converged, because every request opens a
+# fresh connection and the next call re-rolls. See ProxyClient._await_model_servable.
 PROPAGATION_TIMEOUT = float(os.environ.get("E2E_PROPAGATION_TIMEOUT", "15"))
 
 EXPECT_RUST = os.environ.get("E2E_EXPECT_RUST", "").strip().lower() in ("1", "true", "yes")
@@ -135,6 +144,7 @@ LOAD_MIN_CONCURRENCY_EFFICIENCY = float(os.environ.get("E2E_LOAD_MIN_CONCURRENCY
 WEEKLY_ANOMALY_OPT_IN_ENV = "E2E_WEEKLY_ANOMALY"
 MANAGED_FILES_OPT_IN_ENV = "E2E_MANAGED_FILES_STACK"
 PROMPT_CACHING_OPT_IN_ENV = "E2E_PROMPT_CACHING_STACK"
+REDIS_CHAOS_OPT_IN_ENV = "E2E_REDIS_CHAOS"
 ANOMALY_SESSIONS = int(os.environ.get("E2E_ANOMALY_SESSIONS", "6"))
 ANOMALY_TURNS_PER_SESSION = int(os.environ.get("E2E_ANOMALY_TURNS_PER_SESSION", "6"))
 ANOMALY_TURN_ATTEMPTS = int(os.environ.get("E2E_ANOMALY_TURN_ATTEMPTS", "3"))
@@ -151,6 +161,14 @@ ANOMALY_MAX_KEY_SPEND_USD = float(
 ANOMALY_SPEND_SETTLE_SECONDS = float(
     os.environ.get("E2E_ANOMALY_SPEND_SETTLE_SECONDS", "75")
 )
+MEMORY_REQUESTS_PER_PHASE = int(os.environ.get("E2E_MEMORY_REQUESTS_PER_PHASE", "300"))
+MEMORY_RETRIES_PER_REQUEST = int(os.environ.get("E2E_MEMORY_RETRIES_PER_REQUEST", "2"))
+MEMORY_TRANSCRIPT_TURNS = int(os.environ.get("E2E_MEMORY_TRANSCRIPT_TURNS", "40"))
+MEMORY_CONCURRENCY = int(os.environ.get("E2E_MEMORY_CONCURRENCY", "4"))
+MEMORY_RSS_SETTLE_SAMPLES = int(os.environ.get("E2E_MEMORY_RSS_SETTLE_SAMPLES", "15"))
+MEMORY_RSS_SAMPLE_INTERVAL_SECONDS = float(os.environ.get("E2E_MEMORY_RSS_SAMPLE_INTERVAL_SECONDS", "1"))
+MEMORY_RSS_BUDGET_MB = float(os.environ.get("E2E_MEMORY_RSS_BUDGET_MB", "48"))
+MEMORY_STORED_REQUEST_BUDGET_KB = float(os.environ.get("E2E_MEMORY_STORED_REQUEST_BUDGET_KB", "64"))
 
 
 def ws_base_url() -> str:
@@ -172,8 +190,7 @@ def datadog_mcp_url(*, toolsets: str = "core") -> str:
     site = (
         os.environ.get("DD_SITE", DD_SITE) or "datadoghq.com"
     ).strip().removeprefix("https://").removeprefix("http://").rstrip("/")
-    if site.startswith("app."):
-        site = site[len("app.") :]
+    site = site.removeprefix("app.")
     host = "mcp.datadoghq.com" if site in ("", "datadoghq.com") else f"mcp.{site}"
     base = f"https://{host}/v1/mcp"
     return f"{base}?toolsets={toolsets}" if toolsets else base
@@ -191,6 +208,13 @@ def provider_edge_base(mount: str) -> str | None:
         advertise_host=PROVIDER_EDGE_ADVERTISE_HOST,
         forward_timeout=REQUEST_TIMEOUT,
     )
+
+
+STREAM_MIN_LEAD_SECONDS: Final = 1.0
+
+
+def provider_paces_stream() -> bool:
+    return parse_fixture_mode(FIXTURE_MODE_RAW) != "replay"
 
 
 def unique_marker() -> str:

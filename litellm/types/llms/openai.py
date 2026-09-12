@@ -61,6 +61,7 @@ from openai.types.responses.response_create_params import (
     ToolParam,
 )
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
+from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -1358,6 +1359,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             | OutputFunctionToolCall
             | OutputImageGenerationCall
             | ResponseFunctionToolCall
+            | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
         ]
     )
@@ -1562,6 +1564,9 @@ class ResponseFailedEvent(BaseLiteLLMOpenAIResponseObject):
 class ResponseIncompleteEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE]
     response: ResponsesAPIResponse
+
+
+ResponsesTerminalEvent: TypeAlias = ResponseCompletedEvent | ResponseIncompleteEvent | ResponseFailedEvent
 
 
 class ResponsePartAddedEvent(BaseLiteLLMOpenAIResponseObject):

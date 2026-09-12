@@ -26,7 +26,12 @@ from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+from litellm.constants import (
+    EMPTY_MAPPING,
+    LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+)
+from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields, classifier_input_snapshot
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -2920,6 +2925,32 @@ async def _fetch_session_representatives(
     return [rep_by_key[key] for key in session_keys if key in rep_by_key]  # mutable-ok: rows are enriched in place
 
 
+async def _count_grouped_sessions(
+    prisma_client: "PrismaClient",
+    where_clause: str,
+    sql_params: Sequence[object],
+    next_param_index: int,
+) -> tuple[int, bool]:
+    """Count the sessions matching the filter, returning ``(total, total_is_capped)`` bounded by the count cap."""
+    count_query: Final = f"""
+        SELECT COUNT(*) AS total_count
+        FROM (
+            SELECT 1
+            FROM "LiteLLM_SpendLogs"
+            WHERE {where_clause}
+            GROUP BY {_SESSION_GROUP_KEY_SQL}
+            LIMIT ${next_param_index}
+        ) AS bounded_sessions
+    """
+    count_rows: Final[Sequence[_SpendLogsCountRow]] = await _query_raw(
+        prisma_client, count_query, *sql_params, SPEND_LOGS_PAGINATION_COUNT_CAP + 1
+    )
+    raw_total: Final = int(count_rows[0]["total_count"]) if count_rows else 0
+    return (
+        (SPEND_LOGS_PAGINATION_COUNT_CAP, True) if raw_total > SPEND_LOGS_PAGINATION_COUNT_CAP else (raw_total, False)
+    )
+
+
 async def _ui_session_grouped_spend_logs(
     prisma_client: "PrismaClient",
     sql_conditions: Sequence[str],
@@ -2939,11 +2970,19 @@ async def _ui_session_grouped_spend_logs(
     next ``page_size`` sessions ordered by ``(MAX(startTime), session_key,
     api_key)``, resumed from the ``session_cursor`` keyset
     ``'<last_activity>|<api_key>|<session_key>'`` instead of an OFFSET, so
-    page depth does not degrade the query plan. Each session is represented
+    page depth does not degrade the query plan. A request for ``page > 1``
+    without a cursor (the UI jumping straight to the last page, or back to a
+    page it never walked through) falls back to ``OFFSET (page - 1) *
+    page_size``, trimmed to the end of the ``SPEND_LOGS_PAGINATION_COUNT_CAP``
+    window the capped ``total`` promises, so a page never runs past that total
+    and one starting at or past it returns no rows without a query. Each session is represented
     by its newest non-MCP row, enriched by ``_build_ui_spend_logs_response``
     exactly like the flat listing, and the response carries
     ``next_session_cursor`` / ``has_more`` while ``total`` counts sessions
-    (capped like the flat total).
+    (capped like the flat total). A page that runs out of sessions while still
+    holding some is itself the end of the list, so its ``total`` is
+    ``offset + len(page)`` and the grouped count query is skipped; a page that
+    starts past the end says nothing about the total, so that one is counted.
     """
     where_clause: Final = " AND ".join(sql_conditions) if sql_conditions else "TRUE"
     cmp_op: Final = "<" if sort_desc else ">"
@@ -2958,6 +2997,10 @@ async def _ui_session_grouped_spend_logs(
     )
     cursor_params: Final[tuple[object, ...]] = cursor if cursor else ()
     limit_index: Final = next_param_index + len(cursor_params)
+    offset: Final = (page - 1) * page_size if cursor is None else 0
+    page_limit: Final = min(page_size, SPEND_LOGS_PAGINATION_COUNT_CAP - offset)
+    offset_params: Final[tuple[int, ...]] = (offset,) if offset and page_limit > 0 else ()
+    offset_clause: Final = f"OFFSET ${limit_index + 1}" if offset_params else ""
 
     page_query: Final = f"""
         SELECT {_SESSION_KEY_EXPR} AS session_key,
@@ -2968,36 +3011,29 @@ async def _ui_session_grouped_spend_logs(
         GROUP BY {_SESSION_GROUP_KEY_SQL}
         {having_clause}
         ORDER BY MAX("startTime") {direction}, {_SESSION_KEY_EXPR} {direction}, api_key {direction}
-        LIMIT ${limit_index}
+        LIMIT ${limit_index} {offset_clause}
     """
-    page_rows: Final[Sequence[_SessionPageRow]] = await _query_raw(
-        prisma_client, page_query, *sql_params, *cursor_params, page_size + 1
+    page_rows: Final[Sequence[_SessionPageRow]] = (
+        ()
+        if page_limit <= 0
+        else await _query_raw(prisma_client, page_query, *sql_params, *cursor_params, page_limit + 1, *offset_params)
     )
 
-    has_more: Final = len(page_rows) > page_size
-    visible_rows: Final = page_rows[:page_size]
+    has_more: Final = len(page_rows) > page_limit
+    visible_rows: Final = page_rows[:page_limit]
     next_cursor: Final = (
         f"{visible_rows[-1]['last_activity']}|{visible_rows[-1]['api_key']}|{visible_rows[-1]['session_key']}"
         if has_more and visible_rows
         else None
     )
 
-    count_query: Final = f"""
-        SELECT COUNT(*) AS total_count
-        FROM (
-            SELECT 1
-            FROM "LiteLLM_SpendLogs"
-            WHERE {where_clause}
-            GROUP BY {_SESSION_GROUP_KEY_SQL}
-            LIMIT ${next_param_index}
-        ) AS bounded_sessions
-    """
-    count_rows: Final[Sequence[_SpendLogsCountRow]] = await _query_raw(
-        prisma_client, count_query, *sql_params, SPEND_LOGS_PAGINATION_COUNT_CAP + 1
+    page_starts_inside_the_list: Final = offset == 0 or len(page_rows) > 0
+    page_ends_the_list: Final = cursor is None and page_limit > 0 and not has_more and page_starts_inside_the_list
+    total_records, total_is_capped = (
+        (offset + len(page_rows), False)
+        if page_ends_the_list
+        else await _count_grouped_sessions(prisma_client, where_clause, sql_params, next_param_index)
     )
-    raw_total: Final = int(count_rows[0]["total_count"]) if count_rows else 0
-    total_is_capped: Final = raw_total > SPEND_LOGS_PAGINATION_COUNT_CAP
-    total_records: Final = SPEND_LOGS_PAGINATION_COUNT_CAP if total_is_capped else raw_total
 
     session_keys: Final = tuple((row["session_key"], row["api_key"]) for row in visible_rows)
     data: Final[list[dict[str, object]]] = (  # mutable-ok: _build_ui_spend_logs_response writes onto each row
@@ -3099,7 +3135,11 @@ async def _resolve_request_response_payload(
     proxy_server_request: Final = row.get("proxy_server_request")
 
     pg_payload: Final = RequestResponsePayload(messages, response, proxy_server_request)
-    if (
+    stored_request: Final = classifier_input_snapshot(proxy_server_request)
+    truncated_audit: Final = bool(stored_request and classifier_audit_fields(stored_request)) and (
+        LITELLM_TRUNCATED_PAYLOAD_FIELD in str(proxy_server_request)
+    )
+    if not truncated_audit and (
         _spend_log_field_has_content(messages)
         or _spend_log_field_has_content(response)
         or _spend_log_field_has_content(proxy_server_request)
@@ -3124,10 +3164,22 @@ async def _resolve_request_response_payload(
     if payload is None:
         return pg_payload
 
+    cold_audit: Final = classifier_audit_fields(payload)
+    resolved_request: Final = (
+        {
+            **(classifier_input_snapshot(payload.get("proxy_server_request")) or stored_request or EMPTY_MAPPING),
+            **cold_audit,
+        }
+        if cold_audit
+        else payload.get("proxy_server_request")
+    )
+    if truncated_audit:
+        return RequestResponsePayload(messages, response, resolved_request if cold_audit else proxy_server_request)
+
     return RequestResponsePayload(
         messages=payload.get("messages"),
         response=payload.get("response"),
-        proxy_server_request=payload.get("proxy_server_request"),
+        proxy_server_request=resolved_request,
     )
 
 
@@ -3365,23 +3417,24 @@ async def view_spend_logs(
             )
             sql_query, params = summary_sql_and_params
             rows: Final[Sequence[_SpendDailySummaryRow]] = await _query_raw(prisma_client, sql_query, *params)
-            if len(rows) == 0:
-                return []  # pyright: ignore[reportUnknownVariableType]  # empty summary has no element type
-
             summary_items: Final = tuple(
                 _daily_summary_item(date.fromisoformat(day), tuple(day_rows))
                 for day, day_rows in groupby(rows, key=lambda row: row["day"])
             )
-            final_date: Final = date.fromisoformat(rows[-1]["day"])
+            final_date: Final = date.fromisoformat(rows[-1]["day"]) if len(rows) > 0 else None
             end_date_date: Final = end_date_obj.date()
-            padding: Final[tuple[Mapping[str, object], ...]] = tuple(
-                {
-                    "startTime": final_date + timedelta(days=offset),
-                    "spend": 0,
-                    "users": {},
-                    "models": {},
-                }
-                for offset in range(1, (end_date_date - final_date).days + 1)
+            padding: Final[tuple[Mapping[str, object], ...]] = (
+                ()
+                if final_date is None
+                else tuple(
+                    {
+                        "startTime": final_date + timedelta(days=offset),
+                        "spend": 0,
+                        "users": {},
+                        "models": {},
+                    }
+                    for offset in range(1, (end_date_date - final_date).days + 1)
+                )
             )
             return [*summary_items, *padding]
 
@@ -4632,16 +4685,16 @@ async def _assert_user_can_view_request_id(
     Verify the requesting non-admin user is allowed to view this spend-log row.
     Allowed when the log belongs to the user directly, or to one of their
     permitted teams (admin or ``/spend/logs`` permission).
-    Raises HTTP 403 if not.
+    Raises HTTP 403 if not, including when no spend-log row exists for the
+    request_id (e.g. it was pruned by retention), so a missing row can't be
+    used to read a payload out of cold storage via the detail endpoint.
     """
     row: Final = await _find_spend_log_row(prisma_client, request_id)
-    if row is None:
+
+    if row is not None and row.user is not None and row.user == user_api_key_dict.user_id:
         return
 
-    if row.user is not None and row.user == user_api_key_dict.user_id:
-        return
-
-    if row.team_id:
+    if row is not None and row.team_id:
         can_view: Final = await _can_team_member_view_log(
             prisma_client=prisma_client,
             user_api_key_dict=user_api_key_dict,

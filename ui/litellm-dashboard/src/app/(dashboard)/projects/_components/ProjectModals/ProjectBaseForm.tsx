@@ -5,7 +5,7 @@ import { useFieldArray, useWatch, type UseFormReturn } from "react-hook-form";
 import { ChevronDown, CircleAlert, Minus, Plus } from "lucide-react";
 
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { ALL_TEAM_MODELS, type ProjectFormValues } from "./projectFormSchema";
+import { ALL_TEAM_MODELS, type ProjectFormValues, type ProjectSubmitValues } from "./projectFormSchema";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { Team } from "@/components/key_team_helpers/key_list";
 import { fetchTeamModels } from "@/components/organisms/create_key_button";
@@ -32,7 +32,7 @@ const toOptionalNumber = (raw: string): number | undefined => {
 };
 
 interface ProjectBaseFormProps {
-  form: UseFormReturn<ProjectFormValues>;
+  form: UseFormReturn<ProjectFormValues, unknown, ProjectSubmitValues>;
   advancedOpen: boolean;
   onAdvancedOpenChange: (open: boolean) => void;
 }
@@ -94,7 +94,7 @@ export function ProjectBaseForm({ form, advancedOpen, onAdvancedOpenChange }: Pr
     }
   }, [selectedTeam, accessToken, userId, userRole]);
 
-  const handleTeamChange = (teamId: string) => {
+  const handleTeamChange = (teamId: string | null) => {
     const team = teams?.find((t) => t.team_id === teamId) ?? null;
     setSelectedTeam(team);
     form.setValue("models", []);

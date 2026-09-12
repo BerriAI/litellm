@@ -3,7 +3,7 @@ import inspect
 import json
 import sys
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 if sys.version_info < (3, 11):  # BaseExceptionGroup is a builtin only from 3.11
@@ -88,6 +88,125 @@ def _route_has_dependency(route, dependency) -> bool:
 
 class TestExecuteWithMcpClient:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("auth_type", "auth_value", "expected_auth"),
+        (
+            (MCPAuth.none, None, {}),
+            (MCPAuth.basic, "preview:correct", {"Authorization": "Basic cHJldmlldzpjb3JyZWN0"}),
+            (MCPAuth.basic, None, {"Authorization": "Basic cHJldmlldzpzdG9yZWQ="}),
+            (MCPAuth.bearer_token, "edited", {"Authorization": "Bearer edited"}),
+            (MCPAuth.api_key, "edited", {"X-API-Key": "edited"}),
+            (MCPAuth.token, "edited", {"Authorization": "token edited"}),
+            (MCPAuth.authorization, "Custom edited", {"Authorization": "Custom edited"}),
+        ),
+    )
+    async def test_static_preview_uses_edited_connection_instead_of_registered_server(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        auth_type: MCPAuth,
+        auth_value: str | None,
+        expected_auth: dict[str, str],
+    ) -> None:
+        from starlette.datastructures import Headers
+
+        from litellm.experimental_mcp_client.client import MCPClient
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+        from litellm.proxy.management_endpoints import mcp_management_endpoints
+
+        saved: Final = MCPServer(
+            server_id="saved-preview-server",
+            name="saved",
+            url="https://stored.example/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.basic,
+            authentication_token="preview:stored",
+        )
+        manager: Final = MCPServerManager()
+        manager.registry = {saved.server_id: saved}
+        monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+        monkeypatch.setattr(mcp_management_endpoints, "global_mcp_server_manager", manager)
+        payload: Final = NewMCPServerRequest(
+            server_id=saved.server_id,
+            server_name="edited",
+            url="https://stored.example/corrected-mcp",
+            transport=MCPTransport.sse,
+            auth_type=auth_type,
+            credentials={"auth_value": auth_value} if auth_value is not None else None,
+            static_headers={"X-Preview": "edited"},
+        )
+        staged: Final = rest_endpoints._stage_server_test(payload, Headers())
+
+        async def inspect_connection(client: MCPClient) -> dict[str, object]:
+            return {"url": client.server_url, "transport": client.transport_type, "headers": client._get_auth_headers()}
+
+        result: Final = await rest_endpoints._execute_with_mcp_client(
+            staged.request,
+            inspect_connection,
+            mcp_auth_header=staged.mcp_auth_header,
+            oauth2_headers=staged.oauth2_headers,
+        )
+        assert result == {
+            "url": "https://stored.example/corrected-mcp",
+            "transport": MCPTransport.sse,
+            "headers": {"X-Preview": "edited", **expected_auth},
+        }
+        assert manager.get_mcp_server_by_id(saved.server_id) is saved
+        assert saved.url == "https://stored.example/mcp"
+
+    @pytest.mark.parametrize(
+        ("saved_url", "url", "same_origin"),
+        (
+            ("https://stored.example/mcp", "https://other.example/mcp", False),
+            ("https://stored.example/mcp", "http://stored.example/mcp", False),
+            ("https://stored.example/mcp", "https://stored.example:8443/mcp", False),
+            ("https://stored.example/mcp", "https://stored.example:443/mcp", True),
+            ("http://stored.example/mcp", "http://stored.example:80/edited", True),
+            ("https://stored.example/mcp", "HTTPS://STORED.EXAMPLE/edited", True),
+            ("https://[::1]/mcp", "https://[::1]/edited", True),
+            ("https://[::1]/mcp", "https://[::1]:443/edited", True),
+            ("https://[::1]/mcp", "https://[::2]/edited", False),
+            ("https://stored.example/mcp", "https://stored.example:invalid/mcp", False),
+        ),
+    )
+    @pytest.mark.parametrize("explicit_credential", (None, "preview:explicit"))
+    def test_static_preview_respects_origin_when_inheriting_credentials(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        saved_url: str,
+        url: str,
+        same_origin: bool,
+        explicit_credential: str | None,
+    ) -> None:
+        from starlette.datastructures import Headers
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+        from litellm.proxy.management_endpoints import mcp_management_endpoints
+
+        saved: Final = MCPServer(
+            server_id="saved-preview-server",
+            name="saved",
+            url=saved_url,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.basic,
+            authentication_token="preview:stored",
+        )
+        manager: Final = MCPServerManager()
+        manager.registry = {saved.server_id: saved}
+        monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+        monkeypatch.setattr(mcp_management_endpoints, "global_mcp_server_manager", manager)
+        payload: Final = NewMCPServerRequest(
+            server_id=saved.server_id,
+            url=url,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.basic,
+            credentials={"auth_value": explicit_credential} if explicit_credential else None,
+        )
+        staged: Final = rest_endpoints._stage_server_test(payload, Headers())
+        expected: Final = explicit_credential or ("preview:stored" if same_origin else None)
+        assert staged.mcp_auth_header == expected
+        assert staged.request.credentials == ({"auth_value": expected} if expected else None)
+
+    @pytest.mark.asyncio
     async def test_redacts_stack_trace(self, monkeypatch):
         async def fake_create_client(*args, **kwargs):
             return object()
@@ -113,7 +232,7 @@ class TestExecuteWithMcpClient:
         assert "stack_trace" not in result
 
     @pytest.mark.asyncio
-    async def test_timeout_caps_hanging_operation_and_names_url(self, monkeypatch):
+    async def test_timeout_caps_hanging_operation_and_names_origin(self, monkeypatch):
         async def fake_create_client(*args, **kwargs):
             return object()
 
@@ -138,7 +257,7 @@ class TestExecuteWithMcpClient:
         )
 
         assert result["error"] is True
-        assert "https://mcp.example.com/mcp/" in result["message"]
+        assert "https://mcp.example.com" in result["message"]
 
     @pytest.mark.asyncio
     async def test_timeout_covers_client_creation(self, monkeypatch):
@@ -166,16 +285,46 @@ class TestExecuteWithMcpClient:
         )
 
         assert result["error"] is True
-        assert "https://mcp.example.com/mcp/" in result["message"]
+        assert "https://mcp.example.com" in result["message"]
 
     def test_timeout_defaults_to_tool_listing_timeout(self):
         default = inspect.signature(rest_endpoints._execute_with_mcp_client).parameters["timeout_seconds"].default
         assert default == MCP_TOOL_LISTING_TIMEOUT
 
-    def test_connection_error_message_timeout_names_url_and_budget(self):
+    def test_connection_error_message_timeout_names_origin_and_budget(self):
         message = rest_endpoints._connection_error_message(TimeoutError(), "https://api.example.com/mcp/", 30.0)
-        assert "https://api.example.com/mcp/" in message
+        assert "https://api.example.com" in message
         assert "30s" in message
+
+    def test_connection_error_message_hides_arbitrary_http_exception_detail(self):
+        message = rest_endpoints._connection_error_message(
+            HTTPException(status_code=500, detail="secret upstream detail"),
+            "https://api.example.com/mcp/",
+            30.0,
+        )
+
+        assert "secret upstream detail" not in message
+
+    @pytest.mark.asyncio
+    async def test_none_mode_url_credentials_returns_actionable_redacted_error(self):
+        async def unreached_operation(client):
+            raise AssertionError("operation must not run for an invalid server configuration")
+
+        payload = NewMCPServerRequest(
+            server_name="example",
+            url="https://lit-user:s3cr3t@upstream.example.com/mcp",
+            auth_type=MCPAuth.none,
+        )
+
+        result = await rest_endpoints._execute_with_mcp_client(payload, unreached_operation)
+
+        message = str(result["message"])
+        assert result["error"] is True
+        assert "Basic Auth" in message
+        assert "auth_type: basic" in message
+        assert "auth_value: username:password" in message
+        assert "lit-user" not in message
+        assert "s3cr3t" not in message
 
     @pytest.mark.asyncio
     async def test_forwards_static_headers(self, monkeypatch):
@@ -562,7 +711,7 @@ class TestExecuteWithMcpClient:
 
         assert result["status"] == "error"
         assert result["error"] is True
-        assert "Failed to connect to MCP server" in result["message"]
+        assert "reference" in result["message"]
         # Error message must not leak raw exception details
         assert "cancel scope" not in result["message"]
 
@@ -571,6 +720,140 @@ class TestTestConnection:
     def test_requires_auth_dependency(self):
         route = _get_route("/mcp-rest/test/connection", "POST")
         assert _route_has_dependency(route, user_api_key_auth)
+
+    @staticmethod
+    def _capture_execute(monkeypatch) -> dict:
+        captured: dict = {}
+
+        async def fake_execute(
+            request,
+            operation,
+            mcp_auth_header=None,
+            oauth2_headers=None,
+            raw_headers=None,
+        ):
+            captured["request"] = request
+            captured["mcp_auth_header"] = mcp_auth_header
+            captured["oauth2_headers"] = oauth2_headers
+            return {"status": "ok"}
+
+        monkeypatch.setattr(rest_endpoints, "_execute_with_mcp_client", fake_execute, raising=False)
+        return captured
+
+    @staticmethod
+    def _oauth2_authorization_code_payload(**overrides) -> NewMCPServerRequest:
+        return NewMCPServerRequest(
+            server_name="github_mcp",
+            url="https://api.githubcopilot.com/mcp/",
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="authorization_code",
+            authorization_url="https://github.com/login/oauth/authorize",
+            token_url="https://github.com/login/oauth/access_token",
+            **overrides,
+        )
+
+    @pytest.mark.asyncio
+    async def test_forwards_staged_oauth2_bearer(self, monkeypatch):
+        """The just-authorized upstream token rides the request's Authorization header, exactly
+        as /test/tools/list receives it; dropping it makes every authorization_code server fail
+        the connection test that its tools preview passes."""
+        from litellm.proxy._types import LitellmUserRoles
+
+        captured = self._capture_execute(monkeypatch)
+        request = _build_request(
+            {"x-litellm-api-key": "sk-admin-session", "authorization": "Bearer upstream-oauth-token"},
+            path="/mcp-rest/test/connection",
+        )
+
+        result = await rest_endpoints.test_connection(
+            request,
+            self._oauth2_authorization_code_payload(),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result == {"status": "ok"}
+        assert captured["oauth2_headers"] == {"Authorization": "Bearer upstream-oauth-token"}
+        assert captured["mcp_auth_header"] is None
+
+    @pytest.mark.asyncio
+    async def test_forwards_staged_auth_value(self, monkeypatch):
+        from litellm.proxy._types import LitellmUserRoles
+
+        captured = self._capture_execute(monkeypatch)
+        request = _build_request({"x-litellm-api-key": "sk-admin-session"}, path="/mcp-rest/test/connection")
+        payload = NewMCPServerRequest(
+            server_name="example",
+            url="https://example.com/mcp",
+            auth_type=MCPAuth.bearer_token,
+            credentials={"auth_value": "upstream-static-token"},
+        )
+
+        result = await rest_endpoints.test_connection(
+            request,
+            payload,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result == {"status": "ok"}
+        assert captured["mcp_auth_header"] == "upstream-static-token"
+        assert captured["oauth2_headers"] is None
+
+    @pytest.mark.asyncio
+    async def test_inherits_stored_credentials_of_saved_server(self, monkeypatch):
+        """The edit form resends a saved server without its masked credential; the stored one
+        must be used, as /test/tools/list already does."""
+        from litellm.proxy._types import LitellmUserRoles
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        captured = self._capture_execute(monkeypatch)
+        saved = MCPServer(
+            server_id="saved-server-id",
+            name="example",
+            url="https://example.com/mcp",
+            transport="http",
+            auth_type=MCPAuth.bearer_token,
+            authentication_token="stored-upstream-token",
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: saved if server_id == "saved-server-id" else None,
+        )
+        request = _build_request({"x-litellm-api-key": "sk-admin-session"}, path="/mcp-rest/test/connection")
+        payload = NewMCPServerRequest(
+            server_id="saved-server-id",
+            server_name="example",
+            url="https://example.com/mcp",
+            auth_type=MCPAuth.bearer_token,
+        )
+
+        result = await rest_endpoints.test_connection(
+            request,
+            payload,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result == {"status": "ok"}
+        assert captured["mcp_auth_header"] == "stored-upstream-token"
+        assert captured["request"].credentials == {"auth_value": "stored-upstream-token"}
+
+    @pytest.mark.asyncio
+    async def test_does_not_forward_authorization_that_satisfied_admission(self, monkeypatch):
+        """With no x-litellm-api-key, the Authorization value is the caller's LiteLLM key and
+        must never reach the upstream."""
+        from litellm.proxy._types import LitellmUserRoles
+
+        captured = self._capture_execute(monkeypatch)
+        request = _build_request({"authorization": "Bearer sk-litellm-admission-key"}, path="/mcp-rest/test/connection")
+
+        result = await rest_endpoints.test_connection(
+            request,
+            self._oauth2_authorization_code_payload(),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result == {"status": "ok"}
+        assert captured["oauth2_headers"] is None
 
 
 class TestTestToolsList:
@@ -2312,6 +2595,79 @@ class TestCallToolRestAPI:
 
         assert result == masked_result
 
+    async def test_success_logging_start_time_excludes_pre_call_processing(self, monkeypatch):
+        """Pre-call hook latency (guardrails, header resolution) must not inflate the tool call's
+        logged duration on success."""
+        from litellm.proxy import proxy_server
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            server_id = "server-1"
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+            auth_type = None
+
+        stub_server = StubServer()
+
+        async def fake_add_litellm_data_to_request(**kwargs):
+            return kwargs.get("data", {})
+
+        pre_call_finished_at = {}
+
+        async def slow_pre_call_hook(user_api_key_dict, data, call_type):
+            await asyncio.sleep(0.05)
+            pre_call_finished_at["value"] = datetime.now()
+            return data
+
+        captured = {}
+
+        async def fake_execute_mcp_tool(**kwargs):
+            captured.update(kwargs)
+            return {"result": "ok"}
+
+        fire_logging = AsyncMock(return_value={"result": "ok"})
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            proxy_server, "add_litellm_data_to_request", fake_add_litellm_data_to_request, raising=False
+        )
+        monkeypatch.setattr(proxy_server, "proxy_config", {}, raising=False)
+        monkeypatch.setattr(proxy_server.proxy_logging_obj, "pre_call_hook", slow_pre_call_hook)
+        monkeypatch.setattr(rest_endpoints, "execute_mcp_tool", fake_execute_mcp_tool, raising=False)
+        monkeypatch.setattr(rest_endpoints, "_fire_mcp_tool_call_logging", fire_logging, raising=False)
+
+        request = _build_request(
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {}},
+        )
+
+        await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=UserAPIKeyAuth())
+
+        logged_start_time = fire_logging.await_args.args[2]
+        assert captured["start_time"] >= pre_call_finished_at["value"]
+        assert logged_start_time == captured["start_time"]
+
     async def test_success_logging_guardrail_rejection_propagates(self, monkeypatch):
         """A guardrail rejecting the tool result must not be swallowed as a logging failure,
         otherwise the unguarded result would still be returned to the caller."""
@@ -2482,6 +2838,139 @@ class TestCallToolRestAPI:
         info_messages = [_rendered_log_message(c) for c in mock_logger.info.call_args_list if c.args]
         assert not any("relaying upstream" in m for m in info_messages)
 
+    @pytest.mark.parametrize("raise_site", ["pre_call_hook", "execute_mcp_tool"])
+    async def test_guardrail_block_runs_failure_logging_before_http_translation(self, monkeypatch, raise_site):
+        """A pre_mcp_call guardrail block, whether raised by the pre-call hook or from inside
+        execute_mcp_tool, must reach proxy_logging_obj.post_call_failure_hook (the only path that
+        writes the failure spend-log row) with the logging object's failure payload already built,
+        and the REST caller must still get the same 400 it got before."""
+        from litellm.proxy import proxy_server
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            server_id = "server-1"
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+            auth_type = None
+
+        async def fake_add_litellm_data_to_request(**kwargs):
+            return kwargs.get("data", {})
+
+        guardrail_error = HTTPException(
+            status_code=400,
+            detail={"error": "Content blocked: keyword 'confidential' detected", "keyword": "confidential"},
+        )
+
+        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+            return data
+
+        async def blocking_pre_call_hook(user_api_key_dict, data, call_type):
+            raise guardrail_error
+
+        async def fake_execute_mcp_tool(**kwargs):
+            raise guardrail_error
+
+        async def passthrough_execute_mcp_tool(**kwargs):
+            return []
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: StubServer() if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            proxy_server, "add_litellm_data_to_request", fake_add_litellm_data_to_request, raising=False
+        )
+        monkeypatch.setattr(proxy_server, "proxy_config", {}, raising=False)
+        monkeypatch.setattr(
+            proxy_server.proxy_logging_obj,
+            "pre_call_hook",
+            blocking_pre_call_hook if raise_site == "pre_call_hook" else passthrough_pre_call_hook,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "execute_mcp_tool",
+            fake_execute_mcp_tool if raise_site == "execute_mcp_tool" else passthrough_execute_mcp_tool,
+            raising=False,
+        )
+        post_call_failure_hook = AsyncMock(return_value=None)
+        monkeypatch.setattr(proxy_server.proxy_logging_obj, "post_call_failure_hook", post_call_failure_hook)
+
+        user_api_key_dict = UserAPIKeyAuth(api_key="hashed-key", request_route="/mcp-rest/tools/call")
+        request = _build_request(
+            headers={"x-mcp-deepwiki-authorization": "Bearer upstream-secret"},
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {"q": "confidential"}},
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=user_api_key_dict)
+
+        assert exc_info.value is guardrail_error
+
+        post_call_failure_hook.assert_awaited_once()
+        hook_kwargs = post_call_failure_hook.await_args.kwargs
+        assert hook_kwargs["original_exception"] is guardrail_error
+        assert hook_kwargs["user_api_key_dict"] is user_api_key_dict
+        assert hook_kwargs["route"] == "/mcp/call_tool"
+        request_data = hook_kwargs["request_data"]
+        assert "raw_headers" not in request_data
+        assert "mcp_server_auth_headers" not in request_data
+        standard_logging_object = request_data["litellm_logging_obj"].model_call_details["standard_logging_object"]
+        assert standard_logging_object["status"] == "failure"
+        assert standard_logging_object["error_str"] == str(guardrail_error)
+
+    async def test_failure_logging_error_does_not_replace_guardrail_error(self, monkeypatch):
+        from litellm.proxy import proxy_server
+
+        guardrail_error = HTTPException(status_code=400, detail={"error": "Content blocked"})
+
+        async def fake_add_litellm_data_to_request(**kwargs):
+            return kwargs.get("data", {})
+
+        async def blocking_pre_call_hook(user_api_key_dict, data, call_type):
+            raise guardrail_error
+
+        failure_logging = AsyncMock(side_effect=RuntimeError("spend log db down"))
+        monkeypatch.setattr(
+            proxy_server, "add_litellm_data_to_request", fake_add_litellm_data_to_request, raising=False
+        )
+        monkeypatch.setattr(proxy_server, "proxy_config", {}, raising=False)
+        monkeypatch.setattr(proxy_server.proxy_logging_obj, "pre_call_hook", blocking_pre_call_hook)
+        monkeypatch.setattr(rest_endpoints, "fire_mcp_tool_call_failure_logging", failure_logging, raising=False)
+
+        request = _build_request(
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {"q": "confidential"}},
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.call_tool_rest_api(
+                request, user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", request_route="/mcp-rest/tools/call")
+            )
+
+        assert exc_info.value is guardrail_error
+        failure_logging.assert_awaited_once()
+
     async def test_success_logging_cancellation_propagates(self, monkeypatch):
         fire_logging = AsyncMock(side_effect=asyncio.CancelledError())
         monkeypatch.setattr(
@@ -2518,7 +3007,7 @@ class TestCallToolRestAPI:
 
         class _FakePreCall:
             def __init__(self, data):
-                pass
+                self.data = data
 
             async def common_processing_pre_call_logic(self, **kwargs):
                 return None, MagicMock()
@@ -2551,6 +3040,58 @@ class TestCallToolRestAPI:
         assert exc_info.value.status_code == upstream_status
         assert exc_info.value.headers is not None
         assert exc_info.value.headers.get("www-authenticate") == challenge
+
+    async def test_virtual_mcp_tool_call_guardrail_block_runs_failure_logging(self, monkeypatch):
+        """A pre_mcp_call guardrail block on the virtual mcp_tool_call branch must write a failure
+        spend log, same as the direct tool call branch, and still raise the original error."""
+        from litellm.proxy import proxy_server
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        guardrail_error = HTTPException(status_code=400, detail={"error": "Content blocked"})
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_add_litellm_data_to_request(**kwargs):
+            return kwargs.get("data", {})
+
+        async def blocking_pre_call_hook(user_api_key_dict, data, call_type):
+            raise guardrail_error
+
+        failure_logging = AsyncMock()
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            proxy_server, "add_litellm_data_to_request", fake_add_litellm_data_to_request, raising=False
+        )
+        monkeypatch.setattr(proxy_server, "proxy_config", {}, raising=False)
+        monkeypatch.setattr(proxy_server, "general_settings", {}, raising=False)
+        monkeypatch.setattr(proxy_server.proxy_logging_obj, "pre_call_hook", blocking_pre_call_hook)
+        monkeypatch.setattr(rest_endpoints, "fire_mcp_tool_call_failure_logging", failure_logging, raising=False)
+
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            request_route="/mcp-rest/tools/call",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="search-scope",
+                mcp_tool_search_enabled=True,
+            ),
+        )
+        request = _build_request(
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body={"name": "mcp_tool_call", "arguments": {"tool_name": "x", "arguments": {"q": "confidential"}}},
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=user_api_key_dict)
+
+        assert exc_info.value is guardrail_error
+        failure_logging.assert_awaited_once()
+        logging_obj, exception, _start_time, user_api_key_auth, request_data = failure_logging.await_args.args
+        assert exception is guardrail_error
+        assert user_api_key_auth is user_api_key_dict
+        assert logging_obj is request_data.get("litellm_logging_obj")
+        assert logging_obj is not None
 
 
 class TestGetToolsForSingleServer:
@@ -3263,10 +3804,191 @@ class TestConnectionErrorMessage:
         message = rest_endpoints._connection_error_message(exc, "https://example.com", 30.0)
         assert "503" in message
 
+    @pytest.mark.parametrize(
+        "error_type", [httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError, ConnectionResetError]
+    )
+    def test_interrupted_connection_message_is_safe(self, error_type: type[Exception]) -> None:
+        message: Final = rest_endpoints._connection_error_message(
+            error_type("secret-transport-detail"), "https://example.com/?token=secret-query", 30
+        )
+        assert "connection was interrupted" in message
+        assert "secret" not in message
+
+    def test_closed_connection_explains_incomplete_request(self) -> None:
+        from mcp import McpError
+        from mcp.types import ErrorData
+
+        message: Final = rest_endpoints._connection_error_message(
+            McpError(ErrorData(code=-32000, message="Connection closed", data="secret-data")), None, 30
+        )
+        assert "connection was closed before the request completed" in message
+        assert "secret" not in message
+
+    def test_timeout_does_not_claim_the_server_sent_nothing(self) -> None:
+        message: Final = rest_endpoints._connection_error_message(TimeoutError(), None, 30)
+        assert "no valid MCP response received" in message
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("sdk_timeout", [True, False])
+    @pytest.mark.parametrize("read_timeout", [0, 1])
+    async def test_timeout_message_uses_the_deadline_that_expired(self, sdk_timeout: bool, read_timeout: int) -> None:
+        from mcp import McpError
+        from mcp.types import ErrorData
+
+        async def operation(client: rest_endpoints.MCPClient) -> dict[str, object]:
+            try:
+                raise TimeoutError("secret-timeout")
+            except TimeoutError as elapsed:
+                if not sdk_timeout:
+                    raise
+                try:
+                    raise McpError(ErrorData(code=408, message="secret-sdk-timeout")) from elapsed
+                except McpError as sdk_error:
+                    raise TimeoutError() from sdk_error
+
+        payload: Final = NewMCPServerRequest(
+            server_name="timeout", url="https://example.com", auth_type=MCPAuth.none, timeout=read_timeout
+        )
+        result: Final = await rest_endpoints._execute_with_mcp_client(payload, operation, timeout_seconds=30)
+        assert (f"within {read_timeout}s" if sdk_timeout else "within 30s") in result["message"]
+        assert "secret" not in result["message"]
+
     def test_unknown_error_falls_back_to_generic(self):
         message = rest_endpoints._connection_error_message(RuntimeError("weird"), "https://example.com", 30.0)
         assert "weird" not in message
-        assert "proxy logs" in message.lower()
+        assert "reference" in message.lower()
+
+    def test_sdk_session_terminated_explains_endpoint_and_retry(self) -> None:
+        from mcp.shared.exceptions import McpError
+        from mcp.types import ErrorData
+
+        message: Final = rest_endpoints._connection_error_message(
+            McpError(ErrorData(code=32600, message="Session terminated")), "https://example.com/mcp", 30.0
+        )
+
+        assert "session was terminated" in message
+        assert "MCP endpoint" in message
+        assert "transport" in message
+        assert "retry" in message
+        assert "404" not in message
+
+    @pytest.mark.parametrize("code", [-32700, -32601, -32602, -32603, -32000, 32600, 408])
+    def test_rpc_errors_include_code_without_echoing_upstream_data(self, code: int) -> None:
+        from mcp.shared.exceptions import McpError
+        from mcp.types import ErrorData
+
+        message: Final = rest_endpoints._connection_error_message(
+            McpError(ErrorData(code=code, message="secret-message", data={"token": "secret-data"})),
+            "https://example.com/secret-path?token=secret-query",
+            30.0,
+        )
+
+        assert f"JSON-RPC code {code}" in message
+        assert "secret" not in message
+        assert "timed out" not in message
+        assert "session was terminated" not in message
+
+    @pytest.mark.parametrize("status_code", [401, 403, 404, 405, 429, 503])
+    def test_wrapped_http_failures_preserve_status(self, status_code: int) -> None:
+        response: Final = httpx.Response(status_code, text="secret-body")
+        upstream: Final = httpx.HTTPStatusError(
+            "secret-exception",
+            request=httpx.Request("POST", "https://example.com/?token=secret-query"),
+            response=response,
+        )
+        wrapped: Final = BaseExceptionGroup(
+            "secret-group", [asyncio.CancelledError(), BaseExceptionGroup("nested", [upstream])]
+        )
+
+        message: Final = rest_endpoints._connection_error_message(wrapped, "https://example.com", 30.0)
+
+        assert f"HTTP {status_code}" in message
+        assert "secret" not in message
+
+    def test_explicit_cause_is_classified_before_incidental_context(self) -> None:
+        wrapped: Final = RuntimeError("secret-wrapper")
+        wrapped.__cause__ = httpx.ConnectError("secret-cause")
+        wrapped.__context__ = TimeoutError("secret-context")
+
+        message: Final = rest_endpoints._connection_error_message(wrapped, "https://example.com", 30.0)
+
+        assert "unreachable" in message
+        assert "secret" not in message
+
+    def test_timeout_url_redacts_credentials_path_query_and_fragment(self) -> None:
+        message: Final = rest_endpoints._connection_error_message(
+            TimeoutError("secret-error"),
+            "https://secret-user:secret-pass@example.com:8443/secret-path?token=secret-query#secret-fragment",
+            30.0,
+        )
+
+        assert "https://example.com:8443" in message
+        assert "30s" in message
+        assert "secret" not in message
+
+    def test_unknown_failure_reference_matches_safe_diagnostics(self, caplog: pytest.LogCaptureFixture) -> None:
+        import re
+
+        try:
+            raise RuntimeError("secret-exception-body")
+        except RuntimeError as exc:
+            message: Final = rest_endpoints._connection_error_message(
+                exc, "https://secret-user:secret-password@example.com/secret-path?token=secret-query", 30.0
+            )
+
+        reference: Final = re.search(r"reference ([a-f0-9]{32})", message)
+        assert reference is not None
+        diagnostics: Final = tuple(
+            record for record in caplog.records if "MCP connection test failed" in record.message
+        )
+        assert len(diagnostics) == 1
+        assert reference.group(1) in diagnostics[0].message
+        assert "RuntimeError" in diagnostics[0].message
+        assert "test_unknown_failure_reference_matches_safe_diagnostics" in diagnostics[0].message
+        assert diagnostics[0].exc_info is None
+        assert "secret" not in message + diagnostics[0].message
+
+    @pytest.mark.parametrize("exc", [ValueError("secret-config"), HTTPException(500, "secret-detail")])
+    def test_unrelated_errors_are_not_misreported_as_invalid_mcp(self, exc: Exception) -> None:
+        message: Final = rest_endpoints._connection_error_message(exc, "https://example.com", 30.0)
+
+        assert "reference" in message
+        assert "invalid MCP response" not in message
+        assert "secret" not in message
+
+    def test_configuration_validation_error_uses_unknown_fallback(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError) as caught:
+            NewMCPServerRequest.model_validate({"server_name": "example", "transport": "secret-invalid-transport"})
+
+        message: Final = rest_endpoints._connection_error_message(caught.value, "https://example.com", 30.0)
+        assert "reference" in message
+        assert "invalid MCP response" not in message
+        assert "secret" not in message
+
+    @pytest.mark.asyncio
+    async def test_connection_test_preserves_cancellation(self) -> None:
+        async def cancelled_operation(client: rest_endpoints.MCPClient) -> dict[str, object]:
+            raise asyncio.CancelledError
+
+        payload: Final = NewMCPServerRequest(server_name="cancelled", url="https://example.com", auth_type=MCPAuth.none)
+        with pytest.raises(asyncio.CancelledError):
+            await rest_endpoints._execute_with_mcp_client(payload, cancelled_operation)
+
+    @pytest.mark.asyncio
+    async def test_unknown_failure_preserves_response_contract(self) -> None:
+        async def failing_operation(client: rest_endpoints.MCPClient) -> dict[str, object]:
+            raise RuntimeError("secret-operation")
+
+        payload: Final = NewMCPServerRequest(server_name="unknown", url="https://example.com", auth_type=MCPAuth.none)
+        result: Final = await rest_endpoints._execute_with_mcp_client(payload, failing_operation)
+
+        assert result["error"] is True
+        assert result["status"] == "error"
+        assert "reference" in result["message"]
+        assert "secret" not in result["message"]
+        assert "stack_trace" not in result
 
 
 class TestGetServerAuthHeaderGroupDefault:
