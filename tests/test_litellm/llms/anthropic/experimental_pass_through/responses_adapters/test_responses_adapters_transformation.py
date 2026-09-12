@@ -291,7 +291,7 @@ class TestTranslateMessagesToResponsesInput:
             ],
         ],
     )
-    def test_midturn_system_correction_stays_system_in_sequence(self, system_content: object):
+    def test_midturn_system_correction_becomes_user_in_sequence(self, system_content: object):
         messages = [
             {
                 "role": "assistant",
@@ -334,7 +334,7 @@ class TestTranslateMessagesToResponsesInput:
             },
             {
                 "type": "message",
-                "role": "system",
+                "role": "user",
                 "content": [{"type": "input_text", "text": "Use the corrected result."}],
             },
             {
@@ -358,7 +358,7 @@ class TestTranslateMessagesToResponsesInput:
         assert _translate_messages(messages) == [
             {
                 "type": "message",
-                "role": "system",
+                "role": "user",
                 "content": [
                     {"type": "input_text", "text": "First correction."},
                     {"type": "input_text", "text": "Second correction."},
@@ -379,6 +379,24 @@ class TestTranslateMessagesToResponsesInput:
         messages = [{"role": "system", "content": system_content}]
 
         assert _translate_messages(messages) == []
+
+    def test_midturn_system_message_translates_as_user_without_changing_prefix(self):
+        messages = [
+            {"role": "user", "content": "First question."},
+            {"role": "assistant", "content": "OK"},
+            {"role": "user", "content": "next"},
+            {"role": "system", "content": "a reminder"},
+        ]
+
+        result = _translate_messages(messages)
+
+        assert all(item.get("role") != "system" for item in result)
+        assert result[-1] == {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "a reminder"}],
+        }
+        assert result[:-1] == _translate_messages(messages[:-1])
 
     def test_user_base64_image(self):
         """User message with base64 image source becomes input_image with data URL."""
@@ -1069,7 +1087,7 @@ class TestTranslateRequestBroaderCoverage:
     def test_top_level_system_and_midturn_correction_are_not_duplicated(self):
         """
         Request level: the trusted top-level prompt goes to `instructions` only, and the
-        in-sequence correction stays a `role: "system"` input item in its original position.
+        in-sequence correction stays a `role: "user"` input item in its original position.
         Neither appears twice, and the surrounding turns keep their order.
         """
         req = _make_request(
@@ -1092,7 +1110,7 @@ class TestTranslateRequestBroaderCoverage:
             },
             {
                 "type": "message",
-                "role": "system",
+                "role": "user",
                 "content": [{"type": "input_text", "text": "Use the corrected result."}],
             },
             {
@@ -2151,7 +2169,7 @@ class TestPromptCacheBreakpointToResponses:
         assert items == [
             {
                 "type": "message",
-                "role": "system",
+                "role": "user",
                 "content": [{"type": "input_text", "text": "fix", "prompt_cache_breakpoint": self.EXPLICIT}],
             }
         ]

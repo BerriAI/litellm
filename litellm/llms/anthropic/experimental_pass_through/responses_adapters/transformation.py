@@ -225,7 +225,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         Convert Anthropic messages list to Responses API `input` items.
 
         Mapping:
-          system text        -> message(role=system, input_text)
+          system text        -> message(role=user, input_text)
           user text          -> message(role=user, input_text)
           user image         -> message(role=user, input_image)
           user document      -> message(role=user, input_file)
@@ -243,7 +243,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                     input_items.append(
                         {  # mutable-ok: API message payload
                             "type": "message",
-                            "role": "system",
+                            "role": "user",
                             "content": system_parts,
                         }
                     )
