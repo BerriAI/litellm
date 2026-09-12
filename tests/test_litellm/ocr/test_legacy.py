@@ -141,6 +141,7 @@ def test_document_intelligence_environment_key_is_not_replaced_by_generic_azure_
 ) -> None:
     monkeypatch.setenv("AZURE_AI_API_KEY", "generic-key")
     monkeypatch.setenv("AZURE_DOCUMENT_INTELLIGENCE_API_KEY", "document-key")
+    monkeypatch.setenv("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT", "https://document.example.com")
     prepared: Final = _prepare_ocr_request(
         model="azure_ai/doc-intelligence/prebuilt-layout",
         document={"type": "document_url", "document_url": "https://example.com/file.pdf"},
