@@ -15,7 +15,7 @@ from litellm.rust_bridge import configuration
 # `litellm/__init__.py` does `from .ocr.main import *`, which binds the `ocr`
 # function onto `litellm.ocr` and shadows the submodule, so import the modules
 # explicitly via importlib rather than attribute traversal.
-ocr_main = importlib.import_module("litellm.ocr.main")
+ocr_main = importlib.import_module("litellm.ocr.legacy")
 rust_bridge = importlib.import_module("litellm.rust_bridge.ocr")
 rust_bridge_bindings = importlib.import_module("litellm.rust_bridge.bindings")
 rust_bridge_loader = importlib.import_module("litellm.rust_bridge.loader")
@@ -198,11 +198,15 @@ def build_request(
 @pytest.fixture(autouse=True)
 def _reset_rust_flag():
     """Keep the global toggle isolated between tests."""
+    from litellm.rust_bridge.ocr_lifecycle import NATIVE_OCR_LIFECYCLE
+
+    NATIVE_OCR_LIFECYCLE.override(None)
     rust_bridge._OCR.reset()
     rust_bridge._AOCR.reset()
     configuration.reset_rust_configuration()
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
     yield
+    NATIVE_OCR_LIFECYCLE.reset()
     rust_bridge._OCR.reset()
     rust_bridge._AOCR.reset()
     configuration.reset_rust_configuration()

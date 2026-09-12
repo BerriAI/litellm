@@ -17,6 +17,7 @@ use serde_json::{Map, Value};
 pub struct DecodedOcrResponse<T> {
     pub data: T,
     pub native: Option<Value>,
+    pub text: String,
 }
 
 #[derive(Deserialize)]
@@ -134,7 +135,11 @@ pub fn decode_response<T: DeserializeOwned>(
     } else {
         None
     };
-    Ok(DecodedOcrResponse { data, native })
+    Ok(DecodedOcrResponse {
+        data,
+        native,
+        text: String::from_utf8_lossy(bytes).into_owned(),
+    })
 }
 
 pub fn decode_pre_call_result(

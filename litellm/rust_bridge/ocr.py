@@ -16,6 +16,7 @@ from litellm.llms.base_llm.ocr.transformation import PROVIDER_NATIVE_RESPONSE_KE
 from litellm.rust_bridge.bindings import NativeBinding, native_exception_types
 from litellm.rust_bridge.timeouts import timeout_to_seconds as _timeout_to_seconds
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import all_litellm_params
 from litellm.utils import ProviderConfigManager
 
 _RUST_OCR_PROVIDERS: Final = frozenset({"mistral", "azure_ai", "vertex_ai"})
@@ -40,6 +41,14 @@ _RUST_OCR_CONFIG_FIELDS: Final = frozenset(
 _RUST_OCR_SECRET_FIELDS: Final = frozenset(
     {"azure_ad_token", "client_secret", "azure_federated_token_file", "vertex_credentials", "vertex_ai_credentials"}
 )
+
+
+def redact_logging_params(params: Mapping[str, object]) -> dict[str, object]:
+    return {  # mutable-ok: Logging.update_from_kwargs requires concrete params
+        name: "****" if name in _RUST_OCR_SECRET_FIELDS else value
+        for name, value in params.items()
+        if name != "proxy_server_request"
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,13 +161,24 @@ def supported(request: LiteLLMOcrRequest) -> bool:
     return True
 
 
-def _optional_params(request: LiteLLMOcrRequest, resolve_secret: Callable[[str], str | None]) -> Mapping[str, object]:
+def optional_params(request: LiteLLMOcrRequest, resolve_secret: Callable[[str], str | None]) -> Mapping[str, object]:
     optional_params: Final = MappingProxyType(
         {
             name: value
             for name, value in request.kwargs.items()
-            if (name not in GenericLiteLLMParams.model_fields or name in _RUST_OCR_CONFIG_FIELDS)
-            and name not in ("litellm_logging_obj", "aocr", "litellm_call_id", "proxy_server_request")
+            if (
+                (name not in GenericLiteLLMParams.model_fields and name not in all_litellm_params)
+                or name in _RUST_OCR_CONFIG_FIELDS
+            )
+            and name
+            not in (
+                "litellm_logging_obj",
+                "aocr",
+                "litellm_call_id",
+                "proxy_server_request",
+                "metadata",
+                "litellm_metadata",
+            )
         }
     )
     request_provider: Final = provider(request)
@@ -198,7 +218,7 @@ def _optional_params(request: LiteLLMOcrRequest, resolve_secret: Callable[[str],
     return MappingProxyType({**optional_params, **vertex_params})
 
 
-def _input_sources(request: LiteLLMOcrRequest, optional_params: Mapping[str, object]) -> Mapping[str, str]:
+def input_sources(request: LiteLLMOcrRequest, optional_params: Mapping[str, object]) -> Mapping[str, str]:
     proxy_request_value: Final = request.kwargs.get("proxy_server_request")
     if not isinstance(proxy_request_value, Mapping):
         return MappingProxyType({})
@@ -247,10 +267,10 @@ def _marshal(
     api_key: Final = (
         request.api_key or resolve_secret("MISTRAL_API_KEY") if request_provider == "mistral" else request.api_key
     )
-    optional_params: Final = _optional_params(request, resolve_secret)
-    input_sources: Final = _input_sources(request, optional_params)
+    options: Final = optional_params(request, resolve_secret)
+    sources: Final = input_sources(request, options)
     logged_optional_params: Final = MappingProxyType(
-        {name: "****" if name in _RUST_OCR_SECRET_FIELDS else value for name, value in optional_params.items()}
+        {name: "****" if name in _RUST_OCR_SECRET_FIELDS else value for name, value in options.items()}
     )
     logged_kwargs: Final = MappingProxyType(
         {
@@ -293,12 +313,12 @@ def _marshal(
         timeout=request.timeout if request.timeout is not None else request_timeout,
         custom_llm_provider=request.custom_llm_provider,
         extra_headers=request.extra_headers,
-        kwargs=optional_params,
-        input_sources=input_sources,
+        kwargs=options,
+        input_sources=sources,
     )
 
 
-def _map_error(error: Exception, request: LiteLLMOcrRequest) -> Exception:
+def map_error(error: Exception, request: LiteLLMOcrRequest) -> Exception:
     exception_types: Final = native_exception_types()
     if exception_types is None or not isinstance(error, exception_types[1]):
         return error
@@ -356,7 +376,7 @@ def run(
             timeout=marshalled.timeout,
         )
     except Exception as error:
-        raise _map_error(error, request) from error
+        raise map_error(error, request) from error
     return _response(response) if response is not None else None
 
 
@@ -381,7 +401,7 @@ async def arun(
             timeout=marshalled.timeout,
         )
     except Exception as error:
-        raise _map_error(error, request) from error
+        raise map_error(error, request) from error
     return _response(response) if response is not None else None
 
 

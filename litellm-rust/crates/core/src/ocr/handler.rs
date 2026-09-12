@@ -23,50 +23,112 @@ pub(crate) async fn perform_ocr_request(
         hooks: request.hooks.clone(),
         provider_name: context.custom_llm_provider.clone(),
     };
-    CallLifecycle::default().run(context, request, &hooks, |request| async move {
-        macro_rules! execute_selected_adapter {
+    CallLifecycle::default()
+        .run(context, request, &hooks, |request| async move {
+            PreparedOcrCall::prepare(client.clone(), request)
+                .await?
+                .execute()
+                .await?
+                .normalize()
+        })
+        .await
+}
+
+pub struct PreparedOcrCall {
+    client: OcrClient,
+    request: LiteLLMOcrRequest,
+    pub http: reqwest::Request,
+}
+
+impl PreparedOcrCall {
+    pub fn provider(&self) -> &str {
+        self.request.adapter.provider().as_str()
+    }
+
+    pub fn request(&self) -> &LiteLLMOcrRequest {
+        &self.request
+    }
+
+    pub async fn new(request: LiteLLMOcrRequest) -> Result<Self, Error> {
+        Self::prepare(super::client::shared_client()?, request).await
+    }
+
+    async fn prepare(client: OcrClient, request: LiteLLMOcrRequest) -> Result<Self, Error> {
+        macro_rules! prepare_adapter {
             ($( $variant:ident, $adapter:ty, $instance:expr, $provider:ident; )+) => {
                 match request.adapter {
-                    $( OcrAdapterKind::$variant => execute_ocr_provider_call(client, &$instance, request).await, )+
+                    $( OcrAdapterKind::$variant => $instance.prepare_request(&request, &client).await?, )+
                 }
             };
         }
-        super::adapters::for_each_ocr_adapter!(execute_selected_adapter)
-    }).await
+        let http = super::adapters::for_each_ocr_adapter!(prepare_adapter);
+        Ok(Self {
+            client,
+            request,
+            http,
+        })
+    }
+
+    pub async fn execute(self) -> Result<OcrProviderResponse, Error> {
+        let url = self.http.url().to_string();
+        let headers = self
+            .http
+            .headers()
+            .iter()
+            .map(|(name, value)| {
+                value
+                    .to_str()
+                    .map(|value| (name.to_string(), value.to_string()))
+                    .map_err(|_| super::error::OcrRequestError::RequestField {
+                        path: "headers".into(),
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let response = crate::http_utils::http_request(reqwest::RequestBuilder::from_parts(
+            self.client.provider_http().clone(),
+            self.http,
+        ))
+        .await
+        .map_err(super::client::transport_error)?;
+        macro_rules! read_adapter {
+            ($( $variant:ident, $adapter:ty, $instance:expr, $provider:ident; )+) => {
+                match self.request.adapter {
+                    $( OcrAdapterKind::$variant => {
+                        let bytes = $instance.read_response(&self.client, response, &url, &headers, &self.request).await?;
+                        Ok(OcrProviderResponse {
+                            text: String::from_utf8_lossy(&bytes).into_owned(),
+                            request: self.request,
+                            bytes,
+                        })
+                    }, )+
+                }
+            };
+        }
+        super::adapters::for_each_ocr_adapter!(read_adapter)
+    }
 }
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-async fn execute_ocr_provider_call<A: OcrAdapter>(
-    client: &OcrClient,
-    adapter: &A,
-    request: LiteLLMOcrRequest,
-) -> Result<LiteLLMOcrResponse, Error> {
-    let provider_request = adapter.prepare_request(&request, client).await?;
-    let url = provider_request.url().to_string();
-    let headers = provider_request
-        .headers()
-        .iter()
-        .map(|(name, value)| {
-            value
-                .to_str()
-                .map(|value| (name.to_string(), value.to_string()))
-                .map_err(|_| super::error::OcrRequestError::RequestField {
-                    path: "headers".into(),
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let response = crate::http_utils::http_request(reqwest::RequestBuilder::from_parts(
-        client.provider_http().clone(),
-        provider_request,
-    ))
-    .await
-    .map_err(crate::error::TransportError::from)?;
-    let decoded = adapter
-        .read_response(client, response, &url, &headers, &request)
-        .await?;
-    let response = adapter.transform_ocr_response(&request, decoded.data)?;
-    Ok(LiteLLMOcrResponse {
-        provider_native_response: decoded.native,
-        ..response
-    })
+macro_rules! provider_data {
+    ($( $variant:ident, $adapter:ty, $instance:expr, $provider:ident; )+) => {
+        impl OcrProviderResponse {
+            pub fn normalize(self) -> Result<LiteLLMOcrResponse, Error> {
+                let native = self.request.response_format()? == super::types::OcrResponseFormat::Native;
+                match self.request.adapter {
+                    $( OcrAdapterKind::$variant => {
+                        let decoded = super::wire::decode_response::<<$adapter as OcrAdapter>::ProviderResponse>(&self.bytes, native)?;
+                        let response = $instance.transform_ocr_response(&self.request, decoded.data)?;
+                        Ok(LiteLLMOcrResponse { provider_native_response: decoded.native, ..response })
+                    }, )+
+                }
+            }
+        }
+    };
 }
+
+pub struct OcrProviderResponse {
+    pub text: String,
+    request: LiteLLMOcrRequest,
+    bytes: Vec<u8>,
+}
+
+super::adapters::for_each_ocr_adapter!(provider_data);

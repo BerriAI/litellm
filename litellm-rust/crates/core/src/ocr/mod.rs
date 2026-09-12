@@ -11,6 +11,7 @@ pub mod types;
 pub mod wire;
 
 pub use client::{OcrClient, ocr};
+pub use handler::{OcrProviderResponse, PreparedOcrCall};
 pub use types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument};
 
 #[cfg(test)]

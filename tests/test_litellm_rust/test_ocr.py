@@ -224,7 +224,7 @@ async def test_native_ocr_enforces_request_deadline_without_fallback(ocr_server,
         "num_retries": 0,
     }
     started = time.monotonic()
-    with pytest.raises(litellm.APIConnectionError):
+    with pytest.raises(litellm.Timeout):
         await asyncio.wait_for(
             litellm.aocr(**arguments) if asynchronous else asyncio.to_thread(litellm.ocr, **arguments),
             timeout=3,

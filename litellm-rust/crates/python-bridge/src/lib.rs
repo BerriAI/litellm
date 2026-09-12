@@ -4,6 +4,7 @@ mod errors;
 mod execution;
 #[cfg(feature = "trace-parity")]
 mod function_trace;
+mod lifecycle;
 mod marshal;
 mod routes;
 mod token_counter;

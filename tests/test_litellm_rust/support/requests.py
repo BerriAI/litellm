@@ -2,7 +2,6 @@ from typing import Final
 
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.rust_bridge import ocr as native_ocr
 from tests.test_litellm_rust.support.recording_server import RecordingServer
 
 OCR_DOCUMENT: Final = {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"}
@@ -36,11 +35,11 @@ async def call_aocr(server: RecordingServer, **kwargs: object) -> OCRResponse:
 
 
 def call_native_ocr(server: RecordingServer, **kwargs: object) -> OCRResponse:
-    return native_ocr.ocr(ocr_arguments(server, **kwargs))
+    return call_ocr(server, **kwargs)
 
 
 async def call_native_aocr(server: RecordingServer, **kwargs: object) -> OCRResponse:
-    return await native_ocr.aocr(ocr_arguments(server, **kwargs))
+    return await call_aocr(server, **kwargs)
 
 
 def request_body(kwargs: dict[str, object]) -> dict[str, object]:

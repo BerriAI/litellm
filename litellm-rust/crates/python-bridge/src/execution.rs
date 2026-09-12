@@ -28,6 +28,21 @@ where
     )
 }
 
+pub(crate) fn run_sync_value<T, F>(py: Python<'_>, future: F) -> PyResult<T>
+where
+    T: Send + 'static,
+    F: Future<Output = PyResult<T>> + Send + 'static,
+{
+    if Handle::try_current().is_ok() {
+        return Err(PyRuntimeError::new_err(
+            "synchronous native routes cannot run from a Tokio context; use the async route",
+        ));
+    }
+    release_gil(py, move || {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(wait_for_sync_result(future))
+    })?
+}
+
 fn run_sync_on<T, E, F>(
     py: Python<'_>,
     runtime: &Runtime,

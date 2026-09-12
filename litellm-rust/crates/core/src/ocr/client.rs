@@ -77,7 +77,7 @@ fn no_redirect_http() -> Result<reqwest::Client, TransportError> {
         .map_err(TransportError::from)
 }
 
-pub async fn ocr(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error> {
+pub(crate) fn shared_client() -> Result<OcrClient, Error> {
     static CLIENT: OnceLock<Result<OcrClient, TransportError>> = OnceLock::new();
     let client = CLIENT
         .get_or_init(|| {
@@ -88,18 +88,24 @@ pub async fn ocr(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error
                 .and_then(OcrClient::new)
         })
         .clone()?;
-    client.perform(request).await
+    Ok(client)
+}
+
+pub async fn ocr(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error> {
+    shared_client()?.perform(request).await
 }
 
 pub async fn read_json_response<T: DeserializeOwned>(
     response: reqwest::Response,
     native: bool,
 ) -> Result<DecodedOcrResponse<T>, OcrError> {
+    let bytes = read_response_bytes(response).await?;
+    Ok(decode_response(&bytes, native)?)
+}
+
+pub(crate) async fn read_response_bytes(response: reqwest::Response) -> Result<Vec<u8>, OcrError> {
     let status = response.status();
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(crate::error::TransportError::from)?;
+    let bytes = response.bytes().await.map_err(transport_error)?;
     if !status.is_success() {
         return Err(crate::error::TransportError::Http {
             status: status.as_u16(),
@@ -107,5 +113,15 @@ pub async fn read_json_response<T: DeserializeOwned>(
         }
         .into());
     }
-    Ok(decode_response(&bytes, native)?)
+    Ok(bytes.to_vec())
+}
+
+pub(crate) fn transport_error(error: reqwest::Error) -> Error {
+    if error.is_timeout() {
+        return Error::Http {
+            status: 408,
+            body: "OCR request timed out".into(),
+        };
+    }
+    crate::error::TransportError::from(error).into()
 }

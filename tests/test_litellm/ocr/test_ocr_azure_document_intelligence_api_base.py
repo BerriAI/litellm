@@ -10,7 +10,7 @@ supplied api_base is still always honoured.
 from litellm.llms.azure_ai.ocr.common_utils import (
     is_azure_document_intelligence_model,
 )
-from litellm.ocr.main import _prepare_ocr_request
+from litellm.ocr.legacy import _prepare_ocr_request
 
 _DOC = {"type": "document_url", "document_url": "https://example.com/doc.pdf"}
 _AZURE_AI_API_BASE = "https://generic-azure-ai.example.com"

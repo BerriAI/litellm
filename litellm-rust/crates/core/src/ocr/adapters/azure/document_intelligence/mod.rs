@@ -10,7 +10,6 @@ use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
 use crate::ocr::prepare::{credential_env, transform_request_body};
 use crate::ocr::registry::OcrProvider;
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrResponseFormat};
-use crate::ocr::wire::DecodedOcrResponse;
 use crate::providers::azure_ai::auth::AzureAuthInputs;
 use crate::url_utils::ApiUrl;
 
@@ -61,7 +60,7 @@ impl OcrAdapter for AzureDocumentIntelligenceAdapter {
         url: &str,
         headers: &[(String, String)],
         request: &LiteLLMOcrRequest,
-    ) -> Result<DecodedOcrResponse<Self::ProviderResponse>, OcrError> {
+    ) -> Result<Vec<u8>, OcrError> {
         polling::read_operation_response(
             client.polling_http(),
             response,
@@ -71,6 +70,7 @@ impl OcrAdapter for AzureDocumentIntelligenceAdapter {
             request.response_format()? == OcrResponseFormat::Native,
         )
         .await
+        .map(|decoded| decoded.text.into_bytes())
     }
 }
 

@@ -1980,6 +1980,7 @@ dependencies = [
  "litellm-token-counter",
  "pyo3",
  "pyo3-async-runtimes",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tokio",
