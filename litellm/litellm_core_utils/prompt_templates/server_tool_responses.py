@@ -76,13 +76,15 @@ def public_tool_response(
     }
 
 
-def combined_usage(usages: Sequence[Mapping[str, object]]) -> Mapping[str, object]:
+def combined_usage(usages: Sequence[Mapping[str, object]], depth: int = 0) -> Mapping[str, object]:
+    if depth > 16:
+        raise ValueError("Server tool usage nesting exceeds 16 levels")
     names: Final = frozenset(key for usage in usages for key in usage)
 
     def combined(name: str) -> object:
         values: Final = tuple(usage[name] for usage in usages if usage.get(name) is not None)
         if any(isinstance(value, dict) for value in values):
-            return combined_usage(tuple(object_value(value) for value in values))
+            return combined_usage(tuple(object_value(value) for value in values), depth + 1)
         numbers: Final = tuple(
             value for value in values if isinstance(value, (int, float)) and not isinstance(value, bool)
         )

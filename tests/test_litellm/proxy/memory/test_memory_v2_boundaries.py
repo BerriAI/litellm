@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime, timedelta, timezone
+from functools import reduce
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -9,12 +10,19 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import FastAPI, HTTPException, Request
 from prisma.models import LiteLLM_MemoryTable
+from starlette.responses import JSONResponse
+from starlette.types import Receive, Scope, Send
 
+from litellm.litellm_core_utils.prompt_templates.server_tool_responses import (
+    combined_usage,
+    executable_server_calls,
+    object_items,
+)
+from litellm.proxy.memory.continuation import MemoryContinuation, MemoryContinuations, prefix_hashes
 from litellm.proxy.memory.gateway import GatewayMemoryLoop
 from litellm.proxy.memory.knowledge import MEMORY_TOOL_NAMES, execute_memory_tool
-from litellm.litellm_core_utils.prompt_templates.server_tool_responses import executable_server_calls, object_items
-from litellm.proxy.memory.continuation import MemoryContinuation, MemoryContinuations, prefix_hashes
 from litellm.proxy.memory.policy import MemoryAccess, MemoryIdentity, resolve_memory_access
+from litellm.proxy.memory.responses import serve_memory_response
 from litellm.proxy.memory.store import MemoryStore
 from litellm.types.memory_v2 import MemoryCapture, MemoryPolicy, MemorySearch
 
@@ -73,6 +81,102 @@ def row(**changes: object) -> LiteLLM_MemoryTable:
             **changes,
         }
     )
+
+
+def test_nested_conversation_and_cyclic_usage_fail_with_bounded_errors() -> None:
+    nested = reduce(lambda value, _: {"nested": value}, range(70), {})
+    with pytest.raises(HTTPException, match="nesting exceeds") as exc:
+        prefix_hashes(({"role": "user", "content": nested},), "acompletion")
+    assert exc.value.status_code == 400
+    usage: dict[str, object] = {}
+    usage["details"] = usage
+    with pytest.raises(ValueError, match="nesting exceeds"):
+        combined_usage((usage,))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["get", "input_items", "missing"])
+async def test_saved_response_reads_are_scoped_and_never_return_internal_input(
+    prisma_edge: MagicMock, operation: str
+) -> None:
+    patch = MemoryContinuation(
+        replaces=1,
+        response={"id": "resp_litellm_memory_test", "output": [{"type": "message", "content": []}]},
+        upstream_ids=("native=one",),
+    )
+    prisma_edge.db.litellm_memorycontinuation.find_first.return_value = (
+        None if operation == "missing" else SimpleNamespace(payload=patch.model_dump())
+    )
+
+    async def app(scope: Scope, receive: Receive, send: Send) -> None:
+        pytest.fail("Public reads must not fetch the hidden upstream transcript")
+
+    request = Request({"type": "http", "method": "GET", "path": "/v1/responses/resp_litellm_memory_test"})
+    route = "alist_input_items" if operation == "input_items" else "aget_responses"
+    if operation == "get":
+        response = await serve_memory_response("resp_litellm_memory_test", request, route, store(prisma_edge), app)
+        assert isinstance(response, JSONResponse) and json.loads(response.body) == patch.response
+    else:
+        with pytest.raises(HTTPException) as exc:
+            await serve_memory_response("resp_litellm_memory_test", request, route, store(prisma_edge), app)
+        assert exc.value.status_code == (404 if operation == "missing" else 501)
+    where = prisma_edge.db.litellm_memorycontinuation.find_first.call_args.kwargs["where"]
+    assert where["namespace"] == _IDENTITY.namespace("key") and where["key_id"] == _IDENTITY.key_id
+    assert where["expires_at"]["gt"] <= datetime.now(timezone.utc)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["success", "already_missing", "upstream_error", "readonly"])
+async def test_response_deletion_preserves_auth_paths_and_retry_state(prisma_edge: MagicMock, outcome: str) -> None:
+    patch = MemoryContinuation(
+        replaces=1,
+        response={"id": "resp_litellm_memory_test"},
+        upstream_ids=("native=one", "native=two"),
+        transcript_anchor="transcript",
+    )
+    prisma_edge.db.litellm_memorycontinuation.find_first.return_value = SimpleNamespace(payload=patch.model_dump())
+    paths: list[str] = []
+
+    async def app(scope: Scope, receive: Receive, send: Send) -> None:
+        paths.append(scope["path"])
+        assert scope["raw_path"] == scope["path"].replace("=", "%3D").encode()
+        assert Request(scope).headers["authorization"] == "Bearer synthetic-test-credential"
+        assert scope["method"] == "DELETE" and scope["query_string"] == b"api-version=test"
+        status = (
+            502 if outcome == "upstream_error" and len(paths) == 2 else 404 if outcome == "already_missing" else 200
+        )
+        await JSONResponse({"deleted": True}, status_code=status)(scope, receive, send)
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "DELETE",
+            "path": "/v1/responses/resp_litellm_memory_test",
+            "headers": [(b"authorization", b"Bearer synthetic-test-credential")],
+            "query_string": b"api-version=test",
+        }
+    )
+    identity = MemoryIdentity("a" * 64, "owner", "team", "project", "org", outcome == "readonly")
+    if outcome in ("upstream_error", "readonly"):
+        with pytest.raises(HTTPException) as exc:
+            await serve_memory_response(
+                "resp_litellm_memory_test", request, "adelete_responses", store(prisma_edge, identity), app
+            )
+        assert exc.value.status_code == (403 if outcome == "readonly" else 502)
+        prisma_edge.db.litellm_memorycontinuation.delete_many.assert_not_awaited()
+    else:
+        response = await serve_memory_response(
+            "resp_litellm_memory_test", request, "adelete_responses", store(prisma_edge), app
+        )
+        assert isinstance(response, JSONResponse)
+        assert json.loads(response.body) == {
+            "id": "resp_litellm_memory_test",
+            "object": "response.deleted",
+            "deleted": True,
+        }
+        prisma_edge.db.litellm_memorycontinuation.delete_many.assert_awaited_once()
+    assert paths == ([] if outcome == "readonly" else ["/v1/responses/native=one", "/v1/responses/native=two"])
+    prisma_edge.db.litellm_memorytable.delete_many.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -165,6 +269,33 @@ async def test_identical_capture_is_idempotent_and_new_capture_has_scoped_identi
     assert await wrapped.capture(_CAPTURE) == saved
     table.create.assert_awaited_once()
     table.update_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revoked", [False, True])
+async def test_capture_rechecks_policy_on_its_transaction_connection(prisma_edge: MagicMock, revoked: bool) -> None:
+    prisma_edge.db.litellm_memorytable.create.return_value = row()
+    prisma_edge.db.litellm_memorypolicy.find_many.side_effect = [
+        [_POLICY],
+        RuntimeError("The only pooled connection belongs to the active transaction"),
+    ]
+    transaction = SimpleNamespace(
+        litellm_memorytable=prisma_edge.db.litellm_memorytable,
+        litellm_memorypolicy=SimpleNamespace(
+            find_many=AsyncMock(
+                return_value=[_POLICY.model_copy(update={"activation": "disabled"})] if revoked else [_POLICY]
+            )
+        ),
+        litellm_memorypreference=prisma_edge.db.litellm_memorypreference,
+        execute_raw=AsyncMock(),
+    )
+    prisma_edge.db.tx.return_value.__aenter__.return_value = transaction
+    if revoked:
+        with pytest.raises(HTTPException) as exc:
+            await store(prisma_edge).capture(_CAPTURE)
+        assert exc.value.status_code == 403
+    else:
+        assert (await store(prisma_edge).capture(_CAPTURE)).content == _CAPTURE.content
 
 
 @pytest.mark.asyncio

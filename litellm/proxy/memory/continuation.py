@@ -47,15 +47,17 @@ def _empty_array(value: object) -> bool:
     return isinstance(value, list) and not value
 
 
-def _canonical(value: object) -> object:
+def _canonical(value: object, depth: int = 0) -> object:
+    if depth > 64:
+        raise HTTPException(status_code=400, detail="Memory conversation nesting exceeds 64 levels")
     if isinstance(value, dict):
         return {  # mutable-ok: Native provider JSON containers.
-            key: _canonical(item)
+            key: _canonical(item, depth + 1)
             for key, item in _OBJECT.validate_python(value).items()
             if key not in ("cache_control",) and item is not None and not _empty_array(item)
         }
     if isinstance(value, (list, tuple)):
-        return tuple(_canonical(item) for item in _ITEMS.validate_python(value))
+        return tuple(_canonical(item, depth + 1) for item in _ITEMS.validate_python(value))
     return value
 
 

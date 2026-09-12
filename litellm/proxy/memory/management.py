@@ -1,4 +1,4 @@
-from typing import Final
+from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
@@ -30,6 +30,7 @@ from litellm.types.memory_v2 import (
     MemoryPolicy,
     MemoryPolicyInput,
     MemoryPreference,
+    MemoryQuery,
     MemorySearch,
     MemoryStatus,
     MemoryTarget,
@@ -241,7 +242,7 @@ async def access_for_key(auth: UserAPIKeyAuth, key_id: str | None) -> MemoryAcce
 
 @router.get("/entries", response_model=list[MemoryEntry])
 async def list_entries(
-    query: str = Query("", max_length=500),
+    query: Annotated[MemoryQuery, Query(max_length=500)] = "",
     limit: int = Query(20, ge=1, le=20),
     offset: int = Query(0, ge=0),
     key_id: str | None = Query(None, pattern=r"^[a-f0-9]{64}$"),

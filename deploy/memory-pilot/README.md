@@ -92,6 +92,8 @@ correct, or delete entries in Memory; callers can use the self-service API.
   Corrections append observations. Agents receive no memory deletion tool.
 - Search uses weighted fuzzy matching over the authorized scope. There is no vector
   database, extraction model, or nightly consolidation.
+- Searches accept up to 16 distinct terms. Fuzzy matching checks up to 256 distinct
+  words per field; exact terms still match anywhere in the field.
 - Fixed instructions and tool definitions preserve prompt-prefix caching after
   warm-up. Dynamic catalogs and checkpoint IDs stay at the conversation tail.
   Complete-response caching is bypassed for memory rounds on both gateways so
@@ -101,6 +103,8 @@ correct, or delete entries in Memory; callers can use the self-service API.
   not another copy of the complete incoming transcript. Responses retrieval and
   continuation use gateway-owned response IDs; deleting one removes its model
   responses and temporary continuation records, not saved memories.
+- `/input_items` returns 501 for gateway-owned response IDs. Retain the original
+  client input; the hidden provider transcript is not a public input history.
 - Foreground requests with one completion are supported. Use modern tools instead
   of legacy functions. The special Cursor conversion route, background responses,
   multiple completions, and WebSocket inference are outside this implementation.

@@ -6,9 +6,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 
 from litellm.proxy._types import UI_TEAM_ID, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.memory import management
 from litellm.proxy.memory.policy import MemoryIdentity, memory_digest
 from litellm.types.memory_v2 import MemoryCapture, MemoryPolicy, MemoryPolicyInput, MemoryPreference
@@ -66,6 +68,17 @@ def database() -> Iterator[MagicMock]:
 
 def auth(user: str = "owner", role: LitellmUserRoles = LitellmUserRoles.INTERNAL_USER) -> UserAPIKeyAuth:
     return UserAPIKeyAuth(token="a" * 64, user_id=user, user_role=role, team_id="team", org_id="explicit-org")
+
+
+def test_management_search_rejects_excessive_terms_before_database_work(database: MagicMock) -> None:
+    app = FastAPI()
+    app.include_router(management.router)
+    app.dependency_overrides[user_api_key_auth] = auth
+    with TestClient(app) as client:
+        response = client.get("/v2/memory/entries", params={"query": ",".join(f"term{i}" for i in range(17))})
+    assert response.status_code == 422
+    assert "at most 16 distinct search terms" in response.text
+    database.db.litellm_memorytable.find_many.assert_not_awaited()
 
 
 def policy(**changes: object) -> MemoryPolicy:

@@ -1,7 +1,8 @@
+import re
 from datetime import datetime
-from typing import Literal, TypeAlias
+from typing import Annotated, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 from typing_extensions import Self
 
 MemoryTarget: TypeAlias = Literal["gateway", "organization", "team", "project", "user", "key"]
@@ -9,6 +10,17 @@ MemoryScope: TypeAlias = Literal["key", "user", "team", "project", "organization
 MemoryActivation: TypeAlias = Literal["disabled", "opt_in", "automatic"]
 MemoryKind: TypeAlias = Literal["workflow", "decision", "correction", "learning", "context", "disagreement"]
 MemoryCertainty: TypeAlias = Literal["user_stated", "observed", "inferred"]
+
+
+def _validate_search_query(value: str) -> str:
+    if len(frozenset(re.findall(r"[\w-]{2,}", value.casefold()))) > 16:
+        raise ValueError("Memory search accepts at most 16 distinct search terms")
+    return value
+
+
+MemoryQuery: TypeAlias = Annotated[
+    str, AfterValidator(_validate_search_query), Field(description="Use at most 16 distinct search terms")
+]
 
 
 class MemoryPolicyInput(BaseModel):
@@ -88,7 +100,7 @@ class MemoryEntry(BaseModel):
 class MemorySearch(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    query: str = Field(default="", max_length=500)
+    query: MemoryQuery = Field(default="", max_length=500)
     limit: int = Field(default=8, ge=1, le=20)
     offset: int = Field(default=0, ge=0)
 
@@ -129,7 +141,7 @@ class MemoryCatalogRequest(BaseModel):
 class MemoryRecallRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    query: str = Field(default="", max_length=2000)
+    query: MemoryQuery = Field(default="", max_length=2000)
     scope: str | None = Field(default=None, max_length=200)
     limit: int = Field(default=8, ge=1, le=30)
 

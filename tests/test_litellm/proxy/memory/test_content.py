@@ -2,9 +2,20 @@ from datetime import datetime, timezone
 from typing import Final
 
 import pytest
+from pydantic import ValidationError
 
 from litellm.proxy.memory.content import fuzzy_memories, redact_memory
-from litellm.types.memory_v2 import MemoryEntry
+from litellm.types.memory_v2 import MemoryEntry, MemoryRecallRequest, MemorySearch
+
+
+@pytest.mark.parametrize("request_type", (MemoryRecallRequest, MemorySearch))
+def test_all_search_requests_reject_excessive_distinct_terms(
+    request_type: type[MemoryRecallRequest] | type[MemorySearch],
+) -> None:
+    query: Final = ",".join(f"query{index}" for index in range(17))
+    with pytest.raises(ValidationError, match="at most 16 distinct search terms"):
+        request_type(query=query)
+    assert request_type(query=" ".join(["repeat"] * 20)).query
 
 
 @pytest.mark.parametrize("query", ("autorouter clasifier rationle", "rout clasif", "clasifier"))

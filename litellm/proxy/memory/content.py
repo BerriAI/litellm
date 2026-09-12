@@ -43,7 +43,7 @@ def fuzzy_memories(
             (entry.content.casefold(), 0.15),
         )
         indexed: Final = tuple(
-            (text, weight, tuple(frozenset(match.group() for match in _TOKEN.finditer(text))))
+            (text, weight, tuple(dict.fromkeys(match.group() for match in _TOKEN.finditer(text)))[:256])
             for text, weight in fields
         )
         scores: Final = tuple(

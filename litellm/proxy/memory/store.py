@@ -114,7 +114,7 @@ class MemoryStore:
             await transaction.execute_raw("SELECT pg_advisory_xact_lock($1::bigint)", lock_key)
             table: Final = MemoryRepository(SimpleNamespace(db=transaction)).table
             saved: Final = tuple([await self._capture(capture, namespace, table) for capture in captures])
-            await self.authorize_namespace(write=True)
+            await MemoryStore(SimpleNamespace(db=transaction), self.access).authorize_namespace(write=True)
             return saved
 
     async def _capture(
