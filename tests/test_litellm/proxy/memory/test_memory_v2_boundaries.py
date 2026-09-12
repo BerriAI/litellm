@@ -729,7 +729,9 @@ async def test_silent_memory_rounds_keep_the_client_alive_and_cancel_upstream(
             cancelled.set()
 
     with (
-        patch("litellm.sse_keepalive_ping_interval_seconds", 0.01),  # test-quality-ok: Set the real operator configuration.
+        patch(  # test-quality-ok: Set the real operator configuration.
+            "litellm.sse_keepalive_ping_interval_seconds", 0.01
+        ),
         patch.multiple(  # test-quality-ok: Replace the model HTTP boundary, preserving the real internal ASGI transport.
             "litellm.proxy.proxy_server", app=provider, llm_router=None
         ),
@@ -770,6 +772,34 @@ async def test_gateway_preserves_upstream_retry_delay_without_exposing_provider_
             pass
     assert exc.value.status_code == 429 and exc.value.headers == {"retry-after": "17"}
     assert "private provider detail" not in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [b"", b'data: {"error": {"message": "private provider detail"}}\n\n'])
+async def test_invalid_model_stream_before_first_public_byte_returns_bad_gateway(
+    prisma_edge: MagicMock, body: bytes
+) -> None:
+    from unittest.mock import patch
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.memory.gateway import process_gateway_memory
+
+    async def provider(scope: Scope, receive: Receive, send: Send) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": body, "more_body": False})
+
+    with (
+        patch.multiple(  # test-quality-ok: Inject the upstream HTTP boundary, preserving the actual memory loop.
+            "litellm.proxy.proxy_server", app=provider, llm_router=None
+        ),
+        patch(  # test-quality-ok: Inject the authorized persistence edge for a model transport failure.
+            "litellm.proxy.memory.gateway.gateway_memory_store", new=AsyncMock(return_value=store(prisma_edge))
+        ),
+        pytest.raises(HTTPException) as exc,
+    ):
+        await process_gateway_memory({"stream": True, "messages": []}, request(), UserAPIKeyAuth(), "acompletion")
+    assert exc.value.status_code == 502 and "private provider detail" not in str(exc.value.detail)
+    prisma_edge.db.litellm_memorycontinuation.upsert.assert_not_awaited()
 
 
 @pytest.mark.asyncio

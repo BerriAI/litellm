@@ -359,6 +359,8 @@ async def process_gateway_memory(
         first: Final = await anext(iterator)
     except StopAsyncIteration as exc:
         raise HTTPException(status_code=502, detail="The gateway memory stream was empty") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="The gateway model stream was invalid or incomplete") from exc
 
     async def stream() -> AsyncGenerator[bytes, None]:
         try:
