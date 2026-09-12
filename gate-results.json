@@ -1,0 +1,10 @@
+{
+  "lock": 0,
+  "format": 0,
+  "ruff": 0,
+  "test-tree": 0,
+  "strict": 0,
+  "type-discipline": 0,
+  "test-quality": 0,
+  "basedpyright": 0
+}

@@ -1,0 +1,2 @@
+Commit: 0690520080fde5f63878ac1b4f0e00cc19843f36
+Concurrent basedpyright run exited 247; rerun alone passed with canonical typecheck environment. All other gates and 484 affected tests passed. No budgets or suppressions changed.

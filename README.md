@@ -1,7 +1,7 @@
 # LIT-7078 verification
 
 Before: e4706fa409 (PR merge base)
-After: f66239a50f7a2e6f0eb24ce49ea98329bf19c53b
+After: 0690520080fde5f63878ac1b4f0e00cc19843f36
 
 Both images were built using the repository Dockerfile and ran with isolated Docker Compose PostgreSQL on localhost:47078. The OAuth server named example uses authorization_code, explicit upstream GitHub OAuth URLs, and placeholder client credentials. Discovery does not require a real upstream login. A separate auth_type:none server uses https://knowledge-mcp.global.api.aws for real tool calls.
 
@@ -36,3 +36,5 @@ The script rewrites only the transport origin to localhost:4000 inside the conta
 On both commits, authenticated POST /mcp/aws_knowledge_mcp tools/list returns five tools and tools/call aws_knowledge_mcp-aws___list_regions returns real AWS region data with isError:false. No LLM call is involved. Upstream OAuth login completion is outside this metadata fix.
 
 On the final tip, 484 affected tests pass. Against the merge base, 13 new regression cases fail and 11 compatibility/control cases pass. Local changed executable-line coverage is 2/2; the authorization builder covers 6/6 branches and both route handlers have no branches. These are separate from the repository-wide CI coverage report.
+
+The static-prefix subprocess test uses a temporary UI directory so importing the proxy cannot rewrite checked-out dashboard assets. The isolated worktree remains clean after the affected tests

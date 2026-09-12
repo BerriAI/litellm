@@ -1,0 +1,133 @@
+{
+  "commit": "0690520080fde5f63878ac1b4f0e00cc19843f36",
+  "merge_base": "e4706fa409",
+  "files": {
+    "litellm/proxy/_experimental/mcp_server/discoverable_endpoints.py": {
+      "changed_executable_lines": [
+        2699,
+        2814
+      ],
+      "uncovered_changed_lines": [],
+      "changed_line_coverage": 100.0,
+      "touched_functions": {
+        "_build_oauth_authorization_server_response": {
+          "executed_lines": [
+            2678,
+            2679,
+            2680,
+            2683,
+            2684,
+            2685,
+            2686,
+            2688,
+            2691,
+            2693,
+            2694,
+            2695,
+            2697,
+            2699,
+            2707
+          ],
+          "summary": {
+            "covered_lines": 15,
+            "num_statements": 15,
+            "percent_covered": 100.0,
+            "percent_covered_display": "100",
+            "missing_lines": 0,
+            "excluded_lines": 0,
+            "percent_statements_covered": 100.0,
+            "percent_statements_covered_display": "100",
+            "num_branches": 6,
+            "num_partial_branches": 0,
+            "covered_branches": 6,
+            "missing_branches": 0,
+            "percent_branches_covered": 100.0,
+            "percent_branches_covered_display": "100"
+          },
+          "missing_lines": [],
+          "excluded_lines": [],
+          "start_line": 2666,
+          "executed_branches": [
+            [
+              2683,
+              2684
+            ],
+            [
+              2683,
+              2688
+            ],
+            [
+              2685,
+              2686
+            ],
+            [
+              2685,
+              2688
+            ],
+            [
+              2694,
+              2695
+            ],
+            [
+              2694,
+              2697
+            ]
+          ],
+          "missing_branches": []
+        },
+        "oauth_authorization_server_mcp_standard": {
+          "executed_lines": [
+            2732
+          ],
+          "summary": {
+            "covered_lines": 1,
+            "num_statements": 1,
+            "percent_covered": 100.0,
+            "percent_covered_display": "100",
+            "missing_lines": 0,
+            "excluded_lines": 0,
+            "percent_statements_covered": 100.0,
+            "percent_statements_covered_display": "100",
+            "num_branches": 0,
+            "num_partial_branches": 0,
+            "covered_branches": 0,
+            "missing_branches": 0,
+            "percent_branches_covered": 100.0,
+            "percent_branches_covered_display": "100"
+          },
+          "missing_lines": [],
+          "excluded_lines": [],
+          "start_line": 2725,
+          "executed_branches": [],
+          "missing_branches": []
+        },
+        "oauth_authorization_server_legacy": {
+          "executed_lines": [
+            2819
+          ],
+          "summary": {
+            "covered_lines": 1,
+            "num_statements": 1,
+            "percent_covered": 100.0,
+            "percent_covered_display": "100",
+            "missing_lines": 0,
+            "excluded_lines": 0,
+            "percent_statements_covered": 100.0,
+            "percent_statements_covered_display": "100",
+            "num_branches": 0,
+            "num_partial_branches": 0,
+            "covered_branches": 0,
+            "missing_branches": 0,
+            "percent_branches_covered": 100.0,
+            "percent_branches_covered_display": "100"
+          },
+          "missing_lines": [],
+          "excluded_lines": [],
+          "start_line": 2815,
+          "executed_branches": [],
+          "missing_branches": []
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "commit": "0690520080fde5f63878ac1b4f0e00cc19843f36",
+  "image": "sha256:d9f7e203d574e57f4483975569a419ceac0f3d637a020cbfb90712eba42947c9",
+  "file": "litellm/proxy/_experimental/mcp_server/discoverable_endpoints.py",
+  "sha256": "7eb630f7a6d8c54f1ae4bd54e64f048efb7bc9fdcb15515c11a5af3c6b5ff74a",
+  "matches_source": true
+}

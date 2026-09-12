@@ -1,0 +1,1 @@
+{"issuer":"http://localhost:47078","authorization_endpoint":"http://localhost:47078/v1/mcp/oauth/authorize","token_endpoint":"http://localhost:47078/v1/mcp/oauth/token","response_types_supported":["code"],"grant_types_supported":["authorization_code"],"code_challenge_methods_supported":["S256"]}

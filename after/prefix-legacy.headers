@@ -1,0 +1,8 @@
+HTTP/1.1 200 OK
+date: Sat, 12 Sep 2026 00:32:17 GMT
+content-length: 497
+content-type: application/json
+x-frame-options: DENY
+content-security-policy: frame-ancestors 'none'
+x-content-type-options: nosniff
+

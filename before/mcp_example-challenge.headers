@@ -1,0 +1,9 @@
+HTTP/1.1 401 Unauthorized
+date: Sat, 12 Sep 2026 00:04:38 GMT
+www-authenticate: Bearer authorization_uri="http://localhost:47078/.well-known/oauth-authorization-server/example"
+content-length: 25
+content-type: application/json
+x-frame-options: DENY
+content-security-policy: frame-ancestors 'none'
+x-content-type-options: nosniff
+
