@@ -2748,17 +2748,20 @@ class LiteLLMCompletionResponsesConfig:
             cache_write_tokens: Final = getattr(prompt_details, "cache_write_tokens", None) or getattr(
                 prompt_details, "cache_creation_tokens", None
             )
-            input_tokens_details: Final = InputTokensDetails(
+            cache_write_extra: Final[Mapping[str, int]] = (
+                MappingProxyType({"cache_write_tokens": cache_write_tokens})
+                if cache_write_tokens is not None
+                else MappingProxyType({})
+            )
+            response_usage.input_tokens_details = InputTokensDetails(
                 cached_tokens=prompt_details.cached_tokens if prompt_details.cached_tokens is not None else 0,
                 text_tokens=prompt_details.text_tokens,
                 audio_tokens=prompt_details.audio_tokens,
                 cached_tokens_details=(
                     cached_tokens_details if isinstance(cached_tokens_details, CachedTokensDetails) else None
                 ),
+                **cache_write_extra,
             )
-            if cache_write_tokens is not None:
-                setattr(input_tokens_details, "cache_write_tokens", cache_write_tokens)
-            response_usage.input_tokens_details = input_tokens_details
 
         # Translate completion_tokens_details to output_tokens_details
         if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details is not None:
