@@ -1374,11 +1374,6 @@ def test_health_readiness_details_reports_env_credential_login_warning(monkeypat
 def test_health_readiness_details_reports_insecure_master_key_reason(
     monkeypatch, master_key, general_settings, expected_reason
 ):
-    """
-    The Admin UI banner is driven by this field: it must be "example_key" while
-    the docs example key is configured, "missing" when no master key is set and
-    no alternative auth replaces it, and null when the configured key is strong.
-    """
     app = FastAPI()
     app.include_router(_health_endpoints_module.router)
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
