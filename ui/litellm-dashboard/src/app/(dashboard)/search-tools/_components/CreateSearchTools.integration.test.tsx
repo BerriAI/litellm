@@ -1,4 +1,4 @@
-import { fireEvent, renderWithProviders, screen, waitFor } from "../../../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, testQueryClient, waitFor } from "../../../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
@@ -40,6 +40,7 @@ const pickProvider = async (user: ReturnType<typeof userEvent.setup>, label: str
 
 describe("CreateSearchTools submit payload", () => {
   beforeEach(() => {
+    testQueryClient.clear();
     vi.clearAllMocks();
     vi.mocked(networking.fetchAvailableSearchProviders).mockResolvedValue({ providers });
     vi.mocked(networking.createSearchTool).mockResolvedValue({ search_tool_id: "st-1" });
@@ -147,6 +148,7 @@ describe("CreateSearchTools submit payload", () => {
     fireEvent.change(await screen.findByLabelText(/Search Tool Name/), { target: { value: "synthetic-search" } });
     await pickProvider(user, "Perplexity AI");
     await user.click(screen.getByRole("button", { name: "Clear" }));
+    expect(networking.fetchAvailableSearchProviders).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole("button", { name: "Add Search Tool" }));
     expect(await screen.findByText("Please select a search provider")).toBeInTheDocument();
     expect(networking.createSearchTool).not.toHaveBeenCalled();
