@@ -1790,6 +1790,53 @@ def test_model_group_info_cost_none_when_db_model_info_has_no_cost():
         assert result.output_cost_per_token is None
 
 
+def test_model_group_info_cost_none_for_unpriced_deployment_but_zero_when_declared():
+    """A deployment with no cost fields anywhere must report None, not the 0 that
+    get_model_info defaults to, so the reported price matches what the zero-cost
+    budget bypass accepts. A deployment declaring 0 keeps reporting 0."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vllm-unpriced",
+                "litellm_params": {
+                    "model": "openai/my-vllm-unpriced",
+                    "api_key": "fake",
+                    "api_base": "http://localhost:8000/v1",
+                },
+            },
+            {
+                "model_name": "vllm-free",
+                "litellm_params": {
+                    "model": "openai/my-vllm-free",
+                    "api_key": "fake",
+                    "api_base": "http://localhost:8000/v1",
+                    "input_cost_per_token": 0,
+                    "output_cost_per_token": 0,
+                },
+            },
+            {
+                "model_name": "gpt-priced",
+                "litellm_params": {"model": "gpt-4o", "api_key": "fake"},
+            },
+        ]
+    )
+
+    unpriced = router.get_model_group_info(model_group="vllm-unpriced")
+    assert unpriced is not None
+    assert unpriced.input_cost_per_token is None
+    assert unpriced.output_cost_per_token is None
+
+    free = router.get_model_group_info(model_group="vllm-free")
+    assert free is not None
+    assert free.input_cost_per_token == 0
+    assert free.output_cost_per_token == 0
+
+    priced = router.get_model_group_info(model_group="gpt-priced")
+    assert priced is not None
+    assert priced.input_cost_per_token is not None and priced.input_cost_per_token > 0
+    assert priced.output_cost_per_token is not None and priced.output_cost_per_token > 0
+
+
 @pytest.mark.parametrize(
     "value,expected",
     [
