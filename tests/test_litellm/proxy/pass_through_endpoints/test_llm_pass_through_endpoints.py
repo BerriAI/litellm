@@ -41,6 +41,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     milvus_proxy_route,
     mistral_proxy_route,
     openai_proxy_route,
+    tinyfish_proxy_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
     vllm_proxy_route,
@@ -5492,3 +5493,142 @@ class TestAzureRelayDeploymentSegment:
             )
 
         assert [call["model"] for call in captured] == ["gpt", "gpt"]
+
+
+class TestTinyFishProxyRoute:
+    """Tests for the TinyFish Agent pass-through route."""
+
+    def _mock_request(self, method: str, body: bytes = b"") -> MagicMock:
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = method
+        mock_request.query_params = {}
+        mock_request.headers = {}
+        mock_request.body = AsyncMock(return_value=body)
+        return mock_request
+
+    @pytest.mark.asyncio
+    async def test_forwards_allowed_run_endpoint_with_server_key(self):
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+                return_value="sk-tf-server",
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+            ) as mock_create_route,
+        ):
+            mock_endpoint_func = AsyncMock(return_value={"run_id": "run-1", "status": "COMPLETED"})
+            mock_create_route.return_value = mock_endpoint_func
+
+            result = await tinyfish_proxy_route(
+                endpoint="v1/automation/run",
+                request=self._mock_request("POST", b'{"url": "https://scrapeme.live/shop", "goal": "extract"}'),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=MagicMock(),
+            )
+
+            call_args = mock_create_route.call_args[1]
+            assert call_args["target"] == "https://agent.tinyfish.ai/v1/automation/run"
+            assert dict(call_args["custom_headers"]) == {"X-API-Key": "sk-tf-server"}
+            assert call_args["custom_llm_provider"] == "tinyfish"
+            assert result == {"run_id": "run-1", "status": "COMPLETED"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "method,endpoint",
+        [
+            ("GET", "v1/vault/items"),
+            ("GET", "v1/wallet"),
+            ("POST", "v1/browser-profiles"),
+            ("GET", "v1/automation/run"),
+        ],
+    )
+    async def test_blocks_endpoints_outside_allowlist(self, method, endpoint):
+        with pytest.raises(HTTPException) as exc_info:
+            await tinyfish_proxy_route(
+                endpoint=endpoint,
+                request=self._mock_request(method),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=MagicMock(),
+            )
+
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_rejects_authenticated_run_fields_by_default(self, monkeypatch):
+        monkeypatch.delenv("TINYFISH_ALLOW_AUTHENTICATED_RUNS", raising=False)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await tinyfish_proxy_route(
+                endpoint="v1/automation/run",
+                request=self._mock_request("POST", b'{"url": "https://x.com", "goal": "g", "use_vault": true}'),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=MagicMock(),
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "use_vault" in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_env_opt_in_allows_authenticated_run_fields(self, monkeypatch):
+        monkeypatch.setenv("TINYFISH_ALLOW_AUTHENTICATED_RUNS", "true")
+
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+                return_value="sk-tf-server",
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+            ) as mock_create_route,
+        ):
+            mock_create_route.return_value = AsyncMock(return_value={"ok": True})
+
+            result = await tinyfish_proxy_route(
+                endpoint="v1/automation/run",
+                request=self._mock_request("POST", b'{"url": "https://x.com", "goal": "g", "use_vault": true}'),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=MagicMock(),
+            )
+
+        assert result == {"ok": True}
+
+    @pytest.mark.asyncio
+    async def test_raises_401_on_missing_api_key(self):
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value=None,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await tinyfish_proxy_route(
+                    endpoint="v1/runs",
+                    request=self._mock_request("GET"),
+                    fastapi_response=MagicMock(spec=Response),
+                    user_api_key_dict=MagicMock(),
+                )
+
+        assert exc_info.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_env_base_override_changes_target(self, monkeypatch):
+        monkeypatch.setenv("TINYFISH_AGENT_API_BASE", "https://agent.staging.tinyfish.ai")
+
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+                return_value="sk-tf-server",
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+            ) as mock_create_route,
+        ):
+            mock_create_route.return_value = AsyncMock(return_value={})
+
+            await tinyfish_proxy_route(
+                endpoint="v1/runs/run-123",
+                request=self._mock_request("GET"),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=MagicMock(),
+            )
+
+            assert mock_create_route.call_args[1]["target"] == "https://agent.staging.tinyfish.ai/v1/runs/run-123"
