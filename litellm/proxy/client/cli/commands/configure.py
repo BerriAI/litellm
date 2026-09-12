@@ -18,11 +18,9 @@ from litellm.proxy.common_utils.model_listing_utils import (
     GATEWAY_CLIENT_HEADER,
 )
 
-from .auth import CliContextObj, context_secret_vault, get_stored_api_key
+from .auth import CliContextObj
 from .claude_settings import (
     STARTING_MODEL_ROLE,
-    ApiKeyHelper,
-    ClaudeCredential,
     ClaudeSettingsError,
     ModelChoice,
     StartOn,
@@ -33,12 +31,10 @@ from .claude_settings import (
     configure_claude_settings,
     configure_state_path,
     refuse_while_owned,
-    resolve_api_key_helper,
     settings_file_owners,
     unconfigure_claude_settings,
 )
 from .pi import ListedModel, ListingFailure, PiSyncError, fetch_model_listing
-from .up import ensure_fresh_login
 
 _LISTED_MODELS_SHOWN: Final = 20
 _CLAUDE_TARGET: Final = "claude"
@@ -54,24 +50,21 @@ _MODEL_OPTION_HELP: Final = (
 )
 
 
-def resolve_credential(ctx: click.Context, api_key: str | None) -> tuple[ClaudeCredential, str]:
-    """The credential to write and the key to check the proxy with.
+def resolve_credential(ctx: click.Context, api_key: str | None) -> StaticToken:
+    """The long-lived key written into settings.json: --api-key, `lite --api-key` or LITELLM_PROXY_API_KEY.
 
-    An explicit key (--api-key, `lite --api-key`, LITELLM_PROXY_API_KEY) is long-lived and goes
-    into settings.json as a static token. Without one, the stored `lite login` credential is used
-    the way `lite login --config-claude` uses it, through apiKeyHelper, since it expires within a
-    day and renews in place there; a missing or stale login is refreshed first, as `lite up` does.
+    A `lite login` credential is never written: it expires within a day, and keeping it fresh would mean
+    Claude Code running `lite` through `apiKeyHelper` on every credential refresh.
     """
     ctx_obj: Final[CliContextObj] = ctx.obj
     explicit: Final = api_key or (None if ctx_obj.get("api_key_from_token_file") else ctx_obj.get("api_key"))
-    if explicit:
-        return StaticToken(explicit), explicit
-    base_url: Final = ctx_obj["base_url"]
-    ensure_fresh_login(ctx)
-    stored: Final = get_stored_api_key(expected_base_url=base_url, vault=context_secret_vault(ctx))
-    if not stored:
-        raise ClaudeSettingsError("Login did not produce a usable token.")
-    return ApiKeyHelper(resolve_api_key_helper(base_url)), stored
+    if not explicit:
+        raise ClaudeSettingsError(
+            "`lite configure claude` needs a long-lived virtual key: pass --api-key, `lite --api-key`, or set "
+            "LITELLM_PROXY_API_KEY. Your `lite login` credential expires within a day, so it is not written "
+            "into Claude Code's settings."
+        )
+    return StaticToken(explicit)
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,22 +76,22 @@ class _Listing:
         return tuple(model.id for model in self.models)
 
 
-def _start(ctx: click.Context, api_key: str | None) -> tuple[ClaudeCredential, _Listing]:
+def _start(ctx: click.Context, api_key: str | None) -> tuple[StaticToken, _Listing]:
     """Every configure path begins the same way: the local ownership check first, so a `lite up`
-    session is refused before any login prompt or request, then the credential, then the listing."""
+    session is refused before any request, then the credential, then the listing."""
     settings_path: Final = claude_settings_path(os.environ)
     try:
         refuse_while_owned(settings_path, settings_file_owners(settings_path))
-        credential, key = resolve_credential(ctx, api_key)
+        credential: Final = resolve_credential(ctx, api_key)
     except ClaudeSettingsError as e:
         raise click.ClickException(str(e))
-    return credential, _listed_models(ctx.obj["base_url"], key)
+    return credential, _listed_models(ctx.obj["base_url"], credential.token)
 
 
 def _listing_error(base_url: str, error: PiSyncError) -> str:
     """The hint that fits how the listing failed: only an unreachable proxy gets the "is it running" question."""
     if error.kind is ListingFailure.REJECTED:
-        return f"LiteLLM rejected your key (HTTP {error.status}). Run `lite login` to refresh it, or pass a valid --api-key."
+        return f"LiteLLM rejected your key (HTTP {error.status}). Pass a valid --api-key."
     if error.kind is ListingFailure.UNREACHABLE:
         return f"{error.message} Is the proxy at {base_url} running, and is --base-url (or LITELLM_PROXY_URL) correct?"
     if error.kind is ListingFailure.EMPTY:
@@ -122,7 +115,7 @@ def _model_choice(model: str | None) -> ModelChoice:
     return StartOn(model) if model is not None else UnpinModel()
 
 
-def _apply_claude(ctx: click.Context, credential: ClaudeCredential, listing: _Listing, model: str | None) -> None:
+def _apply_claude(ctx: click.Context, credential: StaticToken, listing: _Listing, model: str | None) -> None:
     ctx_obj: Final[CliContextObj] = ctx.obj
     base_url: Final = ctx_obj["base_url"]
     listed: Final = listing.ids
@@ -148,16 +141,13 @@ def _apply_claude(ctx: click.Context, credential: ClaudeCredential, listing: _Li
     in_picker: Final = sum(1 for listed_model in listed if CLAUDE_CODE_PICKER_PATTERN.search(listed_model))
     click.echo(f"Configured Claude Code: {settings_path} now routes through {base_url}.")
 
-    click.echo(
-        "Credential: your virtual key, stored in the file as ANTHROPIC_AUTH_TOKEN."
-        if isinstance(credential, StaticToken)
-        else "Credential: your `lite login`, read through apiKeyHelper on every request, so a later login renews it."
-    )
+    click.echo("Credential: your virtual key, stored in the file as ANTHROPIC_AUTH_TOKEN.")
     click.echo(
         f"Starting model: {starting} ({STARTING_MODEL_ROLE}); switch any time with /model."
         if starting is not None
         else "Starting model: not pinned (Claude Code's default, or a model you set yourself); switch with /model, or "
-        "pass --model to start on a proxy model."
+        "pass --model to start on a proxy model. Without a pin, a resumed session re-sends the model its transcript "
+        "recorded, which behind a raw-model auto-router is the tier model."
     )
     click.echo(
         f"/model will list all {len(listed)} of the proxy's models."
@@ -166,7 +156,7 @@ def _apply_claude(ctx: click.Context, credential: ClaudeCredential, listing: _Li
         "'claude' or 'anthropic', and this proxy does not list the rest under such names."
     )
     click.echo("Start `claude` from any terminal. Undo with `lite unconfigure claude`.")
-    if isinstance(credential, StaticToken) and settings_path.is_symlink():
+    if settings_path.is_symlink():
         click.echo(
             f"Note: {settings_path} is a symlink to {settings_path.resolve()}, so your key now lives in "
             "that file; keep it out of version control.",
@@ -235,16 +225,16 @@ def unconfigure_group() -> None:
     "api_key",
     default=None,
     help="Long-lived LiteLLM virtual key written into Claude Code's settings. Defaults to the `lite --api-key` / "
-    "LITELLM_PROXY_API_KEY value; with neither, your `lite login` credential is used through apiKeyHelper.",
+    "LITELLM_PROXY_API_KEY value; required, since a `lite login` credential expires within a day.",
 )
 @click.option("--model", default=None, help=_MODEL_OPTION_HELP)
 @click.pass_context
 def configure_claude(ctx: click.Context, api_key: str | None, model: str | None) -> None:
     """Route every Claude Code session through your LiteLLM proxy until `lite unconfigure claude`.
 
-    Patches ~/.claude/settings.json in place: the proxy URL, your credential (a virtual key as a
-    static token, or your `lite login` through apiKeyHelper), and gateway model discovery so
-    /model lists the proxy's models; --model picks the one Claude Code starts on. Every other
+    Patches ~/.claude/settings.json in place: the proxy URL, your virtual key as a static token,
+    and gateway model discovery so /model lists the proxy's models; --model picks the one Claude
+    Code starts on and resumes with. Every other
     setting is kept, and what changed is recorded so `lite unconfigure claude` can put it back.
     Assumes the proxy is already running.
     """

@@ -100,14 +100,24 @@ Usage with curl::
          http://localhost:4000/mcp/atlassian_mcp
 """
 
+import asyncio
+import base64
+import io
 import json
-from collections.abc import Callable, Mapping
+import re
+from collections.abc import AsyncIterator, Callable, Mapping
+from http.cookies import CookieError, SimpleCookie
+from itertools import islice
 from types import MappingProxyType
 from typing import Final
+from urllib.parse import parse_qsl, quote, quote_plus, unquote_plus, urlencode
 
+import httpx
+from pydantic import JsonValue, TypeAdapter
 from starlette.requests import HTTPConnection
 from starlette.types import Message, Send
 
+from litellm.litellm_core_utils.secret_redaction import REDACTED, redact_string
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import AuthResolution
 
@@ -221,6 +231,10 @@ class MCPDebug:
     @staticmethod
     def _mask(value: str | None) -> str:
         """Mask a single value for safe display in headers."""
+        return MCPDebug.mask_secret(value)
+
+    @staticmethod
+    def mask_secret(value: str | None) -> str:
         if not value:
             return "(none)"
         return MCPDebug._masker._mask_value(value)
@@ -378,3 +392,230 @@ class MCPDebug:
             server_url=server_url,
             server_auth_type=server_auth_type,
         )
+
+
+_BODY_PREVIEW_CHARS: Final = 512
+_BODY_CAPTURE_BYTES: Final = 16384
+_CAPTURE_TIMEOUT_SECONDS: Final = 1.0
+_CAPTURE_EXTENSION: Final = "litellm_mcp_error_preview"
+_SAFE_HEADER_NAMES: Final = frozenset({"content-type", "content-length", "accept"})
+_PUBLIC_HEADER_NAMES: Final = _SAFE_HEADER_NAMES | frozenset(("host", "user-agent", "accept-encoding", "connection"))
+_JSON_BODY: Final = TypeAdapter(JsonValue)
+_LOG_MASKER: Final = SensitiveDataMasker(visible_prefix=0, visible_suffix=0)
+
+
+def _safe_text(value: str, limit: int = _BODY_PREVIEW_CHARS) -> str:
+    escaped: Final = "".join(json.dumps(char)[1:-1] if ord(char) < 32 or ord(char) == 127 else char for char in value)
+    return escaped if len(escaped) <= limit else f"{escaped[:limit]}...(truncated)"
+
+
+def safe_upstream_url(url: httpx.URL) -> str:
+    return _safe_text(str(url.copy_with(username="", password="", path="/", query=None, fragment=None)))
+
+
+def _sensitive_field(key: str) -> bool:
+    normalized: Final = re.sub(r"[^a-z0-9]", "", key.casefold())
+    return normalized in ("code", "clientassertion") or any(
+        pattern in normalized for pattern in _LOG_MASKER.sensitive_patterns
+    )
+
+
+def _redact_object(
+    fields: Mapping[str, JsonValue],
+) -> dict[str, JsonValue]:  # mutable-ok: the standard JSON encoder requires dict objects
+    return {  # mutable-ok: construct the JSON object once for the standard parser and encoder
+        key: REDACTED if _sensitive_field(key) else value for key, value in fields.items()
+    }
+
+
+def _header_secret_values(name: str, value: str) -> tuple[str, ...]:
+    if name == "cookie":
+        cookie: Final = SimpleCookie[str]()
+        try:
+            cookie.load(value)
+        except CookieError:
+            return (value,)
+        return (value, *(item.value for item in cookie.values()))
+    if name not in ("authorization", "proxy-authorization"):
+        return (value,)
+    scheme, _, credential = value.partition(" ")
+    if scheme.lower() != "basic":
+        return (value, credential)
+    try:
+        decoded: Final = base64.b64decode(credential, validate=True).decode("utf-8")
+    except ValueError:
+        return (value, credential)
+    password: Final = decoded.partition(":")[2]
+    return (value, credential, decoded, password, unquote_plus(password))
+
+
+def _body_secret_values(request: httpx.Request) -> tuple[str, ...] | None:
+    try:
+        raw: Final = request.content
+    except httpx.RequestNotRead:
+        return None
+    if not raw:
+        return ()
+    if len(raw) > _BODY_CAPTURE_BYTES:
+        return None
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() == "application/x-www-form-urlencoded":
+        return tuple(value for key, value in parse_qsl(raw.decode("utf-8", errors="replace")) if _sensitive_field(key))
+    try:
+        body: Final = _JSON_BODY.validate_json(raw)
+    except ValueError:
+        return None
+    from litellm.proxy._experimental.mcp_server.utils import (  # noqa: PLC0415  # MCP utils imports clients; inspect bodies only after initialization
+        json_string_leaves,
+    )
+
+    leaves: Final = json_string_leaves(body)
+    if leaves is None:
+        return None
+    return tuple(
+        value
+        for path, value in leaves
+        if not path or any(isinstance(part, str) and _sensitive_field(part) for part in path)
+    )
+
+
+def _request_secret_values(request: httpx.Request) -> tuple[str, ...] | None:
+    body_values: Final = _body_secret_values(request)
+    if body_values is None:
+        return None
+    values: Final = (
+        *body_values,
+        request.url.password,
+        *(value for _, value in request.url.params.multi_items()),
+        *(
+            secret
+            for name, value in request.headers.items()
+            if name not in _PUBLIC_HEADER_NAMES
+            for secret in _header_secret_values(name, value)
+        ),
+    )
+    return tuple(sorted(frozenset(value for value in values if value), key=len, reverse=True))
+
+
+def _mask_known_values(value: str, secrets: tuple[str, ...]) -> str:
+    variants: Final = tuple(
+        sorted(
+            frozenset(
+                variant
+                for secret in secrets
+                for variant in (secret, json.dumps(secret)[1:-1], quote(secret, safe=""), quote_plus(secret))
+            ),
+            key=len,
+            reverse=True,
+        )
+    )
+    return re.sub("|".join(re.escape(secret) for secret in variants), REDACTED, value) if variants else value
+
+
+def _preview(raw: bytes, content_type: str = "", secrets: tuple[str, ...] = ()) -> str:
+    if not raw:
+        return "(empty)"
+    if len(raw) > _BODY_CAPTURE_BYTES:
+        return "(omitted: body exceeds capture limit)"
+    try:
+        parsed: Final = _JSON_BODY.validate_python(json.loads(raw, object_hook=_redact_object))
+    except (ValueError, RecursionError):
+        text: Final = raw.decode("utf-8", errors="replace")
+        if (
+            content_type.split(";", 1)[0].strip().lower() != "application/x-www-form-urlencoded"
+            or "=" not in text
+            or any(char in text for char in "<>\n\r")
+        ):
+            return "(omitted: unstructured body)"
+        fields: Final = parse_qsl(text, keep_blank_values=True)
+        return _safe_text(
+            _mask_known_values(
+                urlencode(tuple((key, REDACTED if _sensitive_field(key) else value) for key, value in fields)), secrets
+            )
+        )
+    if not isinstance(parsed, (dict, list)):
+        return "(omitted: unstructured body)"
+    return _safe_text(redact_string(_mask_known_values(json.dumps(parsed, separators=(",", ":")), secrets)))
+
+
+def _masked_headers(headers: httpx.Headers) -> str:
+    return _safe_text(", ".join(f"{name}={value}" for name, value in headers.items() if name in _SAFE_HEADER_NAMES))
+
+
+def _request_body_preview(request: httpx.Request, secrets: tuple[str, ...] | None) -> str:
+    try:
+        return _preview(request.content, request.headers.get("content-type", ""), secrets or ())
+    except httpx.RequestNotRead:
+        return "(streamed, not captured)"
+
+
+def _response_body_preview(response: httpx.Response, secrets: tuple[str, ...] | None) -> str:
+    if secrets is None:
+        return "(omitted: request credentials unavailable)"
+    captured: Final = response.extensions.get(_CAPTURE_EXTENSION)
+    if isinstance(captured, str):
+        return captured
+    try:
+        return _preview(response.content, response.headers.get("content-type", ""), secrets)
+    except httpx.ResponseNotRead:
+        return "(not read)"
+
+
+async def _read_error_prefix(chunks: AsyncIterator[bytes], limit: int) -> bytes:
+    buffer: Final = io.BytesIO()
+    async for chunk in chunks:
+        buffer.write(chunk[: limit - buffer.tell()])
+        if buffer.tell() >= limit:
+            break
+    return buffer.getvalue()
+
+
+async def capture_upstream_error_response(response: httpx.Response) -> None:
+    if not response.is_error:
+        return
+    try:
+        prefix: Final = await asyncio.wait_for(
+            _read_error_prefix(response.aiter_bytes(chunk_size=4096), _BODY_CAPTURE_BYTES + 1),
+            timeout=_CAPTURE_TIMEOUT_SECONDS,
+        )
+        response._content = prefix  # pyright: ignore[reportPrivateUsage]  # rebind-ok: httpx has no public setter to retain consumed bytes for auth retries
+        secrets: Final = _request_secret_values(response.request)
+        preview: Final = (
+            _preview(prefix, response.headers.get("content-type", ""), secrets)
+            if secrets is not None
+            else "(omitted: request credentials unavailable)"
+        )
+    except (asyncio.TimeoutError, httpx.HTTPError, httpx.StreamError):
+        response._content = b""  # pyright: ignore[reportPrivateUsage]  # rebind-ok: httpx auth retries must survive diagnostic read failures
+        response.extensions[_CAPTURE_EXTENSION] = (
+            "(unavailable: error body read failed)"  # rebind-ok: httpx response hooks communicate through extensions
+        )
+        return
+    response.extensions[_CAPTURE_EXTENSION] = preview  # rebind-ok: httpx response hooks communicate through extensions
+
+
+def describe_upstream_response(response: httpx.Response) -> str:
+    try:
+        request: Final = response.request
+    except RuntimeError:
+        return f"HTTP {response.status_code} | request unavailable"
+    secrets: Final = _request_secret_values(request)
+    return (
+        f"{_safe_text(request.method)} {safe_upstream_url(request.url)} -> HTTP {response.status_code}"
+        f" | request headers: {_masked_headers(request.headers)}"
+        f" | request body: {_request_body_preview(request, secrets)}"
+        f" | response body: {_response_body_preview(response, secrets)}"
+    )
+
+
+def describe_upstream_http_failure(exc: BaseException) -> str | None:
+    from litellm.proxy._experimental.mcp_server.faults.traversal import (  # noqa: PLC0415  # fault package initialization imports the credential resolver
+        iter_exception_tree,
+    )
+
+    lines: Final = tuple(
+        describe_upstream_response(response)
+        for current in islice(iter_exception_tree(exc), 16)
+        for response in (getattr(current, "response", None),)
+        if isinstance(response, httpx.Response)
+    )
+    return " | ".join(lines) or None

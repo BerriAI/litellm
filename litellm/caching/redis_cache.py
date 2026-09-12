@@ -1146,6 +1146,46 @@ class RedisCache(BaseCache):
             )
             _record_swallowed_redis_failure(self._circuit_breaker, e)
 
+    @_redis_circuit_breaker_guard
+    async def async_set_cache_pipeline_with_ttls(self, cache_list: Sequence[tuple[str, object, float | None]]) -> None:
+        """One round trip for writes whose TTLs differ; a ``None`` TTL falls back to the default TTL."""
+        if len(cache_list) == 0:
+            return
+        commands: Final = tuple(
+            (self.check_and_fix_namespace(key=cache_key), json.dumps(cache_value), self.get_ttl(ttl=ttl))
+            for cache_key, cache_value, ttl in cache_list
+        )
+        start_time: Final = time.time()
+        try:
+            async with self.init_async_client().pipeline(transaction=False) as pipe:
+                for cache_key, json_cache_value, ttl in commands:
+                    pipe.set(name=cache_key, value=json_cache_value, ex=None if ttl is None else timedelta(seconds=ttl))
+                await pipe.execute()
+            asyncio.create_task(
+                self.service_logger_obj.async_service_success_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=time.time() - start_time,
+                    call_type=f"async_set_cache_pipeline_with_ttls <- {_get_call_stack_info()}",
+                    start_time=start_time,
+                    end_time=time.time(),
+                )
+            )
+        except Exception as e:
+            asyncio.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=time.time() - start_time,
+                    error=e,
+                    call_type=f"async_set_cache_pipeline_with_ttls <- {_get_call_stack_info()}",
+                    start_time=start_time,
+                    end_time=time.time(),
+                )
+            )
+            verbose_logger.error(
+                "LiteLLM Redis Caching: async_set_cache_pipeline_with_ttls() - Got exception from REDIS %s", str(e)
+            )
+            _record_swallowed_redis_failure(self._circuit_breaker, e)
+
     async def _set_cache_sadd_helper(
         self,
         redis_client: async_redis_client,
@@ -1241,6 +1281,16 @@ class RedisCache(BaseCache):
         if len(self.redis_batch_writing_buffer) >= self.redis_flush_size:
             await self.flush_cache_buffer()  # logging done in here
 
+    @staticmethod
+    async def _incrbyfloat_with_ttl(
+        _redis_client: "Redis", key: str, value: float, ttl: int | None, refresh_ttl: bool
+    ) -> float:
+        ttl_arg: Final = "" if ttl is None else str(ttl)
+        raw_value: Final = await _redis_client.eval(
+            _INCREMENT_WITH_TTL_LUA, 1, key, value, ttl_arg, "1" if refresh_ttl else "0"
+        )
+        return _LUA_FLOAT.validate_python(raw_value)
+
     @_redis_circuit_breaker_guard
     async def async_increment(
         self,
@@ -1250,16 +1300,16 @@ class RedisCache(BaseCache):
         parent_otel_span: Span | None = None,
         refresh_ttl: bool = False,
     ) -> float:
-        _redis_client: Final = self._async_commands()
+        from redis.asyncio import Redis
+
+        _redis_client: Final[Redis] = self.init_async_client()
         start_time: Final = time.time()
         _used_ttl: Final = self.get_ttl(ttl=ttl)
         key = self.check_and_fix_namespace(key=key)
         try:
-            ttl_arg: Final = "" if _used_ttl is None else str(_used_ttl)
-            raw_value: Final = await _redis_client.eval(
-                _INCREMENT_WITH_TTL_LUA, 1, key, value, ttl_arg, "1" if refresh_ttl else "0"
+            result: Final = await self._incrbyfloat_with_ttl(
+                _redis_client, key=key, value=value, ttl=_used_ttl, refresh_ttl=refresh_ttl
             )
-            result: Final = _LUA_FLOAT.validate_python(raw_value)
 
             ## LOGGING ##
             end_time = time.time()

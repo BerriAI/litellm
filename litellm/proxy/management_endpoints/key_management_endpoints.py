@@ -3729,7 +3729,7 @@ async def delete_key_fn(
             )
 
         verbose_proxy_logger.debug(
-            "/keys/delete - cache after delete: %s", user_api_key_cache.in_memory_cache.cache_dict
+            "/keys/delete - cache after delete: %s", user_api_key_cache.key_object_cache.in_memory_cache.cache_dict
         )
 
         asyncio.create_task(

@@ -5,11 +5,68 @@ Tests the write/read/delete cycle for JSON and simple string secrets.
 """
 
 import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import respx
 
+import litellm
 from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
+from litellm.types.secret_managers.main import KeyManagementSettings
+
+_STATIC_CREDENTIALS = {"aws_access_key_id": "test-key", "aws_secret_access_key": "test-secret"}
+_CMK_ARN = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555"
+
+
+async def _create_secret_body_for_settings(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, settings: KeyManagementSettings
+) -> dict[str, object]:
+    """Boot the manager from settings the way the proxy does and return the CreateSecret body it posts to AWS."""
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", None)
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    AWSSecretsManagerV2.load_aws_secret_manager(use_aws_secret_manager=True, key_management_settings=settings)
+    manager = litellm.secret_manager_client
+    assert isinstance(manager, AWSSecretsManagerV2)
+
+    route = respx_mock.post("https://secretsmanager.us-east-1.amazonaws.com/").respond(
+        json={"ARN": "arn", "Name": "litellm/test-key"}
+    )
+    await manager.async_write_secret(
+        secret_name="litellm/test-key",
+        secret_value="sk-test-value",
+        optional_params=dict(_STATIC_CREDENTIALS),
+    )
+    assert route.call_count == 1
+    request = route.calls.last.request
+    assert request.headers["X-Amz-Target"] == "secretsmanager.CreateSecret"
+    return json.loads(request.content)
+
+
+@pytest.mark.asyncio
+async def test_create_secret_uses_customer_managed_kms_key_from_settings(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    body = await _create_secret_body_for_settings(
+        monkeypatch,
+        respx_mock,
+        KeyManagementSettings(store_virtual_keys=True, aws_region_name="us-east-1", kms_key_id=_CMK_ARN),
+    )
+    assert body["KmsKeyId"] == _CMK_ARN
+    assert body["Name"] == "litellm/test-key"
+    assert body["SecretString"] == "sk-test-value"
+
+
+@pytest.mark.asyncio
+async def test_create_secret_omits_kms_key_id_when_not_configured(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    body = await _create_secret_body_for_settings(
+        monkeypatch, respx_mock, KeyManagementSettings(store_virtual_keys=True, aws_region_name="us-east-1")
+    )
+    assert "KmsKeyId" not in body
+    assert body["Name"] == "litellm/test-key"
 
 
 @pytest.mark.asyncio

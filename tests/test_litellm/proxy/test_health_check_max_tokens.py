@@ -872,9 +872,9 @@ def test_narrowing_by_an_id_that_matches_nothing_keeps_the_whole_list():
     """Pinned because the disabled-dependency fix moved this filter into its own helper."""
     deployments = [{"model_name": "a", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "a-1"}}]
 
-    assert hc_module._narrow_to_target(deployments, None, "no-such-id") == tuple(deployments)
-    assert hc_module._narrow_to_target(deployments, None, "a-1") == tuple(deployments)
-    assert hc_module._narrow_to_target(deployments, "a", None) == tuple(deployments)
+    assert hc_module._narrow_to_target(deployments, None, "no-such-id", None) == tuple(deployments)
+    assert hc_module._narrow_to_target(deployments, None, "a-1", None) == tuple(deployments)
+    assert hc_module._narrow_to_target(deployments, "a", None, None) == tuple(deployments)
 
 
 def _nested_router_fixture(parent_tier: str):
