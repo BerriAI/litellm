@@ -1273,6 +1273,24 @@ class RedisCache(BaseCache):
         if len(self.redis_batch_writing_buffer) >= self.redis_flush_size:
             await self.flush_cache_buffer()  # logging done in here
 
+    @staticmethod
+    async def _incrbyfloat_with_ttl(
+        _redis_client: "Redis", key: str, value: float, ttl: int | None, refresh_ttl: bool
+    ) -> float:
+        """INCRBYFLOAT plus its TTL command in one round trip; a third only when an unexpiring key needs an EXPIRE."""
+        if ttl is None:
+            return await _redis_client.incrbyfloat(name=key, amount=value)
+        async with _redis_client.pipeline(transaction=False) as pipe:
+            pipe.incrbyfloat(name=key, amount=value)
+            if refresh_ttl:
+                pipe.expire(key, ttl)
+            else:
+                pipe.ttl(key)
+            result, ttl_or_expire = await pipe.execute()
+        if not refresh_ttl and ttl_or_expire == -1:
+            await _redis_client.expire(key, ttl)
+        return float(result)
+
     @_redis_circuit_breaker_guard
     async def async_increment(
         self,
@@ -1289,14 +1307,9 @@ class RedisCache(BaseCache):
         _used_ttl: Final = self.get_ttl(ttl=ttl)
         key = self.check_and_fix_namespace(key=key)
         try:
-            result: Final = await _redis_client.incrbyfloat(name=key, amount=value)
-            if _used_ttl is not None:
-                if refresh_ttl:
-                    await _redis_client.expire(key, _used_ttl)
-                else:
-                    current_ttl: Final = await _redis_client.ttl(key)
-                    if current_ttl == -1:
-                        await _redis_client.expire(key, _used_ttl)
+            result: Final = await self._incrbyfloat_with_ttl(
+                _redis_client, key=key, value=value, ttl=_used_ttl, refresh_ttl=refresh_ttl
+            )
 
             ## LOGGING ##
             end_time = time.time()
