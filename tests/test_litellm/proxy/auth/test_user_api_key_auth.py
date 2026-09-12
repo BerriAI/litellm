@@ -5,7 +5,7 @@ import os
 import subprocess
 import sys
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from textwrap import dedent
 from types import SimpleNamespace
@@ -23,6 +23,7 @@ from litellm.proxy._types import (
     LiteLLM_JWTAuth,
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
+    LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LitellmUserRoles,
     ProxyErrorTypes,
@@ -48,6 +49,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     get_api_key,
     user_api_key_auth,
 )
+from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
 
 
 class _RoutingRequest:
@@ -4017,6 +4019,65 @@ async def test_centralized_common_checks_routes_header_tags_to_litellm_metadata(
 
     assert request_data["litellm_metadata"]["tags"] == ["tenant:acme"]
     assert "metadata" not in request_data
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_carries_team_and_user_budget_state_on_the_token():
+    """The team and user objects auth resolves are pinned on the token so the
+    response path (Prometheus budget gauges) reads them from request metadata
+    instead of calling get_team_object / get_user_object again."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    reset_at = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    token = UserAPIKeyAuth(api_key="sk-test", token="hashed", team_id="t1", user_id="u1")
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    user_api_key_cache = DualCache()
+    await user_api_key_cache.async_set_cache(
+        key="team_id:t1",
+        value=LiteLLM_TeamTableCachedObj(team_id="t1", budget_reset_at=reset_at, max_budget=300.0),
+    )
+    await user_api_key_cache.async_set_cache(
+        key="u1",
+        value=LiteLLM_UserTable(user_id="u1", user_alias="Alice", budget_reset_at=None, max_budget=None),
+    )
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
+    attrs = {
+        **_proxy_attrs_for_centralized_checks(user_custom_auth=None),
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": user_api_key_cache,
+        "proxy_logging_obj": proxy_logging_obj,
+    }
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with patch(  # test-quality-ok: the authz gate has its own tests above; this one checks the carry step before it
+            "litellm.proxy.auth.user_api_key_auth.common_checks",
+            new_callable=AsyncMock,
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"model": "gpt-5.4-mini"},
+                route="/chat/completions",
+            )
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+    assert dict(carried_budget_metadata(token)) == {
+        "user_api_key_team_budget_reset_at": "2026-10-01T00:00:00Z",
+        "user_api_key_team_table_max_budget": 300.0,
+        "user_api_key_user_budget_reset_at": None,
+        "user_api_key_user_table_max_budget": None,
+        "user_api_key_user_alias": "Alice",
+    }
 
 
 @pytest.mark.asyncio

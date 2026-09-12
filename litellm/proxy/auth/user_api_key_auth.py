@@ -103,6 +103,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.spend_tracking.carried_budget_state import carry_team_and_user_budget_state
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     bind_admission_counter_keys,
     release_spend_counter_batch,
@@ -2631,6 +2632,11 @@ async def _run_centralized_common_checks(
         None if isinstance(end_user_result, BaseException) else end_user_result
     )
     global_proxy_spend: float | None = None if isinstance(global_spend_result, BaseException) else global_spend_result
+    carry_team_and_user_budget_state(
+        valid_token=user_api_key_auth_obj,
+        team_object=team_object,
+        user_object=user_object,
+    )
 
     if user_api_key_auth_obj.org_id is None and team_object is not None and team_object.organization_id is not None:
         user_api_key_auth_obj.org_id = team_object.organization_id

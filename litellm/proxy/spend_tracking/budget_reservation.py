@@ -32,6 +32,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_cache_key,
     team_membership_reservation_cache_key,
 )
+from litellm.proxy.spend_tracking.spend_counter_batch import spend_counter_batch_scope
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
 from litellm.rust_bridge.token_counter import RustTokenizer, count_input_tokens, rust_tokenizer
@@ -257,46 +258,47 @@ async def reserve_budget_for_request(
 
     applied_entries: Final[list[dict[str, float | str]]] = []
     try:
-        for counter in counters:
-            entry = _counter_to_reservation_entry(
-                counter=counter,
-                reserved_cost=reservation_cost,
-            )
-            applied_entries.append(entry)
-            try:
-                reserved_value = await _reserve_counter(
+        with _counters_batch_scope(frozenset(counter.counter_key for counter in counters)):
+            for counter in counters:
+                entry = _counter_to_reservation_entry(
                     counter=counter,
-                    reservation_cost=reservation_cost,
+                    reserved_cost=reservation_cost,
                 )
-            except _CounterReservationUnavailable as exc:
-                if exc.touched_counter and not exc.counter_invalidated:
-                    await _release_applied_entries_best_effort(
-                        entries=[entry],
-                        default_reserved_cost=reservation_cost,
+                applied_entries.append(entry)
+                try:
+                    reserved_value = await _reserve_counter(
+                        counter=counter,
+                        reservation_cost=reservation_cost,
                     )
-                applied_entries.remove(entry)
-                if fail_closed_budget_enforcement:
-                    _raise_reservation_unavailable(counter_key=counter.counter_key)
-                continue
+                except _CounterReservationUnavailable as exc:
+                    if exc.touched_counter and not exc.counter_invalidated:
+                        await _release_applied_entries_best_effort(
+                            entries=[entry],
+                            default_reserved_cost=reservation_cost,
+                        )
+                    applied_entries.remove(entry)
+                    if fail_closed_budget_enforcement:
+                        _raise_reservation_unavailable(counter_key=counter.counter_key)
+                    continue
 
-            if reserved_value is not None:
-                current_spend = reserved_value
-            else:
-                cached_spend = current_spend_by_counter_key.get(counter.counter_key)
-                if cached_spend is None:
-                    cached_spend = await _get_current_counter_value(counter=counter)
-                current_spend = cached_spend + reservation_cost
-            if current_spend > counter.max_budget:
-                reservation_cost = await _apply_over_budget_reservation_policy(
-                    counter=counter,
-                    valid_token=valid_token,
-                    entry=entry,
-                    applied_entries=applied_entries,
-                    reservation_cost=reservation_cost,
-                    current_spend=current_spend,
-                    fail_closed_budget_enforcement=fail_closed_budget_enforcement,
-                )
-                continue
+                if reserved_value is not None:
+                    current_spend = reserved_value
+                else:
+                    cached_spend = current_spend_by_counter_key.get(counter.counter_key)
+                    if cached_spend is None:
+                        cached_spend = await _get_current_counter_value(counter=counter)
+                    current_spend = cached_spend + reservation_cost
+                if current_spend > counter.max_budget:
+                    reservation_cost = await _apply_over_budget_reservation_policy(
+                        counter=counter,
+                        valid_token=valid_token,
+                        entry=entry,
+                        applied_entries=applied_entries,
+                        reservation_cost=reservation_cost,
+                        current_spend=current_spend,
+                        fail_closed_budget_enforcement=fail_closed_budget_enforcement,
+                    )
+                    continue
     except Exception:
         await _release_applied_entries_best_effort(
             entries=applied_entries,
@@ -878,19 +880,27 @@ async def _get_current_counter_value(counter: _BudgetCounter) -> float:
     )
 
 
+def _counters_batch_scope(counter_keys: frozenset[str]) -> spend_counter_batch_scope:
+    """Each counter is read once, then written, so one MGET up front serves every read in the loop."""
+    from litellm.proxy.proxy_server import spend_counter_cache
+
+    return spend_counter_batch_scope(spend_counter_cache.redis_cache, counter_keys=counter_keys)
+
+
 async def _set_reserved_entries_actual_cost(
     entries: list[dict],
     actual_cost: float,
     default_reserved_cost: float,
     reseed_on_inconsistent: bool = True,
 ) -> None:
-    for entry in entries:
-        await _set_reserved_entry_actual_cost(
-            entry=entry,
-            actual_cost=actual_cost,
-            default_reserved_cost=default_reserved_cost,
-            reseed_on_inconsistent=reseed_on_inconsistent,
-        )
+    with _counters_batch_scope(frozenset(str(entry["counter_key"]) for entry in entries if "counter_key" in entry)):
+        for entry in entries:
+            await _set_reserved_entry_actual_cost(
+                entry=entry,
+                actual_cost=actual_cost,
+                default_reserved_cost=default_reserved_cost,
+                reseed_on_inconsistent=reseed_on_inconsistent,
+            )
 
 
 async def _set_reserved_entry_actual_cost(

@@ -659,7 +659,15 @@ from litellm.proxy.route_priority import hot_routes_first
 from litellm.proxy.search_endpoints.endpoints import router as search_router
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
-from litellm.proxy.spend_tracking.spend_counter_batch import active_spend_counter_batch
+from litellm.proxy.spend_tracking.spend_counter_batch import (
+    active_spend_counter_batch,
+    bind_spend_counter_keys,
+    forget_spend_counter,
+    post_call_counter_keys,
+    read_batched_spend_counter,
+    record_spend_counter_value,
+    spend_counter_batch_scope,
+)
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
@@ -2628,6 +2636,7 @@ async def _repair_stale_spend_counter(counter_key: str, db_spend: float) -> None
     if needs_update:
         spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=db_spend)
     if spend_counter_cache.redis_cache is not None:
+        forget_spend_counter(counter_key)
         try:
             await spend_counter_cache.redis_cache.async_set_max(key=counter_key, value=db_spend)
         except Exception:
@@ -3001,7 +3010,20 @@ async def increment_spend_counters(
     # return_exceptions so a failing scope does not leave its siblings running
     # as orphaned tasks that race the caller's reservation-counter invalidation;
     # all scopes settle, then the first error propagates as before.
-    scope_results: Final = await asyncio.gather(*scope_coros, return_exceptions=True)
+    with spend_counter_batch_scope(spend_counter_cache.redis_cache):
+        bind_spend_counter_keys(
+            post_call_counter_keys(
+                token=token,
+                team_id=team_id,
+                user_id=user_id,
+                org_id=org_id,
+                end_user_id=end_user_id,
+                tags=tags,
+                model_access_groups=model_access_groups,
+            )
+            - reserved_counter_keys
+        )
+        scope_results: Final = await asyncio.gather(*scope_coros, return_exceptions=True)
     scope_errors: Final = tuple(
         item
         for scope in scope_results
@@ -3331,6 +3353,14 @@ async def _ensure_window_spend_counter_initialized(
 
 
 async def _is_spend_counter_cache_warm(counter_key: str) -> bool:
+    batched: Final = await read_batched_spend_counter(counter_key)
+    if batched is not None:
+        batched_value, _ = batched
+        if batched_value is None:
+            return False
+        spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=batched_value)
+        return True
+
     if spend_counter_cache.redis_cache is not None:
         try:
             current_value: Final[object] = await spend_counter_cache.redis_cache.async_get_cache(
@@ -3375,6 +3405,7 @@ async def _increment_spend_counter_cache(counter_key: str, increment: float):
             key=counter_key,
             value=current_value,
         )
+        record_spend_counter_value(counter_key, float(current_value))
         return current_value
 
     return await SpendCounterReseed.increment_in_memory(
@@ -3383,6 +3414,7 @@ async def _increment_spend_counter_cache(counter_key: str, increment: float):
 
 
 async def _invalidate_spend_counter(counter_key: str):
+    forget_spend_counter(counter_key)
     spend_counter_cache.in_memory_cache.delete_cache(key=counter_key)
     if spend_counter_cache.redis_cache is not None:
         try:
@@ -3419,6 +3451,7 @@ async def _apply_spend_counter_increments(pending: Sequence[_PendingSpendIncreme
         raise
     for item, current_value in zip(pending, results or ()):
         spend_counter_cache.in_memory_cache.set_cache(key=item.counter_key, value=current_value)
+        record_spend_counter_value(item.counter_key, float(current_value))
 
 
 async def update_cache(

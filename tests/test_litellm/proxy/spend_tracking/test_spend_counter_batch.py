@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -51,6 +51,24 @@ class CountingRedis(RedisCache):
             raise ConnectionError("redis down")
         self.commands.append(f"MGET {' '.join(key_list)}")
         return {key: self.store.get(key) for key in key_list}
+
+    def get_ttl(self, **kwargs: object) -> int | None:
+        return None
+
+    async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
+        self.commands.append(f"INCRBYFLOAT {key} {value}")
+        return self._incr(key, value)
+
+    async def async_increment_pipeline(
+        self, increment_list: Sequence[Mapping[str, object]], **kwargs: object
+    ) -> list[float]:
+        self.commands.append(f"PIPELINE {' '.join(str(op['key']) for op in increment_list)}")
+        return [self._incr(str(op["key"]), float(str(op["increment_value"]))) for op in increment_list]
+
+    def _incr(self, key: str, value: float) -> float:
+        total = float(str(self.store.get(key, 0.0))) + value
+        self.store[key] = total
+        return total
 
 
 def _spend_counter_cache(redis: RedisCache | None, in_memory: dict[str, float] | None = None) -> MagicMock:
@@ -298,3 +316,45 @@ async def test_reseed_outside_the_scope_still_re_checks_redis_itself():
 
     assert value == 4.0
     assert redis.commands == ["GET spend:key:hashed"]
+
+
+POST_CALL_KEYS = TOKEN_KEYS | {"spend:tag:prod", "spend:model_access_group:premium"}
+
+
+@pytest.mark.asyncio
+async def test_post_call_increment_for_every_entity_costs_one_mget_and_one_pipeline(monkeypatch):
+    redis = CountingRedis({key: 1.0 for key in POST_CALL_KEYS})
+    monkeypatch.setattr(ps, "spend_counter_cache", _spend_counter_cache(redis))
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    await ps.increment_spend_counters(
+        token="hashed",
+        team_id="team",
+        user_id="user",
+        org_id="org",
+        end_user_id="eu",
+        tags=["prod"],
+        model_access_groups=["premium"],
+        response_cost=0.5,
+    )
+
+    assert [c.split()[0] for c in redis.commands] == ["MGET", "PIPELINE"], redis.commands
+    assert set(redis.commands[0].split()[1:]) == POST_CALL_KEYS
+    assert set(redis.commands[1].split()[1:]) == POST_CALL_KEYS
+    assert {key: redis.store[key] for key in POST_CALL_KEYS} == {key: 1.5 for key in POST_CALL_KEYS}
+
+
+@pytest.mark.asyncio
+async def test_post_call_cold_counters_seed_from_the_mget_miss_without_a_second_read(monkeypatch):
+    redis = CountingRedis({"spend:key:hashed": 1.0})
+    redis.async_set_cache = AsyncMock(return_value=True)
+    prisma = MagicMock()
+    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=MagicMock(spend=4.0))
+    monkeypatch.setattr(ps, "spend_counter_cache", _spend_counter_cache(redis))
+    monkeypatch.setattr(ps, "prisma_client", prisma)
+
+    await ps.increment_spend_counters(token="hashed", team_id="team", user_id=None, response_cost=0.5)
+
+    assert [c.split()[0] for c in redis.commands] == ["MGET", "PIPELINE"], redis.commands
+    redis.async_set_cache.assert_awaited_once_with(key="spend:team:team", value=4.0, nx=True)
+    assert redis.store["spend:key:hashed"] == 1.5
