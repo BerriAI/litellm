@@ -6,6 +6,17 @@
   {{- $_ := set .Values.ingress.annotations "kubernetes.io/ingress.class" .Values.ingress.className}}
   {{- end }}
 {{- end }}
+{{- $annotations := deepCopy (.Values.ingress.annotations | default (dict)) -}}
+{{- if and (eq .Values.ingress.className "alb") .Values.ingress.idleTimeoutSeconds (not (hasKey $annotations "alb.ingress.kubernetes.io/load-balancer-attributes")) -}}
+{{- $_ := set $annotations "alb.ingress.kubernetes.io/load-balancer-attributes" (printf "idle_timeout.timeout_seconds=%v" .Values.ingress.idleTimeoutSeconds) -}}
+{{- else if and (eq .Values.ingress.className "nginx") .Values.ingress.idleTimeoutSeconds -}}
+{{- if not (hasKey $annotations "nginx.ingress.kubernetes.io/proxy-read-timeout") -}}
+{{- $_ := set $annotations "nginx.ingress.kubernetes.io/proxy-read-timeout" (printf "%v" .Values.ingress.idleTimeoutSeconds) -}}
+{{- end }}
+{{- if not (hasKey $annotations "nginx.ingress.kubernetes.io/proxy-send-timeout") -}}
+{{- $_ := set $annotations "nginx.ingress.kubernetes.io/proxy-send-timeout" (printf "%v" .Values.ingress.idleTimeoutSeconds) -}}
+{{- end }}
+{{- end }}
 {{- if semverCompare ">=1.19-0" .Capabilities.KubeVersion.GitVersion -}}
 apiVersion: networking.k8s.io/v1
 {{- else if semverCompare ">=1.14-0" .Capabilities.KubeVersion.GitVersion -}}
@@ -21,9 +32,9 @@ metadata:
     {{- with .Values.ingress.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
-  {{- with .Values.ingress.annotations }}
+  {{- if $annotations }}
   annotations:
-    {{- toYaml . | nindent 4 }}
+    {{- toYaml $annotations | nindent 4 }}
   {{- end }}
 spec:
   {{- if and .Values.ingress.className (semverCompare ">=1.18-0" .Capabilities.KubeVersion.GitVersion) }}
