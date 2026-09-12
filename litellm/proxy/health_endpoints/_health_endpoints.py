@@ -925,41 +925,31 @@ def _caller_may_probe_deployment(
     )
 
 
-def _resolve_targeted_model_ids(model_list: list, model: str | None, model_id: str | None) -> set | None:
+def _resolve_targeted_model_ids(
+    model_list: list, model: str | None, model_id: str | None, team_id: str | None
+) -> set | None:
     """
     Resolve a ``/health`` ``model`` / ``model_id`` query param to the set of
-    deployment IDs the response should be scoped to.
+    deployment IDs the response should be scoped to, mirroring the live-path
+    narrowing in ``perform_health_check()``: ``model_id`` wins when given and
+    matches ``model_info.id`` only; ``model`` matches the deployment's
+    ``model_name`` alias, its ``litellm_params.model`` provider string, or the
+    ``model_info.team_public_model_name`` the caller's own team reaches it by.
 
-    Mirrors the live-path semantics in ``perform_health_check()``: ``model``
-    matches the deployment's ``model_name`` alias, its ``litellm_params.model``
-    provider string, or the ``model_info.team_public_model_name`` a team key
-    reaches it by. ``model_id`` matches ``model_info.id``.
-
-    Both query params are validated against the supplied ``model_list``.
-    Callers pass an already-scoped list (filtered to the caller's allowed
-    models for non-admins, full list for admins), so a ``model_id`` that
-    isn't present resolves to an empty set rather than a single-element
-    set — preventing a non-admin from reading another deployment's cached
-    health entry by guessing its ID.
-
-    Returns ``None`` when no targeting is requested — callers should treat
-    that as "no filter."
+    Callers pass an already-scoped list, so a ``model_id`` outside the
+    caller's scope resolves to an empty set and never to the unvalidated id.
+    Returns ``None`` when no targeting is requested.
     """
-    if not model and not model_id:
+    if model_id:
+        return {i for m in model_list if (i := (m.get("model_info") or {}).get("id")) == model_id}
+    if not model:
         return None
-    target_ids: Final[set] = set()
-    for m in model_list:
-        deployment_id = (m.get("model_info") or {}).get("id")
-        if not deployment_id:
-            continue
-        if model_id and deployment_id == model_id:
-            target_ids.add(deployment_id)
-            continue
-        if model:
-            litellm_model = (m.get("litellm_params") or {}).get("model")
-            if litellm_model == model or deployment_answers_to(m, model):
-                target_ids.add(deployment_id)
-    return target_ids
+    return {
+        i
+        for m in model_list
+        if (i := (m.get("model_info") or {}).get("id"))
+        and ((m.get("litellm_params") or {}).get("model") == model or deployment_answers_to(m, model, team_id))
+    }
 
 
 def _filter_health_check_results_by_model_ids(results: dict, allowed_model_ids: set) -> dict:
@@ -1040,8 +1030,12 @@ def _health_endpoint_resolve_target_model_name(
     model_id: str | None,
     llm_router,
 ) -> str | None:
-    """Map ``model_id`` (without ``model``) to ``model_name`` for live health checks."""
-    if not model_id or model:
+    """Map ``model_id`` to its deployment's ``model_name`` for live health checks.
+
+    ``model_id`` wins over ``model``, so an id no deployment carries is a 404 even
+    when it is paired with a known name.
+    """
+    if not model_id:
         return model
     if llm_router is None:
         raise HTTPException(
@@ -1161,7 +1155,7 @@ async def health_endpoint(
             if not restrict_to_allowed_models
             or _caller_may_probe_deployment(m, allowed_models, llm_router, user_api_key_dict.team_id, is_admin)
         ]
-        targeted_ids: Final = _resolve_targeted_model_ids(_llm_model_list, model, model_id)
+        targeted_ids: Final = _resolve_targeted_model_ids(_llm_model_list, model, model_id, user_api_key_dict.team_id)
         if restrict_to_allowed_models and targeted_ids is not None and not targeted_ids:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -1228,6 +1222,7 @@ async def health_endpoint(
                 model_id=model_id,
                 max_concurrency=health_check_concurrency,
                 router=llm_router,
+                team_id=user_api_key_dict.team_id,
                 **_hc_filter,
             )
             return _post_process(router_result)

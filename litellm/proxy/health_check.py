@@ -258,15 +258,18 @@ def _deployment_model(deployment: Mapping[str, object]) -> str | None:
     return params.get("model") if isinstance(params, Mapping) else None
 
 
-def deployment_answers_to(deployment: Mapping[str, object], model_name: str) -> bool:
-    """True when `model_name` is the deployment's model_name or the public name a team key reaches it by."""
+def deployment_answers_to(deployment: Mapping[str, object], model_name: str, team_id: str | None) -> bool:
+    """True when `model_name` is the deployment's model_name or the public name the caller's own team reaches it by."""
     info: Final = deployment.get("model_info")
     public_name: Final = info.get("team_public_model_name") if isinstance(info, Mapping) else None
-    return model_name in (deployment.get("model_name"), public_name)
+    owner_team_id: Final = info.get("team_id") if isinstance(info, Mapping) else None
+    return model_name == deployment.get("model_name") or (
+        model_name == public_name and team_id is not None and owner_team_id == team_id
+    )
 
 
 def _narrow_to_target(
-    model_list: Sequence[Mapping[str, object]], model: str | None, model_id: str | None
+    model_list: Sequence[Mapping[str, object]], model: str | None, model_id: str | None, team_id: str | None
 ) -> tuple[Mapping[str, object], ...]:
     """Narrow to the requested deployment. An id matching nothing keeps the whole list."""
     if model_id is not None:
@@ -275,7 +278,7 @@ def _narrow_to_target(
     if model is None:
         return tuple(model_list)
     by_param: Final = tuple(x for x in model_list if _deployment_model(x) == model)
-    return by_param or tuple(x for x in model_list if deployment_answers_to(x, model))
+    return by_param or tuple(x for x in model_list if deployment_answers_to(x, model, team_id))
 
 
 def _is_strategy_router_deployment(litellm_params: Mapping[str, object]) -> bool:
@@ -820,13 +823,15 @@ async def perform_health_check(
     instrumentation_context: dict | None = None,
     health_check_skip_disabled_background_models: bool = False,
     router: "Router | None" = None,
+    team_id: str | None = None,
 ):
     """
     Perform a health check on the system.
 
     When model_id is provided, only the deployment with that id is checked
     (so models that share the same name but have different ids are checked separately).
-    When model (name) is provided, all deployments matching that name are checked.
+    When model (name) is provided, all deployments matching that name are checked;
+    a team's public model name only matches for a caller from that team (``team_id``).
 
     When ``health_check_skip_disabled_background_models`` is True (via
     ``general_settings.health_check_skip_disabled_background_models``), deployments
@@ -857,7 +862,7 @@ async def perform_health_check(
     cycle_start_time: Final = time.monotonic()
     requested_model_count: Final = len(model_list)
     skip_disabled: Final = health_check_skip_disabled_background_models
-    narrowed: Final = _health_check_eligible(_narrow_to_target(model_list, model, model_id), skip_disabled)
+    narrowed: Final = _health_check_eligible(_narrow_to_target(model_list, model, model_id, team_id), skip_disabled)
     if not narrowed:
         if instrumentation_enabled:
             logger.debug(
