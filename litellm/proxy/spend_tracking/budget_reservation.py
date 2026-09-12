@@ -889,13 +889,15 @@ def _counters_batch_scope(counter_keys: frozenset[str]) -> spend_counter_batch_s
 
 @dataclass(frozen=True, slots=True)
 class _EntryAdjustment:
-    entry: dict
+    entry: dict[str, float | str]
     counter_key: str
     target_adjustment: float
     adjustment: float
 
 
-def _entry_adjustment(entry: dict, actual_cost: float, default_reserved_cost: float) -> _EntryAdjustment | None:
+def _entry_adjustment(
+    entry: dict[str, float | str], actual_cost: float, default_reserved_cost: float
+) -> _EntryAdjustment | None:
     counter_key: Final = entry.get("counter_key")
     if counter_key is None:
         return None
