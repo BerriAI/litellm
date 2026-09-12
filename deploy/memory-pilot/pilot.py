@@ -1,5 +1,6 @@
 """An isolated office pilot that preserves upstream gateway credentials."""
 
+import asyncio
 import hashlib
 import os
 import secrets
@@ -46,6 +47,7 @@ forward_credential: Final = ForwardCredential()
 class PilotGateway:
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
+        self.validation_slots = asyncio.Semaphore(16)
         self.upstream = get_async_httpx_client(
             httpxSpecialProvider.PassThroughEndpoint,
             params={"timeout": 20, "client_alias": "memory-pilot-upstream"},
@@ -97,12 +99,23 @@ class PilotGateway:
             )(scope, receive, send)
             return
         try:
+            await asyncio.wait_for(self.validation_slots.acquire(), timeout=0.05)
+        except TimeoutError:
+            await JSONResponse(
+                {"error": "Pilot credential validation is busy; retry shortly"},
+                status_code=503,
+                headers={"Retry-After": "1"},
+            )(scope, receive, send)
+            return
+        try:
             models: Final = await self.upstream.get(
                 _UPSTREAM + "/v1/models", headers={"Authorization": "Bearer " + credential}
             )
         except httpx.HTTPError:
             await JSONResponse({"error": "Upstream gateway unavailable"}, status_code=503)(scope, receive, send)
             return
+        finally:
+            self.validation_slots.release()
         if models.is_error:
             await JSONResponse({"error": "Upstream gateway rejected this key"}, status_code=models.status_code)(
                 scope, receive, send

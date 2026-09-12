@@ -7,6 +7,7 @@ from fastapi import HTTPException
 
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UI_TEAM_ID, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper, WriterPinnedClient
 from litellm.repositories.table_repositories import MemoryPolicyRepository, MemoryPreferenceRepository
 from litellm.types.memory_v2 import MemoryPolicy, MemoryScope, MemoryStatus
@@ -22,8 +23,16 @@ async def gateway_memory_is_configured(prisma_client: object, cache: DualCache) 
     without shared Redis when an administrator first enables memory.
     """
     cached: Final = await cache.async_get_cache(key=_CONFIGURED_CACHE_KEY)
-    if isinstance(cached, bool):
-        return cached
+    if cached is True:
+        return True
+    if cached is False:
+        if cache.redis_cache is None:
+            return False
+        # A backend mutation evicts Redis, but another worker can still hold
+        # a negative local hint (Redis Cluster may not support pub/sub).
+        shared: Final = await cache.redis_cache.async_get_cache(key=_CONFIGURED_CACHE_KEY)
+        if shared is False:
+            return False
     rows: Final = await MemoryPolicyRepository(memory_primary_client(prisma_client)).table.find_many(take=1)
     configured: Final = bool(rows)
     await cache.async_set_cache(key=_CONFIGURED_CACHE_KEY, value=configured, ttl=30)
@@ -33,7 +42,7 @@ async def gateway_memory_is_configured(prisma_client: object, cache: DualCache) 
 async def invalidate_memory_configuration() -> None:
     from litellm.proxy.proxy_server import user_api_key_cache
 
-    await user_api_key_cache.async_delete_cache(key=_CONFIGURED_CACHE_KEY)
+    await evict_and_broadcast(cache_keys=(_CONFIGURED_CACHE_KEY,), user_api_key_cache=user_api_key_cache)
 
 
 def memory_primary_client(prisma_client: object) -> WriterPinnedClient:
