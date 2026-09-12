@@ -105,6 +105,15 @@ class SpendCounterReseed:
             return lock
 
     @staticmethod
+    async def increment_in_memory(spend_counter_cache: "DualCache", counter_key: str, increment: float) -> float | None:
+        """Apply local deltas after an in-flight reseed establishes the spend balance."""
+        lock: Final = await SpendCounterReseed._get_lock(counter_key)
+        async with lock:
+            return await spend_counter_cache.async_increment_cache(
+                key=counter_key, value=increment, local_only=True, refresh_ttl=True
+            )
+
+    @staticmethod
     async def from_db(prisma_client: Optional["PrismaClient"], counter_key: str) -> float | None:
         """
         Read the authoritative spend for a counter from the DB.
@@ -245,7 +254,10 @@ class SpendCounterReseed:
                         value=current_value,
                     )
                 else:
-                    await spend_counter_cache.async_increment_cache(key=counter_key, value=db_spend, refresh_ttl=True)
+                    cached_spend: Final = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+                    seeded_spend: Final = max(db_spend, float(cached_spend)) if cached_spend is not None else db_spend
+                    spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=seeded_spend)
+                    return seeded_spend
             except Exception:
                 verbose_proxy_logger.exception(
                     "SpendCounterReseed.coalesced: failed to warm counter %s",
@@ -438,11 +450,16 @@ class SpendCounterReseed:
                         value=current_value,
                     )
                 else:
-                    await spend_counter_cache.async_increment_cache(key=counter_key, value=window_spend)
+                    cached_spend: Final = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+                    seeded_spend: Final = (
+                        max(window_spend, float(cached_spend)) if cached_spend is not None else window_spend
+                    )
+                    spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=seeded_spend)
+                    return seeded_spend
             except Exception:
                 verbose_proxy_logger.exception(
                     "SpendCounterReseed.coalesced_window: failed to warm counter %s",
                     counter_key,
                 )
                 raise
-            return window_spend
+            return current_value
