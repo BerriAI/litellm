@@ -8066,6 +8066,25 @@ def _first_token_limit(candidates: tuple[ModelInfo, ...], field: str) -> int | N
     )
 
 
+def _first_cost(candidate_sets: tuple[tuple[ModelInfo, ...], ...], field: str) -> float | None:
+    """The first per-token cost any deployment behind the listed name declares.
+
+    Interchangeable deployments of a model group normally share a price, so there is a
+    single value to report. When a group mixes models, the cheapest deployments are
+    listed first by the router, so the first number is the one a caller is most likely
+    to pay; unlike a context window it is not a ceiling to be maximized.
+    """
+    return next(
+        (
+            cost
+            for candidates in candidate_sets
+            for cost in (info.get(field) for info in candidates)
+            if isinstance(cost, float)
+        ),
+        None,
+    )
+
+
 def _group_token_limit(candidate_sets: tuple[tuple[ModelInfo, ...], ...], field: str) -> int | None:
     """The widest limit any deployment behind the listed name declares for ``field``.
 
@@ -8162,6 +8181,13 @@ def create_model_info_response(
         base["max_input_tokens"] = max_input_tokens
     if max_output_tokens is not None:
         base["max_output_tokens"] = max_output_tokens
+
+    input_cost_per_token: Final = _first_cost(candidate_sets, "input_cost_per_token")
+    output_cost_per_token: Final = _first_cost(candidate_sets, "output_cost_per_token")
+    if input_cost_per_token is not None:
+        base["input_cost_per_token"] = input_cost_per_token
+    if output_cost_per_token is not None:
+        base["output_cost_per_token"] = output_cost_per_token
 
     if not include_metadata:
         return base

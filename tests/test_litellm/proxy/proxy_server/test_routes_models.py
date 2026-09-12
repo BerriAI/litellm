@@ -397,3 +397,69 @@ def test_anthropic_format_keeps_served_ids_for_other_anthropic_clients(client, a
 
     assert response.status_code == 200
     assert [m["id"] for m in response.json()["data"]] == ["gpt-4", "claude-sonnet"]
+
+
+def test_create_model_info_response_carries_per_token_costs():
+    """Gateway-discovered models are priced in litellm.model_cost, so the listing
+    must report that price for clients that cost out their own usage."""
+    response = create_model_info_response(
+        model_id="merge/anthropic/claude-opus-4-6",
+        provider="merge",
+        get_model_info=lambda model: {
+            "key": model,
+            "mode": "chat",
+            "max_input_tokens": 200000,
+            "max_output_tokens": 64000,
+            "input_cost_per_token": 5e-6,
+            "output_cost_per_token": 25e-6,
+        },
+    )
+
+    assert response["input_cost_per_token"] == pytest.approx(5e-6)
+    assert response["output_cost_per_token"] == pytest.approx(25e-6)
+    assert response["max_input_tokens"] == 200000
+
+
+def test_create_model_info_response_omits_unknown_costs():
+    """An unpriced model must not advertise a zero cost, which would read as free."""
+    response = create_model_info_response(
+        model_id="unpriced-model",
+        provider="openai",
+        get_model_info=lambda model: {"key": model, "mode": "chat"},
+    )
+
+    assert "input_cost_per_token" not in response
+    assert "output_cost_per_token" not in response
+
+
+@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+def test_get_models_reports_registered_gateway_costs(client, auth_as, patched_models, monkeypatch, path):
+    """End-to-end: a cost-map entry registered by wildcard expansion reaches /v1/models."""
+    patched_models.get_model_listing_info = MagicMock(return_value=None)
+
+    def _cost_map_lookup(model_id):
+        if model_id != "gpt-4":
+            raise Exception("not in cost map")
+        return {
+            "key": model_id,
+            "mode": "chat",
+            "max_input_tokens": 128000,
+            "max_output_tokens": 16384,
+            "input_cost_per_token": 2.5e-6,
+            "output_cost_per_token": 1e-5,
+        }
+
+    monkeypatch.setattr(
+        proxy_utils,
+        "create_model_info_response",
+        lambda **kwargs: create_model_info_response(**kwargs, get_model_info=_cost_map_lookup),
+    )
+
+    with auth_as():
+        response = client.get(path)
+
+    assert response.status_code == 200
+    gpt_4 = response.json()["data"][0]
+    assert gpt_4["input_cost_per_token"] == pytest.approx(2.5e-6)
+    assert gpt_4["output_cost_per_token"] == pytest.approx(1e-5)
+

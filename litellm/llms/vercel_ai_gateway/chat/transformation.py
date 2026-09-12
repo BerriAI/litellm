@@ -6,14 +6,24 @@ Calls done in OpenAI/openai.py as Vercel AI Gateway is openai-compatible.
 Docs: https://vercel.com/docs/ai-gateway
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.gateway_catalog_cache import (
+    as_mapping,
+    as_sequence,
+    float_field,
+    freeze_catalog,
+    int_field,
+    prefix_model_ids,
+)
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelInfoBase
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import VercelAIGatewayException
@@ -80,28 +90,6 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
         )
 
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
-        api_base, _ = self._get_openai_compatible_provider_info(api_base, api_key)
-
-        if api_base is None:
-            api_base = "https://ai-gateway.vercel.sh/v1"
-
-        models_url: Final = f"{api_base}/models"
-        response: Final = litellm.module_level_client.get(url=models_url)
-
-        if response.status_code != 200:
-            raise Exception(f"Failed to get models: {response.text}")
-
-        models: Final = response.json()["data"]
-        return [model["id"] for model in models]
-
-    def get_models_with_info(
-        self, api_key: str | None = None, api_base: str | None = None
-    ) -> list[dict] | None:
-        """
-        Fetch Vercel AI Gateway's public catalog with pricing and capabilities.
-        """
-        from litellm.litellm_core_utils.gateway_catalog_cache import optional_float
-
         resolved_base, _ = self._get_openai_compatible_provider_info(api_base, api_key)
         if resolved_base is None:
             resolved_base = "https://ai-gateway.vercel.sh/v1"
@@ -110,33 +98,54 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
         if response.status_code != 200:
             raise Exception(f"Failed to get models: {response.text}")
 
-        entries: Final[list[dict]] = []
-        for item in response.json().get("data", []):
-            model_id: Final = item.get("id")
-            item_type: Final = item.get("type")
-            if not model_id or item_type not in ("language", "embedding"):
-                continue
+        models: Final = response.json()["data"]
+        return prefix_model_ids("vercel_ai_gateway", (model["id"] for model in models))
 
-            pricing: Final = item.get("pricing") or {}
-            modalities: Final = item.get("modalities") or {}
-            input_modalities: Final = modalities.get("input") or []
-            tags: Final = item.get("tags") or []
-            context_window: Final = item.get("context_window")
+    def get_models_with_info(
+        self, api_key: str | None = None, api_base: str | None = None
+    ) -> Mapping[str, ModelInfoBase] | None:
+        """
+        Fetch Vercel AI Gateway's public catalog with pricing and capabilities.
+        """
+        resolved_base, _ = self._get_openai_compatible_provider_info(api_base, api_key)
+        if resolved_base is None:
+            resolved_base = "https://ai-gateway.vercel.sh/v1"
 
-            entries.append(
-                {
-                    "key": f"vercel_ai_gateway/{model_id}",
-                    "litellm_provider": "vercel_ai_gateway",
-                    "mode": "chat" if item_type == "language" else "embedding",
-                    "max_tokens": context_window,
-                    "max_input_tokens": context_window,
-                    "max_output_tokens": item.get("max_tokens") if item_type == "language" else None,
-                    "input_cost_per_token": optional_float(pricing.get("input")),
-                    "output_cost_per_token": optional_float(pricing.get("output")),
-                    "cache_read_input_token_cost": optional_float(pricing.get("input_cache_read")),
-                    "cache_creation_input_token_cost": optional_float(pricing.get("input_cache_write")),
-                    "supports_vision": "image" in input_modalities,
-                    "supports_reasoning": "reasoning" in tags,
-                }
-            )
-        return entries
+        response: Final = litellm.module_level_client.get(url=f"{resolved_base}/models")
+        if response.status_code != 200:
+            raise Exception(f"Failed to get models: {response.text}")
+
+        return freeze_catalog(
+            pair
+            for item in as_sequence(as_mapping(response.json()).get("data"))
+            if (pair := _vercel_catalog_entry(as_mapping(item))) is not None
+        )
+
+
+def _vercel_catalog_entry(item: Mapping[str, object]) -> tuple[str, ModelInfoBase] | None:
+    """One catalog model as ``(bare model id, model info)``, or None if not chat/embedding."""
+    model_id: Final = item.get("id")
+    item_type: Final = item.get("type")
+    if not isinstance(model_id, str) or not model_id or item_type not in ("language", "embedding"):
+        return None
+
+    pricing: Final = as_mapping(item.get("pricing"))
+    input_modalities: Final = as_sequence(as_mapping(item.get("modalities")).get("input"))
+    tags: Final = as_sequence(item.get("tags"))
+    context_window: Final = int_field(item, "context_window")
+
+    entry: Final[ModelInfoBase] = {
+        "key": f"vercel_ai_gateway/{model_id}",
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat" if item_type == "language" else "embedding",
+        "max_tokens": context_window,
+        "max_input_tokens": context_window,
+        "max_output_tokens": int_field(item, "max_tokens") if item_type == "language" else None,
+        "input_cost_per_token": float_field(pricing, "input"),
+        "output_cost_per_token": float_field(pricing, "output"),
+        "cache_read_input_token_cost": float_field(pricing, "input_cache_read"),
+        "cache_creation_input_token_cost": float_field(pricing, "input_cache_write"),
+        "supports_vision": "image" in input_modalities,
+        "supports_reasoning": "reasoning" in tags,
+    }
+    return model_id, entry

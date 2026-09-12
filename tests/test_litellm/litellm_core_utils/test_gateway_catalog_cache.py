@@ -8,7 +8,7 @@ Fixtures mirror the real catalog shapes:
   paginated via has_more/next_cursor)
 """
 
-import time
+from types import MappingProxyType
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -17,6 +17,7 @@ import litellm
 from litellm.litellm_core_utils import gateway_catalog_cache
 from litellm.litellm_core_utils.gateway_catalog_cache import (
     get_catalog,
+    prefix_model_ids,
     register_catalog_into_model_cost,
 )
 from litellm.llms.merge_ai_gateway.chat.transformation import MergeAIGatewayConfig
@@ -105,9 +106,20 @@ def _mock_response(payload, status_code=200):
 
 @pytest.fixture(autouse=True)
 def clear_catalog_cache():
-    gateway_catalog_cache._catalog_cache.clear()
+    gateway_catalog_cache._CATALOG_CACHE.clear()
     yield
-    gateway_catalog_cache._catalog_cache.clear()
+    gateway_catalog_cache._CATALOG_CACHE.clear()
+
+
+class TestPrefixModelIds:
+    def test_namespaces_bare_ids_and_keeps_the_upstream_org(self):
+        assert prefix_model_ids("openrouter", ["anthropic/claude-sonnet-4", "openai/gpt-5"]) == [
+            "openrouter/anthropic/claude-sonnet-4",
+            "openrouter/openai/gpt-5",
+        ]
+
+    def test_does_not_double_prefix(self):
+        assert prefix_model_ids("merge_ai_gateway", ["merge_ai_gateway/x/y"]) == ["merge_ai_gateway/x/y"]
 
 
 class TestOpenRouterCatalog:
@@ -116,11 +128,12 @@ class TestOpenRouterCatalog:
             "litellm.module_level_client.get",
             return_value=_mock_response({"data": [OPENROUTER_ITEM, {"id": "~alias/model"}]}),
         ) as mock_get:
-            entries = OpenrouterConfig().get_models_with_info(api_key="sk-or")
+            catalog = OpenrouterConfig().get_models_with_info(api_key="sk-or")
 
         assert mock_get.call_args.kwargs["url"] == "https://openrouter.ai/api/v1/models"
-        assert len(entries) == 1  # ~alias skipped
-        entry = entries[0]
+        assert mock_get.call_args.kwargs["headers"] == {"Authorization": "Bearer sk-or"}
+        assert list(catalog) == ["anthropic/claude-sonnet-4"]  # ~alias skipped
+        entry = catalog["anthropic/claude-sonnet-4"]
         assert entry["key"] == "openrouter/anthropic/claude-sonnet-4"
         assert entry["litellm_provider"] == "openrouter"
         assert entry["mode"] == "chat"
@@ -132,27 +145,59 @@ class TestOpenRouterCatalog:
         assert entry["supports_vision"] is True
         assert entry["supports_reasoning"] is True
 
+    def test_get_models_namespaces_ids(self):
+        with patch("litellm.module_level_client.get", return_value=_mock_response({"data": [OPENROUTER_ITEM]})):
+            assert OpenrouterConfig().get_models() == ["openrouter/anthropic/claude-sonnet-4"]
+
+    def test_survives_unexpected_field_types(self):
+        """Catalog payloads drift; a wrong type must not raise."""
+        payload = {
+            "data": [
+                {
+                    "id": "vendor/model",
+                    "context_length": "not-a-number",
+                    "architecture": {"input_modalities": "text"},
+                    "pricing": {"prompt": None, "completion": "free"},
+                    "top_provider": "unexpected",
+                    "supported_parameters": None,
+                }
+            ]
+        }
+        with patch("litellm.module_level_client.get", return_value=_mock_response(payload)):
+            catalog = OpenrouterConfig().get_models_with_info()
+
+        entry = catalog["vendor/model"]
+        assert entry["max_input_tokens"] is None
+        assert entry["input_cost_per_token"] is None
+        assert entry["output_cost_per_token"] is None
+        assert entry["max_output_tokens"] is None
+        assert entry["supports_vision"] is False
+        assert entry["supports_reasoning"] is False
+
 
 class TestVercelCatalog:
     def test_normalizes_and_filters_types(self):
         payload = {
             "data": [
                 VERCEL_ITEM,
-                {"id": "alibaba/qwen3-embedding-0.6b", "type": "embedding",
-                 "context_window": 32768, "max_tokens": 32768,
-                 "pricing": {"input": "0.00000001"}},
+                {
+                    "id": "alibaba/qwen3-embedding-0.6b",
+                    "type": "embedding",
+                    "context_window": 32768,
+                    "max_tokens": 32768,
+                    "pricing": {"input": "0.00000001"},
+                },
                 {"id": "openai/dall-e-3", "type": "image"},
             ]
         }
         with patch("litellm.module_level_client.get", return_value=_mock_response(payload)) as mock_get:
-            entries = VercelAIGatewayConfig().get_models_with_info()
+            catalog = VercelAIGatewayConfig().get_models_with_info()
 
         assert mock_get.call_args.kwargs["url"] == "https://ai-gateway.vercel.sh/v1/models"
-        assert [e["key"] for e in entries] == [
-            "vercel_ai_gateway/anthropic/claude-sonnet-4",
-            "vercel_ai_gateway/alibaba/qwen3-embedding-0.6b",
-        ]
-        chat, embed = entries
+        assert list(catalog) == ["anthropic/claude-sonnet-4", "alibaba/qwen3-embedding-0.6b"]
+        chat = catalog["anthropic/claude-sonnet-4"]
+        embed = catalog["alibaba/qwen3-embedding-0.6b"]
+        assert chat["key"] == "vercel_ai_gateway/anthropic/claude-sonnet-4"
         assert chat["mode"] == "chat"
         assert chat["max_output_tokens"] == 64000
         assert chat["input_cost_per_token"] == pytest.approx(3e-6)
@@ -160,6 +205,12 @@ class TestVercelCatalog:
         assert chat["supports_reasoning"] is True
         assert embed["mode"] == "embedding"
         assert embed["max_output_tokens"] is None
+
+    def test_get_models_namespaces_ids(self):
+        with patch("litellm.module_level_client.get", return_value=_mock_response({"data": [VERCEL_ITEM]})):
+            assert VercelAIGatewayConfig().get_models() == [
+                "vercel_ai_gateway/anthropic/claude-sonnet-4"
+            ]
 
 
 class TestMergeCatalog:
@@ -173,17 +224,18 @@ class TestMergeCatalog:
             "litellm.module_level_client.get",
             return_value=self._pages([MERGE_ITEM]),
         ) as mock_get:
-            entries = MergeAIGatewayConfig().get_models_with_info(api_key="sk-merge")
+            catalog = MergeAIGatewayConfig().get_models_with_info(api_key="sk-merge")
 
         assert mock_get.call_args.kwargs["url"] == "https://api-gateway.merge.dev/v1/models"
         assert mock_get.call_args.kwargs["params"] == {"limit": 500}
-        assert len(entries) == 1
-        entry = entries[0]
+        assert mock_get.call_args.kwargs["headers"] == {"Authorization": "Bearer sk-merge"}
+        entry = catalog["anthropic/claude-opus-4-6"]
         assert entry["key"] == "merge_ai_gateway/anthropic/claude-opus-4-6"
         # anthropic vendor (5/25 per million) beats bedrock (15/75)
         assert entry["input_cost_per_token"] == pytest.approx(5e-6)
         assert entry["output_cost_per_token"] == pytest.approx(25e-6)
         assert entry["input_cost_per_token_flex"] == pytest.approx(2.5e-6)
+        assert entry["output_cost_per_token_flex"] == pytest.approx(12.5e-6)
         assert entry["max_input_tokens"] == 200000
         assert entry["max_output_tokens"] == 64000
         assert entry["supports_vision"] is True
@@ -191,59 +243,78 @@ class TestMergeCatalog:
         assert entry["supports_function_calling"] is True
         assert entry["supports_native_streaming"] is True
 
+    def test_catalog_root_derived_from_openai_shaped_api_base(self):
+        assert (
+            MergeAIGatewayConfig.get_catalog_root("https://api-gateway.merge.dev/v1/openai")
+            == "https://api-gateway.merge.dev/v1"
+        )
+        assert MergeAIGatewayConfig.get_catalog_root(None) == "https://api-gateway.merge.dev/v1"
+
     def test_pagination_follows_next_cursor(self):
         first = self._pages([MERGE_ITEM], has_more=True, next_cursor="cur2")
         second = self._pages([{**MERGE_ITEM, "model": "openai/gpt-5"}])
         with patch("litellm.module_level_client.get", side_effect=[first, second]) as mock_get:
-            entries = MergeAIGatewayConfig().get_models_with_info(api_key="sk-merge")
+            catalog = MergeAIGatewayConfig().get_models_with_info(api_key="sk-merge")
 
         assert mock_get.call_count == 2
         assert mock_get.call_args_list[1].kwargs["params"] == {"limit": 500, "cursor": "cur2"}
-        assert {e["key"] for e in entries} == {
-            "merge_ai_gateway/anthropic/claude-opus-4-6",
-            "merge_ai_gateway/openai/gpt-5",
-        }
+        assert set(catalog) == {"anthropic/claude-opus-4-6", "openai/gpt-5"}
+
+    def test_stops_when_next_cursor_missing(self):
+        page = self._pages([MERGE_ITEM], has_more=True, next_cursor=None)
+        with patch("litellm.module_level_client.get", return_value=page) as mock_get:
+            MergeAIGatewayConfig().get_models_with_info(api_key="sk-merge")
+
+        assert mock_get.call_count == 1
 
     def test_skips_unavailable_and_embedding_only(self):
-        unavailable = {**MERGE_ITEM, "model": "x/gone", "vendors": {
-            "v1": {**MERGE_ITEM["vendors"]["anthropic"], "availability_status": "deprecated"}
-        }}
-        embed_only = {**MERGE_ITEM, "model": "x/embed", "vendors": {
-            "v1": {**MERGE_ITEM["vendors"]["anthropic"], "capabilities": {
-                "input": ["text"], "output": ["embedding"],
-                "supports_tool_calling": False, "supports_tool_choice": False,
-                "supports_structured_outputs": False, "streaming": False,
-            }}
-        }}
+        unavailable = {
+            **MERGE_ITEM,
+            "model": "x/gone",
+            "vendors": {
+                "v1": {**MERGE_ITEM["vendors"]["anthropic"], "availability_status": "deprecated"}
+            },
+        }
+        embed_only = {
+            **MERGE_ITEM,
+            "model": "x/embed",
+            "vendors": {
+                "v1": {
+                    **MERGE_ITEM["vendors"]["anthropic"],
+                    "capabilities": {
+                        "input": ["text"],
+                        "output": ["embedding"],
+                        "supports_tool_calling": False,
+                        "supports_tool_choice": False,
+                        "supports_structured_outputs": False,
+                        "streaming": False,
+                    },
+                }
+            },
+        }
         with patch(
             "litellm.module_level_client.get",
             return_value=self._pages([unavailable, embed_only, MERGE_ITEM]),
         ):
-            entries = MergeAIGatewayConfig().get_models_with_info(api_key="sk-merge")
+            catalog = MergeAIGatewayConfig().get_models_with_info(api_key="sk-merge")
 
-        assert [e["key"] for e in entries] == ["merge_ai_gateway/anthropic/claude-opus-4-6"]
+        assert list(catalog) == ["anthropic/claude-opus-4-6"]
 
     def test_pricing_fallback_to_openrouter_cost_map(self):
         no_pricing = {
             **MERGE_ITEM,
             "model": "anthropic/claude-3-haiku",
             "vendors": {
-                "v1": {
-                    **MERGE_ITEM["vendors"]["anthropic"],
-                    "pricing": {"currency": "USD"},
-                }
+                "v1": {**MERGE_ITEM["vendors"]["anthropic"], "pricing": {"currency": "USD"}}
             },
         }
         original = litellm.model_cost.get("openrouter/anthropic/claude-3-haiku")
         assert original is not None and original.get("input_cost_per_token") is not None
 
-        with patch(
-            "litellm.module_level_client.get",
-            return_value=self._pages([no_pricing]),
-        ):
-            entries = MergeAIGatewayConfig().get_models_with_info(api_key="sk-merge")
+        with patch("litellm.module_level_client.get", return_value=self._pages([no_pricing])):
+            catalog = MergeAIGatewayConfig().get_models_with_info(api_key="sk-merge")
 
-        entry = entries[0]
+        entry = catalog["anthropic/claude-3-haiku"]
         assert entry["input_cost_per_token"] == original["input_cost_per_token"]
         assert entry["output_cost_per_token"] == original["output_cost_per_token"]
 
@@ -261,15 +332,16 @@ class TestCatalogCache:
         assert first is second
         assert "anthropic/claude-sonnet-4" in first
 
-    def test_cache_key_separates_api_base(self):
+    def test_cache_key_separates_api_base_and_key(self):
         with patch(
             "litellm.module_level_client.get",
             return_value=_mock_response({"data": [OPENROUTER_ITEM]}),
         ) as mock_get:
             get_catalog("openrouter", "sk-or", None)
             get_catalog("openrouter", "sk-or", "https://other.example.com/v1")
+            get_catalog("openrouter", "sk-other", None)
 
-        assert mock_get.call_count == 2
+        assert mock_get.call_count == 3
 
     def test_ttl_expiry_refetches(self):
         with patch(
@@ -277,22 +349,26 @@ class TestCatalogCache:
             return_value=_mock_response({"data": [OPENROUTER_ITEM]}),
         ) as mock_get:
             get_catalog("openrouter", "sk-or", None)
-            key = next(iter(gateway_catalog_cache._catalog_cache))
-            ts, value = gateway_catalog_cache._catalog_cache[key]
-            gateway_catalog_cache._catalog_cache[key] = (ts - 400, value)
+            key = next(iter(gateway_catalog_cache._CATALOG_CACHE))
+            ts, value = gateway_catalog_cache._CATALOG_CACHE[key]
+            gateway_catalog_cache._CATALOG_CACHE[key] = (ts - 400, value)
             get_catalog("openrouter", "sk-or", None)
 
         assert mock_get.call_count == 2
 
-    def test_failed_fetch_returns_none(self):
+    def test_failed_fetch_returns_none_and_caches_nothing(self):
         with patch(
             "litellm.module_level_client.get",
             return_value=_mock_response({}, status_code=500),
         ):
             assert get_catalog("openrouter", "sk-or", None) is None
+        assert gateway_catalog_cache._CATALOG_CACHE == {}
 
     def test_unknown_provider_returns_none(self):
         assert get_catalog("not_a_provider", None, None) is None
+
+    def test_provider_without_catalog_returns_none(self):
+        assert get_catalog("openai", "sk-openai", None) is None
 
 
 class TestRegisterCatalog:
@@ -301,9 +377,10 @@ class TestRegisterCatalog:
         try:
             register_catalog_into_model_cost(
                 "merge",
-                {"anthropic/claude-opus-4-6": {"input_cost_per_token": 5e-6, "mode": "chat"}},
+                MappingProxyType(
+                    {"anthropic/claude-opus-4-6": {"input_cost_per_token": 5e-6, "mode": "chat"}}
+                ),
             )
             assert litellm.model_cost[key]["input_cost_per_token"] == 5e-6
-            assert litellm.model_cost[key]["key"] == key
         finally:
             litellm.model_cost.pop(key, None)

@@ -6,19 +6,27 @@ Calls done in OpenAI/openai.py as OpenRouter is openai-compatible.
 Docs: https://openrouter.ai/docs/parameters
 """
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.gateway_catalog_cache import (
+    as_mapping,
+    as_sequence,
+    float_field,
+    freeze_catalog,
+    int_field,
+    prefix_model_ids,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.llms.openrouter import OpenRouterErrorMessage
-from litellm.types.utils import ModelResponse, ModelResponseStream
+from litellm.types.utils import ModelInfoBase, ModelResponse, ModelResponseStream
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import OpenRouterException
@@ -60,19 +68,24 @@ class OpenrouterConfig(OpenAIGPTConfig):
         return api_key or litellm.openrouter_key or get_secret_str("OPENROUTER_API_KEY")
 
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
-        return super().get_models(
-            api_key=api_key,
-            api_base=api_base or "https://openrouter.ai/api/v1",
+        from litellm.litellm_core_utils.gateway_catalog_cache import prefix_model_ids
+
+        return prefix_model_ids(
+            "openrouter",
+            super().get_models(
+                api_key=api_key,
+                api_base=api_base or "https://openrouter.ai/api/v1",
+            ),
         )
 
     def get_models_with_info(
         self, api_key: str | None = None, api_base: str | None = None
-    ) -> list[dict] | None:
+    ) -> Mapping[str, ModelInfoBase] | None:
         """
         Fetch OpenRouter's public catalog with pricing and capabilities.
         Docs: https://openrouter.ai/docs/api-reference/list-available-models
         """
-        from litellm.litellm_core_utils.gateway_catalog_cache import optional_float
+        from litellm.litellm_core_utils.gateway_catalog_cache import freeze_catalog
 
         resolved_key: Final = self.get_api_key(api_key)
         base: Final = (api_base or "https://openrouter.ai/api/v1").rstrip("/")
@@ -85,38 +98,11 @@ class OpenrouterConfig(OpenAIGPTConfig):
         if response.status_code != 200:
             raise Exception(f"Failed to get models: {response.text}")
 
-        entries: Final[list[dict]] = []
-        for item in response.json().get("data", []):
-            model_id: Final = item.get("id")
-            if not model_id or model_id.startswith("~"):  # ~ids are aliases
-                continue
-
-            pricing: Final = item.get("pricing") or {}
-            top_provider: Final = item.get("top_provider") or {}
-            architecture: Final = item.get("architecture") or {}
-            input_modalities: Final = architecture.get("input_modalities") or []
-            supported_parameters: Final = item.get("supported_parameters") or []
-            context_length: Final = item.get("context_length")
-
-            entries.append(
-                {
-                    "key": f"openrouter/{model_id}",
-                    "litellm_provider": "openrouter",
-                    "mode": "chat",
-                    "max_tokens": context_length,
-                    "max_input_tokens": context_length,
-                    "max_output_tokens": top_provider.get("max_completion_tokens"),
-                    "input_cost_per_token": optional_float(pricing.get("prompt")),
-                    "output_cost_per_token": optional_float(pricing.get("completion")),
-                    "cache_read_input_token_cost": optional_float(pricing.get("input_cache_read")),
-                    "cache_creation_input_token_cost": optional_float(pricing.get("input_cache_write")),
-                    "supports_vision": "image" in input_modalities,
-                    "supports_audio_input": "audio" in input_modalities,
-                    "supports_reasoning": "reasoning" in supported_parameters
-                    or "include_reasoning" in supported_parameters,
-                }
-            )
-        return entries
+        return freeze_catalog(
+            pair
+            for item in as_sequence(as_mapping(response.json()).get("data"))
+            if (pair := _openrouter_catalog_entry(as_mapping(item))) is not None
+        )
 
     def map_openai_params(
         self,
@@ -312,6 +298,37 @@ class OpenrouterConfig(OpenAIGPTConfig):
             sync_stream=sync_stream,
             json_mode=json_mode,
         )
+
+
+def _openrouter_catalog_entry(item: Mapping[str, object]) -> tuple[str, ModelInfoBase] | None:
+    """One catalog model as ``(bare model id, model info)``, or None if unusable."""
+    model_id: Final = item.get("id")
+    if not isinstance(model_id, str) or not model_id or model_id.startswith("~"):  # ~ids are aliases
+        return None
+
+    pricing: Final = as_mapping(item.get("pricing"))
+    top_provider: Final = as_mapping(item.get("top_provider"))
+    input_modalities: Final = as_sequence(as_mapping(item.get("architecture")).get("input_modalities"))
+    supported_parameters: Final = as_sequence(item.get("supported_parameters"))
+    context_length: Final = int_field(item, "context_length")
+
+    entry: Final[ModelInfoBase] = {
+        "key": f"openrouter/{model_id}",
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "max_tokens": context_length,
+        "max_input_tokens": context_length,
+        "max_output_tokens": int_field(top_provider, "max_completion_tokens"),
+        "input_cost_per_token": float_field(pricing, "prompt"),
+        "output_cost_per_token": float_field(pricing, "completion"),
+        "cache_read_input_token_cost": float_field(pricing, "input_cache_read"),
+        "cache_creation_input_token_cost": float_field(pricing, "input_cache_write"),
+        "supports_vision": "image" in input_modalities,
+        "supports_audio_input": "audio" in input_modalities,
+        "supports_reasoning": "reasoning" in supported_parameters
+        or "include_reasoning" in supported_parameters,
+    }
+    return model_id, entry
 
 
 class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):

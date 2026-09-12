@@ -292,6 +292,20 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
 
     if wildcard_models is None:
         return []
+
+    if litellm_params is not None and wildcard_models:
+        from litellm.litellm_core_utils.gateway_catalog_cache import (
+            get_catalog,
+            register_catalog_into_model_cost,
+        )
+
+        catalog: Final = get_catalog(
+            provider=provider,
+            api_key=litellm_params.api_key,
+            api_base=litellm_params.api_base,
+        )
+        if catalog is not None:
+            register_catalog_into_model_cost(wildcard_provider_prefix, catalog)
     if wildcard_suffix != "*":
         ## CHECK IF PARTIAL FILTER e.g. `gemini-*`
         model_prefix: Final = wildcard_suffix.replace("*", "")
@@ -307,14 +321,15 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
     known_providers: Final = {provider.value for provider in LlmProviders}
     suffix_appended_wildcard_models: Final = []
     for model in wildcard_models:
-        if not model.startswith(wildcard_provider_prefix):
+        leading, sep, model_suffix = model.partition("/")
+        if leading != wildcard_provider_prefix:
             # `get_provider_models` returns provider-prefixed ids (e.g. "ollama/gemma3:1b").
             # When the wildcard uses a custom prefix (e.g. "ollama_server1/*" to distinguish
             # multiple instances), replace that existing provider prefix instead of stacking
             # both, which would otherwise yield an uncallable "ollama_server1/ollama/gemma3:1b".
             # Only strip the leading segment when it is a known provider, so ids whose first
             # segment is an org rather than a provider (e.g. "meta-llama/Llama-3-8B") keep it.
-            leading, sep, model_suffix = model.partition("/")
+            # Comparison is whole-segment: "merge" must not match "merge_ai_gateway/...".
             if sep and leading in known_providers:
                 model = f"{wildcard_provider_prefix}/{model_suffix}"
             else:

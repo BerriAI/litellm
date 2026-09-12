@@ -899,3 +899,112 @@ def test_get_complete_model_list_sentinel_only_grants_nothing():
         infer_model_from_keys=False,
     )
     assert result == []
+
+
+def test_wildcard_expansion_registers_catalog_metadata(monkeypatch):
+    """Wildcard expansion must register gateway catalog metadata into
+    litellm.model_cost under the public prefix, so an expanded model's cost key
+    is exactly the name a client calls it by."""
+    import litellm
+    from litellm.litellm_core_utils import gateway_catalog_cache
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    public_name = "merge/anthropic/claude-opus-4-6"
+    monkeypatch.setattr(
+        model_checks,
+        "get_provider_models",
+        lambda provider, litellm_params=None: ["merge_ai_gateway/anthropic/claude-opus-4-6"],
+    )
+    monkeypatch.setattr(
+        gateway_catalog_cache,
+        "get_catalog",
+        lambda provider, api_key, api_base: {
+            "anthropic/claude-opus-4-6": {
+                "input_cost_per_token": 5e-6,
+                "output_cost_per_token": 25e-6,
+                "max_input_tokens": 200000,
+                "mode": "chat",
+                "litellm_provider": "merge_ai_gateway",
+            }
+        },
+    )
+
+    try:
+        result = get_known_models_from_wildcard(
+            wildcard_model="merge/*",
+            litellm_params=LiteLLM_Params(
+                model="merge_ai_gateway/*",
+                custom_llm_provider="merge_ai_gateway",
+                api_key="sk-merge-test",
+            ),
+        )
+
+        assert result == [public_name]
+        assert litellm.model_cost[public_name]["input_cost_per_token"] == 5e-6
+        assert litellm.model_cost[public_name]["max_input_tokens"] == 200000
+    finally:
+        litellm.model_cost.pop(public_name, None)
+
+
+def test_wildcard_expansion_keeps_upstream_org_segment(monkeypatch):
+    """Regression: catalogs whose ids start with another provider's name
+    ("anthropic/claude-4") must not have that segment swapped for the public
+    prefix, which would produce an uncallable "openrouter/claude-4"."""
+    import litellm
+    from litellm.litellm_core_utils import gateway_catalog_cache
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    public_name = "openrouter/anthropic/claude-sonnet-4"
+    monkeypatch.setattr(
+        model_checks,
+        "get_provider_models",
+        lambda provider, litellm_params=None: ["openrouter/anthropic/claude-sonnet-4"],
+    )
+    monkeypatch.setattr(
+        gateway_catalog_cache,
+        "get_catalog",
+        lambda provider, api_key, api_base: {
+            "anthropic/claude-sonnet-4": {"input_cost_per_token": 3e-6, "mode": "chat"}
+        },
+    )
+
+    try:
+        result = get_known_models_from_wildcard(
+            wildcard_model="openrouter/*",
+            litellm_params=LiteLLM_Params(
+                model="openrouter/*", custom_llm_provider="openrouter", api_key="sk-or-test"
+            ),
+        )
+
+        assert result == [public_name]
+        assert litellm.model_cost[public_name]["input_cost_per_token"] == 3e-6
+    finally:
+        litellm.model_cost.pop(public_name, None)
+
+
+def test_wildcard_expansion_skips_catalog_when_fetch_returns_none(monkeypatch):
+    """A provider without catalog metadata must not break expansion."""
+    from litellm.litellm_core_utils import gateway_catalog_cache
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(
+        model_checks,
+        "get_provider_models",
+        lambda provider, litellm_params=None: ["gpt-4o"],
+    )
+    monkeypatch.setattr(
+        gateway_catalog_cache, "get_catalog", lambda provider, api_key, api_base: None
+    )
+
+    result = get_known_models_from_wildcard(
+        wildcard_model="openai/*",
+        litellm_params=LiteLLM_Params(model="openai/*", custom_llm_provider="openai"),
+    )
+
+    assert result == ["openai/gpt-4o"]
