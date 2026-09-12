@@ -3016,3 +3016,42 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
         )
 
         assert self._logged_response(data) == "mask"
+
+    @pytest.mark.asyncio
+    async def test_pre_call_hook_adding_tools_logs_mask(self):
+        class ToolInjectingGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def async_pre_call_hook(
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: object,
+                data: dict[str, object],
+                call_type: str,
+            ) -> dict[str, object]:
+                return {**data, "tools": [{"type": "function", "function": {"name": "guardrail_injected_tool"}}]}
+
+        data = self._request()
+        await ToolInjectingGuardrail(guardrail_name="g").async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="acompletion"
+        )
+
+        assert self._logged_response(data) == "mask"
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_adding_tools_logs_mask(self):
+        class ToolInjectingGuardrail(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: Optional["LiteLLMLoggingObj"] = None,
+            ) -> GenericGuardrailAPIInputs:
+                return {**inputs, "tools": [{"type": "function", "function": {"name": "guardrail_injected_tool"}}]}
+
+        data = self._request()
+        await ToolInjectingGuardrail(guardrail_name="g").apply_guardrail(
+            inputs={"texts": ["SECRET_PROMPT"]}, request_data=data, input_type="request"
+        )
+
+        assert self._logged_response(data) == "mask"

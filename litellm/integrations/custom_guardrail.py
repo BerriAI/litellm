@@ -5,6 +5,7 @@ import os
 import secrets
 from collections.abc import Mapping
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, get_args
 
 from litellm._logging import verbose_logger
@@ -1279,6 +1280,7 @@ class CustomGuardrail(CustomLogger):
         guardrail_response: Final = self._summarize_guardrail_response(
             response=response,
             original_inputs=original_inputs,
+            event_type=event_type,
         )
 
         verbose_logger.debug("Guardrail response: %s", response)
@@ -1298,6 +1300,7 @@ class CustomGuardrail(CustomLogger):
         self,
         response: object,
         original_inputs: Mapping[str, object] | None,
+        event_type: GuardrailEventHooks | None,
     ) -> object:
         """Reduce a hook's return value to what is safe to log as ``guardrail_response``.
 
@@ -1305,15 +1308,21 @@ class CustomGuardrail(CustomLogger):
         returns the (possibly modified) request payload. Neither is a provider verdict, and
         logging them verbatim ships the user's prompt to every logging sink (OTEL spans,
         Datadog, spend logs), so both collapse to ``"allow"`` / ``"mask"`` by comparing
-        against ``original_inputs``, a copy taken before the hook ran. A string result is the
-        hook's own rejection message (the proxy turns it into a 400), not user input, so it is
-        logged as is.
+        against ``original_inputs``, a copy taken before the hook ran. A pre_call baseline only
+        holds the prompt-bearing keys, so the returned request is narrowed to those same keys
+        before the comparison. A string result is the hook's own rejection message (the proxy
+        turns it into a 400), not user input, so it is logged as is.
         """
         if response is None:
             return {}
         if original_inputs is None or not isinstance(response, Mapping):
             return response
-        return "mask" if self._inputs_were_modified(original_inputs, response) else "allow"
+        compared_response: Final[Mapping[str, object]] = (
+            MappingProxyType({key: value for key, value in response.items() if key in _PRE_CALL_CONTENT_KEYS})
+            if event_type == GuardrailEventHooks.pre_call
+            else response
+        )
+        return "mask" if self._inputs_were_modified(original_inputs, compared_response) else "allow"
 
     @staticmethod
     def _is_guardrail_intervention(e: Exception) -> bool:
@@ -1355,8 +1364,8 @@ class CustomGuardrail(CustomLogger):
         raise e
 
     def _inputs_were_modified(self, original_inputs: Mapping[str, object], response: Mapping[str, object]) -> bool:
-        """True when any baseline key's value differs in ``response`` (mask), False otherwise (allow)."""
-        return any(response.get(key) != value for key, value in original_inputs.items())
+        """True when any key of either mapping differs between them (mask), False otherwise (allow)."""
+        return any(original_inputs.get(key) != response.get(key) for key in original_inputs.keys() | response.keys())
 
     def mask_content_in_string(
         self,
