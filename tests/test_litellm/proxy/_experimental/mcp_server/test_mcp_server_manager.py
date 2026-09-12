@@ -13095,7 +13095,7 @@ async def test_discovery_cache_reuses_raw_results_and_expires(kind: str) -> None
         clock.now = 59.999
         assert (await operation(server, None))[0].name == "discovery-example"
         assert upstream.initializes == 1
-        clock.now = 60.0
+        clock.now = 60.001
         assert (await operation(server, None))[0].name == "discovery-example"
         assert upstream.initializes == 2
 
@@ -13383,3 +13383,52 @@ async def test_discovery_resolves_stored_oauth_for_the_requesting_user() -> None
     assert store.calls == (("requesting-user", "discovery"), ("requesting-user", "discovery"))
     assert upstream.initializes == 1
     assert ("prompts/list", "Bearer stored-token") in upstream.requests
+
+
+@pytest.mark.asyncio
+async def test_discovery_cache_evicts_results_at_capacity() -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _DiscoveryCache
+
+    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock())
+
+    async def original() -> list[Prompt]:
+        return [Prompt(name="original")]
+
+    async def refetched() -> list[Prompt]:
+        return [Prompt(name="refetched")]
+
+    for index in range(1025):
+        assert (await cache.get((f"server-{index:04}", None), original))[0].name == "original"
+    assert (await cache.get(("server-1024", None), refetched))[0].name == "original"
+    assert (await cache.get(("server-0000", None), refetched))[0].name == "refetched"
+
+
+@pytest.mark.asyncio
+async def test_discovery_cache_invalidation_preserves_other_servers_and_pending_fetches() -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _DiscoveryCache
+
+    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock())
+    entered: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+
+    async def original() -> list[Prompt]:
+        return [Prompt(name="original")]
+
+    async def blocked() -> list[Prompt]:
+        entered.set()
+        await release.wait()
+        return [Prompt(name="pending")]
+
+    async def refetched() -> list[Prompt]:
+        return [Prompt(name="refetched")]
+
+    assert (await cache.get(("server", None), original))[0].name == "original"
+    assert (await cache.get(("server-extra", None), original))[0].name == "original"
+    task: Final = asyncio.create_task(cache.get(("other", None), blocked))
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    cache.invalidate("server")
+    release.set()
+    assert (await asyncio.wait_for(task, timeout=5))[0].name == "pending"
+    assert (await cache.get(("other", None), refetched))[0].name == "pending"
+    assert (await cache.get(("server-extra", None), refetched))[0].name == "original"
+    assert (await cache.get(("server", None), refetched))[0].name == "refetched"

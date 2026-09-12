@@ -51,6 +51,7 @@ from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import (
     MCP_CLIENT_TIMEOUT,
     MCP_HEALTH_CHECK_TIMEOUT,
@@ -195,7 +196,6 @@ if TYPE_CHECKING:
     from mcp.shared.context import RequestContext
     from mcp.types import CreateMessageRequestParams
 
-    from litellm.caching.caching import InMemoryCache
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.mcp_server.mcp_toolset import MCPToolset
 
@@ -1686,21 +1686,29 @@ _DISCOVERY_CACHE_LIMIT: Final = 1024
 
 @dataclass(frozen=True, slots=True)
 class _DiscoveryEntry(Generic[_DiscoveryItem]):
-    expires_at: float
     items: tuple[_DiscoveryItem, ...]
 
 
 class _DiscoveryCache(Generic[_DiscoveryItem]):
     def __init__(self, ttl: float, clock: Callable[[], float]) -> None:
         self._ttl = ttl
-        self._clock = clock
-        self._entries: Mapping[_DiscoveryKey, _DiscoveryEntry[_DiscoveryItem]] = MappingProxyType({})
-        self._pending: Mapping[_DiscoveryKey, asyncio.Task[list[_DiscoveryItem]]] = MappingProxyType({})
-        self._waiters: Mapping[asyncio.Task[list[_DiscoveryItem]], int] = MappingProxyType({})
+        self._entries = InMemoryCache(max_size_in_memory=_DISCOVERY_CACHE_LIMIT, clock=clock)
+        self._pending: dict[
+            _DiscoveryKey, asyncio.Task[list[_DiscoveryItem]]
+        ] = {}  # mutable-ok: constant-time fetch registration
+        self._waiters: dict[asyncio.Task[list[_DiscoveryItem]], int] = {}  # mutable-ok: constant-time waiter accounting
 
     def invalidate(self, server_id: str) -> None:
-        self._entries = MappingProxyType({key: entry for key, entry in self._entries.items() if key[0] != server_id})
-        self._pending = MappingProxyType({key: task for key, task in self._pending.items() if key[0] != server_id})
+        prefix: Final = f"[{json.dumps(server_id)},"
+        keys: Final = cast(  # cast-ok: private cache contains only JSON string keys
+            "tuple[str, ...]", tuple(self._entries.cache_dict)
+        )
+        for entry_key in keys:
+            if entry_key.startswith(prefix):
+                self._entries.delete_cache(entry_key)
+        for key in tuple(self._pending):
+            if key[0] == server_id:
+                self._pending.pop(key)
 
     @staticmethod
     def _observe_completion(task: asyncio.Task[list[_DiscoveryItem]]) -> None:
@@ -1712,8 +1720,10 @@ class _DiscoveryCache(Generic[_DiscoveryItem]):
     ) -> tuple[_DiscoveryItem, ...]:
         if self._ttl <= 0:
             return tuple(await fetch())
-        entry: Final = self._entries.get(key)
-        if entry is not None and entry.expires_at > self._clock():
+        entry: Final = cast(  # cast-ok: private cache contains only entries for this item type
+            "_DiscoveryEntry[_DiscoveryItem] | None", self._entries.get_cache(json.dumps(key))
+        )
+        if entry is not None:
             return tuple(item.model_copy(deep=True) for item in entry.items)
         pending: Final = self._pending.get(key)
         if pending is not None:
@@ -1721,28 +1731,24 @@ class _DiscoveryCache(Generic[_DiscoveryItem]):
         if len(self._pending) >= _DISCOVERY_CACHE_LIMIT:
             return tuple(await fetch())
         task: Final = asyncio.create_task(self._fetch(key, fetch))
-        self._pending = MappingProxyType({**self._pending, key: task})
+        self._pending[key] = task
         task.add_done_callback(self._observe_completion)
         return await self._await_fetch(key, task)
 
     async def _await_fetch(
         self, key: _DiscoveryKey, task: asyncio.Task[list[_DiscoveryItem]]
     ) -> tuple[_DiscoveryItem, ...]:
-        self._waiters = MappingProxyType({**self._waiters, task: self._waiters.get(task, 0) + 1})
+        self._waiters[task] = self._waiters.get(task, 0) + 1
         try:
             return tuple(item.model_copy(deep=True) for item in await asyncio.shield(task))
         finally:
             remaining: Final = self._waiters[task] - 1
             if remaining:
-                self._waiters = MappingProxyType({**self._waiters, task: remaining})
+                self._waiters[task] = remaining
             else:
-                self._waiters = MappingProxyType(
-                    {pending: count for pending, count in self._waiters.items() if pending is not task}
-                )
+                self._waiters.pop(task)
                 if self._pending.get(key) is task:
-                    self._pending = MappingProxyType(
-                        {entry_key: pending for entry_key, pending in self._pending.items() if entry_key != key}
-                    )
+                    self._pending.pop(key)
                 if not task.done():
                     task.cancel()
 
@@ -1752,28 +1758,15 @@ class _DiscoveryCache(Generic[_DiscoveryItem]):
         try:
             items: Final = await fetch()
             if self._pending.get(key) is asyncio.current_task():
-                now: Final = self._clock()
-                live_entries: Final = tuple(
-                    (entry_key, entry) for entry_key, entry in self._entries.items() if entry.expires_at > now
-                )
-                self._entries = MappingProxyType(
-                    {
-                        entry_key: entry
-                        for entry_key, entry in (
-                            *live_entries[-(_DISCOVERY_CACHE_LIMIT - 1) :],
-                            (
-                                key,
-                                _DiscoveryEntry(now + self._ttl, tuple(item.model_copy(deep=True) for item in items)),
-                            ),
-                        )
-                    }
+                self._entries.set_cache(
+                    json.dumps(key),
+                    _DiscoveryEntry(tuple(item.model_copy(deep=True) for item in items)),
+                    ttl=self._ttl,
                 )
             return items
         finally:
             if self._pending.get(key) is asyncio.current_task():
-                self._pending = MappingProxyType(
-                    {entry_key: task for entry_key, task in self._pending.items() if entry_key != key}
-                )
+                self._pending.pop(key)
 
 
 def _mcp_discovery_cache_ttl() -> float:
