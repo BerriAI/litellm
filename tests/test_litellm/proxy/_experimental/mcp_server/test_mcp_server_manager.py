@@ -6633,6 +6633,40 @@ class TestMCPServerManager:
         assert listed is not None and listed.description == "shared"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("add_prefix", [True, False])
+    async def test_openapi_listing_records_listed_tools(self, add_prefix):
+        from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+        server = MCPServer(
+            server_id="petstore-id",
+            name="petstore",
+            alias="petstore",
+            transport=MCPTransport.http,
+            url=None,
+            spec_path="/spec.yaml",
+        )
+        manager = MCPServerManager()
+        manager._create_mcp_client = AsyncMock(return_value=AsyncMock())
+
+        async def _handler(**kwargs):
+            return None
+
+        with patch.dict(global_mcp_tool_registry.tools, {}, clear=True):
+            global_mcp_tool_registry.register_tool(
+                name="petstore-list_pets",
+                description="List pets",
+                input_schema={"type": "object", "properties": {"limit": {"type": "integer"}}},
+                handler=_handler,
+            )
+            listed = await manager._get_tools_from_server(server=server, add_prefix=add_prefix)
+
+        assert [t.name for t in listed] == ["petstore-list_pets" if add_prefix else "list_pets"]
+        for name in ("list_pets", "petstore-list_pets"):
+            tool = manager.get_listed_tool(server, name)
+            assert tool is not None and tool.description == "List pets"
+            assert tool.inputSchema["properties"] == {"limit": {"type": "integer"}}
+
+    @pytest.mark.asyncio
     async def test_get_allowed_mcp_servers_with_user_api_key_auth(self):
         """
         Test that get_allowed_mcp_servers properly receives and uses user_api_key_auth

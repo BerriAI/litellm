@@ -4442,11 +4442,9 @@ class MCPServerManager:
                 # applied (e.g. "test_petstore-getinventory").  Do NOT pass them
                 # through _create_prefixed_tools — that would add the prefix a second
                 # time producing "test_petstore-test_petstore-getinventory".
-                if add_prefix:
-                    return tools
                 prefix: Final = get_server_prefix(server)
                 sep: Final = MCP_TOOL_PREFIX_SEPARATOR
-                return [  # mutable-ok: returned through the list[MCPTool] listing contract
+                unprefixed_tools: Final = [  # mutable-ok: returned through the list[MCPTool] listing contract
                     (
                         t.model_copy(update={"name": t.name[len(prefix) + len(sep) :]})
                         if t.name.startswith(f"{prefix}{sep}")
@@ -4454,6 +4452,10 @@ class MCPServerManager:
                     )
                     for t in tools
                 ]
+                self._listed_tools_by_server_id[server.server_id] = MappingProxyType(
+                    {t.name: t for t in unprefixed_tools}
+                )
+                return tools if add_prefix else unprefixed_tools
             else:
                 tools = await self._fetch_tools_with_timeout(client, server.name)
                 self._remember_upstream_initialize_instructions(server, client)
