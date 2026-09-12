@@ -3988,6 +3988,7 @@ class LlmProviders(str, Enum):
     OCI = "oci"
     AUTO_ROUTER = "auto_router"
     VERCEL_AI_GATEWAY = "vercel_ai_gateway"
+    MERGE_AI_GATEWAY = "merge_ai_gateway"
     DOTPROMPT = "dotprompt"
     MANUS = "manus"
     WANDB = "wandb"

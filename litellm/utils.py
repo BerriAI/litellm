@@ -8866,6 +8866,8 @@ class ProviderConfigManager:
             return litellm.OpenrouterConfig()
         elif LlmProviders.VERCEL_AI_GATEWAY == provider:
             return litellm.VercelAIGatewayConfig()
+        elif LlmProviders.MERGE_AI_GATEWAY == provider:
+            return litellm.MergeAIGatewayConfig()
         elif LlmProviders.GEMINI == provider:
             return litellm.GeminiModelInfo()
         elif LlmProviders.VERTEX_AI == provider:

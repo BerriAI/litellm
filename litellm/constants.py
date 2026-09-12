@@ -638,6 +638,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "datarobot",
     "helicone",
     "openrouter",
+    "merge_ai_gateway",
     "cometapi",
     "vertex_ai",
     "vertex_ai_beta",
