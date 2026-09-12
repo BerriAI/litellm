@@ -1947,7 +1947,9 @@ class MCPServerManager:
             "gmail_send_email": "zapier_mcp_server",
         }
         """
-        self._listed_tools_by_server_id: dict[str, Mapping[str, MCPTool]] = {}  # mutable-ok: refreshed per tools/list
+        self._listed_tools_by_server_id: dict[
+            str, Mapping[str | None, Mapping[str, MCPTool]]
+        ] = {}  # mutable-ok: refreshed per tools/list
         self._upstream_initialize_instructions_by_server_id: dict[str, str] = {}
         # Per-server monotonic timestamp of last upstream prefetch attempt (success,
         # empty result, or failure). Used to throttle re-probes for servers that do
@@ -4446,15 +4448,15 @@ class MCPServerManager:
                 unprefixed_tools: Final = [  # mutable-ok: returned through the list[MCPTool] listing contract
                     t.model_copy(update={"name": t.name[len(registry_prefix) :]}) for t in tools
                 ]
-                self._listed_tools_by_server_id[server.server_id] = MappingProxyType(
-                    {t.name: t for t in unprefixed_tools}
-                )
+                self._record_listed_tools(server, unprefixed_tools, user_api_key_auth)
                 return tools if add_prefix else unprefixed_tools
             else:
                 tools = await self._fetch_tools_with_timeout(client, server.name)
                 self._remember_upstream_initialize_instructions(server, client)
 
-            prefixed_or_original_tools: Final = self._create_prefixed_tools(tools, server, add_prefix=add_prefix)
+            prefixed_or_original_tools: Final = self._create_prefixed_tools(
+                tools, server, add_prefix=add_prefix, user_api_key_auth=user_api_key_auth
+            )
 
             return prefixed_or_original_tools
 
@@ -4502,6 +4504,29 @@ class MCPServerManager:
         self._invalidate_discovery_lists(server_id)
         self._listed_tools_by_server_id.pop(server_id, None)
 
+    def _discovers_per_caller(self, server: MCPServer) -> bool:
+        return (
+            server.requires_per_user_auth
+            or self._references_per_user_env_var(server)
+            or server.delegate_auth_to_upstream
+            or server.auth_type in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag)
+        )
+
+    def _listed_tools_identity(self, server: MCPServer, user_api_key_auth: UserAPIKeyAuth | None) -> str | None:
+        if server.spec_path or user_api_key_auth is None or not self._discovers_per_caller(server):
+            return None
+        material: Final = json.dumps((user_api_key_auth.user_id, user_api_key_auth.api_key), separators=(",", ":"))
+        return hashlib.sha256(material.encode()).hexdigest()
+
+    def _record_listed_tools(
+        self, server: MCPServer, tools: Sequence[MCPTool], user_api_key_auth: UserAPIKeyAuth | None
+    ) -> None:
+        identity: Final = self._listed_tools_identity(server, user_api_key_auth)
+        listing: Final = MappingProxyType({tool.name: tool for tool in tools})
+        self._listed_tools_by_server_id[server.server_id] = MappingProxyType(
+            {**self._listed_tools_by_server_id.get(server.server_id, {}), identity: listing}
+        )
+
     def _discovery_key(
         self,
         server: MCPServer,
@@ -4512,12 +4537,7 @@ class MCPServerManager:
         subject_token: str | None,
         credential_fingerprint: str | None = None,
     ) -> _DiscoveryKey:
-        per_user: Final = (
-            server.requires_per_user_auth
-            or self._references_per_user_env_var(server)
-            or server.delegate_auth_to_upstream
-            or server.auth_type in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag)
-        )
+        per_user: Final = self._discovers_per_caller(server)
         if not (per_user or mcp_auth_header or extra_headers or stdio_env or subject_token):
             return server.server_id, None
         identity: Final = (
@@ -5330,7 +5350,13 @@ class MCPServerManager:
             "attempts; the 3-character prefix space is too crowded."
         )
 
-    def _create_prefixed_tools(self, tools: list[MCPTool], server: MCPServer, add_prefix: bool = True) -> list[MCPTool]:
+    def _create_prefixed_tools(
+        self,
+        tools: list[MCPTool],
+        server: MCPServer,
+        add_prefix: bool = True,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+    ) -> list[MCPTool]:
         """
         Create prefixed tools and update tool mapping.
 
@@ -5362,12 +5388,15 @@ class MCPServerManager:
             for spelling in iter_known_tool_name_spellings(original_name, server):
                 self.tool_name_to_mcp_server_name_mapping[spelling] = prefix
 
-        self._listed_tools_by_server_id[server.server_id] = MappingProxyType({tool.name: tool for tool in tools})
+        self._record_listed_tools(server, tools, user_api_key_auth)
         verbose_logger.info("Successfully fetched %s tools from server %s", len(prefixed_tools), server.name)
         return prefixed_tools
 
-    def get_listed_tool(self, server: MCPServer, name: str) -> MCPTool | None:
-        listed: Final = self._listed_tools_by_server_id.get(server.server_id)
+    def get_listed_tool(
+        self, server: MCPServer, name: str, user_api_key_auth: UserAPIKeyAuth | None = None
+    ) -> MCPTool | None:
+        identity: Final = self._listed_tools_identity(server, user_api_key_auth)
+        listed: Final = self._listed_tools_by_server_id.get(server.server_id, {}).get(identity)
         if not listed:
             return None
         return listed.get(name) or listed.get(strip_known_server_prefix(name, server))
@@ -6349,7 +6378,7 @@ class MCPServerManager:
             server=mcp_server,
             raw_headers=raw_headers,
             litellm_logging_obj=litellm_logging_obj,
-            tool=self.get_listed_tool(mcp_server, name),
+            tool=self.get_listed_tool(mcp_server, name, user_api_key_auth),
         )
         if "arguments" in hook_result:
             arguments = hook_result["arguments"]
@@ -6365,7 +6394,7 @@ class MCPServerManager:
                 proxy_logging_obj=proxy_logging_obj,
                 start_time=start_time,
                 litellm_logging_obj=litellm_logging_obj,
-                tool=self.get_listed_tool(mcp_server, name),
+                tool=self.get_listed_tool(mcp_server, name, user_api_key_auth),
             )
             tasks.append(during_hook_task)
 
