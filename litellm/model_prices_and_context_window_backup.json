@@ -4497,7 +4497,7 @@
     },
     "azure/eu/o1-2024-12-17": {
         "cache_read_input_token_cost": 8.25e-06,
-        "deprecation_date": "2026-10-21",
+        "deprecation_date": "2026-11-19",
         "input_cost_per_token": 1.65e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 200000,
@@ -4543,7 +4543,7 @@
     },
     "azure/eu/o3-mini-2025-01-31": {
         "cache_read_input_token_cost": 6.05e-07,
-        "deprecation_date": "2026-10-01",
+        "deprecation_date": "2026-11-19",
         "input_cost_per_token": 1.21e-06,
         "input_cost_per_token_batches": 6.05e-07,
         "litellm_provider": "azure",
@@ -9600,7 +9600,7 @@
     },
     "azure/us/o1-2024-12-17": {
         "cache_read_input_token_cost": 8.25e-06,
-        "deprecation_date": "2026-10-21",
+        "deprecation_date": "2026-11-19",
         "input_cost_per_token": 1.65e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 200000,
@@ -9645,7 +9645,7 @@
         "supports_vision": false
     },
     "azure/us/o3-2025-04-16": {
-        "deprecation_date": "2026-10-21",
+        "deprecation_date": "2026-11-19",
         "cache_read_input_token_cost": 5.5e-07,
         "input_cost_per_token": 2.2e-06,
         "litellm_provider": "azure",
@@ -9676,7 +9676,7 @@
     },
     "azure/us/o3-mini-2025-01-31": {
         "cache_read_input_token_cost": 6.05e-07,
-        "deprecation_date": "2026-10-01",
+        "deprecation_date": "2026-11-19",
         "input_cost_per_token": 1.21e-06,
         "input_cost_per_token_batches": 6.05e-07,
         "litellm_provider": "azure",
@@ -9693,7 +9693,7 @@
     },
     "azure/us/o4-mini-2025-04-16": {
         "cache_read_input_token_cost": 3.1e-07,
-        "deprecation_date": "2026-10-16",
+        "deprecation_date": "2026-11-19",
         "input_cost_per_token": 1.21e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 200000,
