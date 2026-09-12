@@ -307,5 +307,6 @@ it("should distinguish an unset enum from empty string and retain explicit false
   await expect(submit(ref)).resolves.toEqual({ active: false });
   await user.click(screen.getByRole("combobox", { name: "mode" }));
   await user.click(await screen.findByRole("option", { name: "Empty string" }));
+  expect(screen.getByRole("combobox", { name: "mode" })).toHaveTextContent("Empty string");
   await expect(submit(ref)).resolves.toEqual({ mode: "", active: false });
 });
