@@ -50,7 +50,7 @@ from litellm.proxy.health_check import (
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
     _clean_endpoint_data,
     _update_litellm_params_for_health_check,
-    deployment_answers_to,
+    deployments_targeted_by_name,
     health_check_filter_kwargs_from_general_settings,
     perform_health_check,
     run_with_timeout,
@@ -932,9 +932,9 @@ def _resolve_targeted_model_ids(
     Resolve a ``/health`` ``model`` / ``model_id`` query param to the set of
     deployment IDs the response should be scoped to, mirroring the live-path
     narrowing in ``perform_health_check()``: ``model_id`` wins when given and
-    matches ``model_info.id`` only; ``model`` matches the deployment's
-    ``model_name`` alias, its ``litellm_params.model`` provider string, or the
-    ``model_info.team_public_model_name`` the caller's own team reaches it by.
+    matches ``model_info.id`` only; ``model`` targets deployments by their
+    ``litellm_params.model`` provider string, else the deployments a request
+    for that name from the caller would route to (``deployments_targeted_by_name``).
 
     Callers pass an already-scoped list, so a ``model_id`` outside the
     caller's scope resolves to an empty set and never to the unvalidated id.
@@ -946,9 +946,8 @@ def _resolve_targeted_model_ids(
         return None
     return {
         i
-        for m in model_list
+        for m in deployments_targeted_by_name(model_list, model, team_id)
         if (i := (m.get("model_info") or {}).get("id"))
-        and ((m.get("litellm_params") or {}).get("model") == model or deployment_answers_to(m, model, team_id))
     }
 
 

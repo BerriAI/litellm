@@ -3069,7 +3069,7 @@ async def test_health_endpoint_returns_a_team_only_deployment_by_its_public_name
 
 
 @pytest.mark.asyncio
-async def test_health_endpoint_targets_both_deployments_behind_a_shared_public_name_on_background_cache_path():
+async def test_health_endpoint_returns_only_the_owning_teams_copy_behind_a_shared_public_name_on_cache_path():
     from fastapi import Response
 
     from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
@@ -3087,7 +3087,7 @@ async def test_health_endpoint_targets_both_deployments_behind_a_shared_public_n
             model_id=None,
         )
 
-    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-bedrock", "id-team-b"]
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-team-b"]
 
 
 async def _live_narrowed_model_ids(
@@ -3134,14 +3134,15 @@ async def test_health_endpoint_keeps_an_admin_probe_by_name_off_other_teams_publ
 
 
 @pytest.mark.asyncio
-async def test_health_endpoint_probes_both_deployments_behind_a_shared_public_name_for_the_owning_team():
+async def test_health_endpoint_probes_only_the_owning_teams_copy_behind_a_shared_public_name():
+    """Team-b's requests for ``bedrock-nova`` route to its copy alone, so its health probe reaches only that copy."""
     probed = await _live_narrowed_model_ids(
         _TEAM_MODEL_LIST,
         UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-nova"], team_id="team-b"),
         model="bedrock-nova",
     )
 
-    assert probed == {"id-bedrock", "id-team-b"}
+    assert probed == {"id-team-b"}
 
 
 @pytest.mark.asyncio
@@ -3163,13 +3164,80 @@ async def test_health_endpoint_keeps_an_admin_probe_by_name_off_other_teams_publ
     assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-bedrock"]
 
 
+@pytest.mark.asyncio
+async def test_health_endpoint_probes_a_team_only_public_name_for_an_admin_on_live_path():
+    """
+    An admin's request for a public name only team-b's deployment carries routes
+    to that deployment, so the health probe for that name must reach it too
+    instead of answering an empty 503.
+    """
+    probed = await _live_narrowed_model_ids(_TEAM_ONLY_MODEL_LIST, _ADMIN_OUTSIDE_TEAM_B, model="bedrock-nova")
+
+    assert probed == {"id-team-b"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_returns_a_team_only_public_name_for_an_admin_on_background_cache_path():
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _TEAM_ONLY_MODEL_LIST,
+        _router_for(_TEAM_ONLY_MODEL_LIST),
+        use_background_health_checks=True,
+        health_check_results=_TEAM_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(), user_api_key_dict=_ADMIN_OUTSIDE_TEAM_B, model="bedrock-nova", model_id=None
+        )
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-team-b"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_background_health_checks", [False, True])
+async def test_health_endpoint_keeps_a_team_only_public_name_off_a_team_less_key(use_background_health_checks):
+    """
+    A key with no team holds the name ``bedrock-nova`` but never sees team-b's
+    deployment, so the public-name fallback an admin gets must not open it up.
+    """
+    from fastapi import HTTPException, Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with (
+        _proxy_health_globals(
+            _TEAM_ONLY_MODEL_LIST,
+            _router_for(_TEAM_ONLY_MODEL_LIST),
+            use_background_health_checks=use_background_health_checks,
+            health_check_results=_TEAM_CACHED_RESULTS,
+        ),
+        patch(  # test-quality-ok: the probe must never run; the endpoint has no injection seam for it
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save", new_callable=AsyncMock
+        ) as probe,
+        pytest.raises(HTTPException) as refused,
+    ):
+        await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-nova"]),
+            model="bedrock-nova",
+            model_id=None,
+        )
+
+    assert refused.value.status_code == 403
+    assert "bedrock-nova" in str(refused.value.detail)
+    probe.assert_not_awaited()
+
+
 def test_resolve_targeted_model_ids_lets_model_id_win_over_model():
     resolve = _health_endpoints_module._resolve_targeted_model_ids
 
     assert resolve(_TEAM_MODEL_LIST, "bedrock-nova", "id-team-b", None) == {"id-team-b"}
     assert resolve([_TEAM_MODEL_LIST[0]], "bedrock-nova", "id-team-b", None) == set()
     assert resolve(_TEAM_MODEL_LIST, "bedrock-nova", None, None) == {"id-bedrock"}
-    assert resolve(_TEAM_MODEL_LIST, "bedrock-nova", None, "team-b") == {"id-bedrock", "id-team-b"}
+    assert resolve(_TEAM_MODEL_LIST, "bedrock-nova", None, "team-b") == {"id-team-b"}
+    assert resolve(_TEAM_ONLY_MODEL_LIST, "bedrock-nova", None, None) == {"id-team-b"}
 
 
 @pytest.mark.asyncio
