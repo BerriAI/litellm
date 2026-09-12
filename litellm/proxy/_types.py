@@ -1307,6 +1307,11 @@ class UpdateKeyRequest(KeyRequestBase):
     rotation_interval: str | None = None
     organization_id: str | None = None
 
+    project_id: str | None = Field(
+        default=None,
+        description="Omit to retain the project, or send null to detach. Assigning a different project is not supported.",
+    )
+
     @model_validator(mode="before")
     @classmethod
     def drop_blank_team_id(cls, values: object) -> object:
