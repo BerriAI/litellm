@@ -1,4 +1,5 @@
 import base64
+import itertools
 import json
 from typing import Final
 from unittest.mock import MagicMock
@@ -18,6 +19,7 @@ from litellm.llms.meta.realtime.transformation import (
     parse_session_update,
     session_created_event,
 )
+from litellm.types.llms.meta import MuseMode
 from litellm.types.realtime import RealtimeResponseTransformInput
 
 EMPTY_TRANSFORM_INPUT: Final[RealtimeResponseTransformInput] = {
@@ -214,8 +216,7 @@ def test_cumulative_partials_emit_only_extensions_and_final_is_authoritative():
     first = send(_event("transcript", turnId="turn-1", transcript="hello", final=False))
     extension = send(_event("transcript", turnId="turn-1", transcript="hello world", final=False))
     rewrite = send(_event("transcript", turnId="turn-1", transcript="hullo world", final=False))
-    assert send(_event("speechComplete", turnId="turn-1", transcript="hullo world")) == ()
-    completed = send(_event("speechEnd", turnId="turn-1"))
+    completed = send(_event("speechComplete", turnId="turn-1", transcript="hullo world"))
 
     assert [event["type"] for event in started] == ["input_audio_buffer.speech_started"]
     assert first[0]["delta"] == "hello"
@@ -225,44 +226,125 @@ def test_cumulative_partials_emit_only_extensions_and_final_is_authoritative():
     assert completed[1]["type"] == "conversation.item.input_audio_transcription.completed"
     assert completed[1]["item_id"] == "turn-1"
     assert completed[1]["transcript"] == "hullo world"
+    assert send(_event("speechEnd", turnId="turn-1")) == ()
 
 
-def test_completed_transcript_waits_for_speech_stopped():
+def test_speech_end_then_speech_complete_emits_stopped_then_completed():
     transformer = MuseEventTransformer()
 
     transformer.transform(json.loads(_event("speechStart", turnId="turn-1")))
-    assert transformer.transform(json.loads(_event("speechComplete", turnId="turn-1", transcript="done"))) == ()
+    stopped = transformer.transform(json.loads(_event("speechEnd", turnId="turn-1")))
+    completed = transformer.transform(json.loads(_event("speechComplete", turnId="turn-1", transcript="done")))
 
-    released = transformer.transform(json.loads(_event("speechEnd", turnId="turn-1")))
-    assert [event["type"] for event in released] == [
+    assert [event["type"] for event in stopped] == ["input_audio_buffer.speech_stopped"]
+    assert [event["type"] for event in completed] == ["conversation.item.input_audio_transcription.completed"]
+    assert completed[0]["transcript"] == "done"
+
+
+def _typed(events: tuple[dict[str, object], ...]) -> list[tuple[object, object]]:
+    return [(event["type"], event["item_id"]) for event in events]
+
+
+def test_overlapping_turns_emit_independently_and_correlate_by_item_id():
+    transformer = MuseEventTransformer()
+
+    def send(payload: str) -> list[tuple[object, object]]:
+        return _typed(transformer.transform(json.loads(payload)))
+
+    assert send(_event("speechStart", turnId="turn-a")) == [("input_audio_buffer.speech_started", "turn-a")]
+    assert send(_event("speechStart", turnId="turn-b")) == [("input_audio_buffer.speech_started", "turn-b")]
+    assert send(_event("transcript", turnId="turn-b", transcript="second", final=False)) == [
+        ("conversation.item.input_audio_transcription.delta", "turn-b")
+    ]
+    assert send(_event("speechComplete", turnId="turn-a", transcript="first")) == [
+        ("input_audio_buffer.speech_stopped", "turn-a"),
+        ("conversation.item.input_audio_transcription.completed", "turn-a"),
+    ]
+    assert send(_event("speechEnd", turnId="turn-a")) == []
+    assert send(_event("speechEnd", turnId="turn-b")) == [("input_audio_buffer.speech_stopped", "turn-b")]
+    assert send(_event("speechComplete", turnId="turn-b", transcript="second final")) == [
+        ("conversation.item.input_audio_transcription.completed", "turn-b")
+    ]
+
+
+def test_empty_vad_turn_is_closed_and_does_not_block_the_next_turn():
+    transformer = MuseEventTransformer()
+
+    def send(payload: str) -> list[tuple[object, object]]:
+        return _typed(transformer.transform(json.loads(payload)))
+
+    assert send(_event("speechStart", turnId="noise")) == [("input_audio_buffer.speech_started", "noise")]
+    assert send(_event("speechEnd", turnId="noise")) == [("input_audio_buffer.speech_stopped", "noise")]
+    assert send(_event("speechStart", turnId="speech")) == [("input_audio_buffer.speech_started", "speech")]
+    assert send(_event("transcript", turnId="speech", transcript="hello", final=False)) == [
+        ("conversation.item.input_audio_transcription.delta", "speech")
+    ]
+    assert send(_event("speechEnd", turnId="speech")) == [("input_audio_buffer.speech_stopped", "speech")]
+    assert send(_event("speechComplete", turnId="speech", transcript="hello world")) == [
+        ("conversation.item.input_audio_transcription.completed", "speech")
+    ]
+
+
+@pytest.mark.parametrize("transcript", ["", "late words"])
+def test_late_speech_complete_after_an_empty_speech_end_completes_that_item(transcript: str):
+    transformer = MuseEventTransformer()
+    transformer.transform(json.loads(_event("speechStart", turnId="turn-1")))
+    transformer.transform(json.loads(_event("speechEnd", turnId="turn-1")))
+    transformer.transform(json.loads(_event("speechStart", turnId="turn-2")))
+
+    (completed,) = transformer.transform(json.loads(_event("speechComplete", turnId="turn-1", transcript=transcript)))
+
+    assert completed["type"] == "conversation.item.input_audio_transcription.completed"
+    assert completed["item_id"] == "turn-1"
+    assert completed["transcript"] == transcript
+
+
+def test_push_to_talk_speech_complete_closes_the_turn_without_speech_end():
+    transformer = MuseEventTransformer()
+    transformer.configure(MuseSessionConfig(MUSE_MODEL, "PUSH_TO_TALK", 24_000, ()))
+
+    transformer.transform(json.loads(_event("speechStart", turnId="turn-1")))
+    transformer.transform(json.loads(_event("transcript", turnId="turn-1", transcript="hel", final=False)))
+    events = transformer.transform(json.loads(_event("speechComplete", turnId="turn-1", transcript="hello")))
+
+    assert [event["type"] for event in events] == [
         "input_audio_buffer.speech_stopped",
         "conversation.item.input_audio_transcription.completed",
     ]
+    assert events[1]["transcript"] == "hello"
 
 
-def test_overlapping_turns_are_emitted_in_provider_turn_order():
+_TERMINAL_SIGNALS: Final = {
+    "speechEnd": _event("speechEnd", turnId="turn-1"),
+    "speechComplete": _event("speechComplete", turnId="turn-1", transcript="final words"),
+    "final": _event("transcript", turnId="turn-1", transcript="final words", final=True),
+}
+_TERMINAL_ORDERINGS: Final = tuple(
+    ordering for size in (1, 2, 3) for ordering in itertools.permutations(_TERMINAL_SIGNALS, size)
+)
+
+
+@pytest.mark.parametrize("mode", ["ENDPOINTING", "PUSH_TO_TALK"])
+@pytest.mark.parametrize("ordering", _TERMINAL_ORDERINGS, ids="-".join)
+def test_every_terminal_signal_order_closes_the_turn_exactly_once(mode: MuseMode, ordering: tuple[str, ...]):
     transformer = MuseEventTransformer()
+    transformer.configure(MuseSessionConfig(MUSE_MODEL, mode, 24_000, ()))
+    transformer.transform(json.loads(_event("speechStart", turnId="turn-1")))
+    transformer.transform(json.loads(_event("transcript", turnId="turn-1", transcript="fin", final=False)))
 
-    def send(payload: str) -> tuple[dict[str, object], ...]:
-        return transformer.transform(json.loads(payload))
-
-    send(_event("speechStart", turnId="turn-a"))
-    send(_event("speechStart", turnId="turn-b"))
-    assert send(_event("transcript", turnId="turn-b", transcript="second", final=False)) == ()
-    assert send(_event("speechComplete", turnId="turn-a", transcript="first")) == ()
-    released = send(_event("speechEnd", turnId="turn-a"))
-
-    assert [(event["type"], event["item_id"]) for event in released] == [
-        ("input_audio_buffer.speech_stopped", "turn-a"),
-        ("conversation.item.input_audio_transcription.completed", "turn-a"),
-        ("input_audio_buffer.speech_started", "turn-b"),
-        ("conversation.item.input_audio_transcription.delta", "turn-b"),
+    emitted = [
+        event["type"] for signal in ordering for event in transformer.transform(json.loads(_TERMINAL_SIGNALS[signal]))
     ]
-    assert send(_event("speechComplete", turnId="turn-b", transcript="second final")) == ()
-    final_b = send(_event("speechEnd", turnId="turn-b"))
-    assert final_b[0]["type"] == "input_audio_buffer.speech_stopped"
-    assert final_b[1]["item_id"] == "turn-b"
-    assert final_b[1]["transcript"] == "second final"
+    replayed = [
+        event["type"] for signal in ordering for event in transformer.transform(json.loads(_TERMINAL_SIGNALS[signal]))
+    ]
+
+    has_text = bool(set(ordering) & {"speechComplete", "final"})
+    assert emitted == [
+        "input_audio_buffer.speech_stopped",
+        *(["conversation.item.input_audio_transcription.completed"] if has_text else []),
+    ]
+    assert replayed == []
 
 
 def test_push_to_talk_final_transcript_completes_without_speech_end():
@@ -290,12 +372,12 @@ def test_positive_audio_progress_deltas_attach_to_next_completion_and_speaker_is
     send(_event("audioProgress", audioProcessedMs=750))
     send(_event("audioProgress", audioProcessedMs=1600))
     assert send(_event("speaker", turnId=42, label=" Speaker 2 ")) == ()
-    send(_event("speechComplete", turnId=42, transcript="hello"))
-    completed = send(_event("speechEnd", turnId=42))
+    completed = send(_event("speechComplete", turnId=42, transcript="hello"))
 
     assert "speaker" not in completed[-1]
     assert completed[-1]["usage"] == {"type": "duration", "seconds": 1.6}
     assert transformer.take_unbilled_usage() is None
+    assert send(_event("speechEnd", turnId=42)) == ()
 
 
 def test_trailing_audio_progress_is_returned_once():
@@ -307,21 +389,35 @@ def test_trailing_audio_progress_is_returned_once():
     assert transformer.take_unbilled_usage() is None
 
 
-def test_completed_turn_tombstone_suppresses_late_duplicates():
+def test_finished_turn_ignores_late_duplicates():
     transformer = MuseEventTransformer()
 
-    transformer.transform(json.loads(_event("speechComplete", turnId="turn-1", transcript="done")))
-    released = transformer.transform(json.loads(_event("speechEnd", turnId="turn-1")))
+    released = transformer.transform(json.loads(_event("speechComplete", turnId="turn-1", transcript="done")))
 
     assert [event["type"] for event in released] == [
+        "input_audio_buffer.speech_started",
         "input_audio_buffer.speech_stopped",
         "conversation.item.input_audio_transcription.completed",
     ]
     assert transformer.transform(json.loads(_event("speechComplete", turnId="turn-1", transcript="duplicate"))) == ()
     assert transformer.transform(json.loads(_event("speechEnd", turnId="turn-1"))) == ()
+    assert transformer.transform(json.loads(_event("speechStart", turnId="turn-1"))) == ()
     assert (
         transformer.transform(json.loads(_event("transcript", turnId="turn-1", transcript="late", final=False))) == ()
     )
+
+
+def test_turn_memory_is_bounded_by_turn_limit():
+    transformer = MuseEventTransformer(turn_limit=2)
+
+    transformer.transform(json.loads(_event("speechComplete", turnId="turn-1", transcript="one")))
+    transformer.transform(json.loads(_event("speechComplete", turnId="turn-2", transcript="two")))
+    assert transformer.transform(json.loads(_event("speechEnd", turnId="turn-1"))) == ()
+    transformer.transform(json.loads(_event("speechComplete", turnId="turn-3", transcript="three")))
+
+    forgotten = transformer.transform(json.loads(_event("speechEnd", turnId="turn-1")))
+
+    assert [event["type"] for event in forgotten] == ["input_audio_buffer.speech_stopped"]
 
 
 def test_provider_error_is_sanitized_and_encodable():
@@ -520,14 +616,11 @@ def test_provider_turn_events_and_close_usage_flow_through_config():
 
     assert _backend_events(config, json.dumps({"type": "audioProgress", "audioProcessedMs": 1349})) == []
     assert _backend_events(config, _event("speechStart", turnId="t1"))[0]["type"] == "input_audio_buffer.speech_started"
-    assert _backend_events(config, _event("speechComplete", turnId="t1", transcript="what is the weather")) == []
-    completed = _backend_events(config, _event("speechEnd", turnId="t1"))
+    assert _backend_events(config, _event("speechEnd", turnId="t1"))[0]["type"] == "input_audio_buffer.speech_stopped"
+    completed = _backend_events(config, _event("speechComplete", turnId="t1", transcript="what is the weather"))
 
-    assert [event["type"] for event in completed] == [
-        "input_audio_buffer.speech_stopped",
-        "conversation.item.input_audio_transcription.completed",
-    ]
-    assert completed[1]["usage"] == {"type": "duration", "seconds": 1.349}
+    assert [event["type"] for event in completed] == ["conversation.item.input_audio_transcription.completed"]
+    assert completed[0]["usage"] == {"type": "duration", "seconds": 1.349}
     assert config.unbilled_usage_on_session_close(MUSE_MODEL) is None
 
     assert _backend_events(config, json.dumps({"type": "audioProgress", "audioProcessedMs": 2349})) == []
