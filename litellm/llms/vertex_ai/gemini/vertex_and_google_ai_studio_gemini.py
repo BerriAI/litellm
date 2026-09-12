@@ -2515,8 +2515,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 model_response._hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
 
             if _candidates and _candidates[0].get("finishReason"):
-                model_response._hidden_params.setdefault("provider_specific_fields", {})["finish_reason"] = _candidates[0]["finishReason"]
-                model_response._hidden_params.setdefault("provider_specific_fields", {})["gemini_finish_reason"] = _candidates[0]["finishReason"]
+                model_response._hidden_params.setdefault("provider_specific_fields", {})["finish_reason"] = _candidates[
+                    0
+                ]["finishReason"]
+                model_response._hidden_params.setdefault("provider_specific_fields", {})["gemini_finish_reason"] = (
+                    _candidates[0]["finishReason"]
+                )
 
             ## ADD SERVICE TIER ##
             if getattr(raw_response, "headers", None):
