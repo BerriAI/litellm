@@ -11,7 +11,7 @@ from bedrock_config import bedrock_params
 from bedrock_stream import assert_converse_stream, assert_invoke_stream
 from e2e_config import unique_marker
 from e2e_http import (
-    assert_client_error,
+    StreamingResponse,
     require_successful_call,
 )
 from lifecycle import ResourceManager
@@ -74,6 +74,11 @@ def _register(proxy: ProxyClient, resources: ResourceManager) -> tuple[str, str]
     )
     resources.defer(lambda: proxy.delete_model(model_id))
     return model, resources.key()
+
+
+def _assert_input_error(result: StreamingResponse, field: str) -> None:
+    assert result.status_code == 400, f"expected Bedrock validation error, got {result.status_code}: {result.body[:500]}"
+    assert field in result.body.lower(), f"validation error did not name {field}: {result.body[:500]}"
 
 
 def _default_converse() -> ConverseBody:
@@ -148,7 +153,7 @@ class TestBedrockNative:
             headers=proxy.transport.bearer(key),
             json=ConverseBody(inferenceConfig=ConverseInferenceConfig()),
         )
-        assert_client_error(result, "converse missing messages")
+        _assert_input_error(result, "messages")
 
     @pytest.mark.covers("llm.bedrock_native.bedrock_converse.input_validation.nonstream.works")
     def test_converse_empty_messages_returns_client_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
@@ -158,7 +163,7 @@ class TestBedrockNative:
             headers=proxy.transport.bearer(key),
             json=ConverseBody(messages=[]),
         )
-        assert_client_error(result, "converse empty messages")
+        _assert_input_error(result, "messages")
 
     @pytest.mark.covers("llm.bedrock_native.bedrock_converse.input_validation.nonstream.works")
     def test_converse_invalid_model_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
@@ -180,7 +185,7 @@ class TestBedrockNative:
             headers=proxy.transport.bearer(key),
             json=InvokeBody(anthropic_version="bedrock-2023-05-31", max_tokens=50),
         )
-        assert_client_error(result, "invoke missing messages")
+        _assert_input_error(result, "messages")
 
     @pytest.mark.covers("llm.bedrock_native.bedrock_invoke.input_validation.nonstream.works")
     def test_invoke_missing_max_tokens_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
@@ -193,7 +198,7 @@ class TestBedrockNative:
                 messages=[InvokeMessage(role="user", content="Hello")],
             ),
         )
-        assert_client_error(result, "invoke missing max_tokens")
+        _assert_input_error(result, "max_tokens")
 
     @pytest.mark.covers("llm.bedrock_native.bedrock_invoke.input_validation.nonstream.works")
     def test_invoke_invalid_temperature_returns_client_error(
@@ -210,4 +215,4 @@ class TestBedrockNative:
                 temperature=5.0,
             ),
         )
-        assert_client_error(result, "invoke invalid temperature")
+        _assert_input_error(result, "temperature")

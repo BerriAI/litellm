@@ -12,6 +12,7 @@ def test_retry_policy_preserves_failures_and_first_attempt_evidence(tmp_path: Pa
     scenario.write_text(
         """
 from pathlib import Path
+import json
 from e2e_http import NetworkError, StreamingResponse, UnknownApiError, require_successful_call, unwrap
 
 def attempt(name):
@@ -21,7 +22,8 @@ def attempt(name):
     return count
 
 def unavailable():
-    unwrap(UnknownApiError(status_code=503, body="unavailable", headers={
+    body = json.dumps({"error":{"message": "litellm.ServiceUnavailableError: BedrockException - Bedrock is unable to process your request."}})
+    unwrap(UnknownApiError(status_code=503, body=body, headers={
         "x-amzn-requestid": "aws-first-attempt", "x-amzn-errortype": "ServiceUnavailableException",
         "x-litellm-call-id": "proxy-first-attempt",
     }))

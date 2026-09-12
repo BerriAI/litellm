@@ -36,12 +36,17 @@ def _assert_success(helper: str) -> None:
 
 class TestProviderFailure:
     def test_aws_headers_preserve_attribution_and_both_request_ids(self) -> None:
-        result: Final = provider_failure(503, "unavailable", _HEADERS)
+        result: Final = provider_failure(503, "unavailable", _HEADERS, expected_provider="bedrock")
         assert result.provider == "bedrock"
         assert result.error_code == "ServiceUnavailableException"
         assert result.request_id == "aws-request-1"
         assert result.call_id == "proxy-call-1"
         assert result.evidence == "headers"
+
+    def test_another_aws_service_is_not_mislabeled_as_bedrock(self) -> None:
+        result: Final = provider_failure(503, "service unavailable", _HEADERS)
+        assert result.provider is None
+        assert result.request_id == "aws-request-1"
 
     def test_proxy_bedrock_error_body_remains_identifiable_without_headers(self) -> None:
         result: Final = provider_failure(503, _BODY, {})

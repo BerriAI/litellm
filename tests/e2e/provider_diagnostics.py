@@ -73,7 +73,13 @@ def provider_failure(
     error_code: Final = normalized.get("llm_provider-x-amzn-errortype") or normalized.get("x-amzn-errortype")
     call_id: Final = normalized.get("x-litellm-call-id")
     if status_code == 503:
-        if request_id and error_code and error_code.split(":", 1)[0] == "ServiceUnavailableException":
+        bedrock_body: Final = _bedrock_unavailable_body(body, expected_provider)
+        if (
+            request_id
+            and error_code
+            and error_code.split(":", 1)[0] == "ServiceUnavailableException"
+            and (expected_provider == "bedrock" or bedrock_body)
+        ):
             return ProviderFailure(
                 status_code=status_code,
                 provider="bedrock",
@@ -82,7 +88,7 @@ def provider_failure(
                 call_id=call_id,
                 evidence="headers",
             )
-        if _bedrock_unavailable_body(body, expected_provider):
+        if bedrock_body:
             return ProviderFailure(
                 status_code=status_code,
                 provider="bedrock",
