@@ -876,10 +876,15 @@ _EMPTY_LIFT: Final = MappingProxyType({})
 
 
 def _call_type_for_route(route: str | None) -> str | None:
+    """The route's call type when it maps to a single operation (its async and sync variants);
+    None for routes shared by several operations, since the method is not known here."""
     if route is None:
         return None
     call_types: Final = get_call_types_for_route(route)
-    return call_types[0].value if call_types else None
+    if not call_types:
+        return None
+    operations: Final = frozenset(call_type.value.removeprefix("a") for call_type in call_types)
+    return call_types[0].value if len(operations) == 1 else None
 
 
 def _failure_fields_to_lift(request_data: Mapping[str, object]) -> Mapping[str, object]:

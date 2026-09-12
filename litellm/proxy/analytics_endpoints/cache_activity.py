@@ -105,6 +105,7 @@ KEY_ALIAS_OPTIONS_SQL: Final = """
     WHERE
         sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
         AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+        AND sl."call_type" NOT IN (SELECT jsonb_array_elements_text($3::jsonb))
     ORDER BY 1
 """
 
@@ -115,6 +116,7 @@ MODEL_OPTIONS_SQL: Final = """
         sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
         AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
         AND sl."model" != ''
+        AND sl."call_type" NOT IN (SELECT jsonb_array_elements_text($3::jsonb))
     ORDER BY 1
 """
 
@@ -161,8 +163,8 @@ async def get_cache_activity(
         prisma_client.db.query_raw(
             ERROR_BREAKDOWN_SQL, start_date, end_date, key_aliases_json, models_json, INFO_ROUTES_JSON
         ),
-        prisma_client.db.query_raw(KEY_ALIAS_OPTIONS_SQL, start_date, end_date),
-        prisma_client.db.query_raw(MODEL_OPTIONS_SQL, start_date, end_date),
+        prisma_client.db.query_raw(KEY_ALIAS_OPTIONS_SQL, start_date, end_date, INFO_ROUTES_JSON),
+        prisma_client.db.query_raw(MODEL_OPTIONS_SQL, start_date, end_date, INFO_ROUTES_JSON),
     )
     groups: Final = _groups_adapter.validate_python(group_rows or [])
     return CacheActivityResponse(

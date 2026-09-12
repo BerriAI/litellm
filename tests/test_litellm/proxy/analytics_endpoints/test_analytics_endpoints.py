@@ -17,6 +17,8 @@ from litellm.proxy.analytics_endpoints.analytics_endpoints import get_global_act
 from litellm.proxy.analytics_endpoints.cache_activity import (
     ERROR_BREAKDOWN_SQL,
     GROUPS_SQL,
+    KEY_ALIAS_OPTIONS_SQL,
+    MODEL_OPTIONS_SQL,
     CacheActivityGroup,
     compute_totals,
 )
@@ -114,20 +116,18 @@ async def test_filters_are_passed_to_sql_as_json_arrays(mock_prisma: MagicMock):
 
 
 @pytest.mark.asyncio
-async def test_info_route_failures_are_excluded_from_groups_and_error_breakdown(mock_prisma: MagicMock):
-    """Regression for LIT-5884: failed info-route calls are spend-logged but are not inference traffic."""
+async def test_every_query_excludes_the_same_info_routes(mock_prisma: MagicMock):
+    """Regression for LIT-5884: failed info-route calls are spend-logged but are not inference traffic, so
+    the groups, error breakdown and both filter-option queries all receive the same exclusion list. What
+    the SQL does with it is covered against Postgres in tests/proxy_behavior/spend/test_cache_activity.py."""
     await get_global_activity(start_date="2026-07-01", end_date="2026-07-27", key_aliases=[], models=[])
 
-    filtered_calls = [
-        call for call in mock_prisma.db.query_raw.call_args_list if call.args[0] in (GROUPS_SQL, ERROR_BREAKDOWN_SQL)
-    ]
-    assert len(filtered_calls) == 2
-    for call in filtered_calls:
-        excluded_call_types = json.loads(call.args[5])
+    exclusions_by_query = {call.args[0]: json.loads(call.args[-1]) for call in mock_prisma.db.query_raw.call_args_list}
+    assert set(exclusions_by_query) == {GROUPS_SQL, ERROR_BREAKDOWN_SQL, KEY_ALIAS_OPTIONS_SQL, MODEL_OPTIONS_SQL}
+    for excluded_call_types in exclusions_by_query.values():
         assert excluded_call_types == LiteLLMRoutes.info_routes.value
         assert {"/model/info", "/v1/models", "/key/info"} <= set(excluded_call_types)
         assert "" not in excluded_call_types
-        assert 'sl."call_type" NOT IN (SELECT jsonb_array_elements_text($5::jsonb))' in call.args[0]
 
 
 @pytest.mark.asyncio
