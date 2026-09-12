@@ -1,7 +1,10 @@
 import json
+import math
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final, Protocol, TypedDict, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 
 class FallbackErrorInfo(TypedDict):
@@ -13,6 +16,68 @@ class FallbackErrorInfo(TypedDict):
 
 class _HiddenParamsHost(Protocol):
     _hidden_params: dict[str, object]
+
+
+_EMPTY_OBJECT_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
+_ROUTING_HEADER_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_COMPLEXITY_ROUTER_HEADER_PREFIX: Final = "x-litellm-complexity-router-"
+
+
+def _routing_header_mapping(value: object) -> Mapping[str, object]:
+    try:
+        mapping: Final[Mapping[str, object]] = _ROUTING_HEADER_MAPPING.validate_python(value, strict=True)
+        return mapping
+    except ValidationError:
+        return _EMPTY_OBJECT_MAPPING
+
+
+def _header_string(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized: Final = value.strip()
+    return normalized if normalized and all(" " <= character <= "~" for character in normalized) else None
+
+
+def complexity_router_decision_headers(request_kwargs: object) -> Mapping[str, str]:
+    data: Final = _routing_header_mapping(request_kwargs)
+    metadata_key: Final = "litellm_metadata" if "litellm_metadata" in data else "metadata"
+    decision: Final = _routing_header_mapping(_routing_header_mapping(data.get(metadata_key)).get("routing_decision"))
+    if decision.get("router_type") != "complexity":
+        return MappingProxyType({})
+    score: Final = decision.get("score")
+    values: Final = (
+        ("tier", decision.get("tier")),
+        ("cause", decision.get("cause")),
+        (
+            "score",
+            str(score)
+            if isinstance(score, (int, float)) and not isinstance(score, bool) and math.isfinite(score)
+            else None,
+        ),
+        (
+            "reasoning-effort",
+            _routing_header_mapping(decision.get("tier_litellm_params")).get("reasoning_effort"),
+        ),
+    )
+    return MappingProxyType(
+        {
+            f"{_COMPLEXITY_ROUTER_HEADER_PREFIX}{key}": header_value
+            for key, value in values
+            if (header_value := _header_string(value)) is not None
+        }
+    )
+
+
+def replace_complexity_router_headers(
+    existing_headers: Mapping[str, object], new_headers: Mapping[str, object]
+) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in (*existing_headers.items(), *new_headers.items())
+            if key in new_headers or not key.startswith(_COMPLEXITY_ROUTER_HEADER_PREFIX)
+        }
+    )
 
 
 class HiddenParamsAsyncIteratorWrapper:

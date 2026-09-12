@@ -61,6 +61,7 @@ from openai.types.responses.response_create_params import (
     ToolParam,
 )
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
+from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -1358,6 +1359,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             | OutputFunctionToolCall
             | OutputImageGenerationCall
             | ResponseFunctionToolCall
+            | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
         ]
     )

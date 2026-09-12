@@ -55,7 +55,7 @@ const addPluginShape = {
   domain: z.string(),
   namespace: z.string(),
   description: z.string(),
-  category: z.string(),
+  category: z.string().nullable(),
   keywords: z.string(),
   version: z.string(),
   authorName: z.string(),
@@ -76,7 +76,7 @@ const EMPTY_VALUES: AddPluginFormValues = {
   domain: "",
   namespace: "",
   description: "",
-  category: "",
+  category: null,
   keywords: "",
   version: "",
   authorName: "",
@@ -346,18 +346,14 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
                 label={labelWithHint("Category (Optional)", "Select a category or enter a custom one")}
               >
                 {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-                  <Combobox
-                    items={PREDEFINED_CATEGORIES}
-                    value={value === "" ? null : value}
-                    onValueChange={(category: string | null) => onChange(category ?? "")}
-                  >
+                  <Combobox items={PREDEFINED_CATEGORIES} value={value} onValueChange={onChange}>
                     <ComboboxInput
                       id={id}
                       aria-invalid={ariaInvalid}
                       aria-describedby={ariaDescribedBy}
                       placeholder="Select or type a category"
                       className="w-full rounded-lg"
-                      showClear={value !== ""}
+                      showClear={value != null && value !== ""}
                     />
                     <ComboboxContent>
                       <ComboboxEmpty>No matching categories</ComboboxEmpty>
