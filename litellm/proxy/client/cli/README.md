@@ -536,7 +536,30 @@ It writes the same settings `lite up` does, `env.ANTHROPIC_BASE_URL`, `env.ENABL
 
 The key in the file is the login's own, so it expires with it (24h by default): run `lite login --config-claude` again after that, which rewrites the key in place. Earlier versions wrote an `apiKeyHelper` that ran `lite auth print-token` instead, so a later login refreshed Claude Code by itself; that meant Claude Code spawning a full `lite` start, keychain check included, on every credential refresh, so the helper is no longer written and a stale one is stripped by the next `--config-claude` or `configure claude`. Like `lite up`, the flag refuses to run while a `lite up` session holds a backup, and tells you to run `lite down` first
 
-#### Configuring Claude Code Once, With a Virtual Key
+#### Configuring Claude Code or Codex Once, With a Virtual Key
+
+Run the setup wizard with your gateway URL and a long-lived virtual key:
+
+```bash
+lite configure --api-key sk-... --gateway-url https://your-proxy.example.com
+```
+
+Select Claude Code, Codex, or both, then choose a gateway model for each selected agent. The wizard validates the key and reads the models your key can access before changing settings. Start either configured agent normally with `claude` or `codex`; the gateway connection persists across terminals without a wrapper or exported API key
+
+`--gateway-url` also accepts a deployment path prefix and a trailing `/v1`. `--base-url` is an alias. If omitted, setup uses `lite --base-url`, `LITELLM_PROXY_URL`, or the saved CLI URL; the wizard asks for a URL when none was provided
+
+For a scripted setup, name the agent and model:
+
+```bash
+lite configure --gateway-url https://your-proxy.example.com codex --api-key sk-... --model my-coding-model
+lite unconfigure codex
+```
+
+Codex setup requires an installed stable Codex version of [0.129.0 or newer](https://github.com/openai/codex/releases/tag/rust-v0.129.0), which prevents repository settings from redirecting requests carrying your saved key. Setup checks `codex --version` before fetching models or changing either selected agent's settings. Undo remains available without Codex installed
+
+Codex setup updates `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`) with the selected model and a LiteLLM Responses provider. The gateway key lives in that provider's static Authorization header, in a file written atomically with owner-only permissions. Other providers, hooks, MCP servers and comments are preserved. A default profile selection is removed so it cannot override the gateway settings; its contents are preserved, and undo restores the selection. Explicit Codex flags and supported project settings still follow Codex's normal precedence
+
+The Codex undo receipt is kept in a private `.litellm` directory beside the resolved config file. `lite unconfigure codex` restores only values still holding what configure wrote, preserving later edits. The provider URL and credential are restored together. Symlinks are followed and their targets become owner-only; keep these credential-bearing files out of version control
 
 `lite configure claude` wires Claude Code up persistently with a long-lived virtual key, a pinned model and an undo, and `lite unconfigure claude` puts things back:
 
@@ -548,7 +571,7 @@ claude
 
 The key comes from `--api-key` (or `lite --api-key` / `LITELLM_PROXY_API_KEY`) and is written into `env.ANTHROPIC_AUTH_TOKEN`; without one the command refuses, since a `lite login` credential expires within a day and keeping it fresh would mean Claude Code running `lite` through `apiKeyHelper` on every credential refresh. The command checks the key against `GET /v1/models`, then patches `~/.claude/settings.json`: `env.ANTHROPIC_BASE_URL`, the credential, and `env.ENABLE_TOOL_SEARCH` and `env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` when those are missing, so Claude Code's `/model` picker lists the proxy's models (under `claude-router-<UTF-8 hex of the group name>` for a group whose id contains neither `claude` nor `anthropic`, since Claude Code lists only those) and you pick between them as usual. Claude Code keeps its own default model until you switch, so that id has to exist on the proxy for the first message to go through; `--model` (or the interactive prompt below) sets the model Claude Code starts on instead, as the top-level `model` key and as `env.ANTHROPIC_MODEL`, both of which have to be on `/v1/models` for the key. The second one matters for `claude -c` and `claude --resume`: a resumed session otherwise re-sends the model its transcript recorded, which behind an auto-router with `return_raw_model_name: true` is the tier model that answered, and a key scoped to the router alias gets a 403 for it; `ANTHROPIC_MODEL` outranks the transcript on resume. Nothing forces Claude Code's sub-agent or background tiers onto a proxy model, so those built-in ids need to exist on the proxy too; `lite autoroute up` is the mode that pins every tier to one group. Claude Code treats a name it does not know as an unknown model: it prints a one-line `unrecognized_model` note, assumes a 200k context window (the proxy appends `[1m]` for a group whose configured or known input window reaches 1M) and sends no thinking parameters for it, so name the group like a Claude model id to change that. The other credential slots (`env.ANTHROPIC_API_KEY`, a stale `env.ANTHROPIC_AUTH_TOKEN` or `apiKeyHelper`) are removed so they cannot fight the one written. Every other setting is preserved and the file is written atomically with owner-only permissions; if `settings.json` is a symlink into a dotfiles repository, the key is written through to that target and the command says so, so keep it out of version control
 
-Plain `lite configure`, with no agent named, asks the same things interactively: which agents to wire (Claude Code today) and which of the proxy's models to start on, picked from `/v1/models` with a type-to-filter prompt
+Plain `lite configure`, with no agent named, asks which agents to wire and which gateway model each starts on, picked from `/v1/models` with a type-to-filter prompt. All choices and selected config files are checked before the first settings write. If a later filesystem write fails, the output identifies each agent already configured and its undo command
 
 What the command changed is recorded in `~/.litellm/claude_configure_state.json` (previous values plus fingerprints of what was written, never a second copy of the key). `lite unconfigure claude` restores each of those keys only if it still holds what `configure` wrote, so anything you changed since is left alone and named in the output; a `settings.json` or `env` object that only existed because of `configure` is removed again. Ownership moves only by a write: running `configure` again (a re-login is one) refreshes the record only for the keys its merge changed, keeps the original snapshot of a key that still holds what it wrote, and snapshots afresh a key you changed in between, so `unconfigure` brings back whatever the repeat displaced and never adopts your edit as its own. A credential (`env.ANTHROPIC_API_KEY`, `env.ANTHROPIC_AUTH_TOKEN`, `apiKeyHelper`) is put back only when the restored file points at the `ANTHROPIC_BASE_URL` it was captured next to; otherwise it stays removed, the output says which server it belonged to, and the receipt is kept so pointing the URL back and running `unconfigure` again finishes the job. It also undoes `lite login --config-claude`, which writes through the same path. Both refuse to run while a `lite up` or `lite autoroute up` session holds a backup, and that check comes before any request
 

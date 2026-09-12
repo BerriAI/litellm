@@ -1,5 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { z } from "zod/v4";
+import {
+  complexityRouterSchema,
+  semanticRouterSchema,
+  EMPTY_FORM_VALUES,
+  type EditAutoRouterFormValues,
+} from "./editAutoRouterFormSchema";
 import { toast } from "@/lib/toast";
 import { CircleHelp } from "lucide-react";
 import { FieldGroup } from "@/components/ui/field";
@@ -44,7 +49,7 @@ import { KeywordTierRule } from "../add_model/KeywordTierRules";
 import { DEFAULT_MATCH_THRESHOLD } from "../add_model/SemanticKeywordMatching";
 import {
   type AutoRouterCompressionState,
-  buildAutoRouterCompressionParams,
+  buildAutoRouterCompressionPatch,
   DEFAULT_AUTO_ROUTER_COMPRESSION,
   hydrateAutoRouterCompression,
 } from "../add_model/buildAutoRouterCompression";
@@ -400,35 +405,6 @@ export const buildUpdatedComplexityRouterConfig = (
   };
 };
 
-const sharedShape = {
-  auto_router_name: z.string().min(1, "Auto router name is required"),
-  model_access_group: z.array(z.string()),
-};
-
-const complexityRouterShape = {
-  ...sharedShape,
-  auto_router_default_model: z.string(),
-  auto_router_embedding_model: z.string(),
-};
-
-const semanticRouterShape = {
-  ...sharedShape,
-  auto_router_default_model: z.string().min(1, "Default model is required"),
-  auto_router_embedding_model: z.string().min(1, "Embedding model is required"),
-};
-
-const complexityRouterSchema = z.object(complexityRouterShape);
-const semanticRouterSchema = z.object(semanticRouterShape);
-
-type EditAutoRouterFormValues = z.infer<typeof semanticRouterSchema>;
-
-const EMPTY_FORM_VALUES: EditAutoRouterFormValues = {
-  auto_router_name: "",
-  auto_router_default_model: "",
-  auto_router_embedding_model: "",
-  model_access_group: [],
-};
-
 const labelWithHint = (label: string, hint: string): React.ReactNode => (
   <>
     {label}
@@ -587,8 +563,8 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       // Set form values
       form.reset({
         auto_router_name: modelData.model_name,
-        auto_router_default_model: modelData.litellm_params?.auto_router_default_model || "",
-        auto_router_embedding_model: modelData.litellm_params?.auto_router_embedding_model || "",
+        auto_router_default_model: modelData.litellm_params?.auto_router_default_model || null,
+        auto_router_embedding_model: modelData.litellm_params?.auto_router_embedding_model || null,
         model_access_group: modelData.model_info?.access_groups || [],
       });
     } catch (error) {
@@ -679,7 +655,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         ...modelData.litellm_params,
         complexity_router_config: updatedConfig,
         complexity_router_default_model: defaultModel,
-        ...buildAutoRouterCompressionParams(autoRouterCompression),
+        ...buildAutoRouterCompressionPatch(autoRouterCompression, modelData.litellm_params ?? {}),
       };
       const updatedModelInfo = {
         ...modelData.model_info,

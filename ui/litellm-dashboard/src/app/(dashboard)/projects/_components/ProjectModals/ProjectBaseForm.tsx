@@ -205,8 +205,19 @@ export function ProjectBaseForm({ form, advancedOpen, onAdvancedOpenChange }: Pr
                   type="number"
                   min={0}
                   placeholder="0.00"
-                  value={value ?? ""}
-                  onChange={(event) => onChange(toOptionalNumber(event.target.value))}
+                  value={Number.isNaN(value) ? "" : value ?? ""}
+                  onInput={(event) => {
+                    if (event.currentTarget.validity.badInput || Number.isNaN(value)) {
+                      onChange(
+                        event.currentTarget.validity.badInput
+                          ? Number.NaN
+                          : toOptionalNumber(event.currentTarget.value) ?? null,
+                      );
+                    }
+                  }}
+                  onChange={(event) =>
+                    onChange(event.target.validity.badInput ? Number.NaN : toOptionalNumber(event.target.value) ?? null)
+                  }
                 />
               </InputGroup>
             )}

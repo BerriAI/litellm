@@ -4,6 +4,7 @@ Unit tests for AttachmentRegistry - tests policy attachment matching.
 Tests the main entry point: get_attached_policies()
 """
 
+import time
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -221,6 +222,21 @@ class TestGetAttachedPolicies:
 
         # Should only appear once
         assert attached.count("multi-policy") == 1
+
+    def test_many_distinct_policies_resolve_in_linear_time(self):
+        policy_count = 20_000
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [{"policy": f"policy-{index}", "scope": "*"} for index in range(policy_count)]
+        )
+        context = PolicyMatchContext(team_alias="team", key_alias="key", model="gpt-4")
+
+        started = time.perf_counter()
+        attached = registry.get_attached_policies(context)
+        elapsed = time.perf_counter() - started
+
+        assert attached == [f"policy-{index}" for index in range(policy_count)]
+        assert elapsed < 1.0, f"{policy_count} attachments took {elapsed:.2f}s, dedup is no longer one pass"
 
     def test_no_attachments_returns_empty(self):
         """Test empty attachments returns empty list."""
