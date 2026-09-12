@@ -1453,22 +1453,19 @@ def _warn_on_server_name_fields(
     _warn("server_name", server_name)
 
 
-def _warn_internal_delegate_pkce_if_applicable(server: MCPServer, *, source: str) -> None:
-    """Surface internal + upstream PKCE delegate in logs for operators."""
+def _warn_legacy_delegate_auth_if_applicable(server: MCPServer, *, source: str) -> None:
+    """Direct legacy delegated OAuth configurations to the admitted replacement."""
     if server.auth_type != MCPAuth.oauth2:
         return
     if getattr(server, "delegate_auth_to_upstream", False) is not True:
-        return
-    if getattr(server, "available_on_public_internet", True):
         return
     if server.has_client_credentials:
         return
     label: Final = get_server_prefix(server)
     verbose_logger.warning(
-        "MCP server %r (id=%s, source=%s): internal-only (available_on_public_internet=false) "
-        "with delegate_auth_to_upstream=true. Anonymous callers can reach the upstream OAuth2 "
-        "/authorize flow and complete PKCE without a LiteLLM API key session; ensure the "
-        "upstream IdP and network enforce your access policy.",
+        "MCP server %r (id=%s, source=%s) uses deprecated auth_type=oauth2 with "
+        "delegate_auth_to_upstream=true. LiteLLM admission is now required; migrate to "
+        "auth_type=oauth_delegate for client-forwarded OAuth.",
         label,
         server.server_id,
         source,
@@ -2640,7 +2637,7 @@ class MCPServerManager:
                 oauth_identity_binding=server_config.get("oauth_identity_binding", None),
             )
             self._assign_unique_short_prefix(new_server)
-            _warn_internal_delegate_pkce_if_applicable(new_server, source="config")
+            _warn_legacy_delegate_auth_if_applicable(new_server, source="config")
             _warn_config_id_jag_server_outruns_sso(new_server)
             self._invalidate_discovery_lists(server_id)
             self.config_mcp_servers[server_id] = new_server
@@ -3185,7 +3182,7 @@ class MCPServerManager:
             timeout=getattr(mcp_server, "timeout", None),
             max_concurrent_requests=getattr(mcp_server, "max_concurrent_requests", None),
         )
-        _warn_internal_delegate_pkce_if_applicable(new_server, source="database")
+        _warn_legacy_delegate_auth_if_applicable(new_server, source="database")
         self._set_oauth_discovery_deferred(
             new_server.server_id,
             _requires_oauth_discovery(server_url, use_issuer_anchor, new_server),
@@ -3479,10 +3476,6 @@ class MCPServerManager:
                 )
             )
 
-            # For anonymous callers (no user_id, no role), also surface any
-            # servers the operator has opted into upstream-delegated auth.
-            # These servers handle their own auth at the upstream level, so
-            # LiteLLM granting access here does not bypass any security gate.
             is_anonymous: Final = not (
                 user_api_key_auth
                 and (
@@ -3492,23 +3485,12 @@ class MCPServerManager:
                 )
             )
             if is_anonymous:
-                delegate_server_ids: Final = [
+                passthrough_server_ids: Final = [
                     server.server_id
                     for server in self.get_registry().values()
-                    if (
-                        getattr(server, "auth_type", None) == MCPAuth.oauth2
-                        and getattr(server, "delegate_auth_to_upstream", False) is True
-                        # M2M servers must not be exposed anonymously: an
-                        # unauthenticated caller would get LiteLLM to proxy tool
-                        # calls using its stored client_credentials. Resolve the flow
-                        # rather than reading has_client_credentials so an unstamped
-                        # M2M-shape row (null column, verbatim-read as non-M2M) still
-                        # fails closed here, matching the anonymous-delegate auth gate.
-                        and MCPServerManager.effective_oauth2_flow(server) != "client_credentials"
-                    )
-                    or getattr(server, "auth_type", None) == MCPAuth.true_passthrough
+                    if getattr(server, "auth_type", None) == MCPAuth.true_passthrough
                 ]
-                combined_servers.update(delegate_server_ids)
+                combined_servers.update(passthrough_server_ids)
 
             restrict_allow_all: Final = (
                 resolved_general_settings.get("mcp_allow_all_keys_respects_mcp_scope", False)
