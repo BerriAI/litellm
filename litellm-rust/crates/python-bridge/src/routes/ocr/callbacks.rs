@@ -51,6 +51,11 @@ impl PythonLogger {
             kwargs.bind(py).get_item("litellm_call_id")?,
         )?;
         params.set_item("api_base", url)?;
+        for name in ["logger_fn", "litellm_request_debug"] {
+            if let Some(value) = kwargs.bind(py).get_item(name)? {
+                params.set_item(name, value)?;
+            }
+        }
         update.set_item("litellm_params", params)?;
         update.set_item("custom_llm_provider", &pre_call.custom_llm_provider)?;
         self.object(py)
@@ -73,8 +78,14 @@ impl PythonLogger {
         let kwargs = PyDict::new(py);
         kwargs.set_item("input", "OCR document processing")?;
         kwargs.set_item("api_key", api_key)?;
-        kwargs.set_item("additional_args", additional)?;
-        self.object(py).call_method("pre_call", (), Some(&kwargs))?;
+        kwargs.set_item("additional_args", &additional)?;
+        if self.callbacks_needed(py, "input")? {
+            self.object(py).call_method("pre_call", (), Some(&kwargs))?;
+        } else {
+            self.object(py)
+                .call_method("_pre_call", (), Some(&kwargs))?;
+            self.object(py).call_method0("record_api_call_start_time")?;
+        }
         Ok(())
     }
 
@@ -85,14 +96,24 @@ impl PythonLogger {
         body: &Option<Py<PyDict>>,
         headers: &Option<Py<PyDict>>,
     ) -> PyResult<()> {
-        let kwargs = PyDict::new(py);
-        kwargs.set_item("original_response", to_py(py, original_response)?)?;
         let additional = PyDict::new(py);
         additional.set_item("complete_input_dict", body)?;
         additional.set_item("headers", headers)?;
-        kwargs.set_item("additional_args", additional)?;
-        self.object(py)
-            .call_method("post_call", (), Some(&kwargs))?;
+        if self.callbacks_needed(py, "input")? {
+            let kwargs = PyDict::new(py);
+            kwargs.set_item("original_response", to_py(py, original_response)?)?;
+            kwargs.set_item("additional_args", &additional)?;
+            self.object(py)
+                .call_method("post_call", (), Some(&kwargs))?;
+        } else {
+            let response = py
+                .import("json")?
+                .call_method1("dumps", (to_py(py, original_response)?,))?;
+            self.object(py).call_method1(
+                "record_post_call",
+                (response, py.None(), py.None(), additional),
+            )?;
+        }
         Ok(())
     }
 }

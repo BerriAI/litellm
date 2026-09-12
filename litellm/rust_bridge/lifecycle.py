@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import os
 import uuid
 from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass
@@ -86,10 +87,13 @@ def setup(
     }
     supplied: Final = arguments.get("litellm_logging_obj")
     if isinstance(supplied, Logging):
+        supplied._native_callback_fast_path = False  # pyright: ignore[reportPrivateUsage]  # supplied loggers retain all dispatch contracts
         return CallSetup(supplied, arguments)
     logger, prepared = utils.function_setup(
         call_type, utils.Rules(), start_time, *args, is_async_call=asynchronous, **arguments
     )
+    if type(logger) is Logging and call_type in ("ocr", "aocr"):
+        logger._native_callback_fast_path = True  # pyright: ignore[reportPrivateUsage]  # only bridge-created OCR loggers opt into callback elision
     return CallSetup(logger, prepared)
 
 
@@ -128,3 +132,84 @@ def finalize(
         MetadataUpdater, response_metadata.update_response_metadata
     )
     update(response, logger, model if isinstance(model, str) else None, kwargs, start_time, end_time)
+
+
+def deployment_callbacks_needed() -> bool:
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+
+    return any(isinstance(callback, CustomLogger) for callback in litellm.callbacks)
+
+
+def callbacks_needed(logger: Logging, phase: str) -> bool:
+    import litellm
+    from litellm._logging import (
+        _is_debugging_on,  # pyright: ignore[reportPrivateUsage]  # use the same debug gate as Logging
+    )
+
+    if (
+        _is_debugging_on()
+        or getattr(logger, "litellm_request_debug", False)
+        or os.getenv("LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD")
+    ):
+        return True
+    input_needed: Final = bool(
+        litellm.input_callback
+        or litellm._async_input_callback  # pyright: ignore[reportPrivateUsage]  # live async registries have no public accessor
+        or logger.dynamic_input_callbacks
+        or callable(getattr(logger, "logger_fn", None))
+        or logger.log_raw_request_response
+        or litellm.log_raw_request_response
+    )
+    match phase:
+        case "input":
+            return input_needed
+        case "sync_success":
+            return bool(litellm.success_callback or logger.dynamic_success_callbacks)
+        case "sync_success_async":
+            return bool(
+                (litellm.success_callback or logger.dynamic_success_callbacks)
+                and logger._should_run_sync_callbacks_for_async_calls()  # pyright: ignore[reportPrivateUsage]  # preserve async call filtering of sync callbacks
+            )
+        case "async_success":
+            return bool(litellm._async_success_callback or logger.dynamic_async_success_callbacks)  # pyright: ignore[reportPrivateUsage]  # live async registries have no public accessor
+        case "sync_failure":
+            return bool(litellm.failure_callback or logger.dynamic_failure_callbacks)
+        case "async_failure":
+            return bool(litellm._async_failure_callback or logger.dynamic_async_failure_callbacks)  # pyright: ignore[reportPrivateUsage]  # live async registries have no public accessor
+        case "payload":
+            return bool(
+                input_needed
+                or litellm.success_callback
+                or litellm.failure_callback
+                or litellm._async_success_callback  # pyright: ignore[reportPrivateUsage]  # live async registries have no public accessor
+                or litellm._async_failure_callback  # pyright: ignore[reportPrivateUsage]  # live async registries have no public accessor
+                or logger.dynamic_success_callbacks
+                or logger.dynamic_async_success_callbacks
+                or logger.dynamic_failure_callbacks
+                or logger.dynamic_async_failure_callbacks
+            )
+        case _:
+            return True
+
+
+def success_bookkeeping(
+    logger: Logging, response: object, start: datetime.datetime, end: datetime.datetime, asynchronous: bool
+) -> None:
+    phase: Final = "async_success" if asynchronous else "sync_success"
+    if logger.should_run_logging(phase):
+        logger._success_handler_helper_fn(  # pyright: ignore[reportPrivateUsage]  # retain success bookkeeping without constructing a callback payload
+            result=response, start_time=start, end_time=end, build_logging_payload=False
+        )
+        logger.has_run_logging(phase)
+
+
+def failure_bookkeeping(
+    logger: Logging, error: BaseException, start: datetime.datetime, end: datetime.datetime, asynchronous: bool
+) -> None:
+    phase: Final = "async_failure" if asynchronous else "sync_failure"
+    if logger.should_run_logging(phase):
+        logger._failure_handler_helper_fn(  # pyright: ignore[reportPrivateUsage]  # retain failure accounting without formatting an unused traceback or payload
+            error, "", start, end, build_logging_payload=False
+        )
+        logger.has_run_logging(phase)

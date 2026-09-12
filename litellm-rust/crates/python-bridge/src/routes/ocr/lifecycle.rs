@@ -86,6 +86,14 @@ impl PythonOcrHost {
         mut request: OcrDuringCallRequest,
     ) -> PyResult<OcrDuringCallRequest> {
         let pre_call = self.pre_call.as_ref().ok_or_else(missing_state)?;
+        let logger = self.state.logger()?;
+        logger.update_ocr(py, &self.state.kwargs, pre_call, &request.url)?;
+        if !logger.callbacks_needed(py, "payload")? {
+            logger
+                .object(py)
+                .call_method0("record_api_call_start_time")?;
+            return Ok(request);
+        }
         if let Some(body) = request.body.as_object_mut() {
             for name in &request.retained_fields {
                 body.remove(name);
@@ -107,8 +115,6 @@ impl PythonOcrHost {
         }
         self.body = Some(body.clone().unbind());
         self.headers = Some(headers.clone().unbind());
-        let logger = self.state.logger()?;
-        logger.update_ocr(py, &self.state.kwargs, pre_call, &request.url)?;
         logger.pre_ocr(py, &self.api_key, &body, &headers, &request.url)?;
         let headers = headers
             .iter()
@@ -124,9 +130,10 @@ impl PythonOcrHost {
         py: Python<'_>,
         request: OcrPostCallRequest,
     ) -> PyResult<OcrPostCallRequest> {
-        self.state
-            .logger()?
-            .post_ocr(py, &request.original_response, &self.body, &self.headers)?;
+        let logger = self.state.logger()?;
+        if logger.callbacks_needed(py, "payload")? {
+            logger.post_ocr(py, &request.original_response, &self.body, &self.headers)?;
+        }
         Ok(request)
     }
 }
