@@ -124,6 +124,14 @@ class MemoryRepository(PrismaTableRepository["prisma_models.LiteLLM_MemoryTable"
     table_name = "litellm_memorytable"
 
 
+class MemoryPolicyRepository(PrismaTableRepository["prisma_models.LiteLLM_MemoryPolicy"]):
+    table_name = "litellm_memorypolicy"
+
+
+class MemoryPreferenceRepository(PrismaTableRepository["prisma_models.LiteLLM_MemoryPreference"]):
+    table_name = "litellm_memorypreference"
+
+
 class SearchToolsRepository(PrismaTableRepository["prisma_models.LiteLLM_SearchToolsTable"]):
     table_name = "litellm_searchtoolstable"
 

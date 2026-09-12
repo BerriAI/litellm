@@ -28,7 +28,6 @@ const ADMIN_ONLY_CAPABILITIES: Capability[] = [
 
 const PROXY_ADMIN_ONLY_PAGE_CAPABILITIES: Capability[] = [
   "viewWorkflowRuns",
-  "viewMemory",
   "viewGuardrailUsage",
   "viewProxyWideCostData",
 ];
@@ -148,5 +147,22 @@ describe("rolesWithCapability", () => {
     const roles = rolesWithCapability("viewToolPolicies");
     const removed = roles.pop();
     expect(hasCapability(removed, "viewToolPolicies")).toBe(true);
+  });
+});
+
+describe("hasCapability - viewMemory", () => {
+  it.each([
+    ...ADMIN_ROLES,
+    "Internal User",
+    "Internal Viewer",
+    "Org Admin",
+    "internal_user",
+    "internal_user_viewer",
+    "org_admin",
+  ])("allows self-service memory for %s", (role) => {
+    expect(hasCapability(role, "viewMemory")).toBe(true);
+  });
+  it.each(["Unknown Role", "", null, undefined])("denies unknown roles: %s", (role) => {
+    expect(hasCapability(role, "viewMemory")).toBe(false);
   });
 });

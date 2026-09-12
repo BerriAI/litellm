@@ -32,6 +32,7 @@ def _make_row(
     now = datetime.now(timezone.utc)
     row = MagicMock()
     row.memory_id = memory_id
+    row.namespace = None
     row.key = key
     row.value = value
     row.metadata = metadata

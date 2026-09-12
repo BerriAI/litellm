@@ -1,4 +1,4 @@
-import { all_admin_roles, old_admin_roles } from "./roles";
+import { all_admin_roles, internalUserRoles, old_admin_roles } from "./roles";
 
 const proxyAdminOnlyRoles = [...old_admin_roles, "proxy_admin", "proxy_admin_viewer"];
 
@@ -12,7 +12,7 @@ const CAPABILITY_ROLES = {
   viewAgentUsage: all_admin_roles,
   viewGlobalSpend: proxyAdminOnlyRoles,
   viewWorkflowRuns: proxyAdminOnlyRoles,
-  viewMemory: proxyAdminOnlyRoles,
+  viewMemory: [...all_admin_roles, ...internalUserRoles, "Org Admin"],
   viewGuardrailUsage: proxyAdminOnlyRoles,
   viewProxyWideCostData: proxyAdminOnlyRoles,
 } as const satisfies Record<string, readonly string[]>;

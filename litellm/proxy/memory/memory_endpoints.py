@@ -74,6 +74,11 @@ def _is_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
     return user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
 
 
+class _LegacyMemoryVisibility(TypedDict):
+    namespace: ReadOnly[None]
+    OR: ReadOnly[object]
+
+
 def _visibility_filter(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object] | None:
     """
     Prisma `where` fragment restricting rows to those the caller can see.
@@ -89,7 +94,8 @@ def _visibility_filter(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object
     if not ors:
         # Caller has neither user_id nor team_id — match nothing.
         return {"memory_id": "__no_match__"}
-    return {"OR": ors}
+    visibility: Final[_LegacyMemoryVisibility] = {"namespace": None, "OR": ors}
+    return visibility
 
 
 class _StartsWith(TypedDict):
@@ -137,7 +143,7 @@ def _row_to_model(row: "prisma_models.LiteLLM_MemoryTable") -> LiteLLM_MemoryRow
     )
 
 
-def _require_prisma() -> "PrismaClient":
+def require_memory_prisma() -> "PrismaClient":
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -197,7 +203,7 @@ async def _assert_write_access(
     )
 
 
-async def _is_team_admin_for(prisma_client: "PrismaClient", user_api_key_dict: UserAPIKeyAuth, team_id: str) -> bool:
+async def is_memory_team_admin(prisma_client: "PrismaClient", user_api_key_dict: UserAPIKeyAuth, team_id: str) -> bool:
     """
     True if the caller is a team admin of `team_id`, or an org admin for the
     team's organization. Mirrors the auth pattern used by team-management
@@ -574,3 +580,7 @@ async def delete_memory(
     if deleted is None:
         raise HTTPException(status_code=404, detail=f"Memory with key '{key}' not found")
     return MemoryDeleteResponse(key=key, deleted=True)
+
+
+_require_prisma = require_memory_prisma
+_is_team_admin_for = is_memory_team_admin
