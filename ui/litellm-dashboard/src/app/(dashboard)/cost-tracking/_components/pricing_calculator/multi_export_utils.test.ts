@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { exportMultiToPDF, exportMultiToCSV } from "./multi_export_utils";
 import type { MultiModelResult } from "./types";

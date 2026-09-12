@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cva.config";
+import { orgDetailHref } from "@/utils/entityLinks";
 import { copyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils";
 
 import { Team } from "../key_team_helpers/key_list";
@@ -26,9 +27,13 @@ interface ResourceTone {
 }
 
 const RESOURCE_TONES: Record<"members" | "models" | "keys", ResourceTone> = {
-  members: { icon: Users, className: "bg-violet-50 text-violet-700 ring-violet-600/20" },
-  models: { icon: Layers, className: "bg-sky-50 text-sky-700 ring-sky-600/20" },
-  keys: { icon: KeyRound, className: "bg-emerald-50 text-emerald-700 ring-emerald-600/20" },
+  members: {
+    icon: Users,
+    className:
+      "bg-violet-50 text-violet-700 ring-violet-600/20 dark:bg-violet-950 dark:text-violet-300 dark:ring-violet-400/30",
+  },
+  models: { icon: Layers, className: "bg-info/10 text-info ring-sky-600/20" },
+  keys: { icon: KeyRound, className: "bg-success/10 text-success ring-emerald-600/20" },
 };
 
 const teamMemberCount = (team: Team): number => team.members_count ?? team.members_with_roles?.length ?? 0;
@@ -179,8 +184,8 @@ export const getTeamTableColumns = ({
         const displayValue = org?.organization_alias || orgId;
         const width = info.cell.column.getSize();
         return (
-          <span className="block truncate text-sm" style={{ maxWidth: width }} title={displayValue}>
-            {displayValue}
+          <span className="block" style={{ maxWidth: width }} title={displayValue}>
+            <IdentityCell title={displayValue} titleClassName="text-sm font-normal" href={orgDetailHref(orgId)} />
           </span>
         );
       },
@@ -209,7 +214,14 @@ export const getTeamTableColumns = ({
       header: "Spend / Budget",
       size: 200,
       enableSorting: false,
-      cell: ({ row }) => <SpendBudgetCell spend={row.original.spend} maxBudget={row.original.max_budget} />,
+      cell: ({ row }) => (
+        <SpendBudgetCell
+          spend={row.original.spend}
+          maxBudget={row.original.max_budget}
+          spendDecimals={2}
+          budgetDecimals={2}
+        />
+      ),
     },
     {
       id: "created_at",

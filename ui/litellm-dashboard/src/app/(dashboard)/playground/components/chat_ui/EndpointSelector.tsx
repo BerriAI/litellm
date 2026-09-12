@@ -1,27 +1,21 @@
-import { Select } from "antd";
+import { SearchSelect } from "@/components/shared/SearchSelect";
 import React from "react";
 import { ENDPOINT_OPTIONS } from "./chatConstants";
 
 interface EndpointSelectorProps {
-  endpointType: string; // Accept string to avoid type conflicts
-  onEndpointChange: (value: string) => void;
+  endpointType: string | null;
+  onEndpointChange: (value: string | null) => void;
   className?: string;
 }
 
 const EndpointSelector: React.FC<EndpointSelectorProps> = ({ endpointType, onEndpointChange, className }) => {
   return (
     <div className={className}>
-      <Select
-        showSearch
+      <SearchSelect
         value={endpointType}
-        style={{ width: "100%" }}
-        onChange={onEndpointChange}
+        onValueChange={onEndpointChange}
         options={ENDPOINT_OPTIONS}
-        className="rounded-md"
-        filterOption={(input, option) =>
-          (option?.label ?? "").toLowerCase().includes(input.toLowerCase()) ||
-          (option?.value ?? "").toLowerCase().includes(input.toLowerCase())
-        }
+        placeholder="Select an endpoint"
       />
     </div>
   );

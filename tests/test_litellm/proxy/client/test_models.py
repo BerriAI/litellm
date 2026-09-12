@@ -1,12 +1,8 @@
-import os
-import sys
 
+import time
 import pytest
 import requests
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 import responses
@@ -143,7 +139,7 @@ def test_list_invalid_api_keys(base_url, api_key):
     assert "Authorization" not in request.headers
 
 
-def test_client_initialization_strips_trailing_slash():
+def test_models_client_initialization_strips_trailing_slash():
     """Test that the client properly strips trailing slashes from base_url during initialization"""
     client = ModelsManagementClient(base_url="http://localhost:8000/////")
     assert client._base_url == "http://localhost:8000"
@@ -472,14 +468,14 @@ def test_get_invalid_params():
     client = ModelsManagementClient(base_url="http://localhost:8000")
 
     # Test with no parameters
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='Exactly one of model_id or model_name must be provided') as exc_info:
         client.get()
     assert "Exactly one of model_id or model_name must be provided" in str(
         exc_info.value
     )
 
     # Test with both parameters
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='Exactly one of model_id or model_name must be provided') as exc_info:
         client.get(model_id="123", model_name="gpt-4")
     assert "Exactly one of model_id or model_name must be provided" in str(
         exc_info.value
@@ -737,3 +733,17 @@ def test_update_other_errors(client):
     with pytest.raises(requests.exceptions.HTTPError) as exc_info:
         client.update(model_id=model_id, model_params=model_params)
     assert exc_info.value.response.status_code == 500
+
+
+def test_list_gives_up_at_the_timeout_instead_of_hanging(hanging_server):
+    """
+    A proxy that accepts the connection but never answers used to pin the caller's
+    process forever, since the request carried no timeout at all.
+    """
+    client = ModelsManagementClient(base_url=hanging_server, api_key="sk-test", timeout=1)
+
+    started = time.monotonic()
+    with pytest.raises(requests.exceptions.Timeout):
+        client.list()
+
+    assert time.monotonic() - started < 10

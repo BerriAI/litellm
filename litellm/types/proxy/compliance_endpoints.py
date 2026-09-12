@@ -1,5 +1,3 @@
-from typing import List, Optional
-
 from pydantic import BaseModel
 
 
@@ -17,7 +15,7 @@ class ComplianceResponse(BaseModel):
 
     compliant: bool
     regulation: str
-    checks: List[ComplianceCheckResult]
+    checks: list[ComplianceCheckResult]
 
 
 class ComplianceCheckRequest(BaseModel):
@@ -27,7 +25,7 @@ class ComplianceCheckRequest(BaseModel):
     """
 
     request_id: str
-    user_id: Optional[str] = None
-    model: Optional[str] = None
-    timestamp: Optional[str] = None
-    guardrail_information: Optional[List[dict]] = None
+    user_id: str | None = None
+    model: str | None = None
+    timestamp: str | None = None
+    guardrail_information: list[dict] | None = None

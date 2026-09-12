@@ -26,10 +26,7 @@ These tests exercise the real public entry points (not the private
 ``_count_content_list`` helper) so the whole chain is covered end to end.
 """
 
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 from litellm import stream_chunk_builder

@@ -8,11 +8,13 @@ identical metrics. The attribute cardinality filter is reused from v1 by import
 (no duplication of the valid-name set or its validation).
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Final, FrozenSet, Mapping, Optional, TypeAlias
+from typing import Any, Final, Literal, Protocol, TypeAlias
 
 from opentelemetry.metrics import Histogram, Meter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -31,6 +33,7 @@ from litellm.integrations.otel.model.semconv import (
     resolve_provider,
 )
 from litellm.integrations.otel.model.utils import to_seconds
+from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
 
@@ -149,6 +152,29 @@ METRIC_ATTRIBUTE_CEILING: Final[frozenset[str]] = frozenset(
 BOUNDED_HIDDEN_PARAM_KEYS: Final[tuple[str, ...]] = ("model_id",)
 
 
+class _TokenUsage(TypedDict, total=False):
+    """The token counts a response's ``usage`` carries, as the recorder reads them."""
+
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
+
+
+class _ResponseView(Protocol):
+    """The one read the recorder makes on a litellm response object."""
+
+    def get(self, key: Literal["usage"], /) -> _TokenUsage | None: ...
+
+
+class _MetricKwargs(TypedDict, total=False):
+    """The logging kwargs the recorder reads directly."""
+
+    call_type: ReadOnly[str | None]
+    litellm_params: ReadOnly[Mapping[str, object] | None]
+    response_cost: ReadOnly[float | None]
+    completion_start_time: ReadOnly[datetime | float | str | None]
+    api_call_start_time: ReadOnly[datetime | float | str | None]
+
+
 def resolve_error_type(kwargs: Mapping[str, Any]) -> str:
     """The ``error.type`` value for a failed request.
 
@@ -159,12 +185,12 @@ def resolve_error_type(kwargs: Mapping[str, Any]) -> str:
     exception *message* is unbounded and never becomes a label; it stays on the
     span and its exception event, where high cardinality is free.
     """
-    std_log = kwargs.get("standard_logging_object")
-    info = getattr(std_log, "error_information", None) or (std_log or {}).get("error_information") or {}
-    error_class = info.get("error_class") or info.get("error_code")
+    std_log: Final = kwargs.get("standard_logging_object")
+    info: Final = getattr(std_log, "error_information", None) or (std_log or {}).get("error_information") or {}
+    error_class: Final = info.get("error_class") or info.get("error_code")
     if error_class:
         return str(error_class)
-    exception = kwargs.get("exception")
+    exception: Final = kwargs.get("exception")
     if exception is not None:
         return type(exception).__name__
     return ERROR_TYPE_FALLBACK
@@ -181,37 +207,42 @@ class GenAIMetricRecorder:
     survives.
     """
 
-    def __init__(self, metrics: GenAIMetrics, callback_name: Optional[str] = None) -> None:
+    def __init__(self, metrics: GenAIMetrics, callback_name: str | None = None) -> None:
         self._metrics = metrics
         self._callback_name = callback_name
-        self._include: Optional[FrozenSet[str]] = None
-        self._exclude: Optional[FrozenSet[str]] = None
+        self._include: frozenset[str] | None = None
+        self._exclude: frozenset[str] | None = None
         self._filter_resolved = False
 
     def record(
         self,
-        kwargs: Mapping[str, Any],
-        response_obj: Any,
+        kwargs: _MetricKwargs,
+        response_obj: _ResponseView | None,
         start_time: datetime,
         end_time: datetime,
     ) -> None:
-        common_attrs = self._filter_attributes(self._bounded_attributes(kwargs))
-        duration_s = (end_time - start_time).total_seconds()
+        common_attrs: Final = self._filter_attributes(self._bounded_attributes(kwargs))
+        duration_s: Final = (end_time - start_time).total_seconds()
+        usage_is_replayed: Final = is_unbilled_non_inference_call_from_params(
+            kwargs.get("call_type"), kwargs.get("litellm_params"), response_obj
+        )
 
         self._metrics.operation_duration.record(duration_s, attributes=common_attrs)
-        self._record_token_usage(response_obj, common_attrs)
+        if not usage_is_replayed:
+            self._record_token_usage(response_obj, common_attrs)
 
-        cost = kwargs.get("response_cost")
+        cost: Final = kwargs.get("response_cost")
         if cost:
             self._metrics.token_cost.record(cost, attributes=common_attrs)
 
         self._record_time_to_first_token(kwargs, common_attrs)
-        self._record_time_per_output_token(kwargs, response_obj, end_time, duration_s, common_attrs)
+        if not usage_is_replayed:
+            self._record_time_per_output_token(kwargs, response_obj, end_time, duration_s, common_attrs)
         self._record_response_duration(kwargs, end_time, common_attrs)
 
     def record_failure(
         self,
-        kwargs: Mapping[str, Any],
+        kwargs: _MetricKwargs,
         start_time: datetime,
         end_time: datetime,
     ) -> None:
@@ -235,7 +266,7 @@ class GenAIMetricRecorder:
         ``gen_ai.token.type``, so an operator's include/exclude list cannot strip
         the discriminator and silently merge failures back into the success series.
         """
-        attributes = {
+        attributes: Final = {
             **self._filter_attributes(self._bounded_attributes(kwargs)),
             Error.TYPE: resolve_error_type(kwargs),
         }
@@ -246,16 +277,16 @@ class GenAIMetricRecorder:
     # ------------------------------------------------------------------ #
 
     def _common_attributes(self, kwargs: Mapping[str, Any]) -> dict:
-        params = kwargs.get("litellm_params") or {}
-        common_attrs: dict = {
+        params: Final = kwargs.get("litellm_params") or {}
+        common_attrs: Final[dict] = {
             GenAI.OPERATION_NAME: resolve_operation(kwargs.get("call_type")).value,
             **_provider_attributes(params.get("custom_llm_provider")),
             GenAI.REQUEST_MODEL: kwargs.get("model"),
             "gen_ai.framework": "litellm",
         }
 
-        std_log = kwargs.get("standard_logging_object")
-        md = getattr(std_log, "metadata", None) or (std_log or {}).get("metadata", {})
+        std_log: Final = kwargs.get("standard_logging_object")
+        md: Final = getattr(std_log, "metadata", None) or (std_log or {}).get("metadata", {})
         for key in METRIC_METADATA_KEYS:
             value = md.get(key)
             if value is None:
@@ -265,8 +296,8 @@ class GenAIMetricRecorder:
             else:
                 common_attrs[f"metadata.{key}"] = str(value)
 
-        hidden_params = getattr(std_log, "hidden_params", None) or (std_log or {}).get("hidden_params", {})
-        bounded_hidden_params = {
+        hidden_params: Final = getattr(std_log, "hidden_params", None) or (std_log or {}).get("hidden_params", {})
+        bounded_hidden_params: Final = {
             key: hidden_params[key]
             for key in BOUNDED_HIDDEN_PARAM_KEYS
             if isinstance(hidden_params, Mapping) and hidden_params.get(key) is not None
@@ -290,8 +321,8 @@ class GenAIMetricRecorder:
             return
         attributes = None
         if self._callback_name in (None, "otel"):
-            otel_settings = (litellm.callback_settings or {}).get("otel") or {}
-            raw = otel_settings.get("attributes") if isinstance(otel_settings, dict) else None
+            otel_settings: Final = (litellm.callback_settings or {}).get("otel") or {}
+            raw: Final = otel_settings.get("attributes") if isinstance(otel_settings, dict) else None
             if raw is not None:
                 attributes = _build_metric_attribute_filter(raw)
         # A bad filter (include_list + exclude_list both set, an unfilterable name)
@@ -312,8 +343,8 @@ class GenAIMetricRecorder:
         it looks like it worked. Logged once, when the filter resolves, rather than
         per request.
         """
-        named = (self._include or frozenset()) | (self._exclude or frozenset())
-        ineligible = sorted(named - METRIC_ATTRIBUTE_CEILING - {TOKEN_TYPE_ATTRIBUTE})
+        named: Final = (self._include or frozenset()) | (self._exclude or frozenset())
+        ineligible: Final = sorted(named - METRIC_ATTRIBUTE_CEILING - {TOKEN_TYPE_ATTRIBUTE})
         if ineligible:
             verbose_logger.warning(
                 "OTel metrics: %s cannot be a metric attribute and is being ignored; it varies "
@@ -335,48 +366,47 @@ class GenAIMetricRecorder:
     #  Per-metric recording
     # ------------------------------------------------------------------ #
 
-    def _record_token_usage(self, response_obj: Any, common_attrs: dict) -> None:
+    def _record_token_usage(self, response_obj: _ResponseView | None, common_attrs: dict) -> None:
         if not response_obj:
             return
-        usage = response_obj.get("usage")
+        usage: Final = response_obj.get("usage")
         if not usage:
             return
-        in_attrs = {**common_attrs, TOKEN_TYPE_ATTRIBUTE: "input"}
-        out_attrs = {**common_attrs, TOKEN_TYPE_ATTRIBUTE: "output"}
+        in_attrs: Final = {**common_attrs, TOKEN_TYPE_ATTRIBUTE: "input"}
+        out_attrs: Final = {**common_attrs, TOKEN_TYPE_ATTRIBUTE: "output"}
         self._metrics.token_usage.record(usage.get("prompt_tokens", 0), attributes=in_attrs)
         self._metrics.token_usage.record(usage.get("completion_tokens", 0), attributes=out_attrs)
 
-    def _record_time_to_first_token(self, kwargs: Mapping[str, Any], common_attrs: dict) -> None:
-        time_to_first_chunk = time_to_first_chunk_seconds(kwargs)
+    def _record_time_to_first_token(self, kwargs: _MetricKwargs, common_attrs: dict) -> None:
+        time_to_first_chunk: Final = time_to_first_chunk_seconds(kwargs)
         if time_to_first_chunk is None:
             return
         self._metrics.time_to_first_token.record(time_to_first_chunk, attributes=common_attrs)
 
     def _record_time_per_output_token(
         self,
-        kwargs: Mapping[str, Any],
-        response_obj: Any,
+        kwargs: _MetricKwargs,
+        response_obj: _ResponseView | None,
         end_time: datetime,
         duration_s: float,
         common_attrs: dict,
     ) -> None:
-        completion_tokens = None
-        if response_obj and (usage := response_obj.get("usage")):
-            completion_tokens = usage.get("completion_tokens")
+        usage: Final = response_obj.get("usage") if response_obj else None
+        completion_tokens: Final = usage.get("completion_tokens") if usage else None
         if completion_tokens is None or completion_tokens <= 0:
             return
 
-        end_ts = to_seconds(end_time)
+        end_ts: Final = to_seconds(end_time)
         if end_ts is None:
             generation_time = duration_s
         else:
-            completion_start_time = kwargs.get("completion_start_time")
-            api_call_start_time = kwargs.get("api_call_start_time")
+            completion_start_time: Final = kwargs.get("completion_start_time")
+            api_call_start_time: Final = kwargs.get("api_call_start_time")
             if completion_start_time is not None:
-                completion_start = to_seconds(completion_start_time)
+                completion_start: Final = to_seconds(completion_start_time)
                 generation_time = duration_s if completion_start is None else end_ts - completion_start
             elif api_call_start_time is not None:
-                api_call_start = to_seconds(api_call_start_time)
+                api_call_start: Final = to_seconds(api_call_start_time)
                 generation_time = duration_s if api_call_start is None else end_ts - api_call_start
             else:
                 generation_time = duration_s
@@ -385,16 +415,16 @@ class GenAIMetricRecorder:
             self._metrics.time_per_output_token.record(generation_time / completion_tokens, attributes=common_attrs)
 
     def _record_response_duration(self, kwargs: Mapping[str, Any], end_time: datetime, common_attrs: dict) -> None:
-        api_call_start_time = kwargs.get("api_call_start_time")
+        api_call_start_time: Final = kwargs.get("api_call_start_time")
         if api_call_start_time is None:
             return
         _end_time = kwargs.get("end_time") or end_time
         if _end_time is None:
             _end_time = datetime.now()
-        api_call_start = to_seconds(api_call_start_time)
-        end_ts = to_seconds(_end_time)
+        api_call_start: Final = to_seconds(api_call_start_time)
+        end_ts: Final = to_seconds(_end_time)
         if api_call_start is None or end_ts is None:
             return
-        duration = end_ts - api_call_start
+        duration: Final = end_ts - api_call_start
         if duration > 0:
             self._metrics.response_duration.record(duration, attributes=common_attrs)
