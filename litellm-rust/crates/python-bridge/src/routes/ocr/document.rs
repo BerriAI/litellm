@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use pyo3::exceptions::{PyFileNotFoundError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::pybacked::PyBackedBytes;
-use pyo3::types::{PyBytes, PyDict, PyString};
+#[cfg(test)]
+use pyo3::types::PyDict;
+use pyo3::types::{PyBytes, PyString};
 
 use litellm_core::constants::OCR_INLINE_MAX_BYTES;
 use litellm_core::ocr::{OcrDocument, encode_file_document, mime_type_for_name, upload_mime_type};
@@ -97,6 +99,11 @@ impl FromPyObject<'_, '_> for FileDocumentInput {
 
     fn extract(document: Borrowed<'_, '_, PyAny>) -> PyResult<Self> {
         let py = document.py();
+        let mime_type = match document.get_item("mime_type") {
+            Ok(value) => Some(value.extract::<String>()?),
+            Err(error) if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py) => None,
+            Err(error) => return Err(error),
+        };
         let file = document.get_item("file").map_err(|error| {
             if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py) {
                 PyValueError::new_err("document with type='file' must include a 'file' field containing a pathlib.Path, file-like object, or bytes")
@@ -110,11 +117,6 @@ impl FromPyObject<'_, '_> for FileDocumentInput {
             ));
         }
         let (bytes, name) = read_file_input(py, &file)?;
-        let mime_type = document
-            .cast::<PyDict>()?
-            .get_item("mime_type")?
-            .map(|value| value.extract::<String>())
-            .transpose()?;
         Ok(Self {
             bytes,
             name,
@@ -203,32 +205,35 @@ mod tests {
     }
 
     #[test]
-    fn extraction_reads_mime_type_after_consuming_file_once() {
+    fn extraction_validates_mime_type_before_consuming_file() {
         Python::initialize();
         Python::attach(|py| {
             let locals = PyDict::new(py);
             py.run(
                 c"class Reader:
+    def __init__(self):
+        self.reads = 0
     def read(self):
-        assert document['mime_type'] == 7
-        document['mime_type'] = 'image/png'
+        self.reads += 1
         return b'abc'
-document = {'file': Reader(), 'mime_type': 7}",
+reader = Reader()
+document = {'file': reader, 'mime_type': 7}",
                 Some(&locals),
                 Some(&locals),
             )
             .unwrap();
             let document = locals.get_item("document").unwrap().unwrap();
-            let input: FileDocumentInput = document.extract().unwrap();
-            assert_eq!(input.bytes.as_ref(), b"abc");
-            assert_eq!(input.mime_type.as_deref(), Some("image/png"));
-            let result = file_document(py, input).unwrap();
-            assert_eq!(
-                serde_json::to_value(result).unwrap(),
-                serde_json::json!({
-                    "type": "image_url", "image_url": "data:image/png;base64,YWJj"
-                })
-            );
+            let error = document.extract::<FileDocumentInput>().err().unwrap();
+            assert!(error.is_instance_of::<PyTypeError>(py));
+            let reads: usize = locals
+                .get_item("reader")
+                .unwrap()
+                .unwrap()
+                .getattr("reads")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(reads, 0);
         });
     }
 

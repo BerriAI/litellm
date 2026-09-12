@@ -69,7 +69,7 @@ pub(crate) async fn transform_request_body<B>(
 where
     B: Serialize + DeserializeOwned,
 {
-    let (body, headers) = if request.hooks.has_guardrails() {
+    let (body, headers) = if request.hooks.intercepts_requests() {
         let body = serde_json::to_value(body).map_err(|_| OcrRequestError::RequestField {
             path: "body".into(),
         })?;
@@ -129,7 +129,7 @@ pub(crate) async fn guardrail_document(
     url: &str,
     headers: &[(String, String)],
 ) -> Result<(OcrDocument, Vec<(String, String)>), OcrError> {
-    if !request.hooks.has_guardrails() {
+    if !request.hooks.intercepts_requests() {
         return Ok((request.document.clone(), headers.to_vec()));
     }
     let changed = request

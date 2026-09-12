@@ -2,6 +2,7 @@ mod callbacks;
 mod document;
 mod errors;
 mod lifecycle;
+mod project;
 mod value;
 
 use pyo3::prelude::*;

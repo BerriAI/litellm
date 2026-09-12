@@ -13,7 +13,9 @@ use super::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrClient};
 use crate::AuthError;
 use crate::Error;
 use crate::auth::{ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};
-use crate::call_lifecycle::host::{HostFailure, HostLifecycle, HostPhase};
+use crate::call_lifecycle::host::{
+    HostCall, HostCallFuture, HostCallStep, HostFailure, HostLifecycle, HostPhase,
+};
 use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleTiming};
 
 pub type NativeResult<T> = Result<NativeOutcome<T>, Error>;
@@ -34,7 +36,6 @@ pub enum OcrDecline {
 pub struct OcrAdmission {
     pub provider_workflow: bool,
     pub host_operations: bool,
-    pub azure_ad_token_provider: bool,
     pub asynchronous: bool,
 }
 
@@ -43,7 +44,6 @@ impl OcrAdmission {
         Self {
             provider_workflow: true,
             host_operations: true,
-            azure_ad_token_provider: false,
             asynchronous: false,
         }
     }
@@ -71,6 +71,17 @@ pub enum OcrHostOperation {
     PostCall(OcrPostCallRequest),
 }
 
+impl OcrHostOperation {
+    pub const fn phase(&self) -> Option<HostPhase> {
+        match self {
+            Self::Lifecycle(phase) => Some(*phase),
+            Self::Success { .. } => Some(HostPhase::Success),
+            Self::Failure { .. } => Some(HostPhase::Failure),
+            _ => None,
+        }
+    }
+}
+
 pub enum OcrHostResult {
     Request(Result<(Box<LiteLLMOcrRequest>, bool), Error>),
     Lifecycle(Result<(), HostFailure>),
@@ -80,10 +91,7 @@ pub enum OcrHostResult {
     PostCall(Result<OcrPostCallRequest, Error>),
 }
 
-pub enum OcrCallStep {
-    Host(OcrHostOperation),
-    Complete(LiteLLMOcrResponse),
-}
+pub type OcrCallStep = HostCallStep<OcrHostOperation, LiteLLMOcrResponse>;
 
 pub struct OcrCall {
     lifecycle: HostLifecycle,
@@ -105,7 +113,7 @@ impl OcrCall {
         }
         NativeOutcome::Completed(Self {
             lifecycle: HostLifecycle::new(admission.asynchronous),
-            execution: OcrExecution::new(client, admission.azure_ad_token_provider),
+            execution: OcrExecution::new(client),
             response: None,
             error: None,
             pending: false,
@@ -277,6 +285,26 @@ impl OcrCall {
     }
 }
 
+impl HostCall for OcrCall {
+    type Operation = OcrHostOperation;
+    type Result = OcrHostResult;
+    type Complete = LiteLLMOcrResponse;
+
+    fn resume(
+        &mut self,
+        result: Option<Self::Result>,
+    ) -> HostCallFuture<'_, Self::Operation, Self::Complete> {
+        Box::pin(OcrCall::resume(self, result))
+    }
+
+    fn interrupt(
+        &mut self,
+        failure: HostFailure,
+    ) -> HostCallFuture<'_, Self::Operation, Self::Complete> {
+        Box::pin(OcrCall::interrupt(self, failure))
+    }
+}
+
 struct PendingOperation {
     operation: OcrHostOperation,
     result: oneshot::Sender<OcrHostResult>,
@@ -295,7 +323,7 @@ struct OcrExecution {
 }
 
 impl OcrExecution {
-    fn new(client: OcrClient, azure_ad_token_provider: bool) -> Self {
+    fn new(client: OcrClient) -> Self {
         let (operations_tx, operations_rx) = mpsc::unbounded_channel();
         Self {
             client: Some(client),
@@ -305,7 +333,7 @@ impl OcrExecution {
             pending_result: None,
             execution: None,
             completed: false,
-            azure_ad_token_provider,
+            azure_ad_token_provider: false,
             terminal: Arc::default(),
         }
     }
@@ -360,7 +388,7 @@ impl OcrExecution {
             .request
             .take()
             .expect("admitted OCR call has a request");
-        let has_guardrails = request.hooks.has_guardrails();
+        let intercepts_requests = request.hooks.intercepts_requests();
         if self.azure_ad_token_provider {
             request.azure_ad_token_provider = Some(TokenProviderHandle::new(Arc::new(
                 OcrAzureAdTokenProvider {
@@ -370,7 +398,7 @@ impl OcrExecution {
         }
         request.hooks = Arc::new(ProtocolHooks {
             operations: self.operations_tx.clone(),
-            has_guardrails,
+            intercepts_requests,
             terminal: self.terminal.clone(),
         });
         self.execution = Some(tokio::spawn(async move {
@@ -404,7 +432,7 @@ impl Drop for OcrExecution {
 
 struct ProtocolHooks {
     operations: mpsc::UnboundedSender<PendingOperation>,
-    has_guardrails: bool,
+    intercepts_requests: bool,
     terminal: Arc<std::sync::Mutex<Option<(CallLifecycleContext, CallLifecycleTiming)>>>,
 }
 
@@ -452,8 +480,8 @@ impl ProtocolHooks {
 }
 
 impl OcrHooks for ProtocolHooks {
-    fn has_guardrails(&self) -> bool {
-        self.has_guardrails
+    fn intercepts_requests(&self) -> bool {
+        self.intercepts_requests
     }
 
     fn pre_call(&self, request: OcrPreCallRequest) -> OcrHookFuture<'_, OcrPreCallRequest> {

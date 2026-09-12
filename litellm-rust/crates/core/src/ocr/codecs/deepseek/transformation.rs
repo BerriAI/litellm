@@ -12,7 +12,7 @@ pub(crate) fn transform_ocr_request(
     params: &DeepSeekOcrParams,
 ) -> Result<DeepSeekOcrRequest, OcrRequestError> {
     if document.source().is_empty() {
-        return Err(OcrRequestError::MissingField("document URL"));
+        return Err(OcrRequestError::MissingDocumentUrl);
     }
     let content = OcrDocument::ImageUrl {
         image_url: document.source().to_string(),

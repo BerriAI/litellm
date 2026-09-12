@@ -13,18 +13,6 @@ from litellm.llms.base_llm.ocr.transformation import PROVIDER_NATIVE_RESPONSE_KE
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.timeouts import timeout_to_seconds as _timeout_to_seconds
 
-_RUST_OCR_SECRET_FIELDS: Final = frozenset(
-    {"azure_ad_token", "client_secret", "azure_federated_token_file", "vertex_credentials", "vertex_ai_credentials"}
-)
-
-
-def redact_logging_params(params: Mapping[str, object]) -> dict[str, object]:
-    return {  # mutable-ok: Logging.update_from_kwargs requires concrete params
-        name: "****" if name in _RUST_OCR_SECRET_FIELDS else value
-        for name, value in params.items()
-        if name != "proxy_server_request"
-    }
-
 
 @dataclass(frozen=True, slots=True)
 class LiteLLMOcrRequest:

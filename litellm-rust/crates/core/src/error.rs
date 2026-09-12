@@ -9,6 +9,8 @@ pub enum Error {
     },
     #[error("missing required field: {0}")]
     MissingField(&'static str),
+    #[error("Document URL is required")]
+    MissingDocumentUrl,
     #[error("invalid response: {0}")]
     InvalidResponse(String),
     #[error("invalid provider: {0}")]
@@ -56,6 +58,8 @@ impl Error {
     pub const fn http_status_code(&self) -> Option<u16> {
         match self {
             Self::InvalidRequest(_) => Some(400),
+            Self::MissingDocumentUrl => Some(500),
+            Self::Http { status, .. } => Some(*status),
             _ => None,
         }
     }
@@ -115,6 +119,7 @@ impl From<crate::ocr::error::OcrRequestError> for Error {
     fn from(error: crate::ocr::error::OcrRequestError) -> Self {
         match error {
             crate::ocr::error::OcrRequestError::MissingField(field) => Self::MissingField(field),
+            crate::ocr::error::OcrRequestError::MissingDocumentUrl => Self::MissingDocumentUrl,
             error => Self::InvalidRequest(error.to_string()),
         }
     }

@@ -132,7 +132,7 @@ struct RecordingHooks {
 }
 
 impl OcrHooks for RecordingHooks {
-    fn has_guardrails(&self) -> bool {
+    fn intercepts_requests(&self) -> bool {
         true
     }
 
@@ -189,7 +189,7 @@ impl OcrHooks for RecordingHooks {
 struct HeaderEditHooks;
 
 impl OcrHooks for HeaderEditHooks {
-    fn has_guardrails(&self) -> bool {
+    fn intercepts_requests(&self) -> bool {
         true
     }
 
@@ -283,7 +283,7 @@ struct AdmissionSpy {
 }
 
 impl OcrHooks for AdmissionSpy {
-    fn has_guardrails(&self) -> bool {
+    fn intercepts_requests(&self) -> bool {
         *self.effects.lock().unwrap() += 1;
         true
     }
@@ -301,7 +301,6 @@ fn admission_declines_without_invoking_hooks_or_transport() {
             OcrAdmission {
                 provider_workflow: false,
                 host_operations: true,
-                azure_ad_token_provider: false,
                 asynchronous: false,
             },
             OcrDecline::ProviderWorkflow,
@@ -310,7 +309,6 @@ fn admission_declines_without_invoking_hooks_or_transport() {
             OcrAdmission {
                 provider_workflow: true,
                 host_operations: false,
-                azure_ad_token_provider: false,
                 asynchronous: false,
             },
             OcrDecline::HostOperations,

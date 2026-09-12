@@ -182,3 +182,29 @@ pub(crate) fn transport_error(error: reqwest::Error) -> Error {
     }
     crate::error::TransportError::from(error).into()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn request_timeout_has_an_http_408_status() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let _connection = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        });
+        let error = reqwest::Client::new()
+            .get(format!("http://{address}"))
+            .timeout(Duration::from_millis(10))
+            .send()
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            transport_error(error),
+            Error::Http { status: 408, .. }
+        ));
+        server.abort();
+    }
+}

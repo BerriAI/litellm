@@ -13,7 +13,7 @@ pub(crate) fn transform_ocr_request(
 ) -> Result<DocumentIntelligenceRequest, OcrRequestError> {
     let source = document.source();
     if source.is_empty() {
-        return Err(OcrRequestError::MissingField("document URL"));
+        return Err(OcrRequestError::MissingDocumentUrl);
     }
     Ok(if let Some(document) = InlineDocument::parse(source)? {
         DocumentIntelligenceRequest::Base64Source(

@@ -419,7 +419,7 @@ async fn pre_call_guardrail_receives_caller_pages_before_mapping() {
 
     struct RewritePages;
     impl OcrHooks for RewritePages {
-        fn has_guardrails(&self) -> bool {
+        fn intercepts_requests(&self) -> bool {
             true
         }
 

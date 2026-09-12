@@ -22,7 +22,8 @@ pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
         Error::InvalidProvider(_)
         | Error::InvalidRequest(_)
         | Error::InvalidType { .. }
-        | Error::MissingField(_) => PyValueError::new_err(err.to_string()),
+        | Error::MissingField(_)
+        | Error::MissingDocumentUrl => PyValueError::new_err(err.to_string()),
         other => PyRuntimeError::new_err(other.to_string()),
     }
 }
@@ -41,6 +42,7 @@ pub(crate) fn chat_completions_error_to_pyerr(err: Error) -> PyErr {
         | Error::InvalidRequest(_)
         | Error::InvalidType { .. }
         | Error::MissingField(_)
+        | Error::MissingDocumentUrl
         | Error::MissingApiKey { .. }
         | Error::MissingAzureAiCredentials
         | Error::MissingAzureDocumentIntelligenceCredentials
@@ -49,9 +51,7 @@ pub(crate) fn chat_completions_error_to_pyerr(err: Error) -> PyErr {
         // Nothing reached the provider, so serving it on Python cannot double
         // bill and is the only way the caller gets an answer at all.
         | Error::Connect(_) => RustBridgeDeclined::new_err(err.to_string()),
-        Error::Http { status, body } => {
-            RustUpstreamError::new_err((status, format!("{status}: {body}")))
-        }
+        Error::Http { status, body } => RustUpstreamError::new_err((status, body)),
         Error::Network(message) | Error::InvalidResponse(message) => {
             RustUpstreamError::new_err((0u16, message))
         }

@@ -18,6 +18,8 @@ pub enum OcrRequestError {
     RequestField { path: String },
     #[error("missing required field: {0}")]
     MissingField(&'static str),
+    #[error("Document URL is required")]
+    MissingDocumentUrl,
     #[error("invalid OCR document data URI")]
     InvalidDataUri,
     #[error(

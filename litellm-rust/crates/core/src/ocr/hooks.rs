@@ -36,7 +36,7 @@ pub struct OcrPostCallRequest {
 }
 
 pub trait OcrHooks: Send + Sync {
-    fn has_guardrails(&self) -> bool {
+    fn intercepts_requests(&self) -> bool {
         false
     }
     fn pre_call(&self, request: OcrPreCallRequest) -> OcrHookFuture<'_, OcrPreCallRequest> {
@@ -91,7 +91,7 @@ impl CallLifecycleHooks<LiteLLMOcrRequest, LiteLLMOcrRequest, LiteLLMOcrResponse
         request: LiteLLMOcrRequest,
     ) -> Self::PreCallFuture<'a> {
         Box::pin(async move {
-            if !self.hooks.has_guardrails() {
+            if !self.hooks.intercepts_requests() {
                 return Ok(request);
             }
             let changed = self

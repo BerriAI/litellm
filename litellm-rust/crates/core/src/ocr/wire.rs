@@ -3,7 +3,6 @@ use crate::ocr::error::OcrResponseError;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use super::hooks::{OcrDuringCallRequest, OcrPreCallRequest};
 use super::types::{LiteLLMOcrRequest, OcrConnection, OcrDocument};
 use crate::Error;
 use crate::auth::InputSource;
@@ -53,6 +52,12 @@ const VERTEX_AUTH_OPTION_FIELDS: &[&str] = &[
     "vertex_location",
     "vertex_ai_location",
 ];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OptionalParamSpec {
+    pub name: &'static str,
+    pub secret: bool,
+}
 
 #[derive(Debug)]
 pub struct DecodedOcrResponse<T> {
@@ -113,11 +118,33 @@ pub fn consumed_optional_param_names(
         .collect())
 }
 
+pub fn consumed_optional_params(
+    model: &str,
+    custom_llm_provider: Option<&str>,
+) -> Result<Vec<OptionalParamSpec>, Error> {
+    consumed_optional_param_names(model, custom_llm_provider).map(|names| {
+        names
+            .into_iter()
+            .map(|name| OptionalParamSpec {
+                name,
+                secret: matches!(
+                    name,
+                    "azure_ad_token"
+                        | "client_secret"
+                        | "azure_federated_token_file"
+                        | "vertex_credentials"
+                        | "vertex_ai_credentials"
+                ),
+            })
+            .collect()
+    })
+}
+
 pub fn decode_request(wire: OcrWireRequest) -> Result<LiteLLMOcrRequest, Error> {
     let api_key_source = source_for(&wire.input_sources, "api_key");
     let api_base_source = source_for(&wire.input_sources, "api_base");
     let extra_headers_source = source_for(&wire.input_sources, "extra_headers");
-    let document = decode_request_value(wire.document, "document")?;
+    let document = decode_document(wire.document)?;
     let headers = wire
         .extra_headers
         .unwrap_or_default()
@@ -182,6 +209,16 @@ pub fn decode_request(wire: OcrWireRequest) -> Result<LiteLLMOcrRequest, Error> 
     })
 }
 
+fn decode_document(value: Value) -> Result<OcrDocument, OcrRequestError> {
+    let kind = value.get("type").and_then(Value::as_str);
+    let missing_url = matches!(kind, Some("document_url")) && value.get("document_url").is_none()
+        || matches!(kind, Some("image_url")) && value.get("image_url").is_none();
+    if missing_url {
+        return Err(OcrRequestError::MissingDocumentUrl);
+    }
+    decode_request_value(value, "document")
+}
+
 fn source_for(sources: &BTreeMap<String, InputSource>, name: &str) -> InputSource {
     sources.get(name).copied().unwrap_or_default()
 }
@@ -233,39 +270,6 @@ pub fn decode_response<T: DeserializeOwned>(
     })
 }
 
-pub fn decode_pre_call_result(
-    original: OcrPreCallRequest,
-    value: Value,
-) -> Result<OcrPreCallRequest, OcrRequestError> {
-    #[derive(Deserialize)]
-    struct Changed {
-        document: OcrDocument,
-        #[serde(default)]
-        optional_params: Map<String, Value>,
-    }
-    let changed: Changed = decode_request_value(value, "guardrail")?;
-    Ok(OcrPreCallRequest {
-        document: changed.document,
-        optional_params: Value::Object(changed.optional_params),
-        ..original
-    })
-}
-
-pub fn decode_during_call_result(
-    original: OcrDuringCallRequest,
-    value: Value,
-) -> Result<OcrDuringCallRequest, OcrRequestError> {
-    #[derive(Deserialize)]
-    struct Changed {
-        body: Value,
-    }
-    let changed: Changed = decode_request_value(value, "guardrail")?;
-    Ok(OcrDuringCallRequest {
-        body: changed.body,
-        ..original
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,5 +286,58 @@ mod tests {
         assert!(vertex.contains(&"temperature"));
         assert!(vertex.contains(&"vertex_credentials"));
         assert!(!vertex.contains(&"pages"));
+    }
+
+    #[test]
+    fn optional_param_metadata_marks_only_credentials_as_secret() {
+        let azure = consumed_optional_params("model", Some("azure_ai")).unwrap();
+        assert!(
+            azure
+                .iter()
+                .any(|spec| spec.name == "client_secret" && spec.secret)
+        );
+        assert!(
+            azure
+                .iter()
+                .any(|spec| spec.name == "tenant_id" && !spec.secret)
+        );
+        let vertex = consumed_optional_params("deepseek-ocr", Some("vertex_ai")).unwrap();
+        assert!(
+            vertex
+                .iter()
+                .any(|spec| spec.name == "vertex_credentials" && spec.secret)
+        );
+        assert!(
+            vertex
+                .iter()
+                .any(|spec| spec.name == "vertex_project" && !spec.secret)
+        );
+    }
+
+    #[test]
+    fn activation_includes_migrated_providers() {
+        assert!(is_supported_request("model", Some("mistral")));
+        assert!(is_supported_request("pixtral-12b", Some("azure_ai")));
+        assert!(is_supported_request(
+            "documentintelligence/prebuilt-read",
+            Some("azure_ai")
+        ));
+        assert!(is_supported_request("parse-v3", Some("reducto")));
+        assert!(is_supported_request("parse-legacy", Some("reducto")));
+        assert!(is_supported_request("mistral-ocr", Some("vertex_ai")));
+        assert!(is_supported_request("deepseek-ocr", Some("vertex_ai")));
+    }
+
+    #[test]
+    fn missing_document_source_has_a_typed_public_error() {
+        for document in [
+            serde_json::json!({"type": "document_url"}),
+            serde_json::json!({"type": "image_url"}),
+        ] {
+            assert_eq!(
+                decode_document(document),
+                Err(OcrRequestError::MissingDocumentUrl)
+            );
+        }
     }
 }

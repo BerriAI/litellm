@@ -31,19 +31,21 @@ impl PythonLogger {
         py: Python<'_>,
         kwargs: &Py<PyDict>,
         pre_call: &OcrLoggingFields,
+        secret_fields: &[&str],
         url: &str,
     ) -> PyResult<()> {
-        let redact = py
-            .import("litellm.rust_bridge.ocr")?
-            .getattr("redact_logging_params")?;
         let update = PyDict::new(py);
-        update.set_item("kwargs", redact.call1((kwargs,))?.cast_into::<PyDict>()?)?;
+        update.set_item("kwargs", redact(py, kwargs.bind(py), secret_fields)?)?;
         update.set_item("model", &pre_call.model)?;
         update.set_item(
             "optional_params",
-            redact
-                .call1((to_py(py, &pre_call.optional_params)?,))?
-                .cast_into::<PyDict>()?,
+            redact(
+                py,
+                &to_py(py, &pre_call.optional_params)?
+                    .into_bound(py)
+                    .cast_into::<PyDict>()?,
+                secret_fields,
+            )?,
         )?;
         let params = PyDict::new(py);
         params.set_item(
@@ -93,8 +95,8 @@ impl PythonLogger {
         &self,
         py: Python<'_>,
         original_response: &Value,
-        body: &Option<Py<PyDict>>,
-        headers: &Option<Py<PyDict>>,
+        body: Option<&Py<PyDict>>,
+        headers: Option<&Py<PyDict>>,
     ) -> PyResult<()> {
         let additional = PyDict::new(py);
         additional.set_item("complete_input_dict", body)?;
@@ -116,6 +118,26 @@ impl PythonLogger {
         }
         Ok(())
     }
+}
+
+fn redact(
+    py: Python<'_>,
+    params: &Bound<'_, PyDict>,
+    secret_fields: &[&str],
+) -> PyResult<Py<PyDict>> {
+    let redacted = PyDict::new(py);
+    for (name, value) in params {
+        let name = name.extract::<String>()?;
+        if name == "proxy_server_request" {
+            continue;
+        }
+        if secret_fields.contains(&name.as_str()) {
+            redacted.set_item(name, "****")?;
+        } else {
+            redacted.set_item(name, value)?;
+        }
+    }
+    Ok(redacted.unbind())
 }
 
 pub(super) fn response(py: Python<'_>, response: &LiteLLMOcrResponse) -> PyResult<Py<PyAny>> {

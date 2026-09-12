@@ -1,3 +1,30 @@
+use std::future::Future;
+use std::pin::Pin;
+
+pub enum HostCallStep<O, C> {
+    Host(O),
+    Complete(C),
+}
+
+pub type HostCallFuture<'a, O, C> =
+    Pin<Box<dyn Future<Output = Result<HostCallStep<O, C>, crate::Error>> + Send + 'a>>;
+
+pub trait HostCall: Send + Sync {
+    type Operation: Send + 'static;
+    type Result: Send + 'static;
+    type Complete: Send + 'static;
+
+    fn resume(
+        &mut self,
+        result: Option<Self::Result>,
+    ) -> HostCallFuture<'_, Self::Operation, Self::Complete>;
+
+    fn interrupt(
+        &mut self,
+        failure: HostFailure,
+    ) -> HostCallFuture<'_, Self::Operation, Self::Complete>;
+}
+
 pub enum HostStep<V, S> {
     Ready(V),
     Suspend(S),

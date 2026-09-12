@@ -1,10 +1,12 @@
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Poll;
 
 use futures_util::future::{AbortHandle, Abortable};
-use litellm_core::call_lifecycle::host::{HostFailure, HostPhase, HostStep};
+#[cfg(test)]
+use litellm_core::call_lifecycle::host::HostCallFuture;
+use litellm_core::call_lifecycle::host::{
+    HostCall as NativeCall, HostCallStep as NativeCallStep, HostFailure, HostPhase, HostStep,
+};
 use pyo3::exceptions::{PyBaseException, PyException, PyRuntimeError};
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
@@ -20,23 +22,6 @@ mod preparation;
 use bindings::DeploymentHooks;
 pub(crate) use bindings::PythonLogger;
 use handle::{Execution, ExecutionBody, ExecutionStep};
-
-pub(crate) enum NativeCallStep<O> {
-    Host(O),
-    Complete,
-}
-
-type NativeCallFuture<'a, O> =
-    Pin<Box<dyn Future<Output = Result<NativeCallStep<O>, litellm_core::Error>> + Send + 'a>>;
-
-pub(crate) trait NativeCall: Send + Sync {
-    type Operation: Send + 'static;
-    type Result: Send + 'static;
-
-    fn resume(&mut self, result: Option<Self::Result>) -> NativeCallFuture<'_, Self::Operation>;
-
-    fn interrupt(&mut self, failure: HostFailure) -> NativeCallFuture<'_, Self::Operation>;
-}
 
 pub(crate) enum OperationClass {
     Phase(HostPhase),
@@ -60,12 +45,17 @@ pub(crate) trait PythonRoute: Send + Sync {
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError>;
 }
 
-type HostResumeStep<R> =
-    HostStep<NativeCallStep<<<R as PythonRoute>::Call as NativeCall>::Operation>, Py<PyAny>>;
+type HostResumeStep<R> = HostStep<
+    NativeCallStep<
+        <<R as PythonRoute>::Call as NativeCall>::Operation,
+        <<R as PythonRoute>::Call as NativeCall>::Complete,
+    >,
+    Py<PyAny>,
+>;
 
 struct NativeCallState<C: NativeCall> {
     call: C,
-    result: Option<Result<NativeCallStep<C::Operation>, litellm_core::Error>>,
+    result: Option<Result<NativeCallStep<C::Operation, C::Complete>, litellm_core::Error>>,
 }
 
 enum PendingOperation {
@@ -151,7 +141,11 @@ impl<R: PythonRoute> PythonLifecycle<R> {
         }
     }
 
-    fn take_native_result(&self) -> PyResult<NativeCallStep<<R::Call as NativeCall>::Operation>> {
+    fn take_native_result(
+        &self,
+    ) -> PyResult<
+        NativeCallStep<<R::Call as NativeCall>::Operation, <R::Call as NativeCall>::Complete>,
+    > {
         self.call
             .as_ref()
             .ok_or_else(missing_state)?
@@ -214,7 +208,7 @@ impl<R: PythonRoute> PythonLifecycle<R> {
         loop {
             let operation = match step {
                 HostStep::Suspend(awaitable) => return Ok(ExecutionStep::Await(awaitable)),
-                HostStep::Ready(NativeCallStep::Complete) => {
+                HostStep::Ready(NativeCallStep::Complete(_)) => {
                     return self
                         .route
                         .state_mut()
@@ -683,24 +677,19 @@ mod tests {
     impl NativeCall for SyntheticCall {
         type Operation = ();
         type Result = ();
+        type Complete = ();
 
         fn resume(
             &mut self,
             result: Option<Self::Result>,
-        ) -> Pin<
-            Box<
-                dyn Future<Output = Result<NativeCallStep<Self::Operation>, litellm_core::Error>>
-                    + Send
-                    + '_,
-            >,
-        > {
+        ) -> HostCallFuture<'_, Self::Operation, Self::Complete> {
             Box::pin(async move {
                 match (self.0, result) {
                     (false, None) => {
                         self.0 = true;
                         Ok(NativeCallStep::Host(()))
                     }
-                    (true, Some(())) => Ok(NativeCallStep::Complete),
+                    (true, Some(())) => Ok(NativeCallStep::Complete(())),
                     _ => Err(litellm_core::Error::InvalidRequest(
                         "invalid synthetic lifecycle state".into(),
                     )),
@@ -711,14 +700,8 @@ mod tests {
         fn interrupt(
             &mut self,
             _: HostFailure,
-        ) -> Pin<
-            Box<
-                dyn Future<Output = Result<NativeCallStep<Self::Operation>, litellm_core::Error>>
-                    + Send
-                    + '_,
-            >,
-        > {
-            Box::pin(async { Ok(NativeCallStep::Complete) })
+        ) -> HostCallFuture<'_, Self::Operation, Self::Complete> {
+            Box::pin(async { Ok(NativeCallStep::Complete(())) })
         }
     }
 

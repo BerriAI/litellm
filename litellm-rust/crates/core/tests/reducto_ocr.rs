@@ -248,7 +248,7 @@ async fn facade_omits_native_response_by_default_and_preserves_auth_priority() {
 struct RewriteDocument;
 
 impl OcrHooks for RewriteDocument {
-    fn has_guardrails(&self) -> bool {
+    fn intercepts_requests(&self) -> bool {
         true
     }
 

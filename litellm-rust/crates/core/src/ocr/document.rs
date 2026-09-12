@@ -172,9 +172,11 @@ fn map_media_error(error: MediaError) -> OcrError {
             body: "OCR document download failed".into(),
         }
         .into(),
-        MediaError::Timeout => {
-            TransportError::Network("OCR document download timed out".into()).into()
+        MediaError::Timeout => TransportError::Http {
+            status: 408,
+            body: "OCR document download timed out".into(),
         }
+        .into(),
         MediaError::Transport(error) => error.into(),
     }
 }
