@@ -25,31 +25,16 @@ pub(crate) enum NativeCallStep<O> {
     Complete,
 }
 
+type NativeCallFuture<'a, O> =
+    Pin<Box<dyn Future<Output = Result<NativeCallStep<O>, litellm_core::Error>> + Send + 'a>>;
+
 pub(crate) trait NativeCall: Send + Sync {
     type Operation: Send + 'static;
     type Result: Send + 'static;
 
-    fn resume(
-        &mut self,
-        result: Option<Self::Result>,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = Result<NativeCallStep<Self::Operation>, litellm_core::Error>>
-                + Send
-                + '_,
-        >,
-    >;
+    fn resume(&mut self, result: Option<Self::Result>) -> NativeCallFuture<'_, Self::Operation>;
 
-    fn interrupt(
-        &mut self,
-        failure: HostFailure,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = Result<NativeCallStep<Self::Operation>, litellm_core::Error>>
-                + Send
-                + '_,
-        >,
-    >;
+    fn interrupt(&mut self, failure: HostFailure) -> NativeCallFuture<'_, Self::Operation>;
 }
 
 pub(crate) enum OperationClass {
@@ -73,6 +58,9 @@ pub(crate) trait PythonRoute: Send + Sync {
     fn cleanup(&mut self);
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError>;
 }
+
+type HostResumeStep<R> =
+    HostStep<NativeCallStep<<<R as PythonRoute>::Call as NativeCall>::Operation>, Py<PyAny>>;
 
 struct NativeCallState<C: NativeCall> {
     call: C,
@@ -128,7 +116,7 @@ impl<R: PythonRoute> PythonLifecycle<R> {
         &mut self,
         py: Python<'_>,
         result: Option<Result<<R::Call as NativeCall>::Result, HostFailure>>,
-    ) -> PyResult<HostStep<NativeCallStep<<R::Call as NativeCall>::Operation>, Py<PyAny>>> {
+    ) -> PyResult<HostResumeStep<R>> {
         let call = Arc::clone(self.call.as_ref().ok_or_else(missing_state)?);
         let future = async move {
             let mut call = call.lock().await;

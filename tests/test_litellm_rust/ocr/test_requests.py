@@ -460,14 +460,27 @@ async def test_native_azure_ocr_rejects_coroutine_returned_by_sync_token_provide
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize("explicit_key", [False, True])
+@pytest.mark.parametrize(
+    "override, expected_key",
+    [
+        ({}, "credential-key"),
+        ({"api_key": "explicit-key"}, "explicit-key"),
+        ({"api_key": None}, "environment-key"),
+    ],
+    ids=["inherit", "explicit", "explicit-none"],
+)
 async def test_native_ocr_inherits_named_credentials_without_overwriting_arguments(
-    ocr_server: RecordingServer, monkeypatch: pytest.MonkeyPatch, asynchronous: bool, explicit_key: bool
+    ocr_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+    asynchronous: bool,
+    override: dict[str, object],
+    expected_key: str,
 ) -> None:
     from litellm.models.credentials import CredentialItem
 
     pages: Final = [0]
     opaque: Final = object()
+    monkeypatch.setenv("MISTRAL_API_KEY", "environment-key")
     monkeypatch.setattr(
         litellm,
         "credential_list",
@@ -497,14 +510,11 @@ async def test_native_ocr_inherits_named_credentials_without_overwriting_argumen
         "document": OCR_DOCUMENT,
         "litellm_credential_name": "ocr-test",
         "callbacks": [Observer()],
-        **({"api_key": "explicit-key"} if explicit_key else {}),
+        **override,
     }
     response: Final = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
     assert response.pages[0].markdown == "native OCR response"
-    assert (
-        ocr_server.requests[0].headers["authorization"]
-        == f"Bearer {'explicit-key' if explicit_key else 'credential-key'}"
-    )
+    assert ocr_server.requests[0].headers["authorization"] == f"Bearer {expected_key}"
     assert ocr_server.requests[0].body["pages"] == [0, 2]
 
 

@@ -6,12 +6,12 @@ use serde_json::Value;
 use std::future::Future;
 
 use crate::errors::core_error_to_pyerr;
-use crate::marshal::{RouteOptions, RouteOptionsInputs, required_value};
+use crate::marshal::{RouteOptions, RouteOptionsInputs, required_object};
 
 fn prepare_messages(
     inputs: MessagesInputs,
 ) -> PyResult<impl Future<Output = Result<AnthropicMessagesResponse, Error>> + Send + 'static> {
-    let body = required_value("body", inputs.body, Value::is_object, "dict")?;
+    let body = required_object("body", inputs.body)?;
     let options = RouteOptions::from_python(RouteOptionsInputs {
         model: inputs.model,
         api_key: inputs.api_key,
@@ -32,7 +32,7 @@ fn prepare_messages(
         } = options;
         run_messages(MessagesRequest {
             model: &model,
-            body,
+            body: Value::Object(body),
             api_key: api_key.as_deref(),
             api_base: api_base.as_deref(),
             custom_llm_provider: custom_llm_provider.as_deref(),
