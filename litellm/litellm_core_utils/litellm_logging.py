@@ -14,10 +14,10 @@ from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
 
 from httpx import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 
 import litellm
 from litellm import (
@@ -42,12 +42,14 @@ from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
+    EMPTY_MAPPING,
     PROVIDER_REQUEST_ID_HEADERS,
     SENTRY_DENYLIST,
     SENTRY_PII_DENYLIST,
 )
 from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
+    ResponsesWebSocketTokenUsageProcessor,
     _select_model_name_for_cost_calc,
 )
 from litellm.exceptions import (
@@ -63,6 +65,11 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
+from litellm.litellm_core_utils.classifier_logging import (
+    classifier_audit_fields,
+    classifier_input_snapshot,
+    is_classifier_call,
+)
 from litellm.litellm_core_utils.core_helpers import is_expected_client_error, reconstruct_model_name
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.internal_call_metadata import (
@@ -88,6 +95,7 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
     redact_streaming_responses_for_custom_logger,
+    should_redact_message_logging,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
@@ -119,7 +127,6 @@ from litellm.types.utils import (
     CachingDetails,
     CallTypes,
     CostBreakdown,
-    CostResponseTypes,
     CustomPricingLiteLLMParams,
     DynamicPromptManagementParamLiteral,
     EmbeddingResponse,
@@ -182,6 +189,7 @@ from ..integrations.lunary import LunaryLogger
 from ..integrations.newrelic import NewRelicLogger
 from ..integrations.openmeter import OpenMeterLogger
 from ..integrations.opik.opik import OpikLogger
+from ..integrations.pointfive import PointFiveLogger
 from ..integrations.posthog import PostHogLogger
 from ..integrations.prompt_layer import PromptLayerLogger
 from ..integrations.s3 import S3Logger
@@ -201,7 +209,9 @@ if TYPE_CHECKING:
     from mcp.types import EmbeddedResource, ImageContent, TextContent
 
     from litellm.integrations.otel.logger import OpenTelemetryV2
-    from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+    from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
+    from litellm.litellm_core_utils.llm_cost_calc.utils import BilledTokenRates
+    from litellm.llms.base_llm.passthrough.transformation import PassthroughStreamCollector
 try:
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
         EnterpriseCallbackControls,
@@ -285,6 +295,9 @@ def _get_provider_request_id(original_exception: Exception) -> str | None:
 # Cache custom pricing keys as frozenset for O(1) lookups instead of looping through 49 keys
 _CUSTOM_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
 _MODEL_INFO_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = _CUSTOM_PRICING_KEYS | DEPLOYMENT_SCOPED_PRICING_FIELDS
+_UNSERIALIZABLE_METADATA_KEYS: Final[frozenset[str]] = frozenset(
+    ("user_api_key_auth", "user_api_key_budget_reservation")
+)
 
 sentry_sdk_instance = None
 capture_exception = None
@@ -447,6 +460,13 @@ def _provider_response_id(source: object) -> str | None:
     return candidate if isinstance(candidate, str) and candidate else None
 
 
+def mask_api_base_credentials(api_base: str) -> str:
+    if "key=" not in api_base:
+        return api_base
+    key_end: Final = api_base.find("key=") + 4
+    return api_base[:key_end] + "*" * 5 + api_base[-4:]
+
+
 class Logging(LiteLLMLoggingBaseClass):
     global \
         supabaseClient, \
@@ -463,6 +483,7 @@ class Logging(LiteLLMLoggingBaseClass):
     stream_options = None
     litellm_request_debug: bool = False
     streamed_anthropic_message_id: str | None = None
+    classifier_input: Mapping[str, JsonValue] | None = None
 
     def __init__(
         self,
@@ -581,6 +602,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         # Initialize cost breakdown field
         self.cost_breakdown: CostBreakdown | None = None
+        self.billed_token_rates: BilledTokenRates | None = None
 
         # Init Caching related details
         self.caching_details: CachingDetails | None = None
@@ -1189,14 +1211,7 @@ class Logging(LiteLLMLoggingBaseClass):
         return data
 
     def _get_masked_api_base(self, api_base: str) -> str:
-        if "key=" in api_base:
-            # Find the position of "key=" in the string
-            key_index: Final = api_base.find("key=") + 4
-            # Mask the last 5 characters after "key="
-            masked_api_base = api_base[:key_index] + "*" * 5 + api_base[-4:]
-        else:
-            masked_api_base = api_base
-        return str(masked_api_base)
+        return str(mask_api_base_credentials(api_base))
 
     def _pre_call(self, input, api_key, model=None, additional_args={}):
         """
@@ -1207,6 +1222,14 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["api_key"] = api_key
         self.model_call_details["additional_args"] = additional_args
         self.model_call_details["log_event_type"] = "pre_api_call"
+        if is_classifier_call(self.call_type, self.model_call_details.get("litellm_params") or EMPTY_MAPPING):
+            self.classifier_input = (
+                None
+                if should_redact_message_logging(self.model_call_details)
+                else classifier_input_snapshot(
+                    additional_args.get("complete_input_dict"), openai_sdk=additional_args.get("openai_sdk") is True
+                )
+            )
         if model:  # if model name was changes pre-call, overwrite the initial model call name with the new one
             self.model_call_details["model"] = model
         self.model_call_details["litellm_params"]["api_base"] = self._get_masked_api_base(
@@ -1585,6 +1608,7 @@ class Logging(LiteLLMLoggingBaseClass):
         service_tier: str | None = None,
         data_residency: str | None = None,
         vertex_location: str | None = None,
+        billed_token_rates: "BilledTokenRates | None" = None,
     ) -> None:
         """
         Helper method to store cost breakdown in the logging object.
@@ -1604,8 +1628,10 @@ class Logging(LiteLLMLoggingBaseClass):
             service_tier: Tier the costs above were priced on, already resolved
             data_residency: Region uplift the costs above were priced on, already resolved
             vertex_location: Vertex AI location the costs above were priced on, already resolved
+            billed_token_rates: Per-token rates the costs above were billed at, already resolved
         """
 
+        self.billed_token_rates = billed_token_rates
         self.cost_breakdown = CostBreakdown(
             input_cost=input_cost,
             output_cost=output_cost,
@@ -2028,6 +2054,17 @@ class Logging(LiteLLMLoggingBaseClass):
                 results=result,
             )
 
+        elif self.call_type == CallTypes.aresponses_websocket.value and isinstance(result, list):  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
+            combined_ws_usage: Final = (
+                ResponsesWebSocketTokenUsageProcessor.collect_and_combine_usage_from_responses_ws_results(
+                    results=result  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
+                )
+            )
+            logging_result = LiteLLMRealtimeStreamLoggingObject(
+                usage=combined_ws_usage,
+                results=result,  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
+            )
+
         elif (
             self.call_type == CallTypes.llm_passthrough_route.value
             or self.call_type == CallTypes.allm_passthrough_route.value
@@ -2359,52 +2396,17 @@ class Logging(LiteLLMLoggingBaseClass):
         for scope in [key for key in spans_logged if isinstance(key, tuple) and key[-1:] == ("success",)]:
             del spans_logged[scope]
 
-    def _flush_passthrough_collected_chunks_helper(
-        self,
-        raw_bytes: list[bytes],
-        provider_config: "BasePassthroughConfig",
-    ) -> Optional["CostResponseTypes"]:
-        all_chunks: Final = provider_config._convert_raw_bytes_to_str_lines(raw_bytes)
-        complete_streaming_response: Final = provider_config.handle_logging_collected_chunks(
-            all_chunks=all_chunks,
-            litellm_logging_obj=self,
-            model=self.model,
-            custom_llm_provider=self.model_call_details.get("custom_llm_provider", ""),
-            endpoint=self.model_call_details.get("endpoint", ""),
-        )
-        return complete_streaming_response
-
-    def flush_passthrough_collected_chunks(
-        self,
-        raw_bytes: list[bytes],
-        provider_config: "BasePassthroughConfig",
-    ):
+    def flush_passthrough_collected_chunks(self, collector: "PassthroughStreamCollector"):
         """
-        Flush collected chunks from the logging object
-        This is used to log the collected chunks once streaming is done on passthrough endpoints
-
-        1. Decode the raw bytes to string lines
-        2. Get the complete streaming response from the provider config
-        3. Log the complete streaming response (trigger success handler)
-        This is used for passthrough endpoints
+        Log the response a passthrough stream collector assembled once streaming is done (trigger success handler)
         """
-        complete_streaming_response: Final = self._flush_passthrough_collected_chunks_helper(
-            raw_bytes=raw_bytes,
-            provider_config=provider_config,
-        )
+        complete_streaming_response: Final = collector.build_logged_response(litellm_logging_obj=self)
 
         if complete_streaming_response is not None:
             self.success_handler(result=complete_streaming_response)
 
-    async def async_flush_passthrough_collected_chunks(
-        self,
-        raw_bytes: list[bytes],
-        provider_config: "BasePassthroughConfig",
-    ):
-        complete_streaming_response: Final = self._flush_passthrough_collected_chunks_helper(
-            raw_bytes=raw_bytes,
-            provider_config=provider_config,
-        )
+    async def async_flush_passthrough_collected_chunks(self, collector: "PassthroughStreamCollector"):
+        complete_streaming_response: Final = collector.build_logged_response(litellm_logging_obj=self)
 
         if complete_streaming_response is not None:
             await self.async_success_handler(result=complete_streaming_response)
@@ -2938,6 +2940,19 @@ class Logging(LiteLLMLoggingBaseClass):
                 result._hidden_params["batch_successful_requests"] = batch_successful_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same result._hidden_params pattern as response_cost/batch_models above
                 result._hidden_params["batch_failed_requests"] = batch_failed_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same pattern as above
                 result.usage = batch_usage
+                batch_prompt_cost: Final = kwargs.get("batch_prompt_cost", None)
+                batch_completion_cost: Final = kwargs.get("batch_completion_cost", None)
+                if (
+                    isinstance(batch_prompt_cost, float)
+                    and isinstance(batch_completion_cost, float)
+                    and isinstance(batch_cost, float)
+                ):
+                    self.set_cost_breakdown(
+                        input_cost=batch_prompt_cost,
+                        output_cost=batch_completion_cost,
+                        total_cost=batch_cost,
+                        cost_for_built_in_tools_cost_usd_dollar=0.0,
+                    )
 
             elif should_compute_batch_data:
                 batch_result: Final = await _handle_completed_batch(
@@ -2953,6 +2968,12 @@ class Logging(LiteLLMLoggingBaseClass):
                 result._hidden_params["batch_successful_requests"] = batch_result.successful_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same pattern as above
                 result._hidden_params["batch_failed_requests"] = batch_result.failed_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same pattern as above
                 result.usage = batch_result.usage
+                self.set_cost_breakdown(
+                    input_cost=batch_result.prompt_cost,
+                    output_cost=batch_result.completion_cost,
+                    total_cost=batch_result.cost,
+                    cost_for_built_in_tools_cost_usd_dollar=0.0,
+                )
 
         self.truncated_messages_for_logging = await truncate_base64_in_messages_async(
             StandardLoggingPayloadSetup.append_system_prompt_messages(
@@ -4340,6 +4361,14 @@ def _init_custom_logger_compatible_class(
             _s3_v2_logger: Final = S3V2Logger()
             _in_memory_loggers.append(_s3_v2_logger)
             return _s3_v2_logger
+        elif logging_integration == "pointfive":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, PointFiveLogger):
+                    return callback
+
+            _pointfive_logger: Final = PointFiveLogger()
+            _in_memory_loggers.append(_pointfive_logger)
+            return _pointfive_logger
         elif logging_integration == "aws_sqs":
             for callback in _in_memory_loggers:
                 if isinstance(callback, SQSLogger):
@@ -4819,29 +4848,81 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
 
     Returns ``None`` when V2 is off OR when there's no preset registered for
     ``callback_name`` — callers should then fall through to the legacy path.
+
+    A preset that needs operator credentials it cannot find is allowed to build
+    only when this request has a key/team destination for that backend and another
+    V2 logger is already registered to carry the fan-out. The resulting logger keeps
+    only its credential-gated exporter, while the registered logger owns operator
+    delivery. Without that carrier, a preset that raises or that ends up with nothing
+    but its gated exporter and the default console placeholder returns ``None``, so the
+    caller falls through to the legacy path exactly as before V2 landed.
     """
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
     if not is_otel_v2_enabled():
         return None
     from litellm.integrations.otel.logger import OpenTelemetryV2, build_otel_v2_logger
+    from litellm.integrations.otel.plumbing.context import destination_backends
     from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
 
     preset_fn: Final = PRESET_BY_CALLBACK.get(callback_name)
     if preset_fn is None:
         return None
+    serves_a_destination: Final = callback_name in destination_backends()
+    has_v2_logger: Final = any(isinstance(callback, OpenTelemetryV2) for callback in _in_memory_loggers)
+    carried: Final = serves_a_destination and has_v2_logger
     for callback in _in_memory_loggers:
-        if isinstance(callback, OpenTelemetryV2) and getattr(callback, "callback_name", None) == callback_name:
+        if (
+            isinstance(callback, OpenTelemetryV2)
+            and getattr(callback, "callback_name", None) == callback_name
+            and (serves_a_destination or not _exports_nowhere(callback.config))
+        ):
             return callback
     try:
-        config: Final = preset_fn()
+        built: Final = preset_fn(allow_missing_credentials=carried)
     except Exception:
         # If env vars are missing or the preset raises, defer to the legacy path
         # so customers get the same error story they had before V2 landed.
         return None
+    gated: Final = _is_credential_gated(built)
+    if gated and not carried and not _has_operator_exporter(built):
+        return None
+    config: Final = _only_the_gated_exporter(built) if gated and carried else built
+    if _exports_nowhere(config):
+        verbose_logger.warning(
+            "OTel V2: no operator credentials for '%s'; only key/team destinations will receive its traces",
+            callback_name,
+        )
     v2_logger: Final = build_otel_v2_logger(config=config, callback_name=callback_name)
     _in_memory_loggers.append(v2_logger)
     return v2_logger
+
+
+def _exports_nowhere(config: "OpenTelemetryV2Config") -> bool:
+    """Whether every exporter in ``config`` is waiting on credentials it never got."""
+    return all(_is_gated(spec) for spec in config.exporters)
+
+
+def _is_credential_gated(config: "OpenTelemetryV2Config") -> bool:
+    """Whether the preset built without the operator's own credentials for its backend."""
+    return any(_is_gated(spec) for spec in config.exporters)
+
+
+def _has_operator_exporter(config: "OpenTelemetryV2Config") -> bool:
+    """Whether the operator configured somewhere real to export, beyond the default console placeholder."""
+    from litellm.integrations.otel.presets.utils import is_unconfigured_placeholder
+
+    return any(not _is_gated(spec) and not is_unconfigured_placeholder(spec) for spec in config.exporters)
+
+
+def _only_the_gated_exporter(config: "OpenTelemetryV2Config") -> "OpenTelemetryV2Config":
+    return config.model_copy(
+        update={"exporters": [spec for spec in config.exporters if _is_gated(spec)]}  # mutable-ok: model_copy update
+    )
+
+
+def _is_gated(spec: "ExporterSpec") -> bool:
+    return spec.requires_headers and not spec.headers
 
 
 def _maybe_auto_initialize_arize_phoenix(_in_memory_loggers: list[CustomLogger]) -> None:
@@ -4975,6 +5056,10 @@ def get_custom_logger_compatible_class(
         elif logging_integration == "s3_v2":
             for callback in _in_memory_loggers:
                 if isinstance(callback, S3V2Logger):
+                    return callback
+        elif logging_integration == "pointfive":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, PointFiveLogger):
                     return callback
         elif logging_integration == "aws_sqs":
             for callback in _in_memory_loggers:
@@ -5269,23 +5354,23 @@ class StandardLoggingPayloadSetup:
         Returns:
             dict: Merged metadata with user API key fields taking precedence
         """
-        merged_metadata: Final[dict] = {}
-
-        # Start with metadata (user API key fields) - but skip non-serializable objects
-        if litellm_params.get("metadata") and isinstance(litellm_params.get("metadata"), dict):
-            for key, value in litellm_params["metadata"].items():
-                # Skip non-serializable objects like UserAPIKeyAuth
-                if key in {"user_api_key_auth", "user_api_key_budget_reservation"}:
-                    continue
-                merged_metadata[key] = value
-
-        # Then merge litellm_metadata (model-related fields) - this will NOT overwrite existing keys
-        if litellm_params.get("litellm_metadata") and isinstance(litellm_params.get("litellm_metadata"), dict):
-            for key, value in litellm_params["litellm_metadata"].items():
-                if key not in merged_metadata:  # Don't overwrite existing keys from metadata
-                    merged_metadata[key] = value
-
-        return merged_metadata
+        metadata: Final = litellm_params.get("metadata")
+        litellm_metadata: Final = litellm_params.get("litellm_metadata")
+        user_metadata: Final = MappingProxyType(
+            {
+                key: value
+                for key, value in (metadata.copy().items() if isinstance(metadata, dict) else ())
+                if key not in _UNSERIALIZABLE_METADATA_KEYS
+            }
+        )
+        model_metadata: Final = MappingProxyType(
+            {
+                key: value
+                for key, value in (litellm_metadata.copy().items() if isinstance(litellm_metadata, dict) else ())
+                if key not in user_metadata
+            }
+        )
+        return {**user_metadata, **model_metadata}  # mutable-ok: function contract returns a plain dict
 
     @staticmethod
     def get_standard_logging_metadata(
@@ -5543,7 +5628,7 @@ class StandardLoggingPayloadSetup:
                     additional_logging_headers[key] = additiona_headers[_key]
 
         # Preserve all remaining headers verbatim (e.g. llm_provider-x-request-id)
-        for k, v in additiona_headers.items():
+        for k, v in additiona_headers.copy().items():
             if k.lower() not in typed_keys:
                 additional_logging_headers[k] = v
 
@@ -6192,6 +6277,18 @@ def get_standard_logging_object_payload(
         )
 
         payload: Final[StandardLoggingPayload] = StandardLoggingPayload(
+            **(
+                classifier_audit_fields(
+                    MappingProxyType(
+                        {
+                            "classifier_input": logging_obj.classifier_input,
+                            "originating_request_masked": proxy_server_request.get("originating_request_masked"),
+                        }
+                    )
+                )
+                if is_classifier_call(call_type or "", litellm_params) and not should_redact_message_logging(kwargs)
+                else EMPTY_MAPPING
+            ),
             id=str(id),
             litellm_call_id=kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),
             trace_id=StandardLoggingPayloadSetup.get_standard_logging_payload_trace_id(
@@ -6373,7 +6470,7 @@ def _get_traceback_str_for_error(error_str: str) -> str:
 from decimal import Decimal
 
 # used for unit testing
-from typing import Any, Optional, Union
+from typing import Any, Union
 
 
 def create_dummy_standard_logging_payload() -> StandardLoggingPayload:

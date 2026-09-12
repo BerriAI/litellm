@@ -15,7 +15,6 @@ import { FormField } from "@/components/shared/form/FormField";
 import React, { useEffect, useRef, useState } from "react";
 import { hasCapability } from "../../utils/capabilities";
 import { isProxyAdminRole, rolesWithWriteAccess } from "../../utils/roles";
-import AgentSelector from "../agent_management/AgentSelector";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 import { mapInternalToDisplayNames } from "../callback_info_helpers";
@@ -32,9 +31,8 @@ import {
   modelSentinelOptions,
   parseAllowedRoutes,
 } from "./keyEditFieldNormalizers";
-import { KeyBudgetNumberField, KeyTypeSelect, labelWithHint } from "./KeyEditViewControls";
+import { KeyAgentAndSkillFields, KeyBudgetNumberField, KeyTypeSelect, labelWithHint } from "./KeyEditViewControls";
 import {
-  AgentsAndGroups,
   KeyEditFormValues,
   keyEditFormSchema,
   McpServersAndGroups,
@@ -307,7 +305,7 @@ export function KeyEditView({
   const handleOrganizationChange = (setField: (value: string | null) => void, orgId: string | null) => {
     setField(orgId);
     setSelectedOrganizationId(orgId);
-    form.setValue("team_id", undefined);
+    form.setValue("team_id", null);
   };
 
   const handleTeamChange = (setField: (value: string | null) => void, teamId: string | null) => {
@@ -318,7 +316,7 @@ export function KeyEditView({
       form.setValue("organization_id", selectedTeam.organization_id);
     } else if (!teamId) {
       setSelectedOrganizationId(null);
-      form.setValue("organization_id", undefined);
+      form.setValue("organization_id", null);
     }
   };
 
@@ -762,16 +760,7 @@ export function KeyEditView({
             />
           </div>
 
-          <FormField control={form.control} name="agents_and_groups" label="Agents / Access Groups">
-            {({ value, onChange }) => (
-              <AgentSelector
-                onChange={onChange}
-                value={value as AgentsAndGroups | undefined}
-                accessToken={accessToken || ""}
-                placeholder="Select agents or access groups (optional)"
-              />
-            )}
-          </FormField>
+          <KeyAgentAndSkillFields control={form.control} accessToken={accessToken || ""} />
 
           <FormField
             control={form.control}
@@ -780,14 +769,15 @@ export function KeyEditView({
               "Organization",
               "The organization this key belongs to. Selecting an organization filters the available teams.",
             )}
+            description={hasProject ? "Organization is locked because this key belongs to a project" : undefined}
           >
             {({ value, onChange, id }) => (
               <OrganizationDropdown
                 id={id}
-                value={(value as string | undefined) ?? undefined}
+                value={value}
                 organizations={organizations}
                 loading={isOrganizationsLoading}
-                disabled={userRole !== "Admin"}
+                disabled={userRole !== "Admin" || hasProject}
                 onChange={(orgId) => handleOrganizationChange(onChange, orgId)}
               />
             )}
@@ -797,15 +787,13 @@ export function KeyEditView({
             control={form.control}
             name="team_id"
             label="Team ID"
-            description={
-              enableProjectsUI && hasProject ? "Team is locked because this key belongs to a project" : undefined
-            }
+            description={hasProject ? "Team is locked because this key belongs to a project" : undefined}
           >
             {({ value, onChange, id }) => (
               <Select
                 value={(value as string | null) ?? null}
                 onValueChange={(teamId: string | null) => handleTeamChange(onChange, teamId)}
-                disabled={enableProjectsUI && hasProject}
+                disabled={hasProject}
                 items={Object.fromEntries(
                   (visibleTeams ?? []).map((t) => [t.team_id, `${t.team_alias} (${t.team_id})`]),
                 )}

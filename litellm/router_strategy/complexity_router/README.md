@@ -207,9 +207,19 @@ custom_dimensions:
   - name: sqlMigration
     weight: 0.7
     patterns: ['\b(create|alter|drop)\s{1,4}table\b']
+  - name: dataPipeline
+    weight: 0.4
+    scoring_mode: match_count
+    keywords: [airflow, dbt, snowflake]
 ```
 
 Each dimension contributes its weight once when any matcher hits the current ask. Repeated matches do not increase it. The built-in score and tier boundaries are unchanged, and the total score is not renormalized. Keywords use the existing case-insensitive word-boundary and CJK rules. Regexes search the first 2048 characters case-insensitively and compile during configuration validation and router initialization, never per request
+
+`scoring_mode` is optional and defaults to `binary`, the behavior above. `match_count` grades the dimension by how many distinct matchers hit: none scores 0 and emits no signal, one scores half the weight, two or more score the full weight. Repeated occurrences of one matcher never raise the count, keywords are distinct case-insensitively, patterns are distinct by source, and a keyword and a pattern are always distinct from each other. Matching stops as soon as the selected mode's maximum is reached, so a binary dimension still stops at its first hit. Existing configurations without the field keep binary scoring and the same tuning fingerprint, so the field only counts as a tuning change when set to `match_count`
+
+### Weights through the API versus the dashboard
+
+The API and YAML store exactly the weights written. A `dimension_weights` map and inline custom weights are read literally, missing recognized built-in names score zero, and nothing renormalizes the vector, so a total other than 1 is legal and scores accordingly. The dashboard's heuristic scoring editor is the one place that rebalances: editing one weight there holds it and redistributes the remainder across the other active dimensions in the draft, then Save sends the resulting explicit values, which the backend stores and scores as written. Opening a router, applying a preset, editing matchers, changing `scoring_mode`, or saving unrelated fields never normalizes existing weights
 
 Only `heuristic`, `heuristic_first` and `hybrid` accept custom dimensions. Each name must be a unique ASCII identifier starting with a letter, at most 64 characters, and cannot reuse a built-in dimension name or a key in `dimension_weights`. Set its weight inline, greater than zero and at most one
 
@@ -217,7 +227,7 @@ Patterns are checked at configuration time against a grammar whose worst case st
 
 Limits are 16 dimensions, 32 combined keywords/patterns per dimension, 256 characters per matcher and 4096 matcher characters per dimension. Matching runs inline on the request path with no timeout and no worker thread, because the grammar is what bounds the cost. These are routing hints, not security enforcement rules
 
-The existing heuristic-v1 tuning quota covers custom dimensions and their weights: one changed router without an auto-router license, unlimited with the entitlement. Omitting `custom_dimensions` preserves existing scoring. Routing decisions and spend logs include signals such as `custom (sqlMigration)` without recording the configured pattern or matched text. The field is configured through YAML or the model API; this change adds no dashboard editor
+The existing heuristic-v1 tuning quota covers custom dimensions, their weights and their scoring mode: one changed router without an auto-router license, unlimited with the entitlement. Omitting `custom_dimensions` preserves existing scoring. Routing decisions and spend logs include signals such as `custom (sqlMigration)` without recording the configured pattern or matched text. The field is configured through YAML, the model API, or the dashboard's heuristic scoring editor
 
 ## Usage
 
@@ -259,6 +269,18 @@ change or default takeover records `cause: modality_escalation` with the displac
 (`modality_escalated_from:<TIER>` or `modality_displaced_default_model`). Escalations are never
 pinned by session affinity, and by default a KEPT session pin bypasses the gate: a session pinned
 to a text-only model keeps it even when an image arrives.
+
+Context-window and modality recovery take priority over the default model. If a compatible tier
+cannot serve, the router checks the remaining compatible recovery tiers before using `default_model`.
+A capacity failure without those constraints tries the selected tier's peers, then the default
+
+The default must fit the context and accept the request's modality. It cannot bypass routing plugins
+or a plan-mode floor. Context fit uses the auto-router's existing buffer even when Router-wide pre-call
+checks are off. Missing context metadata retains the existing unknown-window behavior
+
+Health fallback records `cause: health_default_fallback` and `health_displaced:<MODEL>` in `signals`.
+It does not replace the session's tier pin. Adaptive feedback retains the model that actually served,
+but a default outside the adaptive candidate pool does not become a normal candidate
 
 Add `modality_pin_override: true` to lift that last exemption. The image turn is then re-placed
 the same way every other decision is, and records `cause: modality_pin_override` whether or not
@@ -351,6 +373,19 @@ model_list:
 keep the classifier deployment or provider default, or set a supported value such as `none` or
 `low` to override that call.
 
+When the current ask is a Responses API `agent_message` containing `encrypted_content`, LLM
+classification preserves the encrypted task and uses native Responses. This also bypasses the
+local scoring shortcut in `heuristic_first` and `hybrid` modes. The configured classifier must use
+a native OpenAI or Azure OpenAI Responses deployment with access to the encrypted content. The
+provider handles the encrypted task, and the classifier still chooses the tier dynamically
+
+Compatibility is checked after normal deployment selection. A paused incompatible member of the
+classifier group does not prevent an eligible compatible deployment from classifying the task
+
+Unsupported classifier deployments and provider decryption errors use the existing
+`classifier_fallback` policy. No fixed tier is introduced for encrypted tasks. Plaintext asks and
+requests carrying only historical encrypted reasoning retain the existing classifier path
+
 Classifier calls have a one-attempt hard deadline. After a timeout, the router opens a process-local
 circuit for that classifier and sends every session through `classifier_fallback` for
 `classifier_llm_config.circuit_breaker_cooldown_seconds` (30 seconds by default). When the cooldown
@@ -432,11 +467,26 @@ If 2+ reasoning markers are detected in the user message, the request is promote
 
 Reasoning markers in the system prompt do **not** trigger the reasoning override. This prevents system prompts like "Think step by step before answering" from forcing all requests to the reasoning tier.
 
+For requests identified by a `claude-cli/` or `claude-code/` user agent, the LLM classifier omits caller system
+text to avoid classifying environment, agent, and skill catalogs. The current ask, configured prior-turn context,
+and trajectory signal remain unchanged. The routed completion still receives the original system text. This
+also excludes genuine task constraints supplied only in Claude Code system messages. Other clients keep the
+existing system-context behavior. The browser routing preview has no client-identity field and retains that
+generic behavior; use the real client when checking Claude Code routing.
+
 ### Harness Reminder Blocks
 
 Agent harnesses inject their own context into the conversation as ordinary message text. That text is plumbing, not something a human asked for, so the router strips complete reminder blocks before classifying and picking a tier. A turn that is nothing but a reminder block strips to empty and is skipped, and the router falls back to the last real ask instead
 
-By default a block is anything between `<system-reminder>` and `</system-reminder>`. `reminder_markers` replaces that with your harness's own delimiters. Many harnesses use a different envelope per agent type, so list every pair you emit:
+By default the router strips complete `<system-reminder>` blocks. For requests with a Codex user agent, it also strips complete `<environment_context>`, `<recommended_plugins>`, `<user_instructions>`, and `<environments_instructions>` blocks, plus repository instructions from the fixed heading prefix `# AGENTS.md instructions for ` through `</INSTRUCTIONS>`, regardless of the repository path. Other clients keep those tags and their contents
+
+The proxy records the incoming user agent in request metadata. SDK callers can supply `metadata.user_agent` (or `litellm_metadata.user_agent` on Responses requests), or configure `reminder_markers` explicitly when their client identity is unavailable
+
+The Codex `Message Type: NEW_TASK` wrapper and its delegated-task payload remain available for classification. Cleanup applies to the current ask and quoted prior turns; the routed request retains its original content
+
+In `classification_mode: user_turn`, complete text-only reminder tails leave the preceding fresh ask eligible for classification. Assistant turns and tool results still mark continuations, including tool results carried alongside reminder text
+
+`reminder_markers` replaces these defaults with your harness's own delimiters. Many harnesses use a different envelope per agent type, so list every pair you emit:
 
 ```yaml
 model_list:
@@ -451,7 +501,7 @@ model_list:
             close: "[[SUBAGENT_CONTEXT_END]]"
 ```
 
-Setting `reminder_markers` replaces the built-in `<system-reminder>` pair rather than adding to it, so list that pair too if your harness also emits it. Matching is case-insensitive. Blocks that nest or overlap across pairs are stripped whole. An unclosed delimiter is not a block and is left in place, which keeps prose that merely mentions a delimiter from being eaten
+Setting `reminder_markers` replaces all built-in pairs, including the Codex heading pair, so include every default your harness still needs. Matching is case-insensitive. Blocks that nest or overlap across pairs are stripped whole. An unclosed delimiter is not a block and is left in place, which keeps prose that merely mentions a delimiter from being eaten
 
 ### Code Detection
 

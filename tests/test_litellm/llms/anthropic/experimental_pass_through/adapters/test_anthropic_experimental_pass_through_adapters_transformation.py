@@ -1,4 +1,5 @@
 import base64
+import json
 from typing import Any, Final, cast
 
 import pytest
@@ -9,6 +10,7 @@ import litellm
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_PLACEHOLDER,
+    encrypted_reasoning_signature,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
@@ -38,6 +40,21 @@ from litellm.types.utils import (
     StreamingChoices,
     Usage,
 )
+
+
+def test_translate_openai_response_to_anthropic_empty_choices() -> None:
+    response: Final = ModelResponse(
+        id="chatcmpl-empty",
+        model="gemini-3.5-flash",
+        choices=[],
+        usage=Usage(prompt_tokens=10, completion_tokens=0, total_tokens=10),
+    )
+
+    result: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert result["content"] == []
+    assert result["stop_reason"] == "end_turn"
+    assert result["usage"]["input_tokens"] == 10
 
 
 def test_translate_chat_refusal_to_anthropic_response():
@@ -407,6 +424,43 @@ def test_translate_anthropic_messages_to_openai_thinking_blocks():
     assert result[1]["tool_calls"][0]["id"] == "toolu_01234"
 
 
+def test_translate_anthropic_messages_to_openai_drops_bridge_encrypted_reasoning_blocks():
+    """A session that moves from an OpenAI reasoning model to a chat provider replays reasoning only OpenAI can read.
+
+    Gemini rejects the whole request when such a block reaches it as a thought_signature, so the
+    adapter drops those blocks and keeps the provider-signed ones.
+    """
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Who drinks water?"}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {"type": "thinking", "thinking": "plan", "signature": encrypted_reasoning_signature("gAAAA_1")},
+                {"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAAA_2")},
+                {"type": "text", "text": "The Norwegian."},
+            ],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {"type": "thinking", "thinking": "native", "signature": "EqQBCkYIAxgCIkA_signed"},
+                {"type": "text", "text": "Still the Norwegian."},
+            ],
+        ),
+    ]
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    assert [m["role"] for m in result] == ["user", "assistant", "assistant"]
+    assert not result[1].get("thinking_blocks")
+    assert result[1]["content"] == "The Norwegian."
+    assert [b["signature"] for b in result[2]["thinking_blocks"]] == ["EqQBCkYIAxgCIkA_signed"]
+
+
 def test_translate_anthropic_messages_to_openai_sets_reasoning_content():
     """Reasoning-aware chat providers read reasoning_content, so thinking text must land there.
 
@@ -724,9 +778,14 @@ def test_translate_anthropic_to_openai_orders_top_level_and_midturn_system():
     ]
 
 
-def _translate_with_metadata(
-    model: str, metadata: dict[str, str], custom_llm_provider: str | None
-) -> dict[str, Any]:
+def _claude_code_user_id(session_id: str) -> str:
+    return json.dumps({"device_id": "d" * 64, "account_uuid": "", "session_id": session_id})
+
+
+CLAUDE_CODE_USER_ID: Final = _claude_code_user_id("session-abc")
+
+
+def _translate_with_metadata(model: str, metadata: dict[str, str], custom_llm_provider: str | None) -> dict[str, Any]:
     openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
         anthropic_message_request={
             "model": model,
@@ -739,23 +798,51 @@ def _translate_with_metadata(
     return cast(dict[str, Any], openai_request)
 
 
-def test_translate_anthropic_to_openai_maps_user_id_to_prompt_cache_key_for_openai():
-    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": "session-abc"}, "openai")
-    assert openai_request["user"] == "session-abc"
+def test_translate_anthropic_to_openai_maps_claude_code_session_id_to_prompt_cache_key_for_openai():
+    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": CLAUDE_CODE_USER_ID}, "openai")
+    assert openai_request["user"] == CLAUDE_CODE_USER_ID
     assert openai_request["prompt_cache_key"] == "session-abc"
 
 
-def test_translate_anthropic_to_openai_truncates_prompt_cache_key_but_keeps_full_user():
-    long_id = "".join(str(i % 10) for i in range(100))
-    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": long_id}, "openai")
-    assert openai_request["user"] == long_id
-    assert openai_request["prompt_cache_key"] == long_id[:64]
-    assert len(openai_request["prompt_cache_key"]) == 64
+def test_translate_anthropic_to_openai_gives_each_claude_code_session_its_own_prompt_cache_key():
+    """BerriAI/litellm#39145: the first 64 chars of Claude Code's user_id are the per-install device_id."""
+    keys = tuple(
+        _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": _claude_code_user_id(session_id)}, "openai")[
+            "prompt_cache_key"
+        ]
+        for session_id in ("11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222")
+    )
+    assert keys == ("11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222")
+
+
+def test_translate_anthropic_to_openai_truncates_long_session_id_to_openai_limit():
+    long_session_id = "".join(str(i % 10) for i in range(100))
+    openai_request = _translate_with_metadata(
+        "openai/gpt-5.6-luna", {"user_id": _claude_code_user_id(long_session_id)}, "openai"
+    )
+    assert openai_request["prompt_cache_key"] == long_session_id[:64]
+
+
+@pytest.mark.parametrize(
+    "user_id",
+    [
+        "alice",
+        "".join(str(i % 10) for i in range(100)),
+        json.dumps({"device_id": "d" * 64, "account_uuid": ""}),
+        json.dumps({"session_id": ""}),
+        json.dumps({"session_id": 123}),
+        "{not json",
+    ],
+)
+def test_translate_anthropic_to_openai_keeps_plain_user_id_off_prompt_cache_key(user_id: str):
+    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": user_id}, "openai")
+    assert openai_request["user"] == user_id
+    assert "prompt_cache_key" not in openai_request
 
 
 @pytest.mark.parametrize("model", ["azure/my-gpt-5-deployment", "my-gpt-5-deployment"])
 def test_translate_anthropic_to_openai_sets_prompt_cache_key_for_azure(model: str):
-    openai_request = _translate_with_metadata(model, {"user_id": "session-abc"}, "azure")
+    openai_request = _translate_with_metadata(model, {"user_id": CLAUDE_CODE_USER_ID}, "azure")
     assert openai_request["prompt_cache_key"] == "session-abc"
 
 
@@ -772,8 +859,8 @@ def test_translate_anthropic_to_openai_sets_prompt_cache_key_for_azure(model: st
 def test_translate_anthropic_to_openai_skips_prompt_cache_key_when_provider_lacks_it(
     model: str, custom_llm_provider: str
 ):
-    openai_request = _translate_with_metadata(model, {"user_id": "session-abc"}, custom_llm_provider)
-    assert openai_request["user"] == "session-abc"
+    openai_request = _translate_with_metadata(model, {"user_id": CLAUDE_CODE_USER_ID}, custom_llm_provider)
+    assert openai_request["user"] == CLAUDE_CODE_USER_ID
     assert "prompt_cache_key" not in openai_request
 
 
@@ -781,14 +868,14 @@ def test_translate_anthropic_to_openai_skips_prompt_cache_key_for_chained_litell
     assert "prompt_cache_key" in litellm.get_supported_openai_params(
         model="xai", custom_llm_provider="litellm_proxy"
     )
-    openai_request = _translate_with_metadata("litellm_proxy/xai", {"user_id": "session-abc"}, "litellm_proxy")
-    assert openai_request["user"] == "session-abc"
+    openai_request = _translate_with_metadata("litellm_proxy/xai", {"user_id": CLAUDE_CODE_USER_ID}, "litellm_proxy")
+    assert openai_request["user"] == CLAUDE_CODE_USER_ID
     assert "prompt_cache_key" not in openai_request
 
 
 def test_translate_anthropic_to_openai_skips_prompt_cache_key_without_provider():
-    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": "session-abc"}, None)
-    assert openai_request["user"] == "session-abc"
+    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": CLAUDE_CODE_USER_ID}, None)
+    assert openai_request["user"] == CLAUDE_CODE_USER_ID
     assert "prompt_cache_key" not in openai_request
 
 
@@ -3269,6 +3356,27 @@ def test_is_web_search_tool():
         "input_schema": {"type": "object"},
     }
     assert adapter._is_web_search_tool(regular_tool) is False
+
+
+@pytest.mark.parametrize("schema", [{}, {"type": "object", "properties": {"query": {"type": "string"}}}])
+def test_translate_anthropic_client_web_search_preserves_schema_and_choice(schema: dict[str, object]) -> None:
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    request: Final = AnthropicMessagesRequest(
+        model="gpt-5.4-mini",
+        max_tokens=128,
+        messages=[{"role": "user", "content": "Search for current news"}],
+        tools=[{"name": "web_search", "input_schema": schema}],
+        tool_choice={"type": "tool", "name": "web_search"},
+    )
+
+    translated, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+
+    assert "web_search_options" not in translated
+    assert translated["tools"] == [
+        {"type": "function", "function": {"name": "web_search", "parameters": schema}}
+    ]
+    assert translated["tool_choice"] == {"type": "function", "function": {"name": "web_search"}}
 
 
 def test_translate_anthropic_to_openai_with_web_search_tool():

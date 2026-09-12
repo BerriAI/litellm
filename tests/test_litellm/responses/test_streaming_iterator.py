@@ -18,6 +18,7 @@ from litellm.responses.streaming_iterator import (
     SyncResponsesAPIStreamingIterator,
 )
 from litellm.types.llms.openai import (
+    ResponseAPIUsage,
     ResponseCompletedEvent,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
@@ -329,8 +330,6 @@ def test_run_post_success_hooks_does_not_report_generation_time_as_overhead():
 
 
 def _responses_api_response_with_usage() -> ResponsesAPIResponse:
-    from litellm.types.llms.openai import ResponseAPIUsage
-
     return ResponsesAPIResponse(
         id="resp_lit6427",
         created_at=int(datetime(2025, 1, 1).timestamp()),
@@ -366,6 +365,53 @@ def test_stamp_responses_usage_cost_keeps_provider_reported_cost():
 
     assert getattr(response.usage, "cost", None) == pytest.approx(0.5)
     logging_obj._response_cost_calculator.assert_not_called()
+
+
+def _unvalidated_response_with_dict_usage(usage: dict) -> ResponsesAPIResponse:
+    return ResponsesAPIResponse.model_construct(
+        id="resp_lit7391",
+        created_at=int(datetime(2025, 1, 1).timestamp()),
+        status="completed",
+        model="perplexity/deepseek-v4-flash-0731",
+        object="response",
+        output=[],
+        truncation="",
+        usage=usage,
+    )
+
+
+def test_stamp_responses_usage_cost_keeps_provider_cost_from_dict_usage():
+    from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
+    response = _unvalidated_response_with_dict_usage(
+        {
+            "input_tokens": 29,
+            "output_tokens": 120,
+            "output_tokens_details": {"reasoning_tokens": 117},
+            "total_tokens": 149,
+            "cost": {"currency": "USD", "input_cost": 0, "output_cost": 3e-05, "total_cost": 3e-05},
+        }
+    )
+    logging_obj = Mock(spec=LiteLLMLoggingObj)
+
+    _stamp_responses_usage_cost(response, logging_obj)
+
+    assert isinstance(response.usage, ResponseAPIUsage)
+    assert response.usage.cost == pytest.approx(3e-05)
+    assert response.usage.output_tokens_details.reasoning_tokens == 117
+    logging_obj._response_cost_calculator.assert_not_called()
+
+
+def test_stamp_responses_usage_cost_computes_cost_for_dict_usage_without_cost():
+    from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
+    response = _unvalidated_response_with_dict_usage({"input_tokens": 29, "output_tokens": 120, "total_tokens": 149})
+    logging_obj = Mock(spec=LiteLLMLoggingObj)
+    logging_obj._response_cost_calculator.return_value = 0.000704
+
+    _stamp_responses_usage_cost(response, logging_obj)
+
+    assert isinstance(response.usage, ResponseAPIUsage)
+    assert response.usage.cost == pytest.approx(0.000704)
+    logging_obj._response_cost_calculator.assert_called_once_with(result=response)
 
 
 def test_stamp_responses_usage_cost_survives_calculator_failure():
@@ -535,5 +581,50 @@ async def test_streaming_logging_copy_fallback_leaves_caller_event_untouched():
     with patch.object(type(iterator.completed_response), "model_dump", side_effect=ValueError("cannot serialize")):
         iterator._log_completed_response(is_async=True)
 
-    assert logged == [iterator.completed_response]
+    assert len(logged) == 1
+    assert logged[0] is not iterator.completed_response
+    assert logged[0].response is not iterator.completed_response.response
+    assert logged[0].response._hidden_params["headers"]["apim-request-id"] == "azure-correlation-1"
     assert iterator.completed_response.response._hidden_params == {}
+
+
+def _unvalidated_completed_config() -> Mock:
+    """Config whose completed event carries a Perplexity-style response that fails validation
+    (``truncation: ""``) and already holds the stamped ``ResponseAPIUsage``."""
+    mock_config = Mock(spec=BaseResponsesAPIConfig)
+
+    def _transform(model, parsed_chunk, logging_obj):
+        response = _unvalidated_response_with_dict_usage(
+            ResponseAPIUsage(input_tokens=29, output_tokens=373, total_tokens=402, cost={"total_cost": 0.0001})
+        )
+        return ResponseCompletedEvent(type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED, response=response)
+
+    mock_config.transform_streaming_response.side_effect = _transform
+    return mock_config
+
+
+@pytest.mark.asyncio
+async def test_streaming_logging_copy_keeps_client_usage_when_response_fails_validation():
+    """LIT-7391: the logging copy cannot round-trip a response that fails validation, and logging
+    rewrites the assembled response's usage to chat shape in place, so the event handed to logging
+    must never be the one the caller receives."""
+    logging_obj = _logging_obj_stub()
+    logging_obj.stream = True
+    logged: list[object] = []
+    logging_obj.dispatch_success_handlers = _capture_dispatch(logged)
+    logging_obj._on_deferred_stream_complete = None
+
+    iterator = _make_header_iterator(headers={}, config=_unvalidated_completed_config(), logging_obj=logging_obj)
+    events = [event async for event in iterator]
+
+    assert len(logged) == 1
+    now = datetime.now()
+    LiteLLMLoggingObj._get_assembled_streaming_response(
+        logging_obj, logged[0], start_time=now, end_time=now, is_async=True, streaming_chunks=[]
+    )
+    assert logged[0].response.usage["prompt_tokens"] == 29
+
+    client_usage = events[-1].response.usage
+    assert isinstance(client_usage, ResponseAPIUsage)
+    assert client_usage.input_tokens == 29
+    assert client_usage.cost == pytest.approx(0.0001)

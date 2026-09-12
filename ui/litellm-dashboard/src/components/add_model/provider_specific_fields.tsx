@@ -18,7 +18,7 @@ import { provider_map, Providers } from "../provider_info_helpers";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 
 interface ProviderSpecificFieldsProps {
-  selectedProvider: Providers;
+  selectedProvider: string | null;
 }
 
 const readTextFile = (file: File, onLoaded: (contents: string) => void) => {
@@ -168,6 +168,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
   }, [cacheEntries]);
 
   const allFields = React.useMemo(() => {
+    if (selectedProvider === null) return [];
     // First try to resolve from the in-memory cache. We support both the
     // enum/display-name form and the raw provider slug (e.g. "petals").
     const cachedFields =

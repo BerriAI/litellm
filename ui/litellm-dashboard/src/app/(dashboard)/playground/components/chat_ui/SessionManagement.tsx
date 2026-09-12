@@ -7,7 +7,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface SessionManagementProps {
-  endpointType: string;
+  endpointType: string | null;
   responsesSessionId: string | null;
   useApiSessionManagement: boolean;
   onToggleSessionManagement: (useApi: boolean) => void;

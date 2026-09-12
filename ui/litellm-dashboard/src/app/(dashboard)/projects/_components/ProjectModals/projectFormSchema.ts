@@ -16,7 +16,10 @@ const modelLimitSchema = z.object({
 export const projectFormSchema = z
   .object({
     project_alias: z.string().min(1, "Please enter a project name"),
-    team_id: z.string().min(1, "Please select a team"),
+    team_id: z
+      .string()
+      .nullable()
+      .pipe(z.string({ error: "Please select a team" }).min(1, "Please select a team")),
     description: z.string().optional(),
     models: z.array(z.string()),
     max_budget: z.number().optional(),
@@ -48,11 +51,12 @@ export const projectFormSchema = z
     });
   });
 
-export type ProjectFormValues = z.output<typeof projectFormSchema>;
+export type ProjectFormValues = z.input<typeof projectFormSchema>;
+export type ProjectSubmitValues = z.output<typeof projectFormSchema>;
 
 export const emptyProjectFormValues: ProjectFormValues = {
   project_alias: "",
-  team_id: "",
+  team_id: null,
   description: undefined,
   models: [],
   max_budget: undefined,
