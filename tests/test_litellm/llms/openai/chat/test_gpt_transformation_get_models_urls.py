@@ -29,9 +29,7 @@ from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 )
 def test_get_models_probes_path_preserving_url(respx_mock, api_base, expected_url):
     config = OpenAIGPTConfig()
-    route = respx_mock.get(expected_url).mock(
-        return_value=httpx.Response(200, json={"data": [{"id": "m1"}]})
-    )
+    route = respx_mock.get(expected_url).mock(return_value=httpx.Response(200, json={"data": [{"id": "m1"}]}))
 
     models = config.get_models(api_key="sk-test", api_base=api_base)
 

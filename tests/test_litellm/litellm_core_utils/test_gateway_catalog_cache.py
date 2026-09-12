@@ -149,9 +149,7 @@ class TestOpenRouterCatalog:
         assert route.calls[0].request.headers["authorization"] == "Bearer sk-or"
 
     def test_get_models_namespaces_ids(self, respx_mock):
-        respx_mock.get(OPENROUTER_URL).mock(
-            return_value=httpx.Response(200, json={"data": [OPENROUTER_ITEM]})
-        )
+        respx_mock.get(OPENROUTER_URL).mock(return_value=httpx.Response(200, json={"data": [OPENROUTER_ITEM]}))
 
         assert OpenrouterConfig().get_models() == ["openrouter/anthropic/claude-sonnet-4"]
 
@@ -217,16 +215,12 @@ class TestVercelCatalog:
     def test_get_models_namespaces_ids(self, respx_mock):
         respx_mock.get(VERCEL_URL).mock(return_value=httpx.Response(200, json={"data": [VERCEL_ITEM]}))
 
-        assert VercelAIGatewayConfig().get_models() == [
-            "vercel_ai_gateway/anthropic/claude-sonnet-4"
-        ]
+        assert VercelAIGatewayConfig().get_models() == ["vercel_ai_gateway/anthropic/claude-sonnet-4"]
 
 
 class TestMergeCatalog:
     def test_selects_cheapest_available_vendor(self, respx_mock):
-        route = respx_mock.get(MERGE_URL).mock(
-            return_value=httpx.Response(200, json=_catalog_page([MERGE_ITEM]))
-        )
+        route = respx_mock.get(MERGE_URL).mock(return_value=httpx.Response(200, json=_catalog_page([MERGE_ITEM])))
 
         catalog = MergeAIGatewayConfig().get_models_with_info(api_key="sk-merge")
 
@@ -271,9 +265,7 @@ class TestMergeCatalog:
 
     def test_stops_when_next_cursor_missing(self, respx_mock):
         route = respx_mock.get(MERGE_URL).mock(
-            return_value=httpx.Response(
-                200, json=_catalog_page([MERGE_ITEM], has_more=True, next_cursor=None)
-            )
+            return_value=httpx.Response(200, json=_catalog_page([MERGE_ITEM], has_more=True, next_cursor=None))
         )
 
         catalog = MergeAIGatewayConfig().get_models_with_info(api_key="sk-merge")
@@ -285,9 +277,7 @@ class TestMergeCatalog:
         unavailable = {
             **MERGE_ITEM,
             "model": "x/gone",
-            "vendors": {
-                "v1": {**MERGE_ITEM["vendors"]["anthropic"], "availability_status": "deprecated"}
-            },
+            "vendors": {"v1": {**MERGE_ITEM["vendors"]["anthropic"], "availability_status": "deprecated"}},
         }
         embed_only = {
             **MERGE_ITEM,
@@ -318,15 +308,11 @@ class TestMergeCatalog:
         no_pricing = {
             **MERGE_ITEM,
             "model": "anthropic/claude-3-haiku",
-            "vendors": {
-                "v1": {**MERGE_ITEM["vendors"]["anthropic"], "pricing": {"currency": "USD"}}
-            },
+            "vendors": {"v1": {**MERGE_ITEM["vendors"]["anthropic"], "pricing": {"currency": "USD"}}},
         }
         original = litellm.model_cost.get("openrouter/anthropic/claude-3-haiku")
         assert original is not None and original.get("input_cost_per_token") is not None
-        respx_mock.get(MERGE_URL).mock(
-            return_value=httpx.Response(200, json=_catalog_page([no_pricing]))
-        )
+        respx_mock.get(MERGE_URL).mock(return_value=httpx.Response(200, json=_catalog_page([no_pricing])))
 
         catalog = MergeAIGatewayConfig().get_models_with_info(api_key="sk-merge")
 
@@ -337,9 +323,7 @@ class TestMergeCatalog:
 
 class TestCatalogCache:
     def test_caches_within_ttl(self, respx_mock):
-        route = respx_mock.get(OPENROUTER_URL).mock(
-            return_value=httpx.Response(200, json={"data": [OPENROUTER_ITEM]})
-        )
+        route = respx_mock.get(OPENROUTER_URL).mock(return_value=httpx.Response(200, json={"data": [OPENROUTER_ITEM]}))
 
         first = get_catalog("openrouter", "sk-or", None)
         second = get_catalog("openrouter", "sk-or", None)
@@ -360,9 +344,7 @@ class TestCatalogCache:
         assert (same_base is other_key) is False
 
     def test_ttl_expiry_refetches(self, respx_mock):
-        route = respx_mock.get(OPENROUTER_URL).mock(
-            return_value=httpx.Response(200, json={"data": [OPENROUTER_ITEM]})
-        )
+        route = respx_mock.get(OPENROUTER_URL).mock(return_value=httpx.Response(200, json={"data": [OPENROUTER_ITEM]}))
 
         get_catalog("openrouter", "sk-or", None)
         key = next(iter(gateway_catalog_cache._CATALOG_CACHE))
@@ -392,9 +374,7 @@ class TestRegisterCatalog:
         try:
             register_catalog_into_model_cost(
                 "merge",
-                MappingProxyType(
-                    {"anthropic/claude-opus-4-6": {"input_cost_per_token": 5e-6, "mode": "chat"}}
-                ),
+                MappingProxyType({"anthropic/claude-opus-4-6": {"input_cost_per_token": 5e-6, "mode": "chat"}}),
             )
             assert litellm.model_cost[key]["input_cost_per_token"] == 5e-6
         finally:

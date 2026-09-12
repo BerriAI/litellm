@@ -180,6 +180,42 @@ def get_team_models(
     return all_models
 
 
+def _gather_scoped_models(
+    key_grants: Sequence[str],
+    team_grants: Sequence[str],
+    proxy_models: Sequence[str],
+    fallback_user_model: str | None,
+    infer_from_keys: bool | None,
+    access_group_map: dict[str, list[str]],  # mutable-ok: mirrors get_complete_model_list's parameter
+    include_access_groups: bool | None,
+) -> list[str]:  # mutable-ok: get_complete_model_list's list contract
+    """Key grants win, then team grants, then everything the proxy serves."""
+    models: Final[list[str]] = []  # mutable-ok: ordered dedupe accumulator
+
+    def append_unique(candidate_models):
+        for model in candidate_models:
+            if model not in models and model != SpecialModelNames.no_default_models.value:
+                models.append(model)
+
+    if key_grants:
+        append_unique(key_grants)
+    elif team_grants:
+        append_unique(team_grants)
+    else:
+        append_unique(proxy_models)
+        if include_access_groups:
+            append_unique(access_group_map)  # TODO: keys order
+
+        if fallback_user_model:
+            append_unique((fallback_user_model,))
+
+        if infer_from_keys:
+            valid_models: Final = get_valid_models()
+            append_unique(valid_models)
+
+    return models
+
+
 def get_complete_model_list(
     key_models: Sequence[str],
     team_models: Sequence[str],
@@ -202,28 +238,15 @@ def get_complete_model_list(
     If list contains wildcard -> return known provider models
     """
 
-    unique_models: Final = []
-
-    def append_unique(models):
-        for model in models:
-            if model not in unique_models and model != SpecialModelNames.no_default_models.value:
-                unique_models.append(model)
-
-    if key_models:
-        append_unique(key_models)
-    elif team_models:
-        append_unique(team_models)
-    else:
-        append_unique(proxy_model_list)
-        if include_model_access_groups:
-            append_unique(list(model_access_groups.keys()))  # TODO: keys order
-
-        if user_model:
-            append_unique([user_model])
-
-        if infer_model_from_keys:
-            valid_models: Final = get_valid_models()
-            append_unique(valid_models)
+    unique_models: Final = _gather_scoped_models(
+        key_grants=key_models,
+        team_grants=team_models,
+        proxy_models=proxy_model_list,
+        fallback_user_model=user_model,
+        infer_from_keys=infer_model_from_keys,
+        access_group_map=model_access_groups,
+        include_access_groups=include_model_access_groups,
+    )
 
     if only_model_access_groups:
         model_access_groups_to_return: Final[list[str]] = []
@@ -262,6 +285,33 @@ def _hydrate_litellm_credential_name(
     return litellm_params
 
 
+def _register_gateway_catalog(
+    provider: str,
+    public_prefix: str,
+    litellm_params: LiteLLM_Params | None,
+) -> None:
+    """Register the provider's live catalog into ``litellm.model_cost`` under ``public_prefix``.
+
+    Expanded wildcard names resolve their pricing from there, so the keys must be
+    spelled exactly as the names this expansion returns.
+    """
+    if litellm_params is None:
+        return
+
+    from litellm.litellm_core_utils.gateway_catalog_cache import (
+        get_catalog,
+        register_catalog_into_model_cost,
+    )
+
+    catalog: Final = get_catalog(
+        provider=provider,
+        api_key=litellm_params.api_key,
+        api_base=litellm_params.api_base,
+    )
+    if catalog is not None:
+        register_catalog_into_model_cost(public_prefix, catalog)
+
+
 def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_Params | None = None) -> list[str]:
     wildcard_model_to_expand: Final = (
         litellm_params.model
@@ -293,19 +343,11 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
     if wildcard_models is None:
         return []
 
-    if litellm_params is not None and wildcard_models:
-        from litellm.litellm_core_utils.gateway_catalog_cache import (
-            get_catalog,
-            register_catalog_into_model_cost,
-        )
-
-        catalog: Final = get_catalog(
-            provider=provider,
-            api_key=litellm_params.api_key,
-            api_base=litellm_params.api_base,
-        )
-        if catalog is not None:
-            register_catalog_into_model_cost(wildcard_provider_prefix, catalog)
+    _register_gateway_catalog(
+        provider=provider,
+        public_prefix=wildcard_provider_prefix,
+        litellm_params=litellm_params,
+    )
     if wildcard_suffix != "*":
         ## CHECK IF PARTIAL FILTER e.g. `gemini-*`
         model_prefix: Final = wildcard_suffix.replace("*", "")
@@ -340,6 +382,7 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
 
 def expand_wildcard_deployments_for_model_info(
     deployments: list[dict[str, Any]],
+    expand_wildcards: bool = True,
 ) -> list[dict[str, Any]]:
     """Expand wildcard deployments into one row per known provider model.
 
@@ -347,7 +390,13 @@ def expand_wildcard_deployments_for_model_info(
     so team-scoped rows are included). This function restores wildcard expansion
     on top of that: a wildcard deployment like model_name="*" / litellm_params.model="openai/*"
     becomes one entry per known openai model, matching /v1/models behaviour.
+
+    ``expand_wildcards=False`` (the /v2/model/info `wildcard_only` view) returns the
+    deployments as-is, since that view exists to surface the unexpanded ``*`` rows.
     """
+    if not expand_wildcards:
+        return deployments
+
     expanded: Final[list[dict[str, Any]]] = []
     for deployment in deployments:
         model_name = str(deployment.get("model_name") or "")

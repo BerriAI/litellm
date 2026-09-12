@@ -40,12 +40,18 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
             base_params.append("extra_body")
         return base_params
 
+    @staticmethod
+    def get_api_key(api_key: str | None = None) -> str | None:
+        return api_key or get_secret_str("VERCEL_AI_GATEWAY_API_KEY") or get_secret_str("VERCEL_OIDC_TOKEN")
+
+    @staticmethod
+    def get_api_base(api_base: str | None = None) -> str | None:
+        return api_base or get_secret_str("VERCEL_AI_GATEWAY_API_BASE") or "https://ai-gateway.vercel.sh/v1"
+
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
-        api_base = api_base or get_secret_str("VERCEL_AI_GATEWAY_API_BASE") or "https://ai-gateway.vercel.sh/v1"
-        user_api_key = api_key or get_secret_str("VERCEL_AI_GATEWAY_API_KEY") or get_secret_str("VERCEL_OIDC_TOKEN")
-        return api_base, user_api_key
+        return self.get_api_base(api_base), self.get_api_key(api_key)
 
     def map_openai_params(
         self,

@@ -13,6 +13,7 @@ import httpx
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.gateway_catalog_cache import bearer_auth_headers
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _extract_reasoning_content,
     _handle_invalid_parallel_tool_calls,
@@ -765,10 +766,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             else f"{api_base.rstrip('/')}/v1/models"
         )
 
-        headers: Final = {"Authorization": f"Bearer {api_key}"} if api_key else {}  # mutable-ok: HTTPHandler.get takes a dict
         response: Final = litellm.module_level_client.get(
             url=models_url,
-            headers=headers,
+            headers=bearer_auth_headers(api_key),
         )
 
         if response.status_code != 200:

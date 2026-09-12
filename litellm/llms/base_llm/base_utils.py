@@ -5,7 +5,8 @@ Utility functions for base LLM classes.
 import copy
 import json
 from abc import ABC, abstractmethod
-from typing import Any, Final, Mapping
+from collections.abc import Mapping
+from typing import Any, Final
 
 from openai.lib import _parsing, _pydantic
 from pydantic import BaseModel

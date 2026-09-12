@@ -22,9 +22,7 @@ from litellm.types.router import DeploymentModelListingInfo
 from .conftest import normalize  # type: ignore[import-not-found]
 
 
-def _stub_model_info_response(
-    model_id: str = "gpt-4", provider: str = "openai"
-) -> dict:
+def _stub_model_info_response(model_id: str = "gpt-4", provider: str = "openai") -> dict:
     return {
         "id": model_id,
         "object": "model",
@@ -63,9 +61,7 @@ def patched_models(monkeypatch):
     def _fake_create_model_info_response(model_id, provider="openai", **kwargs):
         return _stub_model_info_response(model_id=model_id, provider=provider)
 
-    monkeypatch.setattr(
-        proxy_utils, "create_model_info_response", _fake_create_model_info_response
-    )
+    monkeypatch.setattr(proxy_utils, "create_model_info_response", _fake_create_model_info_response)
 
     monkeypatch.setattr(proxy_utils, "validate_model_access", lambda **kwargs: None)
 
@@ -104,9 +100,7 @@ def test_get_models_happy_path(client, auth_as, patched_models, path):
 
 
 @pytest.mark.parametrize("path", ["/v1/models", "/models"])
-def test_get_models_anthropic_format_when_header_present(
-    client, auth_as, patched_models, path
-):
+def test_get_models_anthropic_format_when_header_present(client, auth_as, patched_models, path):
     """Pins: ``GET /v1/models`` returns the Anthropic-native models shape when
     the caller sends an ``anthropic-version`` header (Claude Code gateway
     discovery), while the default OpenAI shape is unchanged without it."""
@@ -126,9 +120,7 @@ def test_get_models_anthropic_format_when_header_present(
 
 
 @pytest.mark.parametrize("path", ["/v1/models", "/models"])
-def test_anthropic_format_exposes_token_limits(
-    client, auth_as, patched_models, monkeypatch, path
-):
+def test_anthropic_format_exposes_token_limits(client, auth_as, patched_models, monkeypatch, path):
     """Claude Code sizes requests off the listing, so the Anthropic-native entries
     carry the same token limits the OpenAI listing resolves, with the output budget
     named max_tokens as the Messages API names it."""
@@ -143,9 +135,7 @@ def test_anthropic_format_exposes_token_limits(
             "max_output_tokens": 64000,
         }
 
-    monkeypatch.setattr(
-        proxy_utils, "create_model_info_response", _create_model_info_response
-    )
+    monkeypatch.setattr(proxy_utils, "create_model_info_response", _create_model_info_response)
 
     with auth_as():
         response = client.get(path, headers={"anthropic-version": "2023-06-01"})
@@ -220,9 +210,7 @@ def test_anthropic_format_uses_configured_display_name(client, auth_as, patched_
 
 
 @pytest.mark.parametrize("params", [{}, {"scope": "expand"}])
-def test_anthropic_display_name_resolved_via_internal_team_key(
-    client, auth_as, patched_models, monkeypatch, params
-):
+def test_anthropic_display_name_resolved_via_internal_team_key(client, auth_as, patched_models, monkeypatch, params):
     """For a team-scoped row the configured display name must be looked up by the
     internal routing key while the entry itself is keyed by the public name, so
     the clean name lands on the id the client actually sees."""
@@ -255,14 +243,10 @@ def test_anthropic_display_name_resolved_via_internal_team_key(
         "get_available_models_for_user",
         _fake_get_available_models_for_user,
     )
-    monkeypatch.setattr(
-        model_checks, "get_complete_model_list", lambda **kwargs: [internal_name]
-    )
+    monkeypatch.setattr(model_checks, "get_complete_model_list", lambda **kwargs: [internal_name])
 
     with auth_as():
-        response = client.get(
-            "/v1/models", params=params, headers={"anthropic-version": "2023-06-01"}
-        )
+        response = client.get("/v1/models", params=params, headers={"anthropic-version": "2023-06-01"})
 
     assert response.status_code == 200
     (entry,) = response.json()["data"]
@@ -303,9 +287,7 @@ def test_get_model_by_id_not_found(client, auth_as, patched_models, path):
 
 
 @pytest.mark.parametrize("params", [{}, {"scope": "expand"}])
-def test_anthropic_format_returns_public_team_model_name(
-    client, auth_as, patched_models, monkeypatch, params
-):
+def test_anthropic_format_returns_public_team_model_name(client, auth_as, patched_models, monkeypatch, params):
     """Regression: the Anthropic-native listing must go through the same team
     name translation as the OpenAI listing, so a caller never sees the internal
     ``model_name_{team_id}_{uuid}`` routing key."""
@@ -335,14 +317,10 @@ def test_anthropic_format_returns_public_team_model_name(
         "get_available_models_for_user",
         _fake_get_available_models_for_user,
     )
-    monkeypatch.setattr(
-        model_checks, "get_complete_model_list", lambda **kwargs: [internal_name]
-    )
+    monkeypatch.setattr(model_checks, "get_complete_model_list", lambda **kwargs: [internal_name])
 
     with auth_as():
-        response = client.get(
-            "/v1/models", params=params, headers={"anthropic-version": "2023-06-01"}
-        )
+        response = client.get("/v1/models", params=params, headers={"anthropic-version": "2023-06-01"})
 
     assert response.status_code == 200
     assert [m["id"] for m in response.json()["data"]] == ["gpt-4-team"]
@@ -373,7 +351,9 @@ def test_anthropic_format_lists_claude_code_view_ids_for_claude_code(
 
     patched_models.model_group_alias = {}
     patched_models.has_model_id.return_value = False
-    patched_models.get_candidate_model_ids_for_route.side_effect = lambda name, team_id=None: frozenset({name}) if name in ("gpt-4", "claude-sonnet") else frozenset()
+    patched_models.get_candidate_model_ids_for_route.side_effect = lambda name, team_id=None: (
+        frozenset({name}) if name in ("gpt-4", "claude-sonnet") else frozenset()
+    )
     monkeypatch.setattr(proxy_utils, "create_model_info_response", _create_model_info_response)
 
     with auth_as():
@@ -393,7 +373,9 @@ def test_anthropic_format_lists_claude_code_view_ids_for_claude_code(
 def test_anthropic_format_keeps_served_ids_for_other_anthropic_clients(client, auth_as, patched_models, path):
     """An Anthropic SDK asking for the vendor shape gets the served ids: the view is Claude Code's alone."""
     with auth_as():
-        response = client.get(path, headers={"anthropic-version": "2023-06-01", "user-agent": "anthropic-sdk-python/0.40"})
+        response = client.get(
+            path, headers={"anthropic-version": "2023-06-01", "user-agent": "anthropic-sdk-python/0.40"}
+        )
 
     assert response.status_code == 200
     assert [m["id"] for m in response.json()["data"]] == ["gpt-4", "claude-sonnet"]
@@ -462,4 +444,3 @@ def test_get_models_reports_registered_gateway_costs(client, auth_as, patched_mo
     gpt_4 = response.json()["data"][0]
     assert gpt_4["input_cost_per_token"] == pytest.approx(2.5e-6)
     assert gpt_4["output_cost_per_token"] == pytest.approx(1e-5)
-

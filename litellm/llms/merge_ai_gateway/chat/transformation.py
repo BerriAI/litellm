@@ -16,11 +16,13 @@ from litellm.litellm_core_utils.gateway_catalog_cache import (
     EMPTY_MAPPING,
     as_mapping,
     as_sequence,
+    bearer_auth_headers,
     bool_field,
     float_field,
     freeze_catalog,
     int_field,
     optional_float,
+    page_query_params,
     per_token,
     prefix_model_ids,
 )
@@ -70,7 +72,9 @@ class MergeAIGatewayConfig(OpenAIGPTConfig):
     ) -> tuple[str | None, str | None]:
         return self.get_api_base(api_base), self.get_api_key(api_key)
 
-    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
+    def get_models(
+        self, api_key: str | None = None, api_base: str | None = None
+    ) -> list[str]:  # mutable-ok: inherited get_models list contract
         return prefix_model_ids(
             "merge_ai_gateway",
             super().get_models(api_key=api_key, api_base=self.get_api_base(api_base)),
@@ -87,11 +91,7 @@ class MergeAIGatewayConfig(OpenAIGPTConfig):
             root=self.get_catalog_root(api_base),
             api_key=self.get_api_key(api_key),
         )
-        return freeze_catalog(
-            pair
-            for item in items
-            if (pair := _merge_catalog_entry(as_mapping(item))) is not None
-        )
+        return freeze_catalog(pair for item in items if (pair := _merge_catalog_entry(as_mapping(item))) is not None)
 
     def _fetch_catalog_items(
         self,
@@ -105,14 +105,10 @@ class MergeAIGatewayConfig(OpenAIGPTConfig):
         if remaining <= 0:
             return ()
 
-        params: Final = (  # mutable-ok: HTTPHandler.get takes and mutates a dict
-            {"limit": PAGE_LIMIT} if cursor is None else {"limit": PAGE_LIMIT, "cursor": cursor}
-        )
-        headers: Final = {"Authorization": f"Bearer {api_key}"} if api_key else {}  # mutable-ok: HTTPHandler.get takes a dict
         response: Final = litellm.module_level_client.get(
             url=f"{root}/models",
-            params=params,
-            headers=headers,
+            params=page_query_params(cursor, PAGE_LIMIT),
+            headers=bearer_auth_headers(api_key),
         )
         if response.status_code != 200:
             raise Exception(f"Failed to get models: {response.text}")
@@ -126,7 +122,9 @@ class MergeAIGatewayConfig(OpenAIGPTConfig):
             root=root, api_key=api_key, cursor=next_cursor, remaining=remaining - 1
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict | httpx.Headers
+    ) -> BaseLLMException:  # mutable-ok: BaseLLMException contract
         return MergeAIGatewayException(
             message=error_message,
             status_code=status_code,
@@ -157,9 +155,7 @@ def _merge_catalog_entry(item: Mapping[str, object]) -> tuple[str, ModelInfoBase
 
     input_cost: Final = optional_float(pricing.get("input_per_million"))
     output_cost: Final = optional_float(pricing.get("output_per_million"))
-    fallback: Final = (
-        _cost_map_fallback(model_id) if input_cost is None or output_cost is None else EMPTY_MAPPING
-    )
+    fallback: Final = _cost_map_fallback(model_id) if input_cost is None or output_cost is None else EMPTY_MAPPING
 
     entry: Final[ModelInfoBase] = {
         "key": f"merge_ai_gateway/{model_id}",

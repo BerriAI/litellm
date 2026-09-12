@@ -544,6 +544,12 @@ def _dashscope_family_chat_config(custom_llm_provider: str) -> "litellm.DashScop
     return litellm.DashScopeChatConfig()
 
 
+def _ai_gateway_chat_config(custom_llm_provider: str) -> "litellm.VercelAIGatewayConfig | litellm.MergeAIGatewayConfig":
+    if custom_llm_provider == "merge_ai_gateway":
+        return litellm.MergeAIGatewayConfig()
+    return litellm.VercelAIGatewayConfig()
+
+
 def _get_openai_compatible_provider_info(
     model: str,
     api_base: str | None,
@@ -839,16 +845,9 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.HyperbolicChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
-    elif custom_llm_provider == "vercel_ai_gateway":
-        (
-            api_base,
-            dynamic_api_key,
-        ) = litellm.VercelAIGatewayConfig()._get_openai_compatible_provider_info(api_base, api_key)
-    elif custom_llm_provider == "merge_ai_gateway":
-        # Resolved through the config's own env-var chain rather than its
-        # `_get_openai_compatible_provider_info`, which is protected.
-        api_base = litellm.MergeAIGatewayConfig.get_api_base(api_base)
-        dynamic_api_key = litellm.MergeAIGatewayConfig.get_api_key(api_key)
+    elif custom_llm_provider in ("vercel_ai_gateway", "merge_ai_gateway"):
+        api_base = _ai_gateway_chat_config(custom_llm_provider).get_api_base(api_base)
+        dynamic_api_key = _ai_gateway_chat_config(custom_llm_provider).get_api_key(api_key)
     elif custom_llm_provider == "aiml":
         (
             api_base,

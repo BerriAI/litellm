@@ -8072,6 +8072,28 @@ def _get_model_cost_entry_for_provider_config(
     return {}
 
 
+def _catalog_gateway_config(provider: LlmProviders) -> BaseLLMModelInfo:
+    """Config for a provider whose catalog carries model metadata (see ``get_models_with_info``)."""
+    if LlmProviders.MERGE_AI_GATEWAY == provider:
+        return litellm.MergeAIGatewayConfig()
+    if LlmProviders.VERCEL_AI_GATEWAY == provider:
+        return litellm.VercelAIGatewayConfig()
+    return litellm.OpenrouterConfig()
+
+
+def _dynamic_listing_provider_model_info(provider: LlmProviders) -> BaseLLMModelInfo | None:
+    """Config for providers whose model list is fetched live from the server."""
+    if provider in (LlmProviders.OLLAMA, LlmProviders.OLLAMA_CHAT):
+        from litellm.llms.ollama.common_utils import OllamaModelInfo
+
+        return OllamaModelInfo()
+    if provider in (LlmProviders.VLLM, LlmProviders.HOSTED_VLLM):
+        from litellm.llms.vllm.common_utils import VLLMModelInfo
+
+        return VLLMModelInfo()
+    return None
+
+
 class ProviderConfigManager:
     # Dictionary mapping for O(1) provider lookup
     # Stores tuples of (factory_function, needs_model_parameter)
@@ -8862,12 +8884,8 @@ class ProviderConfigManager:
             return litellm.FireworksAIConfig()
         elif LlmProviders.OPENAI == provider:
             return litellm.OpenAIGPTConfig()
-        elif LlmProviders.OPENROUTER == provider:
-            return litellm.OpenrouterConfig()
-        elif LlmProviders.VERCEL_AI_GATEWAY == provider:
-            return litellm.VercelAIGatewayConfig()
-        elif LlmProviders.MERGE_AI_GATEWAY == provider:
-            return litellm.MergeAIGatewayConfig()
+        elif provider in (LlmProviders.OPENROUTER, LlmProviders.VERCEL_AI_GATEWAY, LlmProviders.MERGE_AI_GATEWAY):
+            return _catalog_gateway_config(provider)
         elif LlmProviders.GEMINI == provider:
             return litellm.GeminiModelInfo()
         elif LlmProviders.VERTEX_AI == provider:
@@ -8882,17 +8900,6 @@ class ProviderConfigManager:
             return litellm.AnthropicModelInfo()
         elif LlmProviders.XAI == provider:
             return litellm.XAIModelInfo()
-        elif LlmProviders.OLLAMA == provider or LlmProviders.OLLAMA_CHAT == provider:
-            # Dynamic model listing for Ollama server
-            from litellm.llms.ollama.common_utils import OllamaModelInfo
-
-            return OllamaModelInfo()
-        elif LlmProviders.VLLM == provider or LlmProviders.HOSTED_VLLM == provider:
-            from litellm.llms.vllm.common_utils import (
-                VLLMModelInfo,  # experimental approach, to reduce bloat on __init__.py
-            )
-
-            return VLLMModelInfo()
         elif LlmProviders.LEMONADE == provider:
             return litellm.LemonadeChatConfig()
         elif LlmProviders.CLARIFAI == provider:
@@ -8905,6 +8912,13 @@ class ProviderConfigManager:
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 
             return AzureFoundryModelInfo(model=model)
+        elif provider in (
+            LlmProviders.OLLAMA,
+            LlmProviders.OLLAMA_CHAT,
+            LlmProviders.VLLM,
+            LlmProviders.HOSTED_VLLM,
+        ):
+            return _dynamic_listing_provider_model_info(provider)
         return None
 
     @staticmethod

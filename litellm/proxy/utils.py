@@ -40,7 +40,7 @@ from litellm.proxy._types import (
 from litellm.proxy.common_utils.openai_error_payload import openai_error_param
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.proxy.model_listing import ModelInfoResponse
+from litellm.types.proxy.model_listing import EMPTY_RESOLVED_COSTS, ModelInfoResponse, ResolvedCosts
 from litellm.types.utils import CallTypes, CallTypesLiteral, ModelInfo, Usage
 
 try:
@@ -8066,27 +8066,25 @@ def _first_token_limit(candidates: tuple[ModelInfo, ...], field: str) -> int | N
     )
 
 
-def _attach_resolved_costs(
-    listed: ModelInfoResponse,
-    input_cost: float | None,
-    output_cost: float | None,
-) -> ModelInfoResponse:
-    """Attach the per-token prices the listing resolved, omitting any it did not.
+def _resolved_costs(input_cost: float | None, output_cost: float | None) -> ResolvedCosts:
+    """The per-token prices a listing resolved, omitting any it did not.
 
     A price that could not be resolved must stay off the object: reporting zero
     would tell a caller the model is free.
     """
-    if input_cost is None and output_cost is None:
-        return listed
-    if input_cost is None:
-        return {**listed, "output_cost_per_token": output_cost}
-    if output_cost is None:
-        return {**listed, "input_cost_per_token": input_cost}
-    return {
-        **listed,
-        "input_cost_per_token": input_cost,
-        "output_cost_per_token": output_cost,
-    }
+    if input_cost is not None and output_cost is not None:
+        both: Final[ResolvedCosts] = {
+            "input_cost_per_token": input_cost,
+            "output_cost_per_token": output_cost,
+        }
+        return both
+    if input_cost is not None:
+        only_input: Final[ResolvedCosts] = {"input_cost_per_token": input_cost}
+        return only_input
+    if output_cost is not None:
+        only_output: Final[ResolvedCosts] = {"output_cost_per_token": output_cost}
+        return only_output
+    return EMPTY_RESOLVED_COSTS
 
 
 def _first_cost(candidate_sets: tuple[tuple[ModelInfo, ...], ...], field: str) -> float | None:
@@ -8167,17 +8165,15 @@ def create_model_info_response(
 
     input_cost_per_token: Final = _first_cost(candidate_sets, "input_cost_per_token")
     output_cost_per_token: Final = _first_cost(candidate_sets, "output_cost_per_token")
+    resolved_costs: Final = _resolved_costs(input_cost_per_token, output_cost_per_token)
 
-    base: Final[ModelInfoResponse] = _attach_resolved_costs(
-        listed={
-            "id": model_id,
-            "object": "model",
-            "created": DEFAULT_MODEL_CREATED_AT_TIME,
-            "owned_by": provider,
-        },
-        input_cost=input_cost_per_token,
-        output_cost=output_cost_per_token,
-    )
+    base: Final[ModelInfoResponse] = {
+        "id": model_id,
+        "object": "model",
+        "created": DEFAULT_MODEL_CREATED_AT_TIME,
+        "owned_by": provider,
+        **resolved_costs,
+    }
 
     max_input_tokens: int | None = _group_token_limit(candidate_sets, "max_input_tokens")
     max_output_tokens: int | None = _group_token_limit(candidate_sets, "max_output_tokens")

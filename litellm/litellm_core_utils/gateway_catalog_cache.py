@@ -85,6 +85,19 @@ def per_token(per_million: float | None) -> float | None:
     return None if per_million is None else per_million / 1_000_000
 
 
+def bearer_auth_headers(api_key: str | None) -> dict[str, str]:  # mutable-ok: HTTPHandler needs a dict
+    """Bearer auth for a catalog request; empty when the gateway serves it publicly."""
+    header: Final = {"Authorization": f"Bearer {api_key}"} if api_key else {}  # mutable-ok: HTTPHandler needs a dict
+    return header
+
+
+def page_query_params(cursor: str | None, limit: int) -> dict[str, object]:  # mutable-ok: HTTPHandler.get needs a dict
+    """One catalog page's query, carrying ``cursor`` only when there is one."""
+    extra: Final = {"cursor": cursor} if cursor is not None else {}  # mutable-ok: HTTPHandler.get needs a dict
+    params: Final = {"limit": limit, **extra}  # mutable-ok: HTTPHandler.get needs a dict
+    return params
+
+
 def freeze_catalog(entries: Iterable[tuple[str, ModelInfoBase]]) -> CatalogEntries:
     """Build the immutable ``{bare model id: info}`` catalog the cache holds."""
     return MappingProxyType(dict(entries))
@@ -100,7 +113,9 @@ def prefix_model_ids(namespace: str, models: Iterable[str]) -> list[str]:  # mut
     each id after the litellm provider up front keeps the upstream id whole.
     """
     prefix: Final = f"{namespace}/"
-    return [model if model.startswith(prefix) else prefix + model for model in models]  # mutable-ok: get_models contract
+    return [  # mutable-ok: get_models contract is `list[str]`
+        model if model.startswith(prefix) else prefix + model for model in models
+    ]
 
 
 def get_catalog(provider: str, api_key: str | None, api_base: str | None) -> CatalogEntries | None:
@@ -148,6 +163,4 @@ def register_catalog_into_model_cost(prefix: str, catalog: CatalogEntries) -> No
     """
     import litellm
 
-    litellm.model_cost.update(
-        MappingProxyType({f"{prefix}/{model_id}": entry for model_id, entry in catalog.items()})
-    )
+    litellm.model_cost.update(MappingProxyType({f"{prefix}/{model_id}": entry for model_id, entry in catalog.items()}))

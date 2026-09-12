@@ -16,14 +16,15 @@ import litellm
 from litellm.litellm_core_utils.gateway_catalog_cache import (
     as_mapping,
     as_sequence,
+    bearer_auth_headers,
     float_field,
     freeze_catalog,
     int_field,
     prefix_model_ids,
 )
-from litellm.secret_managers.main import get_secret_str
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.llms.openrouter import OpenRouterErrorMessage
 from litellm.types.utils import ModelInfoBase, ModelResponse, ModelResponseStream
@@ -67,9 +68,9 @@ class OpenrouterConfig(OpenAIGPTConfig):
     def get_api_key(api_key: str | None = None) -> str | None:
         return api_key or litellm.openrouter_key or get_secret_str("OPENROUTER_API_KEY")
 
-    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
-        from litellm.litellm_core_utils.gateway_catalog_cache import prefix_model_ids
-
+    def get_models(
+        self, api_key: str | None = None, api_base: str | None = None
+    ) -> list[str]:  # mutable-ok: inherited get_models list contract
         return prefix_model_ids(
             "openrouter",
             super().get_models(
@@ -85,15 +86,12 @@ class OpenrouterConfig(OpenAIGPTConfig):
         Fetch OpenRouter's public catalog with pricing and capabilities.
         Docs: https://openrouter.ai/docs/api-reference/list-available-models
         """
-        from litellm.litellm_core_utils.gateway_catalog_cache import freeze_catalog
-
         resolved_key: Final = self.get_api_key(api_key)
         base: Final = (api_base or "https://openrouter.ai/api/v1").rstrip("/")
-        headers: Final = {"Authorization": f"Bearer {resolved_key}"} if resolved_key else {}  # mutable-ok: HTTPHandler.get takes a dict
 
         response: Final = litellm.module_level_client.get(
             url=f"{base}/models",
-            headers=headers,
+            headers=bearer_auth_headers(resolved_key),
         )
         if response.status_code != 200:
             raise Exception(f"Failed to get models: {response.text}")
@@ -325,8 +323,7 @@ def _openrouter_catalog_entry(item: Mapping[str, object]) -> tuple[str, ModelInf
         "cache_creation_input_token_cost": float_field(pricing, "input_cache_write"),
         "supports_vision": "image" in input_modalities,
         "supports_audio_input": "audio" in input_modalities,
-        "supports_reasoning": "reasoning" in supported_parameters
-        or "include_reasoning" in supported_parameters,
+        "supports_reasoning": "reasoning" in supported_parameters or "include_reasoning" in supported_parameters,
     }
     return model_id, entry
 

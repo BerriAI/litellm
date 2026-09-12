@@ -1,12 +1,26 @@
 """Response types for the model listing/retrieve endpoints (/v1/models, /models)."""
 
-from typing import Literal
+from typing import Final, Literal
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 
 class ModelInfoMetadata(TypedDict):
     fallbacks: list[str]
+
+
+class ResolvedCosts(TypedDict, total=False):
+    """The per-token prices a listing resolved, keyed as `ModelInfoResponse` spells them.
+
+    A price the cost map could not supply is absent rather than zero, so that a
+    caller costing out its own usage never reads an unpriced model as free.
+    """
+
+    input_cost_per_token: ReadOnly[float]
+    output_cost_per_token: ReadOnly[float]
+
+
+EMPTY_RESOLVED_COSTS: Final[ResolvedCosts] = {}
 
 
 class ModelInfoResponse(TypedDict):
