@@ -7,7 +7,8 @@ from __future__ import annotations
 import time
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Final, Literal, Protocol
+from types import MappingProxyType
+from typing import Final, Literal, Protocol, TypeAlias
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -28,10 +29,13 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.utils import PrismaClient
 
-_RowKind = Literal["user_row", "team_row", "membership_row", "organization_row", "project_row"]
+_RowKind: TypeAlias = Literal["user_row", "team_row", "membership_row", "organization_row", "project_row"]
 
 _TEAM_MEMBERSHIP_AUTH_TTL: Final = 5
-_RowValues = TypeAdapter(dict[str, object])
+_RowValues: Final = TypeAdapter(dict[str, object])
+_NO_ROWS: Final[Mapping[str, object]] = MappingProxyType({})
+_TEAM_BOUND_ROWS: Final = frozenset({"team_row", "membership_row"})
+_REFRESH_STAMPED_ROWS: Final = frozenset({"team_row", "project_row"})
 
 
 def _lists_as_json(alias: str, columns: Sequence[str]) -> str:
@@ -194,7 +198,7 @@ async def _fill_from_redis(entries: Sequence[_CacheEntry], redis_cache: RedisCac
     if not entries:
         return
     found: Final = _RowValues.validate_python(
-        await redis_cache.async_batch_get_cache(key_list=[entry.cache_key for entry in entries])  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped cache API
+        await redis_cache.async_batch_get_cache(key_list=sorted(entry.cache_key for entry in entries))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped cache API
     )
     for entry, value in ((entry, found.get(entry.cache_key)) for entry in entries):
         if value is not None:
@@ -208,10 +212,10 @@ def _validate_row(
         return None
     try:
         columns: Final = _RowValues.validate_python(row_value)
-        payload: Final = (
-            {**columns, "last_refreshed_at": refreshed_at} if row in ("team_row", "project_row") else columns
-        )
-        return model_type.model_validate(payload)
+        if row in _REFRESH_STAMPED_ROWS:
+            stamped: Final = {**columns, "last_refreshed_at": refreshed_at}  # mutable-ok: validators write into it
+            return model_type.model_validate(stamped)
+        return model_type.model_validate(columns)
     except ValidationError as e:
         verbose_proxy_logger.warning("auth prefetch: %s did not validate as %s: %s", row, model_type.__name__, e)
         return None
@@ -223,12 +227,12 @@ async def _fetch_rows(
     row: Final[object] = await prisma_client.db.query_first(  # pyright: ignore[reportAny]  # prisma types query_first as Any
         _SQL,
         refs.user_id if "user_row" in kinds else None,
-        refs.team_id if kinds & {"team_row", "membership_row"} else None,
+        refs.team_id if kinds & _TEAM_BOUND_ROWS else None,
         refs.membership_user_id if "membership_row" in kinds else None,
         refs.organization_id if "organization_row" in kinds else None,
         refs.project_id if "project_row" in kinds else None,
     )
-    return _RowValues.validate_python(row) if row is not None else {}
+    return _RowValues.validate_python(row) if row is not None else _NO_ROWS
 
 
 async def _write_back(entries: Sequence[tuple[_CacheEntry, BaseModel]], cache: UserApiKeyCache) -> None:
@@ -248,12 +252,14 @@ async def _fill_from_db(
 ) -> None:
     if not entries:
         return
-    model_for: Final[Mapping[_RowKind, type[BaseModel]]] = {entry.row: entry.model_type for entry in entries}
+    model_for: Final[Mapping[_RowKind, type[BaseModel]]] = MappingProxyType(
+        {entry.row: entry.model_type for entry in entries}
+    )
     rows: Final = await _fetch_rows(refs, frozenset(model_for), prisma_client)
     refreshed_at: Final = time.time()
-    objects: Final[Mapping[_RowKind, BaseModel | None]] = {
-        row: _validate_row(rows.get(row), model_type, row, refreshed_at) for row, model_type in model_for.items()
-    }
+    objects: Final[Mapping[_RowKind, BaseModel | None]] = MappingProxyType(
+        {row: _validate_row(rows.get(row), model_type, row, refreshed_at) for row, model_type in model_for.items()}
+    )
     writes: Final = tuple((entry, value) for entry in entries if (value := objects[entry.row]) is not None)
     if writes:
         await _write_back(writes, cache)

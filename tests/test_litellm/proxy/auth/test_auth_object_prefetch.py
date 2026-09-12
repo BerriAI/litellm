@@ -47,6 +47,7 @@ TEAM_ROW = {
     "spend": 2.0,
     "models": [],
     "blocked": False,
+    "members_with_roles": {},
 }
 MEMBERSHIP_ROW = {
     "user_id": USER_ID,
@@ -345,7 +346,7 @@ async def test_live_db_join_binds_the_membership_to_the_requested_team():
     """Runs the real SQL: a user in two teams with different member budgets must get the requested team's row."""
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
-        pytest.skip("DATABASE_URL not set; skipping DB-backed prefetch join test.")
+        pytest.skip("DATABASE_URL not set")  # test-quality-ok: this test exists to run the raw SQL on a real Postgres, the fakes above cover the rest
 
     run = uuid4().hex
     user_id, team_a, team_b, org_id = (f"pf-user-{run}", f"pf-team-a-{run}", f"pf-team-b-{run}", f"pf-org-{run}")

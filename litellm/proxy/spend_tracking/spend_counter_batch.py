@@ -12,7 +12,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import RedisCache
 from litellm.proxy._types import UserAPIKeyAuth
 
-_CounterValues = TypeAdapter(dict[str, float | None])
+_CounterValues: Final = TypeAdapter(dict[str, float | None])
+_NO_VALUES: Final[Mapping[str, float | None]] = MappingProxyType({})
 
 
 class SpendCounterBatch:
@@ -28,7 +29,7 @@ class SpendCounterBatch:
         self._open = True
         self._keys: frozenset[str] = frozenset()
         self._fetched: frozenset[str] = frozenset()
-        self._loaded: Mapping[str, float | None] = MappingProxyType({})
+        self._loaded: Mapping[str, float | None] = _NO_VALUES
 
     @property
     def counter_keys(self) -> frozenset[str]:
@@ -66,7 +67,7 @@ class SpendCounterBatch:
             )
         except Exception as e:  # noqa: BLE001  # per-key reads take over and apply their own Redis fallback
             verbose_proxy_logger.debug("spend counter batch read failed, falling back to per-key reads: %s", e)
-            return {}
+            return _NO_VALUES
 
 
 _active_batch: Final[ContextVar[SpendCounterBatch | None]] = ContextVar("spend_counter_batch", default=None)
