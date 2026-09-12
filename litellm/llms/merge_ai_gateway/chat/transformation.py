@@ -13,6 +13,7 @@ import httpx
 
 import litellm
 from litellm.litellm_core_utils.gateway_catalog_cache import (
+    EMPTY_MAPPING,
     as_mapping,
     as_sequence,
     bool_field,
@@ -104,8 +105,10 @@ class MergeAIGatewayConfig(OpenAIGPTConfig):
         if remaining <= 0:
             return ()
 
-        params: Final = {"limit": PAGE_LIMIT} if cursor is None else {"limit": PAGE_LIMIT, "cursor": cursor}
-        headers: Final = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        params: Final = (  # mutable-ok: HTTPHandler.get takes and mutates a dict
+            {"limit": PAGE_LIMIT} if cursor is None else {"limit": PAGE_LIMIT, "cursor": cursor}
+        )
+        headers: Final = {"Authorization": f"Bearer {api_key}"} if api_key else {}  # mutable-ok: HTTPHandler.get takes a dict
         response: Final = litellm.module_level_client.get(
             url=f"{root}/models",
             params=params,
@@ -154,7 +157,9 @@ def _merge_catalog_entry(item: Mapping[str, object]) -> tuple[str, ModelInfoBase
 
     input_cost: Final = optional_float(pricing.get("input_per_million"))
     output_cost: Final = optional_float(pricing.get("output_per_million"))
-    fallback: Final = _cost_map_fallback(model_id) if input_cost is None or output_cost is None else {}
+    fallback: Final = (
+        _cost_map_fallback(model_id) if input_cost is None or output_cost is None else EMPTY_MAPPING
+    )
 
     entry: Final[ModelInfoBase] = {
         "key": f"merge_ai_gateway/{model_id}",

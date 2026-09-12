@@ -2,14 +2,15 @@
 Mock tests for merge_ai_gateway provider
 """
 
-import os
-from unittest.mock import MagicMock, patch
+import httpx
 
 import litellm
 from litellm.llms.merge_ai_gateway.chat.transformation import (
     DEFAULT_API_BASE,
     MergeAIGatewayConfig,
 )
+
+MODELS_URL = f"{DEFAULT_API_BASE}/models"
 
 
 def test_merge_ai_gateway_provider_routing():
@@ -31,40 +32,40 @@ def test_merge_ai_gateway_in_provider_lists():
     assert "merge_ai_gateway" in litellm.models_by_provider
 
 
-def test_merge_ai_gateway_models_endpoint():
-    """get_models probes {api_base}/models and returns catalog ids."""
-    config = MergeAIGatewayConfig()
-
-    with patch("litellm.module_level_client.get") as mock_get:
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "data": [
-                {"id": "anthropic/claude-opus-4-6"},
-                {"id": "openai/gpt-5"},
-            ]
-        }
-        mock_get.return_value = mock_response
-
-        models = config.get_models(api_key="sk-merge-test")
-
-    assert models == ["anthropic/claude-opus-4-6", "openai/gpt-5"]
-    assert mock_get.call_args.kwargs["url"] == f"{DEFAULT_API_BASE}/models"
-    assert mock_get.call_args.kwargs["headers"] == {"Authorization": "Bearer sk-merge-test"}
-
-
-def test_merge_ai_gateway_get_valid_models_uses_live_catalog():
-    """get_valid_models(check_provider_endpoint=True) hits the live catalog."""
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"data": [{"id": "anthropic/claude-opus-4-6"}]}
-
-    with patch("litellm.module_level_client.get", return_value=mock_response) as mock_get:
-        models = litellm.get_valid_models(
-            check_provider_endpoint=True,
-            custom_llm_provider="merge_ai_gateway",
-            api_key="sk-merge-test",
+def test_merge_ai_gateway_models_endpoint(respx_mock):
+    """get_models probes {api_base}/models and namespaces the catalog ids."""
+    route = respx_mock.get(MODELS_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": "anthropic/claude-opus-4-6"},
+                    {"id": "openai/gpt-5"},
+                ]
+            },
         )
+    )
 
-    assert models == ["anthropic/claude-opus-4-6"]
-    assert mock_get.call_args.kwargs["url"] == f"{DEFAULT_API_BASE}/models"
+    models = MergeAIGatewayConfig().get_models(api_key="sk-merge-test")
+
+    assert models == [
+        "merge_ai_gateway/anthropic/claude-opus-4-6",
+        "merge_ai_gateway/openai/gpt-5",
+    ]
+    assert route.calls[0].request.headers["authorization"] == "Bearer sk-merge-test"
+
+
+def test_merge_ai_gateway_get_valid_models_uses_live_catalog(respx_mock):
+    """get_valid_models(check_provider_endpoint=True) hits the live catalog."""
+    route = respx_mock.get(MODELS_URL).mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "anthropic/claude-opus-4-6"}]})
+    )
+
+    models = litellm.get_valid_models(
+        check_provider_endpoint=True,
+        custom_llm_provider="merge_ai_gateway",
+        api_key="sk-merge-test",
+    )
+
+    assert models == ["merge_ai_gateway/anthropic/claude-opus-4-6"]
+    assert len(route.calls) == 1

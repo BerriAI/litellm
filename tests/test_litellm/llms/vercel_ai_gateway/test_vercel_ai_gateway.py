@@ -5,6 +5,7 @@ Mock tests for vercel_ai_gateway provider
 import json
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 import respx
 
@@ -238,66 +239,69 @@ def test_vercel_ai_gateway_with_provider_options(
     assert request_data["providerOptions"]["gateway"]["order"] == ["azure", "openai"]
 
 
-def test_vercel_ai_gateway_models_endpoint():
+def test_vercel_ai_gateway_models_endpoint(respx_mock):
     """Test the get_models functionality"""
     config = VercelAIGatewayConfig()
 
-    with patch("litellm.module_level_client.get") as mock_get:
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "data": [
-                {"id": "openai/gpt-4o"},
-                {"id": "openai/gpt-3.5-turbo"},
-                {"id": "anthropic/claude-3-sonnet"},
-            ]
-        }
-        mock_get.return_value = mock_response
+    route = respx_mock.get("https://ai-gateway.vercel.sh/v1/models").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": "openai/gpt-4o"},
+                    {"id": "openai/gpt-3.5-turbo"},
+                    {"id": "anthropic/claude-3-sonnet"},
+                ]
+            },
+        )
+    )
 
-        models = config.get_models()
+    models = config.get_models()
 
-        assert models == [
-            "openai/gpt-4o",
-            "openai/gpt-3.5-turbo",
-            "anthropic/claude-3-sonnet",
-        ]
-        mock_get.assert_called_once_with(url="https://ai-gateway.vercel.sh/v1/models")
+    assert models == [
+        "vercel_ai_gateway/openai/gpt-4o",
+        "vercel_ai_gateway/openai/gpt-3.5-turbo",
+        "vercel_ai_gateway/anthropic/claude-3-sonnet",
+    ]
+    assert len(route.calls) == 1
 
 
-def test_vercel_ai_gateway_models_endpoint_failure():
+def test_vercel_ai_gateway_models_endpoint_failure(respx_mock):
     """Test the get_models functionality with failure"""
     config = VercelAIGatewayConfig()
+    respx_mock.get("https://ai-gateway.vercel.sh/v1/models").mock(
+        return_value=httpx.Response(404, text="Not found")
+    )
 
-    with patch("litellm.module_level_client.get") as mock_get:
-        mock_response = MagicMock()
-        mock_response.status_code = 404
-        mock_response.text = "Not found"
-        mock_get.return_value = mock_response
-
-        with pytest.raises(Exception, match="Failed to get models: Not found"):
-            config.get_models()
+    with pytest.raises(Exception, match="Failed to get models: Not found"):
+        config.get_models()
 
 
-def test_vercel_ai_gateway_get_valid_models_uses_live_catalog():
+def test_vercel_ai_gateway_get_valid_models_uses_live_catalog(respx_mock):
     """get_valid_models(check_provider_endpoint=True) must hit the live catalog."""
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "data": [
-            {"id": "openai/gpt-5"},
-            {"id": "anthropic/claude-sonnet-4"},
-        ]
-    }
-
-    with patch("litellm.module_level_client.get", return_value=mock_response) as mock_get:
-        models = litellm.get_valid_models(
-            check_provider_endpoint=True,
-            custom_llm_provider="vercel_ai_gateway",
-            api_base="https://ai-gateway.vercel.sh/v1",
+    route = respx_mock.get("https://ai-gateway.vercel.sh/v1/models").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": "openai/gpt-5"},
+                    {"id": "anthropic/claude-sonnet-4"},
+                ]
+            },
         )
+    )
 
-    assert models == ["openai/gpt-5", "anthropic/claude-sonnet-4"]
-    assert mock_get.call_args.kwargs["url"] == "https://ai-gateway.vercel.sh/v1/models"
+    models = litellm.get_valid_models(
+        check_provider_endpoint=True,
+        custom_llm_provider="vercel_ai_gateway",
+        api_base="https://ai-gateway.vercel.sh/v1",
+    )
+
+    assert models == [
+        "vercel_ai_gateway/openai/gpt-5",
+        "vercel_ai_gateway/anthropic/claude-sonnet-4",
+    ]
+    assert len(route.calls) == 1
 
 
 def test_vercel_ai_gateway_glm46_cost_math():

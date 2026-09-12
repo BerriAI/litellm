@@ -89,7 +89,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
 
         resolved_key: Final = self.get_api_key(api_key)
         base: Final = (api_base or "https://openrouter.ai/api/v1").rstrip("/")
-        headers: Final = {"Authorization": f"Bearer {resolved_key}"} if resolved_key else {}
+        headers: Final = {"Authorization": f"Bearer {resolved_key}"} if resolved_key else {}  # mutable-ok: HTTPHandler.get takes a dict
 
         response: Final = litellm.module_level_client.get(
             url=f"{base}/models",

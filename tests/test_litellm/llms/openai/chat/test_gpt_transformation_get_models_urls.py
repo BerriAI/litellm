@@ -7,8 +7,7 @@ https://api-gateway.merge.dev/v1/openai) must probe {api_base}/models
 instead of being stripped to {host}/v1/models.
 """
 
-from unittest.mock import MagicMock, patch
-
+import httpx
 import pytest
 
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -28,14 +27,29 @@ from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
         ("http://localhost:8080/v1", "http://localhost:8080/v1/models"),
     ],
 )
-def test_get_models_probes_path_preserving_url(api_base, expected_url):
+def test_get_models_probes_path_preserving_url(respx_mock, api_base, expected_url):
     config = OpenAIGPTConfig()
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"data": [{"id": "m1"}]}
+    route = respx_mock.get(expected_url).mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "m1"}]})
+    )
 
-    with patch("litellm.module_level_client.get", return_value=mock_response) as mock_get:
-        models = config.get_models(api_key="sk-test", api_base=api_base)
+    models = config.get_models(api_key="sk-test", api_base=api_base)
 
-    assert mock_get.call_args.kwargs["url"] == expected_url
+    assert str(route.calls[0].request.url) == expected_url
     assert models == ["m1"]
+
+
+def test_get_models_omits_auth_header_without_a_key(respx_mock, monkeypatch):
+    """An unset key must not leak OPENAI_API_KEY to a third-party gateway."""
+    import litellm
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    route = respx_mock.get("https://gateway.example.com/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+
+    OpenAIGPTConfig().get_models(api_key=None, api_base="https://gateway.example.com/v1")
+
+    assert "authorization" not in route.calls[0].request.headers

@@ -1136,7 +1136,7 @@ def _build_models_by_provider() -> dict:
         "baseten": baseten_models,
         "openrouter": openrouter_models,
         "vercel_ai_gateway": vercel_ai_gateway_models,
-        "merge_ai_gateway": set(),
+        "merge_ai_gateway": frozenset(),
         "datarobot": datarobot_models,
         "vertex_ai": vertex_chat_models
         | vertex_text_models

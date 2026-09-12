@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 
 class ModelInfoMetadata(TypedDict):
@@ -22,6 +22,6 @@ class ModelInfoResponse(TypedDict):
     mode: NotRequired[str]
     max_input_tokens: NotRequired[int]
     max_output_tokens: NotRequired[int]
-    input_cost_per_token: NotRequired[float]
-    output_cost_per_token: NotRequired[float]
+    input_cost_per_token: NotRequired[ReadOnly[float]]
+    output_cost_per_token: NotRequired[ReadOnly[float]]
     metadata: NotRequired[ModelInfoMetadata]

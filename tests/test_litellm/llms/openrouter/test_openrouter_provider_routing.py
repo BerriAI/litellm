@@ -102,48 +102,43 @@ class TestOpenRouterNativeModelRouting:
 class TestOpenRouterLiveModelDiscovery:
     """get_valid_models(check_provider_endpoint=True) must hit the live catalog."""
 
-    def test_get_valid_models_uses_openrouter_catalog(self):
-        from unittest.mock import MagicMock, patch
+    def test_get_valid_models_uses_openrouter_catalog(self, respx_mock):
+        import httpx
 
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "data": [
-                {"id": "anthropic/claude-sonnet-4"},
-                {"id": "openai/gpt-5"},
-            ]
-        }
-
-        with patch("litellm.module_level_client.get", return_value=mock_response) as mock_get:
-            models = litellm.get_valid_models(
-                check_provider_endpoint=True,
-                custom_llm_provider="openrouter",
-                api_key="sk-or-test",
+        route = respx_mock.get("https://openrouter.ai/api/v1/models").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"id": "anthropic/claude-sonnet-4"},
+                        {"id": "openai/gpt-5"},
+                    ]
+                },
             )
+        )
 
-        assert models == ["anthropic/claude-sonnet-4", "openai/gpt-5"]
-        assert mock_get.call_args.kwargs["url"] == "https://openrouter.ai/api/v1/models"
-        assert mock_get.call_args.kwargs["headers"] == {"Authorization": "Bearer sk-or-test"}
+        models = litellm.get_valid_models(
+            check_provider_endpoint=True,
+            custom_llm_provider="openrouter",
+            api_key="sk-or-test",
+        )
 
-    def test_get_models_defaults_api_base_and_omits_auth_without_key(self):
-        from unittest.mock import MagicMock, patch
+        assert models == ["openrouter/anthropic/claude-sonnet-4", "openrouter/openai/gpt-5"]
+        assert route.calls[0].request.headers["authorization"] == "Bearer sk-or-test"
+
+    def test_get_models_defaults_api_base_and_omits_auth_without_key(self, respx_mock, monkeypatch):
+        import httpx
 
         from litellm.llms.openrouter.chat.transformation import OpenrouterConfig
 
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"data": [{"id": "m1"}]}
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setattr(litellm, "openrouter_key", None)
+        route = respx_mock.get("https://openrouter.ai/api/v1/models").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": "m1"}]})
+        )
 
-        with (
-            patch("litellm.module_level_client.get", return_value=mock_response) as mock_get,
-            patch.dict("os.environ", {}, clear=False),
-        ):
-            import os
+        models = OpenrouterConfig().get_models()
 
-            os.environ.pop("OPENROUTER_API_KEY", None)
-            os.environ.pop("OPENAI_API_KEY", None)
-            models = OpenrouterConfig().get_models()
-
-        assert models == ["m1"]
-        assert mock_get.call_args.kwargs["url"] == "https://openrouter.ai/api/v1/models"
-        assert mock_get.call_args.kwargs["headers"] == {}
+        assert models == ["openrouter/m1"]
+        assert "authorization" not in route.calls[0].request.headers

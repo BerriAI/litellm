@@ -23,7 +23,7 @@ from litellm.types.utils import ModelInfoBase
 CATALOG_TTL_SECONDS: Final = 300
 CatalogEntries: TypeAlias = Mapping[str, ModelInfoBase]
 
-_EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
+EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
 _EMPTY_SEQUENCE: Final[Sequence[object]] = ()
 
 _CATALOG_CACHE: Final[dict[str, tuple[float, CatalogEntries]]] = {}  # mutable-ok: process-wide TTL cache
@@ -59,7 +59,7 @@ def optional_bool(value: object) -> bool | None:
 
 
 def as_mapping(value: object) -> Mapping[str, object]:
-    return value if isinstance(value, Mapping) else _EMPTY_MAPPING
+    return value if isinstance(value, Mapping) else EMPTY_MAPPING
 
 
 def as_sequence(value: object) -> Sequence[object]:
@@ -148,4 +148,6 @@ def register_catalog_into_model_cost(prefix: str, catalog: CatalogEntries) -> No
     """
     import litellm
 
-    litellm.model_cost.update({f"{prefix}/{model_id}": entry for model_id, entry in catalog.items()})
+    litellm.model_cost.update(
+        MappingProxyType({f"{prefix}/{model_id}": entry for model_id, entry in catalog.items()})
+    )

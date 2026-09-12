@@ -8066,6 +8066,29 @@ def _first_token_limit(candidates: tuple[ModelInfo, ...], field: str) -> int | N
     )
 
 
+def _attach_resolved_costs(
+    listed: ModelInfoResponse,
+    input_cost: float | None,
+    output_cost: float | None,
+) -> ModelInfoResponse:
+    """Attach the per-token prices the listing resolved, omitting any it did not.
+
+    A price that could not be resolved must stay off the object: reporting zero
+    would tell a caller the model is free.
+    """
+    if input_cost is None and output_cost is None:
+        return listed
+    if input_cost is None:
+        return {**listed, "output_cost_per_token": output_cost}
+    if output_cost is None:
+        return {**listed, "input_cost_per_token": input_cost}
+    return {
+        **listed,
+        "input_cost_per_token": input_cost,
+        "output_cost_per_token": output_cost,
+    }
+
+
 def _first_cost(candidate_sets: tuple[tuple[ModelInfo, ...], ...], field: str) -> float | None:
     """The first per-token cost any deployment behind the listed name declares.
 
@@ -8124,13 +8147,6 @@ def create_model_info_response(
     """
     from litellm.proxy.auth.model_checks import get_all_fallbacks
 
-    base: Final[ModelInfoResponse] = {
-        "id": model_id,
-        "object": "model",
-        "created": DEFAULT_MODEL_CREATED_AT_TIME,
-        "owned_by": provider,
-    }
-
     listing_info: Final = llm_router.get_model_listing_info(model_id) if llm_router is not None else None
 
     # One entry per distinct model behind the listed name; (None,) when the router knows
@@ -8147,6 +8163,20 @@ def create_model_info_response(
             get_model_info=get_model_info,
         )
         for deployment_model in deployment_models
+    )
+
+    input_cost_per_token: Final = _first_cost(candidate_sets, "input_cost_per_token")
+    output_cost_per_token: Final = _first_cost(candidate_sets, "output_cost_per_token")
+
+    base: Final[ModelInfoResponse] = _attach_resolved_costs(
+        listed={
+            "id": model_id,
+            "object": "model",
+            "created": DEFAULT_MODEL_CREATED_AT_TIME,
+            "owned_by": provider,
+        },
+        input_cost=input_cost_per_token,
+        output_cost=output_cost_per_token,
     )
 
     max_input_tokens: int | None = _group_token_limit(candidate_sets, "max_input_tokens")
@@ -8181,13 +8211,6 @@ def create_model_info_response(
         base["max_input_tokens"] = max_input_tokens
     if max_output_tokens is not None:
         base["max_output_tokens"] = max_output_tokens
-
-    input_cost_per_token: Final = _first_cost(candidate_sets, "input_cost_per_token")
-    output_cost_per_token: Final = _first_cost(candidate_sets, "output_cost_per_token")
-    if input_cost_per_token is not None:
-        base["input_cost_per_token"] = input_cost_per_token
-    if output_cost_per_token is not None:
-        base["output_cost_per_token"] = output_cost_per_token
 
     if not include_metadata:
         return base

@@ -845,10 +845,10 @@ def _get_openai_compatible_provider_info(
             dynamic_api_key,
         ) = litellm.VercelAIGatewayConfig()._get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "merge_ai_gateway":
-        (
-            api_base,
-            dynamic_api_key,
-        ) = litellm.MergeAIGatewayConfig()._get_openai_compatible_provider_info(api_base, api_key)
+        # Resolved through the config's own env-var chain rather than its
+        # `_get_openai_compatible_provider_info`, which is protected.
+        api_base = litellm.MergeAIGatewayConfig.get_api_base(api_base)
+        dynamic_api_key = litellm.MergeAIGatewayConfig.get_api_key(api_key)
     elif custom_llm_provider == "aiml":
         (
             api_base,

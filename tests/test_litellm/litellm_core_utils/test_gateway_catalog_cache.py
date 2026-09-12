@@ -6,12 +6,16 @@ Fixtures mirror the real catalog shapes:
 - Vercel: GET https://ai-gateway.vercel.sh/v1/models
 - Merge: GET https://api-gateway.merge.dev/v1/models (native catalog,
   paginated via has_more/next_cursor)
+
+HTTP is faked with respx at the transport boundary, so the assertions read the
+requests the provider actually sends.
 """
 
 from types import MappingProxyType
-from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.litellm_core_utils import gateway_catalog_cache
@@ -23,6 +27,10 @@ from litellm.litellm_core_utils.gateway_catalog_cache import (
 from litellm.llms.merge_ai_gateway.chat.transformation import MergeAIGatewayConfig
 from litellm.llms.openrouter.chat.transformation import OpenrouterConfig
 from litellm.llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig
+
+OPENROUTER_URL = "https://openrouter.ai/api/v1/models"
+VERCEL_URL = "https://ai-gateway.vercel.sh/v1/models"
+MERGE_URL = "https://api-gateway.merge.dev/v1/models"
 
 OPENROUTER_ITEM = {
     "id": "anthropic/claude-sonnet-4",
@@ -96,12 +104,8 @@ MERGE_ITEM = {
 }
 
 
-def _mock_response(payload, status_code=200):
-    mock = MagicMock()
-    mock.status_code = status_code
-    mock.json.return_value = payload
-    mock.text = str(payload)
-    return mock
+def _catalog_page(items, has_more=False, next_cursor=None):
+    return {"object": "list", "data": items, "has_more": has_more, "next_cursor": next_cursor}
 
 
 @pytest.fixture(autouse=True)
@@ -123,15 +127,13 @@ class TestPrefixModelIds:
 
 
 class TestOpenRouterCatalog:
-    def test_normalizes_pricing_and_capabilities(self):
-        with patch(
-            "litellm.module_level_client.get",
-            return_value=_mock_response({"data": [OPENROUTER_ITEM, {"id": "~alias/model"}]}),
-        ) as mock_get:
-            catalog = OpenrouterConfig().get_models_with_info(api_key="sk-or")
+    def test_normalizes_pricing_and_capabilities(self, respx_mock):
+        route = respx_mock.get(OPENROUTER_URL).mock(
+            return_value=httpx.Response(200, json={"data": [OPENROUTER_ITEM, {"id": "~alias/model"}]})
+        )
 
-        assert mock_get.call_args.kwargs["url"] == "https://openrouter.ai/api/v1/models"
-        assert mock_get.call_args.kwargs["headers"] == {"Authorization": "Bearer sk-or"}
+        catalog = OpenrouterConfig().get_models_with_info(api_key="sk-or")
+
         assert list(catalog) == ["anthropic/claude-sonnet-4"]  # ~alias skipped
         entry = catalog["anthropic/claude-sonnet-4"]
         assert entry["key"] == "openrouter/anthropic/claude-sonnet-4"
@@ -144,12 +146,16 @@ class TestOpenRouterCatalog:
         assert entry["cache_read_input_token_cost"] == pytest.approx(3e-7)
         assert entry["supports_vision"] is True
         assert entry["supports_reasoning"] is True
+        assert route.calls[0].request.headers["authorization"] == "Bearer sk-or"
 
-    def test_get_models_namespaces_ids(self):
-        with patch("litellm.module_level_client.get", return_value=_mock_response({"data": [OPENROUTER_ITEM]})):
-            assert OpenrouterConfig().get_models() == ["openrouter/anthropic/claude-sonnet-4"]
+    def test_get_models_namespaces_ids(self, respx_mock):
+        respx_mock.get(OPENROUTER_URL).mock(
+            return_value=httpx.Response(200, json={"data": [OPENROUTER_ITEM]})
+        )
 
-    def test_survives_unexpected_field_types(self):
+        assert OpenrouterConfig().get_models() == ["openrouter/anthropic/claude-sonnet-4"]
+
+    def test_survives_unexpected_field_types(self, respx_mock):
         """Catalog payloads drift; a wrong type must not raise."""
         payload = {
             "data": [
@@ -163,8 +169,9 @@ class TestOpenRouterCatalog:
                 }
             ]
         }
-        with patch("litellm.module_level_client.get", return_value=_mock_response(payload)):
-            catalog = OpenrouterConfig().get_models_with_info()
+        respx_mock.get(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=payload))
+
+        catalog = OpenrouterConfig().get_models_with_info()
 
         entry = catalog["vendor/model"]
         assert entry["max_input_tokens"] is None
@@ -176,7 +183,7 @@ class TestOpenRouterCatalog:
 
 
 class TestVercelCatalog:
-    def test_normalizes_and_filters_types(self):
+    def test_normalizes_and_filters_types(self, respx_mock):
         payload = {
             "data": [
                 VERCEL_ITEM,
@@ -190,10 +197,11 @@ class TestVercelCatalog:
                 {"id": "openai/dall-e-3", "type": "image"},
             ]
         }
-        with patch("litellm.module_level_client.get", return_value=_mock_response(payload)) as mock_get:
-            catalog = VercelAIGatewayConfig().get_models_with_info()
+        route = respx_mock.get(VERCEL_URL).mock(return_value=httpx.Response(200, json=payload))
 
-        assert mock_get.call_args.kwargs["url"] == "https://ai-gateway.vercel.sh/v1/models"
+        catalog = VercelAIGatewayConfig().get_models_with_info()
+
+        assert route.called
         assert list(catalog) == ["anthropic/claude-sonnet-4", "alibaba/qwen3-embedding-0.6b"]
         chat = catalog["anthropic/claude-sonnet-4"]
         embed = catalog["alibaba/qwen3-embedding-0.6b"]
@@ -206,29 +214,26 @@ class TestVercelCatalog:
         assert embed["mode"] == "embedding"
         assert embed["max_output_tokens"] is None
 
-    def test_get_models_namespaces_ids(self):
-        with patch("litellm.module_level_client.get", return_value=_mock_response({"data": [VERCEL_ITEM]})):
-            assert VercelAIGatewayConfig().get_models() == [
-                "vercel_ai_gateway/anthropic/claude-sonnet-4"
-            ]
+    def test_get_models_namespaces_ids(self, respx_mock):
+        respx_mock.get(VERCEL_URL).mock(return_value=httpx.Response(200, json={"data": [VERCEL_ITEM]}))
+
+        assert VercelAIGatewayConfig().get_models() == [
+            "vercel_ai_gateway/anthropic/claude-sonnet-4"
+        ]
 
 
 class TestMergeCatalog:
-    def _pages(self, items, has_more=False, next_cursor=None):
-        return _mock_response(
-            {"object": "list", "data": items, "has_more": has_more, "next_cursor": next_cursor}
+    def test_selects_cheapest_available_vendor(self, respx_mock):
+        route = respx_mock.get(MERGE_URL).mock(
+            return_value=httpx.Response(200, json=_catalog_page([MERGE_ITEM]))
         )
 
-    def test_selects_cheapest_available_vendor(self):
-        with patch(
-            "litellm.module_level_client.get",
-            return_value=self._pages([MERGE_ITEM]),
-        ) as mock_get:
-            catalog = MergeAIGatewayConfig().get_models_with_info(api_key="sk-merge")
+        catalog = MergeAIGatewayConfig().get_models_with_info(api_key="sk-merge")
 
-        assert mock_get.call_args.kwargs["url"] == "https://api-gateway.merge.dev/v1/models"
-        assert mock_get.call_args.kwargs["params"] == {"limit": 500}
-        assert mock_get.call_args.kwargs["headers"] == {"Authorization": "Bearer sk-merge"}
+        request = route.calls[0].request
+        assert request.url.params["limit"] == "500"
+        assert "cursor" not in request.url.params
+        assert request.headers["authorization"] == "Bearer sk-merge"
         entry = catalog["anthropic/claude-opus-4-6"]
         assert entry["key"] == "merge_ai_gateway/anthropic/claude-opus-4-6"
         # anthropic vendor (5/25 per million) beats bedrock (15/75)
@@ -250,24 +255,33 @@ class TestMergeCatalog:
         )
         assert MergeAIGatewayConfig.get_catalog_root(None) == "https://api-gateway.merge.dev/v1"
 
-    def test_pagination_follows_next_cursor(self):
-        first = self._pages([MERGE_ITEM], has_more=True, next_cursor="cur2")
-        second = self._pages([{**MERGE_ITEM, "model": "openai/gpt-5"}])
-        with patch("litellm.module_level_client.get", side_effect=[first, second]) as mock_get:
-            catalog = MergeAIGatewayConfig().get_models_with_info(api_key="sk-merge")
+    def test_pagination_follows_next_cursor(self, respx_mock):
+        route = respx_mock.get(MERGE_URL).mock(
+            side_effect=[
+                httpx.Response(200, json=_catalog_page([MERGE_ITEM], has_more=True, next_cursor="cur2")),
+                httpx.Response(200, json=_catalog_page([{**MERGE_ITEM, "model": "openai/gpt-5"}])),
+            ]
+        )
 
-        assert mock_get.call_count == 2
-        assert mock_get.call_args_list[1].kwargs["params"] == {"limit": 500, "cursor": "cur2"}
+        catalog = MergeAIGatewayConfig().get_models_with_info(api_key="sk-merge")
+
+        assert len(route.calls) == 2
+        assert route.calls[1].request.url.params["cursor"] == "cur2"
         assert set(catalog) == {"anthropic/claude-opus-4-6", "openai/gpt-5"}
 
-    def test_stops_when_next_cursor_missing(self):
-        page = self._pages([MERGE_ITEM], has_more=True, next_cursor=None)
-        with patch("litellm.module_level_client.get", return_value=page) as mock_get:
-            MergeAIGatewayConfig().get_models_with_info(api_key="sk-merge")
+    def test_stops_when_next_cursor_missing(self, respx_mock):
+        route = respx_mock.get(MERGE_URL).mock(
+            return_value=httpx.Response(
+                200, json=_catalog_page([MERGE_ITEM], has_more=True, next_cursor=None)
+            )
+        )
 
-        assert mock_get.call_count == 1
+        catalog = MergeAIGatewayConfig().get_models_with_info(api_key="sk-merge")
 
-    def test_skips_unavailable_and_embedding_only(self):
+        assert list(catalog) == ["anthropic/claude-opus-4-6"]
+        assert len(route.calls) == 1
+
+    def test_skips_unavailable_and_embedding_only(self, respx_mock):
         unavailable = {
             **MERGE_ITEM,
             "model": "x/gone",
@@ -292,15 +306,15 @@ class TestMergeCatalog:
                 }
             },
         }
-        with patch(
-            "litellm.module_level_client.get",
-            return_value=self._pages([unavailable, embed_only, MERGE_ITEM]),
-        ):
-            catalog = MergeAIGatewayConfig().get_models_with_info(api_key="sk-merge")
+        respx_mock.get(MERGE_URL).mock(
+            return_value=httpx.Response(200, json=_catalog_page([unavailable, embed_only, MERGE_ITEM]))
+        )
+
+        catalog = MergeAIGatewayConfig().get_models_with_info(api_key="sk-merge")
 
         assert list(catalog) == ["anthropic/claude-opus-4-6"]
 
-    def test_pricing_fallback_to_openrouter_cost_map(self):
+    def test_pricing_fallback_to_openrouter_cost_map(self, respx_mock):
         no_pricing = {
             **MERGE_ITEM,
             "model": "anthropic/claude-3-haiku",
@@ -310,9 +324,11 @@ class TestMergeCatalog:
         }
         original = litellm.model_cost.get("openrouter/anthropic/claude-3-haiku")
         assert original is not None and original.get("input_cost_per_token") is not None
+        respx_mock.get(MERGE_URL).mock(
+            return_value=httpx.Response(200, json=_catalog_page([no_pricing]))
+        )
 
-        with patch("litellm.module_level_client.get", return_value=self._pages([no_pricing])):
-            catalog = MergeAIGatewayConfig().get_models_with_info(api_key="sk-merge")
+        catalog = MergeAIGatewayConfig().get_models_with_info(api_key="sk-merge")
 
         entry = catalog["anthropic/claude-3-haiku"]
         assert entry["input_cost_per_token"] == original["input_cost_per_token"]
@@ -320,48 +336,47 @@ class TestMergeCatalog:
 
 
 class TestCatalogCache:
-    def test_caches_within_ttl(self):
-        with patch(
-            "litellm.module_level_client.get",
-            return_value=_mock_response({"data": [OPENROUTER_ITEM]}),
-        ) as mock_get:
-            first = get_catalog("openrouter", "sk-or", None)
-            second = get_catalog("openrouter", "sk-or", None)
+    def test_caches_within_ttl(self, respx_mock):
+        route = respx_mock.get(OPENROUTER_URL).mock(
+            return_value=httpx.Response(200, json={"data": [OPENROUTER_ITEM]})
+        )
 
-        assert mock_get.call_count == 1
+        first = get_catalog("openrouter", "sk-or", None)
+        second = get_catalog("openrouter", "sk-or", None)
+
+        assert len(route.calls) == 1
         assert first is second
         assert "anthropic/claude-sonnet-4" in first
 
-    def test_cache_key_separates_api_base_and_key(self):
-        with patch(
-            "litellm.module_level_client.get",
-            return_value=_mock_response({"data": [OPENROUTER_ITEM]}),
-        ) as mock_get:
-            get_catalog("openrouter", "sk-or", None)
-            get_catalog("openrouter", "sk-or", "https://other.example.com/v1")
-            get_catalog("openrouter", "sk-other", None)
+    def test_cache_key_separates_api_base_and_key(self, respx_mock):
+        respx_mock.route().mock(return_value=httpx.Response(200, json={"data": [OPENROUTER_ITEM]}))
 
-        assert mock_get.call_count == 3
+        same_base = get_catalog("openrouter", "sk-or", None)
+        other_base = get_catalog("openrouter", "sk-or", "https://other.example.com/v1")
+        other_key = get_catalog("openrouter", "sk-other", None)
 
-    def test_ttl_expiry_refetches(self):
-        with patch(
-            "litellm.module_level_client.get",
-            return_value=_mock_response({"data": [OPENROUTER_ITEM]}),
-        ) as mock_get:
-            get_catalog("openrouter", "sk-or", None)
-            key = next(iter(gateway_catalog_cache._CATALOG_CACHE))
-            ts, value = gateway_catalog_cache._CATALOG_CACHE[key]
-            gateway_catalog_cache._CATALOG_CACHE[key] = (ts - 400, value)
-            get_catalog("openrouter", "sk-or", None)
+        assert len(gateway_catalog_cache._CATALOG_CACHE) == 3
+        assert (same_base is other_base) is False
+        assert (same_base is other_key) is False
 
-        assert mock_get.call_count == 2
+    def test_ttl_expiry_refetches(self, respx_mock):
+        route = respx_mock.get(OPENROUTER_URL).mock(
+            return_value=httpx.Response(200, json={"data": [OPENROUTER_ITEM]})
+        )
 
-    def test_failed_fetch_returns_none_and_caches_nothing(self):
-        with patch(
-            "litellm.module_level_client.get",
-            return_value=_mock_response({}, status_code=500),
-        ):
-            assert get_catalog("openrouter", "sk-or", None) is None
+        get_catalog("openrouter", "sk-or", None)
+        key = next(iter(gateway_catalog_cache._CATALOG_CACHE))
+        ts, value = gateway_catalog_cache._CATALOG_CACHE[key]
+        gateway_catalog_cache._CATALOG_CACHE[key] = (ts - 400, value)
+        refetched = get_catalog("openrouter", "sk-or", None)
+
+        assert len(route.calls) == 2
+        assert "anthropic/claude-sonnet-4" in refetched
+
+    def test_failed_fetch_returns_none_and_caches_nothing(self, respx_mock):
+        respx_mock.get(OPENROUTER_URL).mock(return_value=httpx.Response(500, text="boom"))
+
+        assert get_catalog("openrouter", "sk-or", None) is None
         assert gateway_catalog_cache._CATALOG_CACHE == {}
 
     def test_unknown_provider_returns_none(self):

@@ -759,12 +759,13 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         api_key = self.get_api_key(api_key)
 
         parsed_url: Final = httpx.URL(api_base)
-        if parsed_url.path and parsed_url.path != "/":
-            models_url: Final = f"{api_base.rstrip('/')}/models"
-        else:
-            models_url: Final = f"{api_base.rstrip('/')}/v1/models"
+        models_url: Final = (
+            f"{api_base.rstrip('/')}/models"
+            if parsed_url.path and parsed_url.path != "/"
+            else f"{api_base.rstrip('/')}/v1/models"
+        )
 
-        headers: Final = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        headers: Final = {"Authorization": f"Bearer {api_key}"} if api_key else {}  # mutable-ok: HTTPHandler.get takes a dict
         response: Final = litellm.module_level_client.get(
             url=models_url,
             headers=headers,
