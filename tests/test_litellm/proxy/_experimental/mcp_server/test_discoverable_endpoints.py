@@ -11186,3 +11186,99 @@ async def test_dcr_refusal_is_actionable_without_upstream_body(
     assert f"HTTP {upstream_status}" in str(exc.value.detail)
     assert "pre-registered OAuth client" in str(exc.value.detail)
     assert "private upstream details" not in str(exc.value.detail)
+
+
+@pytest.mark.parametrize("prefix", ["", "/tenant-a", "/tenant-b"])
+@pytest.mark.parametrize(
+    ("server_name", "pattern"),
+    [
+        ("issuer_test", "mcp/{server}"),
+        ("issuer_test", "{server}/mcp"),
+        ("issuer_test", "{server}"),
+        ("mcp", "mcp/{server}"),
+        ("mcp", "{server}/mcp"),
+    ],
+)
+def test_per_server_authorization_metadata_issuer_matches_discovery_path(
+    _no_proxy_base_url, _isolated_mcp_registry, prefix, server_name, pattern
+):
+    server = _create_oauth2_server(server_id=server_name, name=server_name, server_name=server_name, alias=server_name)
+    _isolated_mcp_registry[server.server_id] = server
+    client = _prefixed_discovery_client(["/tenant-a", "/tenant-b"])
+    path = pattern.format(server=server_name)
+    response = client.get(f"{prefix}/.well-known/oauth-authorization-server/{path}")
+    assert response.status_code == 200
+    metadata = response.json()
+    assert metadata["issuer"] == f"http://testserver{prefix}/{path}"
+    assert metadata["authorization_endpoint"] == f"http://testserver{prefix}/{server_name}/authorize"
+    assert metadata["token_endpoint"] == f"http://testserver{prefix}/{server_name}/token"
+    assert metadata["registration_endpoint"] == f"http://testserver{prefix}/{server_name}/register"
+
+
+@pytest.mark.parametrize("prefix", ["", "/tenant-a"])
+@pytest.mark.parametrize("relay", [False, True])
+@pytest.mark.parametrize("pattern", ["mcp/{server}", "{server}/mcp"])
+def test_named_resource_discovery_follows_matching_authorization_issuer(
+    _no_proxy_base_url, _isolated_mcp_registry, prefix, relay, pattern
+):
+    server = _create_oauth2_server().model_copy(update={"per_server_oauth_discovery": relay})
+    _isolated_mcp_registry[server.server_id] = server
+    client = _prefixed_discovery_client(["/tenant-a"])
+    path = pattern.format(server=server.server_name)
+    response = client.get(f"{prefix}/.well-known/oauth-protected-resource/{path}")
+    assert response.status_code == 200
+    resource = response.json()
+    issuer_path = server.server_name if relay else "mcp"
+    assert resource["resource"] == f"http://testserver{prefix}/{path}"
+    assert resource["authorization_servers"] == [f"http://testserver{prefix}/{issuer_path}"]
+    authorization = client.get(f"{prefix}/.well-known/oauth-authorization-server/{issuer_path}")
+    assert authorization.status_code == 200
+    assert authorization.json()["issuer"] == resource["authorization_servers"][0]
+
+
+def test_static_root_path_authorization_discovery_preserves_issuer(monkeypatch, tmp_path):
+    import subprocess
+    import sys
+
+    monkeypatch.setenv("SERVER_ROOT_PATH", "/gateway")
+    monkeypatch.setenv("PROXY_BASE_URL", "http://testserver/gateway")
+    monkeypatch.setenv("LITELLM_UI_PATH", str(tmp_path / "ui"))
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import json
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+from litellm.types.mcp import MCPAuth, MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+global_mcp_server_manager.registry['example'] = MCPServer(
+    server_id='example', name='example', server_name='example', alias='example',
+    transport=MCPTransport.http, auth_type=MCPAuth.oauth2,
+    authorization_url='https://idp.example.com/authorize', token_url='https://idp.example.com/token',
+)
+app = FastAPI(root_path='/gateway')
+app.include_router(router)
+with TestClient(app) as client:
+    responses = {
+        path: client.get('/.well-known/oauth-authorization-server/gateway/' + path)
+        for path in ('mcp/example', 'example/mcp', 'example', 'mcp')
+    }
+    print(json.dumps({path: {'status': response.status_code, 'body': response.json()}
+                      for path, response in responses.items()}))
+""",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+    responses = json.loads(result.stdout)
+    for path in ("mcp/example", "example/mcp", "example", "mcp"):
+        assert responses[path]["status"] == 200, responses[path]
+        assert responses[path]["body"]["issuer"] == f"http://testserver/gateway/{path}"
+    assert responses["example/mcp"]["body"]["token_endpoint"] == "http://testserver/gateway/example/token"
