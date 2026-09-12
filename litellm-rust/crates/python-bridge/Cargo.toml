@@ -35,6 +35,7 @@ tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
 criterion.workspace = true
+rstest.workspace = true
 tokio-tungstenite.workspace = true
 tracing.workspace = true
 
