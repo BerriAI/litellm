@@ -13,6 +13,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy.guardrails.guardrail_endpoints import get_guardrail_ui_settings, get_provider_specific_params
 from litellm.proxy.guardrails.guardrail_hooks.conduct import (
     DEFAULT_TIMEOUT_SECONDS,
     ConductGuardrail,
@@ -23,10 +24,13 @@ from litellm.proxy.guardrails.guardrail_hooks.conduct.conduct import (
     record_decision,
     request_payload,
 )
-from litellm.proxy.guardrails.guardrail_endpoints import get_guardrail_ui_settings
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.types.guardrails import Guardrail, GuardrailEventHooks, LitellmParams
 from litellm.types.llms.openai import ChatCompletionAssistantMessage
+from litellm.types.proxy.guardrails.guardrail_hooks.conduct import (
+    ConductGuardrailConfigModel,
+    ConductGuardrailConfigModelOptionalParams,
+)
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 PACKAGE_INSTALLED: Final = importlib.util.find_spec("conduct_litellm_guard") is not None
@@ -155,6 +159,36 @@ def test_defaults_when_optional_config_is_omitted() -> None:
     assert callback.timeout == DEFAULT_TIMEOUT_SECONDS
     assert callback.workspace_id is None
     assert callback.tool_name == "llm_call"
+
+
+def test_ui_form_defaults_match_what_the_initializer_forwards() -> None:
+    optional: Final = ConductGuardrailConfigModelOptionalParams()
+    model: Final = ConductGuardrailConfigModel(api_key="cond_agt_test")
+    callback: Final = _init(
+        _params(**{**model.model_dump(exclude={"api_key", "optional_params"}), **optional.model_dump()})
+    )
+
+    assert callback.api_url == model.api_base
+    assert callback.fail_mode == optional.unreachable_fallback
+    assert callback.timeout == optional.timeout
+    assert callback.workspace_id == optional.workspace_id
+    assert callback.tool_name == optional.tool_name
+
+
+@pytest.mark.asyncio
+async def test_ui_offers_conduct_fields_without_the_package() -> None:
+    assert ConductGuardrail.get_config_model() is ConductGuardrailConfigModel
+
+    fields: Final = (await get_provider_specific_params())["conduct"]
+
+    assert fields["ui_friendly_name"] == "Conduct Guard"
+    assert fields["api_key"]["required"] is True
+    assert fields["api_base"]["default_value"] == "https://api.conductai.ai"
+    optional: Final = fields["optional_params"]["fields"]
+    assert set(optional) == {"workspace_id", "tool_name", "timeout", "unreachable_fallback"}
+    assert optional["unreachable_fallback"]["type"] == "select"
+    assert optional["unreachable_fallback"]["options"] == ["fail_open", "fail_closed"]
+    assert optional["timeout"]["default_value"] == DEFAULT_TIMEOUT_SECONDS
 
 
 @pytest.mark.parametrize("mode", ["during_call", "post_call", "logging_only"])

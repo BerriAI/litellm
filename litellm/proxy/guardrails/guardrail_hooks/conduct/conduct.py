@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict
 
 from litellm.integrations.custom_guardrail import CustomGuardrail, log_guardrail_information
 from litellm.types.llms.openai import ChatCompletionUserMessage
+from litellm.types.proxy.guardrails.guardrail_hooks.conduct import ConductGuardrailConfigModel
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -104,9 +105,17 @@ except ImportError as import_error:
         def __init__(self, **kwargs: object) -> None:  # kwargs-ok: mirrors the plugin constructor, only raises
             raise ImportError(MISSING_PACKAGE_MESSAGE) from _import_error
 
+        @staticmethod
+        def get_config_model() -> type[ConductGuardrailConfigModel]:
+            return ConductGuardrailConfigModel
+
 else:
 
     class ConductGuardrail(ConductGuard):  # pyright: ignore[reportUntypedBaseClass]  # optional dep, absent at type-check
+        @staticmethod
+        def get_config_model() -> type[ConductGuardrailConfigModel]:
+            return ConductGuardrailConfigModel
+
         @log_guardrail_information
         async def apply_guardrail(
             self,

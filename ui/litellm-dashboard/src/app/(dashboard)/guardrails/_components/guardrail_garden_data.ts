@@ -474,6 +474,16 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     tags: ["Content Moderation", "Prompt Injection", "PII", "Policy"],
     providerKey: "Alice",
   },
+  {
+    id: "conduct",
+    name: "Conduct Guard",
+    description:
+      "Conduct Guard evaluates prompts against workspace rules before the model call: prompt injection, PII, and custom policies, with block, warning, and approval verdicts.",
+    category: "partner",
+    logo: guardrailLogoMap["Conduct Guard"],
+    tags: ["Security", "Prompt Injection", "PII", "Policy"],
+    providerKey: "Conduct",
+  },
 ];
 
 export const ALL_CARDS = [...LITELLM_CONTENT_FILTER_CARDS, ...PARTNER_GUARDRAIL_CARDS];
