@@ -147,6 +147,10 @@ class LoggingWorker:
             self._sem = None
             self._worker_task = None
             self._running_tasks.clear()
+            # The summary task is bound to the old loop; drop it and its pending burst so
+            # timeouts on the new loop arm a fresh summary instead of a stale, stuck one.
+            self._timeout_summary_task = None
+            self._timeout_burst_count = 0
             self._queue = new_queue
             self._bound_loop = current_loop
             return
@@ -167,14 +171,17 @@ class LoggingWorker:
         """Runs the logging task and handles cleanup. Releases semaphore when done."""
         try:
             if self._queue is not None:
+                # Run the coroutine in its original context
+                callback_task: Final = task["context"].run(asyncio.create_task, task["coroutine"])
                 try:
-                    # Run the coroutine in its original context
-                    await asyncio.wait_for(
-                        task["context"].run(asyncio.create_task, task["coroutine"]),
-                        timeout=self.timeout,
-                    )
-                except asyncio.TimeoutError:
-                    self._record_callback_timeout(task["coroutine"])
+                    await asyncio.wait_for(callback_task, timeout=self.timeout)
+                except asyncio.TimeoutError as e:
+                    # wait_for cancels the callback when our own deadline expires; a callback that
+                    # raised TimeoutError itself did not hit our deadline, so keep its traceback.
+                    if callback_task.cancelled():
+                        self._record_callback_timeout(task["coroutine"])
+                    else:
+                        verbose_logger.exception("LoggingWorker error: %s", e)
                 except Exception as e:
                     verbose_logger.exception("LoggingWorker error: %s", e)
                 finally:
@@ -197,6 +204,10 @@ class LoggingWorker:
     async def _flush_timeout_summary(self) -> None:
         """After the burst settles, log one bounded summary covering every timeout in it."""
         await asyncio.sleep(self.timeout_summary_window)
+        self._emit_timeout_summary()
+
+    def _emit_timeout_summary(self) -> None:
+        """Log one bounded summary for the current burst and reset the burst counter."""
         burst_count: Final = self._timeout_burst_count
         self._timeout_burst_count = 0
         if burst_count <= 0:
@@ -444,6 +455,13 @@ class LoggingWorker:
 
     async def stop(self) -> None:
         """Stop the logging worker and clean up resources."""
+        if self._timeout_summary_task is not None:
+            # Cancel the debounced sleeper and emit any pending burst now, so a summary
+            # armed just before shutdown is not lost when the loop tears down.
+            self._timeout_summary_task.cancel()
+            self._timeout_summary_task = None
+        self._emit_timeout_summary()
+
         if self._worker_task is None and not self._running_tasks:
             # No worker launched and no in-flight tasks to drain.
             return
