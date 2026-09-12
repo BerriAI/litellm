@@ -351,8 +351,9 @@ async def test_gateway_rounds_keep_separate_limiter_contexts_and_original_client
     )
     auth = UserAPIKeyAuth(token="a" * 64, user_id="owner", team_id="team", project_id="project", org_id="org")
     before = get_request_stash()
-    # test-quality-ok: inject only database, cache, and ASGI provider edges; the memory and limiter code runs unchanged.
-    with patch.multiple(proxy_server, app=provider, prisma_client=prisma_edge, user_api_key_cache=DualCache()):
+    with patch.multiple(  # test-quality-ok: Inject database/cache/ASGI provider edges; run real memory and limiter code.
+        proxy_server, app=provider, prisma_client=prisma_edge, user_api_key_cache=DualCache()
+    ):
         prepared = await prepare_gateway_memory(original, request, auth, "anthropic_messages")
     release.set()
     owners = await asyncio.gather(*deferred)
@@ -364,3 +365,42 @@ async def test_gateway_rounds_keep_separate_limiter_contexts_and_original_client
     assert prepared["tools"] == original["tools"] and prepared["tool_choice"] == original["tool_choice"]
     assert prepared["stream"] is True and prepared["max_tokens"] == 1
     assert "8347" in json.dumps(prepared) and "8347" not in json.dumps(original)
+
+
+@pytest.mark.asyncio
+async def test_backend_activation_invalidates_a_gateway_negative_hint_without_pubsub(prisma_edge: MagicMock) -> None:
+    from unittest.mock import patch
+
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.memory.policy import gateway_memory_is_configured, invalidate_memory_configuration
+
+    shared = {}
+
+    async def get(key, **kwargs):
+        return shared.get(key)
+
+    async def set_value(key, value, **kwargs):
+        shared[key] = value
+
+    async def delete(key, **kwargs):
+        shared.pop(key, None)
+
+    redis = MagicMock(
+        async_get_cache=AsyncMock(side_effect=get),
+        async_set_cache=AsyncMock(side_effect=set_value),
+        async_delete_cache=AsyncMock(side_effect=delete),
+    )
+    gateway_cache = DualCache(redis_cache=redis)
+    backend_cache = DualCache(redis_cache=redis)
+    policies = prisma_edge.db.litellm_memorypolicy.find_many
+    policies.return_value = []
+    assert not await gateway_memory_is_configured(prisma_edge, gateway_cache)
+    assert not await gateway_memory_is_configured(prisma_edge, gateway_cache)
+    policies.assert_awaited_once()
+    policies.return_value = [_POLICY]
+    with patch.multiple(  # test-quality-ok: Inject external worker caches and Redis; run real invalidation.
+        "litellm.proxy.proxy_server", user_api_key_cache=backend_cache, redis_usage_cache=None
+    ):
+        await invalidate_memory_configuration()
+    assert await gateway_memory_is_configured(prisma_edge, gateway_cache)
+    assert policies.await_count == 2

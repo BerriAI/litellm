@@ -83,6 +83,9 @@ correct, or delete entries in Memory; callers can use the self-service API.
 - Preparation stores durable facts supported by the conversation, then searches
   and reads relevant entries. Search is bounded keyword matching in Postgres.
   There is no vector database, extraction model, scheduler, or nightly process.
+- On gateway/backend deployments without shared Redis, first-time activation
+  can take up to 30 seconds to reach another process. Policy revocation is
+  checked against the primary database before memory operations.
 - Stored references are untrusted data. They cannot grant API permissions or
   change the namespace derived from authentication. Current user corrections
   take precedence. Replacements require the current revision.
