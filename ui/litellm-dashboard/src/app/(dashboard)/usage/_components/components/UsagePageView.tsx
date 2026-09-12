@@ -30,6 +30,7 @@ import { ActivityMetrics, processActivityData } from "@/components/activity_metr
 import CloudZeroExportModal from "@/components/cloudzero_export_modal";
 import UserDropdown from "@/components/common_components/UserDropdown";
 import EntityUsageExportModal from "@/components/EntityUsageExport";
+import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
 import { Team } from "@/components/key_team_helpers/key_list";
 import {
   gatewayDailyActivityCall,
@@ -886,7 +887,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   <ActivityMetrics modelMetrics={modelMetrics} />
                 </TabsContent>
                 <TabsContent value="keys" keepMounted>
-                  <ActivityMetrics modelMetrics={keyMetrics} />
+                  <KeyActivityPanel keyMetrics={keyMetrics} />
                 </TabsContent>
                 <TabsContent value="mcp" keepMounted>
                   <ActivityMetrics modelMetrics={mcpServerMetrics} />
