@@ -2484,6 +2484,8 @@ class TestResponsesWebSocketCredentials:
         ],
     )
     async def test_openai_websocket_authorization(self, monkeypatch, explicit_key, global_key, expected_key):
+        from asyncio import Future, get_running_loop
+        from typing import Final
         from unittest.mock import AsyncMock, patch
 
         import litellm
@@ -2493,11 +2495,11 @@ class TestResponsesWebSocketCredentials:
         monkeypatch.setattr(litellm, "openai_key", None)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.setenv("LITELLM_RUST", "false")
-        captured_headers = []
+        captured_authorization: Final[Future[str]] = get_running_loop().create_future()
 
         class FakeConnect:
             def __init__(self, url, **kwargs):
-                captured_headers.append(kwargs["additional_headers"])
+                captured_authorization.set_result(kwargs["additional_headers"]["Authorization"])
 
             async def __aenter__(self):
                 raise RuntimeError("stop at upstream handshake")
@@ -2505,7 +2507,7 @@ class TestResponsesWebSocketCredentials:
             async def __aexit__(self, *args):
                 pass
 
-        websocket = MagicMock()
+        websocket: Final = MagicMock()
         websocket.close = AsyncMock()
         with patch("websockets.connect", FakeConnect):
             await responses_main._aresponses_websocket.__wrapped__(
@@ -2516,8 +2518,8 @@ class TestResponsesWebSocketCredentials:
                 litellm_logging_obj=MagicMock(),
             )
 
-        assert len(captured_headers) == 1
-        assert captured_headers[0]["Authorization"] == f"Bearer {expected_key}"
+        assert captured_authorization.done()
+        assert captured_authorization.result() == f"Bearer {expected_key}"
 
 
 class TestNativeWebSocketUrlConstruction:
