@@ -6665,6 +6665,36 @@ class TestMCPServerManager:
         for_bob = manager.get_listed_tool(shared, "echo", bob)
         assert for_bob is not None and for_bob.description == "everyone"
 
+    def test_per_caller_listed_tools_evict_oldest_caller_and_keep_shared(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import _LISTED_TOOLS_CALLERS_PER_SERVER
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="srv",
+            name="srv",
+            transport=MCPTransport.http,
+            url="http://srv",
+            auth_type=MCPAuth.oauth2_token_exchange,
+        )
+        manager._create_prefixed_tools([MCPTool(name="read", description="shared", inputSchema={})], server)
+        callers = [UserAPIKeyAuth(user_id=f"u{i}", api_key=f"k{i}") for i in range(_LISTED_TOOLS_CALLERS_PER_SERVER + 1)]
+        for caller in callers:
+            manager._create_prefixed_tools(
+                [MCPTool(name="read", description=caller.user_id, inputSchema={})], server, user_api_key_auth=caller
+            )
+        manager._create_prefixed_tools(
+            [MCPTool(name="read", description="u1 again", inputSchema={})], server, user_api_key_auth=callers[1]
+        )
+
+        assert manager.get_listed_tool(server, "srv-read", callers[0]) is None
+        second = manager.get_listed_tool(server, "srv-read", callers[1])
+        assert second is not None and second.description == "u1 again"
+        newest = manager.get_listed_tool(server, "srv-read", callers[-1])
+        assert newest is not None and newest.description == callers[-1].user_id
+        assert len(manager._listed_tools_by_server_id[server.server_id]) == _LISTED_TOOLS_CALLERS_PER_SERVER + 1
+        shared = manager.get_listed_tool(server, "srv-read")
+        assert shared is not None and shared.description == "shared"
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("add_prefix", [True, False])
     async def test_openapi_listing_records_listed_tools(self, add_prefix):

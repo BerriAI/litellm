@@ -4149,7 +4149,7 @@ if MCP_AVAILABLE:
             if server and (
                 (server.auth_type == MCPAuth.oauth2_token_exchange and not oauth2_headers)
                 or (
-                    _get_mcp_servers_in_path(get_route_relative_request_path(scope)) == [server_name]
+                    tuple(_get_mcp_servers_in_path(get_route_relative_request_path(scope)) or ()) == (server_name,)
                     and not agent_365_subject_token_present(oauth2_headers)
                     and agent_365_authorization_servers(server, user_api_key_auth)
                 )

@@ -242,6 +242,9 @@ _user_env_vars_cache: Final[dict[tuple[str, str], tuple[dict[str, str], float]]]
 _USER_ENV_VARS_CACHE_TTL: Final = 60  # seconds
 _USER_ENV_VARS_CACHE_MAX_SIZE: Final = 4096  # cap to prevent unbounded growth
 
+_NO_LISTED_TOOLS: Final[Mapping[str | None, Mapping[str, MCPTool]]] = MappingProxyType({})
+_LISTED_TOOLS_CALLERS_PER_SERVER: Final = 256
+
 # Auth types whose upstream OAuth endpoints (protected-resource + authorization-server metadata) the
 # gateway discovers from the upstream itself: interactive oauth2 and the two client-forwarded modes.
 # OBO/M2M endpoint discovery is decided separately via _obo_needs_endpoint_discovery. Shared by the
@@ -4446,7 +4449,7 @@ class MCPServerManager:
                 # through _create_prefixed_tools — that would add the prefix a second
                 # time producing "test_petstore-test_petstore-getinventory".
                 unprefixed_tools: Final = [  # mutable-ok: returned through the list[MCPTool] listing contract
-                    t.model_copy(update={"name": t.name[len(registry_prefix) :]}) for t in tools
+                    t.model_copy(update=MappingProxyType({"name": t.name[len(registry_prefix) :]})) for t in tools
                 ]
                 self._record_listed_tools(server, unprefixed_tools, user_api_key_auth)
                 return tools if add_prefix else unprefixed_tools
@@ -4523,9 +4526,16 @@ class MCPServerManager:
     ) -> None:
         identity: Final = self._listed_tools_identity(server, user_api_key_auth)
         listing: Final = MappingProxyType({tool.name: tool for tool in tools})
-        self._listed_tools_by_server_id[server.server_id] = MappingProxyType(
-            {**self._listed_tools_by_server_id.get(server.server_id, {}), identity: listing}
+        existing: Final = self._listed_tools_by_server_id.get(server.server_id, _NO_LISTED_TOOLS)
+        shared: Final = existing.get(None)
+        callers: Final = tuple((key, value) for key, value in existing.items() if key not in (None, identity))
+        evicted: Final = 0 if identity is None else max(len(callers) + 1 - _LISTED_TOOLS_CALLERS_PER_SERVER, 0)
+        entries: Final = (
+            *(() if shared is None else ((None, shared),)),
+            *callers[evicted:],
+            (identity, listing),
         )
+        self._listed_tools_by_server_id[server.server_id] = MappingProxyType(dict(entries))
 
     def _discovery_key(
         self,
@@ -5396,7 +5406,7 @@ class MCPServerManager:
         self, server: MCPServer, name: str, user_api_key_auth: UserAPIKeyAuth | None = None
     ) -> MCPTool | None:
         identity: Final = self._listed_tools_identity(server, user_api_key_auth)
-        listed: Final = self._listed_tools_by_server_id.get(server.server_id, {}).get(identity)
+        listed: Final = self._listed_tools_by_server_id.get(server.server_id, _NO_LISTED_TOOLS).get(identity)
         if not listed:
             return None
         return listed.get(name) or listed.get(strip_known_server_prefix(name, server))
