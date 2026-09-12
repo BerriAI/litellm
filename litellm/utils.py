@@ -2850,6 +2850,12 @@ def supports_reasoning(model: str, custom_llm_provider: str | None = None) -> bo
     return _supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_reasoning")
 
 
+def supports_anthropic_thinking_payload(model: str, custom_llm_provider: str | None = None) -> bool:
+    return _supports_factory(
+        model=model, custom_llm_provider=custom_llm_provider, key="supports_anthropic_thinking_payload"
+    )
+
+
 def supports_none_reasoning_effort(model: str, custom_llm_provider: str | None = None) -> bool:
     """
     Check if the given model accepts reasoning effort "none" and return a boolean value.

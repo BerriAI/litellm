@@ -17623,6 +17623,7 @@
         "supports_mid_conversation_system": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": false,
@@ -17652,6 +17653,7 @@
         "supports_mid_conversation_system": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true,
@@ -17801,6 +17803,7 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -17828,6 +17831,7 @@
         "supports_mid_conversation_system": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -17855,6 +17859,7 @@
         "supports_mid_conversation_system": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -17979,6 +17984,7 @@
         "supports_mid_conversation_system": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true
