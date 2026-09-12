@@ -137,6 +137,27 @@ def test_anthropic_experimental_pass_through_messages_handler_dynamic_api_key_an
         assert mock_completion.call_args.kwargs["custom_key"] == "custom_value"
 
 
+@pytest.mark.parametrize(
+    "api_base, expected",
+    [
+        (None, True),
+        ("https://api.openai.com/v1", True),
+        ("http://localhost:8000/v1", False),
+        ("http://vllm-host:8000/v1", False),
+    ],
+)
+def test_should_route_to_responses_api_considers_api_base_for_openai(api_base, expected):
+    """Regression test for #40780. A self-hosted OpenAI-compatible backend declared as
+    ``openai/<model>`` with a custom api_base must not be routed to the OpenAI Responses API
+    (which reshapes images into ``input_image`` items the backend rejects); only real OpenAI
+    (api_base unset or api.openai.com) keeps the Responses API path."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        _should_route_to_responses_api,
+    )
+
+    assert _should_route_to_responses_api("openai", "openai/model", "model", api_base) is expected
+
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_sanitizes_empty_text_blocks_before_dispatch():
     """Regression test for #22930.  The unified /v1/messages path must

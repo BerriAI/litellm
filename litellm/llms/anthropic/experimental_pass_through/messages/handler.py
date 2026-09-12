@@ -68,10 +68,23 @@ def _responses_mode_is_lost_by_prefix_strip(
     )
 
 
+def _points_at_openai_backend(api_base: str | None) -> bool:
+    """Whether api_base is unset or targets api.openai.com rather than a self-hosted backend.
+
+    The ``openai/`` prefix is also how OpenAI-compatible servers (vLLM, llama.cpp, SGLang, ...)
+    are declared. Those set a custom api_base and do not implement the Responses API, so bridging
+    /v1/messages to it there breaks multimodal requests.
+    """
+    if not api_base:
+        return True
+    return "api.openai.com" in api_base
+
+
 def _should_route_to_responses_api(
     custom_llm_provider: str | None,
     requested_model: str | None = None,
     resolved_model: str | None = None,
+    api_base: str | None = None,
 ) -> bool:
     """Return True when the request should use the Responses API path.
 
@@ -81,7 +94,7 @@ def _should_route_to_responses_api(
     if litellm.use_chat_completions_url_for_anthropic_messages:
         return False
     if custom_llm_provider in _RESPONSES_API_PROVIDERS:
-        return True
+        return _points_at_openai_backend(api_base)
     if custom_llm_provider is None or requested_model is None or resolved_model is None:
         return False
     return _responses_mode_is_lost_by_prefix_strip(requested_model, resolved_model, custom_llm_provider)
@@ -578,7 +591,7 @@ def anthropic_messages_handler(
         )
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
-        if _should_route_to_responses_api(custom_llm_provider, original_model, model):
+        if _should_route_to_responses_api(custom_llm_provider, original_model, model, dynamic_api_base or api_base):
             return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
                 max_tokens=max_tokens,
                 messages=messages,
