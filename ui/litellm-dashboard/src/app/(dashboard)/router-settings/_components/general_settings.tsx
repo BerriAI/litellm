@@ -92,10 +92,7 @@ const SettingValueEditor: React.FC<{
   }
   if (setting.field_type === "Select") {
     return (
-      <Select
-        value={setting.field_value || null}
-        onValueChange={(newValue) => onChange(setting.field_name, newValue ?? "")}
-      >
+      <Select value={setting.field_value ?? null} onValueChange={(newValue) => onChange(setting.field_name, newValue)}>
         <SelectTrigger className="min-w-32">
           <SelectValue placeholder="Default" />
         </SelectTrigger>
@@ -161,8 +158,8 @@ export const PromptCachingPanel: React.FC<{
             </div>
             <Select
               disabled={!enabled}
-              value={ttlSetting.field_value || null}
-              onValueChange={(newValue) => persist(ANTHROPIC_PROMPT_CACHING_TTL, newValue ?? "")}
+              value={ttlSetting.field_value ?? null}
+              onValueChange={(newValue) => persist(ANTHROPIC_PROMPT_CACHING_TTL, newValue)}
             >
               <SelectTrigger className="min-w-40">
                 <SelectValue placeholder="5m (default)" />
@@ -209,9 +206,11 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
       return;
     }
 
-    let fieldValue = generalSettings.find((setting) => setting.field_name === fieldName)?.field_value;
+    const setting = generalSettings.find((setting) => setting.field_name === fieldName);
+    const fieldValue = setting?.field_value;
 
-    if (fieldValue == null || fieldValue == undefined) {
+    if (fieldValue == null) {
+      if (setting?.field_type === "Select") handleResetField(fieldName);
       return;
     }
     try {

@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, renderWithProviders, screen } from "../../../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import type { UserEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi, type Mock } from "vitest";
@@ -16,7 +16,7 @@ const buildTool = (schema: InputSchema | string): MCPTool => ({
 });
 
 const renderPanel = (schema: InputSchema | string) =>
-  render(
+  renderWithProviders(
     <ToolTestPanel
       tool={buildTool(schema)}
       onSubmit={vi.fn()}
@@ -84,10 +84,10 @@ describe("ToolTestPanel defaults", () => {
     expect(screen.getByLabelText("ratio")).toHaveValue(0.4);
     expect(screen.getByTitle("True")).toBeInTheDocument();
 
-    const keywordsTextarea = screen.getByTestId("textarea-keywords");
+    const keywordsTextarea = screen.getByTestId<HTMLTextAreaElement>("textarea-keywords");
     expect(JSON.parse(keywordsTextarea.value)).toEqual([""]);
 
-    const payloadTextarea = screen.getByTestId("textarea-payload");
+    const payloadTextarea = screen.getByTestId<HTMLTextAreaElement>("textarea-payload");
     expect(JSON.parse(payloadTextarea.value)).toEqual({
       user: {
         id: "",
@@ -131,7 +131,7 @@ describe("ToolTestPanel defaults", () => {
     renderPanel(schema);
 
     expect(screen.getByLabelText("query")).toBeInTheDocument();
-    const filtersTextarea = screen.getByTestId("textarea-filters");
+    const filtersTextarea = screen.getByTestId<HTMLTextAreaElement>("textarea-filters");
     expect(JSON.parse(filtersTextarea.value)).toEqual({
       tag: "",
       metadata: { source: "" },
@@ -164,7 +164,7 @@ describe("ToolTestPanel defaults", () => {
 describe("ToolTestPanel argument payload", () => {
   const submitPanel = async (schema: InputSchema | string, drive?: (user: UserEvent) => Promise<void>) => {
     const onSubmit = vi.fn();
-    render(
+    renderWithProviders(
       <ToolTestPanel
         tool={buildTool(schema)}
         onSubmit={onSubmit}
@@ -195,7 +195,7 @@ describe("ToolTestPanel argument payload", () => {
 
   it("sends what the user typed into the fallback input when the tool has no real schema", async () => {
     const onSubmit = vi.fn();
-    render(
+    renderWithProviders(
       <ToolTestPanel
         tool={buildTool("tool_input_schema")}
         onSubmit={onSubmit}
@@ -244,8 +244,8 @@ describe("ToolTestPanel argument payload", () => {
         properties: { payload: { type: "object" }, tags: { type: "array" } },
       },
       async (user) => {
-        await user.clear(screen.getByTestId("textarea-payload"));
-        await user.type(screen.getByTestId("textarea-payload"), '{{"a":1}');
+        await user.clear(screen.getByTestId<HTMLTextAreaElement>("textarea-payload"));
+        await user.type(screen.getByTestId<HTMLTextAreaElement>("textarea-payload"), '{{"a":1}');
         await user.clear(screen.getByTestId("textarea-tags"));
         await user.type(screen.getByTestId("textarea-tags"), '[["x","y"]');
       },
@@ -279,7 +279,7 @@ describe("ToolTestPanel argument payload", () => {
     const onSubmit = await submitPanel(
       { type: "object", properties: { mode: { type: "string", enum: ["fast", "thorough"] } } },
       async (user) => {
-        await user.selectOptions(screen.getByLabelText("mode"), "thorough");
+        await user.selectOptions(screen.getByLabelText("mode"), screen.getByRole("option", { name: "thorough" }));
       },
     );
 
@@ -317,8 +317,8 @@ describe("ToolTestPanel argument payload", () => {
     const onSubmit = await submitPanel(
       { type: "object", properties: { payload: { type: "object" } } },
       async (user) => {
-        await user.clear(screen.getByTestId("textarea-payload"));
-        await user.type(screen.getByTestId("textarea-payload"), "not json");
+        await user.clear(screen.getByTestId<HTMLTextAreaElement>("textarea-payload"));
+        await user.type(screen.getByTestId<HTMLTextAreaElement>("textarea-payload"), "not json");
       },
     );
 
@@ -360,7 +360,7 @@ describe("ToolTestPanel schema changes under a stable tool name", () => {
       properties: { query: { type: "string" }, limit: { type: "integer", default: 5 } },
     };
 
-    const { rerender } = render(renderWith(before, onSubmit));
+    const { rerender } = renderWithProviders(renderWith(before, onSubmit));
     const user = userEvent.setup();
     await user.type(screen.getByLabelText("message"), "stale value");
 
@@ -380,7 +380,7 @@ describe("ToolTestPanel schema changes under a stable tool name", () => {
     const onSubmit = vi.fn();
     const schema = (): InputSchema => ({ type: "object", properties: { message: { type: "string" } } });
 
-    const { rerender } = render(renderWith(schema(), onSubmit));
+    const { rerender } = renderWithProviders(renderWith(schema(), onSubmit));
     const user = userEvent.setup();
     await user.type(screen.getByLabelText("message"), "typed by hand");
 
@@ -404,7 +404,7 @@ describe("ToolTestPanel optional union-typed parameters", () => {
 
   const runPanel = async (drive: () => void) => {
     const onSubmit = vi.fn();
-    render(
+    renderWithProviders(
       <ToolTestPanel
         tool={buildTool(qaEchoSchema)}
         onSubmit={onSubmit}
@@ -437,7 +437,7 @@ describe("ToolTestPanel optional union-typed parameters", () => {
       },
     });
 
-    const payload = screen.getByTestId("textarea-payload");
+    const payload = screen.getByTestId<HTMLTextAreaElement>("textarea-payload");
     expect(payload).toHaveValue(JSON.stringify({ id: "" }, null, 2));
     expect(screen.getByPlaceholderText("Enter JSON object for payload")).toBe(payload);
     expect(screen.queryByPlaceholderText("Enter payload")).not.toBeInTheDocument();
@@ -470,4 +470,38 @@ describe("ToolTestPanel optional union-typed parameters", () => {
     expect(await screen.findByText("Invalid JSON")).toBeInTheDocument();
     expect(onSubmit).not.toHaveBeenCalled();
   });
+});
+
+it("should submit an empty enum choice while omitting unset choices and retaining false", async () => {
+  const user = userEvent.setup();
+  const onSubmit = vi.fn();
+  renderWithProviders(
+    <ToolTestPanel
+      tool={buildTool({
+        type: "object",
+        properties: {
+          mode: { type: "string", enum: ["", "fast"], default: "fast" },
+          active: { type: "boolean", default: true },
+        },
+      })}
+      onSubmit={onSubmit}
+      isLoading={false}
+      result={null}
+      error={null}
+      onClose={vi.fn()}
+    />,
+  );
+  await user.selectOptions(
+    screen.getByRole("combobox", { name: "mode" }),
+    screen.getByRole("option", { name: "Select mode" }),
+  );
+  await chooseSelectOption(user, screen.getByRole("combobox", { name: "active" }), "False");
+  await user.click(screen.getByRole("button", { name: "Call Tool" }));
+  expect(onSubmit).toHaveBeenLastCalledWith({ active: false });
+  await user.selectOptions(
+    screen.getByRole("combobox", { name: "mode" }),
+    screen.getByRole("option", { name: "Empty string" }),
+  );
+  await user.click(screen.getByRole("button", { name: "Call Tool" }));
+  expect(onSubmit).toHaveBeenLastCalledWith({ mode: "", active: false });
 });
