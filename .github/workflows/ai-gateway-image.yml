@@ -1,0 +1,73 @@
+name: ai-gateway image
+
+on:
+  push:
+    paths:
+      - "litellm-rust/**"
+      - "litellm/**"
+      - "enterprise/**"
+      - "litellm-proxy-extras/**"
+      - "pyproject.toml"
+      - "rust-toolchain.toml"
+      - ".github/workflows/ai-gateway-image.yml"
+  pull_request:
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_staging
+      - "litellm_**"
+    paths:
+      - "litellm-rust/**"
+      - "litellm/**"
+      - "enterprise/**"
+      - "litellm-proxy-extras/**"
+      - "pyproject.toml"
+      - "rust-toolchain.toml"
+      - ".github/workflows/ai-gateway-image.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ai-gateway-image:
+    name: ai-gateway release image
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - name: Build the release image
+        run: docker build -f litellm-rust/crates/ai-gateway/Dockerfile -t litellm-ai-gateway:${{ github.sha }} .
+      - name: Start the gateway and wait for readiness
+        env:
+          IMAGE: litellm-ai-gateway:${{ github.sha }}
+        run: |
+          docker run -d --name ai-gateway -p 4001:4001 \
+            -e LITELLM_MASTER_KEY=sk-ci-not-a-real-key \
+            -e OPENAI_API_KEY=sk-ci-not-a-real-key \
+            "$IMAGE"
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:4001/health/readiness; then
+              echo "gateway is serving readiness"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "gateway never became ready" >&2
+          docker logs ai-gateway >&2
+          exit 1
+      - name: Assert the gateway loaded the baked config
+        run: |
+          docker logs ai-gateway 2>&1 | tee gateway.log
+          grep 'via python config reader' gateway.log
+      - name: Stop the gateway
+        if: always()
+        run: docker rm -f ai-gateway || true

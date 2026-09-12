@@ -140,7 +140,7 @@ def _merge_over_saved(
 def _validated_params(settings: Mapping[str, object]) -> CoordinationRedisParams:
     """Validate settings the way startup does: resolve env refs, then require a connection target."""
     try:
-        params: Final = CoordinationRedisParams(**_resolve_env_refs(settings))
+        params: Final = CoordinationRedisParams.model_validate(_resolve_env_refs(settings))
     except ValidationError as e:
         invalid_fields: Final = sorted({str(error["loc"][0]) for error in e.errors() if error["loc"]})
         raise HTTPException(
@@ -243,11 +243,14 @@ async def _emit_coordination_redis_audit_log(
     litellm_changed_by: str | None,
 ) -> None:
     """Emit an audit-log row for a /coordination_redis/settings mutation."""
-    if litellm.store_audit_logs is not True:
-        return
-
-    from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
+    from litellm.proxy.management_helpers.audit_logs import (
+        create_audit_log_for_update,
+        is_audit_logging_enabled,
+    )
     from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
+    if not is_audit_logging_enabled():
+        return
 
     task: Final = asyncio.create_task(
         create_audit_log_for_update(

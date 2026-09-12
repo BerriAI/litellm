@@ -10,7 +10,6 @@ import {
   groupLabel,
   pctLabel,
   viewFor,
-  windowFor,
   type AutoRouterBenchmarkGroup,
   type AutoRouterBenchmarksResponse,
   type AutoRouterCacheStats,
@@ -38,6 +37,7 @@ const totals = (overrides: Partial<AutoRouterBenchmarkGroup> = {}) => ({
   avg_session_seconds: 7560,
   avg_tokens_per_session: 5_300_000,
   spend: 359.86,
+  classifier_cost: 6.146,
   saved_spend: 2174.59,
   baseline_spend: 2534.45,
   saved_pct: 85.8,
@@ -150,21 +150,6 @@ describe("expiredMissShare", () => {
       return_misses_expired: 0,
     };
     expect(expiredMissShare(cache(nothingMeasured))).toBeNull();
-  });
-});
-
-describe("windowFor", () => {
-  const noon = new Date("2026-08-05T12:00:00Z");
-
-  it("derives each picker range as UTC calendar days ending today", () => {
-    expect(windowFor("30d", noon)).toEqual({ start_date: "2026-07-06", end_date: "2026-08-05" });
-    expect(windowFor("7d", noon)).toEqual({ start_date: "2026-07-29", end_date: "2026-08-05" });
-    expect(windowFor("24h", noon)).toEqual({ start_date: "2026-08-04", end_date: "2026-08-05" });
-  });
-
-  it("uses UTC days, not the local calendar", () => {
-    const lateEvening = new Date("2026-08-05T23:30:00-05:00");
-    expect(windowFor("24h", lateEvening)).toEqual({ start_date: "2026-08-05", end_date: "2026-08-06" });
   });
 });
 

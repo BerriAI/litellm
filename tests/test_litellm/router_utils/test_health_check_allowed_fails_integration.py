@@ -179,7 +179,7 @@ class TestHealthCheckCooldownIntegration:
         assert result is False
 
         # Check counter was incremented
-        current_fails = router.failed_calls.get_cache(key="deploy-1")
+        current_fails = router.cache.get_cache(key="deployment:deploy-1:allowed_fails")
         assert current_fails == 1
 
     def test_health_check_failure_triggers_cooldown_at_threshold(self):
@@ -263,7 +263,7 @@ class TestHealthCheckCooldownIntegration:
         assert "exception" not in healthy_endpoint
 
         # Verify failed_calls counter is untouched
-        current_fails = router.failed_calls.get_cache(key="deploy-1")
+        current_fails = router.cache.get_cache(key="deployment:deploy-1:allowed_fails")
         assert current_fails is None
 
     def test_disable_cooldowns_prevents_health_check_cooldown(self):
@@ -501,6 +501,68 @@ class TestHealthCheckFilterBypassWithPolicy:
             deployments
         )
         assert len(result) == 2
+
+    def _make_scoped_router_with_unhealthy(self, policy) -> Router:
+        import time
+
+        from litellm.caching.caching import DualCache
+        from litellm.router_utils.health_state_cache import DeploymentHealthCache
+
+        router = Router(
+            model_list=[
+                _make_model("bad-listed"),
+                _make_model("ok-listed"),
+                _make_model("bad-unlisted", "gpt-5"),
+            ],
+            allowed_fails_policy=policy,
+            enable_health_check_routing=True,
+            background_health_check_model_groups=["gpt-4"],
+        )
+        cache = DualCache()
+        health_cache = DeploymentHealthCache(cache=cache, staleness_threshold=60.0)
+        health_cache.set_deployment_health_states(
+            {
+                model_id: {
+                    "is_healthy": False,
+                    "timestamp": time.time(),
+                    "reason": "test",
+                }
+                for model_id in ("bad-listed", "bad-unlisted")
+            }
+        )
+        router.health_state_cache = health_cache
+        return router
+
+    def test_filter_with_policy_still_applies_to_listed_groups(self):
+        """A model-group allowlist keeps the filter active for listed groups even with a policy set."""
+        router = self._make_scoped_router_with_unhealthy(
+            AllowedFailsPolicy(AuthenticationErrorAllowedFails=3)
+        )
+        deployments = [
+            _make_model("bad-listed"),
+            _make_model("ok-listed"),
+            _make_model("bad-unlisted", "gpt-5"),
+        ]
+
+        result = router._filter_health_check_unhealthy_deployments(deployments)
+        assert [d["model_info"]["id"] for d in result] == ["ok-listed", "bad-unlisted"]
+
+    @pytest.mark.asyncio
+    async def test_async_filter_with_policy_still_applies_to_listed_groups(self):
+        """Async version: listed groups stay filtered with a policy set, unlisted stay untouched."""
+        router = self._make_scoped_router_with_unhealthy(
+            AllowedFailsPolicy(TimeoutErrorAllowedFails=2)
+        )
+        deployments = [
+            _make_model("bad-listed"),
+            _make_model("ok-listed"),
+            _make_model("bad-unlisted", "gpt-5"),
+        ]
+
+        result = await router._async_filter_health_check_unhealthy_deployments(
+            deployments
+        )
+        assert [d["model_info"]["id"] for d in result] == ["ok-listed", "bad-unlisted"]
 
 
 class TestAllDeploymentsInCooldownSafetyNet:

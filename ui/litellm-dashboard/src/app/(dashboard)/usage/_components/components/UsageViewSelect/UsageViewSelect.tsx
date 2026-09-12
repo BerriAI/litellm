@@ -19,6 +19,7 @@ export interface UsageViewSelectProps {
   onChange: (value: UsageOption) => void;
   userRole: string | null;
   canViewTagUsage?: boolean;
+  isOrgAdmin?: boolean;
   title?: string;
   description?: string;
   "data-id"?: string;
@@ -108,6 +109,7 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   onChange,
   userRole,
   canViewTagUsage = false,
+  isOrgAdmin = false,
   title = "Usage View",
   description = "Select the usage data you want to view",
   "data-id": dataId,
@@ -116,7 +118,7 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   const getFilteredOptions = () => {
     return OPTIONS.filter((option) => {
       if (option.capability) {
-        return hasCapability(userRole, option.capability);
+        return hasCapability(userRole, option.capability, isOrgAdmin);
       }
       if (option.value === "tag" && canViewTagUsage) {
         return true;
@@ -153,8 +155,8 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
             <BarChart3 className="size-8" />
           </div>
           <div className="flex-1 min-w-0">
-            <h3 className="text-sm font-semibold text-gray-900 mb-0.5 leading-tight">{title}</h3>
-            <p className="text-xs text-gray-600 leading-tight">{description}</p>
+            <h3 className="text-sm font-semibold text-foreground mb-0.5 leading-tight">{title}</h3>
+            <p className="text-xs text-muted-foreground leading-tight">{description}</p>
           </div>
         </div>
         <div className="shrink-0">
@@ -180,8 +182,8 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
                   <span className="flex items-center gap-2 py-1">
                     <span className="shrink-0 mt-0.5">{option.icon}</span>
                     <span className="flex-1 min-w-0">
-                      <span className="block text-sm font-medium text-gray-900">{option.label}</span>
-                      <span className="block text-xs text-gray-600 mt-0.5">{option.description}</span>
+                      <span className="block text-sm font-medium text-foreground">{option.label}</span>
+                      <span className="block text-xs text-muted-foreground mt-0.5">{option.description}</span>
                     </span>
                     {option.badgeText && <Badge>{option.badgeText}</Badge>}
                   </span>

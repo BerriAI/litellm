@@ -8,8 +8,15 @@ litellm-regression-tests/tests/test_inference_endpoints.py.
 
 from __future__ import annotations
 
+from typing import Final
+
 import pytest
-from e2e_config import unique_marker
+from e2e_config import (
+    STREAM_MIN_LEAD_SECONDS,
+    provider_edge_base,
+    provider_paces_stream,
+    unique_marker,
+)
 from e2e_http import assert_client_error, require_successful_call, unwrap
 from endpoints_client import EndpointsClient, MessagesResult
 from lifecycle import ResourceManager
@@ -24,13 +31,32 @@ from models import (
 )
 from pydantic import BaseModel
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.replayable]
 
 
 class _OptionalMessagesBody(BaseModel):
     model: str | None = None
     messages: list[ChatMessage] | None = None
     max_tokens: int | None = None
+
+
+class _MessagesEventDelta(BaseModel):
+    text: str = ""
+
+
+class _MessagesEventUsage(BaseModel):
+    output_tokens: int | None = None
+
+
+class _MessagesStreamEvent(BaseModel):
+    """One Anthropic SSE event, keeping only what the stream's shape is asserted on.
+
+    ``delta.text`` is populated on ``content_block_delta`` and absent on the
+    ``message_delta`` that closes the turn, which is the event carrying ``usage``."""
+
+    type: str
+    delta: _MessagesEventDelta | None = None
+    usage: _MessagesEventUsage | None = None
 
 
 ANTHROPIC_BACKEND = "anthropic/claude-haiku-4-5"
@@ -50,16 +76,27 @@ def _approx_equal(actual: float, expected: float) -> bool:
     return abs(actual - expected) <= max(1e-9, abs(expected) * 1e-2)
 
 
+def _anthropic_params() -> LiteLLMParamsBody:
+    """The Anthropic deployment, wired through the record/replay edge when a fixture
+    mode is active (LIT-5974). The mount base carries no ``/v1``: litellm's Anthropic
+    handler appends ``/v1/messages`` to ``api_base`` itself, where the OpenAI handler
+    appends only ``/chat/completions``."""
+    base = provider_edge_base("anthropic")
+    return LiteLLMParamsBody(
+        model=ANTHROPIC_BACKEND, api_key="os.environ/ANTHROPIC_API_KEY", api_base=base
+    )
+
+
 class TestAnthropicMessages:
     def _register(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
+        self,
+        endpoints_client: EndpointsClient,
+        resources: ResourceManager,
+        params: LiteLLMParamsBody | None = None,
     ) -> tuple[str, str]:
         model = f"e2e-messages-{unique_marker()}"
         model_id = endpoints_client.create_model(
-            model,
-            LiteLLMParamsBody(
-                model=ANTHROPIC_BACKEND, api_key="os.environ/ANTHROPIC_API_KEY"
-            ),
+            model, _anthropic_params() if params is None else params
         )
         resources.defer(lambda: endpoints_client.delete_model(model_id))
         return model, resources.key()
@@ -81,12 +118,7 @@ class TestAnthropicMessages:
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
         model = f"e2e-messages-cost-{unique_marker()}"
-        model_id = endpoints_client.create_model(
-            model,
-            LiteLLMParamsBody(
-                model=ANTHROPIC_BACKEND, api_key="os.environ/ANTHROPIC_API_KEY"
-            ),
-        )
+        model_id = endpoints_client.create_model(model, _anthropic_params())
         resources.defer(lambda: endpoints_client.delete_model(model_id))
         key = resources.key()
 
@@ -131,27 +163,66 @@ class TestAnthropicMessages:
     def test_messages_streams_completion(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
+        """Edge-wired like its non-streaming siblings, so record and replay both
+        carry the streamed response.
+
+        Asserts what the proxy controls: the event grammar (usage between the last
+        content delta and ``message_stop``) and, on the clock, that the relay is
+        incremental. How many deltas a reply is split into is the provider's choice, so
+        the first content delta must instead reach the client well before
+        ``message_stop``, which a buffered response cannot do. Replay serves chunks back
+        to back, so only live and record runs judge the timing."""
         model, key = self._register(endpoints_client, resources)
 
         result = endpoints_client.proxy.messages_stream(
             key,
             AnthropicMessagesBody(
                 model=model,
-                max_tokens=64,
+                max_tokens=800,
                 stream=True,
-                messages=[ChatMessage(role="user", content="Count from one to three.")],
+                messages=[ChatMessage(role="user", content="Count from 1 to 200, one number per line.")],
             ),
         )
         require_successful_call(result)
         assert result.is_streaming, f"response was not streamed: {result.headers}"
         assert not result.stream_error, f"stream errored: {result.stream_error}"
         assert result.stream_events, "stream produced no SSE events"
-        assert any("content_block_delta" in event for event in result.stream_events), (
-            "stream carried no content deltas"
+
+        events = [
+            _MessagesStreamEvent.model_validate_json(event) for event in result.stream_events
+        ]
+        types = [event.type for event in events]
+        delta_positions = [
+            index for index, event in enumerate(events) if event.type == "content_block_delta"
+        ]
+        assert delta_positions, f"stream carried no content deltas: {types}"
+        text = "".join(
+            event.delta.text
+            for event in events
+            if event.type == "content_block_delta" and event.delta is not None
         )
-        assert any("message_stop" in event for event in result.stream_events), (
-            "stream never reached message_stop"
+        assert text.strip(), f"content deltas assembled to no text: {result.stream_events[:5]}"
+
+        usage_positions = [
+            index
+            for index, event in enumerate(events)
+            if event.type == "message_delta" and event.usage is not None
+        ]
+        assert usage_positions, f"stream never reported usage: {types}"
+        assert "message_stop" in types, f"stream never reached message_stop: {types}"
+        stop_position = types.index("message_stop")
+        assert delta_positions[-1] < usage_positions[0] < stop_position, (
+            f"usage did not land between the last content delta and message_stop: {types}"
         )
+
+        first_delta_at: Final = result.stream_event_arrivals[delta_positions[0]]
+        stop_at: Final = result.stream_event_arrivals[stop_position]
+        if provider_paces_stream():
+            assert stop_at - first_delta_at >= STREAM_MIN_LEAD_SECONDS, (
+                f"first content delta reached the client {first_delta_at:.2f}s after the request "
+                f"and message_stop {stop_at:.2f}s after it; a relayed stream shows the first delta "
+                f"at least {STREAM_MIN_LEAD_SECONDS}s before the end, so the response was buffered"
+            )
 
     @pytest.mark.covers("llm.messages.anthropic.tool_use.nonstream.works")
     def test_messages_tool_use(

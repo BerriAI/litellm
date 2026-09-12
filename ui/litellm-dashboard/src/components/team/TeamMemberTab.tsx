@@ -1,6 +1,6 @@
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { Tooltip } from "@/components/atoms/Tooltip";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import MemberTable from "@/components/common_components/MemberTable";
 import { Member } from "@/components/networking";
 import { DateCell, MoneyCell } from "@/components/shared/table_cells";
@@ -71,8 +71,8 @@ export default function TeamMemberTab({
     const rpmLimit = membership?.litellm_budget_table?.rpm_limit;
     const tpmLimit = membership?.litellm_budget_table?.tpm_limit;
 
-    const rpmText = rpmLimit ? `${formatNumber(rpmLimit)} RPM` : null;
-    const tpmText = tpmLimit ? `${formatNumber(tpmLimit)} TPM` : null;
+    const rpmText = rpmLimit != null ? `${formatNumber(rpmLimit)} RPM` : null;
+    const tpmText = tpmLimit != null ? `${formatNumber(tpmLimit)} TPM` : null;
 
     const limits = [rpmText, tpmText].filter(Boolean);
     return limits.length > 0 ? limits.join(" / ") : "No Limits";
@@ -102,13 +102,13 @@ export default function TeamMemberTab({
       title: (
         <span className="flex items-center gap-1">
           Model Scope
-          <Tooltip content="Models this member can access. Empty means they inherit all team models.">
+          <SimpleTooltip content="Models this member can access. Empty means they inherit all team models.">
             <CircleHelp className="size-4" aria-label="Model scope information" />
-          </Tooltip>
+          </SimpleTooltip>
         </span>
       ),
       key: "model_scope",
-      render: (_: unknown, record: Member) => {
+      render: (record: Member) => {
         const models = getUserAllowedModels(record.user_id);
         if (!models) {
           return <span className="text-muted-foreground">(all team models)</span>;
@@ -123,9 +123,9 @@ export default function TeamMemberTab({
               </code>
             ))}
             {remaining > 0 && (
-              <Tooltip content={models.slice(2).join(", ")}>
+              <SimpleTooltip content={models.slice(2).join(", ")}>
                 <span className="text-muted-foreground">+{remaining} more</span>
-              </Tooltip>
+              </SimpleTooltip>
             )}
           </div>
         );
@@ -135,65 +135,68 @@ export default function TeamMemberTab({
       title: (
         <span className="flex items-center gap-1">
           Current Cycle Spend (USD)
-          <Tooltip content="Spend for the current budget cycle. Resets to $0 when the member's budget window rolls over. This is the value checked against the member's budget.">
+          <SimpleTooltip content="Spend for the current budget cycle. Resets to $0 when the member's budget window rolls over. This is the value checked against the member's budget.">
             <CircleHelp className="size-4" aria-label="Current cycle spend information" />
-          </Tooltip>
+          </SimpleTooltip>
         </span>
       ),
       key: "spend",
-      render: (_: unknown, record: Member) => (
-        <MoneyCell value={getUserCurrentCycleSpend(record.user_id)} decimals={2} />
-      ),
+      sortValue: (record: Member) => getUserCurrentCycleSpend(record.user_id),
+      render: (record: Member) => <MoneyCell value={getUserCurrentCycleSpend(record.user_id)} decimals={2} />,
     },
     {
       title: (
         <span className="flex items-center gap-1">
           Total Spend (USD)
-          <Tooltip content="Cumulative spend by this member within this team, across all budget cycles. Tracking began 2026-04-21; spend from before that date is not included.">
+          <SimpleTooltip content="Cumulative spend by this member within this team, across all budget cycles. Tracking began 2026-04-21; spend from before that date is not included.">
             <CircleHelp className="size-4" aria-label="Total spend information" />
-          </Tooltip>
+          </SimpleTooltip>
         </span>
       ),
       key: "total_spend",
-      render: (_: unknown, record: Member) => <MoneyCell value={getUserTotalSpend(record.user_id)} decimals={2} />,
+      sortValue: (record: Member) => getUserTotalSpend(record.user_id),
+      render: (record: Member) => <MoneyCell value={getUserTotalSpend(record.user_id)} decimals={2} />,
     },
     {
       title: "Team Member Budget (USD)",
       key: "budget",
-      render: (_: unknown, record: Member) => (
+      sortValue: (record: Member) => getUserBudget(record.user_id),
+      render: (record: Member) => (
         <MoneyCell value={getUserBudget(record.user_id)} decimals={2} emptyText="Unlimited" showZero />
       ),
     },
     {
       title: "Budget Reset",
       key: "budget_reset",
-      render: (_: unknown, record: Member) => <DateCell value={getUserBudgetReset(record.user_id)} precision="date" />,
+      sortValue: (record: Member) => getUserBudgetReset(record.user_id),
+      render: (record: Member) => <DateCell value={getUserBudgetReset(record.user_id)} precision="date" />,
     },
     {
       title: (
         <span className="flex items-center gap-1">
           Team Member Rate Limits
-          <Tooltip content="Rate limits for this member's usage within this team.">
+          <SimpleTooltip content="Rate limits for this member's usage within this team.">
             <CircleHelp className="size-4" aria-label="Team member rate limits information" />
-          </Tooltip>
+          </SimpleTooltip>
         </span>
       ),
       key: "rate_limits",
-      render: (_: unknown, record: Member) => <span>{getUserRateLimits(record.user_id)}</span>,
+      render: (record: Member) => <span>{getUserRateLimits(record.user_id)}</span>,
     },
   ];
 
   return (
     <MemberTable
+      key={teamData.team_id}
       members={teamData.team_info.members_with_roles}
       canEdit={canEditTeam}
       onEdit={(record) => {
         const membership = teamData.team_memberships.find((tm) => tm.user_id === record.user_id);
         const enhancedMember = {
           ...record,
-          max_budget_in_team: membership?.litellm_budget_table?.max_budget || null,
-          tpm_limit: membership?.litellm_budget_table?.tpm_limit || null,
-          rpm_limit: membership?.litellm_budget_table?.rpm_limit || null,
+          max_budget_in_team: membership?.litellm_budget_table?.max_budget ?? null,
+          tpm_limit: membership?.litellm_budget_table?.tpm_limit ?? null,
+          rpm_limit: membership?.litellm_budget_table?.rpm_limit ?? null,
           budget_duration: membership?.litellm_budget_table?.budget_duration || null,
           allowed_models: membership?.litellm_budget_table?.allowed_models || [],
         };

@@ -1,4 +1,11 @@
-from typing import Annotated, Any, Final
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import (
+    Annotated,
+    Any,  # noqa: TID251  # jsonify_object in proxy/utils.py is annotated with a bare dict
+    Final,
+    cast,  # noqa: TID251  # jsonify_object in proxy/utils.py is annotated with a bare dict
+)
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
@@ -9,9 +16,6 @@ from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import jsonify_object
-from litellm.proxy.vector_store_endpoints.management_endpoints import (
-    _resolve_embedding_config,
-)
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_proxy_admin_for_vector_store_index_management,
     assert_user_can_access_vector_store,
@@ -22,9 +26,46 @@ from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
 from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
 
 router: Final = APIRouter()
+
+BLOCKED_QUERY_EMBEDDING_SELECTION_PARAMS: Final = frozenset(
+    {
+        "embedding_model",
+        "litellm_embedding_model",
+        "litellm_embedding_config",
+        "litellm_credential_name",
+    }
+)
+
+
+def reject_caller_embedding_selection_params(payload: Mapping[str, object], source: str) -> None:
+    blocked: Final = sorted(BLOCKED_QUERY_EMBEDDING_SELECTION_PARAMS & payload.keys())
+    if blocked:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"'{blocked[0]}' cannot be set in {source}. "
+                "Embedding configuration comes from the vector store's server-side registration."
+            },
+        )
+
+
 ########################################################
 # OpenAI Compatible Endpoints
 ########################################################
+
+
+def build_request_data_from_managed_vector_store(
+    vector_store: LiteLLM_ManagedVectorStore,
+) -> Mapping[str, object]:
+    top_level: Final = MappingProxyType(
+        {
+            key: vector_store.get(key)
+            for key in ("custom_llm_provider", "litellm_credential_name")
+            if key in vector_store
+        }
+    )
+    litellm_params: Final = vector_store.get("litellm_params") or MappingProxyType({})
+    return MappingProxyType({**top_level, **litellm_params})
 
 
 async def _update_request_data_with_litellm_managed_vector_store_registry(
@@ -46,47 +87,14 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
     vector_store_to_run: Final[LiteLLM_ManagedVectorStore | None] = await get_litellm_managed_vector_store(
         vector_store_id=vector_store_id
     )
-    if vector_store_to_run is not None:
-        if user_api_key_dict is not None:
-            await assert_user_can_access_vector_store(
-                vector_store=vector_store_to_run,
-                user_api_key_dict=user_api_key_dict,
-            )
-
-        if "custom_llm_provider" in vector_store_to_run:
-            data["custom_llm_provider"] = vector_store_to_run.get("custom_llm_provider")
-
-        if "litellm_credential_name" in vector_store_to_run:
-            data["litellm_credential_name"] = vector_store_to_run.get("litellm_credential_name")
-
-        if "litellm_params" in vector_store_to_run:
-            litellm_params = vector_store_to_run.get("litellm_params", {}) or {}
-            # Resolve ``litellm_embedding_config`` here, at request-handling
-            # time, instead of at row-creation time. The resolved
-            # ``api_key`` / ``api_base`` / ``api_version`` lives only in
-            # this per-request ``data`` dict and is never persisted.
-            # Legacy rows that already carry a resolved (cleartext)
-            # ``litellm_embedding_config`` skip the lookup and pass through
-            # unchanged so the embed call keeps working.
-            embedding_model: Final = litellm_params.get("litellm_embedding_model")
-            if embedding_model and not litellm_params.get("litellm_embedding_config"):
-                from litellm.proxy.proxy_server import prisma_client
-
-                resolved_config: Final = await _resolve_embedding_config(
-                    embedding_model=embedding_model, prisma_client=prisma_client
-                )
-                if resolved_config:
-                    # Build a fresh dict via spread instead of mutating
-                    # ``litellm_params`` in place — the registry hands back
-                    # a reference to its cached object, so an in-place
-                    # update would persist the resolved cleartext into the
-                    # in-memory cache for the lifetime of the process.
-                    litellm_params = {
-                        **litellm_params,
-                        "litellm_embedding_config": resolved_config,
-                    }
-            data.update(litellm_params)
-    return data
+    if vector_store_to_run is None:
+        return data
+    if user_api_key_dict is not None:
+        await assert_user_can_access_vector_store(
+            vector_store=vector_store_to_run,
+            user_api_key_dict=user_api_key_dict,
+        )
+    return {**data, **build_request_data_from_managed_vector_store(vector_store_to_run)}
 
 
 @router.post(
@@ -125,6 +133,7 @@ async def vector_store_search(
     )
 
     data = await _read_request_body(request=request)
+    reject_caller_embedding_selection_params(payload=data, source="the search request body")
     data["vector_store_id"] = vector_store_id
 
     # Check for legacy vector store registry (non-managed vector stores)
@@ -591,7 +600,11 @@ async def index_create(
     index_data: Final = index_create_request.model_dump(exclude_none=True)
     index_data["created_by"] = user_api_key_dict.user_id
     index_data["updated_by"] = user_api_key_dict.user_id
-    new_index = await ManagedVectorStoreIndexRepository(prisma_client).table.create(data=jsonify_object(index_data))
+    new_index = await ManagedVectorStoreIndexRepository(prisma_client).table.create(
+        data=cast(  # cast-ok: jsonify_object deep-copies a model_dump, so keys are str and values plain objects
+            "dict[str, object]", jsonify_object(index_data)
+        )
+    )
 
     return new_index.model_dump()
 

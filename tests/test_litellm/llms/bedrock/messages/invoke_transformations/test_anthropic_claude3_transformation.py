@@ -2,7 +2,6 @@ import asyncio
 import copy
 import json
 import os
-import sys
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -11,7 +10,6 @@ import pytest
 
 # Ensure the project root is on the import path so `litellm` can be imported when
 # tests are executed from any working directory.
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.bedrock.common_utils import (
@@ -30,23 +28,6 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_tran
     AmazonAnthropicClaudeMessagesStreamDecoder,
 )
 
-
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    """Force the bundled backup cost map so adaptive-thinking detection reads this
-    branch's ``supports_adaptive_thinking`` flags, which the network-fetched
-    ``main`` copy lacks until merge."""
-    import litellm
-
-    original = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original
-        litellm.get_model_info.cache_clear()
 
 
 @pytest.mark.asyncio
@@ -263,6 +244,174 @@ def test_chunk_parser_usage_transformation():
     assert "usage" in parsed
     assert parsed["usage"]["input_tokens"] == 10
     assert parsed["usage"]["output_tokens"] == 5
+
+
+def test_chunk_parser_preserves_cache_usage_fields_with_invocation_metrics():
+    """Cache usage fields on the chunk must survive invocationMetrics conversion.
+
+    Bedrock reports cache_read_input_tokens / cache_creation_input_tokens on
+    message_stop.usage and attaches amazon-bedrock-invocationMetrics to the same
+    chunk. invocationMetrics.inputTokenCount excludes cache reads and writes, so
+    replacing the whole usage block with a metrics-only one drops the cache
+    fields and cache tokens end up billed at $0.
+    """
+
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
+        model="bedrock/invoke/anthropic.claude-sonnet-4-6"
+    )
+
+    chunk = {
+        "type": "message_stop",
+        "usage": {
+            "cache_read_input_tokens": 9821,
+            "cache_creation_input_tokens": 0,
+        },
+        "amazon-bedrock-invocationMetrics": {
+            "inputTokenCount": 10174,
+            "outputTokenCount": 500,
+        },
+    }
+
+    parsed = decoder._chunk_parser(chunk.copy())
+
+    assert "amazon-bedrock-invocationMetrics" not in parsed
+    assert parsed["usage"]["cache_read_input_tokens"] == 9821
+    assert parsed["usage"]["cache_creation_input_tokens"] == 0
+    assert parsed["usage"]["input_tokens"] == 10174
+    assert parsed["usage"]["output_tokens"] == 500
+
+
+def test_chunk_parser_maps_cache_token_counts_from_invocation_metrics():
+    """Cache itemization inside invocationMetrics maps to Anthropic usage keys."""
+
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
+        model="bedrock/invoke/anthropic.claude-sonnet-4-6"
+    )
+
+    chunk = {
+        "type": "message_stop",
+        "amazon-bedrock-invocationMetrics": {
+            "inputTokenCount": 10174,
+            "outputTokenCount": 500,
+            "cacheReadInputTokenCount": 9821,
+            "cacheWriteInputTokenCount": 42,
+        },
+    }
+
+    parsed = decoder._chunk_parser(chunk.copy())
+
+    assert parsed["usage"]["input_tokens"] == 10174
+    assert parsed["usage"]["output_tokens"] == 500
+    assert parsed["usage"]["cache_read_input_tokens"] == 9821
+    assert parsed["usage"]["cache_creation_input_tokens"] == 42
+
+
+def test_chunk_parser_keeps_existing_token_counts_over_invocation_metrics():
+    """Token counts reported in the chunk's own usage block win over invocationMetrics."""
+
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
+        model="bedrock/invoke/anthropic.claude-sonnet-4-6"
+    )
+
+    chunk = {
+        "type": "message_stop",
+        "usage": {
+            "input_tokens": 7,
+            "output_tokens": 11,
+            "cache_read_input_tokens": 3,
+        },
+        "amazon-bedrock-invocationMetrics": {
+            "inputTokenCount": 999,
+            "outputTokenCount": 999,
+        },
+    }
+
+    parsed = decoder._chunk_parser(chunk.copy())
+
+    assert parsed["usage"]["input_tokens"] == 7
+    assert parsed["usage"]["output_tokens"] == 11
+    assert parsed["usage"]["cache_read_input_tokens"] == 3
+
+
+@pytest.mark.asyncio
+async def test_bedrock_sse_wrapper_preserves_cache_usage_with_invocation_metrics():
+    """Regression test: cache usage on message_stop must survive when the same
+    chunk also carries amazon-bedrock-invocationMetrics.
+
+    Mirrors the commercial Bedrock stream shape: message_start and message_delta
+    repeat uncached input_tokens only, while message_stop carries the cache
+    breakdown plus invocationMetrics. The decoder previously replaced
+    message_stop's usage with a metrics-only block, so
+    _promote_message_stop_usage had no cache fields left to promote and the
+    final usage billed cache reads and writes at $0.
+    """
+
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
+        model="bedrock/invoke/anthropic.claude-sonnet-4-6"
+    )
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    raw_chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {
+                    "input_tokens": 10174,
+                    "output_tokens": 1,
+                },
+            },
+        },
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 500},
+        },
+        {
+            "type": "message_stop",
+            "usage": {
+                "cache_read_input_tokens": 9821,
+                "cache_creation_input_tokens": 0,
+            },
+            "amazon-bedrock-invocationMetrics": {
+                "inputTokenCount": 10174,
+                "outputTokenCount": 500,
+                "invocationLatency": 1000,
+                "firstByteLatency": 100,
+            },
+        },
+    ]
+
+    async def _decoded_stream():  # type: ignore[return-type]
+        for chunk in raw_chunks:
+            yield decoder._chunk_parser(copy.deepcopy(chunk))
+
+    collected: list[bytes] = []
+    async for chunk in cfg.bedrock_sse_wrapper(
+        _decoded_stream(),
+        litellm_logging_obj=LiteLLMLoggingObj(
+            model="bedrock/invoke/anthropic.claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+            call_type="chat",
+            start_time=datetime.now(),
+            litellm_call_id="test_bedrock_sse_wrapper_preserves_cache_usage",
+            function_id="test_bedrock_sse_wrapper_preserves_cache_usage",
+        ),
+        request_body={},
+    ):
+        collected.append(chunk)
+
+    delta_chunk = next(c for c in collected if b"event: message_delta\n" in c)
+    delta_json = json.loads(delta_chunk.decode("utf-8").split("data: ", 1)[1].strip())
+
+    assert delta_json["usage"]["cache_read_input_tokens"] == 9821
+    assert delta_json["usage"]["cache_creation_input_tokens"] == 0
+    assert delta_json["usage"]["input_tokens"] == 10174
+    assert delta_json["usage"]["output_tokens"] == 500
 
 
 def test_remove_ttl_from_cache_control():
@@ -786,7 +935,7 @@ def test_bedrock_messages_strips_output_config():
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=False,
     ):
         result = cfg.transform_anthropic_messages_request(
@@ -821,7 +970,7 @@ def test_bedrock_messages_preserves_output_config_for_claude_4_6():
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=True,
     ):
         result = cfg.transform_anthropic_messages_request(
@@ -854,7 +1003,7 @@ def test_bedrock_messages_checks_output_config_support_with_bedrock_provider():
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=True,
     ) as mock_supports_factory:
         result = cfg.transform_anthropic_messages_request(
@@ -865,11 +1014,7 @@ def test_bedrock_messages_checks_output_config_support_with_bedrock_provider():
             headers={},
         )
 
-    mock_supports_factory.assert_called_with(
-        model="us.anthropic.claude-opus-4-7",
-        custom_llm_provider="bedrock",
-        key="supports_output_config",
-    )
+    mock_supports_factory.assert_called_with("us.anthropic.claude-opus-4-7", "supports_output_config")
     assert result["output_config"] == {"effort": "high"}
 
 
@@ -889,7 +1034,7 @@ def test_bedrock_messages_forwards_output_config():
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=True,
     ):
         result = cfg.transform_anthropic_messages_request(
@@ -905,27 +1050,29 @@ def test_bedrock_messages_forwards_output_config():
 
 
 def test_bedrock_messages_forwards_output_config_with_output_format():
-    """``output_config`` is forwarded; ``output_format`` is converted to inline schema."""
+    """Legacy ``output_format`` is forwarded as ``output_config.format`` on models
+    that support native structured outputs, alongside the effort key."""
     from unittest.mock import patch
 
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
     messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    schema_format = {
+        "type": "json_schema",
+        "schema": {
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+        },
+    }
     optional_params = {
         "max_tokens": 4096,
         "output_config": {"effort": "low"},
-        "output_format": {
-            "type": "json_schema",
-            "schema": {
-                "type": "object",
-                "properties": {"answer": {"type": "string"}},
-            },
-        },
+        "output_format": schema_format,
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=True,
     ):
         result = cfg.transform_anthropic_messages_request(
@@ -936,12 +1083,14 @@ def test_bedrock_messages_forwards_output_config_with_output_format():
             headers={},
         )
 
-    assert result.get("output_config") == {"effort": "low"}
+    assert result.get("output_config") == {"effort": "low", "format": schema_format}
     assert "output_format" not in result
+    assert "answer" not in json.dumps(result["messages"])
 
 
 def test_bedrock_messages_converts_output_config_format_to_inline_schema():
-    """``output_config.format`` is consumed so Bedrock does not see an unknown nested key."""
+    """Without native structured-output support, ``output_config.format`` falls back
+    to the inline schema so Bedrock does not see an unknown nested key."""
     from unittest.mock import patch
 
     from litellm.types.router import GenericLiteLLMParams
@@ -961,8 +1110,8 @@ def test_bedrock_messages_converts_output_config_format_to_inline_schema():
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
-        return_value=True,
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
+        side_effect=lambda _model, key: key == "supports_output_config",
     ):
         result = cfg.transform_anthropic_messages_request(
             model="anthropic.claude-opus-4-7",
@@ -997,7 +1146,7 @@ def test_bedrock_messages_normalizes_output_config_effort_for_opus(
     cfg = AmazonAnthropicClaudeMessagesConfig()
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=True,
     ):
         result = cfg.transform_anthropic_messages_request(
@@ -1035,8 +1184,8 @@ def test_bedrock_messages_does_not_mutate_callers_messages_when_embedding_schema
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
-        return_value=True,
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
+        side_effect=lambda _model, key: key == "supports_output_config",
     ):
         result = cfg.transform_anthropic_messages_request(
             model="anthropic.claude-opus-4-7",
@@ -1080,7 +1229,7 @@ def test_bedrock_messages_does_not_mutate_callers_output_config():
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=True,
     ):
         cfg.transform_anthropic_messages_request(
@@ -1122,7 +1271,7 @@ def test_bedrock_messages_strips_output_config_with_output_format():
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=False,
     ):
         result = cfg.transform_anthropic_messages_request(
@@ -1183,7 +1332,7 @@ def test_bedrock_messages_drop_params_keeps_output_config_for_4_7():
     litellm.drop_params = True
     try:
         with patch(
-            "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+            "litellm.llms.bedrock.common_utils._bedrock_model_supports",
             return_value=True,
         ):
             result = cfg.transform_anthropic_messages_request(
@@ -1226,7 +1375,7 @@ def test_bedrock_messages_maps_reasoning_effort_for_adaptive_model(
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=True,
     ):
         result = cfg.transform_anthropic_messages_request(
@@ -1238,7 +1387,7 @@ def test_bedrock_messages_maps_reasoning_effort_for_adaptive_model(
         )
 
     assert "reasoning_effort" not in result
-    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("thinking") == {"type": "adaptive", "display": "summarized"}
     assert result.get("output_config") == {"effort": expected_effort}
 
 
@@ -1333,7 +1482,7 @@ def test_bedrock_messages_explicit_output_config_wins_over_reasoning_effort():
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=True,
     ):
         result = cfg.transform_anthropic_messages_request(
@@ -2125,13 +2274,14 @@ def test_bedrock_invoke_transform_hoists_only_leading_system_run(local_model_cos
     ]
 
 
-def test_bedrock_invoke_transform_hoists_mid_conversation_system_for_older_claude(local_model_cost_map):
-    """Regression test for Claude Code 400s on pre-Opus-4.8 Bedrock models:
-    Invoke rejects ``role: "system"`` in every position on Opus 4.7, Sonnet 4.6,
-    Haiku 4.5, etc. ("role 'system' is not supported on this model"), so on
-    models without ``supports_mid_conversation_system`` every system entry must
-    be hoisted into the top-level ``system`` field, mid-conversation ones
-    included."""
+def test_bedrock_invoke_transform_converts_mid_conversation_system_for_older_claude(local_model_cost_map):
+    """Invoke rejects ``role: "system"`` in every position on Opus 4.7, Sonnet
+    4.6, Haiku 4.5, etc. ("role 'system' is not supported on this model"), but
+    hoisting a mid-conversation reminder into the top-level ``system`` field
+    mutates the cached prefix and reprocesses the whole history. On models
+    without ``supports_mid_conversation_system`` the reminder is converted to a
+    user turn in place instead: the request stays valid and a cache breakpoint
+    before the reminder still hits."""
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -2156,19 +2306,136 @@ def test_bedrock_invoke_transform_hoists_mid_conversation_system_for_older_claud
 
     assert result["messages"] == [
         {"role": "user", "content": "read the file"},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Operator note (not from the user): the following was "
+                        "originally a mid-conversation system-role reminder."
+                    ),
+                },
+                {"type": "text", "text": "[Truncated: PARTIAL view of big1.txt]"},
+            ],
+        },
         {"role": "assistant", "content": "reading"},
         {"role": "user", "content": "continue"},
     ]
-    assert result["system"] == [
-        {"type": "text", "text": "Base."},
-        {"type": "text", "text": "[Truncated: PARTIAL view of big1.txt]"},
+    assert result["system"] == [{"type": "text", "text": "Base."}]
+
+
+def test_bedrock_invoke_transform_moves_converted_system_after_tool_result_turn(local_model_cost_map):
+    """A reminder wedged between an assistant ``tool_use`` turn and the user
+    ``tool_result`` turn cannot become a user turn in that position: the API
+    requires the result right after the call ("tool_use ids were found without
+    tool_result blocks immediately after"). The converted turn goes after the
+    tool-result turn instead, where consecutive user turns merge upstream."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    tool_use_turn = {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_01", "name": "read_file", "input": {"path": "big1.txt"}}],
+    }
+    tool_result_turn = {
+        "role": "user",
+        "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_01", "content": "first 100 lines"},
+            {"type": "text", "text": "keep going"},
+        ],
+    }
+    messages = [
+        {"role": "user", "content": "read the file"},
+        tool_use_turn,
+        {"role": "system", "content": "[Truncated: PARTIAL view of big1.txt]"},
+        {"role": "system", "content": "<budget>low</budget>"},
+        tool_result_turn,
+    ]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-opus-4-7",
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params={"max_tokens": 256, "stream": False},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["messages"] == [
+        {"role": "user", "content": "read the file"},
+        tool_use_turn,
+        tool_result_turn,
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Operator note (not from the user): the following was "
+                        "originally a mid-conversation system-role reminder."
+                    ),
+                },
+                {"type": "text", "text": "[Truncated: PARTIAL view of big1.txt]"},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Operator note (not from the user): the following was "
+                        "originally a mid-conversation system-role reminder."
+                    ),
+                },
+                {"type": "text", "text": "<budget>low</budget>"},
+            ],
+        },
     ]
 
 
-def test_bedrock_invoke_transform_hoists_all_system_for_unmapped_model(local_model_cost_map):
+def test_bedrock_invoke_transform_converted_system_carries_only_its_content(local_model_cost_map):
+    """Hoisting only ever kept a system entry's content, so the in-place
+    conversion must not forward the entry's other keys either ("messages.2.name:
+    Extra inputs are not permitted")."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [
+        {"role": "user", "content": "read the file"},
+        {"role": "assistant", "content": "reading"},
+        {"role": "system", "content": "[Truncated: PARTIAL view of big1.txt]", "name": "ops"},
+        {"role": "user", "content": "continue"},
+    ]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-opus-4-7",
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params={"max_tokens": 256, "stream": False},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["messages"][2] == {
+        "role": "user",
+        "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Operator note (not from the user): the following was "
+                        "originally a mid-conversation system-role reminder."
+                    ),
+                },
+            {"type": "text", "text": "[Truncated: PARTIAL view of big1.txt]"},
+        ],
+    }
+
+
+def test_bedrock_invoke_transform_converts_system_for_unmapped_model(local_model_cost_map):
     """A model with no cost-map entry and no fallback-generalization rule gets
-    the hoist-everything behavior: the safe default is a mutated cache prefix,
-    never a provider 400 from forwarding a role the model may not accept."""
+    the unsupported-model treatment: the safe default converts the reminder to
+    a user turn in place, never a provider 400 from forwarding a role the model
+    may not accept, and never a mutated cache prefix."""
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -2189,10 +2456,23 @@ def test_bedrock_invoke_transform_hoists_all_system_for_unmapped_model(local_mod
 
     assert result["messages"] == [
         {"role": "user", "content": "hi"},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Operator note (not from the user): the following was "
+                        "originally a mid-conversation system-role reminder."
+                    ),
+                },
+                {"type": "text", "text": "mid-conversation reminder"},
+            ],
+        },
         {"role": "assistant", "content": "hello"},
         {"role": "user", "content": "continue"},
     ]
-    assert result["system"] == [{"type": "text", "text": "mid-conversation reminder"}]
+    assert "system" not in result
 
 
 def test_bedrock_invoke_transform_keeps_system_in_place_for_unmapped_future_claude(local_model_cost_map):
@@ -2655,7 +2935,7 @@ def test_bedrock_messages_thinking_shape_follows_exact_bedrock_entry_flag(
         )
 
     result = transform()
-    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("thinking") == {"type": "adaptive", "display": "summarized"}
     assert result.get("output_config") == {"effort": "medium"}
 
     monkeypatch.setitem(litellm.model_cost[model], "supports_adaptive_thinking", False)
@@ -2780,3 +3060,193 @@ def test_bedrock_invoke_messages_allows_converted_websearch_function_tool():
         headers={},
     )
     assert result["tools"][0]["name"] == "litellm_web_search"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_sse_wrapper_dispatches_logging_on_client_disconnect():
+    """
+    Regression test for LIT-5839: closing the outer bedrock_sse_wrapper
+    mid-stream (what the proxy does on a client disconnect) must not lose the
+    stream's spend logging. Since the detached-pump relay, the upstream read
+    survives the disconnect and billing fires once the provider stream ends,
+    so the dispatch is awaited after releasing the upstream instead of being
+    observed synchronously at aclose(). `completion_start_time` is only
+    stamped on the logging object by that dispatch, so it observing a value
+    proves the whole chain ran.
+    """
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    release_upstream = asyncio.Event()
+
+    async def _gated_stream():
+        yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 25, "output_tokens": 1}}}
+        yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "partial"}}
+        await release_upstream.wait()
+
+    logging_obj = LiteLLMLoggingObj(
+        model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="chat",
+        start_time=datetime.now(),
+        litellm_call_id="test_bedrock_sse_wrapper_disconnect_logging",
+        function_id="test_bedrock_sse_wrapper_disconnect_logging",
+    )
+    wrapped = cfg.bedrock_sse_wrapper(_gated_stream(), litellm_logging_obj=logging_obj, request_body={})
+    await wrapped.__anext__()
+    await wrapped.__anext__()
+    assert logging_obj.completion_start_time is None
+
+    await wrapped.aclose()
+    release_upstream.set()
+
+    for _ in range(500):
+        if logging_obj.completion_start_time is not None:
+            break
+        await asyncio.sleep(0.01)
+    assert logging_obj.completion_start_time is not None
+
+
+def test_bedrock_messages_forwards_output_config_format_natively(local_model_cost_map):
+    """Regression: on a model Bedrock enforces structured outputs for (Claude
+    Sonnet 4.5), ``output_config.format`` must be forwarded verbatim, not
+    silently rewritten into inline prompt text."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    schema_format = {
+        "type": "json_schema",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "zebra_count": {"type": "integer"},
+                "is_tuesday": {"type": "boolean"},
+            },
+            "required": ["zebra_count", "is_tuesday"],
+            "additionalProperties": False,
+        },
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "say hello"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 100,
+            "output_config": {"format": schema_format},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("output_config") == {"format": schema_format}
+    assert "zebra_count" not in json.dumps(result["messages"])
+
+
+def test_bedrock_messages_inlines_schema_for_claude_5(local_model_cost_map):
+    """Bedrock rejects ``output_config.format`` for the Claude 5 family, so the
+    schema falls back to the inline-text path instead of a deterministic 400."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    schema = {
+        "type": "object",
+        "properties": {"zebra_count": {"type": "integer"}},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-5",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "say hello"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 100,
+            "output_config": {"format": {"type": "json_schema", "schema": schema}},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "output_config" not in result
+    last_content = result["messages"][-1]["content"]
+    assert json.loads(last_content[-1]["text"]) == schema
+
+
+def test_bedrock_messages_legacy_output_format_wins_over_output_config_format(local_model_cost_map):
+    """When a request carries both schema forms, the legacy top-level
+    ``output_format`` keeps winning, matching the pre-existing precedence."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    legacy_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"legacy_field": {"type": "string"}}},
+    }
+    newer_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"newer_field": {"type": "string"}}},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "say hello"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 100,
+            "output_format": legacy_format,
+            "output_config": {"format": newer_format},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("output_config") == {"format": legacy_format}
+    assert "output_format" not in result
+    assert "newer_field" not in json.dumps(result)
+
+
+def test_bedrock_messages_drop_params_keeps_native_output_config_format(local_model_cost_map, monkeypatch):
+    """``drop_params=True`` must not strip a natively forwarded
+    ``output_config.format`` on models without effort support (Sonnet 4.5)."""
+    import litellm
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    schema_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "say hello"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 100,
+            "output_config": {"format": schema_format},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("output_config") == {"format": schema_format}
+
+
+def test_bedrock_messages_strips_effort_but_keeps_format_for_sonnet_4_5(local_model_cost_map):
+    """Sonnet 4.5 has native structured-output support but no effort support, so
+    a mixed ``output_config`` keeps ``format`` and drops ``effort``."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    schema_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "say hello"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 4096,
+            "output_config": {"format": schema_format, "effort": "high"},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("output_config") == {"format": schema_format}

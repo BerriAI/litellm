@@ -3,6 +3,8 @@ import { Bot, User } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
+
+import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
 import ResponseMetrics from "@/components/chat_ui/ResponseMetrics";
 import { Message } from "./types";
 
@@ -11,6 +13,7 @@ interface MessageBubbleProps {
 }
 
 const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
+  const syntaxTheme = useSyntaxTheme(coy);
   return (
     <div className={`mb-4 flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
       <div
@@ -63,13 +66,13 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
                   const match = /language-(\w+)/.exec(className || "");
                   return !inline && match ? (
                     <SyntaxHighlighter
-                      style={coy as any}
+                      {...props}
+                      style={syntaxTheme}
                       language={match[1]}
                       PreTag="div"
                       className="rounded-md my-2"
                       wrapLines={true}
                       wrapLongLines={true}
-                      {...props}
                     >
                       {String(children).replace(/\n$/, "")}
                     </SyntaxHighlighter>

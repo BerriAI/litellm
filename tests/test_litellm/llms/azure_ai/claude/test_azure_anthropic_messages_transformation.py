@@ -317,21 +317,6 @@ class TestProviderConfigManagerAzureAnthropicMessages:
         assert config is None
 
 
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    """Force the bundled backup cost map so capability flags match this branch."""
-    import litellm
-
-    original = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original
-        litellm.get_model_info.cache_clear()
-
 
 def test_messages_thinking_shape_follows_exact_azure_entry_flag(local_model_cost_map, monkeypatch):
     """The Azure messages config must probe capabilities under ``azure_ai`` so an
@@ -356,7 +341,7 @@ def test_messages_thinking_shape_follows_exact_azure_entry_flag(local_model_cost
         )
 
     result = transform()
-    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("thinking") == {"type": "adaptive", "display": "summarized"}
     assert result.get("output_config") == {"effort": "medium"}
 
     monkeypatch.setitem(
@@ -425,7 +410,7 @@ class TestAzureAnthropicMidConversationSystem:
             {"type": "text", "text": "Cite sources."},
         ]
 
-    def test_unsupported_model_hoists_mid_conversation_system(self, local_model_cost_map):
+    def test_unsupported_model_converts_mid_conversation_system_in_place(self, local_model_cost_map):
         messages = [
             {"role": "user", "content": "read the file"},
             {"role": "system", "content": "[Truncated: PARTIAL view of big1.txt]"},
@@ -437,13 +422,23 @@ class TestAzureAnthropicMidConversationSystem:
         )
         assert result["messages"] == [
             {"role": "user", "content": "read the file"},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Operator note (not from the user): the following was "
+                            "originally a mid-conversation system-role reminder."
+                        ),
+                    },
+                    {"type": "text", "text": "[Truncated: PARTIAL view of big1.txt]"},
+                ],
+            },
             {"role": "assistant", "content": "reading"},
             {"role": "user", "content": "continue"},
         ]
-        assert result["system"] == [
-            {"type": "text", "text": "Base."},
-            {"type": "text", "text": "[Truncated: PARTIAL view of big1.txt]"},
-        ]
+        assert result["system"] == [{"type": "text", "text": "Base."}]
 
 
 def test_azure_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_flag():

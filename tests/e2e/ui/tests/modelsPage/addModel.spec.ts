@@ -5,6 +5,11 @@ import { navigateToPage } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
 import { captureRequestBody, readBack } from "../../helpers/roundTrip";
 import { sendChatCompletion } from "../../helpers/traffic";
+import { proxyIsPremium } from "../../helpers/premium";
+
+/** Four probes 13s apart span 39s, one PROXY_CONFIG_RELOAD_INTERVAL_SECONDS (30s) plus margin. */
+const CREDENTIAL_PROBE_SUCCESSES = 4;
+const CREDENTIAL_PROBE_SPACING_MS = 13_000;
 
 /** The mock LLM as the proxy reaches it: same host locally, a sidecar in the deployed stack. */
 const MOCK_LLM_BASE = `http://127.0.0.1:${process.env.MOCK_LLM_PORT ?? "8090"}/v1`;
@@ -21,15 +26,25 @@ async function findDeploymentByName(page: PlaywrightPage, modelName: string): Pr
   return body.data.find((row) => row.model_name === modelName);
 }
 
+/** Anchors a substring match to the whole string, escaping regex metacharacters. */
+const exactly = (text: string): RegExp => new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
+
 /**
- * Helper to select a provider from the Add Model form dropdown.
+ * Helper to select a provider from the Add Model form dropdown. The field is a
+ * searchable combobox: it only opens on click, typing filters the list, and the
+ * option has to be picked explicitly because nothing is highlighted by default.
+ * Options are matched on their visible text, not their accessible name, which
+ * also carries the provider logo's alt text ("Anthropic logo Anthropic").
  */
-async function selectProvider(page: any, providerName: string) {
-  const providerDropdown = page.getByRole("combobox", { name: /Provider/i });
+async function selectProvider(page: PlaywrightPage, providerName: string) {
+  const providerDropdown = page.getByRole("combobox", { name: "Provider", exact: true });
+  await providerDropdown.click();
   await providerDropdown.fill(providerName);
-  await page.waitForTimeout(1000);
-  await providerDropdown.press("Enter");
-  await page.waitForTimeout(2000);
+  await page
+    .getByRole("option")
+    .filter({ hasText: exactly(providerName) })
+    .click();
+  await expect(providerDropdown).toHaveValue(providerName);
 }
 
 test.describe("Add Model", () => {
@@ -64,14 +79,16 @@ test.describe("Add Model", () => {
     await selectProvider(page, "Anthropic");
 
     // The model field should be a multi-select dropdown; click to open it
-    const modelDropdown = page.locator(".ant-select-selection-overflow").first();
-    await modelDropdown.click();
+    await page.getByRole("combobox", { name: "Select models" }).click();
 
     // Verify provider-specific models are listed
-    await expect(page.getByTitle("claude-haiku-4-5", { exact: true })).toBeVisible();
+    await expect(page.getByRole("option", { name: "claude-haiku-4-5", exact: true })).toBeVisible();
   });
 
   test("Edit team model TPM and RPM limits", async ({ page }) => {
+    // /model/new refuses a team-scoped deployment on an unlicensed proxy, so there this fails in
+    // setup on a product gate rather than on a regression in the edit it covers.
+    test.skip(!proxyIsPremium(), "proxy under test is unlicensed — team-scoped models are premium");
     const masterKey = users[Role.ProxyAdmin].password;
     const modelName = `e2e-team-model-${Date.now()}`;
 
@@ -156,14 +173,14 @@ test.describe("Add Model", () => {
     await page.getByRole("tab", { name: "Add Model" }).click();
 
     // Labels come from /public/providers/fields, not the frontend Providers enum, and the two differ.
-    await selectProvider(page, "OpenAI-Compatible Endpoints");
+    await selectProvider(page, "OpenAI-Compatible Endpoints (Together AI, etc.)");
 
     const publicName = `e2e-ui-added-${Date.now()}`;
     uiAddedModelName = publicName;
 
     // The model picker's "custom" entry reveals the free-text name field.
-    await page.locator(".ant-select-selection-overflow").first().click();
-    await page.locator(".ant-select-dropdown:visible").getByText("Custom Model Name (Enter below)").click();
+    await page.getByRole("combobox", { name: "Select models" }).click();
+    await page.getByRole("option", { name: "Custom Model Name (Enter below)" }).click();
     await page.keyboard.press("Escape");
     await page.getByPlaceholder("Enter custom model name").fill(publicName);
 
@@ -177,12 +194,12 @@ test.describe("Add Model", () => {
     await expect(page.getByTestId("connection-success-msg")).toBeVisible({ timeout: 30_000 });
 
     // The modal swallows the Add click. Scope to the footer: the dismiss X is also named "Close".
-    const resultsModal = page.locator(".ant-modal:visible").filter({ hasText: "Connection Test Results" });
-    await resultsModal.locator(".ant-modal-footer").getByRole("button", { name: "Close" }).click();
+    const resultsModal = page.getByRole("dialog", { name: "Connection Test Results" });
+    await resultsModal.locator('[data-slot="dialog-footer"]').getByRole("button", { name: "Close" }).click();
     await expect(resultsModal).toBeHidden({ timeout: 5_000 });
 
     const created = await captureRequestBody(page, { method: "POST", urlIncludes: "/model/new" }, async () => {
-      await page.getByRole("button", { name: "Add Model" }).last().click();
+      await page.getByTestId("add-model-btn").click();
     });
     expect(created.model_name, "the model is created under the name that was typed").toBe(publicName);
     expect(created.litellm_params?.api_base, "the api base survives the form").toBe(MOCK_LLM_BASE);
@@ -206,6 +223,120 @@ test.describe("Add Model", () => {
       .toBe(true);
   });
 
+  test("Add a model with a stored credential, pass Test Connect, and serve traffic", async ({ page, request }) => {
+    const masterKey = users[Role.ProxyAdmin].password;
+    const auth = { Authorization: `Bearer ${masterKey}` };
+    const credentialName = `e2e-cred-reuse-${Date.now()}`;
+    const createCred = await page.request.post("/credentials", {
+      headers: auth,
+      data: {
+        credential_name: credentialName,
+        credential_values: { api_key: "fake-key", api_base: MOCK_LLM_BASE },
+        credential_info: { custom_llm_provider: "openai" },
+      },
+    });
+    expect(createCred.ok(), `POST /credentials failed (${createCred.status()}): ${await createCred.text()}`).toBe(true);
+
+    // The proxy's periodic credential refresh prunes its in-memory list against a database snapshot
+    // it took before this credential landed, so a credential that resolves right after POST
+    // /credentials can stop resolving until the refresh after that. Successes spanning a whole
+    // PROXY_CONFIG_RELOAD_INTERVAL_SECONDS prove it survived a refresh, after which it stays.
+    // Resolution fails open onto the ambient key, so losing it reads as a confusing upstream 404.
+    let consecutiveProbeSuccesses = 0;
+    await expect
+      .poll(
+        async () => {
+          const probe = await page.request.post("/health/test_connection", {
+            headers: auth,
+            data: {
+              litellm_params: {
+                model: "openai/fake-gpt-4",
+                custom_llm_provider: "openai",
+                litellm_credential_name: credentialName,
+              },
+              model_info: {},
+              mode: "chat",
+            },
+          });
+          const healthy = probe.ok() && (await probe.json()).status === "success";
+          consecutiveProbeSuccesses = healthy ? consecutiveProbeSuccesses + 1 : 0;
+          return consecutiveProbeSuccesses;
+        },
+        {
+          message: `stored credential ${credentialName} never stayed usable across a config reload`,
+          intervals: [0, CREDENTIAL_PROBE_SPACING_MS],
+          timeout: 110_000,
+        },
+      )
+      .toBeGreaterThanOrEqual(CREDENTIAL_PROBE_SUCCESSES);
+
+    try {
+      await navigateToPage(page, Page.Models);
+      await page.getByRole("tab", { name: "Add Model" }).click();
+
+      await selectProvider(page, "OpenAI-Compatible Endpoints (Together AI, etc.)");
+
+      const publicName = `e2e-cred-model-${Date.now()}`;
+      uiAddedModelName = publicName;
+
+      await page.getByRole("combobox", { name: "Select models" }).click();
+      await page.getByRole("option", { name: "Custom Model Name (Enter below)" }).click();
+      await page.keyboard.press("Escape");
+      await page.getByPlaceholder("Enter custom model name").fill(publicName);
+
+      const credentialSelect = page.getByRole("combobox", { name: "Existing Credentials" });
+      await credentialSelect.click();
+      await credentialSelect.fill(credentialName);
+      await page.getByRole("option", { name: credentialName, exact: true }).click();
+
+      await expect(page.locator("#api_key")).toHaveCount(0);
+      await expect(page.locator("#api_base")).toHaveCount(0);
+
+      await page.getByRole("button", { name: "Test Connect" }).click();
+      await expect(page.getByText("Connection Test Results")).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByTestId("connection-success-msg")).toBeVisible({ timeout: 30_000 });
+
+      const resultsModal = page.getByRole("dialog", { name: "Connection Test Results" });
+      await resultsModal.locator('[data-slot="dialog-footer"]').getByRole("button", { name: "Close" }).click();
+      await expect(resultsModal).toBeHidden({ timeout: 5_000 });
+
+      const created = await captureRequestBody(page, { method: "POST", urlIncludes: "/model/new" }, async () => {
+        await page.getByRole("button", { name: "Add Model" }).last().click();
+      });
+      expect(created.litellm_params?.litellm_credential_name, "the picked credential goes on the wire").toBe(
+        credentialName,
+      );
+      expect(created.litellm_params?.api_key, "no raw api key goes on the wire").toBeUndefined();
+
+      await expect(page.getByText("created successfully")).toBeVisible({ timeout: 15_000 });
+
+      await expect
+        .poll(
+          async () => {
+            try {
+              await sendChatCompletion(request, { model: publicName, prompt: `hello via ${credentialName}` });
+              return true;
+            } catch {
+              return false;
+            }
+          },
+          {
+            message: `model ${publicName} added with a stored credential never served a request`,
+            timeout: 30_000,
+          },
+        )
+        .toBe(true);
+    } finally {
+      const stored = uiAddedModelName ? await findDeploymentByName(page, uiAddedModelName) : undefined;
+      const id = stored?.model_info?.id;
+      if (id) {
+        await page.request.post("/model/delete", { headers: auth, data: { id } });
+        uiAddedModelName = "";
+      }
+      await page.request.delete(`/credentials/${credentialName}`, { headers: auth });
+    }
+  });
+
   test("Test connection with bad credentials shows failure", async ({ page }) => {
     await navigateToPage(page, Page.Models);
     await page.getByRole("tab", { name: "Add Model" }).click();
@@ -213,9 +344,8 @@ test.describe("Add Model", () => {
     await selectProvider(page, "Anthropic");
 
     // Select model: claude-haiku-4-5
-    const modelDropdown = page.locator(".ant-select-selection-overflow").first();
-    await modelDropdown.click();
-    await page.getByTitle("claude-haiku-4-5", { exact: true }).click();
+    await page.getByRole("combobox", { name: "Select models" }).click();
+    await page.getByRole("option", { name: "claude-haiku-4-5", exact: true }).click();
     await page.keyboard.press("Escape");
 
     // Enter bad API key
@@ -239,9 +369,8 @@ test.describe("Add Model", () => {
     await selectProvider(page, "Anthropic");
 
     // Select model: claude-haiku-4-5
-    const modelDropdown = page.locator(".ant-select-selection-overflow").first();
-    await modelDropdown.click();
-    await page.getByTitle("claude-haiku-4-5", { exact: true }).click();
+    await page.getByRole("combobox", { name: "Select models" }).click();
+    await page.getByRole("option", { name: "claude-haiku-4-5", exact: true }).click();
     await page.keyboard.press("Escape");
 
     // Enter any API key
@@ -250,7 +379,7 @@ test.describe("Add Model", () => {
 
     // Click Add Model button by its text
     const created = await captureRequestBody(page, { method: "POST", urlIncludes: "/model/new" }, async () => {
-      await page.getByRole("button", { name: "Add Model" }).last().click();
+      await page.getByTestId("add-model-btn").click();
     });
     // The form sends custom_llm_provider separately from the name, so both halves have to arrive.
     expect(created.model_name, "the selected model is what goes on the wire").toBe("claude-haiku-4-5");
@@ -263,11 +392,9 @@ test.describe("Add Model", () => {
     // Navigate to All Models tab
     await page.getByRole("tab", { name: "All Models" }).click();
     await page.waitForLoadState("networkidle");
-    await page.waitForTimeout(2000);
 
     // Search for the model we just added
     await page.getByPlaceholder("Search model names").fill("claude-haiku-4-5");
-    await page.waitForTimeout(1000);
 
     // Verify the model appears in the results count (not "Showing 0 results")
     await expect(page.getByTestId("pagination-range")).toHaveText(/Showing \d+-\d+ of \d+/, {
@@ -275,8 +402,9 @@ test.describe("Add Model", () => {
     });
 
     // Verify the model name appears in the table body
-    const tableBody = page.locator("table tbody");
-    await expect(tableBody.getByText("claude-haiku-4-5").first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole("row").filter({ hasText: "claude-haiku-4-5" })).not.toHaveCount(0, {
+      timeout: 15_000,
+    });
 
     // A row proves the name is there, not what the deployment routes to.
     const stored = await findDeploymentByName(page, "claude-haiku-4-5");
@@ -315,42 +443,36 @@ test.describe("Add Model", () => {
 
       await selectProvider(page, "Cohere");
 
-      const modelDropdown = page.locator(".ant-select-selection-overflow").first();
-      await modelDropdown.click();
-      const wildcardOption = page.getByTitle(/All .* Models \(Wildcard\)/);
-      await wildcardOption.click();
+      await page.getByRole("combobox", { name: "Select models" }).click();
+      await page.getByRole("option", { name: /All .* Models \(Wildcard\)/ }).click();
       await page.keyboard.press("Escape");
 
       const apiKeyInput = page.locator('input[type="password"]').first();
       await apiKeyInput.fill("sk-any-key-for-team-byok-test");
 
-      // Flip the Team-BYOK switch on (Form.Item label "Team-BYOK Model")
-      const teamByokRow = page.locator(".ant-form-item", { hasText: "Team-BYOK Model" });
-      await teamByokRow.getByRole("switch").click();
+      // Flip the Team-BYOK switch on; the Switch carries its own aria-label.
+      await page.getByRole("switch", { name: "Team-BYOK Model" }).click();
 
       // TeamDropdown options show the alias above the team id, so match on the id line by text.
       const teamDropdown = page.getByTestId("team-dropdown").getByRole("combobox");
       await expect(teamDropdown).toBeVisible({ timeout: 5_000 });
       await teamDropdown.click();
-      const teamOption = page.locator('[data-slot="combobox-content"]:visible').getByText(E2E_TEAM_CRUD_ID).first();
+      const teamOption = page.getByRole("option", { name: E2E_TEAM_CRUD_ID }).first();
       await expect(teamOption).toBeVisible({ timeout: 5_000 });
       await teamOption.click();
 
-      await page.getByRole("button", { name: "Add Model" }).last().click();
+      await page.getByTestId("add-model-btn").click();
 
-      // Scope to antd's notification container so a stale toast can't satisfy this.
-      await expect(page.locator(".ant-notification").getByText("created successfully").last()).toBeVisible({
+      // Scope to the toast container so a stale toast can't satisfy this.
+      await expect(page.locator("[data-sonner-toast]").getByText("created successfully").last()).toBeVisible({
         timeout: 15_000,
       });
 
       // The Models table renders team-scoped models with the team id in the row.
       await page.getByRole("tab", { name: "All Models" }).click();
       await page.waitForLoadState("networkidle");
-      // networkidle fires before the table finishes re-rendering.
-      await page.waitForTimeout(2000);
 
       await page.getByPlaceholder("Search model names").fill("cohere");
-      await page.waitForTimeout(1000);
 
       // Clearer failure than timing out on a row assertion when the table is empty.
       await expect(page.getByTestId("pagination-range")).toHaveText(/Showing \d+-\d+ of \d+/, {
@@ -359,10 +481,7 @@ test.describe("Add Model", () => {
 
       // Pin to one row carrying both the name and the team, so the sibling test's
       // team-less cohere row can't satisfy it.
-      const teamCohereRow = page
-        .locator("table tbody tr")
-        .filter({ hasText: "cohere/" })
-        .filter({ hasText: E2E_TEAM_CRUD_ID });
+      const teamCohereRow = page.getByRole("row").filter({ hasText: "cohere/" }).filter({ hasText: E2E_TEAM_CRUD_ID });
       await expect(teamCohereRow).toHaveCount(1, { timeout: 15_000 });
     } finally {
       await deleteTeamScopedCohereModels();
@@ -376,10 +495,8 @@ test.describe("Add Model", () => {
     await selectProvider(page, "Cohere");
 
     // Select All Cohere Models (Wildcard)
-    const modelDropdown = page.locator(".ant-select-selection-overflow").first();
-    await modelDropdown.click();
-    const wildcardOption = page.getByTitle(/All .* Models \(Wildcard\)/);
-    await wildcardOption.click();
+    await page.getByRole("combobox", { name: "Select models" }).click();
+    await page.getByRole("option", { name: /All .* Models \(Wildcard\)/ }).click();
     await page.keyboard.press("Escape");
 
     // Enter any API key
@@ -388,7 +505,7 @@ test.describe("Add Model", () => {
 
     // Click Add Model button by its text
     const created = await captureRequestBody(page, { method: "POST", urlIncludes: "/model/new" }, async () => {
-      await page.getByRole("button", { name: "Add Model" }).last().click();
+      await page.getByTestId("add-model-btn").click();
     });
     // A wildcard with the star stripped becomes a plain "cohere" deployment that matches nothing.
     expect(created.model_name, "the wildcard route goes on the wire intact").toBe("cohere/*");
@@ -399,11 +516,9 @@ test.describe("Add Model", () => {
     // Navigate to All Models tab
     await page.getByRole("tab", { name: "All Models" }).click();
     await page.waitForLoadState("networkidle");
-    await page.waitForTimeout(2000);
 
     // Search for the wildcard model
     await page.getByPlaceholder("Search model names").fill("cohere");
-    await page.waitForTimeout(1000);
 
     // Verify the model appears in the results count (not "Showing 0 results")
     await expect(page.getByTestId("pagination-range")).toHaveText(/Showing \d+-\d+ of \d+/, {
@@ -411,8 +526,7 @@ test.describe("Add Model", () => {
     });
 
     // Verify the wildcard model appears in the table body (wildcard models show as "cohere/*")
-    const tableBody = page.locator("table tbody");
-    await expect(tableBody.getByText("cohere/").first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole("row").filter({ hasText: "cohere/" })).not.toHaveCount(0, { timeout: 15_000 });
 
     // "cohere/" in the table also matches a plain cohere deployment; require the wildcard exactly.
     const stored = await findDeploymentByName(page, "cohere/*");

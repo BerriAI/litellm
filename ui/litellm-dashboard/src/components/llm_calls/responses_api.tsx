@@ -2,8 +2,9 @@ import openai from "openai";
 import { MessageType } from "../chat_ui/types";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { getProxyBaseUrl } from "@/components/networking";
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
+import { parseUsageCost } from "./usage_cost";
 import type { MCPEvent } from "@/components/mcp_tools/types";
 import { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
 import {
@@ -116,6 +117,7 @@ export async function makeOpenAIResponsesRequest(
   try {
     const startTime = Date.now();
     let firstTokenReceived = false;
+    let servedFromResponseCache = false;
 
     // Format messages for the API
     const formattedInput = messages.map((message) => {
@@ -202,7 +204,15 @@ export async function makeOpenAIResponsesRequest(
 
     // Create request to OpenAI responses API
     // Use 'any' type to avoid TypeScript issues with the experimental API
-    const response = await (client as any).responses.create({ ...requestBody, stream: streamingEnabled }, { signal });
+    const response = streamingEnabled
+      ? await (client as any).responses.create({ ...requestBody, stream: true }, { signal })
+      : await (async () => {
+          const nonStreamingResponse = await (client as any).responses
+            .create({ ...requestBody, stream: false }, { signal })
+            .withResponse();
+          servedFromResponseCache = nonStreamingResponse.response.headers.get("x-litellm-cache-key") !== null;
+          return nonStreamingResponse.data;
+        })();
     const events = streamingEnabled ? response : responseAsEvents(response);
 
     let mcpToolUsed = "";
@@ -292,15 +302,19 @@ export async function makeOpenAIResponsesRequest(
               promptTokens: usage.input_tokens,
               totalTokens: usage.total_tokens,
               ...extractPromptCacheTokens(usage),
+              ...(servedFromResponseCache ? { servedFromResponseCache: true } : {}),
             };
 
             // Add reasoning tokens if available
-            if (usage.completion_tokens_details?.reasoning_tokens) {
-              usageData.reasoningTokens = usage.completion_tokens_details.reasoning_tokens;
+            const reasoningTokens =
+              usage.output_tokens_details?.reasoning_tokens ?? usage.completion_tokens_details?.reasoning_tokens;
+            if (reasoningTokens) {
+              usageData.reasoningTokens = reasoningTokens;
             }
 
-            if (usage.cost !== undefined && usage.cost !== null) {
-              usageData.cost = Number(usage.cost);
+            const parsedCost = parseUsageCost(usage.cost);
+            if (parsedCost !== undefined) {
+              usageData.cost = parsedCost;
             }
 
             onUsageData(usageData, mcpToolUsed);
@@ -317,9 +331,7 @@ export async function makeOpenAIResponsesRequest(
   } catch (error) {
     if (signal?.aborted) {
     } else {
-      NotificationManager.fromBackend(
-        `Error occurred while generating model response. Please try again. Error: ${error}`,
-      );
+      toast.fromError(`Error occurred while generating model response. Please try again. Error: ${error}`);
     }
     throw error; // Re-throw to allow the caller to handle the error
   }

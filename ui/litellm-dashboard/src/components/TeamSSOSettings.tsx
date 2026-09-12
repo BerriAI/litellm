@@ -23,7 +23,7 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { getDefaultTeamSettings, updateDefaultTeamSettings, Organization } from "./networking";
 import BudgetDurationDropdown, { getBudgetDurationLabel } from "./common_components/budget_duration_dropdown";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { ModelSelect } from "./ModelSelect/ModelSelect";
 import OrganizationDropdown from "./common_components/OrganizationDropdown";
 
@@ -135,7 +135,7 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
       } catch (error) {
         console.error("Error fetching team SSO settings:", error);
         setFetchError(true);
-        NotificationsManager.fromBackend("Failed to fetch team settings");
+        toast.fromError("Failed to fetch team settings");
       } finally {
         setLoading(false);
       }
@@ -154,10 +154,10 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
       setValues(newValues);
       setEditedValues(newValues);
       setIsEditing(false);
-      NotificationsManager.success("Default team settings updated successfully");
+      toast.success("Default team settings updated successfully");
     } catch (error) {
       console.error("Error updating team settings:", error);
-      NotificationsManager.fromBackend("Failed to update team settings");
+      toast.fromError("Failed to update team settings");
     } finally {
       setSaving(false);
     }

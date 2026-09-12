@@ -97,7 +97,7 @@ describe("MakeMCPPublicForm", () => {
 
     // Check that the Next button is enabled (servers are preselected)
     const nextButton = screen.getByRole("button", { name: "Next" });
-    expect(nextButton).not.toBeDisabled();
+    expect(nextButton).toBeEnabled();
   });
 
   it("should handle server selection and navigation", async () => {
@@ -114,7 +114,7 @@ describe("MakeMCPPublicForm", () => {
 
     // Verify Next button is enabled
     const nextButton = screen.getByRole("button", { name: "Next" });
-    expect(nextButton).not.toBeDisabled();
+    expect(nextButton).toBeEnabled();
 
     // Click Next
     await act(async () => {

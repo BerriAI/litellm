@@ -4,38 +4,83 @@ LiteLLM Proxy uses this MCP Client to connnect to other MCP servers.
 
 import asyncio
 import base64
+import hashlib
+import json
 import os
 from collections.abc import Awaitable, Callable, Generator
+from contextlib import AbstractAsyncContextManager
 from datetime import timedelta
-from typing import Any, Final, TypeVar
+from functools import partial
+from importlib import metadata
+from types import MappingProxyType
+from typing import Any, Final, Protocol, TypeAlias, TypeVar
 
 import httpx
+from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from mcp import ClientSession, McpError, ReadResourceResult, Resource, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
+from mcp.shared.message import SessionMessage
+from mcp.shared.session import RequestResponder
+from typing_extensions import Unpack
 
-streamable_http_client: Any | None = None
+_TransportStreams: TypeAlias = tuple[
+    MemoryObjectReceiveStream[SessionMessage | Exception],
+    MemoryObjectSendStream[SessionMessage],
+    Unpack[tuple[object, ...]],
+]
+_TransportContext: TypeAlias = AbstractAsyncContextManager[_TransportStreams]
+
+
+class _StreamableHttpClientFactory(Protocol):
+    """The ``streamable_http_client`` entry point this module calls on the installed MCP SDK."""
+
+    def __call__(self, *, url: str, http_client: httpx.AsyncClient | None) -> _TransportContext: ...
+
+
+streamable_http_client: _StreamableHttpClientFactory | None = None
 try:
     import mcp.client.streamable_http as streamable_http_module
 
     streamable_http_client = getattr(streamable_http_module, "streamable_http_client", None)
 except ImportError:
     pass
-from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
-from mcp.types import CallToolResult as MCPCallToolResult
+
+MCP_STREAMABLE_HTTP_REQUIREMENT: Final = "mcp>=1.28.1"
+
+
+def missing_streamable_http_client_error() -> ImportError:
+    return ImportError(
+        f"MCP streamable HTTP transport requires {MCP_STREAMABLE_HTTP_REQUIREMENT}, but the installed "
+        f"mcp {metadata.version('mcp')} does not provide streamable_http_client. "
+        "Fix with: pip install 'litellm[mcp]' (or upgrade mcp directly: pip install -U mcp)"
+    )
+
+
 from mcp.types import (
+    METHOD_NOT_FOUND,
+    ClientResult,
     GetPromptRequestParams,
     GetPromptResult,
+    ListPromptsResult,
+    ListResourcesResult,
+    ListResourceTemplatesResult,
     Prompt,
     ResourceTemplate,
+    ServerNotification,
+    ServerRequest,
     TextContent,
 )
+from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
+from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl
 
 from litellm._logging import verbose_logger
-from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR
+from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR, MCP_TOOL_LISTING_TIMEOUT
+from litellm.experimental_mcp_client.tools import list_tools_with_pagination
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
+from litellm.proxy._experimental.mcp_server.mcp_debug import capture_upstream_error_response
 from litellm.types.llms.custom_http import VerifyTypes
 from litellm.types.mcp import (
     MCPAuth,
@@ -43,12 +88,50 @@ from litellm.types.mcp import (
     MCPStdioConfig,
     MCPTransport,
     MCPTransportType,
+    credential_redirect_hook,
+    has_header,
+    without_header,
 )
 
 
 def to_basic_auth(auth_value: str) -> str:
     """Convert auth value to Basic Auth format."""
     return base64.b64encode(auth_value.encode("utf-8")).decode()
+
+
+def strip_auth_scheme(auth_value: str, scheme: str) -> str:
+    """Return ``auth_value`` with a leading ``<scheme>`` and separator removed, or unchanged when absent.
+
+    Callers supply both a bare credential and a complete header value, so prefixing
+    unconditionally yields ``Bearer Bearer <jwt>``. Scheme names are case-insensitive per
+    RFC 7235. A credential is required after the scheme, so both a token that merely begins
+    with the scheme text and a scheme with nothing behind it are returned untouched.
+    Surrounding whitespace is left to ``_strip_header_whitespace`` at header-build time.
+    """
+    parts: Final = auth_value.split(None, 1)
+    if len(parts) == 2 and parts[0].lower() == scheme.lower():
+        return parts[1]
+    return auth_value
+
+
+def to_basic_credentials(auth_value: str) -> str:
+    """Return the base64 credentials for a ``Basic`` header, encoding only when needed.
+
+    ``Basic <credentials>`` carries credentials that are already encoded, so encoding the whole
+    value again would bury the scheme inside the payload. This has to run before
+    :func:`to_basic_auth` rather than at header-build time, where no prefix is left to find.
+    A schemed value whose remainder does not decode is the bare ``username:password`` shape with
+    the scheme written in front of it, and is encoded rather than forwarded as an invalid header;
+    a pair always contains ``:``, which is outside the base64 alphabet, so the two never collide.
+    """
+    credentials: Final = strip_auth_scheme(auth_value, "Basic")
+    if credentials == auth_value:
+        return to_basic_auth(auth_value)
+    try:
+        base64.b64decode(credentials, validate=True)
+    except ValueError:
+        return to_basic_auth(credentials)
+    return credentials
 
 
 def _strip_header_whitespace(headers: dict[str, str]) -> dict[str, str]:
@@ -75,8 +158,8 @@ _SDK_READ_TIMEOUT_CODE: Final = int(httpx.codes.REQUEST_TIMEOUT)
 otherwise carries JSON-RPC error codes."""
 
 
-def _as_read_timeout(exc: BaseException) -> TimeoutError | None:
-    """The session read timeout elapsing, re-expressed as a ``TimeoutError``, or ``None``.
+def as_mcp_read_timeout(exc: BaseException) -> TimeoutError | None:
+    """Normalize an MCP SDK read timeout for client and gateway diagnostics, or return ``None``.
 
     The SDK reports its own elapsed read timeout as ``McpError`` carrying an HTTP status code in a
     field that otherwise holds JSON-RPC error codes, and it relays an upstream's JSON-RPC error
@@ -163,10 +246,12 @@ class MCPSigV4Auth(httpx.Auth):
         aws_region_name: str,
     ):
         """Call STS AssumeRole and return temporary credentials."""
+        import time
+
         import boto3
         from botocore.credentials import Credentials
 
-        session_name: Final = aws_session_name or f"litellm-mcp-{int(__import__('time').time())}"
+        session_name: Final = aws_session_name or f"litellm-mcp-{int(time.time())}"
         sts_kwargs: Final[dict] = {"region_name": aws_region_name}
         if aws_access_key_id and aws_secret_access_key:
             sts_kwargs["aws_access_key_id"] = aws_access_key_id
@@ -224,6 +309,7 @@ class MCPClient:
         transport_type: MCPTransportType = MCPTransport.http,
         auth_type: MCPAuthType = None,
         auth_value: str | dict[str, str] | None = None,
+        auth_header_name: str | None = None,
         timeout: float | None = None,
         stdio_config: MCPStdioConfig | None = None,
         extra_headers: dict[str, str] | None = None,
@@ -239,6 +325,11 @@ class MCPClient:
         self.auth_type: MCPAuthType = auth_type
         self.timeout: float = timeout if timeout is not None else MCP_CLIENT_TIMEOUT
         self._mcp_auth_value: str | dict[str, str] | None = None
+        # The one place this client decides which header its credential occupies: the operator's
+        # configured slot on the v1 path, or the slot the v2 resolver's auth object already owns.
+        # Every consumer reads this rather than re-deriving it, since each re-derivation so far
+        # picked up a different bug.
+        self._credential_slot: str | None = auth_header_name or getattr(resolved_auth, "header_name", None)
         self.stdio_config: MCPStdioConfig | None = stdio_config
         self.extra_headers: dict[str, str] | None = extra_headers
         self.ssl_verify: VerifyTypes | None = ssl_verify
@@ -254,9 +345,25 @@ class MCPClient:
         if auth_value:
             self.update_auth_value(auth_value)
 
+    async def discovery_auth_fingerprint(self) -> str:
+        request: Final = httpx.Request("POST", self.server_url or "http://localhost/", headers=self._get_auth_headers())
+        if self._resolved_auth is None:
+            return self._hash_discovery_auth(request)
+        flow: Final = self._resolved_auth.async_auth_flow(request)
+        try:
+            authenticated: Final = await flow.__anext__()
+            return self._hash_discovery_auth(authenticated)
+        finally:
+            await flow.aclose()
+
+    @staticmethod
+    def _hash_discovery_auth(request: httpx.Request) -> str:
+        material: Final = json.dumps((str(request.url), tuple(sorted(request.headers.multi_items()))))
+        return hashlib.sha256(material.encode()).hexdigest()
+
     def _create_transport_context(
         self,
-    ) -> tuple[Any, httpx.AsyncClient | None]:
+    ) -> tuple[_TransportContext, httpx.AsyncClient | None]:
         """
         Create the appropriate transport context based on transport type.
         Returns:
@@ -287,7 +394,7 @@ class MCPClient:
             )
         # HTTP transport (default)
         if streamable_http_client is None:
-            raise ImportError("streamable_http_client is not available. Please install mcp with HTTP support.")
+            raise missing_streamable_http_client_error()
         headers = self._get_auth_headers()
         httpx_client_factory = self._create_httpx_client_factory()
         verbose_logger.debug("litellm headers for streamable_http_client: %s", headers)
@@ -349,7 +456,7 @@ class MCPClient:
 
     async def _execute_session_operation(
         self,
-        transport_ctx: Any,
+        transport_ctx: _TransportContext,
         operation: Callable[[ClientSession], Awaitable[TSessionResult]],
     ) -> TSessionResult:
         """
@@ -363,6 +470,18 @@ class MCPClient:
         in_flight_error: BaseException | None = None
         try:
             read_stream, write_stream = transport[0], transport[1]
+            stream_error: Final[asyncio.Future[Exception]] = asyncio.get_running_loop().create_future()
+
+            async def receive_message(
+                message: RequestResponder[ServerRequest, ClientResult] | ServerNotification | Exception,
+            ) -> None:
+                if not isinstance(message, (ValueError, httpx.RequestError, OSError)):
+                    return
+                if not stream_error.done():
+                    stream_error.set_result(message)
+                # The SDK closes pending requests when its message handler raises.
+                raise RuntimeError("MCP response stream failed")
+
             # Build session kwargs with optional callbacks
             session_kwargs: Final[dict[str, Any]] = {}
             if self._sampling_callback is not None:
@@ -377,6 +496,7 @@ class MCPClient:
                 read_stream,
                 write_stream,
                 read_timeout_seconds=timedelta(seconds=self.timeout),
+                message_handler=receive_message,
                 **session_kwargs,
             )
             session: Final = await session_ctx.__aenter__()
@@ -388,6 +508,10 @@ class MCPClient:
                     if isinstance(ins, str) and ins.strip():
                         self._last_initialize_instructions = ins.strip()
                 return await operation(session)
+            except McpError:
+                if stream_error.done():
+                    raise stream_error.result()
+                raise
             finally:
                 try:
                     await session_ctx.__aexit__(None, None, None)
@@ -422,11 +546,10 @@ class MCPClient:
             transport_ctx, http_client = self._create_transport_context()
             return await self._execute_session_operation(transport_ctx, operation)
         except Exception as e:
-            read_timeout: Final = _as_read_timeout(e)
+            read_timeout: Final = as_mcp_read_timeout(e)
             if read_timeout is not None:
                 verbose_logger.warning(
-                    "MCP client timed out after %ss waiting for %s to answer; the server accepted the "
-                    "request and ended its response stream without a JSON-RPC reply",
+                    "MCP client timed out after %ss waiting for a valid MCP response from %s",
                     self.timeout,
                     self.server_url or "stdio",
                 )
@@ -441,17 +564,19 @@ class MCPClient:
                 except BaseException as e:
                     verbose_logger.debug("Error during http_client cleanup: %s", e)
 
-    def update_auth_value(self, mcp_auth_value: str | dict[str, str]):
+    def update_auth_value(self, mcp_auth_value: str | dict[str, str]) -> None:
         """
         Set the authentication header for the MCP client.
         """
         if isinstance(mcp_auth_value, dict):
             self._mcp_auth_value = mcp_auth_value
+        elif self.auth_type == MCPAuth.basic:
+            self._mcp_auth_value = to_basic_credentials(mcp_auth_value)
         else:
-            if self.auth_type == MCPAuth.basic:
-                # Assuming mcp_auth_value is in format "username:password", convert it when updating
-                mcp_auth_value = to_basic_auth(mcp_auth_value)
             self._mcp_auth_value = mcp_auth_value
+
+    def _header_slot(self, default: str) -> str:
+        return self._credential_slot or default
 
     def _get_auth_headers(self) -> dict:
         """Generate authentication headers based on auth type."""
@@ -459,19 +584,24 @@ class MCPClient:
         if self._mcp_auth_value:
             if isinstance(self._mcp_auth_value, str):
                 if self.auth_type == MCPAuth.bearer_token:
-                    headers["Authorization"] = f"Bearer {self._mcp_auth_value}"
+                    static_bearer: Final = strip_auth_scheme(self._mcp_auth_value, "Bearer")
+                    headers[self._header_slot("Authorization")] = f"Bearer {static_bearer}"
                 elif self.auth_type == MCPAuth.basic:
-                    headers["Authorization"] = f"Basic {self._mcp_auth_value}"
+                    headers[self._header_slot("Authorization")] = f"Basic {self._mcp_auth_value}"
                 elif self.auth_type == MCPAuth.api_key:
-                    headers["X-API-Key"] = self._mcp_auth_value
+                    headers[self._header_slot("X-API-Key")] = self._mcp_auth_value
                 elif self.auth_type == MCPAuth.authorization:
-                    headers["Authorization"] = self._mcp_auth_value
+                    # This auth type means the caller owns the whole header value.
+                    headers[self._header_slot("Authorization")] = self._mcp_auth_value
                 elif self.auth_type == MCPAuth.oauth2:
-                    headers["Authorization"] = f"Bearer {self._mcp_auth_value}"
+                    oauth2_bearer: Final = strip_auth_scheme(self._mcp_auth_value, "Bearer")
+                    headers[self._header_slot("Authorization")] = f"Bearer {oauth2_bearer}"
                 elif self.auth_type == MCPAuth.token:
-                    headers["Authorization"] = f"token {self._mcp_auth_value}"
+                    scheme_token: Final = strip_auth_scheme(self._mcp_auth_value, "token")
+                    headers[self._header_slot("Authorization")] = f"token {scheme_token}"
                 elif self.auth_type == MCPAuth.oauth2_token_exchange:
-                    headers["Authorization"] = f"Bearer {self._mcp_auth_value}"
+                    exchanged_bearer: Final = strip_auth_scheme(self._mcp_auth_value, "Bearer")
+                    headers[self._header_slot("Authorization")] = f"Bearer {exchanged_bearer}"
             elif isinstance(self._mcp_auth_value, dict):
                 headers.update(self._mcp_auth_value)
         # Note: aws_sigv4 auth is not handled here — SigV4 requires per-request
@@ -479,7 +609,14 @@ class MCPClient:
         # of static headers. See MCPSigV4Auth and _create_httpx_client_factory().
         # update the headers with the extra headers
         if self.extra_headers:
-            headers.update(self.extra_headers)
+            # Mirrors _resolve_v2_auth: when the operator named a slot for the credential the
+            # gateway resolved, no injected header may shadow it, case-insensitively, since HTTP
+            # header names are. Without a configured slot the old precedence stands unchanged.
+            slot: Final = self._credential_slot
+            injected: Final = (
+                without_header(self.extra_headers, slot) if slot and has_header(headers, slot) else self.extra_headers
+            )
+            headers.update(injected or {})
         return _strip_header_whitespace(headers)
 
     def _create_httpx_client_factory(self) -> Callable[..., httpx.AsyncClient]:
@@ -507,12 +644,16 @@ class MCPClient:
             # SigV4 aws_auth. Both are None for the common case — no behavior change.
             fallback_auth: Final = self._resolved_auth if self._resolved_auth is not None else self._aws_auth
             effective_auth: Final = auth if auth is not None else fallback_auth
+            guard: Final = credential_redirect_hook(self.server_url, self._credential_slot)
             return httpx.AsyncClient(
                 headers=headers,
                 timeout=timeout,
                 auth=effective_auth,
                 verify=ssl_config,
                 follow_redirects=True,
+                event_hooks=MappingProxyType(
+                    {"response": [capture_upstream_error_response], "request": [guard] if guard else []}
+                ),  # mutable-ok: httpx types require lists of hooks
             )
 
         return factory
@@ -529,17 +670,19 @@ class MCPClient:
         """
         verbose_logger.debug("MCP client listing tools from %s", self.server_url or "stdio")
 
-        async def _list_tools_operation(session: ClientSession):
-            return await session.list_tools()
-
         try:
-            result: Final = await self.run_with_session(_list_tools_operation, quiet_on_error=raise_on_error)
-            tool_count: Final = len(result.tools)
-            tool_names: Final = [tool.name for tool in result.tools]
+            # A per-server timeout above the global default extends the whole-walk deadline
+            listing_deadline: Final = max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)
+            tools: Final = await self.run_with_session(
+                partial(list_tools_with_pagination, listing_deadline=listing_deadline),
+                quiet_on_error=raise_on_error,
+            )
+            tool_count: Final = len(tools)
+            tool_names: Final = tuple(tool.name for tool in tools)
             verbose_logger.info(
                 "MCP client listed %s tools from %s: %s", tool_count, self.server_url or "stdio", tool_names
             )
-            return result.tools
+            return tools
         except asyncio.CancelledError:
             verbose_logger.warning("MCP client list_tools was cancelled")
             raise
@@ -656,12 +799,23 @@ class MCPClient:
             # Return a default error result instead of raising
             return self.error_tool_result(e)
 
-    async def list_prompts(self) -> list[Prompt]:
+    async def list_prompts(self, *, raise_on_error: bool = False) -> list[Prompt]:
         """List available prompts from the server."""
         verbose_logger.debug("MCP client listing tools from %s", self.server_url or "stdio")
 
-        async def _list_prompts_operation(session: ClientSession):
-            return await session.list_prompts()
+        async def _list_prompts_operation(session: ClientSession) -> ListPromptsResult:
+            capabilities: Final = session.get_server_capabilities()
+            if capabilities is not None and capabilities.prompts is None:
+                return ListPromptsResult(prompts=[])
+            try:
+                return await session.list_prompts()
+            except McpError as error:
+                if error.error.code != METHOD_NOT_FOUND:
+                    raise
+                verbose_logger.debug(
+                    "MCP client list_prompts is unsupported by %s: %s", self.server_url or "stdio", error
+                )
+                return ListPromptsResult(prompts=[])
 
         try:
             result: Final = await self.run_with_session(_list_prompts_operation)
@@ -675,6 +829,8 @@ class MCPClient:
             verbose_logger.warning("MCP client list_prompts was cancelled")
             raise
         except Exception as e:
+            if raise_on_error:
+                raise
             error_type: Final = type(e).__name__
             verbose_logger.error(
                 "MCP client list_prompts failed - Error Type: %s, Error: %s, Server: %s, Transport: %s",
@@ -733,12 +889,23 @@ class MCPClient:
                 )
             raise
 
-    async def list_resources(self) -> list[Resource]:
+    async def list_resources(self, *, raise_on_error: bool = False) -> list[Resource]:
         """List available resources from the server."""
         verbose_logger.debug("MCP client listing resources from %s", self.server_url or "stdio")
 
-        async def _list_resources_operation(session: ClientSession):
-            return await session.list_resources()
+        async def _list_resources_operation(session: ClientSession) -> ListResourcesResult:
+            capabilities: Final = session.get_server_capabilities()
+            if capabilities is not None and capabilities.resources is None:
+                return ListResourcesResult(resources=[])
+            try:
+                return await session.list_resources()
+            except McpError as error:
+                if error.error.code != METHOD_NOT_FOUND:
+                    raise
+                verbose_logger.debug(
+                    "MCP client list_resources is unsupported by %s: %s", self.server_url or "stdio", error
+                )
+                return ListResourcesResult(resources=[])
 
         try:
             result: Final = await self.run_with_session(_list_resources_operation)
@@ -752,6 +919,8 @@ class MCPClient:
             verbose_logger.warning("MCP client list_resources was cancelled")
             raise
         except Exception as e:
+            if raise_on_error:
+                raise
             error_type: Final = type(e).__name__
             verbose_logger.error(
                 "MCP client list_resources failed - Error Type: %s, Error: %s, Server: %s, Transport: %s",
@@ -769,12 +938,23 @@ class MCPClient:
             # Return empty list instead of raising to allow graceful degradation
             return []
 
-    async def list_resource_templates(self) -> list[ResourceTemplate]:
+    async def list_resource_templates(self, *, raise_on_error: bool = False) -> list[ResourceTemplate]:
         """List available resource templates from the server."""
         verbose_logger.debug("MCP client listing resource templates from %s", self.server_url or "stdio")
 
-        async def _list_resource_templates_operation(session: ClientSession):
-            return await session.list_resource_templates()
+        async def _list_resource_templates_operation(session: ClientSession) -> ListResourceTemplatesResult:
+            capabilities: Final = session.get_server_capabilities()
+            if capabilities is not None and capabilities.resources is None:
+                return ListResourceTemplatesResult(resourceTemplates=[])
+            try:
+                return await session.list_resource_templates()
+            except McpError as error:
+                if error.error.code != METHOD_NOT_FOUND:
+                    raise
+                verbose_logger.debug(
+                    "MCP client list_resource_templates is unsupported by %s: %s", self.server_url or "stdio", error
+                )
+                return ListResourceTemplatesResult(resourceTemplates=[])
 
         try:
             result: Final = await self.run_with_session(_list_resource_templates_operation)
@@ -791,6 +971,8 @@ class MCPClient:
             verbose_logger.warning("MCP client list_resource_templates was cancelled")
             raise
         except Exception as e:
+            if raise_on_error:
+                raise
             error_type: Final = type(e).__name__
             verbose_logger.error(
                 "MCP client list_resource_templates failed - Error Type: %s, Error: %s, Server: %s, Transport: %s",

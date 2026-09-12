@@ -115,14 +115,9 @@ def _router_with_credentialed_fallback() -> Router:
 
 
 @pytest.fixture(autouse=True)
-def _reset_expose_flag():
+def _reset_expose_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     """Each test starts with the flag in its default (on) state."""
-    original = litellm.expose_router_debug_in_errors
-    litellm.expose_router_debug_in_errors = True
-    try:
-        yield
-    finally:
-        litellm.expose_router_debug_in_errors = original
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", True)
 
 
 def test_flag_defaults_on():
@@ -133,8 +128,8 @@ def test_flag_defaults_on():
 
 
 @pytest.mark.asyncio
-async def test_flag_off_does_not_leak_received_model_group():
-    litellm.expose_router_debug_in_errors = False
+async def test_flag_off_does_not_leak_received_model_group(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", False)
     router = _router_with_rate_limit_failure()
     with pytest.raises(litellm.RateLimitError) as excinfo:
         await router.acompletion(
@@ -148,8 +143,8 @@ async def test_flag_off_does_not_leak_received_model_group():
 
 
 @pytest.mark.asyncio
-async def test_flag_on_shows_received_model_group():
-    litellm.expose_router_debug_in_errors = True
+async def test_flag_on_shows_received_model_group(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", True)
     router = _router_with_rate_limit_failure()
     with pytest.raises(litellm.RateLimitError) as excinfo:
         await router.acompletion(
@@ -166,8 +161,8 @@ async def test_flag_on_shows_received_model_group():
 
 
 @pytest.mark.asyncio
-async def test_flag_off_does_not_leak_context_window_fallback_hint():
-    litellm.expose_router_debug_in_errors = False
+async def test_flag_off_does_not_leak_context_window_fallback_hint(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", False)
     router = _router_with_context_window_failure()
     with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
         await router.acompletion(
@@ -181,8 +176,8 @@ async def test_flag_off_does_not_leak_context_window_fallback_hint():
 
 
 @pytest.mark.asyncio
-async def test_flag_on_shows_context_window_fallback_hint():
-    litellm.expose_router_debug_in_errors = True
+async def test_flag_on_shows_context_window_fallback_hint(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", True)
     router = _router_with_context_window_failure()
     with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
         await router.acompletion(
@@ -201,8 +196,8 @@ async def test_flag_on_shows_context_window_fallback_hint():
 
 
 @pytest.mark.asyncio
-async def test_flag_off_does_not_leak_when_no_fallback_group_found():
-    litellm.expose_router_debug_in_errors = False
+async def test_flag_off_does_not_leak_when_no_fallback_group_found(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", False)
     router = Router(
         model_list=[
             {
@@ -232,8 +227,8 @@ async def test_flag_off_does_not_leak_when_no_fallback_group_found():
 
 
 @pytest.mark.asyncio
-async def test_flag_on_shows_when_no_fallback_group_found():
-    litellm.expose_router_debug_in_errors = True
+async def test_flag_on_shows_when_no_fallback_group_found(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", True)
     router = Router(
         model_list=[
             {
@@ -284,8 +279,8 @@ def _router_with_plain_deployment() -> Router:
 
 
 @pytest.mark.asyncio
-async def test_flag_off_does_not_leak_deployment_timeout_debug():
-    litellm.expose_router_debug_in_errors = False
+async def test_flag_off_does_not_leak_deployment_timeout_debug(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", False)
     router = _router_with_plain_deployment()
     with pytest.raises(litellm.Timeout) as excinfo:
         await router.acompletion(
@@ -299,8 +294,8 @@ async def test_flag_off_does_not_leak_deployment_timeout_debug():
 
 
 @pytest.mark.asyncio
-async def test_flag_on_shows_deployment_timeout_debug():
-    litellm.expose_router_debug_in_errors = True
+async def test_flag_on_shows_deployment_timeout_debug(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", True)
     router = _router_with_plain_deployment()
     with pytest.raises(litellm.Timeout) as excinfo:
         await router.acompletion(
@@ -325,8 +320,8 @@ def _content_policy_error() -> litellm.ContentPolicyViolationError:
 
 
 @pytest.mark.asyncio
-async def test_flag_off_does_not_leak_content_policy_fallback_hint():
-    litellm.expose_router_debug_in_errors = False
+async def test_flag_off_does_not_leak_content_policy_fallback_hint(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", False)
     router = _router_with_plain_deployment()
     with pytest.raises(litellm.ContentPolicyViolationError) as excinfo:
         await router.acompletion(
@@ -340,8 +335,8 @@ async def test_flag_off_does_not_leak_content_policy_fallback_hint():
 
 
 @pytest.mark.asyncio
-async def test_flag_on_shows_content_policy_fallback_hint():
-    litellm.expose_router_debug_in_errors = True
+async def test_flag_on_shows_content_policy_fallback_hint(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", True)
     router = _router_with_plain_deployment()
     with pytest.raises(litellm.ContentPolicyViolationError) as excinfo:
         await router.acompletion(
@@ -358,8 +353,8 @@ async def test_flag_on_shows_content_policy_fallback_hint():
 
 
 @pytest.mark.asyncio
-async def test_flag_off_hides_fallback_credentials():
-    litellm.expose_router_debug_in_errors = False
+async def test_flag_off_hides_fallback_credentials(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", False)
     router = _router_with_credentialed_fallback()
     with pytest.raises(litellm.RateLimitError) as excinfo:
         await router.acompletion(
@@ -372,8 +367,8 @@ async def test_flag_off_hides_fallback_credentials():
 
 
 @pytest.mark.asyncio
-async def test_flag_on_masks_fallback_credentials():
-    litellm.expose_router_debug_in_errors = True
+async def test_flag_on_masks_fallback_credentials(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", True)
     router = _router_with_credentialed_fallback()
     with pytest.raises(litellm.RateLimitError) as excinfo:
         await router.acompletion(
@@ -389,14 +384,14 @@ async def test_flag_on_masks_fallback_credentials():
 
 
 @pytest.mark.asyncio
-async def test_flag_on_scrubs_credential_from_inner_fallback_exception_string():
+async def test_flag_on_scrubs_credential_from_inner_fallback_exception_string(monkeypatch: pytest.MonkeyPatch):
     """If the fallback attempt itself raises an exception whose message embeds a
     raw provider credential (e.g. a provider SDK echoing back the api_key it was
     called with), that string is re-embedded via `Error doing the fallback: ...`
     on the terminal raise. The router must scrub known secret patterns from it.
     The primary fails with a benign rate-limit; the fallback deployment fails
     with an exception whose text contains the secret."""
-    litellm.expose_router_debug_in_errors = True
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", True)
     inner_secret = "sk-INNERFALLBACKEXCEPTIONSECRET1234"
     router = Router(
         model_list=[
