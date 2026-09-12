@@ -1,4 +1,5 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderWithProviders as render } from "../../../tests/test-utils";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import UserSearchModal from "./user_search_modal";
@@ -101,15 +102,18 @@ describe("UserSearchModal submit payload", () => {
     await user.click(await screen.findByRole("option", { name: "picked@example.com" }));
   };
 
-  it("submits every registered field, with the untouched identity fields undefined", async () => {
+  it("should block submission without a selected user and after clearing the paired identity", async () => {
     const { user, onSubmit } = setup();
 
+    expect(save()).toBeDisabled();
+    await searchByEmail(user, "pick");
+    await user.click(screen.getAllByRole("button", { name: "Clear" })[0]);
+    expect(screen.getByLabelText("Email")).toHaveValue("");
+    expect(screen.getByLabelText("User ID")).toHaveValue("");
+    expect(save()).toBeDisabled();
     await user.click(save());
 
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    const values = onSubmit.mock.calls[0][0];
-    expect(Object.keys(values).sort()).toEqual(["role", "user_email", "user_id"]);
-    expect(values).toStrictEqual({ user_email: undefined, user_id: undefined, role: "user" });
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
   it("carries the picked user's email and id into the payload", async () => {
@@ -130,6 +134,7 @@ describe("UserSearchModal submit payload", () => {
     const { onSubmit } = setup();
     const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
 
+    await searchByEmail(user, "pick");
     await user.click(screen.getByLabelText("Member Role"));
     await user.click(await screen.findByRole("option", { name: /^admin/ }));
     await user.click(save());
@@ -184,6 +189,7 @@ describe("UserSearchModal submit payload", () => {
   it("does not submit on Enter in any field, while the button still does", async () => {
     const { user, onSubmit } = setup();
 
+    await searchByEmail(user, "pick");
     await user.click(getEmailSearchInput());
     await user.keyboard("{Enter}");
     await user.click(screen.getByLabelText("User ID"));

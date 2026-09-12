@@ -1217,6 +1217,7 @@ class CustomGuardrail(CustomLogger):
 
         _, metadata_bucket = get_or_create_metadata_bucket(request_data)
         _append_guardrail_info(metadata_bucket)
+        _sync_guardrail_info_to_logging_obj(request_data, request_data.get("litellm_logging_obj"))
 
         _guardrail_self_recorded.set(True)
 

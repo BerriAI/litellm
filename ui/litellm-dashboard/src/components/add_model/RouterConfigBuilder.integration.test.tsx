@@ -47,7 +47,7 @@ describe("RouterConfigBuilder", () => {
     expect(onChange).toHaveBeenCalledWith({
       routes: [
         expect.objectContaining({
-          name: "",
+          name: null,
           utterances: [],
           description: "",
           score_threshold: 0.5,
