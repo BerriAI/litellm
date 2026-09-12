@@ -6413,7 +6413,7 @@ def test_build_key_filter_conditions_key_alias_narrows_team_admin_visibility():
         admin_team_ids=["team-a"],
         member_team_ids=["team-a"],
         include_created_by_keys=False,
-        use_substring_matching=True,
+        use_key_alias_substring_matching=True,
     )
     assert {"key_alias": {"contains": "member-key", "mode": "insensitive"}} in where_substring["AND"], (
         f"substring key_alias not ANDed: {where_substring}"
@@ -9358,7 +9358,7 @@ async def test_build_key_filter_team_id_scoped():
 async def test_build_key_filter_admin_substring_matching():
     """
     Admin callers get substring (contains + insensitive) matching for user_id
-    and key_alias when use_substring_matching=True.
+    and key_alias when both substring flags are set.
     """
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _build_key_filter_conditions,
@@ -9378,10 +9378,39 @@ async def test_build_key_filter_admin_substring_matching():
         member_team_ids=None,
         include_created_by_keys=False,
         use_substring_matching=True,
+        use_key_alias_substring_matching=True,
     )
 
     assert where["AND"][0]["user_id"] == {"contains": user_id, "mode": "insensitive"}
     assert {"key_alias": {"contains": key_alias, "mode": "insensitive"}} in where["AND"]
+
+
+def test_build_key_filter_key_alias_substring_keeps_user_id_exact():
+    """A non-admin searching a team's keys by partial alias gets a substring
+    key_alias filter while their own-user scoping stays exact, so alias search
+    can never widen visibility to another user (user_id="alice" -> "alice2")."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = _build_key_filter_conditions(
+        user_id="alice",
+        team_id="team-a",
+        organization_id=None,
+        key_alias="first",
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        member_team_ids=["team-a"],
+        include_created_by_keys=False,
+        use_substring_matching=False,
+        use_key_alias_substring_matching=True,
+    )
+
+    assert {"key_alias": {"contains": "first", "mode": "insensitive"}} in where["AND"]
+    assert {"key_alias": "first"} not in where["AND"]
+    assert json.dumps({"user_id": "alice"}) in json.dumps(where)
+    assert '"contains": "alice"' not in json.dumps(where)
 
 
 @pytest.mark.asyncio
@@ -15149,14 +15178,43 @@ async def test_list_keys_admin_substring_opt_in():
 
 @pytest.mark.asyncio
 async def test_list_keys_non_admin_cannot_opt_into_substring():
-    """substring_matching is admin-only: a non-admin requesting it still gets
-    exact matching, scoped to their own user_id."""
+    """user_id substring matching is admin-only: a non-admin requesting it still
+    gets exact matching, scoped to their own user_id."""
     user = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice")
     kwargs = await _list_keys_capture_helper_kwargs(
         user, user_id=None, substring_matching=True
     )
     assert kwargs["use_substring_matching"] is False
     assert kwargs["user_id"] == "alice"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "user_role",
+    [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, LitellmUserRoles.TEAM],
+)
+async def test_list_keys_non_admin_key_alias_substring_is_honored(user_role):
+    """Team admins and internal users searching a team's keys by a partial alias
+    (key_alias=first for app_llmhub_first.last) must get substring matching on
+    key_alias, while user_id substring matching stays admin-only."""
+    user = UserAPIKeyAuth(user_role=user_role, user_id="alice")
+    kwargs = await _list_keys_capture_helper_kwargs(
+        user, user_id=None, key_alias="first", team_id="team-a", substring_matching=True
+    )
+    assert kwargs["use_key_alias_substring_matching"] is True
+    assert kwargs["use_substring_matching"] is False
+    assert kwargs["key_alias"] == "first"
+    assert kwargs["user_id"] == "alice"
+
+
+@pytest.mark.asyncio
+async def test_list_keys_key_alias_substring_defaults_off():
+    """Without substring_matching, key_alias stays an exact filter for every role."""
+    user = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice")
+    kwargs = await _list_keys_capture_helper_kwargs(
+        user, user_id=None, key_alias="first", substring_matching=False
+    )
+    assert kwargs["use_key_alias_substring_matching"] is False
 
 
 @pytest.mark.asyncio
