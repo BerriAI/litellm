@@ -1,4 +1,4 @@
-use serde_json::{Map, Value};
+use serde_json::Value;
 use std::sync::Arc;
 
 use pyo3::prelude::*;
@@ -14,9 +14,15 @@ use litellm_python_interop::{
     from_py_preserving_errors as from_py, to_py_preserving_errors as to_py,
 };
 
-use super::ocr_callbacks::{self, AzureAdTokenProvider};
-use crate::errors::{RustBridgeDeclined, ocr_error_to_pyerr};
-use crate::lifecycle::{PythonCallState, PythonRoute, missing_state, now, run_call};
+use super::callbacks;
+use super::errors::to_pyerr as ocr_error_to_pyerr;
+use crate::auth::{AZURE_AD_TOKEN_PROVIDER, PythonTokenProvider};
+use crate::errors::RustBridgeDeclined;
+use crate::lifecycle::{
+    NativeCall, NativeCallStep, OperationClass, PythonCallState, PythonRoute, missing_state, now,
+    run_call,
+};
+use crate::marshal::{project_optional_fields, python_timeout_seconds, request_input_sources};
 
 struct PythonOcrHost {
     state: PythonCallState,
@@ -24,7 +30,7 @@ struct PythonOcrHost {
     pre_call: Option<OcrPreCallRequest>,
     document: Option<Py<PyAny>>,
     api_key: Option<Py<PyAny>>,
-    azure_ad_token_provider: Option<AzureAdTokenProvider>,
+    azure_ad_token_provider: Option<PythonTokenProvider>,
     provider: String,
     retained_fields: Option<Py<PyDict>>,
     body: Option<Py<PyDict>>,
@@ -35,7 +41,7 @@ struct AdmittedOcrCall {
     request: litellm_core::ocr::LiteLLMOcrRequest,
     document: Py<PyAny>,
     api_key: Py<PyAny>,
-    azure_ad_token_provider: Option<AzureAdTokenProvider>,
+    azure_ad_token_provider: Option<PythonTokenProvider>,
     provider: String,
 }
 
@@ -125,13 +131,83 @@ impl PythonOcrHost {
     }
 }
 
+impl NativeCall for OcrCall {
+    type Operation = OcrHostOperation;
+    type Result = OcrHostResult;
+
+    fn resume(
+        &mut self,
+        result: Option<Self::Result>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<NativeCallStep<Self::Operation>, litellm_core::Error>,
+                > + Send
+                + '_,
+        >,
+    > {
+        Box::pin(async move {
+            OcrCall::resume(self, result).await.map(|step| match step {
+                litellm_core::ocr::OcrCallStep::Host(operation) => NativeCallStep::Host(operation),
+                litellm_core::ocr::OcrCallStep::Complete(_) => NativeCallStep::Complete,
+            })
+        })
+    }
+
+    fn interrupt(
+        &mut self,
+        failure: litellm_core::call_lifecycle::host::HostFailure,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<NativeCallStep<Self::Operation>, litellm_core::Error>,
+                > + Send
+                + '_,
+        >,
+    > {
+        Box::pin(async move {
+            OcrCall::interrupt(self, failure)
+                .await
+                .map(|step| match step {
+                    litellm_core::ocr::OcrCallStep::Host(operation) => {
+                        NativeCallStep::Host(operation)
+                    }
+                    litellm_core::ocr::OcrCallStep::Complete(_) => NativeCallStep::Complete,
+                })
+        })
+    }
+}
+
 impl PythonRoute for PythonOcrHost {
+    type Call = OcrCall;
+
     fn state(&self) -> &PythonCallState {
         &self.state
     }
 
     fn state_mut(&mut self) -> &mut PythonCallState {
         &mut self.state
+    }
+
+    fn classify(operation: &OcrHostOperation) -> OperationClass {
+        match operation {
+            OcrHostOperation::Lifecycle(phase) => OperationClass::Phase(*phase),
+            OcrHostOperation::Success { .. } => {
+                OperationClass::Phase(litellm_core::call_lifecycle::host::HostPhase::Success)
+            }
+            OcrHostOperation::Failure { .. } => {
+                OperationClass::Phase(litellm_core::call_lifecycle::host::HostPhase::Failure)
+            }
+            _ => OperationClass::Route,
+        }
+    }
+
+    fn lifecycle_result() -> OcrHostResult {
+        OcrHostResult::Lifecycle(Ok(()))
+    }
+
+    fn map_error(error: litellm_core::Error) -> PyErr {
+        ocr_error_to_pyerr(error)
     }
 
     fn invoke(&mut self, py: Python<'_>, operation: OcrHostOperation) -> PyResult<OcrHostResult> {
@@ -165,7 +241,7 @@ impl PythonRoute for PythonOcrHost {
             }
             OcrHostOperation::ConstructResponse(response) => {
                 self.state.end = Some(now(py)?);
-                self.state.response = Some(ocr_callbacks::response(py, response.as_ref())?);
+                self.state.response = Some(callbacks::response(py, response.as_ref())?);
                 OcrHostResult::Lifecycle(Ok(()))
             }
             OcrHostOperation::MapFailure(error) => {
@@ -177,7 +253,7 @@ impl PythonRoute for PythonOcrHost {
                 }
                 let error = self.state.error.as_ref().ok_or_else(missing_state)?;
                 let request = self.request.as_ref().ok_or_else(missing_state)?.bind(py);
-                let mapped = ocr_callbacks::map_failure(py, error, request, &self.provider)?;
+                let mapped = callbacks::map_failure(py, error, request, &self.provider)?;
                 self.state
                     .retain_error(py, PyErr::from_value(mapped.into_bound(py).into_any()));
                 OcrHostResult::Lifecycle(Ok(()))
@@ -231,11 +307,17 @@ fn project_request(
     let request_kwargs = kwargs;
     let consumed = consumed_optional_param_names(&model, custom_llm_provider.as_deref())
         .map_err(ocr_error_to_pyerr)?;
-    let optional_params = extract_optional_params(request_kwargs, &consumed)?;
-    let input_sources = extract_input_sources(request_kwargs, &consumed)?;
+    let optional_params = project_optional_fields(request_kwargs, &consumed)?;
+    let input_sources = request_input_sources(
+        request_kwargs,
+        consumed
+            .iter()
+            .copied()
+            .chain(["api_key", "api_base", "extra_headers"]),
+    )?;
     let azure_ad_token_provider = request_kwargs
         .get_item("azure_ad_token_provider")?
-        .and_then(AzureAdTokenProvider::select);
+        .and_then(|provider| PythonTokenProvider::select(provider, AZURE_AD_TOKEN_PROVIDER));
     let wire = OcrWireRequest {
         model,
         document: wire_document,
@@ -250,7 +332,7 @@ fn project_request(
         input_sources,
         timeout_seconds: argument("timeout")?
             .extract::<Option<Py<PyAny>>>()?
-            .map(|value| ocr_callbacks::timeout_seconds(py, value))
+            .map(|value| python_timeout_seconds(py, value))
             .transpose()?
             .flatten(),
     };
@@ -266,55 +348,11 @@ fn project_request(
     })
 }
 
-fn extract_optional_params(
-    kwargs: &Bound<'_, PyDict>,
-    consumed: &[&str],
-) -> PyResult<Map<String, Value>> {
-    let mut optional_params = Map::new();
-    for name in consumed {
-        if let Some(value) = kwargs.get_item(name)? {
-            optional_params.insert((*name).to_string(), from_py(&value)?);
-        }
-    }
-    Ok(optional_params)
-}
-
-fn extract_input_sources(
-    kwargs: &Bound<'_, PyDict>,
-    consumed: &[&str],
-) -> PyResult<std::collections::BTreeMap<String, litellm_core::auth::InputSource>> {
-    let Some(proxy_request) = kwargs.get_item("proxy_server_request")? else {
-        return Ok(Default::default());
-    };
-    let proxy_request = proxy_request.cast_into::<PyDict>()?;
-    let body_fields = proxy_request
-        .get_item("body_fields")?
-        .or(proxy_request.get_item("body")?);
-    let credential_fields = proxy_request.get_item("credential_fields")?;
-    let mut sources = std::collections::BTreeMap::new();
-    for name in consumed
-        .iter()
-        .copied()
-        .chain(["api_key", "api_base", "extra_headers"])
-    {
-        let present = body_fields
-            .as_ref()
-            .is_some_and(|fields| fields.contains(name).unwrap_or(false))
-            || credential_fields
-                .as_ref()
-                .is_some_and(|fields| fields.contains(name).unwrap_or(false));
-        if present {
-            sources.insert(name.to_string(), litellm_core::auth::InputSource::Request);
-        }
-    }
-    Ok(sources)
-}
-
 fn extract_document(py: Python<'_>, document: &Bound<'_, PyAny>) -> PyResult<Value> {
     if document.get_item("type")?.extract::<String>()? != "file" {
         return from_py(document);
     }
-    serde_json::to_value(super::ocr_document::file_document(py, document)?)
+    serde_json::to_value(super::document::file_document(py, document.extract()?)?)
         .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
 }
 

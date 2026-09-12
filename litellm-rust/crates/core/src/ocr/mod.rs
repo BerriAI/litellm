@@ -17,7 +17,6 @@ pub use lifecycle::{
     NativeOutcome, NativeResult, NoopOcrHost, OcrAdmission, OcrCall, OcrCallStep, OcrDecline,
     OcrHookHost, OcrHost, OcrHostOperation, OcrHostResult,
 };
-pub use prepare::{credential_default_fields, credential_index};
 pub use types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument};
 
 #[cfg(test)]

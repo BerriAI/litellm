@@ -1,3 +1,4 @@
+mod auth;
 mod constants;
 mod diagnostics;
 mod errors;

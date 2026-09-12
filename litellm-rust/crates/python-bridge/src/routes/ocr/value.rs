@@ -6,7 +6,7 @@ use litellm_core::ocr::wire::{OcrWireRequest, decode_request, is_supported_reque
 use pyo3::prelude::*;
 use serde_json::Value;
 
-use crate::errors::ocr_error_to_pyerr;
+use super::errors::to_pyerr as ocr_error_to_pyerr;
 use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty};
 
 fn prepare_ocr(

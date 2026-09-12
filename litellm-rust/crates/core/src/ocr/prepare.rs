@@ -6,21 +6,6 @@ use super::error::{OcrError, OcrRequestError};
 use super::hooks::OcrDuringCallRequest;
 use super::types::{LiteLLMOcrRequest, OcrDocument};
 
-pub fn credential_index(requested: &str, names: &[String]) -> Option<usize> {
-    names.iter().position(|name| name == requested)
-}
-
-pub fn credential_default_fields<'a>(
-    supplied: &[String],
-    credential_fields: &'a [String],
-) -> Vec<&'a str> {
-    credential_fields
-        .iter()
-        .filter(|name| !supplied.contains(name))
-        .map(String::as_str)
-        .collect()
-}
-
 #[derive(Debug, Deserialize)]
 pub(crate) struct ParsedProviderParams<T> {
     #[serde(flatten)]

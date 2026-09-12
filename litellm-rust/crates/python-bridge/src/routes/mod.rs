@@ -10,14 +10,9 @@ mod audio_transcription;
 mod chat_completions;
 mod messages;
 mod ocr;
-mod ocr_callbacks;
-mod ocr_document;
-mod ocr_lifecycle;
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     ocr::register(module)?;
-    ocr_document::register(module)?;
-    ocr_lifecycle::register(module)?;
     audio_transcription::register(module)?;
     messages::register(module)?;
     chat_completions::register(module)?;

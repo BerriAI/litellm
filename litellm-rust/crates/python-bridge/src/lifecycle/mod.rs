@@ -1,169 +1,82 @@
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use futures_util::future::{AbortHandle, Abortable};
 use litellm_core::call_lifecycle::host::{HostFailure, HostPhase, HostStep};
-use litellm_core::ocr::{OcrCall, OcrCallStep, OcrHostOperation, OcrHostResult};
-use litellm_python_interop::panic_to_pyerr;
 use pyo3::exceptions::{PyBaseException, PyException, PyRuntimeError};
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 use tokio::sync::Mutex;
 
-use crate::errors::ocr_error_to_pyerr;
 use crate::execution::{run_async_value, run_sync_value};
 
 mod bindings;
+mod handle;
 mod preparation;
 
 use bindings::DeploymentHooks;
 pub(crate) use bindings::PythonLogger;
+use handle::{Execution, ExecutionBody, ExecutionStep};
+
+pub(crate) enum NativeCallStep<O> {
+    Host(O),
+    Complete,
+}
+
+pub(crate) trait NativeCall: Send + Sync {
+    type Operation: Send + 'static;
+    type Result: Send + 'static;
+
+    fn resume(
+        &mut self,
+        result: Option<Self::Result>,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<NativeCallStep<Self::Operation>, litellm_core::Error>>
+                + Send
+                + '_,
+        >,
+    >;
+
+    fn interrupt(
+        &mut self,
+        failure: HostFailure,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<NativeCallStep<Self::Operation>, litellm_core::Error>>
+                + Send
+                + '_,
+        >,
+    >;
+}
+
+pub(crate) enum OperationClass {
+    Phase(HostPhase),
+    Route,
+}
 
 pub(crate) trait PythonRoute: Send + Sync {
+    type Call: NativeCall + 'static;
+
     fn state(&self) -> &PythonCallState;
     fn state_mut(&mut self) -> &mut PythonCallState;
-    fn invoke(&mut self, py: Python<'_>, operation: OcrHostOperation) -> PyResult<OcrHostResult>;
+    fn classify(operation: &<Self::Call as NativeCall>::Operation) -> OperationClass;
+    fn lifecycle_result() -> <Self::Call as NativeCall>::Result;
+    fn map_error(error: litellm_core::Error) -> PyErr;
+    fn invoke(
+        &mut self,
+        py: Python<'_>,
+        operation: <Self::Call as NativeCall>::Operation,
+    ) -> PyResult<<Self::Call as NativeCall>::Result>;
     fn cleanup(&mut self);
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError>;
 }
 
-enum ExecutionStep {
-    Return(Py<PyAny>),
-    Await(Py<PyAny>),
-}
-
-trait ExecutionBody: Send + Sync {
-    fn resume(&mut self, result: Option<PyResult<Py<PyAny>>>) -> PyResult<ExecutionStep>;
-    fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError>;
-}
-
-enum ExecutionState {
-    Created(Box<dyn ExecutionBody>),
-    Running,
-    Suspended(Box<dyn ExecutionBody>),
-    Closed,
-}
-
-#[pyclass]
-struct Execution {
-    state: ExecutionState,
-}
-
-impl Execution {
-    fn new(body: impl ExecutionBody + 'static) -> Self {
-        Self {
-            state: ExecutionState::Created(Box::new(body)),
-        }
-    }
-
-    fn advance(
-        slf: &Bound<'_, Self>,
-        py: Python<'_>,
-        result: Option<PyResult<Py<PyAny>>>,
-    ) -> PyResult<Py<PyAny>> {
-        let mut body = {
-            let mut execution = slf.borrow_mut();
-            match (&execution.state, result.is_some()) {
-                (ExecutionState::Created(_), false) | (ExecutionState::Suspended(_), true) => {}
-                (ExecutionState::Running, _) => {
-                    return Err(PyRuntimeError::new_err("execution is already running"));
-                }
-                (ExecutionState::Closed, _) => {
-                    return Err(PyRuntimeError::new_err("execution is closed"));
-                }
-                _ => {
-                    return Err(PyRuntimeError::new_err(
-                        "execution requires start before resume and can only start once",
-                    ));
-                }
-            }
-            match std::mem::replace(&mut execution.state, ExecutionState::Running) {
-                ExecutionState::Created(body) | ExecutionState::Suspended(body) => body,
-                _ => unreachable!(),
-            }
-        };
-        let outcome = catch_unwind(AssertUnwindSafe(|| {
-            let step = body.resume(result)?;
-            let (tag, value, suspended) = match step {
-                ExecutionStep::Await(value) => ("Await", value, true),
-                ExecutionStep::Return(value) => ("Complete", value, false),
-            };
-            let step = py
-                .import("litellm.rust_bridge.lifecycle")?
-                .getattr(tag)?
-                .call1((value,))?
-                .unbind();
-            Ok((step, suspended))
-        }))
-        .map_err(panic_to_pyerr)
-        .and_then(|result| result);
-        match outcome {
-            Ok((step, true)) if matches!(slf.borrow().state, ExecutionState::Running) => {
-                slf.borrow_mut().state = ExecutionState::Suspended(body);
-                Ok(step)
-            }
-            outcome => {
-                slf.borrow_mut().state = ExecutionState::Closed;
-                drop(body);
-                outcome.and_then(|(step, suspended)| {
-                    if suspended {
-                        Err(PyRuntimeError::new_err(
-                            "execution was closed while running",
-                        ))
-                    } else {
-                        Ok(step)
-                    }
-                })
-            }
-        }
-    }
-}
-
-#[pymethods]
-impl Execution {
-    fn start(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        Self::advance(slf, py, None)
-    }
-
-    fn resume_value(
-        slf: &Bound<'_, Self>,
-        py: Python<'_>,
-        value: Py<PyAny>,
-    ) -> PyResult<Py<PyAny>> {
-        Self::advance(slf, py, Some(Ok(value)))
-    }
-
-    fn resume_error(
-        slf: &Bound<'_, Self>,
-        py: Python<'_>,
-        error: Bound<'_, PyBaseException>,
-    ) -> PyResult<Py<PyAny>> {
-        Self::advance(slf, py, Some(Err(PyErr::from_value(error.into_any()))))
-    }
-
-    fn close(slf: &Bound<'_, Self>) {
-        let state = std::mem::replace(&mut slf.borrow_mut().state, ExecutionState::Closed);
-        drop(state);
-    }
-
-    fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
-        match &self.state {
-            ExecutionState::Created(body) | ExecutionState::Suspended(body) => {
-                body.traverse(&visit)
-            }
-            _ => Ok(()),
-        }
-    }
-
-    fn __clear__(slf: &Bound<'_, Self>) {
-        Self::close(slf);
-    }
-}
-
-struct NativeCall {
-    call: OcrCall,
-    result: Option<Result<OcrCallStep, litellm_core::Error>>,
+struct NativeCallState<C: NativeCall> {
+    call: C,
+    result: Option<Result<NativeCallStep<C::Operation>, litellm_core::Error>>,
 }
 
 enum PendingOperation {
@@ -173,20 +86,20 @@ enum PendingOperation {
 
 struct PythonLifecycle<R: PythonRoute> {
     route: R,
-    call: Option<Arc<Mutex<NativeCall>>>,
+    call: Option<Arc<Mutex<NativeCallState<R::Call>>>>,
     pending: Option<PendingOperation>,
     native_abort: Option<AbortHandle>,
 }
 
 pub(crate) fn run_call<R: PythonRoute + 'static>(
     py: Python<'_>,
-    call: OcrCall,
+    call: R::Call,
     route: R,
 ) -> PyResult<Py<PyAny>> {
     let asynchronous = route.state().asynchronous;
     let mut lifecycle = PythonLifecycle {
         route,
-        call: Some(Arc::new(Mutex::new(NativeCall { call, result: None }))),
+        call: Some(Arc::new(Mutex::new(NativeCallState { call, result: None }))),
         pending: None,
         native_abort: None,
     };
@@ -214,14 +127,15 @@ impl<R: PythonRoute> PythonLifecycle<R> {
     fn resume_core(
         &mut self,
         py: Python<'_>,
-        result: Option<OcrHostResult>,
-    ) -> PyResult<HostStep<OcrCallStep, Py<PyAny>>> {
+        result: Option<Result<<R::Call as NativeCall>::Result, HostFailure>>,
+    ) -> PyResult<HostStep<NativeCallStep<<R::Call as NativeCall>::Operation>, Py<PyAny>>> {
         let call = Arc::clone(self.call.as_ref().ok_or_else(missing_state)?);
         let future = async move {
             let mut call = call.lock().await;
             let result = match result {
-                Some(OcrHostResult::Lifecycle(Err(failure))) => call.call.interrupt(failure).await,
-                result => call.call.resume(result).await,
+                Some(Err(failure)) => call.call.interrupt(failure).await,
+                Some(Ok(result)) => call.call.resume(Some(result)).await,
+                None => call.call.resume(None).await,
             };
             call.result = Some(result);
             Ok(())
@@ -244,7 +158,7 @@ impl<R: PythonRoute> PythonLifecycle<R> {
         }
     }
 
-    fn take_native_result(&self) -> PyResult<OcrCallStep> {
+    fn take_native_result(&self) -> PyResult<NativeCallStep<<R::Call as NativeCall>::Operation>> {
         self.call
             .as_ref()
             .ok_or_else(missing_state)?
@@ -253,7 +167,7 @@ impl<R: PythonRoute> PythonLifecycle<R> {
             .result
             .take()
             .ok_or_else(missing_state)?
-            .map_err(ocr_error_to_pyerr)
+            .map_err(R::map_error)
     }
 
     fn host_failure(
@@ -261,7 +175,7 @@ impl<R: PythonRoute> PythonLifecycle<R> {
         py: Python<'_>,
         error: PyErr,
         phase: Option<HostPhase>,
-    ) -> OcrHostResult {
+    ) -> HostFailure {
         let native = litellm_core::Error::InvalidRequest(error.to_string());
         let cancelled = !error.is_instance_of::<PyException>(py);
         let failure = if !cancelled {
@@ -276,7 +190,7 @@ impl<R: PythonRoute> PythonLifecycle<R> {
         if state.end.is_none() {
             state.end = now(py).ok();
         }
-        OcrHostResult::Lifecycle(Err(failure))
+        failure
     }
 
     fn drive(
@@ -289,16 +203,16 @@ impl<R: PythonRoute> PythonLifecycle<R> {
             (Some(PendingOperation::Native), Some(result)) => match result {
                 Ok(_) => HostStep::Ready(self.take_native_result()?),
                 Err(error) => {
-                    let result = self.host_failure(py, error, None);
-                    self.resume_core(py, Some(result))?
+                    let failure = self.host_failure(py, error, None);
+                    self.resume_core(py, Some(Err(failure)))?
                 }
             },
             (Some(PendingOperation::Host(phase)), Some(result)) => {
                 let result =
                     result.and_then(|value| self.route.state_mut().accept(py, phase, value));
                 let result = match result {
-                    Ok(()) => OcrHostResult::Lifecycle(Ok(())),
-                    Err(error) => self.host_failure(py, error, Some(phase)),
+                    Ok(()) => Ok(R::lifecycle_result()),
+                    Err(error) => Err(self.host_failure(py, error, Some(phase))),
                 };
                 self.resume_core(py, Some(result))?
             }
@@ -307,7 +221,7 @@ impl<R: PythonRoute> PythonLifecycle<R> {
         loop {
             let operation = match step {
                 HostStep::Suspend(awaitable) => return Ok(ExecutionStep::Await(awaitable)),
-                HostStep::Ready(OcrCallStep::Complete(_)) => {
+                HostStep::Ready(NativeCallStep::Complete) => {
                     return self
                         .route
                         .state_mut()
@@ -316,44 +230,30 @@ impl<R: PythonRoute> PythonLifecycle<R> {
                         .map(ExecutionStep::Return)
                         .ok_or_else(missing_state);
                 }
-                HostStep::Ready(OcrCallStep::Host(operation)) => operation,
+                HostStep::Ready(NativeCallStep::Host(operation)) => operation,
             };
-            let phase = match &operation {
-                OcrHostOperation::Lifecycle(phase) => Some(*phase),
-                OcrHostOperation::Failure { .. } => Some(HostPhase::Failure),
-                OcrHostOperation::Success { .. } => Some(HostPhase::Success),
-                _ => None,
+            let phase = match R::classify(&operation) {
+                OperationClass::Phase(phase) => Some(phase),
+                OperationClass::Route => None,
             };
-            let result = match operation {
-                OcrHostOperation::Success { .. } => self
-                    .route
-                    .state_mut()
-                    .invoke(py, HostPhase::Success)
-                    .map(|_| OcrHostResult::Lifecycle(Ok(()))),
-                OcrHostOperation::Failure { .. } => self
-                    .route
-                    .state_mut()
-                    .invoke(py, HostPhase::Failure)
-                    .map(|_| OcrHostResult::Lifecycle(Ok(()))),
-                OcrHostOperation::Lifecycle(phase) => {
-                    match self.route.state_mut().invoke(py, phase) {
-                        Ok(HostStep::Suspend(awaitable)) => {
-                            self.pending = Some(PendingOperation::Host(phase));
-                            return Ok(ExecutionStep::Await(awaitable));
-                        }
-                        Ok(HostStep::Ready(value)) => self
-                            .route
-                            .state_mut()
-                            .accept(py, phase, value)
-                            .map(|()| OcrHostResult::Lifecycle(Ok(()))),
-                        Err(error) => Err(error),
+            let result = match phase {
+                Some(phase) => match self.route.state_mut().invoke(py, phase) {
+                    Ok(HostStep::Suspend(awaitable)) => {
+                        self.pending = Some(PendingOperation::Host(phase));
+                        return Ok(ExecutionStep::Await(awaitable));
                     }
-                }
-                operation => self.route.invoke(py, operation),
+                    Ok(HostStep::Ready(value)) => self
+                        .route
+                        .state_mut()
+                        .accept(py, phase, value)
+                        .map(|()| R::lifecycle_result()),
+                    Err(error) => Err(error),
+                },
+                None => self.route.invoke(py, operation),
             };
             let result = match result {
-                Ok(result) => result,
-                Err(error) => self.host_failure(py, error, phase),
+                Ok(result) => Ok(result),
+                Err(error) => Err(self.host_failure(py, error, phase)),
             };
             step = self.resume_core(py, Some(result))?;
         }
@@ -762,6 +662,111 @@ mod tests {
         Execution::new(CallingBody(callback))
     }
 
+    struct SyntheticCall(bool);
+
+    impl NativeCall for SyntheticCall {
+        type Operation = ();
+        type Result = ();
+
+        fn resume(
+            &mut self,
+            result: Option<Self::Result>,
+        ) -> Pin<
+            Box<
+                dyn Future<Output = Result<NativeCallStep<Self::Operation>, litellm_core::Error>>
+                    + Send
+                    + '_,
+            >,
+        > {
+            Box::pin(async move {
+                match (self.0, result) {
+                    (false, None) => {
+                        self.0 = true;
+                        Ok(NativeCallStep::Host(()))
+                    }
+                    (true, Some(())) => Ok(NativeCallStep::Complete),
+                    _ => Err(litellm_core::Error::InvalidRequest(
+                        "invalid synthetic lifecycle state".into(),
+                    )),
+                }
+            })
+        }
+
+        fn interrupt(
+            &mut self,
+            _: HostFailure,
+        ) -> Pin<
+            Box<
+                dyn Future<Output = Result<NativeCallStep<Self::Operation>, litellm_core::Error>>
+                    + Send
+                    + '_,
+            >,
+        > {
+            Box::pin(async { Ok(NativeCallStep::Complete) })
+        }
+    }
+
+    struct SyntheticRoute(PythonCallState);
+
+    impl PythonRoute for SyntheticRoute {
+        type Call = SyntheticCall;
+
+        fn state(&self) -> &PythonCallState {
+            &self.0
+        }
+
+        fn state_mut(&mut self) -> &mut PythonCallState {
+            &mut self.0
+        }
+
+        fn classify(_: &()) -> OperationClass {
+            OperationClass::Route
+        }
+
+        fn lifecycle_result() {}
+
+        fn map_error(error: litellm_core::Error) -> PyErr {
+            crate::errors::core_error_to_pyerr(error)
+        }
+
+        fn invoke(&mut self, py: Python<'_>, _: ()) -> PyResult<()> {
+            self.0.response = Some(
+                pyo3::types::PyString::new(py, "shared lifecycle")
+                    .into_any()
+                    .unbind(),
+            );
+            Ok(())
+        }
+
+        fn cleanup(&mut self) {}
+
+        fn traverse(&self, _: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn shared_runner_executes_a_non_ocr_adapter() {
+        Python::initialize();
+        Python::attach(|py| {
+            let route = SyntheticRoute(
+                PythonCallState::new(
+                    py,
+                    PyTuple::empty(py).unbind(),
+                    PyDict::new(py).unbind(),
+                    false,
+                    "synthetic",
+                )
+                .unwrap(),
+            );
+            let value: String = run_call(py, SyntheticCall(false), route)
+                .unwrap()
+                .extract(py)
+                .unwrap();
+            assert_eq!(value, "shared lifecycle");
+        });
+    }
+
     #[test]
     fn python_driver_preserves_inline_await_and_native_ownership() {
         let _guard = PYTHON_GLOBALS
@@ -771,7 +776,7 @@ mod tests {
         Python::attach(|py| {
             py.import("asyncio").unwrap();
             let source = std::ffi::CString::new(include_str!(
-                "../../../../litellm/rust_bridge/lifecycle.py"
+                "../../../../../litellm/rust_bridge/lifecycle.py"
             ))
             .unwrap();
             let module = PyModule::from_code(
@@ -797,7 +802,7 @@ mod tests {
                     wrap_pyfunction!(calling_execution, py).unwrap(),
                 )
                 .unwrap();
-            let probe = std::ffi::CString::new(include_str!("../tests/lifecycle.py")).unwrap();
+            let probe = std::ffi::CString::new(include_str!("../../tests/lifecycle.py")).unwrap();
             py.run(&probe, Some(&locals), Some(&locals)).unwrap();
         });
     }

@@ -1,9 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
+
+use litellm_core::auth::InputSource;
+use litellm_python_interop::from_py_preserving_errors as from_py;
 
 pub(crate) struct RouteOptions {
     pub(crate) model: String,
@@ -82,6 +85,52 @@ pub(crate) fn optional_timeout(timeout_seconds: Option<f64>) -> Option<Duration>
             None
         }
     })
+}
+
+pub(crate) fn python_timeout_seconds(py: Python<'_>, timeout: Py<PyAny>) -> PyResult<Option<f64>> {
+    py.import("litellm.rust_bridge.timeouts")?
+        .getattr("timeout_to_seconds")?
+        .call1((timeout,))?
+        .extract()
+}
+
+pub(crate) fn project_optional_fields(
+    kwargs: &Bound<'_, pyo3::types::PyDict>,
+    names: &[&str],
+) -> PyResult<Map<String, Value>> {
+    names
+        .iter()
+        .filter_map(|name| match kwargs.get_item(name) {
+            Ok(Some(value)) => Some(from_py(&value).map(|value| ((*name).to_string(), value))),
+            Ok(None) => None,
+            Err(error) => Some(Err(error)),
+        })
+        .collect()
+}
+
+pub(crate) fn request_input_sources<'a>(
+    kwargs: &Bound<'_, pyo3::types::PyDict>,
+    names: impl Iterator<Item = &'a str>,
+) -> PyResult<BTreeMap<String, InputSource>> {
+    let Some(proxy_request) = kwargs.get_item("proxy_server_request")? else {
+        return Ok(BTreeMap::new());
+    };
+    let proxy_request = proxy_request.cast_into::<pyo3::types::PyDict>()?;
+    let body_fields = proxy_request
+        .get_item("body_fields")?
+        .or(proxy_request.get_item("body")?);
+    let credential_fields = proxy_request.get_item("credential_fields")?;
+    Ok(names
+        .filter_map(|name| {
+            let present = body_fields
+                .as_ref()
+                .is_some_and(|fields| fields.contains(name).unwrap_or(false))
+                || credential_fields
+                    .as_ref()
+                    .is_some_and(|fields| fields.contains(name).unwrap_or(false));
+            present.then(|| (name.to_string(), InputSource::Request))
+        })
+        .collect())
 }
 
 pub(crate) fn marshal_headers(headers: Option<Value>) -> PyResult<HashMap<String, String>> {
