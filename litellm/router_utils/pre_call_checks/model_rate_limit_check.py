@@ -168,8 +168,11 @@ class ModelRateLimitingCheck(CustomLogger):
 
             # Check TPM limit
             if tpm_limit is not None:
-                # Query cache for current minute token usage (checks in-memory first, falling back to Redis if configured)
-                current_tpm: Final = self.dual_cache.get_cache(key=tpm_key)
+                redis_cache = getattr(self.dual_cache, "redis_cache", None)
+                if redis_cache is not None:
+                    current_tpm = redis_cache.get_cache(key=tpm_key)
+                else:
+                    current_tpm = self.dual_cache.get_cache(key=tpm_key)
                 if current_tpm is not None and current_tpm >= tpm_limit:
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. TPM limit={tpm_limit}, current usage={current_tpm}",
@@ -249,8 +252,11 @@ class ModelRateLimitingCheck(CustomLogger):
 
             # Check TPM limit
             if tpm_limit is not None:
-                # Query cache for current minute token usage (checks in-memory first, falling back to Redis if configured)
-                current_tpm: Final = await self.dual_cache.async_get_cache(key=tpm_key)
+                redis_cache = getattr(self.dual_cache, "redis_cache", None)
+                if redis_cache is not None:
+                    current_tpm = await redis_cache.async_get_cache(key=tpm_key)
+                else:
+                    current_tpm = await self.dual_cache.async_get_cache(key=tpm_key)
                 if current_tpm is not None and current_tpm >= tpm_limit:
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. TPM limit={tpm_limit}, current usage={current_tpm}",

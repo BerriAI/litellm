@@ -127,6 +127,7 @@ class TestModelRateLimitingCheck:
     def test_pre_call_check_raises_rate_limit_error_when_over_tpm(self):
         """Test that RateLimitError is raised when TPM limit is exceeded."""
         mock_cache = MagicMock()
+        mock_cache.redis_cache = None
         mock_cache.get_cache.return_value = 1000  # Already at limit
 
         check = ModelRateLimitingCheck(dual_cache=mock_cache)
@@ -145,10 +146,12 @@ class TestModelRateLimitingCheck:
         assert "current usage=1000" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_async_pre_call_check_queries_remote_cache_without_local_only(self):
-        """Test that async_pre_call_check allows DualCache to check Redis without forcing local_only=True."""
+    async def test_async_pre_call_check_queries_remote_cache_when_redis_configured(self):
+        """Test that async_pre_call_check queries redis_cache directly when configured to observe global cluster counter."""
         mock_cache = MagicMock()
-        mock_cache.async_get_cache = AsyncMock(return_value=1000)
+        mock_redis = MagicMock()
+        mock_redis.async_get_cache = AsyncMock(return_value=1000)
+        mock_cache.redis_cache = mock_redis
 
         check = ModelRateLimitingCheck(dual_cache=mock_cache)
 
@@ -162,10 +165,8 @@ class TestModelRateLimitingCheck:
         with pytest.raises(litellm.RateLimitError):
             await check.async_pre_call_check(deployment)
 
-        # Verify async_get_cache was called without local_only=True restriction
-        mock_cache.async_get_cache.assert_called_once()
-        _, kwargs = mock_cache.async_get_cache.call_args
-        assert kwargs.get("local_only") is not True
+        # Verify redis_cache.async_get_cache was called directly to fetch live cluster count
+        mock_redis.async_get_cache.assert_called_once()
 
     def test_log_success_event_increments_cache(self):
         """Test that log_success_event correctly increments the cache."""
@@ -252,6 +253,7 @@ class TestModelRateLimitingCheckAsync:
     async def test_async_pre_call_check_raises_rate_limit_error_when_over_tpm(self):
         """Test that RateLimitError is raised when TPM limit is exceeded (async)."""
         mock_cache = MagicMock()
+        mock_cache.redis_cache = None
         mock_cache.async_get_cache = AsyncMock(return_value=1000)  # Already at limit
 
         check = ModelRateLimitingCheck(dual_cache=mock_cache)
