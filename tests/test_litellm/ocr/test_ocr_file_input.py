@@ -12,16 +12,32 @@ Tests that:
 import base64
 import os
 import tempfile
+from collections.abc import Generator
 from io import BytesIO
 from pathlib import Path
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import orjson
 import pytest
 from starlette.datastructures import FormData
 
 from litellm.ocr.input import convert_file_document_to_url_document, get_mime_type
+
+
+@pytest.fixture(autouse=True, params=["native", "disabled", "unavailable"])
+def document_runtime(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
+    from litellm.rust_bridge import bindings, configuration
+
+    configuration.reset_rust_configuration()
+    monkeypatch.delenv("LITELLM_RUST", raising=False)
+    if request.param == "disabled":
+        monkeypatch.setenv("LITELLM_RUST", "0")
+        monkeypatch.setattr(bindings, "get_native_bridge", Mock(side_effect=AssertionError("Rust is disabled")))
+    elif request.param == "unavailable":
+        monkeypatch.setattr(bindings, "get_native_bridge", lambda: None)
+    yield
+    configuration.reset_rust_configuration()
 
 
 class TestGetMimeType:
