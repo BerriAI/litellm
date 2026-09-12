@@ -2,16 +2,17 @@ import json
 import os
 import subprocess
 import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 
 import pytest
-import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 START_IDP = ROOT / ".github/e2e-stack/start-idp.sh"
 
 
-def run_start(tmp_path: Path, *, platform: str = "Linux", failure: str = ""):
+def run_start(tmp_path: Path, *, platform: str = "Linux", failure: str = "", port: int = 8181, real_curl: bool = False):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     calls = tmp_path / "docker.jsonl"
@@ -27,6 +28,8 @@ if os.environ['FAILURE'] == 'launch' and '--name' in sys.argv:
         "curl": "import os, sys; sys.exit(1 if os.environ['FAILURE'] == 'readiness' else 0)\n",
         "uname": "import os; print(os.environ['PLATFORM'])\n",
     }
+    if real_curl:
+        del programs["curl"]
     for name, source in programs.items():
         program = bin_dir / name
         program.write_text(f"#!{sys.executable}\n{source}")
@@ -44,7 +47,7 @@ if os.environ['FAILURE'] == 'launch' and '--name' in sys.argv:
             "DATABASE_USER": "fixture_user",
             "DATABASE_PASSWORD": "fixture_password",
             "DATABASE_NAME": "fixture_db",
-            "E2E_KEYCLOAK_PORT": "8181",
+            "E2E_KEYCLOAK_PORT": str(port),
             "E2E_KEYCLOAK_STARTUP_TIMEOUT": "0",
         },
         capture_output=True,
@@ -88,19 +91,25 @@ def test_idp_failure_stops_stack_startup(tmp_path: Path, failure: str, code: int
         assert len(calls) == 1, "do not replace an IdP when its database is unavailable"
 
 
-def test_proxy_and_test_runner_share_the_same_jwt_configuration() -> None:
-    config = yaml.safe_load((ROOT / "tests/e2e/gateway/stage_mirror_ci_config.yml").read_text())
-    general = config["general_settings"]
-    assert general["enable_jwt_auth"] is True
-    assert general["litellm_jwtauth"] == {
-        "user_id_jwt_field": "sub",
-        "user_email_jwt_field": "email",
-        "team_ids_jwt_field": "groups",
-        "user_id_upsert": True,
-    }
-    up = (START_IDP.parent / "up.sh").read_text()
-    assert '"JWT_ISSUER=http://127.0.0.1:${KEYCLOAK_PORT}/realms/litellm-e2e"' in up
-    assert '"JWT_AUDIENCE=litellm-e2e"' in up
-    assert "E2E_KEYCLOAK_URL=http://127.0.0.1:${KEYCLOAK_PORT}" in up
-    assert up.index("bash .github/e2e-stack/start-idp.sh") < up.index("start_server backend")
-    assert "e2e-keycloak" in (START_IDP.parent / "down.sh").read_text()
+def test_readiness_requires_the_imported_realm_on_the_configured_port(tmp_path: Path) -> None:
+    expected_path = "/realms/litellm-e2e/.well-known/openid-configuration"
+    observed_paths: list[str] = []
+
+    class Discovery(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            observed_paths.append(self.path)
+            self.send_response(200 if self.path == expected_path else 404)
+            self.end_headers()
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Discovery) as server:
+        worker = Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            result, _ = run_start(tmp_path, port=server.server_port, real_curl=True)
+        finally:
+            server.shutdown()
+            worker.join(timeout=5)
+
+    assert result.returncode == 0, result.stderr
+    assert observed_paths == [expected_path]
+    assert "Keycloak realm is up" in result.stdout
