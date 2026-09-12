@@ -10,6 +10,21 @@ vi.unmock("@/lib/toast");
 
 const fetchMock = vi.fn<typeof fetch>();
 const calls: { path: string; method: string; body: unknown }[] = [];
+const entry = {
+  memory_id: "entry-1",
+  key: "demo",
+  title: "Demo port",
+  content: "Use port 8123",
+  evidence: "Fixture recommendation",
+  when_to_use: "Configuring the demo",
+  scope: "demo",
+  kind: "decision",
+  certainty: "inferred",
+  source: "fixture.md",
+  created_at: "2026-09-12T00:00:00Z",
+  updated_at: "2026-09-12T00:00:00Z",
+  actor: "u1",
+};
 const session = (user_role: string) => {
   const payload = { key: "sk-test", user_id: "u1", user_role, exp: Math.floor(Date.now() / 1000) + 3600 };
   document.cookie = `token=${btoa("{}")}\.${btoa(JSON.stringify(payload))}.signature; path=/`;
@@ -30,7 +45,15 @@ beforeEach(async () => {
       if (path === "/v2/memory/preference") return { enabled: request.method === "PUT" };
       if (path === "/v2/memory/policies") return [];
       if (path === "/v1/memory") return { memories: [], total: 0 };
-      if (path.includes("/key/list")) return { keys: [], total_count: 0, current_page: 1, total_pages: 1 };
+      if (path === "/v2/memory/status") return { active: true, scope: "key" };
+      if (path === "/v2/memory/entries") return request.method === "POST" ? entry : [entry];
+      if (path.includes("/key/list"))
+        return {
+          keys: [{ token: "a".repeat(64), key_alias: "QA key" }],
+          total_count: 1,
+          current_page: 1,
+          total_pages: 1,
+        };
       if (path.includes("/team/list") || path.includes("/organization")) return [];
       return {};
     };
@@ -41,6 +64,36 @@ beforeEach(async () => {
 });
 
 describe("Gateway memory settings", () => {
+  it("preserves observation attribution when a person corrects saved content", async () => {
+    session("internal_user");
+    const user = userEvent.setup();
+    renderWithProviders(<Memory />);
+    await user.click(await screen.findByLabelText("Virtual key"));
+    await user.click(await screen.findByRole("option", { name: "QA key" }));
+    await user.click(await screen.findByRole("button", { name: "Edit memory" }));
+    await user.clear(screen.getByLabelText("Correct this memory"));
+    await user.type(screen.getByLabelText("Correct this memory"), "Use port 8124");
+    await user.click(screen.getByRole("button", { name: "Save correction" }));
+    await waitFor(() =>
+      expect(calls).toContainEqual({
+        path: "/v2/memory/entries",
+        method: "POST",
+        body: {
+          key: entry.key,
+          title: entry.title,
+          content: "Use port 8124",
+          evidence: entry.evidence,
+          when_to_use: entry.when_to_use,
+          scope: entry.scope,
+          kind: entry.kind,
+          certainty: entry.certainty,
+          source: entry.source,
+          expected_revision: entry.updated_at,
+        },
+      }),
+    );
+  });
+
   it("lets an administrator choose automatic activation and a sharing scope", async () => {
     session("proxy_admin");
     const user = userEvent.setup();

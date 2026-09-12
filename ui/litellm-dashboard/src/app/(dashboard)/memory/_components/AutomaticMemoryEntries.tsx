@@ -125,15 +125,21 @@ export function AutomaticMemoryEntries({ userId, readOnly }: Readonly<{ userId: 
           className="space-y-3 rounded-md border p-4"
           onSubmit={(event) => {
             event.preventDefault();
+            const body: Capture = {
+              key: editing.key,
+              title: editing.title,
+              content: editing.content,
+              evidence: editing.evidence,
+              when_to_use: editing.when_to_use,
+              scope: editing.scope,
+              kind: editing.kind,
+              certainty: editing.certainty,
+              source: editing.source,
+              expected_revision: editing.updated_at,
+            };
             save.mutate({
               key: keyId,
-              body: {
-                key: editing.key,
-                title: editing.title,
-                content: editing.content,
-                evidence: editing.evidence,
-                expected_revision: editing.updated_at,
-              },
+              body,
             });
           }}
         >
