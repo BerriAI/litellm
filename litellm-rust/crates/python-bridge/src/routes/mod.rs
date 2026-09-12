@@ -10,6 +10,7 @@ mod audio_transcription;
 mod chat_completions;
 mod messages;
 mod ocr;
+mod ocr_callbacks;
 mod ocr_document;
 mod ocr_lifecycle;
 

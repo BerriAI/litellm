@@ -5,10 +5,10 @@ use pyo3::types::{PyDict, PyList};
 pub(super) fn prepare<'py>(
     py: Python<'py>,
     kwargs: &Bound<'py, PyDict>,
-    logger: &Bound<'py, PyAny>,
+    logger: &super::PythonLogger,
 ) -> PyResult<Bound<'py, PyDict>> {
     let arguments = kwargs.copy()?;
-    arguments.set_item("litellm_logging_obj", logger)?;
+    arguments.set_item("litellm_logging_obj", logger.object(py))?;
     let litellm = py.import("litellm")?;
     inherit_credentials(py, &litellm, &arguments)?;
     py.import("litellm.rust_bridge.lifecycle")?

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 
-use litellm_core::auth::{ResolvedCredential, SecretValue};
+use litellm_core::auth::ResolvedCredential;
 use litellm_core::ocr::hooks::{OcrDuringCallRequest, OcrPostCallRequest, OcrPreCallRequest};
 use litellm_core::ocr::wire::{OcrWireRequest, consumed_optional_param_names, decode_request};
 use litellm_core::ocr::{
@@ -14,6 +14,7 @@ use litellm_python_interop::{
     from_py_preserving_errors as from_py, to_py_preserving_errors as to_py,
 };
 
+use super::ocr_callbacks::{self, AzureAdTokenProvider};
 use crate::errors::{RustBridgeDeclined, ocr_error_to_pyerr};
 use crate::lifecycle::{PythonCallState, PythonRoute, missing_state, now, run_call};
 
@@ -23,7 +24,7 @@ struct PythonOcrHost {
     pre_call: Option<OcrPreCallRequest>,
     document: Option<Py<PyAny>>,
     api_key: Option<Py<PyAny>>,
-    azure_ad_token_provider: Option<Py<PyAny>>,
+    azure_ad_token_provider: Option<AzureAdTokenProvider>,
     provider: String,
     retained_fields: Option<Py<PyDict>>,
     body: Option<Py<PyDict>>,
@@ -34,7 +35,7 @@ struct AdmittedOcrCall {
     request: litellm_core::ocr::LiteLLMOcrRequest,
     document: Py<PyAny>,
     api_key: Py<PyAny>,
-    azure_ad_token_provider: Option<Py<PyAny>>,
+    azure_ad_token_provider: Option<AzureAdTokenProvider>,
     provider: String,
 }
 
@@ -70,15 +71,7 @@ impl PythonOcrHost {
             .azure_ad_token_provider
             .as_ref()
             .ok_or_else(missing_state)?;
-        let token: String = py
-            .import("litellm.rust_bridge.ocr_lifecycle")?
-            .getattr("call_azure_ad_token_provider")?
-            .call1((provider,))?
-            .extract()?;
-        Ok(ResolvedCredential::AccessToken {
-            token: SecretValue::new(token),
-            expires_on: None,
-        })
+        provider.acquire(py)
     }
 
     fn python_pre_call(
@@ -108,35 +101,9 @@ impl PythonOcrHost {
         }
         self.body = Some(body.clone().unbind());
         self.headers = Some(headers.clone().unbind());
-        let logger = self.state.logger(py)?;
-        let redact = py
-            .import("litellm.rust_bridge.ocr")?
-            .getattr("redact_logging_params")?;
-        let update = PyDict::new(py);
-        update.set_item("kwargs", redact.call1((&self.state.kwargs,))?)?;
-        update.set_item("model", &pre_call.model)?;
-        update.set_item(
-            "optional_params",
-            redact.call1((to_py(py, &pre_call.optional_params)?,))?,
-        )?;
-        let params = PyDict::new(py);
-        params.set_item(
-            "litellm_call_id",
-            self.state.kwargs.bind(py).get_item("litellm_call_id")?,
-        )?;
-        params.set_item("api_base", &request.url)?;
-        update.set_item("litellm_params", params)?;
-        update.set_item("custom_llm_provider", &pre_call.custom_llm_provider)?;
-        logger.call_method("update_from_kwargs", (), Some(&update))?;
-        let additional = PyDict::new(py);
-        additional.set_item("complete_input_dict", &body)?;
-        additional.set_item("headers", &headers)?;
-        additional.set_item("api_base", &request.url)?;
-        let kwargs = PyDict::new(py);
-        kwargs.set_item("input", "OCR document processing")?;
-        kwargs.set_item("api_key", &self.api_key)?;
-        kwargs.set_item("additional_args", additional)?;
-        logger.call_method("pre_call", (), Some(&kwargs))?;
+        let logger = self.state.logger()?;
+        logger.update_ocr(py, &self.state.kwargs, pre_call, &request.url)?;
+        logger.pre_ocr(py, &self.api_key, &body, &headers, &request.url)?;
         let headers = headers
             .iter()
             .map(|(name, value)| Ok((name.extract::<String>()?, value.extract::<String>()?)))
@@ -151,14 +118,9 @@ impl PythonOcrHost {
         py: Python<'_>,
         request: OcrPostCallRequest,
     ) -> PyResult<OcrPostCallRequest> {
-        let logger = self.state.logger(py)?;
-        let kwargs = PyDict::new(py);
-        kwargs.set_item("original_response", to_py(py, &request.original_response)?)?;
-        let additional = PyDict::new(py);
-        additional.set_item("complete_input_dict", &self.body)?;
-        additional.set_item("headers", &self.headers)?;
-        kwargs.set_item("additional_args", additional)?;
-        logger.call_method("post_call", (), Some(&kwargs))?;
+        self.state
+            .logger()?
+            .post_ocr(py, &request.original_response, &self.body, &self.headers)?;
         Ok(request)
     }
 }
@@ -203,12 +165,7 @@ impl PythonRoute for PythonOcrHost {
             }
             OcrHostOperation::ConstructResponse(response) => {
                 self.state.end = Some(now(py)?);
-                self.state.response = Some(
-                    py.import("litellm.rust_bridge.ocr")?
-                        .getattr("_response")?
-                        .call1((to_py(py, response.as_ref())?,))?
-                        .unbind(),
-                );
+                self.state.response = Some(ocr_callbacks::response(py, response.as_ref())?);
                 OcrHostResult::Lifecycle(Ok(()))
             }
             OcrHostOperation::MapFailure(error) => {
@@ -220,11 +177,9 @@ impl PythonRoute for PythonOcrHost {
                 }
                 let error = self.state.error.as_ref().ok_or_else(missing_state)?;
                 let request = self.request.as_ref().ok_or_else(missing_state)?.bind(py);
-                let mapped = py
-                    .import("litellm.rust_bridge.ocr_lifecycle")?
-                    .getattr("map_failure")?
-                    .call1((error, request, &self.provider))?;
-                self.state.retain_error(py, PyErr::from_value(mapped));
+                let mapped = ocr_callbacks::map_failure(py, error, request, &self.provider)?;
+                self.state
+                    .retain_error(py, PyErr::from_value(mapped.into_bound(py).into_any()));
                 OcrHostResult::Lifecycle(Ok(()))
             }
             OcrHostOperation::Lifecycle(_)
@@ -247,7 +202,9 @@ impl PythonRoute for PythonOcrHost {
         visit.call(&self.request)?;
         visit.call(&self.document)?;
         visit.call(&self.api_key)?;
-        visit.call(&self.azure_ad_token_provider)?;
+        if let Some(provider) = &self.azure_ad_token_provider {
+            provider.traverse(visit)?;
+        }
         visit.call(&self.retained_fields)?;
         visit.call(&self.body)?;
         visit.call(&self.headers)
@@ -278,8 +235,7 @@ fn project_request(
     let input_sources = extract_input_sources(request_kwargs, &consumed)?;
     let azure_ad_token_provider = request_kwargs
         .get_item("azure_ad_token_provider")?
-        .filter(|provider| provider.is_callable() && provider.is_truthy().unwrap_or(false))
-        .map(Bound::unbind);
+        .and_then(AzureAdTokenProvider::select);
     let wire = OcrWireRequest {
         model,
         document: wire_document,
@@ -294,12 +250,7 @@ fn project_request(
         input_sources,
         timeout_seconds: argument("timeout")?
             .extract::<Option<Py<PyAny>>>()?
-            .map(|value| {
-                py.import("litellm.rust_bridge.timeouts")?
-                    .getattr("timeout_to_seconds")?
-                    .call1((value,))?
-                    .extract()
-            })
+            .map(|value| ocr_callbacks::timeout_seconds(py, value))
             .transpose()?
             .flatten(),
     };

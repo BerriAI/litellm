@@ -50,20 +50,6 @@ def arguments(request: LiteLLMOcrRequest) -> Mapping[str, object]:
     return request.kwargs
 
 
-def call_azure_ad_token_provider(provider: object) -> str:
-    if not callable(provider):
-        raise TypeError("Azure AD token provider must be callable")
-    try:
-        token: Final = provider()
-        if not isinstance(token, str):
-            raise TypeError(f"Azure AD token must be a string, got {type(token)}")
-        return token
-    except TypeError:
-        raise
-    except Exception as error:
-        raise RuntimeError(f"Failed to get Azure AD token: {error}") from error
-
-
 def map_failure(error: Exception, request: LiteLLMOcrRequest, request_provider: str) -> Exception:
     mapper: Final = cast(  # cast-ok: bounded adapter for the legacy public exception mapper
         ExceptionMapper, litellm.exception_type

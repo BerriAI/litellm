@@ -14,7 +14,11 @@ use tokio::sync::Mutex;
 use crate::errors::ocr_error_to_pyerr;
 use crate::execution::{run_async_value, run_sync_value};
 
+mod bindings;
 mod preparation;
+
+use bindings::DeploymentHooks;
+pub(crate) use bindings::PythonLogger;
 
 pub(crate) trait PythonRoute: Send + Sync {
     fn state(&self) -> &PythonCallState;
@@ -401,7 +405,7 @@ impl<R: PythonRoute> Drop for PythonLifecycle<R> {
 pub(crate) struct PythonCallState {
     pub args: Py<PyTuple>,
     pub kwargs: Py<PyDict>,
-    pub logger: Option<Py<PyAny>>,
+    pub logger: Option<PythonLogger>,
     pub start: Py<PyAny>,
     pub end: Option<Py<PyAny>>,
     pub response: Option<Py<PyAny>>,
@@ -427,32 +431,31 @@ impl PythonCallState {
         match phase {
             HostPhase::Setup => self.setup(py)?,
             HostPhase::DeploymentPreCall => {
-                return Ok(HostStep::Suspend(
-                    py.import("litellm.utils")?
-                        .getattr("async_pre_call_deployment_hook")?
-                        .call1((&self.kwargs, self.call_type))?
-                        .unbind(),
-                ));
+                return Ok(HostStep::Suspend(DeploymentHooks::before_call(
+                    py,
+                    &self.kwargs,
+                    self.call_type,
+                )?));
             }
             HostPhase::Prepare => self.prepare(py)?,
             HostPhase::DeploymentPostCall => {
-                return Ok(HostStep::Suspend(
-                    py.import("litellm.utils")?
-                        .getattr("async_post_call_success_deployment_hook")?
-                        .call1((&self.kwargs, &self.response, self.call_type))?
-                        .unbind(),
-                ));
+                return Ok(HostStep::Suspend(DeploymentHooks::after_success(
+                    py,
+                    &self.kwargs,
+                    &self.response,
+                    self.call_type,
+                )?));
             }
             HostPhase::Finalize => self.finalize(py)?,
             HostPhase::Success => self.dispatch_success(py)?,
             HostPhase::DeploymentFailure => {
                 if let Some(error) = &self.error {
-                    return Ok(HostStep::Suspend(
-                        py.import("litellm.utils")?
-                            .getattr("async_post_call_failure_deployment_hook")?
-                            .call1((&self.kwargs, error, self.call_type))?
-                            .unbind(),
-                    ));
+                    return Ok(HostStep::Suspend(DeploymentHooks::after_failure(
+                        py,
+                        &self.kwargs,
+                        error,
+                        self.call_type,
+                    )?));
                 }
             }
             HostPhase::Failure | HostPhase::AsyncFailure => {
@@ -502,59 +505,48 @@ impl PythonCallState {
         })
     }
 
-    pub fn logger<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        self.logger
-            .as_ref()
-            .map(|value| value.bind(py).clone())
-            .ok_or_else(|| {
-                pyo3::exceptions::PyRuntimeError::new_err("call logging is not initialized")
-            })
+    pub fn logger(&self) -> PyResult<&PythonLogger> {
+        self.logger.as_ref().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("call logging is not initialized")
+        })
     }
 
     pub fn setup(&mut self, py: Python<'_>) -> PyResult<()> {
         self.start = now(py)?;
-        self.internal = py
-            .import("litellm._internal_context")?
-            .getattr("is_internal_call")?
-            .call_method0("get")?
-            .extract()?;
-        let result = py
-            .import("litellm.rust_bridge.lifecycle")?
-            .getattr("setup")?
-            .call1((
-                self.call_type,
-                &self.args,
-                &self.kwargs,
-                &self.start,
-                self.asynchronous,
-            ))?;
-        self.logger = Some(result.getattr("logger")?.unbind());
-        self.kwargs = result.getattr("kwargs")?.cast_into::<PyDict>()?.unbind();
+        self.internal = bindings::is_internal_call(py)?;
+        let result = bindings::setup(
+            py,
+            self.call_type,
+            &self.args,
+            &self.kwargs,
+            &self.start,
+            self.asynchronous,
+        )?;
+        self.logger = Some(result.logger()?);
+        self.kwargs = result.kwargs()?;
         Ok(())
     }
 
     pub fn prepare(&mut self, py: Python<'_>) -> PyResult<()> {
-        self.kwargs = preparation::prepare(py, self.kwargs.bind(py), &self.logger(py)?)?.unbind();
+        self.kwargs = preparation::prepare(py, self.kwargs.bind(py), self.logger()?)?.unbind();
         Ok(())
     }
 
     pub fn finalize(&self, py: Python<'_>) -> PyResult<()> {
-        py.import("litellm.rust_bridge.lifecycle")?
-            .getattr("finalize")?
-            .call1((
-                &self.response,
-                self.logger(py)?,
-                &self.kwargs,
-                &self.start,
-                &self.end,
-            ))?;
-        Ok(())
+        bindings::finalize(
+            py,
+            &self.response,
+            self.logger()?,
+            &self.kwargs,
+            &self.start,
+            &self.end,
+        )
     }
 
     pub fn dispatch_success(&self, py: Python<'_>) -> PyResult<()> {
         match self.try_dispatch_success(py) {
             Err(error) if error.is_instance_of::<PyException>(py) => {
-                error.write_unraisable(py, self.logger.as_ref().map(|logger| logger.bind(py)));
+                error.write_unraisable(py, self.logger.as_ref().map(|logger| logger.object(py)));
                 Ok(())
             }
             result => result,
@@ -562,9 +554,9 @@ impl PythonCallState {
     }
 
     fn try_dispatch_success(&self, py: Python<'_>) -> PyResult<()> {
-        let logger = self.logger(py)?;
+        let logger = self.logger()?;
         let pending = PendingSuccess {
-            logger: logger.clone().unbind(),
+            logger: logger.clone_ref(py),
             response: self.response.as_ref().map(|value| value.clone_ref(py)),
             start: self.start.clone_ref(py),
             end: self.end.as_ref().map(|value| value.clone_ref(py)),
@@ -579,12 +571,9 @@ impl PythonCallState {
                     .get_item("fallbacks")?
                     .is_none_or(|value| value.is_none())
             {
-                if logger
-                    .getattr("_defer_async_logging")
-                    .is_ok_and(|value| value.is_truthy().unwrap_or(false))
-                {
-                    logger.setattr(
-                        "_native_pending_logging",
+                if logger.defers_async_logging(py) {
+                    logger.defer_success(
+                        py,
                         Py::new(
                             py,
                             PendingLogging {
@@ -596,12 +585,7 @@ impl PythonCallState {
                     pending.asynchronous(py)?;
                 }
             }
-            logger
-                .call_method1(
-                    "handle_sync_success_callbacks_for_async_calls",
-                    (&self.response, &self.start, &self.end),
-                )
-                .map(|_| ())
+            logger.sync_success_for_async_call(py, &self.response, &self.start, &self.end)
         }
     }
 
@@ -616,29 +600,13 @@ impl PythonCallState {
         let Some(error) = &self.error else {
             return Ok(None);
         };
-        let trace = py
-            .import("traceback")?
-            .getattr("format_exception")?
-            .call1((error,))?;
-        let trace = pyo3::types::PyString::new(py, "").call_method1("join", (trace,))?;
-        let value = self.logger(py)?.call_method1(
-            if asynchronous {
-                "async_failure_handler"
-            } else {
-                "failure_handler"
-            },
-            (error, trace, &self.start, &self.end),
-        )?;
-        Ok(asynchronous.then(|| value.unbind()))
+        self.logger()?
+            .failure(py, error, &self.start, &self.end, asynchronous)
     }
 
     pub fn cleanup(&mut self, py: Python<'_>) {
         if let Some(logger) = self.logger.take()
-            && let Err(error) = py.import("litellm.utils").and_then(|utils| {
-                utils
-                    .getattr("_restore_correlation_context_if_supported")?
-                    .call1((logger,))
-            })
+            && let Err(error) = logger.restore_context(py)
         {
             error.write_unraisable(py, None);
         }
@@ -651,7 +619,9 @@ impl PythonCallState {
     pub fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         visit.call(&self.args)?;
         visit.call(&self.kwargs)?;
-        visit.call(&self.logger)?;
+        if let Some(logger) = &self.logger {
+            logger.traverse(visit)?;
+        }
         visit.call(&self.start)?;
         visit.call(&self.end)?;
         visit.call(&self.response)?;
@@ -660,54 +630,21 @@ impl PythonCallState {
 }
 
 struct PendingSuccess {
-    logger: Py<PyAny>,
+    logger: PythonLogger,
     response: Option<Py<PyAny>>,
     start: Py<PyAny>,
     end: Option<Py<PyAny>>,
 }
 
 impl PendingSuccess {
-    fn context(py: Python<'_>) -> PyResult<Py<PyAny>> {
-        py.import("contextvars")?
-            .call_method0("copy_context")
-            .map(Bound::unbind)
-    }
-
     fn sync(&self, py: Python<'_>) -> PyResult<()> {
-        let context = Self::context(py)?;
-        py.import("litellm.litellm_core_utils.litellm_logging")?
-            .getattr("executor")?
-            .call_method1(
-                "submit",
-                (
-                    context.getattr(py, "run")?,
-                    self.logger.getattr(py, "success_handler")?,
-                    &self.response,
-                    &self.start,
-                    &self.end,
-                ),
-            )?;
-        Ok(())
+        self.logger
+            .submit_success(py, &self.response, &self.start, &self.end)
     }
 
     fn asynchronous(&self, py: Python<'_>) -> PyResult<()> {
-        let context = Self::context(py)?;
-        let worker = py
-            .import("litellm.litellm_core_utils.logging_worker")?
-            .getattr("GLOBAL_LOGGING_WORKER")?
-            .getattr("ensure_initialized_and_enqueue")?;
-        let coroutine = self.logger.call_method1(
-            py,
-            "async_success_handler",
-            (&self.response, &self.start, &self.end),
-        )?;
-        let enqueue = context.call_method1(py, "run", (worker, &coroutine));
-        if enqueue.is_err()
-            && let Err(error) = coroutine.call_method0(py, "close")
-        {
-            error.write_unraisable(py, Some(coroutine.bind(py)));
-        }
-        enqueue.map(|_| ())
+        self.logger
+            .enqueue_success(py, &self.response, &self.start, &self.end)
     }
 }
 
@@ -725,7 +662,7 @@ impl PendingLogging {
         {
             match pending.asynchronous(py) {
                 Err(error) if error.is_instance_of::<PyException>(py) => {
-                    error.write_unraisable(py, Some(pending.logger.bind(py)));
+                    error.write_unraisable(py, Some(pending.logger.object(py)));
                 }
                 result => return result,
             }
@@ -735,7 +672,7 @@ impl PendingLogging {
 
     fn __traverse__(&self, visit: pyo3::gc::PyVisit<'_>) -> Result<(), pyo3::gc::PyTraverseError> {
         if let Some(pending) = &self.pending {
-            visit.call(&pending.logger)?;
+            pending.logger.traverse(&visit)?;
             visit.call(&pending.response)?;
             visit.call(&pending.start)?;
             visit.call(&pending.end)?;
@@ -944,7 +881,7 @@ assert reference() is None
         PythonCallState {
             args: PyTuple::empty(py).unbind(),
             kwargs: PyDict::new(py).unbind(),
-            logger: Some(logger),
+            logger: Some(logger.extract(py).unwrap()),
             start: py.None(),
             end: Some(py.None()),
             response: Some(response),
@@ -1079,7 +1016,12 @@ logger = Logger()
                 py,
                 PendingLogging {
                     pending: Some(PendingSuccess {
-                        logger: locals.get_item("logger").unwrap().unwrap().unbind(),
+                        logger: locals
+                            .get_item("logger")
+                            .unwrap()
+                            .unwrap()
+                            .extract()
+                            .unwrap(),
                         response: Some(py.None()),
                         start: py.None(),
                         end: Some(py.None()),
@@ -1095,6 +1037,54 @@ marker.set('release')
 pending.release(True)
 pending.release(True)
 assert observed == ['created', 'release', 'closed']
+"#
+                ),
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+        });
+    }
+
+    #[test]
+    fn deferred_logging_collects_cycles_through_typed_logger() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            py.run(
+                pyo3::ffi::c_str!("class Logger: pass\nlogger = Logger()"),
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+            let pending = Py::new(
+                py,
+                PendingLogging {
+                    pending: Some(PendingSuccess {
+                        logger: locals
+                            .get_item("logger")
+                            .unwrap()
+                            .unwrap()
+                            .extract()
+                            .unwrap(),
+                        response: None,
+                        start: py.None(),
+                        end: None,
+                    }),
+                },
+            )
+            .unwrap();
+            locals.set_item("pending", pending).unwrap();
+            py.run(
+                pyo3::ffi::c_str!(
+                    r#"
+import gc
+import weakref
+logger.pending = pending
+reference = weakref.ref(logger)
+del logger, pending
+gc.collect()
+assert reference() is None
 "#
                 ),
                 Some(&locals),
