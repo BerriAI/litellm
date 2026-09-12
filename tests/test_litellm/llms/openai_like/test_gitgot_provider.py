@@ -38,7 +38,7 @@ class TestGitGotProviderConfig:
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         model, provider, api_key, api_base = get_llm_provider(
-            model="gitgot/openai/gpt-5-nano",
+            model="gitgot/openai/gpt-oss-120b",
             custom_llm_provider=None,
             api_base=None,
             api_key=None,
@@ -46,7 +46,7 @@ class TestGitGotProviderConfig:
 
         # GitGot model ids carry a vendor prefix, so only the leading "gitgot/"
         # is stripped and the rest of the path is preserved.
-        assert model == "openai/gpt-5-nano"
+        assert model == "openai/gpt-oss-120b"
         assert provider == "gitgot"
         assert api_base == "https://inference.gitgot.ai/v1"
 
@@ -54,7 +54,7 @@ class TestGitGotProviderConfig:
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         model, provider, api_key, api_base = get_llm_provider(
-            model="gitgot/openai/gpt-5-nano",
+            model="gitgot/openai/gpt-oss-120b",
             custom_llm_provider=None,
             api_base="https://custom.gitgot.ai/v1",
             api_key="gg-test",
@@ -67,7 +67,7 @@ class TestGitGotProviderConfig:
     def test_gitgot_model_prices_registered(self, local_model_cost_map):
         from litellm import model_cost
 
-        entry = model_cost["gitgot/openai/gpt-5-nano"]
+        entry = model_cost["gitgot/openai/gpt-oss-120b"]
         assert entry["litellm_provider"] == "gitgot"
         assert entry["mode"] == "chat"
         # Costs in this file are per token, not per million. A per-million
@@ -91,7 +91,7 @@ class TestGitGotProviderConfig:
                 )
             ],
             created=1234567890,
-            model="gitgot/openai/gpt-5-nano",
+            model="gitgot/openai/gpt-oss-120b",
             object="chat.completion",
             usage=Usage(
                 prompt_tokens=1_000_000,
@@ -112,7 +112,7 @@ class TestGitGotProviderConfig:
                 {
                     "model_name": "gitgot-chat",
                     "litellm_params": {
-                        "model": "gitgot/openai/gpt-5-nano",
+                        "model": "gitgot/openai/gpt-oss-120b",
                         "api_key": "test-key",
                     },
                 }
