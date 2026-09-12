@@ -400,7 +400,7 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
                     return False
                 continue
         try:
-            target_group: Final = _resolve_cost_model_group(model_name, llm_router)
+            target_group = _resolve_cost_model_group(model_name, llm_router)
             # Use router's get_model_group_info method directly for better reliability
             model_group_info = llm_router.get_model_group_info(model_group=target_group)
 
