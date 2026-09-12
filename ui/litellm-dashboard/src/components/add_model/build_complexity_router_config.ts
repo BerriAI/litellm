@@ -11,6 +11,7 @@ import {
   tierRowByName,
 } from "./tier_rows";
 import { emptyKeywordTierRuleIndexes, serializeKeywordTierRules } from "./complexity_router_keywords";
+import { type CustomDimension, type CustomDimensionRow, serializeCustomDimensions } from "./custom_dimensions";
 import {
   TierModelParams,
   TierModelParamsByTier,
@@ -92,6 +93,7 @@ interface ScorerKnobInputs {
   tierBoundaries: TierBoundaries | undefined;
   tokenThresholds: TokenThresholds | undefined;
   dimensionWeights: DimensionWeights | undefined;
+  customDimensions: CustomDimensionRow[] | undefined;
   reasoningOverrideMinScore: number | undefined;
 }
 
@@ -106,19 +108,27 @@ const scorerKnobPayload = ({
   tierBoundaries,
   tokenThresholds,
   dimensionWeights,
+  customDimensions,
   reasoningOverrideMinScore,
-}: ScorerKnobInputs) =>
-  heuristicScoringRoleFor(classifierType, classifierFallback) === "never"
+}: ScorerKnobInputs) => {
+  const role = heuristicScoringRoleFor(classifierType, classifierFallback);
+  return role === "never"
     ? {}
     : {
         ...(tierBoundaries && { tier_boundaries: tierBoundaries }),
         ...(tokenThresholds && { token_thresholds: tokenThresholds }),
         ...(dimensionWeights && { dimension_weights: dimensionWeights }),
+        // Only a scorer that decides accepts these; the backend rejects them on every other
+        // classifier, so a fallback-only router must not carry rows a switch left behind.
+        ...(role === "decides" &&
+          customDimensions !== undefined && { custom_dimensions: serializeCustomDimensions(customDimensions) }),
         ...(reasoningOverrideMinScore !== undefined && { reasoning_override_min_score: reasoningOverrideMinScore }),
       };
+};
 
 export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;
+  enableNonReasoningTier?: boolean;
   customTierSet?: CustomTierSet;
   defaultModel: string | undefined;
   planModeMinTier: string | undefined;
@@ -155,6 +165,7 @@ export interface BuildComplexityRouterConfigParams {
   tierBoundaries?: TierBoundaries;
   tokenThresholds?: TokenThresholds;
   dimensionWeights?: DimensionWeights;
+  customDimensions?: CustomDimensionRow[];
   reasoningOverrideMinScore?: number;
   tierModelParams?: TierModelParamsByTier;
   enableContextWindowEscalation?: boolean;
@@ -180,6 +191,7 @@ export interface TierDefinitionPayload {
 
 export interface ComplexityRouterConfigPayload {
   tiers: ComplexityTiers | Record<string, string[]>;
+  enable_non_reasoning_tier?: boolean;
   tier_definitions?: TierDefinitionPayload[];
   fallback_tier?: string;
   default_model?: string;
@@ -219,6 +231,7 @@ export interface ComplexityRouterConfigPayload {
   tier_boundaries?: TierBoundaries;
   token_thresholds?: TokenThresholds;
   dimension_weights?: DimensionWeights;
+  custom_dimensions?: CustomDimension[];
   reasoning_override_min_score?: number;
   enable_context_window_escalation?: boolean;
   context_window_escalation_buffer?: number;
@@ -372,6 +385,26 @@ export const customTierWireFields = (
   };
 };
 
+/** The built-in tier pools and the opt-in flag, read back from a stored config. `tiers` is
+ * rewritten wholesale on save, so a stored tier this misses is deleted by any unrelated edit. */
+export const hydrateBuiltInTiers = (
+  storedTiers: Partial<Record<keyof ComplexityTiers, unknown>> | undefined,
+  storedFlag: boolean | undefined,
+): { tiers: ComplexityTiers; enable_non_reasoning_tier: boolean } => {
+  const nonReasoning: string[] = normalizeTierModels(storedTiers?.NON_REASONING);
+  const enable_non_reasoning_tier: boolean = storedFlag === true || nonReasoning.length > 0;
+  return {
+    enable_non_reasoning_tier,
+    tiers: {
+      SIMPLE: normalizeTierModels(storedTiers?.SIMPLE),
+      MEDIUM: normalizeTierModels(storedTiers?.MEDIUM),
+      COMPLEX: normalizeTierModels(storedTiers?.COMPLEX),
+      REASONING: normalizeTierModels(storedTiers?.REASONING),
+      ...(enable_non_reasoning_tier && { NON_REASONING: nonReasoning }),
+    },
+  };
+};
+
 // plan_mode_min_tier rides the strip list because the base payload carries it as a row id;
 // customTierWireFields re-emits it as the row's name, and an unresolvable floor stays off.
 const CUSTOM_TIER_STRIPPED_KEYS: readonly string[] = [...CUSTOM_TIER_OMITTED_KEYS, "plan_mode_min_tier"];
@@ -460,6 +493,7 @@ const classifierWireFields = (
 
 export const buildComplexityRouterConfig = ({
   tiers,
+  enableNonReasoningTier,
   customTierSet,
   defaultModel,
   planModeMinTier,
@@ -496,6 +530,7 @@ export const buildComplexityRouterConfig = ({
   tierBoundaries,
   tokenThresholds,
   dimensionWeights,
+  customDimensions,
   reasoningOverrideMinScore,
   tierModelParams,
   enableContextWindowEscalation,
@@ -517,6 +552,7 @@ export const buildComplexityRouterConfig = ({
     tierBoundaries,
     tokenThresholds,
     dimensionWeights,
+    customDimensions,
     reasoningOverrideMinScore,
   };
   const scorerKnobs = scorerKnobPayload(scorerInputs);
@@ -535,6 +571,8 @@ export const buildComplexityRouterConfig = ({
 
   const payload: ComplexityRouterConfigPayload = {
     tiers,
+    // The backend rejects the flag beside a custom tier set.
+    ...(!customTierSet && enableNonReasoningTier && { enable_non_reasoning_tier: true }),
     ...(serializedTierModelConfigs && { tier_model_configs: serializedTierModelConfigs }),
     ...(defaultModel?.trim() && { default_model: defaultModel }),
     ...(planModeMinTier?.trim() && { plan_mode_min_tier: planModeMinTier }),

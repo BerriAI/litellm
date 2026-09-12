@@ -13,3 +13,4 @@ export { ModelsCell } from "./models_cell";
 export { MoneyCell } from "./money_cell";
 export { SpendBudgetCell } from "./spend_budget_cell";
 export { StatusBadge, type StatusTone } from "./status_badge";
+export { UserPopoverCell, ENTITY_CELL_TITLE_CLASSES } from "./UserPopoverCell";

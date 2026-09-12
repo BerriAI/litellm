@@ -179,16 +179,7 @@ def _gateway_dcr_challenge_target(
     mcp_servers: list[str] | None,
     client_ip: str | None,
 ) -> str | None:
-    """The single path-named server this request targets, iff it resolves to a
-    gateway-managed oauth2 server — the one per-server shape the gateway's own keyless
-    DCR flow serves end to end, so the 401 challenge may advertise the per-server
-    protected-resource metadata (whose ``authorization_servers`` names the gateway).
-
-    Multi-server CSV paths, header/path mismatches, unknown names, and every
-    client-forwarded or delegated mode return ``None``: those cells keep their existing
-    challenge (or absence of one), and a challenge is never emitted for a name the
-    public discovery routes would 404, so this reveals exactly the server set the
-    per-server protected-resource metadata already reveals."""
+    """Resolve a single path target whose sign-in metadata advertises the gateway."""
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
@@ -217,7 +208,7 @@ def _is_gateway_dcr_challenge_scope(
     the caller is not a cold-start DCR client), on the scopes the gateway's keyless
     flow serves: the aggregate ``/mcp`` endpoint, an ``x-mcp-servers``-scoped request
     (the resource the client configured is still ``/mcp``), or a per-server path whose
-    single target is a gateway-managed oauth2 server. Every other named target keeps
+    single target advertises gateway-owned sign-in. Every other named target keeps
     its existing behavior, failing closed to the original admission error."""
     if not _is_litellm_auth_admission_error(exc):
         return False
@@ -236,7 +227,7 @@ def _gateway_dcr_challenge(
 ) -> HTTPException:
     """The RFC 9728 challenge pointing the client at the protected-resource metadata
     matching the scope it requested: the per-server document (same URL spelling the
-    request arrived on) when the single target is a gateway-managed oauth2 server,
+    request arrived on) when the single target advertises gateway-owned sign-in,
     else the gateway's aggregate document. Either way the client discovers the gateway
     as its authorization server and starts the same sign-in flow.
 
@@ -2172,6 +2163,10 @@ class MCPRequestHandler:
                 allowed_tools = cast(list[str], key_tools)
 
             allowed_tools = _as_list(
+                await MCPRequestHandler._apply_end_user_tool_ceiling(allowed_tools, server_id, user_api_key_auth)
+            )
+
+            allowed_tools = _as_list(
                 await MCPRequestHandler._apply_user_tool_ceiling(
                     allowed_tools, server_id, user_api_key_auth, keyless_source=keyless_source
                 )
@@ -3035,6 +3030,38 @@ class MCPRequestHandler:
         if allowed_tools is None:
             return list(user_tools)
         return list(set(allowed_tools) & set(user_tools))
+
+    @staticmethod
+    async def _apply_end_user_tool_ceiling(
+        allowed_tools: Sequence[str] | None,
+        server_id: str,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+    ) -> Sequence[str] | None:
+        """Narrow a key/team tool allowlist by the end user's (customer's) tool entitlement."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy.proxy_server import prisma_client
+
+        if user_api_key_auth is None or not user_api_key_auth.end_user_id or prisma_client is None:
+            return allowed_tools
+
+        object_permissions: Final = await MCPRequestHandler._get_end_user_object_permission(
+            user_api_key_auth, prisma_client
+        )
+        if object_permissions is None:
+            return allowed_tools
+
+        end_user_direct_tools: Final = global_mcp_server_manager.expand_tool_permissions(
+            object_permissions.mcp_tool_permissions
+        ).get(server_id)
+        end_user_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(object_permissions, server_id)
+        end_user_tools: Final = MCPRequestHandler._union_tool_grants(end_user_direct_tools, end_user_toolset_tools)
+        if end_user_tools is None:
+            return allowed_tools
+        if allowed_tools is None:
+            return list(end_user_tools)
+        return list(set(allowed_tools) & set(end_user_tools))
 
     # Sentinel stored in cache when an agent has no object_permission, so we
     # don't re-query the DB on every MCP request for that agent.

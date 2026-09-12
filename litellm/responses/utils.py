@@ -544,6 +544,49 @@ class ResponsesAPIRequestUtils:
         return request_input
 
     @staticmethod
+    def strip_encrypted_reasoning_from_input(request_input: object) -> None:
+        """Drop reasoning items the routed deployment cannot decrypt, keeping their readable summary.
+
+        Mutates ``request_input`` in place: the router's fallback snapshot shares this
+        list object, so a rebound list would replay the stripped items on the fallback hop.
+        """
+        if not isinstance(request_input, list):
+            return
+        items: Final = cast(list[object], request_input)  # cast-ok: untyped client json
+        stripped: Final = tuple(ResponsesAPIRequestUtils._without_encrypted_reasoning(item) for item in items)
+        items[:] = (item for item in stripped if item is not None)  # rebind-ok: list shared with fallback snapshot
+
+    @staticmethod
+    def _without_encrypted_reasoning(item: object) -> object | None:
+        if not isinstance(item, dict):
+            return item
+        reasoning: Final = cast(Mapping[str, object], item)  # cast-ok: untyped client json
+        if reasoning.get("type") != "reasoning" or not reasoning.get("encrypted_content"):
+            return reasoning
+        readable: Final = any(
+            ResponsesAPIRequestUtils._has_readable_text(reasoning.get(key)) for key in ("summary", "content")
+        )
+        if not readable:
+            return None
+        kept: Final[dict[str, object]] = {  # mutable-ok: request item rebuilt without the undecryptable keys
+            key: value for key, value in reasoning.items() if key not in ("encrypted_content", "id")
+        }
+        return kept
+
+    @staticmethod
+    def _has_readable_text(value: object) -> bool:
+        """A reasoning item's ``summary``/``content`` carries readable text: a non-empty string, or a
+        list holding at least one block with a non-empty ``text`` field (summary_text / output_text)."""
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, list):
+            return any(
+                isinstance(block, dict) and bool(cast(Mapping[str, object], block).get("text"))  # cast-ok: untyped json
+                for block in value
+            )
+        return False
+
+    @staticmethod
     def _build_responses_api_response_id(
         custom_llm_provider: str | None,
         model_id: str | None,

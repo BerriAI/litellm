@@ -77,6 +77,7 @@ from litellm.llms.base_llm.vector_store_files.transformation import (
     BaseVectorStoreFilesConfig,
 )
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
+from litellm.llms.bedrock.base_aws_llm import SignsRequestsWithAWS, run_aws_signing, sign_request_off_loop_if_aws
 from litellm.llms.custom_httpx.container_handler import raise_for_error_status
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -579,7 +580,7 @@ class BaseLLMHTTPHandler:
             data: dict[str, object],  # mutable-ok: async_completion takes dict
             signed_headers: dict[str, object],  # mutable-ok: async_completion takes dict
             signed_json_body: bytes | None,
-        ):
+        ) -> Coroutine[object, object, ModelResponse | CustomStreamWrapper]:
             async_client: Final = client if isinstance(client, AsyncHTTPHandler) else None
             if stream is True:
                 return self.acompletion_stream_function(
@@ -626,7 +627,7 @@ class BaseLLMHTTPHandler:
 
         if acompletion is True and provider_config.uses_async_transform_request:
 
-            async def transform_then_dispatch():
+            async def transform_then_dispatch() -> ModelResponse | CustomStreamWrapper:
                 transformed: Final = cast(  # cast-ok: async_transform_request is declared as a bare dict
                     "dict[str, object]",
                     await provider_config.async_transform_request(
@@ -637,7 +638,12 @@ class BaseLLMHTTPHandler:
                         headers=request_headers,
                     ),
                 )
-                return await dispatch_async(*await asyncio.to_thread(sign_and_log, transformed))
+                signed_request: Final = await (
+                    run_aws_signing(sign_and_log, transformed)
+                    if isinstance(provider_config, SignsRequestsWithAWS)
+                    else asyncio.to_thread(sign_and_log, transformed)
+                )
+                return await dispatch_async(*signed_request)
 
             return transform_then_dispatch()
 
@@ -1741,6 +1747,12 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
+        logging_obj.post_call(
+            api_key=api_key,
+            original_response=response.text,
+            additional_args={"complete_input_dict": data},
+        )
+
         return self._transform_ocr_response(
             provider_config=provider_config,
             model=model,
@@ -1803,6 +1815,12 @@ class BaseLLMHTTPHandler:
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
+
+        logging_obj.post_call(
+            api_key=api_key,
+            original_response=response.text,
+            additional_args={"complete_input_dict": data},
+        )
 
         # Use async response transform for async operations
         return await provider_config.async_transform_ocr_response(
@@ -1900,6 +1918,7 @@ class BaseLLMHTTPHandler:
                     url=complete_url,
                     headers=signed_headers,
                 )
+                response.raise_for_status()
             else:
                 # A signed body must be sent verbatim, re-serializing it would break the signature
                 response = client.post(
@@ -1909,6 +1928,8 @@ class BaseLLMHTTPHandler:
                     json=data if signed_json_body is None else None,
                     timeout=timeout,
                 )
+        except httpx.HTTPStatusError as e:
+            raise provider_config.get_http_error_class(e)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
@@ -1961,7 +1982,9 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
         )
 
-        signed_headers, signed_json_body = provider_config.sign_request(
+        signed_headers, signed_json_body = await sign_request_off_loop_if_aws(
+            provider_config,
+            provider_config.sign_request,
             headers=headers,
             optional_params=optional_params,
             request_data=data,
@@ -1999,6 +2022,7 @@ class BaseLLMHTTPHandler:
                     url=complete_url,
                     headers=signed_headers,
                 )
+                response.raise_for_status()
             else:
                 # A signed body must be sent verbatim, re-serializing it would break the signature
                 response = await async_httpx_client.post(
@@ -2008,6 +2032,8 @@ class BaseLLMHTTPHandler:
                     json=data if signed_json_body is None else None,
                     timeout=timeout,
                 )
+        except httpx.HTTPStatusError as e:
+            raise provider_config.get_http_error_class(e)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
@@ -2062,7 +2088,9 @@ class BaseLLMHTTPHandler:
                         max_attempts,
                     )
                     provider_config.transform_anthropic_messages_request_on_http_error(e=e, request_data=request_body)
-                    headers, signed_json_body = provider_config.sign_request(
+                    headers, signed_json_body = await sign_request_off_loop_if_aws(
+                        provider_config,
+                        provider_config.sign_request,
                         headers=headers,
                         optional_params=optional_params_dict,
                         request_data=request_body,
@@ -2222,7 +2250,9 @@ class BaseLLMHTTPHandler:
             stream=stream,
         )
 
-        headers, signed_json_body = anthropic_messages_provider_config.sign_request(
+        headers, signed_json_body = await sign_request_off_loop_if_aws(
+            anthropic_messages_provider_config,
+            anthropic_messages_provider_config.sign_request,
             headers=headers,
             optional_params=dict(litellm_params),  # dynamic aws_* params are passed under litellm_params
             request_data=request_body,
@@ -2898,7 +2928,9 @@ class BaseLLMHTTPHandler:
                 fake_stream=fake_stream,
             )
 
-        headers, signed_body = responses_api_provider_config.sign_request(
+        headers, signed_body = await sign_request_off_loop_if_aws(
+            responses_api_provider_config,
+            responses_api_provider_config.sign_request,
             headers=headers,
             optional_params=dict(litellm_params),
             request_data=data,
@@ -4606,7 +4638,9 @@ class BaseLLMHTTPHandler:
         )
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
-        headers, signed_body = responses_api_provider_config.sign_request(
+        headers, signed_body = await sign_request_off_loop_if_aws(
+            responses_api_provider_config,
+            responses_api_provider_config.sign_request,
             headers=headers,
             optional_params=dict(litellm_params),
             request_data=data,
@@ -9814,7 +9848,7 @@ class BaseLLMHTTPHandler:
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 api_base=api_base,
                 litellm_logging_obj=logging_obj,
-                litellm_params=dict(litellm_params),
+                litellm_params=MappingProxyType(dict(litellm_params, timeout=timeout)),
                 extra_body=extra_body,
                 embedding_executor=embedding_executor,
             )
@@ -9833,7 +9867,9 @@ class BaseLLMHTTPHandler:
             )
         all_optional_params: Final[dict[str, object]] = dict(litellm_params)
         all_optional_params.update(vector_store_search_optional_params or {})
-        headers, signed_json_body = vector_store_provider_config.sign_request(
+        headers, signed_json_body = await sign_request_off_loop_if_aws(
+            vector_store_provider_config,
+            vector_store_provider_config.sign_request,
             headers=headers,
             optional_params=all_optional_params,
             request_data=request_body,
@@ -9859,6 +9895,12 @@ class BaseLLMHTTPHandler:
                 data=request_data,
                 timeout=timeout,
             )
+        except httpx.TimeoutException:
+            raise vector_store_provider_config.get_error_class(
+                error_message="Vector store search exceeded the caller timeout.",
+                status_code=408,
+                headers=httpx.Headers(),
+            ) from None
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
@@ -9943,7 +9985,7 @@ class BaseLLMHTTPHandler:
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 api_base=api_base,
                 litellm_logging_obj=logging_obj,
-                litellm_params=dict(litellm_params),
+                litellm_params=MappingProxyType(dict(litellm_params, timeout=timeout)),
                 extra_body=extra_body,
                 embedding_executor=embedding_executor,
             )
@@ -9988,7 +10030,14 @@ class BaseLLMHTTPHandler:
                 url=url,
                 headers=headers,
                 data=request_data,
+                timeout=timeout,
             )
+        except httpx.TimeoutException:
+            raise vector_store_provider_config.get_error_class(
+                error_message="Vector store search exceeded the caller timeout.",
+                status_code=408,
+                headers=httpx.Headers(),
+            ) from None
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
@@ -10017,6 +10066,8 @@ class BaseLLMHTTPHandler:
             )
         else:
             async_httpx_client = client
+
+        vector_store_provider_config.validate_create_vector_store()
 
         headers: Final = vector_store_provider_config.validate_environment(
             headers=extra_headers or {}, litellm_params=litellm_params
@@ -10087,6 +10138,8 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
         else:
             sync_httpx_client = client
+
+        vector_store_provider_config.validate_create_vector_store()
 
         headers: Final = vector_store_provider_config.validate_environment(
             headers=extra_headers or {}, litellm_params=litellm_params

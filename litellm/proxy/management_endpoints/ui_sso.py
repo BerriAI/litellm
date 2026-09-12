@@ -22,7 +22,6 @@ from html import escape
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
-    Annotated,
     Any,
     Final,
     Literal,
@@ -42,12 +41,13 @@ if TYPE_CHECKING:
 import jwt
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.constants import (
     CLI_SSO_CLAIM_MAP,
     CLI_SSO_CLAIM_MAX_SCALAR_LENGTH,
@@ -95,6 +95,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.proxy.auth.team_grants import TeamModelAliasTable
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
     admin_ui_disabled,
@@ -209,31 +210,14 @@ def _team_detail_db(repo: TeamRepository) -> "TableActions[_TeamDetailRow]":
     return repo.table
 
 
-_MODEL_ALIASES_ADAPTER: Final = TypeAdapter(dict[str, str])
 _SSO_TOKEN_CLAIMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
-
-
-def _decode_model_aliases(value: object) -> object:
-    """``/team/new`` stores team model aliases as a JSON-encoded string in the Json column."""
-    if not isinstance(value, str):
-        return value
-    try:
-        return _MODEL_ALIASES_ADAPTER.validate_json(value)
-    except ValidationError:
-        return None
-
-
-class _TeamModelAliasTable(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
-
-    model_aliases: Annotated[Mapping[str, str] | None, BeforeValidator(_decode_model_aliases)] = None
 
 
 class _TeamRowGrants(BaseModel):
     team_id: str
     team_alias: str | None = None
     models: tuple[str, ...] = ()
-    litellm_model_table: _TeamModelAliasTable | None = None
+    litellm_model_table: TeamModelAliasTable | None = None
 
 
 class CliSsoTeamDetail(BaseModel):
@@ -353,6 +337,16 @@ def _check_cli_sso_start_rate_limit(
         )
 
 
+def _read_cli_sso_flow(cache: DualCache, cache_key: str) -> object:
+    redis_cache: Final = cache.redis_cache
+    if redis_cache is None:
+        return cache.get_cache(key=cache_key)
+    try:
+        return redis_cache.get_cache(key=cache_key)
+    except RedisCircuitBreakerOpenError:
+        return None
+
+
 def _get_cli_sso_flow_or_raise(login_id: str | None, cache: DualCache) -> dict:
     if isinstance(login_id, str) and login_id.startswith("sk-"):
         raise HTTPException(
@@ -365,12 +359,7 @@ def _get_cli_sso_flow_or_raise(login_id: str | None, cache: DualCache) -> dict:
     if not _is_valid_cli_sso_login_id(login_id):
         raise HTTPException(status_code=400, detail="Invalid CLI login session id")
 
-    cache_key: Final = _get_cli_sso_flow_cache_key(cast(str, login_id))
-    redis_cache: Final = cache.redis_cache
-    if redis_cache is not None:
-        flow = redis_cache.get_cache(key=cache_key)
-    else:
-        flow = cache.get_cache(key=cache_key)
+    flow = _read_cli_sso_flow(cache, _get_cli_sso_flow_cache_key(cast(str, login_id)))
     if isinstance(flow, str):
         try:
             flow = _as_object(json.loads(flow))

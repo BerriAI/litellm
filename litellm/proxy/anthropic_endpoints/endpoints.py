@@ -25,6 +25,11 @@ from litellm.proxy.common_request_processing import (
     proxy_exception_from_http_exception,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.openai_error_payload import (
+    error_status_code,
+    openai_error_param,
+    openai_error_type,
+)
 from litellm.types.utils import TokenCountResponse
 
 router: Final = APIRouter()
@@ -243,9 +248,9 @@ async def anthropic_response(
         return _anthropic_error_json_response(
             ProxyException(
                 message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                type=openai_error_type(e, error_status_code(e, 500)),
+                param=openai_error_param(e),
+                code=error_status_code(e, 500),
                 headers=headers,
             ),
             request,

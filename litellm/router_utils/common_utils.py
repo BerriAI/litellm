@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Final
 if TYPE_CHECKING:
     from litellm.types.llms.openai import OpenAIFileObject
 
+import litellm
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
@@ -24,6 +25,18 @@ def _is_proxy_admin_request(request_kwargs: Mapping[str, object] | None) -> bool
     litellm_metadata: Final = litellm_metadata_value if isinstance(litellm_metadata_value, Mapping) else {}
     user_api_key_auth: Final = metadata.get("user_api_key_auth") or litellm_metadata.get("user_api_key_auth")
     return getattr(user_api_key_auth, "user_role", None) == "proxy_admin"
+
+
+def get_request_team_id(request_kwargs: Mapping[str, object] | None) -> str | None:
+    """The caller's team id, from whichever metadata bucket this surface writes to."""
+    if request_kwargs is None:
+        return None
+    for bucket_name in ("metadata", "litellm_metadata"):
+        bucket = request_kwargs.get(bucket_name)
+        team_id = bucket.get("user_api_key_team_id") if isinstance(bucket, Mapping) else None
+        if isinstance(team_id, str) and team_id:
+            return team_id
+    return None
 
 
 def resolve_model_group_alias(model_group_alias: object, model: str) -> str | None:
@@ -110,7 +123,7 @@ def filter_team_based_models(
 
     metadata: Final = request_kwargs.get("metadata") or {}
     litellm_metadata: Final = request_kwargs.get("litellm_metadata") or {}
-    request_team_id: Final = metadata.get("user_api_key_team_id") or litellm_metadata.get("user_api_key_team_id")
+    request_team_id: Final = get_request_team_id(request_kwargs)
     if request_team_id is None and _is_proxy_admin_request(request_kwargs) and isinstance(healthy_deployments, list):
         requested_model: Final = (
             request_kwargs.get("model") or metadata.get("model_group") or litellm_metadata.get("model_group")
@@ -242,6 +255,32 @@ PROVIDER_SCOPED_CREDENTIAL_PARAMS: Final[Mapping[str, frozenset[str]]] = Mapping
         "vertex_project": _VERTEX_PROVIDERS,
     }
 )
+
+
+def provider_for_generic_call(litellm_params: Mapping[str, object]) -> str | None:
+    """
+    The provider the router hands a deployment's generic SDK call, or None when it cannot be resolved.
+
+    A model that carries its own provider prefix keeps that prefix even where get_llm_provider
+    would resolve it to a sibling provider (azure_ai/<openai model> on an Azure OpenAI host
+    resolves to azure): the SDK call still receives the prefixed model, and an explicit provider
+    that contradicts the prefix makes get_llm_provider re-prefix it into a deployment name that
+    does not exist upstream.
+    """
+    declared: Final = litellm_params.get("custom_llm_provider")
+    if isinstance(declared, str) and declared:
+        return declared
+    model: Final = litellm_params.get("model")
+    if not isinstance(model, str) or not model:
+        return None
+    prefix: Final = model.split("/", 1)[0]
+    if "/" in model and prefix in litellm.provider_list:
+        return prefix
+    try:
+        _, inferred, _, _ = get_llm_provider(model=model)
+    except BadRequestError:
+        return None
+    return inferred
 
 
 def warn_on_provider_credential_mismatch(model_name: str, litellm_params: Mapping[str, object]) -> str | None:

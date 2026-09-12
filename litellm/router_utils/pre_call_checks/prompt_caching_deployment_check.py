@@ -14,6 +14,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
 )
 from litellm.integrations.custom_logger import CustomLogger, Span
+from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes, StandardLoggingPayload
 from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_prompt
@@ -61,7 +62,7 @@ class PromptCachingDeploymentCheck(CustomLogger):
         if request_kwargs is not None and request_kwargs.get("_target_order") is not None:
             return healthy_deployments
 
-        if messages is not None and is_prompt_caching_valid_prompt(
+        if messages is not None and await offload_token_count(is_prompt_caching_valid_prompt)(
             messages=messages,
             model=model,
             min_token_count=_get_min_token_count_for_deployments(healthy_deployments),
@@ -139,7 +140,7 @@ class PromptCachingDeploymentCheck(CustomLogger):
             return
 
         ## PROMPT CACHING - cache model id, if prompt caching valid prompt + provider
-        if is_prompt_caching_valid_prompt(
+        if await offload_token_count(is_prompt_caching_valid_prompt)(
             model=model,
             messages=cast(list[AllMessageValues], messages),
         ):

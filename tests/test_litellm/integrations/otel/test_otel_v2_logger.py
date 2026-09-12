@@ -2041,7 +2041,7 @@ def test_select_global_otel_v2_logger_builds_one_when_none_registered():
     assert isinstance(chosen, OpenTelemetryV2)
 
 
-def test_publish_global_otel_v2_provider_sets_selected_logger_provider():
+def test_publish_global_otel_v2_provider_sets_selected_logger_provider(monkeypatch):
     """The startup publish must set the OTel global provider to the *selected*
     logger's provider (the preset logger that owns every exporter), so the FastAPI
     server span and the gen-ai spans share one provider and one trace.
@@ -2051,8 +2051,10 @@ def test_publish_global_otel_v2_provider_sets_selected_logger_provider():
     test would otherwise miss: that the published provider is the selected logger's,
     not some other.
     """
+    from litellm.integrations.otel import logger as otel_logger
     from litellm.integrations.otel.logger import publish_global_otel_v2_provider
 
+    monkeypatch.setattr(otel_logger, "_published_v2_provider", None)
     cfg = OpenTelemetryV2Config(exporter="in_memory")
     tp = providers.build_tracer_provider(cfg)
     preset_logger = OpenTelemetryV2(

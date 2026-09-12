@@ -1,11 +1,16 @@
 import asyncio
+import contextlib
 import json
 import logging
 import os
+import queue
+import threading
 from datetime import datetime, timedelta, timezone
+from collections.abc import Iterator
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 import respx
 from jsonschema import validate
@@ -13,6 +18,7 @@ from jsonschema import validate
 
 import litellm
 from litellm._internal_context import is_internal_call
+from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm._logging import (
     CorrelationContextFilter,
     JsonFormatter,
@@ -52,6 +58,12 @@ from litellm.utils import (
 )
 
 # Adds the parent directory to the system path
+
+
+def test_cloudflare_model_info_includes_rpm(local_model_cost_map: None) -> None:
+    assert litellm.get_model_info("cloudflare/@cf/meta/llama-3.1-8b-instruct-fp8")["rpm"] == 300
+    assert litellm.get_model_info("cloudflare/@cf/moonshotai/kimi-k2.6")["rpm"] == 20
+    assert litellm.get_model_info("cloudflare/@cf/openai/whisper-large-v3-turbo")["rpm"] == 720
 
 
 def test_get_utc_datetime_returns_current_aware_utc_time() -> None:
@@ -186,6 +198,8 @@ def test_get_model_info_resolves_provider_prefixed_model_ids(local_model_cost_ma
         ("perplexity/perplexity/kimi-k3", True),
         ("perplexity/perplexity/deepseek-v4-flash-0731", True),
         ("perplexity/perplexity/kimi-k2.7-code", False),
+        ("perplexity/perplexity/nemotron-3.5-lightning-30b-a3b", True),
+        ("perplexity/perplexity/nemotron-3-ultra-550b-a55b", True),
     ):
         assert litellm.supports_reasoning(model=model) is reasoning, model
 
@@ -196,6 +210,18 @@ def test_get_model_info_resolves_provider_prefixed_model_ids(local_model_cost_ma
     assert via_provider["input_cost_per_token"] == 1.4e-06
     assert via_provider["output_cost_per_token"] == 4.4e-06
     assert via_provider["mode"] == "responses"
+
+    lightning = litellm.get_model_info(
+        model="perplexity/nemotron-3.5-lightning-30b-a3b", custom_llm_provider="perplexity"
+    )
+    assert lightning["key"] == "perplexity/perplexity/nemotron-3.5-lightning-30b-a3b"
+    assert lightning["input_cost_per_token"] == 1.15e-08
+    assert lightning["output_cost_per_token"] == 1.7e-07
+    assert lightning["cache_read_input_token_cost"] == 1.15e-09
+    assert lightning["mode"] == "responses"
+
+    ultra = litellm.get_model_info(model="perplexity/perplexity/nemotron-3-ultra-550b-a55b")
+    assert ultra["key"] == "perplexity/perplexity/nemotron-3-ultra-550b-a55b"
 
 
 def test_get_model_info_strips_openai_finetune_ids_without_a_custom_suffix(local_model_cost_map):
@@ -808,6 +834,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "input_cost_per_second",
         "output_cost_per_second",
         "output_cost_per_second_480p",
+        "output_cost_per_second_720p",
         "output_cost_per_second_1080p",
         "output_cost_per_second_4k",
         "input_cost_per_query",
@@ -1031,6 +1058,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_pixel": {"type": "number"},
                 "output_cost_per_second": {"type": "number"},
                 "output_cost_per_second_480p": {"type": "number"},
+                "output_cost_per_second_720p": {"type": "number"},
                 "output_cost_per_second_1080p": {"type": "number"},
                 "output_cost_per_second_4k": {"type": "number"},
                 "output_cost_per_token": {"type": "number"},
@@ -1403,21 +1431,33 @@ def test_supports_tool_choice_simple_tests():
         is True
     )
 
-    assert (
-        litellm.utils.supports_tool_choice(model="us.amazon.nova-micro-v1:0") is False
-    )
-    assert (
-        litellm.utils.supports_tool_choice(model="bedrock/us.amazon.nova-micro-v1:0")
-        is False
-    )
-    assert (
-        litellm.utils.supports_tool_choice(
-            model="us.amazon.nova-micro-v1:0", custom_llm_provider="bedrock_converse"
-        )
-        is False
-    )
-
     assert litellm.utils.supports_tool_choice(model="perplexity/sonar") is False
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "model",
+    [
+        "amazon.nova-lite-v1:0",
+        "amazon.nova-micro-v1:0",
+        "amazon.nova-pro-v1:0",
+        "apac.amazon.nova-lite-v1:0",
+        "apac.amazon.nova-micro-v1:0",
+        "apac.amazon.nova-pro-v1:0",
+        "bedrock/us-gov-east-1/amazon.nova-pro-v1:0",
+        "bedrock/us-gov-west-1/amazon.nova-lite-v1:0",
+        "bedrock/us-gov-west-1/amazon.nova-micro-v1:0",
+        "bedrock/us-gov-west-1/amazon.nova-pro-v1:0",
+        "eu.amazon.nova-lite-v1:0",
+        "eu.amazon.nova-micro-v1:0",
+        "eu.amazon.nova-pro-v1:0",
+        "us.amazon.nova-lite-v1:0",
+        "us.amazon.nova-micro-v1:0",
+        "us.amazon.nova-pro-v1:0",
+    ],
+)
+def test_amazon_nova_v1_understanding_models_support_tool_choice(model: str) -> None:
+    assert litellm.utils.supports_tool_choice(model=model) is True
 
 
 def test_check_provider_match():
@@ -2380,6 +2420,28 @@ def test_register_model_with_scientific_notation():
     if test_model_name in litellm.model_cost:
         del litellm.model_cost[test_model_name]
     _invalidate_model_cost_lowercase_map()
+
+
+@respx.mock
+def test_register_model_url_fetch_uses_single_attempt(monkeypatch):
+    monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    before = dict(litellm.model_cost)
+    threads_before = {thread.name for thread in threading.enumerate()}
+    route = respx.get("https://example.invalid/custom_pricing.json").mock(
+        return_value=httpx.Response(503)
+    )
+
+    litellm.register_model(model_cost="https://example.invalid/custom_pricing.json")
+
+    threads_after = {thread.name for thread in threading.enumerate()}
+    assert route.call_count == 1
+    assert not (threads_after - threads_before) & {"litellm-model-cost-map-retry"}
+    assert not any(
+        thread.name == "litellm-model-cost-map-retry" and thread.is_alive()
+        for thread in threading.enumerate()
+    )
+    assert litellm.model_cost.keys() >= before.keys()
 
 
 def test_register_model_openrouter_without_slash():
@@ -4027,7 +4089,7 @@ def test_deepseek_v4_models_in_cost_map():
     configured in model_prices_and_context_window.json.
 
     Prices sourced from https://api-docs.deepseek.com/quick_start/pricing:
-    - deepseek-v4-flash: $0.44/M input, $1.32/M output
+    - deepseek-v4-flash: $0.30/M input, $1.20/M output
     - deepseek-v4-pro:   $1.32/M input, $3.96/M output
 
     Closes https://github.com/BerriAI/litellm/issues/26709
@@ -4040,9 +4102,9 @@ def test_deepseek_v4_models_in_cost_map():
         model_cost = json.load(f)
 
     # --- bare model names ---
-    for key, expected_input, expected_output, expected_cache in [
-        ("deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
-        ("deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
+    for key, expected_input, expected_output, expected_cache, expected_vision in [
+        ("deepseek-v4-flash", 3e-07, 1.2e-06, 6e-09, True),
+        ("deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08, False),
     ]:
         info = model_cost.get(key)
         assert info is not None, f"{key} missing from model_prices_and_context_window.json"
@@ -4054,11 +4116,12 @@ def test_deepseek_v4_models_in_cost_map():
         assert info["max_input_tokens"] == 1_000_000
         assert info["supports_function_calling"] is True
         assert info["supports_tool_choice"] is True
+        assert info.get("supports_vision", False) is expected_vision
 
     # --- provider-prefixed names ---
-    for key, expected_input, expected_output, expected_cache in [
-        ("deepseek/deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
-        ("deepseek/deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
+    for key, expected_input, expected_output, expected_cache, expected_vision in [
+        ("deepseek/deepseek-v4-flash", 3e-07, 1.2e-06, 6e-09, True),
+        ("deepseek/deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08, False),
     ]:
         info = model_cost.get(key)
         assert info is not None, f"{key} missing from model_prices_and_context_window.json"
@@ -4069,6 +4132,7 @@ def test_deepseek_v4_models_in_cost_map():
         assert info["cache_read_input_token_cost"] == expected_cache
         assert info["supports_function_calling"] is True
         assert info["supports_tool_choice"] is True
+        assert info.get("supports_vision", False) is expected_vision
 
 
 def test_deepseek_v4_models_in_backup_cost_map():
@@ -4084,9 +4148,9 @@ def test_deepseek_v4_models_in_backup_cost_map():
         model_cost = json.load(f)
 
     # --- bare model names ---
-    for key, expected_input, expected_output, expected_cache in [
-        ("deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
-        ("deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
+    for key, expected_input, expected_output, expected_cache, expected_vision in [
+        ("deepseek-v4-flash", 3e-07, 1.2e-06, 6e-09, True),
+        ("deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08, False),
     ]:
         info = model_cost.get(key)
         assert info is not None, f"{key} missing from backup JSON"
@@ -4096,11 +4160,12 @@ def test_deepseek_v4_models_in_backup_cost_map():
         assert info["output_cost_per_token"] == expected_output
         assert info["cache_read_input_token_cost"] == expected_cache
         assert info["max_input_tokens"] == 1_000_000
+        assert info.get("supports_vision", False) is expected_vision
 
     # --- provider-prefixed names ---
-    for key, expected_input, expected_output, expected_cache in [
-        ("deepseek/deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
-        ("deepseek/deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
+    for key, expected_input, expected_output, expected_cache, expected_vision in [
+        ("deepseek/deepseek-v4-flash", 3e-07, 1.2e-06, 6e-09, True),
+        ("deepseek/deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08, False),
     ]:
         info = model_cost.get(key)
         assert info is not None, f"{key} missing from backup JSON"
@@ -4109,6 +4174,43 @@ def test_deepseek_v4_models_in_backup_cost_map():
         assert info["input_cost_per_token"] == expected_input
         assert info["output_cost_per_token"] == expected_output
         assert info["cache_read_input_token_cost"] == expected_cache
+        assert info.get("supports_vision", False) is expected_vision
+
+
+def test_deprecation_dates_for_retired_xai_and_groq_models():
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    assert model_cost["xai/grok-imagine-image-quality"]["deprecation_date"] == "2026-11-02"
+    assert model_cost["xai/grok-imagine-image-quality-latest"]["deprecation_date"] == "2026-11-02"
+    assert model_cost["xai/grok-imagine-image-quality-20260403"]["deprecation_date"] == "2026-11-02"
+    assert model_cost["groq/gemma-7b-it"]["deprecation_date"] == "2024-12-18"
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_deepseek_flash_completion_cost():
+    from litellm.types.utils import ModelResponse
+
+    response = ModelResponse(
+        model="deepseek-flash",
+        usage=Usage(
+            prompt_tokens=1_000_000,
+            completion_tokens=1_000_000,
+            total_tokens=2_000_000,
+        ),
+    )
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="deepseek-flash",
+        custom_llm_provider="deepseek",
+    )
+
+    assert cost == pytest.approx(1.50, abs=1e-9)
 
 
 _FIREWORKS_MODELS = [
@@ -6092,3 +6194,207 @@ class TestFinalOptionalParamsLineRedaction:
 
         assert "'max_tokens': 17" in printed
         assert "'temperature': 0.25" in printed
+
+
+class TestDropParamsStringCoercion:
+    @pytest.mark.parametrize("drop_params", ["true", "True", True])
+    def test_truthy_drop_params_drops_unsupported_temperature(self, drop_params, monkeypatch):
+        from litellm.utils import get_optional_params
+
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result = get_optional_params(
+            model="gpt-5-nano",
+            custom_llm_provider="openai",
+            temperature=0.1,
+            drop_params=drop_params,
+        )
+        assert "temperature" not in result
+
+    @pytest.mark.parametrize("drop_params", ["false", False, None])
+    def test_falsy_drop_params_still_raises(self, drop_params, monkeypatch):
+        from litellm.utils import get_optional_params
+
+        monkeypatch.setattr(litellm, "drop_params", False)
+        with pytest.raises(litellm.UnsupportedParamsError):
+            get_optional_params(
+                model="gpt-5-nano",
+                custom_llm_provider="openai",
+                temperature=0.1,
+                drop_params=drop_params,
+            )
+
+
+def _credential_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [record.getMessage() for record in caplog.records if "litellm_credential_name=" in record.getMessage()]
+
+
+def test_load_credentials_from_list_warns_when_the_named_credential_is_not_loaded(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.utils import load_credentials_from_list
+
+    monkeypatch.setattr(litellm, "credential_list", [])
+    request_kwargs = {"litellm_credential_name": "openai-cred", "model": "openai/gpt-5.4-mini"}
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        load_credentials_from_list(request_kwargs)
+
+    assert request_kwargs == {"litellm_credential_name": "openai-cred", "model": "openai/gpt-5.4-mini"}
+    assert _credential_warnings(caplog) == [
+        "litellm_credential_name=openai-cred matched none of the 0 loaded credentials; the request runs without it"
+    ]
+
+
+def test_load_credentials_from_list_fills_kwargs_from_the_loaded_credential_without_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.types.utils import CredentialItem
+    from litellm.utils import load_credentials_from_list
+
+    loaded = CredentialItem(
+        credential_name="openai-cred",
+        credential_values={"api_key": "sk-from-db", "api_base": "https://credential.example"},
+        credential_info={},
+    )
+    monkeypatch.setattr(litellm, "credential_list", [loaded])
+    request_kwargs = {"litellm_credential_name": "openai-cred", "api_base": "https://request.example"}
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        load_credentials_from_list(request_kwargs)
+
+    assert request_kwargs == {
+        "litellm_credential_name": "openai-cred",
+        "api_base": "https://request.example",
+        "api_key": "sk-from-db",
+    }
+    assert _credential_warnings(caplog) == []
+
+
+_MOCK_STREAM_ID: Final = "chatcmpl-mock-stream"
+_ChunkSnapshot = tuple[str, tuple[str | None, ...], Usage | None]
+
+
+def _snapshot(chunk: ModelResponseStream) -> _ChunkSnapshot:
+    return chunk.id, tuple(choice.delta.content for choice in chunk.choices), getattr(chunk, "usage", None)
+
+
+def _mock_stream_snapshots(mock_response: object, prompt_tokens: int | None) -> list[_ChunkSnapshot]:
+    from litellm.utils import mock_completion_streaming_obj
+
+    return [
+        _snapshot(chunk)
+        for chunk in mock_completion_streaming_obj(
+            ModelResponseStream(id=_MOCK_STREAM_ID, model="gpt-5.4-mini"),
+            mock_response=mock_response,
+            model="gpt-5.4-mini",
+            prompt_tokens=prompt_tokens,
+        )
+    ]
+
+
+async def _async_mock_stream_snapshots(mock_response: object, prompt_tokens: int | None) -> list[_ChunkSnapshot]:
+    from litellm.utils import async_mock_completion_streaming_obj
+
+    return [
+        _snapshot(chunk)
+        async for chunk in async_mock_completion_streaming_obj(
+            ModelResponseStream(id=_MOCK_STREAM_ID, model="gpt-5.4-mini"),
+            mock_response=mock_response,
+            model="gpt-5.4-mini",
+            prompt_tokens=prompt_tokens,
+        )
+    ]
+
+
+_CONTENT_SNAPSHOTS: Final = [(_MOCK_STREAM_ID, (content,), None) for content in ("hel", "lo ", "wor", "ld")]
+
+
+def _assert_trailing_usage_chunk(snapshots: list[_ChunkSnapshot], prompt_tokens: int) -> None:
+    assert snapshots[:-1] == _CONTENT_SNAPSHOTS
+    chunk_id, choices, usage = snapshots[-1]
+    assert chunk_id == _MOCK_STREAM_ID
+    assert choices == ()
+    assert usage is not None
+    assert usage.prompt_tokens == prompt_tokens
+    assert usage.completion_tokens == DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
+    assert usage.total_tokens == prompt_tokens + usage.completion_tokens
+
+
+@pytest.mark.parametrize("prompt_tokens", (51234, 0))
+def test_mock_completion_streaming_obj_emits_usage_chunk_with_admission_prompt_tokens(prompt_tokens: int) -> None:
+    _assert_trailing_usage_chunk(_mock_stream_snapshots("hello world", prompt_tokens), prompt_tokens)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prompt_tokens", (51234, 0))
+async def test_async_mock_completion_streaming_obj_emits_usage_chunk_with_admission_prompt_tokens(
+    prompt_tokens: int,
+) -> None:
+    _assert_trailing_usage_chunk(await _async_mock_stream_snapshots("hello world", prompt_tokens), prompt_tokens)
+
+
+def test_mock_completion_streaming_obj_emits_no_usage_chunk_without_admission_prompt_tokens() -> None:
+    assert _mock_stream_snapshots("hello world", None) == _CONTENT_SNAPSHOTS
+
+
+@pytest.mark.asyncio
+async def test_async_mock_completion_streaming_obj_emits_no_usage_chunk_without_admission_prompt_tokens() -> None:
+    assert await _async_mock_stream_snapshots("hello world", None) == _CONTENT_SNAPSHOTS
+
+
+def test_mock_completion_streaming_obj_passes_prebuilt_stream_chunk_through_without_usage_chunk() -> None:
+    prebuilt: Final = ModelResponseStream(
+        model="gpt-5.4-mini", choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content="prebuilt"))]
+    )
+
+    assert _mock_stream_snapshots(prebuilt, 51234) == [(prebuilt.id, ("prebuilt",), None)]
+
+
+@pytest.mark.asyncio
+async def test_async_mock_completion_streaming_obj_raises_mock_exception_before_usage_chunk() -> None:
+    mock_exception: Final = litellm.MockException(
+        status_code=500, message="boom", llm_provider="openai", model="gpt-5.4-mini"
+    )
+    with pytest.raises(litellm.MockException):
+        await _async_mock_stream_snapshots(mock_exception, 51234)
+
+
+
+@contextlib.contextmanager
+def _recording_hidden_params_at_submit(submit_target: str) -> "Iterator[queue.SimpleQueue[dict[str, object]]]":
+    seen: Final = queue.SimpleQueue()
+
+    def record_submit(_fn, *args, **_kwargs):
+        response: Final = next(arg for arg in args if isinstance(arg, litellm.ModelResponse))
+        seen.put(dict(response._hidden_params))
+        return MagicMock()
+
+    with patch(submit_target, side_effect=record_submit):
+        yield seen
+
+
+@pytest.mark.asyncio
+async def test_acompletion_finishes_response_metadata_before_handing_the_response_to_the_logging_thread(monkeypatch):
+    monkeypatch.setattr(litellm, "success_callback", [lambda kwargs, response, start_time, end_time: None])
+    with _recording_hidden_params_at_submit("litellm.litellm_core_utils.litellm_logging.executor.submit") as seen:
+        await litellm.acompletion(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello there!",
+            num_retries=0,
+        )
+    snapshot: Final = seen.get_nowait()
+    assert snapshot["litellm_call_id"]
+    assert snapshot["response_cost"] is not None
+    assert snapshot["api_base"]
+
+
+def test_completion_finishes_response_metadata_before_handing_the_response_to_the_logging_thread():
+    with _recording_hidden_params_at_submit("litellm.utils.executor.submit") as seen:
+        litellm.completion(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello there!",
+        )
+    snapshot: Final = seen.get_nowait()
+    assert snapshot["litellm_call_id"]
+    assert snapshot["response_cost"] is not None
+    assert snapshot["api_base"]

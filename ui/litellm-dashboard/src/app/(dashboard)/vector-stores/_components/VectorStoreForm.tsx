@@ -70,7 +70,6 @@ const PROVIDER_FIELD_NAMES = [
   "vector_bucket_name",
   "index_name",
   "aws_region_name",
-  "mongodb_connection_string",
   "mongodb_database",
   "mongodb_collection",
   "mongodb_embedding_field",
@@ -107,7 +106,6 @@ const vectorStoreShape = {
   vector_bucket_name: optionalText,
   index_name: optionalText,
   aws_region_name: optionalText,
-  mongodb_connection_string: optionalText,
   mongodb_database: optionalText,
   mongodb_collection: optionalText,
   mongodb_embedding_field: optionalText,
@@ -142,7 +140,7 @@ const VECTOR_STORE_ID_PLACEHOLDERS: Record<string, string> = {
   vertex_rag_engine: '6917529027641081856 (corpus ID from Vertex AI / "RAG Engine" console)',
   "vertex_ai/search_api": 'my-datastore_1234567890 (data store ID from Vertex AI / "Agent Search" console)',
   valkey: "my-search-index (FT index name in Valkey)",
-  mongodb: "my-vector-index (Atlas Vector Search index name)",
+  mongodb: "my-vector-index (MongoDB Vector Search index name)",
 };
 
 const VERTEX_SEARCH_API_WITH_ENGINE_PLACEHOLDER = "Any identifier you'll use to reference this in LiteLLM";

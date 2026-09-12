@@ -35,6 +35,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    JsonValue,
     PrivateAttr,
     SkipValidation,
     field_serializer,
@@ -272,7 +273,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_above_272k_tokens_flex: float | None
     input_cost_per_token_above_512k_tokens: float | None  # MiniMax-M3: prompts >512K priced at 2x input
     input_cost_per_character_above_128k_tokens: float | None  # only for vertex ai models
-    input_cost_per_query: float | None  # only for rerank models
+    input_cost_per_query: float | None  # per-request pricing: rerank, search, and Bedrock Marengo embeddings
     input_cost_per_image: float | None  # only for vertex ai models
     input_cost_per_image_token: float | None  # for gpt-image-1 and similar models
     input_cost_per_video_token: float | None  # for gemini omni models with video input
@@ -318,6 +319,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
         float | None
     )  # video_generation tier: key output_cost_per_second_<resolution> (e.g. 1080p, 720p)
     output_cost_per_second_480p: ReadOnly[float | None]
+    output_cost_per_second_720p: ReadOnly[float | None]
     output_cost_per_second_4k: ReadOnly[float | None]
     ocr_cost_per_page: float | None  # for OCR models
     ocr_cost_per_credit: float | None  # for OCR models priced by credit
@@ -580,6 +582,7 @@ CallTypesLiteral = Literal[
     "search",
     "asearch",
     "_arealtime",
+    "_aresponses_websocket",
     "create_batch",
     "acreate_batch",
     "create_file",
@@ -1693,6 +1696,9 @@ class PromptTokensDetailsWrapper(
     audio_length_seconds: float | None = None
     """Length of audio sent to the model. Used for multimodal embeddings priced per audio-second."""
 
+    query_count: int | None = None
+    """Number of billable requests sent to the model. Used for embeddings priced per request, such as Bedrock Marengo."""
+
     cache_write_tokens: int | None = None
     """Number of cache write (creation) tokens sent to the model. OpenAI naming (prompt_tokens_details.cache_write_tokens); this is the canonical field."""
 
@@ -1734,6 +1740,8 @@ class PromptTokensDetailsWrapper(
             del self.video_length_seconds
         if self.audio_length_seconds is None:
             del self.audio_length_seconds
+        if self.query_count is None:
+            del self.query_count
         if self.web_search_requests is None:
             del self.web_search_requests
         if self.google_maps_grounding_requests is None:
@@ -2912,6 +2920,7 @@ RoutingDecisionCause = Literal[
     # same tier served instead. The displaced group rides in signals. Reported even on a kept
     # session pin, since the pinned model did not serve the request.
     "health_failover",
+    "health_default_fallback",
     "session_affinity_pin",
     "session_affinity_escalation",
     # classification_mode 'user_turn': the request is an agent loop's continuation turn (no new
@@ -3366,7 +3375,12 @@ class StandardAuditLogPayload(TypedDict):
     updated_values: str | None
 
 
-class StandardLoggingPayload(TypedDict):
+class ClassifierAudit(TypedDict, total=False):
+    classifier_input: ReadOnly[Mapping[str, JsonValue]]
+    originating_request_masked: ReadOnly[Mapping[str, JsonValue]]
+
+
+class StandardLoggingPayload(ClassifierAudit):
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
     session_id: str  # End-user/conversation session id (litellm_session_id), independent of trace_id
@@ -3516,6 +3530,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_second: float | None = None
     output_cost_per_second_1080p: float | None = None
     output_cost_per_second_480p: float | None = None
+    output_cost_per_second_720p: float | None = None
     output_cost_per_second_4k: float | None = None
     input_cost_per_pixel: float | None = None
     output_cost_per_pixel: float | None = None

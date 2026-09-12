@@ -264,6 +264,231 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
             # Should return the responses unchanged
             assert result == responses_so_far
 
+    @staticmethod
+    def _ended_sse_chunks() -> list:
+        events = [
+            ("message_start", {"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-4-5", "content": [], "stop_reason": None, "usage": {"input_tokens": 1, "output_tokens": 0}}}),
+            ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hello "}}),
+            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "world"}}),
+            ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+            ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 2}}),
+            ("message_stop", {"type": "message_stop"}),
+        ]
+        return [f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode() for name, payload in events]
+
+    @staticmethod
+    def _masking_guardrail() -> CustomGuardrail:
+        class MaskWorld(CustomGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                return {**inputs, "texts": [text.replace("world", "[MASKED]") for text in inputs.get("texts", [])]}
+
+        return MaskWorld(guardrail_name="test")
+
+    @staticmethod
+    def _delta_texts(chunks: list) -> list:
+        texts = []
+        for chunk in chunks:
+            for line in chunk.decode().split("\n"):
+                if not line.startswith("data:"):
+                    continue
+                data = json.loads(line[len("data:") :].strip())
+                if data.get("type") == "content_block_delta":
+                    texts.append(data["delta"]["text"])
+        return texts
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_writes_text_back_into_sse_chunks(self):
+        handler = AnthropicMessagesHandler()
+        chunks = self._ended_sse_chunks()
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=MagicMock(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is chunks
+        assert self._delta_texts(chunks) == ["hello [MASKED]", ""]
+        raw = b"".join(chunks).decode()
+        assert "event: message_start" in raw and "event: message_stop" in raw
+        assert '"stop_reason": "end_turn"' in raw
+
+    @staticmethod
+    def _ended_tool_use_sse_chunks() -> list:
+        events = [
+            ("message_start", {"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-4-5", "content": [], "stop_reason": None, "usage": {"input_tokens": 1, "output_tokens": 0}}}),
+            ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "toolu_1", "name": "lookup_fruit", "input": {}}}),
+            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": ""}}),
+            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": '{"fruit": "persim'}}),
+            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": 'mon"}'}}),
+            ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+            ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None}, "usage": {"output_tokens": 2}}),
+            ("message_stop", {"type": "message_stop"}),
+        ]
+        return [f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode() for name, payload in events]
+
+    @staticmethod
+    def _argument_masking_guardrail() -> CustomGuardrail:
+        class MaskArguments(CustomGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                for tool_call in inputs.get("tool_calls", []):
+                    tool_call.function.arguments = '{"fruit": "[MASKED]"}'
+                return inputs
+
+        return MaskArguments(guardrail_name="test")
+
+    @staticmethod
+    def _partial_jsons(chunks: list) -> list:
+        return [
+            json.loads(line[len("data:") :].strip())["delta"]["partial_json"]
+            for chunk in chunks
+            for line in chunk.decode().split("\n")
+            if line.startswith("data:") and json.loads(line[len("data:") :].strip()).get("type") == "content_block_delta"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_writes_tool_use_input_back_into_sse_chunks(self):
+        handler = AnthropicMessagesHandler()
+        chunks = self._ended_tool_use_sse_chunks()
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._argument_masking_guardrail(),
+            litellm_logging_obj=MagicMock(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is chunks
+        assert self._partial_jsons(chunks) == ['{"fruit": "[MASKED]"}', "", ""]
+        raw = b"".join(chunks).decode()
+        assert '"name": "lookup_fruit"' in raw and '"id": "toolu_1"' in raw
+        assert '"stop_reason": "tool_use"' in raw
+        assert "persim" not in raw
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_writes_tool_use_name_back_into_sse_chunks(self):
+        class RenameTool(CustomGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                for tool_call in inputs.get("tool_calls", []):
+                    tool_call.function.name = "lookup_fruit_reviewed"
+                return inputs
+
+        handler = AnthropicMessagesHandler()
+        chunks = self._ended_tool_use_sse_chunks()
+
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=RenameTool(guardrail_name="test"),
+            litellm_logging_obj=MagicMock(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        raw = b"".join(chunks).decode()
+        assert '"name": "lookup_fruit_reviewed"' in raw and '"id": "toolu_1"' in raw
+        assert '"name": "lookup_fruit"' not in raw
+        assert json.loads("".join(self._partial_jsons(chunks))) == {"fruit": "persimmon"}
+
+    @pytest.mark.asyncio
+    async def test_ended_stream_tool_use_rewrite_leaves_chunks_untouched_by_default(self):
+        handler = AnthropicMessagesHandler()
+        chunks = self._ended_tool_use_sse_chunks()
+        original = [bytes(chunk) for chunk in chunks]
+
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._argument_masking_guardrail(),
+            litellm_logging_obj=MagicMock(),
+        )
+
+        assert chunks == original
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_tool_use_rewrite_with_server_tool_use_block_fails_closed(self):
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        handler = AnthropicMessagesHandler()
+        server_tool_use = [
+            ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {}}}),
+            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": '{"query": "fruit"}'}}),
+            ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        ]
+        tool_use = self._ended_tool_use_sse_chunks()
+        chunks = (
+            tool_use[:1]
+            + [f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode() for name, payload in server_tool_use]
+            + [chunk.replace(b'"index": 0', b'"index": 1') for chunk in tool_use[1:]]
+        )
+
+        with pytest.raises(UndeliverableStreamRewrite):
+            await handler.process_output_streaming_response(
+                responses_so_far=chunks,
+                guardrail_to_apply=self._argument_masking_guardrail(),
+                litellm_logging_obj=MagicMock(),
+                deliver_ended_stream_rewrites=True,
+            )
+
+    @pytest.mark.asyncio
+    async def test_ended_stream_rewrite_leaves_chunks_untouched_by_default(self):
+        handler = AnthropicMessagesHandler()
+        chunks = self._ended_sse_chunks()
+        original = [bytes(chunk) for chunk in chunks]
+
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=MagicMock(),
+        )
+
+        assert chunks == original
+
+    @pytest.mark.asyncio
+    async def test_unended_stream_rewrite_with_delivery_expected_fails_closed(self):
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        handler = AnthropicMessagesHandler()
+        chunks = self._ended_sse_chunks()[:-2]
+
+        with pytest.raises(UndeliverableStreamRewrite):
+            await handler.process_output_streaming_response(
+                responses_so_far=chunks,
+                guardrail_to_apply=self._masking_guardrail(),
+                litellm_logging_obj=MagicMock(),
+                deliver_ended_stream_rewrites=True,
+            )
+
+    @pytest.mark.asyncio
+    async def test_unended_stream_without_rewrite_is_released_with_delivery_expected(self):
+        handler = AnthropicMessagesHandler()
+        chunks = self._ended_sse_chunks()[:-2]
+        original = [bytes(chunk) for chunk in chunks]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=MockPassThroughGuardrail(guardrail_name="test"),
+            litellm_logging_obj=MagicMock(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is chunks
+        assert chunks == original
+
+    @pytest.mark.asyncio
+    async def test_unended_stream_rewrite_without_delivery_expected_does_not_raise(self):
+        handler = AnthropicMessagesHandler()
+        chunks = self._ended_sse_chunks()[:-2]
+        original = [bytes(chunk) for chunk in chunks]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=MagicMock(),
+        )
+
+        assert result is chunks
+        assert chunks == original
+
 
 class TestAnthropicMessagesHandlerInputProcessing:
     """Test input processing preserves litellm_metadata for dynamic guardrails."""
@@ -2045,3 +2270,29 @@ class TestAnthropicMessagesHandlerStreamingScanKey:
         assert open_key == StreamingScanKey(texts=("hi",))
         assert len(ended_key.tool_calls) == 1 and "get_weather" in ended_key.tool_calls[0]
         assert ended_key != open_key
+
+
+class TestAnthropicMessagesHandlerPostCallHookResponse:
+    def test_openai_shaped_stream_assembly_reaches_the_hook_as_a_messages_response(self):
+        from litellm.types.utils import Choices, Message, ModelResponse, Usage
+
+        assembled = ModelResponse(
+            id="msg_1",
+            model="claude",
+            choices=[Choices(message=Message(role="assistant", content="hello world"), finish_reason="stop")],
+            usage=Usage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
+        )
+
+        hook_response = AnthropicMessagesHandler().post_call_hook_response(assembled)
+
+        assert hook_response["type"] == "message"
+        assert hook_response["role"] == "assistant"
+        assert hook_response["content"] == [{"type": "text", "text": "hello world"}]
+        assert hook_response["stop_reason"] == "end_turn"
+        assert hook_response["usage"]["input_tokens"] == 1
+        assert hook_response["usage"]["output_tokens"] == 2
+
+    def test_anything_else_reaches_the_hook_untouched(self):
+        native = {"type": "message", "role": "assistant", "content": [{"type": "text", "text": "hi"}]}
+
+        assert AnthropicMessagesHandler().post_call_hook_response(native) is native

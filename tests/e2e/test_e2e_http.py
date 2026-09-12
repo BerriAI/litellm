@@ -13,13 +13,24 @@ monkeypatches anything.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
 import pytest
-
-from e2e_http import RETRY_ATTEMPTS, TRANSIENT_STATUSES, request_with_retry, streaming_outcome
+from e2e_http import (
+    RETRY_ATTEMPTS,
+    TRANSIENT_STATUSES,
+    NoBody,
+    PartialBody,
+    Success,
+    ValidationError,
+    classify,
+    request_with_retry,
+    streaming_outcome,
+    wire_body,
+)
+from pydantic import BaseModel, TypeAdapter
 
 
 @dataclass
@@ -33,10 +44,10 @@ class FakeResponse:
 
 @dataclass
 class SleepRecorder:
-    delays: list[float] = field(default_factory=list)
+    delays: tuple[float, ...] = ()
 
     def __call__(self, seconds: float) -> None:
-        self.delays.append(seconds)
+        self.delays += (seconds,)
 
 
 def _issue_from(responses: Sequence[FakeResponse]) -> Callable[[], FakeResponse]:
@@ -55,7 +66,7 @@ class TestTransientRetryPolicy:
         sleep = SleepRecorder()
         result = request_with_retry(_issue_from(responses), sleep=sleep)
         assert result is responses[0]
-        assert sleep.delays == []
+        assert sleep.delays == ()
         assert responses[0].close_calls == 0
 
     def test_429_is_never_retried(self) -> None:
@@ -63,7 +74,7 @@ class TestTransientRetryPolicy:
         sleep = SleepRecorder()
         result = request_with_retry(_issue_from(responses), sleep=sleep)
         assert result is responses[0]
-        assert sleep.delays == []
+        assert sleep.delays == ()
         assert responses[0].close_calls == 0
 
     def test_overloaded_529_retries_with_backoff_then_returns_the_success(self) -> None:
@@ -71,7 +82,7 @@ class TestTransientRetryPolicy:
         sleep = SleepRecorder()
         result = request_with_retry(_issue_from(responses), sleep=sleep)
         assert result is responses[1]
-        assert sleep.delays == [0.5]
+        assert sleep.delays == (0.5,)
         assert responses[0].close_calls == 1
         assert responses[1].close_calls == 0
 
@@ -80,7 +91,7 @@ class TestTransientRetryPolicy:
         sleep = SleepRecorder()
         result = request_with_retry(_issue_from(responses), sleep=sleep)
         assert result is responses[RETRY_ATTEMPTS - 1]
-        assert sleep.delays == [0.5, 1.0]
+        assert sleep.delays == (0.5, 1.0)
         assert [r.close_calls for r in responses] == [1, 1, 0, 0]
 
 
@@ -134,3 +145,65 @@ class TestStreamEventArrivals:
         assert result.stream_events == []
         assert result.stream_event_arrivals == []
         assert result.body == "bad request"
+
+
+class _ServerUpdate(PartialBody):
+    server_id: str
+    alias: str | None = None
+    description: str | None = None
+
+
+class _ServerCreate(BaseModel):
+    alias: str
+    description: str | None = None
+
+
+class TestWireBody:
+    """A partial-update body must put exactly the caller's choice on the wire: an
+    omitted field stays off it so the route keeps the stored value, and an explicit
+    None goes out as JSON null so the route clears it. Plain bodies keep dropping
+    None, which is what every create route expects."""
+
+    def test_partial_body_omits_unset_fields_and_sends_explicit_none_as_null(self) -> None:
+        assert wire_body(_ServerUpdate(server_id="s1", description=None)) == {"server_id": "s1", "description": None}
+        assert wire_body(_ServerUpdate(server_id="s1", alias="renamed")) == {"server_id": "s1", "alias": "renamed"}
+
+    def test_plain_body_drops_none_fields(self) -> None:
+        assert wire_body(_ServerCreate(alias="a", description=None)) == {"alias": "a"}
+
+
+_JSON: Final[TypeAdapter[object]] = TypeAdapter(object)
+
+
+@dataclass
+class FakeJsonResponse:
+    """The `classify` view of a response: a status, the raw body bytes, and the
+    parse that would raise on an empty one."""
+
+    status_code: int
+    content: bytes
+
+    @property
+    def ok(self) -> bool:
+        return self.status_code < 400
+
+    @property
+    def text(self) -> str:
+        return self.content.decode()
+
+    def json(self) -> object:
+        return _JSON.validate_json(self.content)
+
+
+class TestClassifyEmptyBody:
+    """A delete that answers 202 with no body is a success, not a parse failure:
+    the MCP server and toolset delete routes both answer that way, and reading it
+    as a failure would hide a delete that did not happen behind one that did."""
+
+    def test_empty_2xx_body_is_a_success(self) -> None:
+        result: Final = classify(FakeJsonResponse(status_code=202, content=b""), NoBody)
+        assert isinstance(result, Success) and result.status_code == 202
+
+    def test_body_that_is_not_json_is_still_a_validation_failure(self) -> None:
+        result: Final = classify(FakeJsonResponse(status_code=200, content=b"<html/>"), NoBody)
+        assert isinstance(result, ValidationError)

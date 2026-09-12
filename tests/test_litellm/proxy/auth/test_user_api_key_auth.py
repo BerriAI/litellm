@@ -1,8 +1,13 @@
 import asyncio
 import json
 import logging
+import os
+import subprocess
+import sys
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from textwrap import dedent
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
@@ -18,6 +23,7 @@ from litellm.proxy._types import (
     LiteLLM_JWTAuth,
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
+    LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LitellmUserRoles,
     ProxyErrorTypes,
@@ -43,6 +49,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     get_api_key,
     user_api_key_auth,
 )
+from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
 
 
 class _RoutingRequest:
@@ -1636,6 +1643,95 @@ async def test_db_virtual_key_auth_sets_via_virtual_key_marker():
         assert isinstance(result, UserAPIKeyAuth)
         assert result.via_virtual_key is True
         assert result.api_key == hashed_key
+    finally:
+        for attr, val in _original_values.items():
+            setattr(_proxy_server_mod, attr, val)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_allowed", [True, False])
+async def test_auth_prefetches_referenced_objects_only_after_the_key_may_call_the_model(model_allowed):
+    """A request denied by the key's model list must not pay for the team/user/org MGET or DB join."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.proxy_server import hash_token
+
+    api_key = "sk-prefetch-order-test"
+    valid_token = UserAPIKeyAuth(api_key=api_key, token=hash_token(api_key), user_id="u1", team_id="t1")
+
+    mock_cache = AsyncMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.delete_cache = MagicMock()
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    _attrs_to_set = {
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": mock_cache,
+        "proxy_logging_obj": mock_proxy_logging_obj,
+        "master_key": "sk-master-key",
+        "general_settings": {},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": None,
+        "jwt_handler": None,
+        "litellm_proxy_admin_name": "admin",
+    }
+    _original_values = {attr: getattr(_proxy_server_mod, attr, None) for attr in _attrs_to_set}
+    denied = ProxyException(
+        message="Key not allowed to access model",
+        type=ProxyErrorTypes.key_model_access_denied,
+        param="model",
+        code=401,
+    )
+    try:
+        for attr, val in _attrs_to_set.items():
+            setattr(_proxy_server_mod, attr, val)
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        with (
+            patch(  # test-quality-ok: the builder has no DI seam for the key lookup; stands in for the DB
+                "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
+                new_callable=AsyncMock,
+                return_value=valid_token,
+            ),
+            patch(  # test-quality-ok: the observable is whether the prefetch runs before or after this check
+                "litellm.proxy.auth.user_api_key_auth._enforce_key_and_fallback_model_access",
+                new_callable=AsyncMock,
+                side_effect=None if model_allowed else denied,
+            ),
+            patch(  # test-quality-ok: counting prefetch calls on a denied request IS the regression being pinned
+                "litellm.proxy.auth.user_api_key_auth.prefetch_auth_objects", new_callable=AsyncMock
+            ) as mock_prefetch,
+            patch(  # test-quality-ok: no DB in this test; the user lookup must not fail the allowed path
+                "litellm.proxy.auth.user_api_key_auth.get_user_object", new_callable=AsyncMock, return_value=None
+            ),
+        ):
+            call = _user_api_key_auth_builder(
+                request=request,
+                api_key=f"Bearer {api_key}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={"model": "gpt-4o"},
+            )
+            if model_allowed:
+                assert isinstance(await call, UserAPIKeyAuth)
+                mock_prefetch.assert_awaited_once()
+                assert mock_prefetch.await_args.kwargs["refs"].team_id == "t1"
+            else:
+                with pytest.raises(ProxyException) as exc:
+                    await call
+                assert exc.value.type == ProxyErrorTypes.key_model_access_denied
+                mock_prefetch.assert_not_awaited()
     finally:
         for attr, val in _original_values.items():
             setattr(_proxy_server_mod, attr, val)
@@ -3923,6 +4019,65 @@ async def test_centralized_common_checks_routes_header_tags_to_litellm_metadata(
 
     assert request_data["litellm_metadata"]["tags"] == ["tenant:acme"]
     assert "metadata" not in request_data
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_carries_team_and_user_budget_state_on_the_token():
+    """The team and user objects auth resolves are pinned on the token so the
+    response path (Prometheus budget gauges) reads them from request metadata
+    instead of calling get_team_object / get_user_object again."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    reset_at = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    token = UserAPIKeyAuth(api_key="sk-test", token="hashed", team_id="t1", user_id="u1")
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    user_api_key_cache = DualCache()
+    await user_api_key_cache.async_set_cache(
+        key="team_id:t1",
+        value=LiteLLM_TeamTableCachedObj(team_id="t1", budget_reset_at=reset_at, max_budget=300.0),
+    )
+    await user_api_key_cache.async_set_cache(
+        key="u1",
+        value=LiteLLM_UserTable(user_id="u1", user_alias="Alice", budget_reset_at=None, max_budget=None),
+    )
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
+    attrs = {
+        **_proxy_attrs_for_centralized_checks(user_custom_auth=None),
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": user_api_key_cache,
+        "proxy_logging_obj": proxy_logging_obj,
+    }
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with patch(  # test-quality-ok: the authz gate has its own tests above; this one checks the carry step before it
+            "litellm.proxy.auth.user_api_key_auth.common_checks",
+            new_callable=AsyncMock,
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"model": "gpt-5.4-mini"},
+                route="/chat/completions",
+            )
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+    assert dict(carried_budget_metadata(token)) == {
+        "user_api_key_team_budget_reset_at": "2026-10-01T00:00:00Z",
+        "user_api_key_team_table_max_budget": 300.0,
+        "user_api_key_user_budget_reset_at": None,
+        "user_api_key_user_table_max_budget": None,
+        "user_api_key_user_alias": "Alice",
+    }
 
 
 @pytest.mark.asyncio
@@ -6767,6 +6922,109 @@ async def test_temp_budget_increase_applied_for_cached_key():
     assert cached_after.max_budget == 2.0
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "team_member_spend, expect_blocked",
+    [
+        (2.4, True),
+        (2.4000000000000004, True),
+        (2.39, False),
+    ],
+)
+async def test_cached_key_team_member_budget_blocks_at_exact_cap(team_member_spend, expect_blocked):
+    """A team member counter sitting exactly at the cap (where a resized reservation
+    lands it) must be rejected by the cached-key auth path like every other budget check."""
+    from litellm.proxy._types import LiteLLM_TeamMembership, LiteLLM_TeamTableCachedObj
+    from litellm.proxy.common_utils.user_api_key_cache import team_membership_auth_cache_key
+    from litellm.proxy.utils import hash_token
+
+    api_key = "sk-team-member-exact-cap"
+    hashed_token = hash_token(api_key)
+    team_id = "team-exact-cap"
+    user_id = "user-exact-cap"
+    max_budget = 2.4
+
+    user_api_key_cache = DualCache()
+    await _cache_key_object(
+        hashed_token=hashed_token,
+        user_api_key_obj=UserAPIKeyAuth(
+            token=hashed_token,
+            team_id=team_id,
+            user_id=user_id,
+            team_member_spend=team_member_spend,
+        ),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=None,
+    )
+    await user_api_key_cache.async_set_cache(
+        key=f"team_id:{team_id}",
+        value=LiteLLM_TeamTableCachedObj(team_id=team_id),
+    )
+    await user_api_key_cache.async_set_cache(
+        key=user_id,
+        value=LiteLLM_UserTable(user_id=user_id, user_role=LitellmUserRoles.INTERNAL_USER),
+    )
+    await user_api_key_cache.async_set_cache(
+        key=team_membership_auth_cache_key(team_id=team_id, user_id=user_id),
+        value=LiteLLM_TeamMembership(
+            user_id=user_id,
+            team_id=team_id,
+            spend=team_member_spend,
+            budget_id="budget-exact-cap",
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=max_budget),
+        ),
+    )
+
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/messages"
+    mock_request.method = "POST"
+    mock_request.headers = {"authorization": f"Bearer {api_key}"}
+    mock_request.query_params = {}
+    mock_request.state = SimpleNamespace()
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    async def _auth():
+        return await _user_api_key_auth_builder(
+            request=mock_request,
+            api_key=f"Bearer {api_key}",
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={"model": "claude-sonnet-5", "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    with (
+        patch(  # test-quality-ok: the builder reads proxy settings from module globals, no injection seam
+            "litellm.proxy.proxy_server.general_settings", {"disable_budget_reservation": True}
+        ),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),  # test-quality-ok: module-global proxy state
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: module-global proxy state
+        patch(  # test-quality-ok: seed the cached key, team and membership without a DB
+            "litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache
+        ),
+        patch(  # test-quality-ok: module-global proxy state
+            "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+        ),
+        patch(  # test-quality-ok: the live counter needs Redis or a DB; pin the spend the check compares
+            "litellm.proxy.proxy_server.get_current_spend",
+            new=AsyncMock(return_value=team_member_spend),
+        ),
+    ):
+        if not expect_blocked:
+            result = await _auth()
+            assert result.team_member_spend == team_member_spend
+            return
+        with pytest.raises(ProxyException) as exc_info:
+            await _auth()
+
+    assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+    assert f"TeamMember={user_id}:{team_id}" in exc_info.value.message
+
+
 async def _proxy_exception_for_key(
     api_key: str,
     general_settings: dict[str, bool],
@@ -6902,3 +7160,285 @@ class TestLitellmReceivedAtStamping:
 
         assert result == earlier
         assert request.state.litellm_received_at == earlier
+
+
+_RECORDING_DDTRACE = dedent(
+    '''
+    import functools
+    import inspect
+
+
+    class _Span:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return None
+
+
+    class _Tracer:
+        def __init__(self):
+            self.spans = []
+
+        def wrap(self, name=None, **kwargs):
+            def decorator(f):
+                span_name = name or f"{f.__module__}.{f.__name__}"
+                if inspect.iscoroutinefunction(f):
+
+                    @functools.wraps(f)
+                    async def async_wrapped(*args, **kw):
+                        self.spans.append(span_name)
+                        return await f(*args, **kw)
+
+                    return async_wrapped
+
+                @functools.wraps(f)
+                def wrapped(*args, **kw):
+                    self.spans.append(span_name)
+                    return f(*args, **kw)
+
+                return wrapped
+
+            return decorator
+
+        def trace(self, name, **kwargs):
+            return _Span()
+
+        def current_span(self):
+            return None
+
+        def current_root_span(self):
+            return None
+
+
+    tracer = _Tracer()
+    '''
+)
+
+_DDTRACE_AUTH_PROBE = dedent(
+    '''
+    import asyncio
+    import json
+
+    import ddtrace
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    proxy_server.master_key = "sk-probe"
+
+
+    async def auth(api_key):
+        request = Request(scope={"type": "http", "headers": [], "method": "POST", "path": "/chat/completions"})
+        request._url = URL(url="/chat/completions")
+        try:
+            await user_api_key_auth(
+                request=request,
+                api_key=api_key,
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                custom_litellm_key_header=None,
+            )
+            return "accepted"
+        except ProxyException:
+            return "rejected"
+
+
+    async def main():
+        outcomes = [await auth("Bearer sk-probe"), await auth("Bearer sk-wrong")]
+        print(json.dumps({"outcomes": outcomes, "spans": ddtrace.tracer.spans}))
+
+
+    asyncio.run(main())
+    '''
+)
+
+
+def test_user_api_key_auth_opens_a_datadog_span_for_accepted_and_rejected_keys(tmp_path: Path):
+    stub_root = tmp_path / "site"
+    (stub_root / "ddtrace").mkdir(parents=True)
+    (stub_root / "ddtrace" / "__init__.py").write_text(_RECORDING_DDTRACE)
+    probe = tmp_path / "probe.py"
+    probe.write_text(_DDTRACE_AUTH_PROBE)
+    repo_root = Path(litellm.__file__).resolve().parent.parent
+    env = {
+        **os.environ,
+        "USE_DDTRACE": "true",
+        "PYTHONPATH": os.pathsep.join(
+            [str(stub_root), str(repo_root)] + [p for p in (os.environ.get("PYTHONPATH"),) if p]
+        ),
+    }
+
+    result = subprocess.run(
+        [sys.executable, str(probe)], env=env, cwd=repo_root, capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 0, result.stderr[-4000:]
+    report = json.loads(result.stdout.strip().splitlines()[-1])
+    assert report["outcomes"] == ["accepted", "rejected"]
+    auth_span = "litellm.proxy.auth.user_api_key_auth.user_api_key_auth"
+    assert [span for span in report["spans"] if span == auth_span] == [auth_span, auth_span]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_proxy_admin", [False, True], ids=["standard-return", "proxy-admin-return"])
+async def test_jwt_builder_returns_every_team_grant_the_key_path_gets(is_proxy_admin):
+    """LIT-5858: the team-based JWT path hand-built ``UserAPIKeyAuth`` from a short list of team fields, so the
+    team's model aliases (and on the admin return, its object permission) never reached the token and alias
+    requests 403'd. Both returns now go through ``team_grants``; pin the fields that used to be dropped."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.models.team import LiteLLM_ModelTable
+    from litellm.proxy._types import (
+        LiteLLM_ObjectPermissionTable,
+        LiteLLM_TeamMembership,
+        LiteLLM_TeamTable,
+        Member,
+    )
+
+    class _AcceptEveryJwt(JWTHandler):
+        def is_jwt(self, token: str) -> bool:
+            return True
+
+    jwt_handler = _AcceptEveryJwt()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    team = LiteLLM_TeamTable(
+        team_id="team-jwt-aliases",
+        team_alias="jwt-aliases",
+        models=["gpt-4o"],
+        max_budget=40.0,
+        spend=4.0,
+        blocked=False,
+        metadata={"tier": "gold"},
+        litellm_model_table=LiteLLM_ModelTable(
+            model_aliases='{"fast": "gpt-4o"}', created_by="admin", updated_by="admin"
+        ),
+        object_permission_id="op-jwt",
+        object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-jwt", mcp_servers=["mcp-a"]),
+        members_with_roles=[Member(user_id="jwt-user", role="admin")],
+    )
+    membership = LiteLLM_TeamMembership(user_id="jwt-user", team_id="team-jwt-aliases", spend=1.5)
+    builder_result = {
+        "is_proxy_admin": is_proxy_admin,
+        "team_object": team,
+        "user_object": None,
+        "end_user_object": None,
+        "org_object": None,
+        "token": "jwt",
+        "team_id": "team-jwt-aliases",
+        "user_id": "jwt-user",
+        "user_email": "jwt-user@example.com",
+        "end_user_id": None,
+        "org_id": None,
+        "team_membership": membership,
+        "jwt_claims": {"sub": "jwt-user"},
+    }
+
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    attrs = {
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": DualCache(),
+        "proxy_logging_obj": mock_proxy_logging_obj,
+        "master_key": "sk-master-key",
+        "general_settings": {"enable_jwt_auth": True},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": None,
+        "jwt_handler": jwt_handler,
+        "premium_user": True,
+        "litellm_proxy_admin_name": "admin",
+    }
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        request = Request(scope={"type": "http", "headers": [], "method": "POST"})
+        request._url = URL(url="/chat/completions")
+        with patch(  # test-quality-ok: auth_builder is the claim-resolution seam; the regression is how its result is projected onto the token
+            "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
+            new_callable=AsyncMock,
+            return_value=builder_result,
+        ):
+            token = await _user_api_key_auth_builder(
+                request=request,
+                api_key="Bearer header.payload.signature",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+    assert token.team_id == "team-jwt-aliases"
+    assert token.user_role == (LitellmUserRoles.PROXY_ADMIN if is_proxy_admin else LitellmUserRoles.INTERNAL_USER)
+    assert token.team_model_aliases == {"fast": "gpt-4o"}
+    assert token.team_object_permission is not None
+    assert token.team_object_permission.mcp_servers == ["mcp-a"]
+    assert token.team_object_permission_id == "op-jwt"
+    assert token.team_alias == "jwt-aliases"
+    assert token.team_models == ["gpt-4o"]
+    assert token.team_max_budget == 40.0
+    assert token.team_spend == 4.0
+    assert token.team_metadata == {"tier": "gold"}
+    assert token.team_member == Member(user_id="jwt-user", role="admin")
+    assert token.team_member_spend == 1.5
+    assert token.jwt_claims == {"sub": "jwt-user"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/v1/messages", "/messages", "/v1/chat/completions", "/chat/completions", "/v1/responses", "/responses"])
+async def test_claude_view_normalizes_before_model_access(monkeypatch, route):
+    from starlette.requests import Request
+    from litellm.proxy.auth.user_api_key_auth import _enforce_key_and_fallback_model_access
+
+    source = "foo[1m]"
+    encoded = "claude-router-" + source.encode().hex() + "[1m]"
+    router = litellm.Router(model_list=[{"model_name": source, "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"}}])
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    data = {"model": encoded, "messages": [{"role": "user", "content": "hi"}]}
+    request = Request({"type": "http", "method": "POST", "path": route, "headers": [], "query_string": b""})
+    token = UserAPIKeyAuth(models=[source])
+    await _enforce_key_and_fallback_model_access(valid_token=token, request_data=data, route=route, request=request, llm_model_list=router.model_list, llm_router=router)
+    assert data["model"] == source
+    assert (await request.json())["model"] == source
+    assert json.loads(await request.body())["model"] == source
+    assert request.scope["parsed_body"][1]["model"] == source
+    with pytest.raises(ProxyException):
+        await _enforce_key_and_fallback_model_access(valid_token=UserAPIKeyAuth(models=["other"]), request_data=data, route=route, request=request, llm_model_list=router.model_list, llm_router=router)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("layer", ["literal", "global", "router", "key", "hierarchical", "unclaimed"])
+async def test_claude_view_never_reinterprets_explicit_names(monkeypatch, layer):
+    from starlette.requests import Request
+    from litellm.proxy.auth.user_api_key_auth import _normalize_claude_model
+
+    encoded = "claude-router-666f6f"
+    names = ("foo", "other", encoded) if layer == "literal" else ("foo", "other")
+    alias = {encoded: "other"}
+    router = litellm.Router(model_list=[{"model_name": name, "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"}} for name in names], model_group_alias=alias if layer == "router" else None)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "model_alias_map", alias if layer == "global" else {})
+    token = UserAPIKeyAuth(aliases=alias if layer == "key" else {}, router_settings={"model_group_alias": alias} if layer == "hierarchical" else None)
+    data = {"model": encoded}
+    request = Request({"type": "http", "method": "POST", "path": "/v1/messages", "headers": [], "query_string": b""})
+    await _normalize_claude_model(data, token, request, "/v1/messages")
+    assert data["model"] == ("foo" if layer == "unclaimed" else encoded)
+    await _normalize_claude_model(data, token, request, "/v1/messages")
+    assert data["model"] == ("foo" if layer == "unclaimed" else encoded)

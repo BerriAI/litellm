@@ -21,6 +21,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
+    is_encrypted_reasoning_block,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
@@ -72,8 +73,13 @@ _CLAUDE_CODE_OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
 _CLAUDE_CODE_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 
 
+_CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
+
+
 def is_claude_code_user_agent(user_agent: str) -> bool:
-    return user_agent.startswith("claude-cli/")
+    """Claude Code sends its API calls through the Anthropic SDK as `claude-cli/<version>` and its own
+    fetches, such as gateway model discovery, as `claude-code/<version>`"""
+    return user_agent.startswith(_CLAUDE_CODE_USER_AGENT_PREFIXES)
 
 
 def _validated_claude_code_mapping(value: object) -> dict[object, object] | None:
@@ -1201,6 +1207,32 @@ def strip_thinking_blocks_from_anthropic_messages(messages: list[Any]) -> list[A
     return out
 
 
+def _without_encrypted_reasoning_blocks(message: dict) -> dict | None:  # mutable-ok: Anthropic message payload shape
+    if not isinstance(message, Mapping):
+        return message
+    content: Final = message.get("content")
+    if not isinstance(content, list):
+        return message
+    kept: Final = [b for b in content if not is_encrypted_reasoning_block(b)]  # mutable-ok: API message payload
+    if len(kept) == len(content):
+        return message
+    if not kept:
+        return None
+    return {**message, "content": kept}  # mutable-ok: API message payload
+
+
+def strip_encrypted_reasoning_blocks_from_anthropic_messages(
+    messages: Sequence[dict],  # mutable-ok: Anthropic message payload shape
+) -> list[dict]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
+    """
+    Drop thinking / redacted_thinking blocks that carry another provider's encrypted
+    reasoning (a turn the Responses API bridge served) before the request reaches
+    Anthropic, which cannot verify them. Anthropic's own signed blocks are kept.
+    """
+    stripped: Final = (_without_encrypted_reasoning_blocks(m) for m in messages)
+    return [m for m in stripped if m is not None]  # mutable-ok: API message payload
+
+
 def strip_thinking_blocks_from_anthropic_messages_request_dict(
     data: dict[str, Any],
 ) -> None:
@@ -1629,11 +1661,16 @@ def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
 
 
 def _anthropic_model_entry(
-    model: ModelInfoResponse, created_at: str, display_names: Mapping[str, str]
+    model: ModelInfoResponse, created_at: str, display_names: Mapping[str, str], listed_ids: Mapping[str, str]
 ) -> Mapping[str, object]:
+    listed_id: Final = listed_ids.get(model["id"])
+    source: Final[Mapping[str, object]] = (
+        MappingProxyType({"source_model": model["id"]}) if listed_id is not None else MappingProxyType({})
+    )
     return {  # mutable-ok: JSON response body, serialized by the route and never mutated
         "type": "model",
-        "id": model["id"],
+        "id": listed_id or model["id"],
+        **source,
         "display_name": display_names.get(model["id"], model["id"]),
         "created_at": created_at,
         "max_input_tokens": model.get("max_input_tokens"),
@@ -1644,6 +1681,7 @@ def _anthropic_model_entry(
 def create_anthropic_model_list_response(
     models: Sequence[ModelInfoResponse],
     display_names: Mapping[str, str] = MappingProxyType({}),
+    listed_ids: Mapping[str, str] = MappingProxyType({}),
 ) -> Mapping[str, object]:
     """Build the Anthropic-native /v1/models envelope.
 
@@ -1653,17 +1691,19 @@ def create_anthropic_model_list_response(
     over from the OpenAI-shaped listing, named as the Messages API names them, and
     are always present because the vendor shape declares them nullable, not optional.
     display_names maps a listed model id to a configured human-readable name; ids
-    without an entry fall back to the id itself, matching the vendor behavior
+    without an entry fall back to the id itself, matching the vendor behavior.
+    listed_ids maps a model id to the id the caller should see it under (the Claude
+    Code view); ids without an entry are listed as they are
     """
     created_at: Final = (
         datetime.fromtimestamp(DEFAULT_MODEL_CREATED_AT_TIME, tz=timezone.utc).isoformat().replace("+00:00", "Z")
     )
     data: Final = [  # mutable-ok: JSON response body, serialized by the route and never mutated
-        _anthropic_model_entry(model, created_at, display_names) for model in models
+        _anthropic_model_entry(model, created_at, display_names, listed_ids) for model in models
     ]
     return {  # mutable-ok: JSON response body, serialized by the route and never mutated
         "data": data,
         "has_more": False,
-        "first_id": models[0]["id"] if models else None,
-        "last_id": models[-1]["id"] if models else None,
+        "first_id": data[0]["id"] if data else None,
+        "last_id": data[-1]["id"] if data else None,
     }

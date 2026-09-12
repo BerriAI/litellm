@@ -4,7 +4,9 @@ use std::time::Duration;
 
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
+use litellm_core::AuthError;
 use litellm_core::Error;
+use litellm_core::auth::error::MissingCredential;
 use litellm_core::providers::openai::responses::transformation::OPENAI_RESPONSES_WS_CONFIG;
 use litellm_core::responses::types::ResponsesWsEvent;
 use litellm_core::responses::websocket::ResponsesWebSocketProviderConfig;
@@ -23,8 +25,6 @@ use crate::constants::{
 };
 
 const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
-const MISSING_KEY_MESSAGE: &str = "Missing OpenAI API Key - a Responses WebSocket call is being made but no key was passed via params or the OPENAI_API_KEY environment variable";
-
 pub type ResponsesUpstreamWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type UpstreamTx = SplitSink<ResponsesUpstreamWs, Message>;
 type UpstreamRx = SplitStream<ResponsesUpstreamWs>;
@@ -120,7 +120,7 @@ pub(crate) fn resolve_api_key(api_key: Option<&str>) -> Result<String, Error> {
                 .ok()
                 .filter(|value| !value.trim().is_empty())
         })
-        .ok_or_else(|| Error::Auth(MISSING_KEY_MESSAGE.to_string()))
+        .ok_or_else(|| Error::from(AuthError::from(MissingCredential::OpenAiResponsesApiKey)))
 }
 
 async fn dial_upstream(

@@ -3,7 +3,7 @@ import asyncio
 import contextlib
 import json
 from collections.abc import Mapping
-from typing import Dict, Optional
+from typing import Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -30,7 +30,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.router import Router
-from litellm.types.router import Deployment, LiteLLM_Params, updateDeployment
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment, updateLiteLLMParams
 
 
 async def _passthrough_row(update_data):
@@ -391,6 +391,185 @@ class TestModelManagementAuthChecks:
                 )
             assert exc_info.value.code == "403"
             mock_update.assert_not_awaited()
+
+    def test_can_user_set_aws_session_tags_admin_success(self):
+        result = ModelManagementAuthChecks.can_user_set_aws_session_tags(
+            litellm_params=LiteLLM_Params(
+                model="bedrock/test_model", aws_session_tags=[{"Key": "team", "Value": "genai"}]
+            ),
+            user_api_key_dict=self.admin_user,
+        )
+        assert result is True
+
+    def test_can_user_set_aws_session_tags_without_tags_allows_any_role(self):
+        result = ModelManagementAuthChecks.can_user_set_aws_session_tags(
+            litellm_params=LiteLLM_Params(model="bedrock/test_model", aws_role_name="arn:aws:iam::123:role/x"),
+            user_api_key_dict=self.team_admin_user,
+        )
+        assert result is True
+
+    def test_can_user_set_aws_session_tags_team_admin_fails(self):
+        with pytest.raises(Exception, match="Only a proxy admin can set aws_session_tags") as exc_info:
+            ModelManagementAuthChecks.can_user_set_aws_session_tags(
+                litellm_params=LiteLLM_Params(
+                    model="bedrock/test_model", aws_session_tags=[{"Key": "team", "Value": "genai"}]
+                ),
+                user_api_key_dict=self.team_admin_user,
+            )
+        assert exc_info.value.code == "403"
+        assert exc_info.value.param == "aws_session_tags"
+
+    def test_can_user_set_aws_session_tags_unchanged_existing_allows_any_role(self):
+        result = ModelManagementAuthChecks.can_user_set_aws_session_tags(
+            litellm_params=LiteLLM_Params(
+                model="bedrock/test_model",
+                aws_session_tags=[{"Key": "team", "Value": "genai"}, {"Key": "env", "Value": "prod"}],
+            ),
+            user_api_key_dict=self.team_admin_user,
+            existing_litellm_params=LiteLLM_Params(
+                model="bedrock/test_model",
+                aws_session_tags=[{"Key": "env", "Value": "prod"}, {"Key": "team", "Value": "genai"}],
+            ),
+        )
+        assert result is True
+
+    def test_can_user_set_aws_session_tags_changed_value_fails_for_team_admin(self):
+        with pytest.raises(Exception, match="Only a proxy admin can set aws_session_tags") as exc_info:
+            ModelManagementAuthChecks.can_user_set_aws_session_tags(
+                litellm_params=LiteLLM_Params(
+                    model="bedrock/test_model", aws_session_tags=[{"Key": "team", "Value": "platform"}]
+                ),
+                user_api_key_dict=self.team_admin_user,
+                existing_litellm_params=LiteLLM_Params(
+                    model="bedrock/test_model", aws_session_tags=[{"Key": "team", "Value": "genai"}]
+                ),
+            )
+        assert exc_info.value.code == "403"
+
+    @pytest.mark.asyncio
+    async def test_add_new_model_rejects_aws_session_tags_for_non_admin(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            add_new_model,
+        )
+
+        mock_prisma = MagicMock()
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch(  # test-quality-ok: prior auth check needs a live DB; only the session tag check is under test
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await add_new_model(
+                    model_params=Deployment(
+                        model_name="tagged-bedrock",
+                        litellm_params=LiteLLM_Params(
+                            model="bedrock/anthropic.claude-opus-4-6-v1:0",
+                            aws_role_name="arn:aws:iam::123456789012:role/team-role",
+                            aws_session_tags=[{"Key": "team", "Value": "genai"}],
+                        ),
+                        model_info={"id": "session-tags-create-test", "team_id": "test_team"},
+                    ),
+                    user_api_key_dict=self.team_admin_user,
+                )
+            assert exc_info.value.code == "403"
+            assert exc_info.value.param == "aws_session_tags"
+            mock_prisma.db.litellm_proxymodeltable.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_patch_model_rejects_aws_session_tags_for_non_admin(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            patch_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        model_id = "session-tags-patch-test"
+        db_model = Deployment(
+            model_name="tagged-bedrock",
+            litellm_params=LiteLLM_Params(
+                model="bedrock/anthropic.claude-opus-4-6-v1:0",
+                aws_role_name="arn:aws:iam::123456789012:role/team-role",
+            ),
+            model_info={"id": model_id, "team_id": "test_team"},
+        )
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch(  # test-quality-ok: stubs the DB row fetch; only the session tag check is under test
+                "litellm.proxy.management_endpoints.model_management_endpoints.get_db_model",
+                new=AsyncMock(return_value=db_model),
+            ),
+            patch(  # test-quality-ok: prior auth check needs a live DB; only the session tag check is under test
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(  # test-quality-ok: asserts the DB write is never reached on rejection
+                "litellm.proxy.management_endpoints.model_management_endpoints._update_team_model_in_db",
+                new=AsyncMock(),
+            ) as mock_update,
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await patch_model(
+                    model_id=model_id,
+                    patch_data=updateDeployment(
+                        litellm_params=updateLiteLLMParams(aws_session_tags=[{"Key": "team", "Value": "genai"}])
+                    ),
+                    user_api_key_dict=self.team_admin_user,
+                )
+            assert exc_info.value.code == "403"
+            assert exc_info.value.param == "aws_session_tags"
+            mock_update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_update_model_rejects_aws_session_tags_for_non_admin(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        model_id = "session-tags-put-test"
+        existing = Deployment(
+            model_name="tagged-bedrock",
+            litellm_params=LiteLLM_Params(
+                model="bedrock/anthropic.claude-opus-4-6-v1:0",
+                aws_role_name="arn:aws:iam::123456789012:role/team-role",
+            ),
+            model_info={"id": model_id, "team_id": "test_team"},
+        )
+        existing_row = MagicMock()
+        existing_row.model_dump.return_value = existing.model_dump()
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=existing_row)
+        mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.llm_router", None),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch(  # test-quality-ok: prior auth check needs a live DB; only the session tag check is under test
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await update_model(
+                    model_params=updateDeployment(
+                        litellm_params=updateLiteLLMParams(aws_session_tags=[{"Key": "team", "Value": "genai"}]),
+                        model_info=ModelInfo(id=model_id),
+                    ),
+                    user_api_key_dict=self.team_admin_user,
+                )
+            assert exc_info.value.code == "403"
+            assert exc_info.value.param == "aws_session_tags"
+            mock_prisma.db.litellm_proxymodeltable.update.assert_not_awaited()
 
     def test_can_user_attach_credential_internal_user_fails(self):
         with pytest.raises(Exception, match="Only a proxy admin can attach a stored credential") as exc_info:
@@ -1990,7 +2169,7 @@ class TestModelInfoEndpoint:
         ):
             mock_router.get_fully_blocked_model_names.return_value = set()
             mock_router.get_model_list.return_value = []
-            mock_router.get_configured_token_limits.return_value = (None, None)
+            mock_router.get_model_listing_info.return_value = None
             mock_router.get_deployment_by_model_group_name.return_value = Deployment(
                 model_name="gpt-4",
                 litellm_params=LiteLLM_Params(model="openai/gpt-4"),
@@ -2067,7 +2246,7 @@ class TestModelInfoEndpoint:
         ):
             mock_router.get_fully_blocked_model_names.return_value = set()
             mock_router.get_model_list.return_value = []
-            mock_router.get_configured_token_limits.return_value = (None, None)
+            mock_router.get_model_listing_info.return_value = None
             mock_router.get_deployment_by_model_group_name.return_value = Deployment(
                 model_name="team-model-1",
                 litellm_params=LiteLLM_Params(model="custom/team-model-1"),
@@ -3070,6 +3249,31 @@ class TestUpdateDBModelBlocked:
         assert "blocked" not in result
 
 
+class TestUpdateDBModelKeepsLegacyDropParams:
+    def test_partial_patch_keeps_encrypted_string_drop_params(self, monkeypatch):
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+        legacy_row = Deployment(
+            model_name="gpt-5-nano",
+            litellm_params=LiteLLM_Params(
+                model="openai/gpt-5-nano",
+                api_key=encrypt_value_helper(value="sk-old"),
+                drop_params=encrypt_value_helper(value="true"),
+            ),
+            model_info=ModelInfo(id="legacy-row"),
+        )
+
+        result = update_db_model(
+            db_model=legacy_row,
+            updated_patch=updateDeployment(litellm_params=updateLiteLLMParams(api_key="sk-new")),
+        )
+
+        stored = json.loads(result["litellm_params"])
+        assert decrypt_value_helper(value=stored["drop_params"], key="drop_params") == "true"
+
+
 def _build_db_model_with_pricing():
     """Wildcard deployment with custom pricing in litellm_params; Deployment.__init__
     mirrors SPECIAL_MODEL_INFO_PARAMS into model_info, so both blobs hold the rate."""
@@ -3084,6 +3288,99 @@ def _build_db_model_with_pricing():
         ),
         model_info=ModelInfo(id="dep-pricing-0"),
     )
+
+
+class TestUpdateDBModelCompression:
+    @pytest.mark.parametrize(
+        "compression_patch, expected",
+        [
+            (
+                {},
+                {
+                    "auto_router_routing_compression": "routing-compressor",
+                    "auto_router_model_compression": "model-compressor",
+                },
+            ),
+            ({"auto_router_routing_compression": None}, {"auto_router_model_compression": "model-compressor"}),
+            ({"auto_router_model_compression": None}, {"auto_router_routing_compression": "routing-compressor"}),
+            (
+                {"auto_router_routing_compression": "none", "auto_router_model_compression": "none"},
+                {"auto_router_routing_compression": "none", "auto_router_model_compression": "none"},
+            ),
+            (
+                {
+                    "auto_router_routing_compression": "new-compressor",
+                    "auto_router_model_compression": "new-compressor",
+                },
+                {
+                    "auto_router_routing_compression": "new-compressor",
+                    "auto_router_model_compression": "new-compressor",
+                },
+            ),
+        ],
+    )
+    def test_compression_patch_preserves_omissions_and_explicit_choices(
+        self, monkeypatch: pytest.MonkeyPatch, compression_patch: dict[str, str | None], expected: dict[str, str]
+    ):
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "synthetic-compression-salt")
+        result: Final = update_db_model(
+            db_model=Deployment(
+                model_name="synthetic-router",
+                litellm_params=LiteLLM_Params(
+                    model="auto_router/complexity_router",
+                    auto_router_routing_compression=encrypt_value_helper("routing-compressor"),
+                    auto_router_model_compression=encrypt_value_helper("model-compressor"),
+                ),
+                model_info=ModelInfo(id="compression-router"),
+            ),
+            updated_patch=updateDeployment.model_validate({"litellm_params": compression_patch}),
+        )
+        params: Final = json.loads(result["litellm_params"])
+        assert {
+            key: decrypt_value_helper(value=val, key=key)
+            for key, val in params.items()
+            if key in ("auto_router_routing_compression", "auto_router_model_compression")
+        } == expected
+
+    def test_explicit_compression_clear_removes_both_saved_overrides(self):
+        from litellm.proxy.guardrails.auto_router_compression import policy_from_litellm_params
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+        db_model: Final = Deployment(
+            model_name="synthetic-router",
+            litellm_params=LiteLLM_Params(
+                model="auto_router/complexity_router",
+                auto_router_routing_compression="routing-compressor",
+                auto_router_model_compression="model-compressor",
+                api_base="http://127.0.0.1:9999/v1",
+                temperature=0,
+            ),
+            model_info=ModelInfo(id="compression-router", team_id="synthetic-team"),
+        )
+        result: Final = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment.model_validate(
+                {
+                    "litellm_params": {
+                        "auto_router_routing_compression": None,
+                        "auto_router_model_compression": None,
+                        "api_base": None,
+                    },
+                    "model_info": {"team_id": None},
+                }
+            ),
+        )
+
+        params: Final = json.loads(result["litellm_params"])
+        assert "auto_router_routing_compression" not in params
+        assert "auto_router_model_compression" not in params
+        assert policy_from_litellm_params(params) is None
+        assert params["api_base"] == "http://127.0.0.1:9999/v1"
+        assert params["temperature"] == 0
+        assert json.loads(result["model_info"])["team_id"] == "synthetic-team"
 
 
 class TestUpdateDBModelClearPricing:

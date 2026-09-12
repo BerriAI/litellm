@@ -4,13 +4,16 @@ import stat
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pytest
 import requests
 
 from litellm.proxy.client.cli.commands.pi import (
+    ListingFailure,
     ModelLimits,
     PiSyncError,
     fetch_model_ids,
     fetch_model_limits,
+    fetch_model_listing,
     models_json_path,
     provider_block,
     sync_models_json,
@@ -26,6 +29,10 @@ class _FakeResponse:
         if self._payload is None:
             raise ValueError("not json")
         return self._payload
+
+
+def _refused(*args, **kwargs):
+    raise requests.ConnectionError("refused")
 
 
 class TestFetchModelIds:
@@ -44,6 +51,43 @@ class TestFetchModelIds:
         assert captured["url"] == "http://localhost:4000/v1/models"
         assert captured["headers"] == {"Authorization": "Bearer sk-key"}
 
+    def test_returns_rows_with_optional_source_model_and_dedups_identical_rows(self):
+        result = fetch_model_listing(
+            "http://localhost:4000",
+            "sk-key",
+            get=lambda *a, **k: _FakeResponse(
+                200,
+                {"data": [{"id": "emitted", "source_model": "source"}, {"id": "emitted", "source_model": "source"}]},
+            ),
+        )
+        assert not isinstance(result, PiSyncError)
+        assert tuple((model.id, model.source_model) for model in result) == (("emitted", "source"),)
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            {"id": ""},
+            {"id": "emitted", "source_model": ""},
+            {"id": "emitted", "source_model": 1},
+        ],
+    )
+    def test_rejects_invalid_model_identity(self, entry):
+        result = fetch_model_listing(
+            "http://localhost:4000", "sk-key", get=lambda *a, **k: _FakeResponse(200, {"data": [entry]})
+        )
+        assert isinstance(result, PiSyncError) and result.kind is ListingFailure.BAD_BODY
+
+    def test_rejects_conflicting_emitted_id_mappings(self):
+        result = fetch_model_listing(
+            "http://localhost:4000",
+            "sk-key",
+            get=lambda *a, **k: _FakeResponse(
+                200,
+                {"data": [{"id": "emitted", "source_model": "one"}, {"id": "emitted", "source_model": "two"}]},
+            ),
+        )
+        assert isinstance(result, PiSyncError) and result.kind is ListingFailure.BAD_BODY
+
     def test_network_error_is_a_value(self):
         def boom(*a, **k):
             raise requests.ConnectionError("refused")
@@ -53,9 +97,7 @@ class TestFetchModelIds:
         assert "Could not list models" in result.message
 
     def test_non_200_is_a_value(self):
-        result = fetch_model_ids(
-            "http://localhost:4000", "sk-key", get=lambda *a, **k: _FakeResponse(500)
-        )
+        result = fetch_model_ids("http://localhost:4000", "sk-key", get=lambda *a, **k: _FakeResponse(500))
         assert isinstance(result, PiSyncError)
         assert "HTTP 500" in result.message
 
@@ -75,6 +117,22 @@ class TestFetchModelIds:
         )
         assert isinstance(result, PiSyncError)
         assert "no models" in result.message
+        assert result.kind is ListingFailure.EMPTY
+
+    @pytest.mark.parametrize(
+        ("get", "kind"),
+        [
+            (_refused, ListingFailure.UNREACHABLE),
+            (lambda *a, **k: _FakeResponse(401), ListingFailure.REJECTED),
+            (lambda *a, **k: _FakeResponse(403), ListingFailure.REJECTED),
+            (lambda *a, **k: _FakeResponse(500), ListingFailure.OTHER),
+            (lambda *a, **k: _FakeResponse(200), ListingFailure.BAD_BODY),
+        ],
+        ids=["unreachable", "401", "403", "500", "bad-body"],
+    )
+    def test_the_failure_kind_is_decided_where_the_response_is_classified(self, get, kind):
+        result = fetch_model_ids("http://localhost:4000", "sk-key", get=get)
+        assert isinstance(result, PiSyncError) and result.kind is kind
 
 
 class TestFetchModelLimits:

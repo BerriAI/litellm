@@ -301,6 +301,16 @@ describe("object_permission", () => {
     ).toStrictEqual(aliasOnly({ object_permission: { agents: ["a-1"], agent_access_groups: ["ag-1"] } }));
   });
 
+  it("moves the selected skills under object_permission and off the top level", () => {
+    expect(payloadOf(build({ key_alias: "my-key", allowed_skills: ["private-skill"] }))).toStrictEqual(
+      aliasOnly({ object_permission: { skills: ["private-skill"] } }),
+    );
+  });
+
+  it("sends no object_permission for an empty skill selection", () => {
+    expect(payloadOf(build({ key_alias: "my-key", allowed_skills: [] }))).toStrictEqual(aliasOnly());
+  });
+
   it("merges every source into a single object_permission", () => {
     const everySource = {
       key_alias: "my-key",
@@ -308,6 +318,7 @@ describe("object_permission", () => {
       allowed_mcp_servers_and_groups: { servers: ["s-1"], accessGroups: ["g-1"], toolsets: ["t-1"] },
       mcp_tool_permissions: { "s-1": ["read"] },
       allowed_agents_and_groups: { agents: ["a-1"], accessGroups: ["ag-1"] },
+      allowed_skills: ["private-skill"],
     };
     expect(payloadOf(build(everySource))).toStrictEqual(
       aliasOnly({
@@ -319,6 +330,7 @@ describe("object_permission", () => {
           mcp_tool_permissions: { "s-1": ["read"] },
           agents: ["a-1"],
           agent_access_groups: ["ag-1"],
+          skills: ["private-skill"],
         },
       }),
     );

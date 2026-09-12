@@ -4,7 +4,7 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
 
@@ -12,13 +12,16 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
+from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 
 if TYPE_CHECKING:
     from litellm.router import Router
 
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
+from .llms.bedrock import AwsSessionTag
 from .llms.openai import OpenAIFileObject
 from .search import SearchProvider
 from .utils import (
@@ -286,6 +289,7 @@ class CredentialLiteLLMParams(BaseModel):
     aws_web_identity_token: str | None = None
     aws_sts_endpoint: str | None = None
     aws_external_id: str | None = None
+    aws_session_tags: Sequence[AwsSessionTag] | None = None
     aws_bedrock_runtime_endpoint: str | None = None
     aws_bedrock_project_id: str | None = None
     s3_bucket_name: str | None = None
@@ -314,6 +318,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     timeout: float | str | httpx.Timeout | None = None  # if str, pass in as os.environ/
     stream_timeout: float | str | None = None  # timeout when making stream=True calls, if str, pass in as os.environ/
     max_retries: int | None = None
+    drop_params: bool | str | None = None
     organization: str | None = None  # for openai orgs
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
     litellm_credential_name: str | None = None
@@ -403,6 +408,18 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
                 filtered["max_retries"] = int(filtered["max_retries"])
             return filtered
         return data
+
+    @field_validator("drop_params", mode="before")
+    @classmethod
+    def coerce_drop_params(cls, value: object) -> bool | str | None:
+        normalized: Final = normalize_drop_params(value)
+        if normalized is not None:
+            return normalized
+        if isinstance(value, str):
+            return value
+        if value is not None:
+            verbose_logger.warning("drop_params=%r is not a flag value, treating it as unset", value)
+        return None
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -510,6 +527,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     input_cost_per_second: float | None
     output_cost_per_second: float | None
     output_cost_per_second_480p: ReadOnly[float | None]
+    output_cost_per_second_720p: ReadOnly[float | None]
     output_cost_per_second_1080p: float | None
     output_cost_per_second_4k: ReadOnly[float | None]
     num_retries: int | None
@@ -594,6 +612,24 @@ class Deployment(BaseModel):
     def __setitem__(self, key, value) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
+
+
+@dataclass(frozen=True, slots=True)
+class DeploymentModelListingInfo:
+    """What the deployments behind a model name contribute to its OpenAI-compatible listing entry.
+
+    ``cost_map_keys`` are the names those deployments' underlying models are known by in
+    ``litellm.model_cost`` (``base_model`` when set, else ``litellm_params.model``), which
+    is what a request actually reaches; the public model name they are listed under is an
+    arbitrary alias and often absent from the cost map. Keys are deduplicated in config
+    order, so the ordinary group -- several interchangeable deployments of one model --
+    carries exactly one. The token limits are the widest explicitly set in any
+    deployment's ``model_info``, which outrank anything the cost map says.
+    """
+
+    cost_map_keys: tuple[str, ...]
+    max_input_tokens: int | None
+    max_output_tokens: int | None
 
 
 class RouterErrors(enum.Enum):

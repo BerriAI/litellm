@@ -1,3 +1,4 @@
+mod constants;
 mod diagnostics;
 mod errors;
 mod execution;
@@ -5,6 +6,7 @@ mod execution;
 mod function_trace;
 mod marshal;
 mod routes;
+mod token_counter;
 
 use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
 use pyo3::prelude::*;
@@ -71,6 +73,7 @@ mod _native {
         super::errors::register(module)?;
         super::routes::register(module)?;
         module.add_class::<super::ResponsesWebSocketConnection>()?;
+        super::token_counter::register(module)?;
         super::diagnostics::register(module)
     }
 }
@@ -106,6 +109,7 @@ mod tests {
                 "chat_completions",
                 "achat_completions",
                 "ResponsesWebSocketConnection",
+                "TokenCounter",
                 "gil_stats",
             ];
 

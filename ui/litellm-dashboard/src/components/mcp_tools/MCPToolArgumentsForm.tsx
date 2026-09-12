@@ -1,6 +1,6 @@
 import React, { forwardRef, useImperativeHandle, useMemo } from "react";
 import { CircleHelp } from "lucide-react";
-import { useForm, type Resolver } from "react-hook-form";
+import { useForm, type Resolver, type ResolverResult } from "react-hook-form";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Input } from "@/components/ui/input";
@@ -9,7 +9,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { MCPTool, InputSchema, InputSchemaProperty } from "./types";
 
-type ToolFormValues = Record<string, unknown>;
+type ToolFormValues = { args: unknown[] };
+
+const argumentValues = (schema: InputSchema, values: ToolFormValues): Record<string, unknown> =>
+  Object.fromEntries(Object.keys(schema.properties ?? {}).map((key, index) => [key, values.args[index]]));
 
 const STRING_SCHEMA_MESSAGES: Readonly<Record<string, string>> = { input: "Please enter input for this tool" };
 
@@ -38,7 +41,7 @@ type FieldError = { type: string; message: string };
 const collectErrors = (
   actualSchema: InputSchema,
   requiredMessages: Readonly<Record<string, string>>,
-  values: ToolFormValues,
+  values: Record<string, unknown>,
 ): Record<string, FieldError> => {
   const entries = Object.entries(actualSchema.properties ?? {}).flatMap<[string, FieldError]>(([key, prop]) => {
     const value = values[key];
@@ -56,9 +59,19 @@ const collectErrors = (
 
 const buildResolver =
   (actualSchema: InputSchema, requiredMessages: Readonly<Record<string, string>> = {}): Resolver<ToolFormValues> =>
-  (values) => {
-    const errors = collectErrors(actualSchema, requiredMessages, values);
-    return Object.keys(errors).length > 0 ? { values: {}, errors } : { values, errors: {} };
+  (values): ResolverResult<ToolFormValues> => {
+    const errors = collectErrors(actualSchema, requiredMessages, argumentValues(actualSchema, values));
+    if (Object.keys(errors).length === 0) return { values, errors: {} };
+    return {
+      values: {},
+      errors: {
+        args: Object.fromEntries(
+          Object.keys(actualSchema.properties ?? {}).flatMap((key, index) =>
+            Object.hasOwn(errors, key) ? [[index, errors[key]]] : [],
+          ),
+        ),
+      },
+    };
   };
 
 const labelFor = (key: string, prop: InputSchemaProperty, required: boolean): React.ReactNode => (
@@ -238,10 +251,7 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
     }, [schema]);
 
     const defaultValues = useMemo<ToolFormValues>(
-      () =>
-        Object.fromEntries(
-          Object.entries(actualSchema.properties ?? {}).map(([key, prop]) => [key, getInitialValueForField(prop)]),
-        ),
+      () => ({ args: Object.values(actualSchema.properties ?? {}).map(getInitialValueForField) }),
       [actualSchema],
     );
 
@@ -255,7 +265,7 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
 
     useImperativeHandle(ref, () => ({
       getSubmitValues: async () => {
-        const values = form.getValues();
+        const values = argumentValues(actualSchema, form.getValues());
         const errors = collectErrors(actualSchema, requiredMessages, values);
         if (Object.keys(errors).length > 0) {
           await form.trigger();
@@ -286,14 +296,16 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
           <FieldGroup>
             <FormField
               control={form.control}
-              name="input"
+              name="args.0"
               label={
                 <span>
                   Input <span className="text-destructive">*</span>
                 </span>
               }
             >
-              {(field) => <Input {...field} value={field.value as string} placeholder="Enter input for this tool" />}
+              {(field) => (
+                <Input {...field} value={(field.value as string) ?? ""} placeholder="Enter input for this tool" />
+              )}
             </FormField>
           </FieldGroup>
         </form>
@@ -318,13 +330,13 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
           className={className}
         >
           <FieldGroup>
-            {Object.entries(actualSchema.properties).map(([key, prop]) => {
+            {Object.entries(actualSchema.properties).map(([key, prop], index) => {
               const required = actualSchema.required?.includes(key) ?? false;
               return (
                 <FormField
                   key={`${tool.name}-${key}`}
                   control={form.control}
-                  name={key}
+                  name={`args.${index}`}
                   label={labelFor(key, prop, required)}
                 >
                   {(field) => {
@@ -375,7 +387,7 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
                           {...field}
                           type="number"
                           step={prop.type === "integer" ? 1 : undefined}
-                          value={field.value as number | string}
+                          value={(field.value as number | string) ?? ""}
                           placeholder={prop.description || `Enter ${key}`}
                         />
                       );
@@ -385,7 +397,7 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
                         <Textarea
                           {...field}
                           rows={prop.type === "object" ? 4 : 3}
-                          value={field.value as string}
+                          value={(field.value as string) ?? ""}
                           spellCheck={false}
                           className="font-mono"
                           placeholder={
@@ -398,7 +410,7 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
                     return (
                       <Input
                         {...field}
-                        value={field.value as string}
+                        value={(field.value as string) ?? ""}
                         placeholder={prop.description || `Enter ${key}`}
                       />
                     );

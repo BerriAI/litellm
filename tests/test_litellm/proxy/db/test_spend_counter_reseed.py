@@ -7,6 +7,8 @@ allowed to run: only when the row is missing or belongs to an older window.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
@@ -14,6 +16,8 @@ from typing import Final
 import pytest
 
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.constants import PROXY_DB_LOOKUP_MAX_CONCURRENCY
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 
 WINDOW_START = datetime(2026, 8, 1, tzinfo=timezone.utc)
@@ -42,6 +46,19 @@ class _FakeSpendLogsTable:
         return [{by[0]: where.get(by[0]), "_sum": {"spend": self._total}}]
 
 
+class _InFlightCountingTable:
+    def __init__(self) -> None:
+        self.in_flight = 0
+        self.max_in_flight = 0
+
+    async def find_unique(self, where: dict[str, str]) -> SimpleNamespace:
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        await asyncio.sleep(0.001)
+        self.in_flight -= 1
+        return SimpleNamespace(token=where["token"], spend=1.0)
+
+
 class _FakePrismaClient:
     def __init__(
         self,
@@ -55,11 +72,45 @@ class _FakePrismaClient:
             litellm_budgetwindowspend=_FakeFindUniqueTable(row=row, error=error),
             litellm_spendlogs=_FakeSpendLogsTable(total=spend_logs_total),
             litellm_endusertable=_FakeFindUniqueTable(row=end_user_row, error=end_user_error),
+            litellm_verificationtoken=_InFlightCountingTable(),
         )
 
 
 def _row(window_start: datetime, spend: float) -> SimpleNamespace:
     return SimpleNamespace(window_start=window_start, spend=spend)
+
+
+class _PausedSpendTable:
+    def __init__(self, spend: float) -> None:
+        self.spend: Final = spend
+        self.read_started: Final = asyncio.Event()
+        self.resume_read: Final = asyncio.Event()
+
+    async def find_unique(self, where: Mapping[str, object]) -> SimpleNamespace:
+        self.read_started.set()
+        await self.resume_read.wait()
+        return _row(WINDOW_START, self.spend)
+
+
+async def _reseed_with_paused_table(
+    table: _PausedSpendTable, cache: DualCache, counter_key: str, window: bool
+) -> float | None:
+    prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_usertable=table, litellm_budgetwindowspend=table))
+    if window:
+        return await SpendCounterReseed.coalesced_window(
+            prisma_client=prisma,
+            spend_counter_cache=cache,
+            counter_key=counter_key,
+            entity_type="Team",
+            entity_id="team-1",
+            window_duration="1d",
+            window_start=WINDOW_START,
+        )
+    return await SpendCounterReseed.coalesced(
+        prisma_client=prisma,
+        spend_counter_cache=cache,
+        counter_key=counter_key,
+    )
 
 
 @pytest.mark.asyncio
@@ -255,6 +306,63 @@ async def test_coalesced_window_seeds_a_cold_counter_from_the_row():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("window", [False, True], ids=["primary", "window"])
+@pytest.mark.parametrize("concurrent_spend", [989.01459411, 995.0, 900.0])
+async def test_cold_reseed_does_not_add_database_spend_to_concurrent_cache(
+    window: bool,
+    concurrent_spend: float,
+) -> None:
+    cache: Final = DualCache(in_memory_cache=InMemoryCache())
+    counter_key: Final = "spend:team:team-1:window:1d" if window else "spend:user:user-1"
+    db_spend: Final = 989.01459411
+    table: Final = _PausedSpendTable(db_spend)
+    reseed_task: Final = asyncio.create_task(_reseed_with_paused_table(table, cache, counter_key, window))
+
+    await asyncio.wait_for(table.read_started.wait(), timeout=5)
+    cache.in_memory_cache.set_cache(key=counter_key, value=concurrent_spend)
+    table.resume_read.set()
+    result: Final = await asyncio.wait_for(reseed_task, timeout=5)
+
+    expected: Final = max(db_spend, concurrent_spend)
+    assert cache.in_memory_cache.get_cache(key=counter_key) == expected
+    assert result == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("window", [False, True], ids=["primary", "window"])
+@pytest.mark.parametrize("batch", [False, True], ids=["single_increment", "batch_increment"])
+@pytest.mark.parametrize("increment", [5.0, -5.0], ids=["charge", "refund"])
+async def test_cold_reseed_preserves_concurrent_local_increment(
+    monkeypatch: pytest.MonkeyPatch, window: bool, batch: bool, increment: float
+) -> None:
+    from litellm.proxy import proxy_server
+
+    cache: Final = DualCache(in_memory_cache=InMemoryCache())
+    counter_key: Final = (
+        f"spend:team:concurrent-{batch}-{increment}:window:1d"
+        if window
+        else f"spend:user:concurrent-{batch}-{increment}"
+    )
+    table: Final = _PausedSpendTable(100.0)
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", cache)
+    reseed_task: Final = asyncio.create_task(_reseed_with_paused_table(table, cache, counter_key, window))
+    await asyncio.wait_for(table.read_started.wait(), timeout=5)
+
+    increment_task: Final = asyncio.create_task(
+        proxy_server._apply_spend_counter_increments(
+            pending=(proxy_server.PendingSpendIncrement(counter_key=counter_key, increment=increment),)
+        )
+        if batch
+        else proxy_server._increment_spend_counter_cache(counter_key=counter_key, increment=increment)
+    )
+    await asyncio.sleep(0)
+    table.resume_read.set()
+    await asyncio.wait_for(asyncio.gather(reseed_task, increment_task), timeout=5)
+
+    assert cache.in_memory_cache.get_cache(key=counter_key) == 100.0 + increment
+
+
+@pytest.mark.asyncio
 async def test_end_user_from_db_reads_the_end_user_row_by_user_id():
     prisma: Final = _FakePrismaClient(end_user_row=SimpleNamespace(user_id="customer-42", spend=0.0))
 
@@ -288,8 +396,7 @@ async def test_end_user_from_db_ignores_other_counter_kinds_without_touching_the
 @pytest.mark.asyncio
 async def test_end_user_from_db_returns_none_without_a_row_a_client_or_on_db_error():
     assert (
-        await SpendCounterReseed.end_user_from_db(prisma_client=None, counter_key="spend:end_user:customer-42")
-        is None
+        await SpendCounterReseed.end_user_from_db(prisma_client=None, counter_key="spend:end_user:customer-42") is None
     )
     assert (
         await SpendCounterReseed.end_user_from_db(
@@ -304,6 +411,21 @@ async def test_end_user_from_db_returns_none_without_a_row_a_client_or_on_db_err
         )
         is None
     )
+
+
+@pytest.mark.asyncio
+async def test_from_db_bounds_in_flight_prisma_requests_across_counter_keys():
+    """Per-counter singleflight only collapses duplicates of one key. A cold-cache burst
+    over many distinct keys must still not flood the prisma engine HTTP pool (LIT-6435)."""
+    prisma: Final = _FakePrismaClient()
+    burst: Final = PROXY_DB_LOOKUP_MAX_CONCURRENCY * 5
+
+    results: Final = await asyncio.gather(
+        *(SpendCounterReseed.from_db(prisma_client=prisma, counter_key=f"spend:key:hashed-{i}") for i in range(burst))
+    )
+
+    assert results == [1.0] * burst
+    assert prisma.db.litellm_verificationtoken.max_in_flight == PROXY_DB_LOOKUP_MAX_CONCURRENCY
 
 
 @pytest.mark.asyncio

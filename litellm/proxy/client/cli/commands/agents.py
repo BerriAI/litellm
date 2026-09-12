@@ -1,9 +1,12 @@
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -12,10 +15,12 @@ import requests
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from .auth import CliContextObj, context_secret_vault, get_stored_api_key, login
+from .claude_settings import ClaudeSettingsError, install_statusline_script
 from .cmd_quoting import quote_for_cmd
 from .pi import (
     LITELLM_PROXY_API_KEY_ENV,
     PI_PROVIDER_NAME,
+    ListingFailure,
     PiSyncError,
     fetch_model_ids,
     fetch_model_limits,
@@ -116,6 +121,18 @@ def build_agent_env(
     return env
 
 
+def codex_proxy_provider(base_url: str) -> Mapping[str, str | bool]:
+    return MappingProxyType(
+        {
+            "name": "LiteLLM proxy",
+            "base_url": base_url.rstrip("/") + "/v1",
+            "wire_api": "responses",
+            "supports_websockets": False,
+            "requires_openai_auth": False,
+        }
+    )
+
+
 def _codex_proxy_args(base_url: str) -> list[str]:
     """Codex `-c` overrides that point it at the proxy.
 
@@ -125,21 +142,19 @@ def _codex_proxy_args(base_url: str) -> list[str]:
     because the proxy does not speak the Responses WebSocket protocol. The key is
     read from OPENAI_API_KEY, which build_agent_env already exports.
     """
-    root: Final = base_url.rstrip("/") + "/v1"
     provider: Final = f"model_providers.{CODEX_PROXY_PROVIDER}"
     return [
         "-c",
         f'model_provider="{CODEX_PROXY_PROVIDER}"',
-        "-c",
-        f'{provider}.name="LiteLLM proxy"',
-        "-c",
-        f'{provider}.base_url="{root}"',
+        *(
+            argument
+            for key, value in codex_proxy_provider(base_url).items()
+            for argument in ("-c", f"{provider}.{key}={json.dumps(value)}")
+        ),
         "-c",
         f'{provider}.env_key="{OPENAI_API_KEY_ENV}"',
         "-c",
-        f'{provider}.wire_api="responses"',
-        "-c",
-        f"{provider}.supports_websockets=false",
+        f"{provider}.http_headers={{}}",
     ]
 
 
@@ -165,7 +180,9 @@ def prepare_pi(
     """
     ids: Final = fetch_model_ids(base_url, api_key, get=get)
     if isinstance(ids, PiSyncError):
-        raise AgentRunError(ids.message)
+        raise AgentRunError(
+            f"{ids.message} pi would have nothing to run." if ids.kind is ListingFailure.EMPTY else ids.message
+        )
     limits: Final = fetch_model_limits(base_url, api_key, get=get)
     path: Final = models_json_path(base_env)
     error: Final = sync_models_json(path, base_url, ids, limits)
@@ -175,10 +192,52 @@ def prepare_pi(
     return ("--model", f"{PI_PROVIDER_NAME}/{ids[0]}")
 
 
+def _warn(message: str) -> None:
+    click.echo(message, err=True)
+
+
+_CODEX_STOP_HOOKS_DECLARED: Final = re.compile(
+    r"^\s*(\[\[\s*\"?hooks\"?\s*\.\s*\"?Stop\"?\s*\]\]|\"?hooks\"?(?:\s*\.\s*\"?Stop\"?)?\s*=|\[\s*\"?hooks\"?\s*\])",
+    re.MULTILINE,
+)
+
+
+def codex_config_path(base_env: Mapping[str, str]) -> Path:
+    return Path(base_env.get("CODEX_HOME") or Path.home() / ".codex") / "config.toml"
+
+
+def codex_declares_stop_hooks(config_path: Path) -> bool:
+    """A config that cannot be read or decoded declares nothing we can see; Codex reports its own
+    TOML failure at launch, so the pre-check must not be the thing that stops `lite codex`."""
+    try:
+        return _CODEX_STOP_HOOKS_DECLARED.search(config_path.read_text(encoding="utf-8")) is not None
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def prepare_codex(
+    base_url: str,
+    api_key: str,
+    base_env: Mapping[str, str],
+    *,
+    install: Callable[[], str] = install_statusline_script,
+    warn: Callable[[str], None] = _warn,
+) -> tuple[str, ...]:
+    """A `-c hooks.Stop=` session flag replaces the user's whole Stop list, so their own hooks win over ours."""
+    if codex_declares_stop_hooks(codex_config_path(base_env)):
+        warn("litellm: your Codex config already declares hooks; not adding the routed-model Stop hook")
+        return ()
+    try:
+        command: Final = install()
+    except ClaudeSettingsError as e:
+        raise AgentRunError(str(e)) from e
+    return ("-c", f'hooks.Stop=[{{hooks=[{{type="command",command={json.dumps(command)}}}]}}]')
+
+
 _Preparer: TypeAlias = Callable[[str, str, Mapping[str, str]], Sequence[str]]
 
 _PREPARERS: Final[Mapping[str, _Preparer]] = MappingProxyType(
-    {"pi": prepare_pi}  # mutable-ok: MappingProxyType freezes the provider registry
+    {"pi": prepare_pi, "codex": prepare_codex}  # mutable-ok: MappingProxyType freezes the provider registry
 )
 
 
@@ -440,10 +499,6 @@ def _restore_controlling_terminal() -> None:
         os.close(fd)
 
 
-def _warn(message: str) -> None:
-    click.echo(message, err=True)
-
-
 def run_agent(
     base_url: str,
     api_key: str,
@@ -535,7 +590,7 @@ def _launch(ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify
     started_interactive: Final = _is_interactive()
     api_key: Final = resolve_api_key(ctx)
 
-    display_name, _ = agent_profile(binary)
+    display_name, _profiles = agent_profile(binary)
     click.echo(f"litellm: routing {display_name} through proxy at {base_url.rstrip('/')}")
 
     try:

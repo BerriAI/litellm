@@ -3,10 +3,12 @@ import json
 import logging
 import threading
 import time
+from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
+from botocore.credentials import RefreshableCredentials
 
 import litellm
 from litellm._logging import verbose_logger
@@ -19,6 +21,9 @@ from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
+from litellm.llms.bedrock.base_aws_llm import SignsRequestsWithAWS
+from litellm.llms.brave.search.transformation import BraveSearchConfig
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
@@ -29,13 +34,171 @@ from litellm.llms.custom_httpx.llm_http_handler import (
     _rust_responses_websocket_enabled,
 )
 from litellm.llms.azure.videos.transformation import AzureVideoConfig
+from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+    AmazonAnthropicClaudeMessagesConfig,
+)
+from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
+from litellm.llms.tinyfish.search.transformation import TinyfishSearchConfig
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ImageObject, ImageResponse, ModelResponse, TranscriptionResponse
+from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
 
 _ACTIVE_KEY = "_code_interpreter_interception_active"
 _SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
+
+
+async def _get_search_with_client(
+    client: HTTPHandler | AsyncHTTPHandler, provider_config: BaseSearchConfig | None = None
+) -> SearchResponse:
+    result: Final = BaseLLMHTTPHandler().search(
+        query="test",
+        optional_params={},
+        timeout=5,
+        logging_obj=Mock(),
+        api_key="test-key",
+        api_base="https://search.example.test/",
+        custom_llm_provider="tinyfish" if isinstance(provider_config, TinyfishSearchConfig) else "brave",
+        client=client,
+        asearch=isinstance(client, AsyncHTTPHandler),
+        provider_config=provider_config or BraveSearchConfig(),
+    )
+    return await result if asyncio.iscoroutine(result) else result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+@pytest.mark.parametrize("status_code", (400, 401, 403, 422, 429, 500))
+async def test_get_search_raises_provider_http_errors(is_async: bool, status_code: int) -> None:
+    upstream_response: Final = httpx.Response(
+        status_code, json={"error": "rejected request"}, headers={"retry-after": "7"}
+    )
+    transport: Final = httpx.MockTransport(lambda request: upstream_response)
+    async with httpx.AsyncClient(transport=transport) as async_client:
+        with httpx.Client(transport=transport) as sync_client:
+            client: Final = AsyncHTTPHandler() if is_async else HTTPHandler(client=sync_client)
+            if isinstance(client, AsyncHTTPHandler):
+                await client.close()
+                client.client = async_client
+            with pytest.raises(BaseLLMException) as error:
+                await _get_search_with_client(client)
+            assert error.value.status_code == status_code
+            assert "rejected request" in error.value.message
+            assert error.value.headers is not None
+            assert error.value.headers["retry-after"] == "7"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+@pytest.mark.parametrize("has_results", (False, True))
+async def test_get_search_preserves_successful_results(is_async: bool, has_results: bool) -> None:
+    results: Final = (
+        [{"title": "Example", "url": "https://example.com", "description": "Example snippet"}] if has_results else []
+    )
+    transport: Final = httpx.MockTransport(lambda request: httpx.Response(200, json={"web": {"results": results}}))
+    async with httpx.AsyncClient(transport=transport) as async_client:
+        with httpx.Client(transport=transport) as sync_client:
+            client: Final = AsyncHTTPHandler() if is_async else HTTPHandler(client=sync_client)
+            if isinstance(client, AsyncHTTPHandler):
+                await client.close()
+                client.client = async_client
+            response: Final = await _get_search_with_client(client)
+            assert response.object == "search"
+            assert len(response.results) == int(has_results)
+            if has_results:
+                assert response.results[0].title == "Example"
+                assert response.results[0].url == "https://example.com"
+                assert response.results[0].snippet == "Example snippet"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+async def test_get_search_preserves_tinyfish_http_error_formatting(is_async: bool) -> None:
+    upstream_response: Final = httpx.Response(
+        429,
+        json={"error": {"code": "RATE_LIMIT_EXCEEDED", "message": "rate limit exceeded"}},
+        headers={"retry-after": "7"},
+    )
+    transport: Final = httpx.MockTransport(lambda request: upstream_response)
+    async with httpx.AsyncClient(transport=transport) as async_client:
+        with httpx.Client(transport=transport) as sync_client:
+            client: Final = AsyncHTTPHandler() if is_async else HTTPHandler(client=sync_client)
+            if isinstance(client, AsyncHTTPHandler):
+                await client.close()
+                client.client = async_client
+            with pytest.raises(BaseLLMException) as error:
+                await _get_search_with_client(client, TinyfishSearchConfig())
+            assert error.value.status_code == 429
+            assert error.value.message == (
+                "TinyFish Search: rate limit exceeded. See https://docs.tinyfish.ai/search-api for details."
+            )
+            assert error.value.headers is not None
+            assert error.value.headers["retry-after"] == "7"
+
+
+OCR_RESPONSE = {
+    "pages": [{"index": 0, "markdown": "OCR output", "images": []}],
+    "model": "mistral-ocr-latest",
+    "usage_info": {"pages_processed": 1},
+}
+
+
+def _ocr_sync_client() -> HTTPHandler:
+    client = HTTPHandler()
+    client.client = httpx.Client(transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=OCR_RESPONSE)))
+    return client
+
+
+def _ocr_async_client() -> AsyncHTTPHandler:
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=OCR_RESPONSE))
+    )
+    return client
+
+
+def test_ocr_calls_post_call_with_raw_provider_response():
+    logging_obj = Mock()
+
+    response = BaseLLMHTTPHandler().ocr(
+        model="mistral-ocr-latest",
+        document={"type": "document_url", "document_url": "https://example.com/document.pdf"},
+        optional_params={},
+        timeout=5,
+        logging_obj=logging_obj,
+        api_key="test-key",
+        api_base="https://api.mistral.ai/v1/ocr",
+        custom_llm_provider="mistral",
+        client=_ocr_sync_client(),
+        provider_config=MistralOCRConfig(),
+    )
+
+    assert response.pages[0].markdown == "OCR output"
+    logging_obj.post_call.assert_called_once()
+    assert json.loads(logging_obj.post_call.call_args.kwargs["original_response"]) == OCR_RESPONSE
+
+
+@pytest.mark.asyncio
+async def test_async_ocr_calls_post_call_with_raw_provider_response():
+    logging_obj = Mock()
+
+    response = await BaseLLMHTTPHandler().async_ocr(
+        model="mistral-ocr-latest",
+        document={"type": "document_url", "document_url": "https://example.com/document.pdf"},
+        optional_params={},
+        timeout=5,
+        logging_obj=logging_obj,
+        api_key="test-key",
+        api_base="https://api.mistral.ai/v1/ocr",
+        custom_llm_provider="mistral",
+        client=_ocr_async_client(),
+        provider_config=MistralOCRConfig(),
+    )
+
+    assert response.pages[0].markdown == "OCR output"
+    logging_obj.post_call.assert_called_once()
+    assert json.loads(logging_obj.post_call.call_args.kwargs["original_response"]) == OCR_RESPONSE
 
 
 def test_prepare_fake_stream_request():
@@ -747,6 +910,65 @@ async def test_anthropic_messages_streaming_response_aclose_closes_agentic_upstr
 
     await stream.aclose()
     assert tracker.closed is True
+
+
+class _ProbedBedrockMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
+    def __init__(self, probe: EventLoopProbe) -> None:
+        super().__init__()
+        self._probe = probe
+
+    def get_credentials(
+        self,
+        **kwargs: object,  # kwargs-ok: mirrors the base resolver's keyword contract, which the probe ignores
+    ) -> RefreshableCredentials:
+        return self._probe.credentials()
+
+
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_signs_bedrock_off_the_event_loop(monkeypatch):
+    """Regression for issue #40165: /v1/messages on Bedrock signed on the loop, so botocore's blocking
+    credential refresh inside SigV4 stalled every other request on the worker."""
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    probe = EventLoopProbe()
+    handler = BaseLLMHTTPHandler()
+    upstream_response = httpx.Response(
+        200,
+        json={
+            "id": "msg_123",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "hi"}],
+            "model": "claude-haiku-4-5-20251001",
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        },
+        request=httpx.Request("POST", "https://bedrock-runtime.us-west-2.amazonaws.com/"),
+    )
+    mock_client = AsyncMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=upstream_response)
+    mock_logging_obj = Mock()
+    mock_logging_obj.model_call_details = {}
+    mock_logging_obj.dynamic_success_callbacks = None
+    release = asyncio.create_task(probe.release_refresh_from_the_loop())
+
+    await handler.async_anthropic_messages_handler(
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_provider_config=_ProbedBedrockMessagesConfig(probe),
+        anthropic_messages_optional_request_params={"max_tokens": 16},
+        custom_llm_provider="bedrock",
+        litellm_params=GenericLiteLLMParams(aws_region_name="us-west-2"),
+        logging_obj=mock_logging_obj,
+        client=mock_client,
+        stream=False,
+        kwargs={},
+    )
+    await release
+
+    sent_headers = mock_client.post.call_args.kwargs["headers"]
+    assert sent_headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+    assert probe.served_during_refresh is True
 
 
 @pytest.mark.asyncio
@@ -3303,6 +3525,26 @@ async def test_completion_signs_and_logs_off_the_event_loop_after_the_async_tran
     assert captured["body"] == {"transformed_by": "async"}
     assert config.sign_threads and all(thread is not loop_thread for thread in config.sign_threads)
     assert pre_call_threads and all(thread is not loop_thread for thread in pre_call_threads)
+    assert not any(thread.name.startswith("aws-signing") for thread in config.sign_threads + pre_call_threads)
+
+
+class _AWSTransformRecordingConfig(SignsRequestsWithAWS, _TransformRecordingConfig):
+    pass
+
+
+async def test_completion_signs_aws_configs_on_the_aws_signing_pool_after_the_async_transform():
+    config = _AWSTransformRecordingConfig(transform_async=True)
+    pre_call_threads = []
+    logging_obj = Mock(dynamic_success_callbacks=None, model_call_details={})
+    logging_obj.pre_call.side_effect = lambda **kwargs: pre_call_threads.append(threading.current_thread())
+
+    pending, captured = _start_async_completion(config, logging_obj)
+    response = await pending
+
+    assert response.choices[0].message.content == "async"
+    assert captured["body"] == {"transformed_by": "async"}
+    assert config.sign_threads and all(thread.name.startswith("aws-signing") for thread in config.sign_threads)
+    assert pre_call_threads and all(thread.name.startswith("aws-signing") for thread in pre_call_threads)
 
 
 async def test_completion_keeps_sync_transform_request_before_returning_by_default():

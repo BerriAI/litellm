@@ -25,7 +25,7 @@ import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    responses_reasoning_item_from_thinking_blocks,
+    responses_reasoning_items_from_thinking_blocks,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
@@ -129,8 +129,8 @@ def _reasoning_input_items(msg: "AllMessageValues") -> list[dict[str, object]]: 
         return stored
     raw_blocks: Final = msg.get("thinking_blocks") or ()
     blocks: Final = cast("Iterable[ChatCompletionThinkingBlock]", raw_blocks)  # cast-ok: untyped client json
-    from_thinking: Final = responses_reasoning_item_from_thinking_blocks(blocks)
-    return [] if from_thinking is None else [dict(from_thinking)]  # mutable-ok: API message payload
+    replayed: Final = responses_reasoning_items_from_thinking_blocks(blocks)
+    return [dict(item) for item in replayed]  # mutable-ok: API message payload
 
 
 def _build_reasoning_item(
@@ -227,7 +227,7 @@ class _ChatToolCallDict(ChatCompletionToolCallChunk, total=False):
     provider_specific_fields: Mapping[str, object]
 
 
-def _tool_call_dict_from_output_item(item: Mapping[str, Any], index: int) -> _ChatToolCallDict:
+def tool_call_dict_from_output_item(item: Mapping[str, Any], index: int) -> _ChatToolCallDict:
     """Convert a ``function_call`` or ``custom_tool_call`` output item dict to a chat
     completions tool_call dict. Custom (grammar/freeform) tool calls carry their raw
     string payload in ``input`` rather than ``arguments``; both map to
@@ -370,7 +370,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             and isinstance(tool_call.get("custom"), dict)
         )
 
-        for msg in messages:
+        leading_system_count: Final = next(
+            (index for index, msg in enumerate(messages) if msg.get("role") != "system"),
+            len(messages),
+        )
+
+        for index, msg in enumerate(messages):
             role = msg.get("role")
             content = msg.get("content", "")
             tool_calls = msg.get("tool_calls")
@@ -378,7 +383,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
             if role == "system":
                 # Extract system message as instructions
-                if isinstance(content, str):
+                if isinstance(content, str) and index < leading_system_count:
                     if instructions:
                         # Concatenate multiple system prompts with a space
                         instructions = f"{instructions} {content}"
@@ -750,7 +755,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     # Tool calls accumulate into the single trailing tool_calls choice
                     # like the typed branches above; a choice per call would hide every
                     # call after choices[0] from chat clients
-                    accumulated_tool_calls.append(_tool_call_dict_from_output_item(raw_item, tool_call_index))
+                    accumulated_tool_calls.append(tool_call_dict_from_output_item(raw_item, tool_call_index))
                     tool_call_index += 1
                 elif handle_raw_dict_callback is not None:
                     choice, index = handle_raw_dict_callback(item=raw_item, index=index)
@@ -1196,6 +1201,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         # Cast to Any to match the expected union type for tools list items
         tools.append(cast(Any, web_search_tool))
 
+    def transform_response_format_to_text_format(self, response_format: object) -> "ResponseText | None":
+        return self._transform_response_format_to_text_format(response_format)
+
     def _transform_response_format_to_text_format(self, response_format: object) -> "ResponseText | None":
         """
         Transform Chat Completion response_format parameter to Responses API text.format parameter.
@@ -1404,7 +1412,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             # New output item added
             output_item = parsed_chunk.get("item", {})
             if output_item.get("type") in ("function_call", "custom_tool_call"):
-                converted: Final = _tool_call_dict_from_output_item(output_item, parsed_chunk.get("output_index", 0))
+                converted: Final = tool_call_dict_from_output_item(output_item, parsed_chunk.get("output_index", 0))
                 provider_specific_fields: Final = converted.get("provider_specific_fields")
 
                 function_chunk: Final = ChatCompletionToolCallFunctionChunk(
@@ -1479,7 +1487,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                                 index=0,
                                 delta=Delta(
                                     tool_calls=(
-                                        _tool_call_dict_from_output_item(
+                                        tool_call_dict_from_output_item(
                                             output_item, parsed_chunk.get("output_index", 0)
                                         ),
                                     )
