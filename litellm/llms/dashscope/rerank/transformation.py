@@ -127,8 +127,6 @@ class DashScopeRerankConfig(BaseRerankConfig):
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
     ) -> dict:
-        # qwen3-rerank accepts query/documents/top_n/return_documents/instruct. The
-        # rest (rank_fields, max_*_per_doc) are silently dropped.
         params: Final[OptionalRerankParams] = OptionalRerankParams(
             query=query,
             documents=documents,
