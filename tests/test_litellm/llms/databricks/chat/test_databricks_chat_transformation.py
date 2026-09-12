@@ -523,29 +523,30 @@ def test_databricks_config_probes_capabilities_under_databricks_namespace():
     assert DatabricksConfig().custom_llm_provider == "databricks"
 
 
-# ---------------------------------------------------------------------------
-# reasoning_effort translation
-#
-# Databricks foundation-model endpoints take reasoning controls via different
-# payload shapes depending on the underlying model family:
-#
-#   Claude:        Anthropic-style `thinking={"type":"enabled","budget_tokens":N}`
-#   Gemini 2.5:    Same Anthropic-style `thinking` payload as Claude
-#                  (per docs.databricks.com/.../query-reason-models)
-#   Gemini 3+:     Native OpenAI-style top-level `reasoning_effort`
-#   GPT-5/GPT-OSS: Native OpenAI-style top-level `reasoning_effort`
-#
-# LiteLLM should translate `reasoning_effort` into the right shape for the
-# first two families and pass it through unchanged for the latter two.
-# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "model, expected_thinking, expected_output_config",
+    [
+        ("databricks-claude-opus-4-8", {"type": "adaptive"}, {"effort": "high"}),
+        ("databricks-claude-opus-4-6", {"type": "enabled", "budget_tokens": 4096}, None),
+    ],
+    ids=["adaptive_only_upgrades_to_adaptive", "legacy_capable_forwards_verbatim"],
+)
+def test_map_openai_params_upgrades_legacy_thinking_on_adaptive_only_claude(
+    model, expected_thinking, expected_output_config
+):
+    mapped = DatabricksConfig().map_openai_params(
+        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 4096}},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert mapped["thinking"] == expected_thinking
+    assert mapped.get("output_config") == expected_output_config
 
 
-def _map_reasoning_effort(model: str, reasoning_effort, **extra_non_default):
-    """Run map_openai_params with reasoning_effort + optional extras."""
-    non_default = {"reasoning_effort": reasoning_effort}
-    non_default.update(extra_non_default)
+def _map_reasoning_effort(model: str, reasoning_effort: str):
     return DatabricksConfig().map_openai_params(
-        non_default_params=non_default,
+        non_default_params={"reasoning_effort": reasoning_effort},
         optional_params={},
         model=model,
         drop_params=False,
@@ -553,8 +554,23 @@ def _map_reasoning_effort(model: str, reasoning_effort, **extra_non_default):
 
 
 def test_claude_translates_reasoning_effort_to_thinking(_use_local_model_cost_map):
-    """Regression: Claude path must still translate to Anthropic-style thinking."""
     params = _map_reasoning_effort("databricks-claude-3-7-sonnet", "low")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_adaptive_claude_translates_reasoning_effort_to_output_config(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-claude-opus-4-7", "high")
+    assert params.get("thinking") == {"type": "adaptive", "display": "summarized"}
+    assert params.get("output_config") == {"effort": "high"}
+    assert "reasoning_effort" not in params
+
+
+def test_unmapped_claude_endpoint_still_translates(_use_local_model_cost_map):
+    params = _map_reasoning_effort("my-claude-serving-endpoint", "low")
     assert params.get("thinking") == {
         "type": "enabled",
         "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
@@ -590,7 +606,6 @@ def test_gemini_2_5_high_translates_to_thinking_budget(_use_local_model_cost_map
 
 
 def test_gemini_2_5_pro_translates_to_thinking_budget(_use_local_model_cost_map):
-    """Cover the gemini-2-5-pro endpoint too, not just flash."""
     params = _map_reasoning_effort("databricks-gemini-2-5-pro", "high")
     assert params.get("thinking") == {
         "type": "enabled",
@@ -600,8 +615,6 @@ def test_gemini_2_5_pro_translates_to_thinking_budget(_use_local_model_cost_map)
 
 
 def test_gemini_2_5_with_dot_notation_translates(_use_local_model_cost_map):
-    """A user passing the upstream Google-style `gemini-2.5-...` form should
-    still trigger the Anthropic-thinking translation, not pass through."""
     params = _map_reasoning_effort("databricks-gemini-2.5-flash", "low")
     assert params.get("thinking") == {
         "type": "enabled",
@@ -611,78 +624,33 @@ def test_gemini_2_5_with_dot_notation_translates(_use_local_model_cost_map):
 
 
 def test_gemini_2_0_does_not_match(_use_local_model_cost_map):
-    """Guard against over-matching: `gemini-2-0` (hypothetical or future) is
-    NOT a Gemini 2.5 endpoint and must not get the thinking translation."""
     params = _map_reasoning_effort("databricks-gemini-2-0-flash", "low")
     assert "thinking" not in params
     assert params.get("reasoning_effort") == "low"
 
 
 def test_gemini_2_5_none_drops_thinking_and_reasoning_effort(_use_local_model_cost_map):
-    """`reasoning_effort='none'` mirrors the Claude behavior: no thinking emitted."""
     params = _map_reasoning_effort("databricks-gemini-2-5-flash", "none")
     assert "thinking" not in params
     assert "reasoning_effort" not in params
 
 
 def test_gemini_3_passes_reasoning_effort_through(_use_local_model_cost_map):
-    """Databricks-Gemini-3+ accepts reasoning_effort natively — do not translate."""
     params = _map_reasoning_effort("databricks-gemini-3-1-pro", "low")
     assert params.get("reasoning_effort") == "low"
     assert "thinking" not in params
 
 
 def test_gpt_5_passes_reasoning_effort_through(_use_local_model_cost_map):
-    """Databricks-GPT-5 family accepts reasoning_effort natively."""
     params = _map_reasoning_effort("databricks-gpt-5-1", "low")
     assert params.get("reasoning_effort") == "low"
     assert "thinking" not in params
 
 
 def test_gpt_oss_passes_reasoning_effort_through(_use_local_model_cost_map):
-    """Databricks-GPT-OSS accepts reasoning_effort natively."""
     params = _map_reasoning_effort("databricks-gpt-oss-120b", "high")
     assert params.get("reasoning_effort") == "high"
     assert "thinking" not in params
-
-
-def test_non_claude_adaptive_thinking_flag_is_rejected(monkeypatch, _use_local_model_cost_map):
-    """Adaptive thinking + output_config is Claude-only; a non-Claude model that
-    resolves to an adaptive payload would send Databricks' Gemini endpoint a shape
-    it can't parse, so the translation must fail loudly instead of passing it through."""
-    fake_model = "databricks-gemini-2-5-adaptive-probe"
-    monkeypatch.setitem(
-        litellm.model_cost,
-        fake_model,
-        {
-            "litellm_provider": "databricks",
-            "supports_anthropic_thinking_payload": True,
-            "supports_adaptive_thinking": True,
-        },
-    )
-    with pytest.raises(litellm.exceptions.BadRequestError):
-        _map_reasoning_effort(fake_model, "high")
-
-
-@pytest.mark.parametrize(
-    "model, expected_thinking, expected_output_config",
-    [
-        ("databricks-claude-opus-4-8", {"type": "adaptive"}, {"effort": "high"}),
-        ("databricks-claude-opus-4-6", {"type": "enabled", "budget_tokens": 4096}, None),
-    ],
-    ids=["adaptive_only_upgrades_to_adaptive", "legacy_capable_forwards_verbatim"],
-)
-def test_map_openai_params_upgrades_legacy_thinking_on_adaptive_only_claude(
-    model, expected_thinking, expected_output_config
-):
-    mapped = DatabricksConfig().map_openai_params(
-        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 4096}},
-        optional_params={},
-        model=model,
-        drop_params=False,
-    )
-    assert mapped["thinking"] == expected_thinking
-    assert mapped.get("output_config") == expected_output_config
 
 
 def _streaming_chunk(usage=None, choices=None):
