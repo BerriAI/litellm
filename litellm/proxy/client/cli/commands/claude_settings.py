@@ -458,9 +458,15 @@ def read_configure_receipt(state_path: Path) -> ConfigureReceipt | None:
         return ConfigureReceipt.model_validate_json(state_path.read_bytes())
     except (OSError, ValidationError) as e:
         raise ClaudeSettingsError(
-            f"{state_path} is not a readable `lite configure claude` receipt ({e}). "
+            f"{state_path} is not a readable `lite configure claude` receipt. "
             "Remove it and edit Claude Code's settings by hand if they still point at the proxy."
         ) from e
+
+
+def preflight_claude_settings(settings_path: Path) -> None:
+    refuse_while_owned(settings_path, settings_file_owners(settings_path))
+    _env_object(load_json_or_empty(settings_path), settings_path)
+    read_configure_receipt(configure_state_path(settings_path))
 
 
 def configure_claude_settings(
