@@ -52,9 +52,8 @@ def create_bad_base_deployment(proxy: ProxyClient, name: str) -> str:
 
 
 def create_never_benched_refusing_deployment(proxy: ProxyClient, name: str) -> str:
-    """Register a deployment that refuses every call at the socket and opts out of the
-    stack's cooldown policy (cooldown_time 0), so the router keeps retrying it for the
-    whole run instead of benching it after allowed_fails and skipping the retry loop."""
+    """cooldown_time 0 keeps the router retrying this deployment instead of benching it
+    after allowed_fails, which would skip the retry loop the memory test measures."""
     return proxy.create_model(
         name,
         LiteLLMParamsBody(model=REAL_MODEL, api_key=REAL_KEY, api_base="http://127.0.0.1:9/v1", cooldown_time=0),
@@ -124,8 +123,7 @@ def chat_override(
     history: Sequence[ChatMessage] = (),
 ) -> StreamingResponse:
     """POST /chat/completions with an optional per-request router_settings_override,
-    returning the raw outcome so tests read status, body, and reliability headers.
-    `history` is the conversation sent ahead of the user turn carrying `content`."""
+    returning the raw outcome so tests read status, body, and reliability headers."""
     return proxy.transport.send(
         "/chat/completions",
         headers=proxy.transport.bearer(key),
