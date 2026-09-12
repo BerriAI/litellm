@@ -680,7 +680,17 @@ def test_deployment_model_info_beats_the_seeded_rule_defaults(shipped_cost_map):
 
 
 def test_shipped_rules_flag_unmapped_openai_reasoning_families(shipped_cost_map):
-    for model in ("gpt-5.7-nova", "openai/gpt-6", "ft:gpt-5.1-2025-11-13:org::abc", "o5-mini", "gpt-5.6-codex-max", "o4-mini-deep-research-2027-01-01", "gpt-5.7-chat-latest", "azure/gpt-5.7-cyber", "openai/codex-mini-latest-2027"):
+    for model in (
+        "gpt-5.7-nova",
+        "openai/gpt-6",
+        "ft:gpt-5.1-2025-11-13:org::abc",
+        "o5-mini",
+        "gpt-5.6-codex-max",
+        "o4-mini-deep-research-2027-01-01",
+        "gpt-5.7-chat-latest",
+        "azure/gpt-5.7-cyber",
+        "openai/codex-mini-latest-2027",
+    ):
         assert model not in litellm.model_cost, model
         assert match_capability_generalizations(model) == {"supports_reasoning": True}, model
     info = litellm.get_model_info("gpt-5.7-nova", custom_llm_provider="openai")
@@ -692,7 +702,18 @@ def test_shipped_rules_flag_unmapped_openai_reasoning_families(shipped_cost_map)
 
 
 def test_shipped_openai_reasoning_rule_skips_non_reasoning_gpt_ids(shipped_cost_map):
-    for model in ("gpt-4o", "gpt-4.1-nano-new", "gpt-oss-120b", "gpt-realtime-2027", "gpt-image-2", "gpt-5-search-api-2027-01-01", "omni-moderation-new", "text-embedding-4", "vendor/my-codex-embedding", "some-codex-model"):
+    for model in (
+        "gpt-4o",
+        "gpt-4.1-nano-new",
+        "gpt-oss-120b",
+        "gpt-realtime-2027",
+        "gpt-image-2",
+        "gpt-5-search-api-2027-01-01",
+        "omni-moderation-new",
+        "text-embedding-4",
+        "vendor/my-codex-embedding",
+        "some-codex-model",
+    ):
         assert match_capability_generalizations(model) is None, model
 
 
