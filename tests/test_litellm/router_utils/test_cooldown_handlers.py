@@ -1,6 +1,8 @@
 from unittest.mock import MagicMock, patch
 
 import litellm
+from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.router_utils.cooldown_handlers import (
     _get_deployment_cooldown_policy,
     _resolve_allowed_fails_from_policy,
@@ -269,18 +271,20 @@ class TestShouldCooldownBasedOnDeploymentPolicy:
 
 
 class TestShouldCooldownBasedOnAllowedFailsPolicy:
-    def _make_router(self, cooldown_time: float = 60.0) -> MagicMock:
+    def _make_router(self, cooldown_time: float = 60.0, cache: DualCache | None = None) -> MagicMock:
         router = MagicMock()
         router.cooldown_time = cooldown_time
         router.allowed_fails = 0
         router.allowed_fails_policy = None
         router.get_allowed_fails_from_policy.return_value = None
-        router.failed_calls.get_cache.return_value = None
+        router.cache = cache if cache is not None else DualCache(in_memory_cache=InMemoryCache())
         return router
 
     def test_cooldown_time_override_zero_is_not_falsy(self):
         """cooldown_time_override=0 must be honored; it must not fall through to the router-level value."""
         router = self._make_router(cooldown_time=60.0)
+        router.cache = MagicMock()
+        router.cache.increment_cache.return_value = 1
         exc = litellm.RateLimitError("429", "openai", "gpt-4")
 
         should_cooldown_based_on_allowed_fails_policy(
@@ -291,11 +295,67 @@ class TestShouldCooldownBasedOnAllowedFailsPolicy:
             cooldown_time_override=0.0,
         )
 
-        set_cache_call = router.failed_calls.set_cache.call_args
-        assert set_cache_call is not None
-        assert set_cache_call[1]["ttl"] == 0.0, (
+        increment_call = router.cache.increment_cache.call_args
+        assert increment_call is not None
+        assert increment_call[1]["ttl"] == 0.0, (
             "cooldown_time_override=0 should be used as TTL, not the router-level 60.0"
         )
+
+    def test_fail_counter_is_shared_across_router_instances(self):
+        """Two workers (two Router objects over one shared cache) must pool their failures toward allowed_fails."""
+        shared_cache = DualCache(in_memory_cache=InMemoryCache())
+        workers = (self._make_router(cache=shared_cache), self._make_router(cache=shared_cache))
+        exc = litellm.AuthenticationError("401", "openai", "gpt-4")
+
+        results = [
+            should_cooldown_based_on_allowed_fails_policy(
+                litellm_router_instance=workers[i % 2],
+                deployment="dep-1",
+                original_exception=exc,
+                allowed_fails_override=5,
+            )
+            for i in range(6)
+        ]
+
+        assert results == [False, False, False, False, False, True]
+        assert shared_cache.get_cache(key="deployment:dep-1:allowed_fails") == 6
+
+    def test_fleet_wide_count_from_redis_decides_cooldown(self):
+        """The Redis (fleet-wide) count decides, even when this process has only seen one failure."""
+        redis_cache = MagicMock()
+        redis_cache.increment_cache.return_value = 6
+        router = self._make_router(cache=DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache))
+        exc = litellm.AuthenticationError("401", "openai", "gpt-4")
+
+        result = should_cooldown_based_on_allowed_fails_policy(
+            litellm_router_instance=router,
+            deployment="dep-1",
+            original_exception=exc,
+            allowed_fails_override=5,
+        )
+
+        assert result is True
+        redis_cache.increment_cache.assert_called_once_with("deployment:dep-1:allowed_fails", 1, ttl=60.0)
+
+    def test_redis_outage_falls_back_to_this_workers_count(self):
+        """When every Redis increment fails, the worker's own in-memory count must still cool the deployment down."""
+        redis_cache = MagicMock()
+        redis_cache.increment_cache.side_effect = ConnectionError("redis down")
+        router = self._make_router(cache=DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache))
+        exc = litellm.AuthenticationError("401", "openai", "gpt-4")
+
+        results = [
+            should_cooldown_based_on_allowed_fails_policy(
+                litellm_router_instance=router,
+                deployment="dep-1",
+                original_exception=exc,
+                allowed_fails_override=5,
+            )
+            for _ in range(6)
+        ]
+
+        assert results == [False, False, False, False, False, True]
+        assert redis_cache.increment_cache.call_count == 6
 
 
 class TestRoutingGroupCooldownAlternatives:

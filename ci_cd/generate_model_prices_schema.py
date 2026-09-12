@@ -58,6 +58,11 @@ OBJECT_KEYS: dict[str, JsonSchema] = {
 }
 
 ARRAY_KEYS: dict[str, JsonSchema] = {
+    "supported_audio_formats": {
+        "type": "array",
+        "description": "Audio container formats the model can return.",
+        "items": {"type": "string", "enum": ["mp3", "wav"]},
+    },
     "supported_endpoints": {
         "type": "array",
         "description": "OpenAI-style API routes this model can be called through, e.g. /v1/chat/completions.",
@@ -220,8 +225,21 @@ def string_key_schemas(modes: tuple) -> dict[str, JsonSchema]:
             "description": "Highest reasoning effort the Bedrock output_config accepts for this model.",
             "enum": ["low", "medium", "high", "max", "xhigh"],
         },
+        "default_reasoning_effort": {
+            "type": "string",
+            "description": (
+                "Reasoning effort the provider applies when the request omits reasoning_effort. "
+                "Gates whether a non-default temperature or the top_p/logprobs sampling params are "
+                "accepted, which hold only when the effort resolves to 'none'."
+            ),
+            "enum": ["none", "minimal", "low", "medium", "high", "xhigh"],
+        },
         "comment": STRING,
         "audio_transcription_config": STRING,
+        "vertex_ai_audio_api": {
+            "type": "string",
+            "enum": ["lyria_predict", "lyria_interactions"],
+        },
     }
 
 

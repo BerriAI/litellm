@@ -164,7 +164,7 @@ export function TeamsTable({ userRole, userID, onSelectTeam, onEditTeam, onDelet
       isLoading={isLoading}
       loadingMessage="Loading teams..."
       noDataMessage="No teams found"
-      maxBodyHeight="calc(75vh - 210px)"
+      fillHeight
       size="compact"
       toolbar={(table) => (
         <>
@@ -203,7 +203,7 @@ export function TeamsTable({ userRole, userID, onSelectTeam, onEditTeam, onDelet
                   <SearchSelect
                     options={orgOptions}
                     value={(get("org_id") as string) || undefined}
-                    onValueChange={(value) => set("org_id", value)}
+                    onValueChange={(value) => set("org_id", value ?? undefined)}
                     placeholder="Select an organization…"
                     emptyText="No organizations found"
                   />

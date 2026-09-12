@@ -77,6 +77,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select as ShadcnSelect, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
+import { uiHref } from "@/utils/uiHref";
 import {
   AUDIO_ACCEPT,
   IMAGE_EDIT_ACCEPT,
@@ -195,17 +196,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
     () => sessionStorage.getItem("customProxyBaseUrl") || "",
   );
   const [inputMessage, setInputMessage] = useState("");
-  const [selectedModel, setSelectedModel] = useState<string | undefined>(simplified ? fixedModel : undefined);
+  const [selectedModel, setSelectedModel] = useState<string | null | undefined>(simplified ? fixedModel : null);
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [modelLoadError, setModelLoadError] = useState(false);
   const [agentInfo, setAgentInfo] = useState<Agent[]>([]);
-  const [selectedAgent, setSelectedAgent] = useState<string | undefined>(undefined);
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const debouncedSetSelectedModel = useDebouncedCallback((value: string) => setSelectedModel(value), {
     wait: CUSTOM_MODEL_DEBOUNCE_WAIT_MS,
   });
-  const [endpointType, setEndpointType] = useState<string>(
+  const [endpointType, setEndpointType] = useState<string | null>(
     () => sessionStorage.getItem("endpointType") || EndpointType.CHAT,
   );
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -326,7 +327,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   };
 
   useEffect(() => {
-    if (isGetCodeModalVisible) {
+    if (isGetCodeModalVisible && endpointType !== null) {
       const code = generateCodeSnippet({
         apiKeySource,
         accessToken,
@@ -341,7 +342,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
         mcpServers,
         mcpServerToolRestrictions,
         endpointType,
-        selectedModel,
+        selectedModel: selectedModel ?? undefined,
         selectedSdk,
         selectedVoice,
         proxySettings,
@@ -375,7 +376,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
     } catch {
       // Storage full or unavailable — non-critical, skip persisting.
     }
-    sessionStorage.setItem("endpointType", endpointType);
+    if (endpointType === null) sessionStorage.removeItem("endpointType");
+    else sessionStorage.setItem("endpointType", endpointType);
     sessionStorage.setItem("selectedTags", JSON.stringify(selectedTags));
     sessionStorage.setItem("selectedVectorStores", JSON.stringify(selectedVectorStores));
     sessionStorage.setItem("selectedGuardrails", JSON.stringify(selectedGuardrails));
@@ -492,7 +494,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
         setAgentInfo(agents);
         // Clear selection if current agent not in list
         if (selectedAgent && !agents.some((a) => a.agent_name === selectedAgent)) {
-          setSelectedAgent(undefined);
+          setSelectedAgent(null);
         }
       } catch (error) {
         console.error("Error fetching agents:", error);
@@ -615,10 +617,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
     setUploadedAudio(file);
   };
 
-  const handleEndpointChange = (value: string) => {
+  const handleEndpointChange = (value: string | null) => {
     setEndpointType(value);
-    setSelectedModel(undefined);
-    setSelectedAgent(undefined);
+    setGeneratedCode("");
+    setSelectedModel(null);
+    setSelectedAgent(null);
     setShowCustomModelInput(false);
     setSelectedMCPDirectTool(undefined);
     if (value === EndpointType.MCP) {
@@ -709,6 +712,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
   };
 
   const handleSendMessage = async () => {
+    if (endpointType === null) {
+      toast.fromError("Please select an endpoint before sending a request");
+      return;
+    }
+
     if (inputMessage.trim() === "" && endpointType !== EndpointType.TRANSCRIPTION && endpointType !== EndpointType.MCP)
       return;
 
@@ -1024,6 +1032,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             mcpServers,
             mcpServerToolRestrictions,
             mcpToolsets,
+            streamingEnabled,
           );
         } else if (endpointType === EndpointType.EMBEDDINGS) {
           await makeOpenAIEmbeddingsRequest(
@@ -1150,7 +1159,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     toast.success("Chat history cleared.");
   };
 
-  const onModelChange = (value: string) => {
+  const onModelChange = (value: string | null) => {
     setSelectedModel(value);
     setShowCustomModelInput(value === "custom");
 
@@ -1173,7 +1182,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
     return !model.mode || model.mode === "chat";
   };
 
-  const supportsStreamingToggle = endpointType === EndpointType.CHAT || endpointType === EndpointType.RESPONSES;
+  const supportsStreamingToggle =
+    endpointType === EndpointType.CHAT ||
+    endpointType === EndpointType.RESPONSES ||
+    endpointType === EndpointType.ANTHROPIC_MESSAGES;
   const modelsForEndpoint = useMemo(
     () => filterModelsForEndpoint(modelInfo, endpointType as EndpointType),
     [modelInfo, endpointType],
@@ -1205,6 +1217,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               : "Describe the image you want to generate...";
 
   const sendDisabled =
+    endpointType === null ||
     isLoading ||
     (endpointType === EndpointType.MCP
       ? !(selectedMCPServers.length === 1 && selectedMCPServers[0] !== "__all__" && selectedMCPDirectTool)
@@ -1650,7 +1663,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       </TooltipTrigger>
                       <TooltipContent className="max-w-xs">
                         Select vector store(s) to use for this LLM API call. You can set up your vector store{" "}
-                        <a href="?page=vector-stores" className="text-info underline">
+                        <a href={uiHref("vector-stores")} className="text-info underline">
                           here
                         </a>
                         .
@@ -1674,7 +1687,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       </TooltipTrigger>
                       <TooltipContent className="max-w-xs">
                         Select guardrail(s) to use for this LLM API call. You can set up your guardrails{" "}
-                        <a href="?page=guardrails" className="text-info underline">
+                        <a href={uiHref("guardrails")} className="text-info underline">
                           here
                         </a>
                         .
@@ -1700,7 +1713,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         <TooltipContent className="max-w-xs">
                           Select policy/policies to apply to this LLM API call. Policies define which guardrails are
                           applied based on conditions. You can set up your policies{" "}
-                          <a href="?page=policies" className="text-info underline">
+                          <a href={uiHref("policies")} className="text-info underline">
                             here
                           </a>
                           .

@@ -12,11 +12,19 @@ import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EntityLink } from "@/components/shared/EntityLink";
-import { teamDetailHref } from "@/utils/entityLinks";
+import { modelGroupHref, teamDetailHref } from "@/utils/entityLinks";
+import { BadgeLink } from "@/components/shared/BadgeLink";
 import { KeyInfoHeader } from "./KeyInfoHeader";
 import KeySavingsTab from "./KeySavingsTab";
+import KeyAutoRouterUsageTab from "./KeyAutoRouterUsageTab";
+import { useActivityDateRange } from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
 import { useEffect, useState } from "react";
-import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
+import {
+  hasProxyWideSpendView,
+  isProxyAdminRole,
+  isUserTeamAdminForSingleTeam,
+  rolesWithWriteAccess,
+} from "../../utils/roles";
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
 import AutoRotationView from "../common_components/AutoRotationView";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -80,6 +88,7 @@ export default function KeyInfoView({
   backButtonText = "Back to Keys",
 }: KeyInfoViewProps) {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
+  const activityDateRange = useActivityDateRange();
   const queryClient = useQueryClient();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const { teams: teamsData } = useTeams();
@@ -209,6 +218,23 @@ export default function KeyInfoView({
       // Handle max budget empty string
       formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
 
+      // soft_budget is a budget change server-side (admin-gated); only send it when it changed
+      // so a non-admin edit of unrelated fields isn't blocked by that gate.
+      const previousSoftBudget =
+        (currentKeyData.litellm_budget_table as { soft_budget?: number | null } | null | undefined)?.soft_budget ??
+        null;
+      const nextSoftBudget =
+        formValues.soft_budget === "" || formValues.soft_budget == null ? null : Number(formValues.soft_budget);
+      if (nextSoftBudget !== null && !Number.isFinite(nextSoftBudget)) {
+        toast.error("Soft Budget must be a finite number");
+        return;
+      }
+      if (nextSoftBudget === previousSoftBudget) {
+        delete formValues.soft_budget;
+      } else {
+        formValues.soft_budget = nextSoftBudget;
+      }
+
       // Handle object_permission updates
       if (formValues.vector_stores !== undefined) {
         formValues.object_permission = {
@@ -249,6 +275,14 @@ export default function KeyInfoView({
           agent_access_groups: accessGroups || [],
         };
         delete formValues.agents_and_groups;
+      }
+
+      if (formValues.skills !== undefined) {
+        formValues.object_permission = {
+          ...formValues.object_permission,
+          skills: formValues.skills || [],
+        };
+        delete formValues.skills;
       }
 
       formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
@@ -617,6 +651,11 @@ export default function KeyInfoView({
           <TabsTrigger value="savings" className="flex-none rounded-none px-4 py-2">
             Savings
           </TabsTrigger>
+          {hasProxyWideSpendView(userRole) && (
+            <TabsTrigger value="auto-router-usage" className="flex-none rounded-none px-4 py-2">
+              Auto-router usage
+            </TabsTrigger>
+          )}
           <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
             Settings
           </TabsTrigger>
@@ -660,9 +699,9 @@ export default function KeyInfoView({
                 <div className="mt-2 flex flex-wrap gap-2">
                   {currentKeyData.models && currentKeyData.models.length > 0 ? (
                     currentKeyData.models.map((model, index) => (
-                      <Badge key={index} variant="secondary" className="min-w-0 break-words">
+                      <BadgeLink key={index} href={modelGroupHref(model)} className="min-w-0 break-words">
                         {model}
-                      </Badge>
+                      </BadgeLink>
                     ))
                   ) : (
                     <p className="text-sm">No models specified</p>
@@ -760,8 +799,19 @@ export default function KeyInfoView({
               keyToken={currentKeyData.token}
               userId={userID}
               userRole={userRole}
+              activity={activityDateRange}
             />
           </TabsContent>
+
+          {hasProxyWideSpendView(userRole) && (
+            <TabsContent value="auto-router-usage">
+              <KeyAutoRouterUsageTab
+                accessToken={accessToken}
+                keyToken={currentKeyData.token}
+                activity={activityDateRange}
+              />
+            </TabsContent>
+          )}
 
           {/* Settings Panel */}
           <TabsContent value="settings" keepMounted>
@@ -894,7 +944,7 @@ export default function KeyInfoView({
 
                   <div>
                     <p className="text-sm font-medium">Budget Reset</p>
-                    <p className="text-sm">
+                    <p data-testid="budget-reset-value" className="text-sm">
                       {currentKeyData.budget_reset_at
                         ? `${currentKeyData.budget_duration ? `Every ${currentKeyData.budget_duration}, next ` : ""}${formatTimestamp(currentKeyData.budget_reset_at)}`
                         : "Never"}
@@ -996,9 +1046,9 @@ export default function KeyInfoView({
                     <div className="flex flex-wrap gap-2 mt-1">
                       {currentKeyData.models && currentKeyData.models.length > 0 ? (
                         currentKeyData.models.map((model, index) => (
-                          <span key={index} className="px-2 py-1 bg-info/15 rounded-sm text-xs">
+                          <BadgeLink key={index} href={modelGroupHref(model)} className="min-w-0 break-words">
                             {model}
-                          </span>
+                          </BadgeLink>
                         ))
                       ) : (
                         <p className="text-sm">No models specified</p>

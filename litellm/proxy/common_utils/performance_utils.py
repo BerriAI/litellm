@@ -15,9 +15,23 @@ import inspect
 import threading
 from collections.abc import Callable
 from pathlib import Path as PathLib
-from typing import Any, Final
+from types import ModuleType
+from typing import Final, Protocol, TextIO
 
 from litellm._logging import verbose_proxy_logger
+
+
+class _LineProfiler(Protocol):
+    """The line_profiler.LineProfiler surface this module drives."""
+
+    def __call__(self, func: Callable[..., object]) -> Callable[..., object]: ...
+
+    def add_function(self, func: Callable[..., object]) -> object: ...
+
+    def dump_stats(self, filename: str) -> object: ...
+
+    def print_stats(self, stream: TextIO) -> object: ...
+
 
 # Global profiling state
 _profile_lock: Final = threading.Lock()
@@ -27,7 +41,7 @@ _sample_counter = 0
 _sample_counter_lock: Final = threading.Lock()
 
 # Global line_profiler state
-_line_profiler: Any | None = None
+_line_profiler: _LineProfiler | None = None
 _line_profiler_lock: Final = threading.Lock()
 _wrapped_functions: Final[dict[str, Callable]] = {}  # Store original functions
 
@@ -157,7 +171,7 @@ def enable_line_profiler() -> None:
             verbose_proxy_logger.info("Line profiler enabled")
 
 
-def wrap_function_with_line_profiler(module: Any, function_name: str) -> bool:
+def wrap_function_with_line_profiler(module: ModuleType, function_name: str) -> bool:
     """Dynamically wrap a function with line_profiler.
 
     Args:

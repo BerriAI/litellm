@@ -45,7 +45,7 @@ describe("VectorStoreManagement loading state", () => {
 
   it("should resolve the loading state when accessToken is null instead of showing the skeleton forever", async () => {
     const user = userEvent.setup();
-    render(<VectorStoreManagement accessToken={null} userID={null} userRole={null} />);
+    render(<VectorStoreManagement accessToken={null} userID={null} userRole={null} isViewOnly={false} />);
     await openManageTab(user);
     expect(await screen.findByText("table-loaded")).toBeInTheDocument();
     expect(mockVectorStoreListCall).not.toHaveBeenCalled();
@@ -59,13 +59,50 @@ describe("VectorStoreManagement loading state", () => {
         resolveFetch = resolve;
       }),
     );
-    render(<VectorStoreManagement accessToken="sk-test" userID="user-1" userRole="Admin" />);
+    render(<VectorStoreManagement accessToken="sk-test" userID="user-1" userRole="Admin" isViewOnly={false} />);
     await openManageTab(user);
     expect(screen.getByText("table-loading")).toBeInTheDocument();
 
     resolveFetch({ data: [] });
     expect(await screen.findByText("table-loaded")).toBeInTheDocument();
     expect(mockVectorStoreListCall).toHaveBeenCalledWith("sk-test");
+  });
+});
+
+describe("VectorStoreManagement create flow visibility", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockVectorStoreListCall.mockResolvedValue({ data: [] });
+    mockCredentialListCall.mockResolvedValue({ credentials: [] });
+  });
+
+  it.each([
+    { label: "Internal User", userRole: "Internal User", isViewOnly: false },
+    { label: "Internal Viewer", userRole: "Internal Viewer", isViewOnly: true },
+    { label: "proxy_admin_viewer session (userRole Admin, isViewOnly)", userRole: "Admin", isViewOnly: true },
+    { label: "Org Admin", userRole: "Org Admin", isViewOnly: false },
+  ])(
+    "should hide the Create Vector Store tab and button and skip /credentials for $label",
+    async ({ userRole, isViewOnly }) => {
+      render(
+        <VectorStoreManagement accessToken="sk-test" userID="user-1" userRole={userRole} isViewOnly={isViewOnly} />,
+      );
+      await waitFor(() => expect(mockVectorStoreListCall).toHaveBeenCalledWith("sk-test"));
+      expect(screen.queryByRole("tab", { name: "Create Vector Store" })).not.toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "Manage Vector Stores" })).toHaveAttribute("aria-selected", "true");
+      expect(await screen.findByText("table-loaded")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "+ Add Vector Store" })).not.toBeInTheDocument();
+      expect(mockCredentialListCall).not.toHaveBeenCalled();
+    },
+  );
+
+  it("should keep the Create Vector Store tab and button and fetch /credentials for a proxy admin", async () => {
+    const user = userEvent.setup();
+    render(<VectorStoreManagement accessToken="sk-test" userID="user-1" userRole="Admin" isViewOnly={false} />);
+    await waitFor(() => expect(mockCredentialListCall).toHaveBeenCalledWith("sk-test"));
+    expect(screen.getByRole("tab", { name: "Create Vector Store" })).toHaveAttribute("aria-selected", "true");
+    await openManageTab(user);
+    expect(screen.getByRole("button", { name: "+ Add Vector Store" })).toBeInTheDocument();
   });
 });
 
@@ -88,7 +125,7 @@ describe("VectorStoreManagement Indexes tab", () => {
         },
       ],
     });
-    render(<VectorStoreManagement accessToken="sk-test" userID="user-1" userRole="Admin" />);
+    render(<VectorStoreManagement accessToken="sk-test" userID="user-1" userRole="Admin" isViewOnly={false} />);
     await user.click(screen.getByRole("tab", { name: "Indexes" }));
     expect(await screen.findByText("support-docs-index")).toBeInTheDocument();
     expect(screen.getByText("support-docs-store")).toBeInTheDocument();
@@ -96,7 +133,7 @@ describe("VectorStoreManagement Indexes tab", () => {
   });
 
   it("should not render the Indexes tab for an Admin Viewer", async () => {
-    render(<VectorStoreManagement accessToken="sk-test" userID="user-1" userRole="Admin Viewer" />);
+    render(<VectorStoreManagement accessToken="sk-test" userID="user-1" userRole="Admin Viewer" isViewOnly={true} />);
     await waitFor(() => expect(mockVectorStoreListCall).toHaveBeenCalledWith("sk-test"));
     expect(screen.getByRole("tab", { name: "Manage Vector Stores" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Indexes" })).not.toBeInTheDocument();
@@ -125,7 +162,7 @@ describe("VectorStoreManagement Indexes tab", () => {
         },
       ],
     });
-    render(<VectorStoreManagement accessToken="sk-test" userID="user-1" userRole="Admin" />);
+    render(<VectorStoreManagement accessToken="sk-test" userID="user-1" userRole="Admin" isViewOnly={false} />);
     await user.click(screen.getByRole("tab", { name: "Indexes" }));
     await user.click(await screen.findByRole("button", { name: "support-docs-store" }));
     expect(await screen.findByTestId("vector-store-info-view")).toHaveTextContent("vs-1");
@@ -135,7 +172,7 @@ describe("VectorStoreManagement Indexes tab", () => {
   it("should link to the feature docs and a GitHub issue for unsupported providers on the Indexes tab", async () => {
     const user = userEvent.setup();
     mockIndexesListCall.mockResolvedValue({ object: "list", data: [] });
-    render(<VectorStoreManagement accessToken="sk-test" userID="user-1" userRole="Admin" />);
+    render(<VectorStoreManagement accessToken="sk-test" userID="user-1" userRole="Admin" isViewOnly={false} />);
     await user.click(screen.getByRole("tab", { name: "Indexes" }));
     expect(screen.getByRole("link", { name: "vector store index docs" })).toHaveAttribute(
       "href",
@@ -149,7 +186,7 @@ describe("VectorStoreManagement Indexes tab", () => {
   });
 
   it("should not call indexesListCall until the Indexes tab is clicked", async () => {
-    render(<VectorStoreManagement accessToken="sk-test" userID="user-1" userRole="Admin" />);
+    render(<VectorStoreManagement accessToken="sk-test" userID="user-1" userRole="Admin" isViewOnly={false} />);
     await waitFor(() => expect(mockVectorStoreListCall).toHaveBeenCalledWith("sk-test"));
     expect(screen.getByRole("tab", { name: "Indexes" })).toBeInTheDocument();
     expect(mockIndexesListCall).not.toHaveBeenCalled();

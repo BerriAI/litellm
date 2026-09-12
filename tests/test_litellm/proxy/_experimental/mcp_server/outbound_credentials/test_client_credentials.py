@@ -478,3 +478,47 @@ async def test_bearer_auth_advertises_the_header_it_will_occupy():
     assert ClientCredentialsBearerAuth("t", refetch, ClientCredentialsConfig()).header_name == "Authorization"
     default_carrier = ClientCredentialsConfig(header_name="esb-oauth")
     assert ClientCredentialsBearerAuth("t", refetch, default_carrier).header_name == "esb-oauth"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["denied", "invalid", "missing", "success", "timeout", "connect", "cancel"])
+async def test_token_exchange_failure_diagnostics(mode, monkeypatch, caplog):
+    import asyncio
+    import logging
+    from litellm.llms.custom_httpx import http_handler
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import post_client_credentials_grant
+
+    class Poster:
+        async def post(self, url, headers, data):
+            request = httpx.Request("POST", url, headers=headers, data=data)
+            if mode == "timeout":
+                raise httpx.ReadTimeout("private-transport-message", request=request)
+            if mode == "connect":
+                raise httpx.ConnectError("private-transport-message", request=request)
+            if mode == "cancel":
+                raise asyncio.CancelledError
+            response = httpx.Response(401 if mode == "denied" else 200, request=request,
+                content=b"not-json-private" if mode == "invalid" else None,
+                json=None if mode == "invalid" else {"error": "invalid_client", "client_secret":"first second", **({"access_token":"private-token"} if mode == "success" else {})})
+            response.raise_for_status()
+            return response
+
+    monkeypatch.setattr(http_handler, "get_async_httpx_client", lambda **kwargs: Poster())
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        if mode == "cancel":
+            with pytest.raises(asyncio.CancelledError):
+                await post_client_credentials_grant("https://idp/token", {}, {})
+            assert not caplog.text
+            return
+        result = await post_client_credentials_grant("https://idp/token?key=query-secret", {"client_secret":"first second"}, {"X-Custom":"header-secret"})
+    for secret in ("first", "second", "query-secret", "header-secret", "private-token", "not-json-private", "private-transport-message"):
+        assert secret not in caplog.text
+    if mode == "success":
+        assert isinstance(result, TokenEndpointSuccess) and result.body["access_token"] == "private-token"
+        assert not caplog.text
+    elif mode in {"timeout", "connect"}:
+        assert isinstance(result, TokenEndpointUnreachable)
+        assert "POST https://idp/ failed" in caplog.text
+    else:
+        assert "POST https://idp/ -> HTTP" in caplog.text
+        assert {"denied":"denied", "invalid":"invalid response", "missing":"no access token"}[mode] in caplog.text
