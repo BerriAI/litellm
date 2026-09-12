@@ -1793,10 +1793,10 @@ class AmazonConverseConfig(BaseConfig):
     ) -> RequestObject:
         messages, system_content_blocks = self._transform_system_message(messages, model=model)
 
-        messages = self._handle_orphaned_tool_blocks(messages, optional_params)
-
         # Convert last user message to guarded_text if guardrailConfig is present
-        messages = self._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
+        messages = self._convert_consecutive_user_messages_to_guarded_text(
+            self._handle_orphaned_tool_blocks(messages, optional_params), optional_params
+        )
         ## TRANSFORMATION ##
 
         _data: Final[CommonRequestObject] = self._transform_request_helper(
@@ -1856,10 +1856,10 @@ class AmazonConverseConfig(BaseConfig):
     ) -> RequestObject:
         messages, system_content_blocks = self._transform_system_message(messages, model=model)
 
-        messages = self._handle_orphaned_tool_blocks(messages, optional_params)
-
         # Convert last user message to guarded_text if guardrailConfig is present
-        messages = self._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
+        messages = self._convert_consecutive_user_messages_to_guarded_text(
+            self._handle_orphaned_tool_blocks(messages, optional_params), optional_params
+        )
 
         _data: Final[CommonRequestObject] = self._transform_request_helper(
             model=model,
