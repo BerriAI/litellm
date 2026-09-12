@@ -29551,6 +29551,12 @@ export interface components {
             aws_web_identity_token?: string | null;
             /** Azure Ad Token */
             azure_ad_token?: string | null;
+            /** Azure Password */
+            azure_password?: string | null;
+            /** Azure Scope */
+            azure_scope?: string | null;
+            /** Azure Username */
+            azure_username?: string | null;
             /** Bedrock Tags */
             bedrock_tags?: unknown[] | null;
             /** Budget Duration */
@@ -29599,6 +29605,10 @@ export interface components {
             cache_read_input_token_cost_ultrafast?: number | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
+            /** Client Id */
+            client_id?: string | null;
+            /** Client Secret */
+            client_secret?: string | null;
             /** Complexity Router Config */
             complexity_router_config?: {
                 [key: string]: unknown;
@@ -29812,6 +29822,8 @@ export interface components {
             tag_regex?: string[] | null;
             /** Tags */
             tags?: string[] | null;
+            /** Tenant Id */
+            tenant_id?: string | null;
             /** Tiered Pricing */
             tiered_pricing?: {
                 [key: string]: unknown;
@@ -39753,6 +39765,12 @@ export interface components {
             aws_web_identity_token?: string | null;
             /** Azure Ad Token */
             azure_ad_token?: string | null;
+            /** Azure Password */
+            azure_password?: string | null;
+            /** Azure Scope */
+            azure_scope?: string | null;
+            /** Azure Username */
+            azure_username?: string | null;
             /** Bedrock Tags */
             bedrock_tags?: unknown[] | null;
             /** Budget Duration */
@@ -39801,6 +39819,10 @@ export interface components {
             cache_read_input_token_cost_ultrafast?: number | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
+            /** Client Id */
+            client_id?: string | null;
+            /** Client Secret */
+            client_secret?: string | null;
             /** Complexity Router Config */
             complexity_router_config?: {
                 [key: string]: unknown;
@@ -40014,6 +40036,8 @@ export interface components {
             tag_regex?: string[] | null;
             /** Tags */
             tags?: string[] | null;
+            /** Tenant Id */
+            tenant_id?: string | null;
             /** Tiered Pricing */
             tiered_pricing?: {
                 [key: string]: unknown;
