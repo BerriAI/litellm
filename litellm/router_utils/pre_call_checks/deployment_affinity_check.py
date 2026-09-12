@@ -349,7 +349,9 @@ class DeploymentAffinityCheck(CustomLogger):
         first write instead of the last. Re-claiming with the stored value refreshes its
         TTL, the same keepalive the complexity router's model pin documents: an active
         session must not lose its pin mid-conversation just because it outlives the
-        original write, so `session_affinity_ttl_seconds` bounds idle time, not total
+        original write, so the affinity TTL (the Router's
+        `deployment_affinity_ttl_seconds`, or a pre-routing hook's per-request
+        `session_affinity_ttl_seconds` override) bounds idle time, not total
         session length. On Redis one Lua script does the get-or-set-or-refresh
         atomically (same registration seam the rate limiters use) and the in-memory
         tier is synchronized to the winner; without Redis, and whenever Redis is

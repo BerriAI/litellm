@@ -4,6 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import { IdCell } from "./id_cell";
 
+const { routerPushMock } = vi.hoisted(() => ({ routerPushMock: vi.fn() }));
+
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: routerPushMock }) }));
+
 const { copyToClipboardMock } = vi.hoisted(() => ({ copyToClipboardMock: vi.fn() }));
 
 vi.mock("@/utils/dataUtils", async (importOriginal) => ({
@@ -71,8 +75,35 @@ describe("IdCell", () => {
     expect(rowClick).not.toHaveBeenCalled();
   });
 
+  it("names the copy button after the field it copies", async () => {
+    const user = userEvent.setup();
+    render(<IdCell value="alice@example.com" copyable copyLabel="Copy User Email" />);
+    expect(screen.queryByRole("button", { name: "Copy ID" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Copy User Email" }));
+    expect(copyToClipboardMock).toHaveBeenCalledWith("alice@example.com");
+  });
+
   it("passes dataTestId through to the id element", () => {
     render(<IdCell value="k-1" dataTestId="key-id-cell" />);
     expect(screen.getByTestId("key-id-cell")).toHaveTextContent("k-1");
+  });
+
+  it("renders the id as a link and routes client side when href is set", async () => {
+    const user = userEvent.setup();
+    render(<IdCell value="user-42" href="/ui/users?user=user-42" />);
+
+    const link = screen.getByRole("link", { name: "user-42" });
+    expect(link).toHaveAttribute("href", "/ui/users?user=user-42");
+    expect(link).toHaveClass("cursor-pointer");
+
+    await user.click(link);
+    expect(routerPushMock).toHaveBeenCalledWith("/ui/users?user=user-42");
+  });
+
+  it("stays plain text when href is undefined", () => {
+    render(<IdCell value="default_user_id" href={undefined} />);
+
+    expect(screen.getByText("default_user_id").tagName).toBe("SPAN");
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 });

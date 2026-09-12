@@ -2,7 +2,7 @@ import React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { UserEvent } from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 
 import { ToolTestPanel } from "./ToolTestPanel";
 import { InputSchema, MCPTool } from "@/components/mcp_tools/types";
@@ -341,7 +341,7 @@ describe("ToolTestPanel argument payload", () => {
 });
 
 describe("ToolTestPanel schema changes under a stable tool name", () => {
-  const renderWith = (schema: InputSchema, onSubmit: ReturnType<typeof vi.fn>) => (
+  const renderWith = (schema: InputSchema, onSubmit: Mock) => (
     <ToolTestPanel
       tool={buildTool(schema)}
       onSubmit={onSubmit}

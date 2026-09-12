@@ -264,6 +264,13 @@ class BaseSearchConfig:
         """
         raise NotImplementedError("transform_search_response must be implemented by provider")
 
+    def get_http_error_class(self, error: httpx.HTTPStatusError) -> Exception:
+        return self.get_error_class(
+            error_message=error.response.text,
+            status_code=error.response.status_code,
+            headers=dict(error.response.headers),  # mutable-ok: provider error factories require dict headers
+        )
+
     def get_error_class(
         self,
         error_message: str,
