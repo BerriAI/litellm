@@ -127,14 +127,14 @@ def test_bad_request_bad_param_error():
         )
 
 
-def test_anthropic_with_responses_api():
-    client = get_test_client()
-    response = client.responses.create(
-        model="anthropic/claude-sonnet-4-5-20250929",
+def test_anthropic_with_responses_api() -> None:
+    client: Final = get_test_client()
+    response: Final = client.responses.create(
+        model="anthropic/claude-sonnet-5",
         input="just respond with the word 'ping'",
-        previous_response_id="hi",
     )
-    print("anthropic response=", response)
+    assert response.status == "completed"
+    assert response.output_text.strip()
 
 
 def test_cancel_response():

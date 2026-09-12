@@ -13,7 +13,7 @@ import AccessGroupTagsCombobox from "../add_model/AccessGroupTagsCombobox";
 import ModelChoiceCombobox, { type ModelChoice } from "../add_model/ModelChoiceCombobox";
 import { modelAvailableCall, modelPatchUpdateCall, validateAutoRouterConfig } from "../networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
-import RouterConfigBuilder from "../add_model/RouterConfigBuilder";
+import RouterConfigBuilder, { type RouterConfig, serializeRouterConfig } from "../add_model/RouterConfigBuilder";
 import { hydrateTierModelParams } from "../add_model/complexity_router_tiers";
 import {
   type ActiveTierSet,
@@ -452,7 +452,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [showValidationErrors, setShowValidationErrors] = useState<boolean>(false);
   const [editingTiers, setEditingTiers] = useState(false);
-  const [routerConfig, setRouterConfig] = useState<any>(null);
+  const [routerConfig, setRouterConfig] = useState<RouterConfig | null>(null);
   const [customTechnicalKeywords, setCustomTechnicalKeywords] = useState<string[]>([]);
   const [keywordTierRules, setKeywordTierRules] = useState<KeywordTierRule[]>([]);
   const [escalationKeywords, setEscalationKeywords] = useState<string[]>([]);
@@ -706,7 +706,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
     // Prepare the updated litellm_params
     const updatedLitellmParams = {
       ...modelData.litellm_params,
-      auto_router_config: JSON.stringify(routerConfig),
+      auto_router_config: serializeRouterConfig(routerConfig),
       auto_router_default_model: values.auto_router_default_model,
       auto_router_embedding_model: values.auto_router_embedding_model || undefined,
     };
@@ -745,7 +745,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       })();
     } catch (error) {
       console.error("Error updating auto router:", error);
-      toast.fromError("Failed to update auto router configuration");
+      toast.fromError(error);
     } finally {
       setLoading(false);
     }

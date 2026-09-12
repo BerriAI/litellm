@@ -4,7 +4,7 @@ import contextlib
 import json
 import os
 import traceback
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest import mock
@@ -12,7 +12,9 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
+import respx
 from fastapi import HTTPException, Request, Response
+from fastapi.routing import APIRoute
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 from starlette.datastructures import FormData
@@ -45,6 +47,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
 )
 from litellm.proxy._types import LitellmUserRoles, SpecialHeaders, UserAPIKeyAuth
 from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
 
@@ -3339,7 +3342,10 @@ class TestOpenAIPassthroughRoute:
 def _resolve_route_name(method: str, path: str) -> str | None:
     from starlette.routing import Match
 
+    from litellm.proxy._lazy_features import LAZY_FEATURES, _force_load
     from litellm.proxy.proxy_server import app
+
+    asyncio.run(_force_load(app, next(f for f in LAZY_FEATURES if f.name == "llm_passthrough")))
 
     scope: Final = {
         "type": "http",
@@ -3350,8 +3356,8 @@ def _resolve_route_name(method: str, path: str) -> str | None:
         "root_path": "",
     }
     for route in app.router.routes:
-        if route.matches(scope)[0] == Match.FULL:
-            return getattr(route, "name", None)
+        if isinstance(route, APIRoute) and route.matches(scope)[0] == Match.FULL:
+            return route.name
     return None
 
 
@@ -3376,7 +3382,7 @@ def test_openai_passthrough_prefix_wins_over_native_provider_routes(method, path
     /{provider}/v1/files and /{provider}/v1/batches routes must never capture it
     with provider="openai_passthrough" (which 500s on the LlmProviders lookup).
     """
-    assert _resolve_route_name(method, path) == "openai_proxy_route"
+    assert _resolve_route_name(method, path) == "openai_passthrough_route"
 
 
 @pytest.mark.parametrize(
@@ -3391,6 +3397,41 @@ def test_openai_passthrough_prefix_wins_over_native_provider_routes(method, path
 )
 def test_native_provider_routes_are_unchanged(method, path, expected_name):
     assert _resolve_route_name(method, path) == expected_name
+
+
+@pytest.fixture
+def openai_passthrough_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    from litellm.proxy.proxy_server import app
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-upstream")
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
+    yield TestClient(app)
+
+
+@pytest.mark.parametrize(
+    "method, path, body",
+    [
+        ("POST", "/v1/responses", {"model": "gpt-5.1", "input": "hi"}),
+        ("GET", "/v1/files", None),
+        ("POST", "/v1/batches", {"input_file_id": "file-abc123", "endpoint": "/v1/responses"}),
+    ],
+)
+def test_openai_passthrough_forwards_verbatim_to_openai(
+    openai_passthrough_client: TestClient, method: str, path: str, body: dict[str, str] | None
+) -> None:
+    """Every /openai_passthrough request, including the /v1/files and /v1/batches
+    paths that native provider routes also claim, must reach OpenAI unchanged."""
+    with respx.mock(assert_all_called=True) as upstream:
+        route = upstream.request(method, f"https://api.openai.com{path}").mock(
+            return_value=httpx.Response(200, json={"id": "upstream_123"})
+        )
+        response = openai_passthrough_client.request(method, f"/openai_passthrough{path}", json=body)
+
+        assert (response.status_code, response.json()) == (200, {"id": "upstream_123"})
+        assert route.calls.last.request.headers["authorization"] == "Bearer sk-upstream"
 
 
 class TestCursorProxyRoute:
