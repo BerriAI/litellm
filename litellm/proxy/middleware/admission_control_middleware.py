@@ -10,6 +10,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.middleware.route_path_utils import get_route_path
 
 _EXEMPT_PATHS: Final[frozenset[str]] = frozenset(
     {
@@ -147,7 +148,7 @@ class AdmissionControlMiddleware:
             return
 
         settings: Final = self.get_settings()
-        if settings is None or _get_route_path(scope) in _EXEMPT_PATHS:
+        if settings is None or get_route_path(scope) in _EXEMPT_PATHS:
             await self.app(scope, receive, send)
             return
 
@@ -183,19 +184,6 @@ class AdmissionControlMiddleware:
         finally:
             semaphore.release()
             state.record_release()
-
-
-def _get_route_path(scope: Scope) -> str:
-    """Strip the ASGI root_path (SERVER_ROOT_PATH) the same way Starlette does before route matching."""
-    path: Final[str] = scope["path"]
-    root_path: Final[str] = scope.get("root_path", "")
-    if not root_path or not path.startswith(root_path):
-        return path
-    if path == root_path:
-        return ""
-    if path[len(root_path)] == "/":
-        return path[len(root_path) :]
-    return path
 
 
 def _create_gauge(gauge_type: Callable[..., object], name: str, description: str) -> _Gauge:

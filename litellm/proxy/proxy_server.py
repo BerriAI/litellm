@@ -632,6 +632,9 @@ from litellm.proxy.middleware.request_size_limit_middleware import (
 from litellm.proxy.middleware.security_headers_middleware import (
     SecurityHeadersMiddleware,
 )
+from litellm.proxy.middleware.ui_relative_redirect_middleware import (
+    UiRelativeRedirectMiddleware,
+)
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
@@ -2218,6 +2221,11 @@ app.add_middleware(
 )
 app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+# LIT-7455: /ui redirects (the mount's trailing-slash redirect and
+# StaticFiles' directory-index redirect) hardcode scope["scheme"], which is
+# wrong behind a TLS-terminating LB unless FORWARDED_ALLOW_IPS trusts the
+# LB's peer IP. Relativizing same-origin Locations removes that dependency.
+app.add_middleware(UiRelativeRedirectMiddleware)
 
 
 def mount_swagger_ui():
