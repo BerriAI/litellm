@@ -1,0 +1,33 @@
+suite: test gateway environment defaults
+templates:
+  - gateway/deployment.yaml
+  - gateway/configmap.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: sets KEEPALIVE_TIMEOUT only on the gateway container
+    template: gateway/deployment.yaml
+    set:
+      gateway.collector.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KEEPALIVE_TIMEOUT
+            value: "630"
+      - notContains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: KEEPALIVE_TIMEOUT
+          any: true
+
+  - it: omits KEEPALIVE_TIMEOUT when configured to zero
+    template: gateway/deployment.yaml
+    set:
+      gateway.keepaliveTimeoutSeconds: 0
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KEEPALIVE_TIMEOUT
+          any: true

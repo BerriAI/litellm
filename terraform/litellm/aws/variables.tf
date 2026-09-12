@@ -878,3 +878,14 @@ variable "collector_drain_timeout_seconds" {
     error_message = "collector_drain_timeout_seconds must be > 0."
   }
 }
+
+variable "alb_idle_timeout_seconds" {
+  description = "ALB idle timeout in seconds. Streaming responses that stay silent longer than this (e.g. a slow first token) are cut by the ALB with a 504, so keep it at or above the proxy's request_timeout."
+  type        = number
+  default     = 600
+
+  validation {
+    condition     = var.alb_idle_timeout_seconds >= 1 && var.alb_idle_timeout_seconds <= 4000
+    error_message = "alb_idle_timeout_seconds must be between 1 and 4000."
+  }
+}

@@ -4,6 +4,40 @@ templates:
 values:
   - ./values/required.yaml
 tests:
+  - it: adds the default ALB idle timeout annotation
+    set:
+      ingress.enabled: true
+    asserts:
+      - equal:
+          path: metadata.annotations["alb.ingress.kubernetes.io/load-balancer-attributes"]
+          value: idle_timeout.timeout_seconds=600
+
+  - it: preserves a user-supplied ALB load balancer attributes annotation
+    set:
+      ingress.enabled: true
+      ingress.annotations:
+        alb.ingress.kubernetes.io/load-balancer-attributes: "idle_timeout.timeout_seconds=120,routing.http2.enabled=true"
+    asserts:
+      - equal:
+          path: metadata.annotations["alb.ingress.kubernetes.io/load-balancer-attributes"]
+          value: idle_timeout.timeout_seconds=120,routing.http2.enabled=true
+
+  - it: does not add the ALB idle timeout annotation for ingress-nginx
+    set:
+      ingress.enabled: true
+      ingress.controller: nginx
+    asserts:
+      - notExists:
+          path: metadata.annotations["alb.ingress.kubernetes.io/load-balancer-attributes"]
+
+  - it: does not add the ALB idle timeout annotation when disabled
+    set:
+      ingress.enabled: true
+      ingress.albIdleTimeoutSeconds: 0
+    asserts:
+      - notExists:
+          path: metadata.annotations["alb.ingress.kubernetes.io/load-balancer-attributes"]
+
   - it: keeps the AWS Load Balancer Controller path types by default
     set:
       ingress.enabled: true
