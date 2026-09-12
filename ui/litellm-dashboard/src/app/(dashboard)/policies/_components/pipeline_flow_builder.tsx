@@ -343,7 +343,7 @@ const StepCard: React.FC<StepCardProps> = ({
         <SearchSelect
           options={guardrailOptions}
           value={step.guardrail || undefined}
-          onValueChange={(value) => onChange({ guardrail: value })}
+          onValueChange={(value) => onChange({ guardrail: value ?? undefined })}
           placeholder="Select a guardrail"
           emptyText="No guardrails found"
         />

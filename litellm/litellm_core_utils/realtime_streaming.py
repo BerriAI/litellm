@@ -90,12 +90,12 @@ class _ResponseDoneBody(TypedDict, total=False):
     output: ReadOnly[Sequence[Mapping[str, object]]]
 
 
-class _ScopedWebSocket(Protocol):
+class ScopedWebSocket(Protocol):
     @property
     def scope(self) -> _ASGIScope: ...
 
 
-class _ClientWebSocket(_ScopedWebSocket, Protocol):
+class _ClientWebSocket(ScopedWebSocket, Protocol):
     async def send_text(self, data: str) -> None: ...
     async def receive_text(self) -> str: ...
     async def close(self, code: int = 1000, reason: str | None = None) -> None: ...
@@ -1149,7 +1149,7 @@ class RealTimeStreaming:
         )
 
     @staticmethod
-    def _detect_beta_header(websocket: _ScopedWebSocket) -> bool:
+    def _detect_beta_header(websocket: ScopedWebSocket) -> bool:
         """Return True if the client sent 'OpenAI-Beta: realtime=v1'.
 
         Checks the raw ASGI scope headers so it works for both FastAPI WebSocket
@@ -1584,6 +1584,6 @@ class RealTimeStreaming:
             verbose_logger.debug("Could not relay the upstream close to the client: %s", e)
 
 
-def client_sent_openai_beta_realtime_header(websocket: _ScopedWebSocket) -> bool:
+def client_sent_openai_beta_realtime_header(websocket: ScopedWebSocket) -> bool:
     """True when the client WebSocket includes ``OpenAI-Beta: realtime=v1``."""
     return RealTimeStreaming._detect_beta_header(websocket)

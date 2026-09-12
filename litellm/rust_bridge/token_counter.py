@@ -5,17 +5,20 @@ from __future__ import annotations
 from collections.abc import Awaitable
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Final, Protocol, cast  # noqa: TID251  # native extension exposes dynamically typed callables
+from typing import Final, Literal, Protocol, cast  # noqa: TID251  # native extension exposes untyped callables
 
 from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.default_encoding import cl100k_base_rank_file, o200k_base_rank_file
+from litellm.litellm_core_utils.token_counter import openai_tokenizer_encoding, uses_legacy_message_accounting
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.runtime import BridgeErrorContext, RustHandled, aattempt
-from litellm.utils import claude_json_str
-from litellm.utils import uses_anthropic_tokenizer as _python_uses_anthropic_tokenizer
+from litellm.utils import claude_json_str, huggingface_tokenizer_kind
+
+RustTokenizer = Literal["anthropic", "cl100k_base", "o200k_base"]
 
 
 class RustTokenCounter(Protocol):
@@ -25,6 +28,12 @@ class RustTokenCounter(Protocol):
 
 class RustTokenCounterFactory(Protocol):
     def __call__(self, tokenizer_json: str) -> RustTokenCounter:
+        raise NotImplementedError
+
+    def from_cl100k_ranks(self, rank_file: str) -> RustTokenCounter:
+        raise NotImplementedError
+
+    def from_o200k_ranks(self, rank_file: str) -> RustTokenCounter:
         raise NotImplementedError
 
 
@@ -50,18 +59,41 @@ def _as_factory(value: object) -> RustTokenCounterFactory | None:
 TOKEN_COUNTER: Final = NativeBinding("TokenCounter", validate=_as_factory)
 
 
-def uses_anthropic_tokenizer(model: str) -> bool:
-    if litellm.disable_token_counter is True or litellm.disable_hf_tokenizer_download is True:
-        return False
-    return _python_uses_anthropic_tokenizer(model)
+def rust_tokenizer(model: str) -> RustTokenizer | None:
+    """The Rust counter for the tokenizer `litellm.token_counter` selects for `model`, `None` when Python must count.
+
+    Mirrors `_select_tokenizer_helper`: the Anthropic tokenizer has a Rust port, the other HuggingFace
+    downloads do not, and of the tiktoken encodings `cl100k_base` and `o200k_base` do (p50k/r50k do not). Rust
+    prices every message with the default constants, so the legacy `gpt-3.5-turbo-0301` accounting stays in
+    Python."""
+    if litellm.disable_token_counter is True:
+        return None
+    kind: Final = None if litellm.disable_hf_tokenizer_download is True else huggingface_tokenizer_kind(model)
+    if kind == "anthropic":
+        return "anthropic"
+    if kind is not None or uses_legacy_message_accounting(model):
+        return None
+    match openai_tokenizer_encoding(model).name:
+        case "cl100k_base":
+            return "cl100k_base"
+        case "o200k_base":
+            return "o200k_base"
+        case _:
+            return None
 
 
 @lru_cache(maxsize=4)
-def _anthropic_counter(factory: RustTokenCounterFactory) -> RustTokenCounter:
-    return factory(claude_json_str)
+def _counter(factory: RustTokenCounterFactory, tokenizer: RustTokenizer) -> RustTokenCounter:
+    match tokenizer:
+        case "anthropic":
+            return factory(claude_json_str)
+        case "cl100k_base":
+            return factory.from_cl100k_ranks(cl100k_base_rank_file())
+        case "o200k_base":
+            return factory.from_o200k_ranks(o200k_base_rank_file())
 
 
-async def count_anthropic_input_tokens(body: bytes) -> InputTokenCount | None:
+async def count_input_tokens(body: bytes, tokenizer: RustTokenizer) -> InputTokenCount | None:
     if not rust_enabled():
         return None
     factory: Final = TOKEN_COUNTER.load()
@@ -69,11 +101,14 @@ async def count_anthropic_input_tokens(body: bytes) -> InputTokenCount | None:
         return None
     try:
         attempt: Final = await aattempt(
-            native_call=lambda: _anthropic_counter(factory).acount_request(body),
+            native_call=lambda: _counter(factory, tokenizer).acount_request(body),
             adapt=_INPUT_TOKEN_COUNT.validate_python,
-            context=BridgeErrorContext(route="token_counter", provider="anthropic", model=""),
+            context=BridgeErrorContext(route="token_counter", provider=tokenizer, model=""),
         )
     except (RuntimeError, ValueError) as error:
-        verbose_logger.debug("Rust token counter failed, counting in Python: %s", error)
+        verbose_logger.debug("Rust token counter (%s) failed, counting in Python: %s", tokenizer, error)
         return None
-    return attempt.value if isinstance(attempt, RustHandled) else None
+    if not isinstance(attempt, RustHandled):
+        return None
+    verbose_logger.debug("Rust token counter (%s) counted %d input tokens", tokenizer, attempt.value.input_tokens)
+    return attempt.value

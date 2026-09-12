@@ -30,6 +30,7 @@ pub(crate) fn wire_request(model: &str, base: &str, options: Value) -> LiteLLMOc
         custom_llm_provider: None,
         extra_headers: None,
         optional_params: options.as_object().unwrap().clone(),
+        input_sources: Default::default(),
         timeout_seconds: Some(2.0),
     })
     .unwrap()
