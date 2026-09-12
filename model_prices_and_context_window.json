@@ -14633,6 +14633,7 @@
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
         "supports_prompt_caching": false,
         "supports_reasoning": true,
         "supports_response_schema": false,
