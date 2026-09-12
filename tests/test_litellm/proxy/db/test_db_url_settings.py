@@ -784,7 +784,7 @@ def test_libpq_verify_full_and_sslrootcert_become_prisma_strict_sslcert(monkeypa
     }
 
 
-def _tls_env(monkeypatch) -> None:
+def _tls_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_HOST", "writer.example.com")
     monkeypatch.setenv("DATABASE_USER", "litellm")
     monkeypatch.setenv("DATABASE_NAME", "litellm_db")
@@ -792,7 +792,7 @@ def _tls_env(monkeypatch) -> None:
     monkeypatch.setenv("DATABASE_SSLROOTCERT", "/certs/rds-bundle.pem")
 
 
-def test_tls_env_vars_make_the_minted_iam_writer_url_verify_the_server(monkeypatch):
+def test_tls_env_vars_make_the_minted_iam_writer_url_verify_the_server(monkeypatch: pytest.MonkeyPatch):
     """The supervisor starts PgBouncer from the URL assembled here, before any
     config.yaml is read, so an IAM URL with no TLS params leaves PgBouncer on
     ``prefer`` (no SNI, no verification) and the RDS handshake fails."""
@@ -812,7 +812,7 @@ def test_tls_env_vars_make_the_minted_iam_writer_url_verify_the_server(monkeypat
     }
 
 
-def test_tls_env_vars_apply_to_the_password_writer_and_the_assembled_reader(monkeypatch):
+def test_tls_env_vars_apply_to_the_password_writer_and_the_assembled_reader(monkeypatch: pytest.MonkeyPatch):
     _tls_env(monkeypatch)
     monkeypatch.setenv("DATABASE_PASSWORD", "s3cr3t")
     monkeypatch.setenv("DATABASE_SCHEMA", "public")
@@ -835,7 +835,7 @@ def test_tls_env_vars_apply_to_the_password_writer_and_the_assembled_reader(monk
     assert _query(os.environ["DATABASE_URL_READ_REPLICA"]) == expected
 
 
-def test_tls_env_vars_never_override_a_pinned_database_url(monkeypatch):
+def test_tls_env_vars_never_override_a_pinned_database_url(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://pinned:url@db.example.com:5432/litellm_db?sslmode=disable")
     _tls_env(monkeypatch)
 

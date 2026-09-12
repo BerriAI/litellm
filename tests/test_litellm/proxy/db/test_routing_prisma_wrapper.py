@@ -4,6 +4,7 @@ import os
 import sys
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -925,6 +926,58 @@ def test_prisma_client_init_falls_back_to_writer_when_reader_iam_token_fails(
         "Failed to initialize read replica Prisma client" in r.getMessage()
         for r in caplog.records
     )
+
+
+def test_prisma_client_init_keeps_reader_tls_params_on_the_minted_iam_url(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The initial reader mint rebuilds the URL from host/port/user/db, so the
+    Prisma TLS dialect on DATABASE_URL_READ_REPLICA must be carried over or
+    a verify-only database rejects the reader and reads fall to the writer."""
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "true")
+    monkeypatch.setenv(
+        "DATABASE_URL_READ_REPLICA",
+        "postgresql://reader_user@reader.aurora.local:5432/litellm"
+        "?schema=tenant&sslmode=require&sslcert=/certs/root.pem&sslaccept=strict",
+    )
+
+    created: list[dict[str, Any]] = []
+
+    class FakePrisma:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            created.append(kwargs)
+
+        async def connect(self):
+            return None
+
+    fake_prisma_module = MagicMock()
+    fake_prisma_module.Prisma = FakePrisma
+    monkeypatch.setitem(sys.modules, "prisma", fake_prisma_module)
+
+    fake_iam_module = MagicMock()
+    fake_iam_module.generate_iam_auth_token = lambda **_kwargs: "READER-TOKEN"
+    monkeypatch.setitem(sys.modules, "litellm.proxy.auth.rds_iam_token", fake_iam_module)
+
+    from litellm.proxy.utils import PrismaClient
+
+    client = PrismaClient(
+        database_url="postgresql://writer@writer.aurora.local:5432/litellm",
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert isinstance(client.db, RoutingPrismaWrapper)
+    reader_url = os.environ["DATABASE_URL_READ_REPLICA"]
+    assert reader_url.startswith("postgresql://reader_user:READER-TOKEN@reader.aurora.local:5432/litellm?")
+    assert parse_qs(urlsplit(reader_url).query) == {
+        "schema": ["tenant"],
+        "sslmode": ["require"],
+        "sslcert": ["/certs/root.pem"],
+        "sslaccept": ["strict"],
+    }
+    assert [kwargs for kwargs in created if "datasource" in kwargs] == [{"datasource": {"url": reader_url}}]
 
 
 @pytest.mark.asyncio
