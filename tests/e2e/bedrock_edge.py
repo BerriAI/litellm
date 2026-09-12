@@ -2,12 +2,15 @@ import hashlib
 import hmac
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from functools import lru_cache
 from typing import Final
 
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
-from botocore.credentials import Credentials
+from botocore.client import BaseClient
+from botocore.credentials import AssumeRoleCredentialFetcher, Credentials, DeferredRefreshableCredentials
+from botocore.session import get_session
 
 TEST_ACCESS_KEY: Final = "e2e-bedrock-replay"
 TEST_SECRET_KEY: Final = "e2e-bedrock-replay-secret"
@@ -55,12 +58,35 @@ def valid_bedrock_signature(
     return hmac.compare_digest(expected, auth.group(5))
 
 
-def recording_credentials() -> Credentials:
-    access_key: Final = os.environ.get("AWS_ACCESS_KEY_ID", "")
-    secret_key: Final = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
+def recording_credentials_from(environ: Mapping[str, str], client_creator: Callable[..., BaseClient]) -> Credentials:
+    access_key: Final = environ.get("AWS_ACCESS_KEY_ID", "")
+    secret_key: Final = environ.get("AWS_SECRET_ACCESS_KEY", "")
     if not access_key or not secret_key:
         raise ValueError("Bedrock recording requires AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in the runner")
-    return Credentials(access_key, secret_key, os.environ.get("AWS_SESSION_TOKEN") or None)
+    source: Final = Credentials(access_key, secret_key, environ.get("AWS_SESSION_TOKEN") or None)
+    role: Final = environ.get("AWS_ROLE_NAME")
+    if not role:
+        return source
+    extra_args: Final = {
+        key: value
+        for key, value in (
+            ("RoleSessionName", environ.get("AWS_SESSION_NAME", "e2e-bedrock-record")),
+            ("ExternalId", environ.get("AWS_EXTERNAL_ID")),
+        )
+        if value
+    }
+    fetcher: Final = AssumeRoleCredentialFetcher(
+        client_creator=client_creator,
+        source_credentials=source,
+        role_arn=role,
+        extra_args=extra_args,
+    )
+    return DeferredRefreshableCredentials(refresh_using=fetcher.fetch_credentials, method="assume-role")
+
+
+@lru_cache(maxsize=1)
+def recording_credentials() -> Credentials:
+    return recording_credentials_from(os.environ, get_session().create_client)
 
 
 def sign_bedrock_forward(
@@ -73,5 +99,5 @@ def sign_bedrock_forward(
         and not key.lower().startswith("x-amz-")
     }
     request: Final = AWSRequest(method=method, url=url, data=body, headers=forwarded)
-    SigV4Auth(credentials, "bedrock", region).add_auth(request)
+    SigV4Auth(credentials.get_frozen_credentials(), "bedrock", region).add_auth(request)
     return dict(request.headers.items())

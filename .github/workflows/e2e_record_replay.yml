@@ -31,6 +31,15 @@ jobs:
       contents: read
       id-token: write
     services:
+      redis:
+        image: redis:7.4.2@sha256:fbdbaea47b9ae4ecc2082ecdb4e1cea81e32176ffb1dcf643d422ad07427e5d9
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
       postgres:
         image: postgres:16.6
         env:
@@ -108,17 +117,22 @@ jobs:
 
       - name: Require all recording credentials before starting the proxy
         run: |
-          uv run --no-sync --env-file tests/e2e/.env python - <<'PY'
+          PYTHONPATH=tests/e2e uv run --no-sync --env-file tests/e2e/.env python - <<'PY'
           import os
+          from bedrock_edge import recording_credentials
           required = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
           missing = [key for key in required if not os.environ.get(key)]
           if missing:
               raise SystemExit("Missing recording credentials: " + ", ".join(missing))
+          recording_credentials().get_frozen_credentials()
           PY
 
       - name: Start the proxy
         run: |
-          nohup uv run --no-sync --env-file tests/e2e/.env litellm --config tests/e2e/gateway/record_replay_ci_config.yml --port 4000 > proxy.log 2>&1 &
+          nohup uv run --no-sync --env-file tests/e2e/.env env -u AWS_ROLE_NAME -u AWS_SESSION_NAME -u AWS_PROFILE_NAME \
+            -u AWS_WEB_IDENTITY_TOKEN -u AWS_SESSION_TOKEN -u AWS_BEARER_TOKEN_BEDROCK \
+            AWS_ACCESS_KEY_ID=e2e-bedrock-replay AWS_SECRET_ACCESS_KEY=e2e-bedrock-replay-secret \
+            AWS_EC2_METADATA_DISABLED=true litellm --config tests/e2e/gateway/record_replay_ci_config.yml --port 4000 > proxy.log 2>&1 &
           for _ in $(seq 1 90); do
             if curl -fs http://localhost:4000/health/liveliness > /dev/null; then
               exit 0
@@ -165,6 +179,15 @@ jobs:
       contents: read
       actions: read
     services:
+      redis:
+        image: redis:7.4.2@sha256:fbdbaea47b9ae4ecc2082ecdb4e1cea81e32176ffb1dcf643d422ad07427e5d9
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
       postgres:
         image: postgres:16.6
         env:
@@ -231,7 +254,10 @@ jobs:
 
       - name: Start the proxy
         run: |
-          nohup uv run --no-sync litellm --config tests/e2e/gateway/record_replay_ci_config.yml --port 4000 > proxy.log 2>&1 &
+          nohup uv run --no-sync env -u AWS_ROLE_NAME -u AWS_SESSION_NAME -u AWS_PROFILE_NAME \
+            -u AWS_WEB_IDENTITY_TOKEN -u AWS_SESSION_TOKEN -u AWS_BEARER_TOKEN_BEDROCK \
+            AWS_ACCESS_KEY_ID=e2e-bedrock-replay AWS_SECRET_ACCESS_KEY=e2e-bedrock-replay-secret \
+            AWS_EC2_METADATA_DISABLED=true litellm --config tests/e2e/gateway/record_replay_ci_config.yml --port 4000 > proxy.log 2>&1 &
           for _ in $(seq 1 90); do
             if curl -fs http://localhost:4000/health/liveliness > /dev/null; then
               exit 0

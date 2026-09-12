@@ -1,5 +1,6 @@
 import base64
 import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
 
@@ -8,12 +9,16 @@ from bedrock_edge import (
     TEST_ACCESS_KEY,
     TEST_SECRET_KEY,
     bedrock_upstream,
+    recording_credentials_from,
     sign_bedrock_forward,
     valid_bedrock_signature,
 )
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
+from botocore.client import BaseClient
 from botocore.credentials import Credentials
+from botocore.session import get_session
+from botocore.stub import Stubber
 from fixture_bundle import BundleRecorder, LoadedBundle, RecordedHttpResponse, load_bundle, prepare_bundle
 from fixture_mode import current_test_key
 from provider_edge import EdgeReply, RecordEdge, ReplayEdge, ReplaySource, edge_request, handle_edge_request
@@ -34,6 +39,57 @@ def _signed_headers() -> dict[str, str]:
 
 
 class TestBedrockSigningBoundary:
+    def test_recording_resolves_the_real_role_once_without_using_proxy_test_credentials(self) -> None:
+        client: Final = get_session().create_client(
+            "sts",
+            region_name="us-east-1",
+            aws_access_key_id="recording-access",
+            aws_secret_access_key="recording-secret",
+        )
+
+        def client_creator(service: str, **credentials: str | None) -> BaseClient:
+            assert service == "sts"
+            assert credentials == {
+                "aws_access_key_id": "recording-access",
+                "aws_secret_access_key": "recording-secret",
+                "aws_session_token": "source-session",
+            }
+            return client
+
+        with Stubber(client) as stub:
+            stub.add_response(
+                "assume_role",
+                {
+                    "Credentials": {
+                        "AccessKeyId": "ASIA1234567890123456",
+                        "SecretAccessKey": "role-secret",
+                        "SessionToken": "role-session",
+                        "Expiration": datetime.now(timezone.utc) + timedelta(hours=1),
+                    },
+                },
+                {
+                    "RoleArn": "arn:aws:iam::123456789012:role/e2e-test",
+                    "RoleSessionName": "test-recording",
+                    "ExternalId": "external",
+                },
+            )
+            result: Final = recording_credentials_from(
+                {
+                    "AWS_ACCESS_KEY_ID": "recording-access",
+                    "AWS_SECRET_ACCESS_KEY": "recording-secret",
+                    "AWS_SESSION_TOKEN": "source-session",
+                    "AWS_ROLE_NAME": "arn:aws:iam::123456789012:role/e2e-test",
+                    "AWS_SESSION_NAME": "test-recording",
+                    "AWS_EXTERNAL_ID": "external",
+                },
+                client_creator,
+            )
+            first: Final = result.get_frozen_credentials()
+            assert first.access_key == "ASIA1234567890123456"
+            assert first.token == "role-session"
+            assert result.get_frozen_credentials() == first
+            stub.assert_no_pending_responses()
+
     def test_accepts_a_valid_signature_from_the_proxy(self) -> None:
         assert valid_bedrock_signature("POST", _PATH, _signed_headers(), _BODY, "us-east-1")
 
