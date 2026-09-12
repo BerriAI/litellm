@@ -1368,16 +1368,6 @@ class LiteLLMAnthropicMessagesAdapter:
         elif openai_finish_reason == "tool_calls":
             return "tool_use"
         elif openai_finish_reason == "content_filter":
-            # A blocked turn must not arrive as `end_turn`, which is what an ordinary completed turn
-            # gets: the client cannot tell the two apart, and the block is the one thing it has to
-            # act on. `refusal` is already declared on this surface, and `_FINISH_REASON_MAP` in
-            # core_helpers already sends Anthropic `refusal` the other way to `content_filter`, so
-            # this closes the round trip rather than inventing a value (#40857).
-            #
-            # This covers the providers whose blocks carry no OpenAI `refusal` string, which the
-            # refusal-text branch below cannot see: Gemini `SAFETY`/`RECITATION`, Cohere
-            # `ERROR_TOXIC`, Bedrock `guardrail_intervened`, Azure `content_filtered` all normalize
-            # to `content_filter` and nothing else.
             return "refusal"
         return "end_turn"
 
