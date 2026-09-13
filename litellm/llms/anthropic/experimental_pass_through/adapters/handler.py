@@ -11,6 +11,7 @@ from typing_extensions import TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     AnthropicAdapter,
 )
@@ -24,10 +25,11 @@ from litellm.llms.anthropic.experimental_pass_through.utils import (
     litellm_logging_obj_from_kwargs,
     local_model_name,
 )
+from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import Choices, Message, ModelResponse, Usage
 from litellm.utils import get_model_info
 
 if TYPE_CHECKING:
@@ -41,10 +43,67 @@ _AnthropicMessages: TypeAlias = "list[dict[str, object]]"
 _AnthropicSystem: TypeAlias = "str | list[dict[str, object]] | None"
 _ContextManagementSpec: TypeAlias = "dict[str, object] | list[dict[str, object]] | None"
 
+_OUTPUT_TOKEN_LIMIT_ERROR_MARKER = "max_tokens or model output limit was reached"
+
+
+def _is_output_token_limit_error(exc: Exception) -> bool:
+    """True for the provider 400 raised when the output-token budget cannot finish even one token (e.g. OpenAI GPT-5.x with ``max_tokens=1``)."""
+    if not isinstance(exc, litellm.BadRequestError):
+        return False
+    return _OUTPUT_TOKEN_LIMIT_ERROR_MARKER in exc.message.lower()
+
+
+def _build_max_tokens_truncation_response(model: str) -> ModelResponse:
+    """Synthesize an empty ``finish_reason="length"`` response so the truncated turn reuses the existing translation path (mapping to Anthropic ``stop_reason="max_tokens"``)."""
+    return ModelResponse(
+        model=model,
+        choices=[  # mutable-ok: ModelResponse.__init__ only honors choices when isinstance(choices, list); a tuple is silently dropped for a default Choices()
+            Choices(
+                index=0,
+                finish_reason="length",
+                message=Message(role="assistant", content=""),
+            )
+        ],
+        usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+    )
+
 
 class _CompletionKwargs(TypedDict, total=False, extra_items=object):
     model: str
     custom_llm_provider: str
+
+
+_CompletionResult: TypeAlias = "ModelResponse | CustomStreamWrapper | MockResponseIterator"
+
+
+async def _acompletion_allowing_max_tokens_truncation(
+    completion_kwargs: _CompletionKwargs,
+    model: str,
+    stream: bool,
+) -> _CompletionResult:
+    """``litellm.acompletion``, but a provider output-limit 400 becomes an empty ``max_tokens``-truncated turn."""
+    try:
+        return await litellm.acompletion(**completion_kwargs)
+    except Exception as e:
+        if not _is_output_token_limit_error(e):
+            raise
+        truncation_response: Final = _build_max_tokens_truncation_response(model)
+        return MockResponseIterator(model_response=truncation_response) if stream else truncation_response
+
+
+def _completion_allowing_max_tokens_truncation(
+    completion_kwargs: _CompletionKwargs,
+    model: str,
+    stream: bool,
+) -> _CompletionResult:
+    """``litellm.completion``, but a provider output-limit 400 becomes an empty ``max_tokens``-truncated turn."""
+    try:
+        return litellm.completion(**completion_kwargs)
+    except Exception as e:
+        if not _is_output_token_limit_error(e):
+            raise
+        truncation_response: Final = _build_max_tokens_truncation_response(model)
+        return MockResponseIterator(model_response=truncation_response) if stream else truncation_response
 
 
 def _messages_have_compaction_block(messages: _AnthropicMessages) -> bool:
@@ -613,7 +672,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             extra_kwargs=kwargs,
         )
 
-        completion_response: Final = await litellm.acompletion(**completion_kwargs)
+        completion_response: Final = await _acompletion_allowing_max_tokens_truncation(
+            completion_kwargs, model=model, stream=bool(stream)
+        )
 
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
@@ -748,7 +809,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             extra_kwargs=kwargs,
         )
 
-        completion_response: Final = litellm.completion(**completion_kwargs)
+        completion_response: Final = _completion_allowing_max_tokens_truncation(
+            completion_kwargs, model=model, stream=bool(stream)
+        )
 
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
