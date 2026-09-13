@@ -48,4 +48,3 @@ Return only JSON:
 - `duplicate_of`: the issue number of the earlier report, or `null`
 - `confidence`: 0.0 to 1.0
 - `evidence`: one sentence naming the shared root cause and symptom, or why nothing matched
-- `considered`: the issue numbers you actually read

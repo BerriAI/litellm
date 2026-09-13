@@ -1,7 +1,7 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["duplicate_of", "confidence", "evidence", "considered"],
+  "required": ["duplicate_of", "confidence", "evidence"],
   "properties": {
     "duplicate_of": {
       "type": ["integer", "null"],
@@ -15,10 +15,6 @@
     "evidence": {
       "type": "string",
       "description": "One sentence naming the shared root cause and symptom, or why nothing matched."
-    },
-    "considered": {
-      "type": "array",
-      "items": { "type": "integer" }
     }
   }
 }
