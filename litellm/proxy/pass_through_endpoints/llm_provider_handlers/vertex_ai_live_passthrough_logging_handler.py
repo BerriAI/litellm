@@ -5,18 +5,90 @@ Handles cost tracking and logging for Vertex AI Live API WebSocket passthrough e
 Supports different modalities: text, audio, video, and web search.
 """
 
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, Final
+from itertools import chain, pairwise
+from types import MappingProxyType
+from typing import Final, Literal, TypeAlias
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler import (
     BasePassthroughLoggingHandler,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrough_logging_handler import (
     PassThroughEndpointLoggingTypedDict,
 )
-from litellm.types.utils import LlmProviders, ModelResponse, Usage
-from litellm.utils import get_model_info
+from litellm.types.utils import (
+    CompletionTokensDetailsWrapper,
+    CostBreakdown,
+    LlmProviders,
+    ModelResponse,
+    PromptTokensDetailsWrapper,
+    Usage,
+)
+
+_AGGREGATED_FIELDS: Final = frozenset(
+    {
+        "promptTokenCount",
+        "candidatesTokenCount",
+        "totalTokenCount",
+        "toolUsePromptTokenCount",
+        "promptTokensDetails",
+        "candidatesTokensDetails",
+    }
+)
+
+
+def _detail_entries(raw: object) -> tuple[Mapping[str, object], ...]:
+    """Narrow one turn's ``*TokensDetails`` value to the entries that are actually shaped like one."""
+    return tuple(entry for entry in raw if isinstance(entry, Mapping)) if isinstance(raw, Sequence) else ()
+
+
+def _grounding_metadata(websocket_messages: Sequence[object]) -> tuple[Mapping[str, object], ...]:
+    """Collect every ``serverContent.groundingMetadata`` a session emitted.
+
+    Live reports grounding in the server frames, never in ``usageMetadata``, so the per-query
+    charge has to be counted here rather than derived from the token totals.
+    """
+    return tuple(
+        metadata
+        for message in websocket_messages
+        if isinstance(message, Mapping)
+        for server_content in (message.get("serverContent"),)
+        if isinstance(server_content, Mapping)
+        for metadata in (server_content.get("groundingMetadata"),)
+        if isinstance(metadata, Mapping)
+    )
+
+
+def _turns(websocket_messages: Sequence[object]) -> tuple[tuple[object, ...], ...]:
+    """Split a session at every ``usageMetadata`` frame; frames after the last one never got their usage."""
+    closes: Final = tuple(
+        index + 1
+        for index, message in enumerate(websocket_messages)
+        if isinstance(message, Mapping) and isinstance(message.get("usageMetadata"), dict)
+    )
+    return tuple(tuple(websocket_messages[start:end]) for start, end in pairwise((0, *closes)))
+
+
+_SummedField: TypeAlias = Literal[
+    "input_cost",
+    "output_cost",
+    "tool_usage_cost",
+    "cache_read_cost",
+    "cache_creation_cost",
+    "reasoning_cost",
+    "original_cost",
+    "discount_amount",
+    "margin_fixed_amount",
+    "margin_total_amount",
+]
+
+
+def _summed(breakdowns: Sequence[CostBreakdown], field: _SummedField) -> float | None:
+    values: Final = tuple(value for breakdown in breakdowns if (value := breakdown.get(field)) is not None)
+    return sum(values) if values else None
 
 
 class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
@@ -49,11 +121,66 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         return LlmProviders.VERTEX_AI
 
     @staticmethod
+    def _resolve_detail_counts(
+        details: Sequence[Mapping[str, object]],
+        declared_total: object,
+    ) -> tuple[tuple[str, int], ...]:
+        """
+        Pair each of one turn's ``*TokensDetails`` entries with its token count.
+
+        Live sometimes names the modality that carries the rest of a turn without a
+        ``tokenCount``, and reading the absent key as zero drops those tokens from the
+        breakdown, so real audio ends up priced as text. A lone unpriced entry therefore takes
+        whatever the turn's declared count leaves over. Two or more cannot be told apart, so
+        they are left out and the cost calculator charges the remainder as text.
+        """
+        priced: Final = tuple(
+            (str(detail.get("modality", "TEXT")), count)
+            for detail in details
+            if isinstance(count := detail.get("tokenCount"), int)
+        )
+        unpriced: Final = tuple(
+            str(detail.get("modality", "TEXT")) for detail in details if not isinstance(detail.get("tokenCount"), int)
+        )
+        if len(unpriced) != 1 or not isinstance(declared_total, int):
+            return priced
+        residual: Final = declared_total - sum(count for _, count in priced)
+        return priced if residual <= 0 else (*priced, (unpriced[0], residual))
+
+    @staticmethod
+    def _sum_by_modality(counts: Sequence[tuple[str, int]]) -> Mapping[str, int]:
+        """Total the (modality, tokenCount) pairs of one or more turns per modality."""
+        return MappingProxyType({modality: sum(c for m, c in counts if m == modality) for modality, _ in counts})
+
+    @staticmethod
+    def _merged_modality_totals(
+        snapshots: Sequence[Mapping[str, object]],
+        count_key: str,
+        details_key: str,
+    ) -> Mapping[str, int]:
+        """Total every turn's per-modality counts, so the breakdown adds up the way the totals do."""
+        return VertexAILivePassthroughLoggingHandler._sum_by_modality(
+            tuple(
+                chain.from_iterable(
+                    VertexAILivePassthroughLoggingHandler._resolve_detail_counts(
+                        _detail_entries(snapshot.get(details_key)), snapshot.get(count_key)
+                    )
+                    for snapshot in snapshots
+                )
+            )
+        )
+
+    @staticmethod
     def _extract_usage_metadata_from_websocket_messages(
-        websocket_messages: list[dict],
+        websocket_messages: Sequence[object],
     ) -> dict | None:
         """
         Extract and aggregate usage metadata from a list of WebSocket messages.
+
+        Live emits one ``usageMetadata`` per turn and Google charges per turn for every token in
+        the session context window, which is the current turn's tokens plus all accumulated
+        tokens from previous turns, so the turns add up rather than restating each other. See
+        the Live API note under https://cloud.google.com/vertex-ai/generative-ai/pricing.
 
         Args:
             websocket_messages: List of WebSocket messages from the Live API
@@ -61,173 +188,42 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         Returns:
             Dictionary containing aggregated usage metadata, or None if not found
         """
-        all_usage_metadata: Final = []
+        snapshots: Final = tuple(
+            metadata
+            for message in websocket_messages
+            if isinstance(message, Mapping)
+            for metadata in (message.get("usageMetadata"),)
+            if isinstance(metadata, dict)
+        )
 
-        # Collect all usage metadata messages
-        for message in websocket_messages:
-            if isinstance(message, dict) and "usageMetadata" in message:
-                all_usage_metadata.append(message["usageMetadata"])
-
-        if not all_usage_metadata:
+        if not snapshots:
             return None
 
-        # If only one usage metadata, return it as-is
-        if len(all_usage_metadata) == 1:
-            return all_usage_metadata[0]
-
-        # Aggregate multiple usage metadata messages
-        aggregated: Final[dict[str, Any]] = {
-            "promptTokenCount": 0,
-            "candidatesTokenCount": 0,
-            "totalTokenCount": 0,
-            "promptTokensDetails": [],
-            "candidatesTokensDetails": [],
+        prompt_totals: Final = VertexAILivePassthroughLoggingHandler._merged_modality_totals(
+            snapshots, "promptTokenCount", "promptTokensDetails"
+        )
+        candidate_totals: Final = VertexAILivePassthroughLoggingHandler._merged_modality_totals(
+            snapshots, "candidatesTokenCount", "candidatesTokensDetails"
+        )
+        return {
+            **{key: value for key, value in snapshots[0].items() if key not in _AGGREGATED_FIELDS},
+            "promptTokenCount": sum(snapshot.get("promptTokenCount", 0) for snapshot in snapshots),
+            "candidatesTokenCount": sum(snapshot.get("candidatesTokenCount", 0) for snapshot in snapshots),
+            "totalTokenCount": sum(snapshot.get("totalTokenCount", 0) for snapshot in snapshots),
+            "toolUsePromptTokenCount": sum(snapshot.get("toolUsePromptTokenCount", 0) for snapshot in snapshots),
+            "promptTokensDetails": [
+                {"modality": modality, "tokenCount": count} for modality, count in prompt_totals.items() if count > 0
+            ],
+            "candidatesTokensDetails": [
+                {"modality": modality, "tokenCount": count} for modality, count in candidate_totals.items() if count > 0
+            ],
         }
-
-        # Aggregate token counts
-        for usage in all_usage_metadata:
-            aggregated["promptTokenCount"] += usage.get("promptTokenCount", 0)
-            aggregated["candidatesTokenCount"] += usage.get("candidatesTokenCount", 0)
-            aggregated["totalTokenCount"] += usage.get("totalTokenCount", 0)
-
-        # Aggregate token details by modality
-        modality_totals: Final = {}
-
-        for usage in all_usage_metadata:
-            # Process prompt tokens details
-            for detail in usage.get("promptTokensDetails", []):
-                modality = detail.get("modality", "TEXT")
-                token_count = detail.get("tokenCount", 0)
-
-                if modality not in modality_totals:
-                    modality_totals[modality] = {"prompt": 0, "candidate": 0}
-                modality_totals[modality]["prompt"] += token_count
-
-            # Process candidate tokens details
-            for detail in usage.get("candidatesTokensDetails", []):
-                modality = detail.get("modality", "TEXT")
-                token_count = detail.get("tokenCount", 0)
-
-                if modality not in modality_totals:
-                    modality_totals[modality] = {"prompt": 0, "candidate": 0}
-                modality_totals[modality]["candidate"] += token_count
-
-        # Convert aggregated modality totals back to details format
-        for modality, totals in modality_totals.items():
-            if totals["prompt"] > 0:
-                aggregated["promptTokensDetails"].append({"modality": modality, "tokenCount": totals["prompt"]})
-            if totals["candidate"] > 0:
-                aggregated["candidatesTokensDetails"].append({"modality": modality, "tokenCount": totals["candidate"]})
-
-        # Add any additional fields from the first usage metadata
-        first_usage: Final = all_usage_metadata[0]
-        for key, value in first_usage.items():
-            if key not in aggregated:
-                aggregated[key] = value
-
-        return aggregated
-
-    @staticmethod
-    def _calculate_live_api_cost(
-        model: str,
-        usage_metadata: dict,
-        custom_llm_provider: str = "vertex_ai",
-    ) -> float:
-        """
-        Calculate cost for Vertex AI Live API based on usage metadata.
-
-        Args:
-            model: The model name (e.g., "gemini-2.0-flash-live-preview-04-09")
-            usage_metadata: Usage metadata from the Live API response
-            custom_llm_provider: The LLM provider (default: "vertex_ai")
-
-        Returns:
-            Total cost in USD
-        """
-        try:
-            # Get model pricing information
-            model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-
-            verbose_proxy_logger.debug("Vertex AI Live API model info for '%s': %s", model, model_info)
-
-            # Check if pricing info is available
-            if not model_info or not model_info.get("input_cost_per_token"):
-                verbose_proxy_logger.error("No pricing info found for %s in local model pricing database", model)
-                return 0.0
-
-            total_cost = 0.0
-
-            # Extract token counts from usage metadata
-            prompt_token_count: Final = usage_metadata.get("promptTokenCount", 0)
-            candidates_token_count: Final = usage_metadata.get("candidatesTokenCount", 0)
-
-            # Calculate base text token costs
-            input_cost_per_token: Final = model_info.get("input_cost_per_token", 0.0)
-            output_cost_per_token: Final = model_info.get("output_cost_per_token", 0.0)
-
-            total_cost += prompt_token_count * input_cost_per_token
-            total_cost += candidates_token_count * output_cost_per_token
-
-            # Handle modality-specific costs if present
-            prompt_tokens_details: Final = usage_metadata.get("promptTokensDetails", [])
-            candidates_tokens_details: Final = usage_metadata.get("candidatesTokensDetails", [])
-
-            # Process prompt tokens by modality
-            for detail in prompt_tokens_details:
-                modality = detail.get("modality", "TEXT")
-                token_count = detail.get("tokenCount", 0)
-
-                if modality == "AUDIO":
-                    audio_cost_per_token = model_info.get("input_cost_per_audio_token", 0.0)
-                    total_cost += token_count * audio_cost_per_token
-                elif modality == "VIDEO":
-                    # Video tokens are typically per second, but we'll treat as per token for now
-                    video_cost_per_token = model_info.get("input_cost_per_video_per_second", 0.0)
-                    total_cost += token_count * video_cost_per_token
-                # TEXT tokens are already handled above
-
-            # Process candidate tokens by modality
-            for detail in candidates_tokens_details:
-                modality = detail.get("modality", "TEXT")
-                token_count = detail.get("tokenCount", 0)
-
-                if modality == "AUDIO":
-                    audio_cost_per_token = model_info.get("output_cost_per_audio_token", 0.0)
-                    total_cost += token_count * audio_cost_per_token
-                elif modality == "VIDEO":
-                    # Video tokens are typically per second, but we'll treat as per token for now
-                    video_cost_per_token = model_info.get("output_cost_per_video_per_second", 0.0)
-                    total_cost += token_count * video_cost_per_token
-                # TEXT tokens are already handled above
-
-            # Handle web search costs if present
-            tool_use_prompt_token_count: Final = usage_metadata.get("toolUsePromptTokenCount", 0)
-            if tool_use_prompt_token_count > 0:
-                # Web search typically has a fixed cost per request
-                web_search_cost: Final = model_info.get("web_search_cost_per_request", 0.0)
-                if isinstance(web_search_cost, (int, float)) and web_search_cost > 0:
-                    total_cost += web_search_cost
-                else:
-                    # Fallback to token-based pricing for tool use
-                    total_cost += tool_use_prompt_token_count * input_cost_per_token
-
-            verbose_proxy_logger.debug(
-                f"Vertex AI Live API cost calculation - Model: {model}, "
-                f"Prompt tokens: {prompt_token_count}, "
-                f"Candidate tokens: {candidates_token_count}, "
-                f"Total cost: ${total_cost:.6f}"
-            )
-
-            return total_cost
-
-        except Exception as e:
-            verbose_proxy_logger.error("Error calculating Vertex AI Live API cost: %s", e)
-            return 0.0
 
     @staticmethod
     def _create_usage_object_from_metadata(
         usage_metadata: dict,
         model: str,
+        grounding_metadata: Sequence[Mapping[str, object]] = (),
     ) -> Usage:
         """
         Create a LiteLLM Usage object from Live API usage metadata.
@@ -235,48 +231,131 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         Args:
             usage_metadata: Usage metadata from the Live API response
             model: The model name
+            grounding_metadata: Every ``serverContent.groundingMetadata`` the session emitted, so
+                Search and Maps grounding carry their per-query charge
 
         Returns:
             LiteLLM Usage object
         """
-        prompt_tokens: Final = usage_metadata.get("promptTokenCount", 0)
-        completion_tokens: Final = usage_metadata.get("candidatesTokenCount", 0)
-        total_tokens: Final = usage_metadata.get("totalTokenCount", 0)
-
-        # Create modality-specific token details if available
-        prompt_tokens_details: Final = usage_metadata.get("promptTokensDetails", [])
-        candidates_tokens_details: Final = usage_metadata.get("candidatesTokensDetails", [])
-
-        # Extract text tokens from details
-        text_prompt_tokens = 0
-        text_completion_tokens = 0
-
-        for detail in prompt_tokens_details:
-            if detail.get("modality") == "TEXT":
-                text_prompt_tokens = detail.get("tokenCount", 0)
-                break
-
-        for detail in candidates_tokens_details:
-            if detail.get("modality") == "TEXT":
-                text_completion_tokens = detail.get("tokenCount", 0)
-                break
-
-        # If no text tokens found in details, use total counts
-        if text_prompt_tokens == 0:
-            text_prompt_tokens = prompt_tokens
-        if text_completion_tokens == 0:
-            text_completion_tokens = completion_tokens
-
-        return Usage(
-            prompt_tokens=text_prompt_tokens,
-            completion_tokens=text_completion_tokens,
-            total_tokens=total_tokens,
+        prompt_by_modality: Final = VertexAILivePassthroughLoggingHandler._sum_by_modality(
+            VertexAILivePassthroughLoggingHandler._resolve_detail_counts(
+                _detail_entries(usage_metadata.get("promptTokensDetails")), usage_metadata.get("promptTokenCount")
+            )
         )
+        candidates_by_modality: Final = VertexAILivePassthroughLoggingHandler._sum_by_modality(
+            VertexAILivePassthroughLoggingHandler._resolve_detail_counts(
+                _detail_entries(usage_metadata.get("candidatesTokensDetails")),
+                usage_metadata.get("candidatesTokenCount"),
+            )
+        )
+
+        prompt_tokens: Final = usage_metadata.get("promptTokenCount", 0) or sum(prompt_by_modality.values())
+        completion_tokens: Final = usage_metadata.get("candidatesTokenCount", 0) or sum(candidates_by_modality.values())
+
+        usage: Final = Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=usage_metadata.get("totalTokenCount", 0) or (prompt_tokens + completion_tokens),
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=prompt_by_modality.get("TEXT"),
+                audio_tokens=prompt_by_modality.get("AUDIO"),
+                image_tokens=prompt_by_modality.get("IMAGE"),
+                video_tokens=prompt_by_modality.get("VIDEO"),
+                tool_use_tokens=usage_metadata.get("toolUsePromptTokenCount") or None,
+            ),
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                text_tokens=candidates_by_modality.get("TEXT"),
+                audio_tokens=candidates_by_modality.get("AUDIO"),
+                image_tokens=candidates_by_modality.get("IMAGE"),
+                video_tokens=candidates_by_modality.get("VIDEO"),
+            ),
+        )
+        if grounding_metadata:
+            from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+                VertexGeminiConfig,
+            )
+
+            VertexGeminiConfig._set_grounding_usage_counters(  # pyright: ignore[reportPrivateUsage]  # shared with the chat path; no public alias exists yet
+                usage, grounding_metadata
+            )
+        return usage
+
+    def _session_usage(self, websocket_messages: Sequence[object], model: str) -> Usage | None:
+        usage_metadata: Final = self._extract_usage_metadata_from_websocket_messages(websocket_messages)
+        if usage_metadata is None:
+            return None
+        return self._create_usage_object_from_metadata(
+            usage_metadata=usage_metadata,
+            grounding_metadata=_grounding_metadata(websocket_messages),
+            model=model,
+        )
+
+    def _turn_cost(
+        self,
+        turn: Sequence[object],
+        model: str,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> tuple[float, CostBreakdown] | None:
+        usage: Final = self._session_usage(turn, model)
+        if usage is None:
+            return None
+        cost: Final = logging_obj._response_cost_calculator(  # pyright: ignore[reportPrivateUsage]  # the call's own calculator keeps custom pricing and the deployment's region in step with the spend row
+            result=ModelResponse(model=model, usage=usage),
+            litellm_model_name=model,
+        )
+        if cost is None:
+            return None
+        breakdown: Final = logging_obj.cost_breakdown
+        return None if breakdown is None else (cost, breakdown)
+
+    def _session_cost(
+        self,
+        websocket_messages: Sequence[object],
+        model: str,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> float | None:
+        """Price each turn on its own tokens and grounding, so two grounded turns pay the query fee twice.
+
+        The fixed cost margin is a flat per-request fee, so the session's single spend row carries it once
+        rather than once per turn.
+        """
+        turn_costs: Final = tuple(self._turn_cost(turn, model, logging_obj) for turn in _turns(websocket_messages))
+        priced: Final = tuple(turn_cost for turn_cost in turn_costs if turn_cost is not None)
+        if not priced or len(priced) != len(turn_costs):
+            return None
+        breakdowns: Final = tuple(breakdown for _, breakdown in priced)
+        first: Final = breakdowns[0]
+        fixed_margin: Final = first.get("margin_fixed_amount") or 0.0
+        duplicated_fixed_margin: Final = fixed_margin * (len(priced) - 1)
+        total_cost: Final = sum(cost for cost, _ in priced) - duplicated_fixed_margin
+        summed_margin_total: Final = _summed(breakdowns, "margin_total_amount")
+        margin_total_amount: Final = (
+            None if summed_margin_total is None else summed_margin_total - duplicated_fixed_margin
+        )
+        logging_obj.set_cost_breakdown(
+            input_cost=_summed(breakdowns, "input_cost") or 0.0,
+            output_cost=_summed(breakdowns, "output_cost") or 0.0,
+            total_cost=total_cost,
+            cost_for_built_in_tools_cost_usd_dollar=_summed(breakdowns, "tool_usage_cost") or 0.0,
+            original_cost=_summed(breakdowns, "original_cost"),
+            discount_percent=first.get("discount_percent"),
+            discount_amount=_summed(breakdowns, "discount_amount"),
+            margin_percent=first.get("margin_percent"),
+            margin_fixed_amount=first.get("margin_fixed_amount"),
+            margin_total_amount=margin_total_amount,
+            cache_read_cost=_summed(breakdowns, "cache_read_cost"),
+            cache_creation_cost=_summed(breakdowns, "cache_creation_cost"),
+            reasoning_cost=_summed(breakdowns, "reasoning_cost"),
+            service_tier=first.get("service_tier"),
+            data_residency=first.get("data_residency"),
+            vertex_location=first.get("vertex_location"),
+        )
+        return total_cost
 
     def vertex_ai_live_passthrough_handler(
         self,
-        websocket_messages: list[dict],
-        logging_obj,
+        websocket_messages: Sequence[object],
+        logging_obj: LiteLLMLoggingObj,
         url_route: str,
         start_time: datetime,
         end_time: datetime,
@@ -300,34 +379,25 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         """
         try:
             # Extract model from request body or kwargs
-            model: Final = kwargs.get("model", "gemini-2.0-flash-live-preview-04-09")
+            requested_model: Final = kwargs.get("model")
+            model: Final = (
+                requested_model if isinstance(requested_model, str) else "gemini-2.0-flash-live-preview-04-09"
+            )
             custom_llm_provider: Final = kwargs.get("custom_llm_provider", "vertex_ai")
             verbose_proxy_logger.debug(
                 "Vertex AI Live API model: %s, custom_llm_provider: %s", model, custom_llm_provider
             )
 
-            # Extract usage metadata from WebSocket messages
-            usage_metadata: Final = self._extract_usage_metadata_from_websocket_messages(websocket_messages)
+            usage: Final = self._session_usage(websocket_messages, model)
 
-            if not usage_metadata:
+            if usage is None:
                 verbose_proxy_logger.warning("No usage metadata found in Vertex AI Live API WebSocket messages")
                 return {
                     "result": None,
                     "kwargs": kwargs,
                 }
 
-            # Calculate cost using Live API specific pricing
-            response_cost: Final = self._calculate_live_api_cost(
-                model=model,
-                usage_metadata=usage_metadata,
-                custom_llm_provider=custom_llm_provider,
-            )
-
-            # Create Usage object for standard LiteLLM logging
-            usage: Final = self._create_usage_object_from_metadata(
-                usage_metadata=usage_metadata,
-                model=model,
-            )
+            response_cost: Final = self._session_cost(websocket_messages, model, logging_obj)
 
             # Create a mock ModelResponse for standard logging
             litellm_model_response: Final = ModelResponse(
@@ -338,9 +408,9 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 usage=usage,
                 choices=[],
             )
+            if response_cost is not None:
+                litellm_model_response._hidden_params["response_cost"] = response_cost  # pyright: ignore[reportPrivateUsage]  # the logger reads the cost off the response's hidden params; the constructor's hidden_params kwarg is reset by pydantic
 
-            # Update kwargs with cost information
-            kwargs["response_cost"] = response_cost
             kwargs["model"] = model
             kwargs["custom_llm_provider"] = custom_llm_provider
 
@@ -348,12 +418,15 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             import re
 
             allowed_pattern: Final = re.compile(r"^[A-Za-z0-9._\-:]+$")
-            safe_model: Final = model if isinstance(model, str) and allowed_pattern.match(model) else "[REDACTED]"
+            safe_model: Final = model if allowed_pattern.match(model) else "[REDACTED]"
             verbose_proxy_logger.debug(
-                f"Vertex AI Live API passthrough cost tracking - "
-                f"Model: {safe_model}, Cost: ${response_cost:.6f}, "
-                f"Prompt tokens: {usage.prompt_tokens}, "
-                f"Completion tokens: {usage.completion_tokens}"
+                "Vertex AI Live API passthrough cost tracking - Model: %s, "
+                "Prompt tokens: %s %s, Completion tokens: %s %s",
+                safe_model,
+                usage.prompt_tokens,
+                usage.prompt_tokens_details,
+                usage.completion_tokens,
+                usage.completion_tokens_details,
             )
 
             return {
