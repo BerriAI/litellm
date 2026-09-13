@@ -1,4 +1,4 @@
-"""Shared VCR (Redis-backed) plumbing imported by per-directory conftests.
+"""Shared VCR cassette plumbing imported by per-directory conftests.
 
 See ``tests/llm_translation/Readme.md`` for the full design and
 ``tests/llm_translation/conftest.py`` for the reference wiring."""
@@ -15,18 +15,18 @@ import socket
 import sys
 import threading
 from collections import defaultdict
-from typing import Iterable
+from collections.abc import Iterable
 
 import pytest
 import vcr.matchers as _vcr_matchers
 
+from tests._vcr_persister import make_persister, set_cassette_ttl_override
 from tests._vcr_redis_persister import (
     MAX_EPISODES_PER_CASSETTE,
     VCR_VERBOSE_ENV,
     cassette_cache_capacity_snapshot,
     cassette_cache_health,
     filter_non_2xx_response,
-    make_redis_persister,
     mark_test_outcome_for_cassette,
     patch_vcrpy_aiohttp_record_path,
 )
@@ -1131,9 +1131,7 @@ def vcr_config_dict() -> dict:
 
 
 def vcr_disabled() -> bool:
-    if os.environ.get("LITELLM_VCR_DISABLE") == "1":
-        return True
-    return not os.environ.get("CASSETTE_REDIS_URL")
+    return os.environ.get("LITELLM_VCR_DISABLE") == "1"
 
 
 _atexit_banner_registered = False
@@ -1183,7 +1181,7 @@ def register_persister_if_enabled(vcr) -> None:
     """Call from ``pytest_recording_configure(config, vcr)`` in each conftest."""
     if vcr_disabled():
         return
-    vcr.register_persister(make_redis_persister())
+    vcr.register_persister(make_persister())
     vcr.register_matcher(SAFE_BODY_MATCHER_NAME, _safe_body_matcher)
     vcr.register_matcher(KEY_FINGERPRINT_MATCHER_NAME, _key_fingerprint_matcher)
     vcr.register_matcher(TOLERANT_QUERY_MATCHER_NAME, _tolerant_query_matcher)
@@ -1788,6 +1786,9 @@ def record_vcr_outcome(request, vcr) -> None:
     test_passed = bool(rep_call and rep_call.passed)
     cassette_path = getattr(cassette, "_path", None) if cassette is not None else None
     if cassette_path:
+        ttl_marker = request.node.get_closest_marker("cassette_ttl")
+        if ttl_marker is not None:
+            set_cassette_ttl_override(cassette_path, ttl_marker.args[0])
         mark_test_outcome_for_cassette(cassette_path, test_passed)
 
     nodeid = request.node.nodeid
