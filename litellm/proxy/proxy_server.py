@@ -582,6 +582,7 @@ from litellm.proxy.management_helpers.team_metadata_validation import (
     TEAM_METADATA_VALIDATOR_REGISTRY,
     parse_team_metadata_schema,
 )
+from litellm.proxy.memory.management import router as memory_v2_router
 from litellm.proxy.memory.memory_endpoints import router as memory_router
 from litellm.proxy.middleware.billable_request_metrics_middleware import (
     BillableRequestMetricsMiddleware,
@@ -10246,6 +10247,19 @@ class ProxyStartupEvent:
 
         await cls._initialize_expired_ui_session_key_cleanup_background_job(scheduler=scheduler)
 
+        if prisma_client is not None:
+            from litellm.proxy.memory.continuation import cleanup_memory_continuations
+
+            scheduler.add_job(
+                cleanup_memory_continuations,
+                "interval",
+                seconds=60,
+                args=(prisma_client,),
+                id="memory_continuation_cleanup",
+                max_instances=1,
+                coalesce=True,
+            )
+
     @classmethod
     async def _initialize_expired_ui_session_key_cleanup_background_job(cls, scheduler: AsyncIOScheduler):
         """
@@ -18785,6 +18799,7 @@ app.include_router(auto_router_management_router)
 app.include_router(tag_management_router)
 app.include_router(workflow_management_router)
 app.include_router(memory_router)
+app.include_router(memory_v2_router)
 app.include_router(plugin_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(router_settings_router)

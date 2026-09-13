@@ -727,18 +727,18 @@ class _UpstreamClosingStreamingResponse(StreamingResponse):
 
     def __init__(
         self,
-        content: AsyncGenerator[str, None],
+        content: AsyncGenerator[str | bytes, None],
         *,
         media_type: str | None = None,
         headers: Mapping[str, str] | None = None,
         status_code: int = status.HTTP_200_OK,
-        upstream_generator: AsyncGenerator[str, None] | None = None,
+        upstream_generator: AsyncGenerator[str | bytes, None] | None = None,
     ) -> None:
         super().__init__(content, status_code=status_code, headers=headers, media_type=media_type)
         self._upstream_generator = upstream_generator
 
     @property
-    def upstream_generator(self) -> AsyncGenerator[str, None] | None:
+    def upstream_generator(self) -> AsyncGenerator[str | bytes, None] | None:
         """The upstream LLM stream, for a caller that has to run this response's cleanup itself."""
         return self._upstream_generator
 
@@ -2339,6 +2339,11 @@ class ProxyBaseLLMRequestProcessing:
                     "Ensure common_processing_pre_call_logic was called before using this parameter."
                 )
         else:
+            from litellm.proxy.memory.gateway import process_gateway_memory
+
+            memory_response: Final = await process_gateway_memory(self.data, request, user_api_key_dict, route_type)
+            if memory_response is not None:
+                return memory_response
             self.data, logging_obj = await self._pre_call_with_fallbacks(
                 request=request,
                 general_settings=general_settings,
@@ -2355,6 +2360,15 @@ class ProxyBaseLLMRequestProcessing:
                 route_type=route_type,
                 llm_router=llm_router,
             )
+
+        from litellm.proxy.memory.transport import in_gateway_round
+
+        if in_gateway_round() and route_type in ("acompletion", "aresponses", "anthropic_messages"):
+            self.data["caching"] = False
+            self.data["cache"] = {  # mutable-ok: The existing inference pipeline consumes native cache controls.
+                "no-cache": True,
+                "no-store": True,
+            }
 
         # Defer async logging when post-call guardrails are configured so the
         # StandardLoggingPayload is built after guardrails write to metadata.

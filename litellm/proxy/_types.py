@@ -836,6 +836,12 @@ class LiteLLMRoutes(enum.Enum):
     )
 
     self_managed_routes = [
+        "/v2/memory/policies",
+        "/v2/memory/policies/{policy_id}",
+        "/v2/memory/preference",
+        "/v2/memory/status",
+        "/v2/memory/entries",
+        "/v2/memory/entries/{memory_id}",
         "/team/member_add",
         "/team/member_delete",
         "/team/member_update",
@@ -923,6 +929,10 @@ class LiteLLMRoutes(enum.Enum):
     # updating this list — the default-allow behavior covers it automatically.
     admin_viewer_routes = (
         [
+            "/v2/memory/policies",
+            "/v2/memory/preference",
+            "/v2/memory/status",
+            "/v2/memory/entries",
             "/user/list",
             "/user/available_users",
             "/user/available_roles",
