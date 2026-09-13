@@ -1023,25 +1023,38 @@ class Logging(LiteLLMLoggingBaseClass):
             dynamic_callback_params=self.standard_callback_dynamic_params,
         )
 
-        if custom_logger:
-            breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
-            (
-                model,
-                messages,
-                non_default_params,
-            ) = await custom_logger.async_get_chat_completion_prompt(
-                model=model,
-                messages=messages,
-                non_default_params=non_default_params or {},
-                prompt_id=prompt_id,
-                prompt_spec=prompt_spec,
-                prompt_variables=prompt_variables,
-                dynamic_callback_params=self.standard_callback_dynamic_params,
-                litellm_logging_obj=self,
+        vector_store_logger: Final = (
+            self._get_vector_store_pre_call_hook()
+            if isinstance(custom_logger, AnthropicCacheControlHook)
+            and litellm.vector_store_registry is not None
+            and litellm.vector_store_registry.get_vector_store_ids_to_run(
+                non_default_params=non_default_params,
                 tools=tools,
-                prompt_label=prompt_label,
-                prompt_version=prompt_version,
             )
+            else None
+        )
+        prompt_loggers: Final = tuple(logger for logger in (vector_store_logger, custom_logger) if logger is not None)
+
+        if prompt_loggers:
+            breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
+            for prompt_logger in prompt_loggers:
+                (
+                    model,
+                    messages,
+                    non_default_params,
+                ) = await prompt_logger.async_get_chat_completion_prompt(
+                    model=model,
+                    messages=messages,
+                    non_default_params=non_default_params or {},
+                    prompt_id=prompt_id,
+                    prompt_spec=prompt_spec,
+                    prompt_variables=prompt_variables,
+                    dynamic_callback_params=self.standard_callback_dynamic_params,
+                    litellm_logging_obj=self,
+                    tools=tools,
+                    prompt_label=prompt_label,
+                    prompt_version=prompt_version,
+                )
             if request_kwargs is not None:
                 AnthropicCacheControlHook.record_gateway_injection(
                     request_kwargs,
@@ -1177,18 +1190,25 @@ class Logging(LiteLLMLoggingBaseClass):
         # Vector Store / Knowledge Base hooks
         #########################################################
         if litellm.vector_store_registry is not None:
-            vector_store_custom_logger: Final = _init_custom_logger_compatible_class(
-                logging_integration="vector_store_pre_call_hook",
-                internal_usage_cache=None,
-                llm_router=None,
-            )
-            self.model_call_details["prompt_integration"] = vector_store_custom_logger.__class__.__name__
-            # Add to global callbacks so post-call hooks are invoked
-            if vector_store_custom_logger and vector_store_custom_logger not in litellm.callbacks:
-                litellm.logging_callback_manager.add_litellm_callback(vector_store_custom_logger)
-            return vector_store_custom_logger
+            vector_store_custom_logger: Final = self._get_vector_store_pre_call_hook()
+            if vector_store_custom_logger is not None:
+                self.model_call_details["prompt_integration"] = vector_store_custom_logger.__class__.__name__
+                return vector_store_custom_logger
 
         return None
+
+    @staticmethod
+    def _get_vector_store_pre_call_hook() -> CustomLogger | None:
+        vector_store_custom_logger: Final = _init_custom_logger_compatible_class(
+            logging_integration="vector_store_pre_call_hook",
+            internal_usage_cache=None,
+            llm_router=None,
+        )
+        if vector_store_custom_logger is None:
+            return None
+        if vector_store_custom_logger not in litellm.callbacks:
+            litellm.logging_callback_manager.add_litellm_callback(vector_store_custom_logger)
+        return vector_store_custom_logger
 
     def get_custom_logger_for_anthropic_cache_control_hook(self, non_default_params: dict) -> CustomLogger | None:
         if non_default_params.get("cache_control_injection_points", None):
