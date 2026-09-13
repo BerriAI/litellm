@@ -7994,11 +7994,13 @@ class Router:
         if model_group is None:
             return None
 
-        fallback_model_group: list[str] | None = None
-        for item in fallbacks:  # [{"gpt-3.5-turbo": ["gpt-4"]}]
-            if list(item.keys())[0] == model_group:
-                fallback_model_group = item[model_group]
-                break
+        from litellm.router_utils.fallback_event_handlers import (
+            get_fallback_model_group,
+        )
+
+        fallback_model_group, _ = get_fallback_model_group(
+            fallbacks=fallbacks, model_group=model_group
+        )
         return fallback_model_group
 
     def _get_fallback_model_group_for_lookup_groups(
