@@ -1150,6 +1150,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "enum": ["none", "minimal", "low", "medium", "high", "xhigh"],
                 },
                 "supports_adaptive_thinking": {"type": "boolean"},
+                "supports_anthropic_thinking_payload": {"type": "boolean"},
                 "supports_legacy_thinking": {"type": "boolean"},
                 "thinking_always_on": {"type": "boolean"},
                 "supports_mid_conversation_system": {"type": "boolean"},
@@ -4491,6 +4492,75 @@ def test_fireworks_models_in_backup_cost_map():
         assert model_cost.get(short_key) == model_cost.get(
             long_key
         ), f"short-form {short_key} does not match long-form {long_key}"
+
+
+@pytest.fixture
+def fireworks_short_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "fireworks_ai/accounts/fireworks/models/glm-5p3": {
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "litellm_provider": "fireworks_ai",
+                "mode": "chat",
+                "max_tokens": 100,
+            },
+            "fireworks_ai/accounts/fireworks/routers/glm-5p3-fast": {
+                "input_cost_per_token": 2.1e-6,
+                "output_cost_per_token": 6.6e-6,
+                "litellm_provider": "fireworks_ai",
+                "mode": "chat",
+            },
+            "fireworks_ai/nomic-ai/nomic-embed-text-v1.5": {
+                "input_cost_per_token": 8e-9,
+                "output_cost_per_token": 0.0,
+                "litellm_provider": "fireworks_ai",
+                "mode": "embedding",
+            },
+        },
+    )
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
+
+
+def test_fireworks_short_model_names_resolve_to_long_cost_map_keys(fireworks_short_model_cost_map: None) -> None:
+    model_info = litellm.get_model_info("fireworks_ai/glm-5p3")
+    assert model_info["key"] == "fireworks_ai/accounts/fireworks/models/glm-5p3"
+    assert model_info["input_cost_per_token"] == 1e-6
+    assert model_info["max_tokens"] == 100
+
+    model_info = litellm.get_model_info("glm-5p3", custom_llm_provider="fireworks_ai")
+    assert model_info["key"] == "fireworks_ai/accounts/fireworks/models/glm-5p3"
+
+    model_info = litellm.get_model_info("fireworks_ai/glm-5p3-fast")
+    assert model_info["key"] == "fireworks_ai/accounts/fireworks/routers/glm-5p3-fast"
+    assert model_info["input_cost_per_token"] == 2.1e-6
+
+    model_info = litellm.get_model_info("fireworks_ai/nomic-ai/nomic-embed-text-v1.5")
+    assert model_info["key"] == "fireworks_ai/nomic-ai/nomic-embed-text-v1.5"
+
+    with pytest.raises(Exception, match="isn't mapped"):
+        litellm.get_model_info("fireworks_ai/does-not-exist")
+
+
+def test_fireworks_short_model_names_price_with_completion_cost(fireworks_short_model_cost_map: None) -> None:
+    from litellm.types.utils import ModelResponse
+
+    response = ModelResponse(
+        model="fireworks_ai/glm-5p3",
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="fireworks_ai/glm-5p3",
+        custom_llm_provider="fireworks_ai",
+    )
+
+    assert cost == pytest.approx(10 * 1e-6 + 5 * 2e-6)
 
 
 class TestBedrockBaseModelLabelKeepsTools:
