@@ -1203,15 +1203,32 @@ class TestToolPermissionGuardrailAnthropicMessages:
         assert excinfo.value.detail["detection_message"] == "Tool 'Read' denied by rule 'deny_read'"
 
     @pytest.mark.asyncio
-    async def test_pre_call_rewrite_strips_denied_anthropic_tool_and_forced_choice(self):
+    @pytest.mark.parametrize(
+        ("tool_shape", "tool_choice", "call_type", "expected_tool_choice"),
+        [
+            (
+                {"input_schema": {"type": "object", "properties": {}}},
+                {"type": "tool", "name": "Read"},
+                "anthropic_messages",
+                {"type": "none"},
+            ),
+            (
+                {"type": "function", "parameters": {"type": "object", "properties": {}}},
+                {"type": "function", "name": "Read"},
+                "responses",
+                "none",
+            ),
+        ],
+        ids=["anthropic", "responses_api"],
+    )
+    async def test_pre_call_rewrite_strips_denied_flat_tool_and_forced_choice(
+        self, tool_shape, tool_choice, call_type, expected_tool_choice
+    ):
         data = {
             "model": "claude-sonnet-4-5",
             "messages": [{"role": "user", "content": "hi"}],
-            "tools": [
-                {"name": "Bash", "input_schema": {"type": "object", "properties": {}}},
-                {"name": "Read", "input_schema": {"type": "object", "properties": {}}},
-            ],
-            "tool_choice": {"type": "tool", "name": "Read"},
+            "tools": [{"name": "Bash", **tool_shape}, {"name": "Read", **tool_shape}],
+            "tool_choice": tool_choice,
         }
 
         with patch.object(self.rewriting, "should_run_guardrail", return_value=True):
@@ -1219,11 +1236,11 @@ class TestToolPermissionGuardrailAnthropicMessages:
                 user_api_key_dict=UserAPIKeyAuth(),
                 cache=DualCache(default_in_memory_ttl=1),
                 data=data,
-                call_type="anthropic_messages",
+                call_type=call_type,
             )
 
         assert [tool["name"] for tool in result["tools"]] == ["Bash"]
-        assert result["tool_choice"] == {"type": "none"}
+        assert result["tool_choice"] == expected_tool_choice
 
     @pytest.mark.asyncio
     async def test_denied_anthropic_tool_use_is_blocked(self):

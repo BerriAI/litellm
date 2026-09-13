@@ -620,12 +620,10 @@ class ToolPermissionGuardrail(CustomGuardrail):
             return None
         if isinstance(tool_choice, str):
             return tool_choice
-        choice_type: Final[object] = self._get_mapping_value(tool_choice, "type")
-        if choice_type == "tool":
-            return self._get_mapping_value(tool_choice, "name")
-        if choice_type != "function":
+        if self._get_mapping_value(tool_choice, "type") not in ("tool", "function"):
             return None
-        return self._get_mapping_value(self._get_mapping_value(tool_choice, "function"), "name")
+        function_name: Final = self._get_mapping_value(self._get_mapping_value(tool_choice, "function"), "name")
+        return function_name or self._get_mapping_value(tool_choice, "name")
 
     @staticmethod
     def _is_anthropic_tool_choice(data: Mapping[str, object]) -> bool:
