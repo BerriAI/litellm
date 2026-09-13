@@ -144,6 +144,127 @@ class TestVertexAIFilesHandler:
             assert call_args.kwargs["standard_callback_dynamic_params"]["gcs_bucket_name"] == "test-bucket"
 
     @pytest.mark.asyncio
+    async def test_afile_content_fetches_all_result_shards(self):
+        """A sharded unmanaged-container batch output names shard zero in the file id; reading
+        only that shard silently drops the rest of the batch (LIT-7387)."""
+        file_id = (
+            "gs%3A%2F%2Ftest-bucket%2Flitellm-vertex-files%2Fcustom-endpoints%2F123%2F"
+            "prediction-custom-unmanaged-model-2026_09_09T13_00_00_000Z%2Fprediction.results-00000-of-00003"
+        )
+        shards = {
+            "litellm-vertex-files/custom-endpoints/123/prediction-custom-unmanaged-model-2026_09_09T13_00_00_000Z/prediction.results-00000-of-00003": b'{"a": 1}\n',
+            "litellm-vertex-files/custom-endpoints/123/prediction-custom-unmanaged-model-2026_09_09T13_00_00_000Z/prediction.results-00001-of-00003": b'{"b": 2}\n',
+            "litellm-vertex-files/custom-endpoints/123/prediction-custom-unmanaged-model-2026_09_09T13_00_00_000Z/prediction.results-00002-of-00003": b'{"c": 3}',
+        }
+
+        async def fake_download(object_name: str, **kwargs):
+            return shards[object_name]
+
+        with (
+            patch.object(self.handler, "download_gcs_object", side_effect=fake_download),
+            patch.object(
+                self.handler,
+                "get_gcs_logging_config",
+                new_callable=AsyncMock,
+                return_value=_mock_gcs_logging_config(),
+            ),
+        ):
+            result = await self.handler.afile_content(
+                file_content_request=FileContentRequest(file_id=file_id, extra_headers=None, extra_body=None),
+                vertex_credentials=None,
+                vertex_project="test-project",
+                vertex_location="us-central1",
+                timeout=60.0,
+                max_retries=3,
+            )
+
+        assert result.response.content == b'{"a": 1}\n{"b": 2}\n{"c": 3}'
+
+    @pytest.mark.asyncio
+    async def test_afile_content_single_shard_unchanged(self):
+        file_id = (
+            "gs%3A%2F%2Ftest-bucket%2Flitellm-vertex-files%2Fcustom-endpoints%2F123%2F"
+            "prediction-custom-unmanaged-model-2026_09_09T13_00_00_000Z%2Fprediction.results-00000-of-00001"
+        )
+        with (
+            patch.object(self.handler, "download_gcs_object", new_callable=AsyncMock) as mock_download,
+            patch.object(
+                self.handler,
+                "get_gcs_logging_config",
+                new_callable=AsyncMock,
+                return_value=_mock_gcs_logging_config(),
+            ),
+        ):
+            mock_download.return_value = b'{"a": 1}\n'
+            result = await self.handler.afile_content(
+                file_content_request=FileContentRequest(file_id=file_id, extra_headers=None, extra_body=None),
+                vertex_credentials=None,
+                vertex_project="test-project",
+                vertex_location="us-central1",
+                timeout=60.0,
+                max_retries=3,
+            )
+
+        assert result.response.content == b'{"a": 1}\n'
+        mock_download.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_afile_content_crafted_upload_filename_does_not_fan_out(self):
+        """The object path comes from a caller-controlled file id, so an ordinary upload whose
+        name mimics the shard suffix must not trigger shard fetches (99,998 GCS requests from one
+        crafted 'prediction.results-00000-of-99999' filename)."""
+        file_id = "gs%3A%2F%2Ftest-bucket%2Flitellm-vertex-files%2Fuploads%2Fabc-prediction.results-00000-of-99999"
+        with (
+            patch.object(self.handler, "download_gcs_object", new_callable=AsyncMock) as mock_download,
+            patch.object(
+                self.handler,
+                "get_gcs_logging_config",
+                new_callable=AsyncMock,
+                return_value=_mock_gcs_logging_config(),
+            ),
+        ):
+            mock_download.return_value = b"tiny"
+            result = await self.handler.afile_content(
+                file_content_request=FileContentRequest(file_id=file_id, extra_headers=None, extra_body=None),
+                vertex_credentials=None,
+                vertex_project="test-project",
+                vertex_location="us-central1",
+                timeout=60.0,
+                max_retries=3,
+            )
+
+        assert result.response.content == b"tiny"
+        mock_download.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_afile_content_shard_count_above_cap_raises(self):
+        file_id = (
+            "gs%3A%2F%2Ftest-bucket%2Flitellm-vertex-files%2Fcustom-endpoints%2F123%2F"
+            "prediction-custom-unmanaged-model-2026_09_09T13_00_00_000Z%2Fprediction.results-00000-of-99999"
+        )
+        with (
+            patch.object(self.handler, "download_gcs_object", new_callable=AsyncMock) as mock_download,
+            patch.object(
+                self.handler,
+                "get_gcs_logging_config",
+                new_callable=AsyncMock,
+                return_value=_mock_gcs_logging_config(),
+            ),
+        ):
+            mock_download.return_value = b"tiny"
+            with pytest.raises(ValueError, match="shards"):
+                await self.handler.afile_content(
+                    file_content_request=FileContentRequest(file_id=file_id, extra_headers=None, extra_body=None),
+                    vertex_credentials=None,
+                    vertex_project="test-project",
+                    vertex_location="us-central1",
+                    timeout=60.0,
+                    max_retries=3,
+                )
+
+        mock_download.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_afile_content_missing_file_id(self):
         """Test async file content retrieval with missing file_id"""
         file_content_request = FileContentRequest(extra_headers=None, extra_body=None)
@@ -182,8 +303,7 @@ class TestVertexAIFilesHandler:
             with pytest.raises(
                 ValueError,
                 match=re.escape(
-                    "Failed to download file from GCS: "
-                    "gs://test-bucket/litellm-vertex-files/uploads/abc-test-file.txt"
+                    "Failed to download file from GCS: gs://test-bucket/litellm-vertex-files/uploads/abc-test-file.txt"
                 ),
             ):
                 await self.handler.afile_content(
