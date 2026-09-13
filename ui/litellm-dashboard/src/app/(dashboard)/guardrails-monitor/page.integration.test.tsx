@@ -11,7 +11,23 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 
 const fetchMock = vi.fn();
 
-const requestedUrls = () => fetchMock.mock.calls.map(([url]) => String(url));
+const requestUrl = (input: RequestInfo | URL) => (input instanceof Request ? input.url : String(input));
+
+const requestedUrls = () => fetchMock.mock.calls.map(([input]) => requestUrl(input));
+
+const emptyOverview = {
+  rows: [],
+  chart: [],
+  totalRequests: 0,
+  totalBlocked: 0,
+  passRate: 100,
+  totalUsageUnits: {},
+  totalCost: null,
+  totalUntrackedUsageUnits: {},
+};
+
+const jsonResponse = (body: unknown) =>
+  new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 
 const renderAs = (userRole: string) => {
   useAuthorizedMock.mockReturnValue({ accessToken: "sk-test", userId: "u1", userRole });
@@ -25,12 +41,9 @@ describe("Guardrails Monitor page access by role", () => {
   beforeEach(() => {
     testQueryClient.clear();
     vi.clearAllMocks();
-    fetchMock.mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      json: async () => ({ rows: [], chart: [], totalRequests: 0, totalBlocked: 0, passRate: 100 }),
-    });
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) =>
+      jsonResponse(requestUrl(input).includes("/guardrails/usage/overview") ? emptyOverview : []),
+    );
     vi.stubGlobal("fetch", fetchMock);
   });
 
@@ -46,8 +59,7 @@ describe("Guardrails Monitor page access by role", () => {
       renderAs(userRole);
 
       expect(await screen.findByText("Guardrails Monitor is only available to admin users.")).toBeInTheDocument();
-      await waitFor(() => expect(fetchMock).not.toHaveBeenCalled());
-      expect(requestedUrls().filter((url) => url.includes("/guardrails/usage"))).toEqual([]);
+      await waitFor(() => expect(requestedUrls().filter((url) => url.includes("/guardrails/usage"))).toEqual([]));
     },
   );
 });

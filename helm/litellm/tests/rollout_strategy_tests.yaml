@@ -1,0 +1,66 @@
+suite: test rolling update strategy on the component deployments
+templates:
+  - gateway/deployment.yaml
+  - gateway/configmap.yaml
+  - backend/deployment.yaml
+  - ui/deployment.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: leaves the strategy to Kubernetes defaults when unset
+    asserts:
+      - notExists:
+          path: spec.strategy
+
+  - it: renders the configured strategy on each deployment
+    set:
+      gateway.strategy:
+        type: RollingUpdate
+        rollingUpdate:
+          maxUnavailable: 0
+          maxSurge: 1
+      backend.strategy:
+        type: RollingUpdate
+        rollingUpdate:
+          maxUnavailable: "25%"
+          maxSurge: 2
+      ui.strategy:
+        type: Recreate
+    asserts:
+      - equal:
+          path: spec.strategy
+          value:
+            type: RollingUpdate
+            rollingUpdate:
+              maxUnavailable: 0
+              maxSurge: 1
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.strategy
+          value:
+            type: RollingUpdate
+            rollingUpdate:
+              maxUnavailable: 25%
+              maxSurge: 2
+        template: backend/deployment.yaml
+      - equal:
+          path: spec.strategy
+          value:
+            type: Recreate
+        template: ui/deployment.yaml
+
+  - it: keeps a component on the cluster default when only another one sets a strategy
+    set:
+      gateway.strategy:
+        type: Recreate
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+        template: gateway/deployment.yaml
+      - notExists:
+          path: spec.strategy
+        template: backend/deployment.yaml
+      - notExists:
+          path: spec.strategy
+        template: ui/deployment.yaml

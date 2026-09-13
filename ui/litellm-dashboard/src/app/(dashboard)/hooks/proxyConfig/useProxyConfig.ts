@@ -17,6 +17,10 @@ export enum ConfigType {
  */
 export enum GeneralSettingsFieldName {
   MAXIMUM_SPEND_LOGS_RETENTION_PERIOD = "maximum_spend_logs_retention_period",
+  MAXIMUM_SPEND_LOGS_CLEANUP_BATCH_SIZE = "maximum_spend_logs_cleanup_batch_size",
+  MAXIMUM_SPEND_LOGS_CLEANUP_MAX_BATCHES = "maximum_spend_logs_cleanup_max_batches",
+  MAXIMUM_SPEND_LOGS_CLEANUP_RUN_BUDGET = "maximum_spend_logs_cleanup_run_budget",
+  MAXIMUM_SPEND_LOGS_CLEANUP_BATCH_TIMEOUT = "maximum_spend_logs_cleanup_batch_timeout",
   // Add more field names here as needed
 }
 

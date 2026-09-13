@@ -1,14 +1,10 @@
 import asyncio
 import json
-import sys
 import os
 import tempfile
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.google_genai import (

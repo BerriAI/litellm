@@ -12,6 +12,7 @@ export interface SpendMetrics {
   compression_saved_tokens?: number;
   compression_savings_spend?: number;
   prompt_caching_savings_spend?: number;
+  gateway_injected_caching_savings_spend?: number;
   autorouter_savings_spend?: number;
 }
 
@@ -45,6 +46,8 @@ export interface KeyMetricWithMetadata {
 export interface KeyMetadata {
   key_alias: string | null;
   team_id: string | null;
+  user_id?: string | null;
+  user_email?: string | null;
   tags?: { tag: string; usage: number }[];
 }
 
@@ -68,6 +71,7 @@ export interface TopModelData {
 
 export interface ModelActivityData {
   label: string;
+  key_metadata?: KeyMetadata;
   total_requests: number;
   total_successful_requests: number;
   total_failed_requests: number;

@@ -1,3 +1,4 @@
+import { keyActivityLabel } from "@/components/UsagePage/keyActivityLabel";
 import { BreakdownMetrics, DailyData, KeyMetricWithMetadata, TagUsage } from "@/components/UsagePage/types";
 
 export type ExtendedDailyData = DailyData & {
@@ -5,6 +6,15 @@ export type ExtendedDailyData = DailyData & {
 };
 
 export type ModelBreakdownKey = "models" | "model_groups";
+
+export interface ProviderSpendRow extends Record<string, unknown> {
+  provider: string;
+  spend: number;
+  requests: number;
+  successful_requests: number;
+  failed_requests: number;
+  tokens: number;
+}
 
 export const getTopModels = (
   results: ExtendedDailyData[],
@@ -109,6 +119,7 @@ export const getTopAPIKeys = (results: ExtendedDailyData[], topKeysLimit: number
           metadata: {
             key_alias: metrics.metadata.key_alias,
             team_id: metrics.metadata.team_id || null,
+            user_email: metrics.metadata.user_email,
             tags: tagDictionary[key] || [],
           },
         };
@@ -128,7 +139,7 @@ export const getTopAPIKeys = (results: ExtendedDailyData[], topKeysLimit: number
   return Object.entries(keySpend)
     .map(([api_key, metrics]) => ({
       api_key,
-      key_alias: metrics.metadata.key_alias || "-", // Using truncated key as alias
+      key_alias: keyActivityLabel(metrics.metadata),
       tags: metrics.metadata.tags || "-",
       spend: metrics.metrics.spend,
     }))
@@ -136,8 +147,8 @@ export const getTopAPIKeys = (results: ExtendedDailyData[], topKeysLimit: number
     .slice(0, topKeysLimit);
 };
 
-export const getProviderSpend = (results: ExtendedDailyData[]) => {
-  const providerSpend: { [key: string]: any } = {};
+export const getProviderSpend = (results: ExtendedDailyData[]): ProviderSpendRow[] => {
+  const providerSpend: Record<string, ProviderSpendRow> = {};
   results.forEach((day) => {
     Object.entries(day.breakdown.providers || {}).forEach(([provider, metrics]) => {
       if (!providerSpend[provider]) {
