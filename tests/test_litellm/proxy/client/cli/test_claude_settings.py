@@ -201,6 +201,7 @@ class TestConflictingOwnersOfTheSettingsFile:
 
 
 class TestDoesNotDestroyUserOwnedStructure:
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlink creation needs elevation or Developer Mode on Windows")
     def test_writes_through_a_symlinked_settings_file(self, tmp_path):
         """os.replace() swaps the symlink for a regular file, detaching a dotfiles repo.
 
@@ -265,6 +266,7 @@ class TestConfigureStatePath:
         default_settings, default_state = default_paths
         assert configure_state_path(default_settings) == default_state
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlink creation needs elevation or Developer Mode on Windows")
     def test_a_symlink_alias_of_the_default_file_shares_its_receipt(self, default_paths):
         default_settings, default_state = default_paths
         default_settings.parent.mkdir(parents=True)
@@ -713,6 +715,7 @@ class TestConfigureAndUnconfigure:
         finally:
             rig.state.parent.chmod(0o700)
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlink creation needs elevation or Developer Mode on Windows")
     def test_configure_writes_through_a_symlinked_settings_file(self, tmp_path):
         target = tmp_path / "dotfiles" / "settings.json"
         target.parent.mkdir()
