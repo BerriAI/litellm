@@ -33,7 +33,7 @@ class ProviderUnavailableError(AssertionError):
 class NetworkFailureError(AssertionError):
     def __init__(self, failure: ProviderFailure, message: str) -> None:
         self.failure: Final = failure
-        super().__init__(f"kind='network'; {failure.model_dump_json(exclude_none=True)}; body={message[:1000]}")
+        super().__init__(f"HTTP transfer failed; {failure.model_dump_json(exclude_none=True)}; body={message[:1000]}")
 
 
 class _ErrorMessage(BaseModel):

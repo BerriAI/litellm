@@ -125,6 +125,27 @@ class TestBedrockEventStream:
         with pytest.raises(ChecksumMismatch):
             tuple(decode_bedrock_stream((wire[:-1] + bytes([wire[-1] ^ 1]),)))
 
+    @pytest.mark.parametrize("invoke", [False, True])
+    @pytest.mark.parametrize("cut", [1, 7, 11, 12, 30, -1])
+    def test_incomplete_frame_after_valid_completion_is_rejected(self, invoke: bool, cut: int) -> None:
+        wire: Final = (
+            b"".join(
+                _frame(json.dumps({"bytes": base64.b64encode(event.encode()).decode()}), "chunk")
+                for event in _INVOKE
+            )
+            if invoke
+            else b"".join(
+                _frame(json.dumps(value), key)
+                for payload in _CONVERSE
+                for key, value in _JSON_OBJECT.validate_json(payload).items()
+            )
+        )
+        assertion: Final = assert_invoke_stream if invoke else assert_converse_stream
+        assertion(streaming_outcome(_BinaryResponse((wire,)), True, sent_at=0.0))
+        extra: Final = _frame('{"message":"unavailable"}', "serviceUnavailableException", "exception")[:cut]
+        with pytest.raises(AssertionError, match="incomplete Bedrock frame"):
+            assertion(streaming_outcome(_BinaryResponse((wire, extra)), True, sent_at=0.0))
+
 
 class TestNativeStreamAssertions:
     @pytest.mark.parametrize("missing", [0, 1, 3, 4])
@@ -180,7 +201,7 @@ def test_interrupted_http_stream_preserves_network_classification_and_ids(path: 
         )
         assert result.status_code == 200 and not result.ok
         assert result.network_error is not None and result.network_error.kind == "network"
-        with pytest.raises(NetworkFailureError, match="kind='network'") as caught:
+        with pytest.raises(NetworkFailureError, match="HTTP transfer failed") as caught:
             require_successful_call(result)
         assert caught.value.failure.provider is None
         assert caught.value.failure.request_id == "interrupted-request"

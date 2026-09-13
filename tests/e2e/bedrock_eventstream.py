@@ -17,6 +17,10 @@ class _InvokeChunk(BaseModel):
     bytes: str
 
 
+class _PreludeLength(BaseModel):
+    total_length: int
+
+
 @dataclass(frozen=True, slots=True)
 class BedrockEvent:
     payload: str
@@ -41,9 +45,24 @@ def _decode_event(event: EventStreamMessage) -> BedrockEvent:
     return BedrockEvent(payload=_JSON.dump_json({headers.event_type: _JSON.validate_json(event.payload)}).decode())
 
 
-def decode_bedrock_stream(chunks: Iterable[bytes]) -> Iterator[BedrockEvent]:
-    buffer: Final = EventStreamBuffer()
-    for chunk in chunks:
-        buffer.add_data(chunk)
-        for event in buffer:
+class _CompleteEventStream:
+    def __init__(self) -> None:
+        self._buffer: Final = EventStreamBuffer()
+        self._pending_bytes: int = 0
+
+    def feed(self, chunk: bytes) -> Iterator[BedrockEvent]:
+        self._pending_bytes += len(chunk)
+        self._buffer.add_data(chunk)
+        for event in self._buffer:
+            self._pending_bytes -= _PreludeLength.model_validate(event.prelude, from_attributes=True).total_length
             yield _decode_event(event)
+
+    def finish(self) -> None:
+        assert self._pending_bytes == 0, f"incomplete Bedrock frame: {self._pending_bytes} trailing bytes"
+
+
+def decode_bedrock_stream(chunks: Iterable[bytes]) -> Iterator[BedrockEvent]:
+    stream: Final = _CompleteEventStream()
+    for chunk in chunks:
+        yield from stream.feed(chunk)
+    stream.finish()
