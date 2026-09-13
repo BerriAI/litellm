@@ -28,6 +28,7 @@ from litellm.proxy.auth.auth_utils import is_request_body_safe  # noqa: E402
         "base_url",
         "vertex_credentials",
         "azure_ad_token",
+        "ssl_verify",
     ],
 )
 def test_banned_param_under_extra_body_is_rejected(banned_param):

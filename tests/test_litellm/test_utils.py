@@ -5403,6 +5403,19 @@ def test_client_side_timeout_marker_never_reaches_the_provider():
     )
 
 
+def test_ssl_verify_never_reaches_the_provider_params():
+    """SSL transport configuration must stay in litellm_params instead of extra_body."""
+    kwargs = {"a_real_provider_specific_param": 1, "ssl_verify": "/tmp/ca.pem"}
+
+    non_default = get_non_default_completion_params(kwargs)
+
+    assert non_default == {"a_real_provider_specific_param": 1}, (
+        "ssl_verify leaked into the provider params: "
+        f"{sorted(set(non_default) - {'a_real_provider_specific_param'})}"
+    )
+    assert "ssl_verify" in all_litellm_params
+
+
 class _RecordingDeploymentFailureLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()

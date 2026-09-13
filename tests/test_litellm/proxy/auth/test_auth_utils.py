@@ -2361,6 +2361,53 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
         )
 
 
+class TestIsRequestBodySafeBlocksTLSVerificationOverride:
+    @pytest.mark.parametrize("ssl_verify", [False, "/tmp/custom-ca.pem"])
+    def test_ssl_verify_in_request_body_is_rejected(self, ssl_verify):
+        with pytest.raises(ValueError, match="ssl_verify"):
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "ssl_verify": ssl_verify},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_admin_opt_in_proxy_wide_allows_ssl_verify(self):
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "ssl_verify": False},
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+    def test_admin_opt_in_per_deployment_allows_ssl_verify(self):
+        from litellm import Router
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4",
+                    "litellm_params": {
+                        "model": "openai/gpt-4",
+                        "configurable_clientside_auth_params": ["ssl_verify"],
+                    },
+                }
+            ]
+        )
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "ssl_verify": "/tmp/custom-ca.pem"},
+                general_settings={},
+                llm_router=router,
+                model="gpt-4",
+            )
+            is True
+        )
+
+
 class TestIsRequestBodySafeBlocksBedrockProjectOverride:
     """``aws_bedrock_project_id`` pins a deployment to a Bedrock project so
     that project's data-retention policy applies to its requests. A
