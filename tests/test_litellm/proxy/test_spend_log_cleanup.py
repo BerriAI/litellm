@@ -1417,3 +1417,88 @@ def test_the_reported_run_outcome_is_the_most_significant_reason_in_any_order(st
     """
     results = tuple(TableCleanupResult(rows_deleted=0, stop_reason=reason) for reason in stop_reasons)
     assert SpendLogCleanup._run_outcome(results) == expected
+
+
+@pytest.mark.asyncio
+async def test_cancelled_cleanup_records_and_logs_aborted_run(monkeypatch):
+    """
+    When cleanup_old_spend_logs is cancelled (e.g. during pod shutdown),
+    asyncio.CancelledError must record outcome='aborted', emit an error-level
+    diagnostic containing progress metrics (including rows deleted and batches
+    completed prior to cancellation), and re-raise CancelledError.
+    """
+    import litellm.proxy.db.db_transaction_queue.spend_log_cleanup as cleanup_module
+
+    mock_db = MagicMock()
+    _wire_tx(mock_db)
+    # First batch deletes 150 rows. Second batch simulates cancellation mid-run.
+    mock_db.execute_raw = AsyncMock(
+        side_effect=[150, asyncio.CancelledError("simulated shutdown mid-run")]
+    )
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = mock_db
+
+    mock_lock_manager = MagicMock()
+    mock_lock_manager.redis_cache = MagicMock()
+    mock_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    mock_lock_manager.release_lock = AsyncMock()
+
+    cleaner = SpendLogCleanup(
+        general_settings={"maximum_spend_logs_retention_period": "7d"}
+    )
+    cleaner.pod_lock_manager = mock_lock_manager
+
+    logger = MagicMock()
+    recorded_runs: list[str] = []
+
+    monkeypatch.setattr(cleanup_module, "verbose_proxy_logger", logger)
+    monkeypatch.setattr(
+        cleanup_module.SpendLogCleanupMetrics, "record_run", lambda outcome: recorded_runs.append(outcome)
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+
+    assert recorded_runs == ["aborted"]
+    assert cleaner._run_rows_deleted == 150
+    assert cleaner._run_batches == 1
+    mock_lock_manager.release_lock.assert_awaited_once()
+
+    logger.exception.assert_called_once()
+    log_call = logger.exception.call_args[0]
+    rendered_log = log_call[0] % log_call[1:]
+    assert "cancelled" in rendered_log.lower()
+    assert "elapsed=" in rendered_log
+    assert "rows_deleted=150" in rendered_log
+    assert "batches=1" in rendered_log
+
+
+@pytest.mark.asyncio
+async def test_cancelled_cleanup_releases_lock():
+    """
+    When a cleanup run holds a distributed pod lock and is cancelled,
+    the finally block must release the lock before propagating CancelledError.
+    """
+    mock_db = MagicMock()
+    _wire_tx(mock_db)
+    mock_db.execute_raw = AsyncMock(
+        side_effect=asyncio.CancelledError("simulated immediate shutdown")
+    )
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = mock_db
+
+    mock_lock_manager = MagicMock()
+    mock_lock_manager.redis_cache = MagicMock()
+    mock_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    mock_lock_manager.release_lock = AsyncMock()
+
+    cleaner = SpendLogCleanup(
+        general_settings={"maximum_spend_logs_retention_period": "7d"}
+    )
+    cleaner.pod_lock_manager = mock_lock_manager
+
+    with pytest.raises(asyncio.CancelledError):
+        await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+
+    mock_lock_manager.release_lock.assert_awaited_once()
+
