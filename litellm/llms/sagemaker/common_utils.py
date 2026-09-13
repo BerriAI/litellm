@@ -174,7 +174,11 @@ class AWSEventStreamDecoder:
                 except Exception as e:
                     verbose_logger.error("Error parsing message: %s. Attempting to combine with next event.", e)
                     continue
-
+        
+        # remove custom sagemaker [DONE] message in stream
+        if accumulated_json.endswith("[DONE]"):
+            accumulated_json = accumulated_json[:-6].strip()
+        
         # Handle any remaining data after the iterator is exhausted
         if accumulated_json:
             try:
