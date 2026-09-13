@@ -2334,6 +2334,47 @@ def test_sync_retrieve_file_content_raises_on_http_error():
     assert exc_info.value.status_code == 404
 
 
+def test_handle_error_preserves_base_llm_exception_message_and_status():
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
+
+    message = "Invalid JSON on line 3 of batch input file: Expecting value"
+    error = VertexAIError(status_code=400, message=message)
+
+    with pytest.raises(VertexAIError) as exc_info:
+        BaseLLMHTTPHandler()._handle_error(e=error, provider_config=VertexAIFilesConfig())
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.message == message
+
+
+def test_handle_error_preserves_base_llm_exception_from_wrapper():
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
+
+    message = "Invalid JSON on line 3 of batch input file: Expecting value"
+    error = VertexAIError(status_code=400, message=message)
+    wrapper = httpx.ConnectError("Failed to send bytes")
+    wrapper.__cause__ = error
+
+    with pytest.raises(VertexAIError) as exc_info:
+        BaseLLMHTTPHandler()._handle_error(e=wrapper, provider_config=VertexAIFilesConfig())
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.message == message
+
+
+def test_handle_error_maps_plain_exception_to_provider_error():
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
+
+    with pytest.raises(VertexAIError) as exc_info:
+        BaseLLMHTTPHandler()._handle_error(e=ValueError("boom"), provider_config=VertexAIFilesConfig())
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.message == "boom"
+
+
 _UPSTREAM_NOT_FOUND_BODY = {
     "error": {
         "message": "Response with id 'resp_abc' not found.",
