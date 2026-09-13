@@ -26202,6 +26202,12 @@ export interface components {
             /** User Header Mappings */
             user_header_mappings?: components["schemas"]["UserHeaderMapping"][] | null;
             /**
+             * User Header Mappings Upsert User Id
+             * @description When a user_header_mappings header carries an email address that matches no internal user, create that user instead of falling back to the raw header value. Off by default so untrusted headers cannot grow the user table.
+             * @default false
+             */
+            user_header_mappings_upsert_user_id: boolean;
+            /**
              * User Header Name
              * @description [DEPRECATED] Use 'user_header_mappings' instead. When set, the header value is treated as the end user id unless overridden by user_header_mappings.
              */

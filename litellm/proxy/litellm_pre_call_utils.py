@@ -174,8 +174,11 @@ _ENABLE_TEAM_STALE_ALIAS_BYPASS: bool | None = None
 
 if TYPE_CHECKING:
     from litellm.integrations.otel.model.destination import OtelDestination
+    from litellm.models.user import LiteLLM_UserTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.policy_engine.attachment_registry import AttachmentRegistry
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
+    from litellm.proxy.utils import PrismaClient
     from litellm.types.proxy.policy_engine import Policy, PolicyMatchContext
 
     ProxyConfig = _ProxyConfig
@@ -1300,10 +1303,42 @@ class LiteLLMProxyRequestSetup:
         return None
 
     @staticmethod
-    def add_internal_user_from_user_mapping(
-        general_settings: dict | None,
+    async def _resolve_internal_user_from_mapped_header(
+        header_value: str,
+        upsert_missing_user: bool,
+        prisma_client: "PrismaClient",
+        user_api_key_cache: "UserApiKeyCache",
+    ) -> "LiteLLM_UserTable | None":
+        from litellm.proxy.auth.auth_checks import UserNotFoundError, get_user_object
+
+        try:
+            return await get_user_object(
+                user_id=header_value,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id_upsert=upsert_missing_user,
+                user_email=header_value if "@" in header_value else None,
+            )
+        except UserNotFoundError:
+            verbose_logger.debug(
+                "user_header_mappings: no internal user matches mapped header value %s",
+                _sanitize_for_log(header_value),
+            )
+            return None
+        except Exception as e:
+            verbose_logger.warning(
+                "user_header_mappings: failed to resolve internal user for mapped header value: %s",
+                _sanitize_for_log(e),
+            )
+            return None
+
+    @staticmethod
+    async def add_internal_user_from_user_mapping(
+        general_settings: Mapping[str, object] | None,
         user_api_key_dict: UserAPIKeyAuth,
         headers: dict,
+        prisma_client: "PrismaClient | None" = None,
+        user_api_key_cache: "UserApiKeyCache | None" = None,
     ) -> UserAPIKeyAuth:
         if general_settings is None:
             return user_api_key_dict
@@ -1314,9 +1349,30 @@ class LiteLLMProxyRequestSetup:
         if not header_name:
             return user_api_key_dict
         header_value: Final = LiteLLMProxyRequestSetup._get_case_insensitive_header(headers, header_name)
-        if header_value:
+        if not header_value:
+            return user_api_key_dict
+
+        internal_user: Final = (
+            await LiteLLMProxyRequestSetup._resolve_internal_user_from_mapped_header(
+                header_value=header_value,
+                upsert_missing_user=general_settings.get("user_header_mappings_upsert_user_id") is True,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
+            if prisma_client is not None and user_api_key_cache is not None
+            else None
+        )
+        if internal_user is None:
             user_api_key_dict.user_id = header_value
             return user_api_key_dict
+
+        # hooks/max_budget_limiter.py reads user_max_budget/user_spend off this object, so they have to
+        # move with user_id. user_role is deliberately not copied: it is the authenticated privilege
+        # level, and a request header must never be able to raise it.
+        user_api_key_dict.user_id = internal_user.user_id
+        user_api_key_dict.user_email = internal_user.user_email
+        user_api_key_dict.user_max_budget = internal_user.max_budget
+        user_api_key_dict.user_spend = internal_user.spend
         return user_api_key_dict
 
     @staticmethod
@@ -1928,7 +1984,7 @@ async def add_litellm_data_to_request(
 
     """
 
-    from litellm.proxy.proxy_server import llm_router, premium_user
+    from litellm.proxy.proxy_server import llm_router, premium_user, prisma_client, user_api_key_cache
     from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
 
     # Strip internal-only keys from user input before the proxy sets its own.
@@ -2056,8 +2112,12 @@ async def add_litellm_data_to_request(
         data=data, headers=_headers, user_api_key_dict=user_api_key_dict
     )
 
-    user_api_key_dict = LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
-        general_settings, user_api_key_dict, _headers
+    user_api_key_dict = await LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+        general_settings,
+        user_api_key_dict,
+        _headers,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
     )
 
     # Parse user info from headers (fallback to general_settings.user_header_name)
