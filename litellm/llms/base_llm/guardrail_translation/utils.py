@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from itertools import accumulate
 from types import MappingProxyType
 from typing import Final, TypeVar, cast  # noqa: TID251  # a rebuilt chat row has no typed constructor across roles
 
@@ -390,7 +389,7 @@ def _part_with_text(part: object, text: str) -> object:
     return {**part, "text": text}  # mutable-ok: content parts stay JSON-plain dicts
 
 
-def _content_with_slot_texts(content: Sequence[object], texts: Sequence[str]) -> list[object]:
+def _content_with_slot_texts(content: Sequence[object], texts: Sequence[str]) -> Sequence[object]:
     text_part_indices: Final = tuple(
         index for index, part in enumerate(content) if _content_part_text(part) is not None
     )
@@ -401,39 +400,18 @@ def _content_with_slot_texts(content: Sequence[object], texts: Sequence[str]) ->
     ]
 
 
-def _message_with_slot_texts(message: AllMessageValues, texts: Sequence[str]) -> AllMessageValues:
+def message_with_slot_texts(message: AllMessageValues, texts: Sequence[str]) -> AllMessageValues | None:
+    """Swap one rewritten text into each text slot of a chat row, in order.
+
+    A slot is a string ``content`` or one list part carrying a string ``text``;
+    images and other parts ride along untouched. Returns None unless the counts
+    line up exactly, so a rewrite never lands on the wrong slot.
+    """
+    if message_text_slot_count(message) != len(texts):
+        return None
     content: Final = message.get("content")
     if not isinstance(content, (str, list)):
         return message
     rewritten_content: Final = texts[0] if isinstance(content, str) else _content_with_slot_texts(content, texts)
     rewritten: Final = {**message, "content": rewritten_content}  # mutable-ok: chat rows stay JSON-plain dicts
     return cast("AllMessageValues", rewritten)  # cast-ok: the same row with only its text slots swapped
-
-
-def message_with_slot_texts(message: AllMessageValues, texts: Sequence[str]) -> AllMessageValues | None:
-    if message_text_slot_count(message) != len(texts):
-        return None
-    return _message_with_slot_texts(message, texts)
-
-
-def messages_with_slot_texts(
-    messages: Sequence[AllMessageValues],
-    texts: Sequence[str],
-) -> list[AllMessageValues] | None:
-    """Spread one flat list of rewritten texts over the messages' text slots, in order.
-
-    A slot is a string ``content`` or one list part carrying a string ``text``;
-    images and other parts ride along untouched. A guardrail that answers one
-    text per message it saw produces exactly this shape, which stops matching
-    the endpoint's own per-text extraction as soon as the request carries
-    instructions or tool items. Returns None unless the counts line up exactly,
-    so a rewrite never lands on the wrong slot.
-    """
-    slot_counts: Final = tuple(message_text_slot_count(message) for message in messages)
-    if sum(slot_counts) != len(texts):
-        return None
-    offsets: Final = tuple(accumulate(slot_counts, initial=0))
-    return [  # mutable-ok: guardrail rows travel as a list
-        _message_with_slot_texts(message, texts[start:end])
-        for message, start, end in zip(messages, offsets, offsets[1:])
-    ]

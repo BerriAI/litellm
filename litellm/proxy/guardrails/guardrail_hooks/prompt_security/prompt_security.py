@@ -287,7 +287,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 structured_messages, modified_messages
             )
             if rewritten_messages is not None:
-                inputs["structured_messages"] = rewritten_messages
+                inputs["structured_messages"] = list(rewritten_messages)  # mutable-ok: guardrail inputs take a list
 
         return inputs
 
@@ -298,7 +298,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         self,
         structured_messages: Sequence[AllMessageValues],
         modified_messages: Sequence[Mapping[str, object]],
-    ) -> list[AllMessageValues] | None:
+    ) -> tuple[AllMessageValues, ...] | None:
         sent_indices: Final = tuple(
             index for index, message in enumerate(structured_messages) if self._is_sent_to_protect(message)
         )
@@ -313,9 +313,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         )
         if len(replacements) != len(sent_indices):
             return None
-        return [  # mutable-ok: guardrail inputs take a list
-            replacements.get(index, message) for index, message in enumerate(structured_messages)
-        ]
+        return tuple(replacements.get(index, message) for index, message in enumerate(structured_messages))
 
     async def _apply_guardrail_on_response(
         self,
