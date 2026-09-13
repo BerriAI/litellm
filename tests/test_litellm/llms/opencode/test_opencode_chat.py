@@ -6,6 +6,7 @@ mapping, auth header selection, or URL construction are mutated.
 """
 
 import json
+import uuid
 
 
 import respx  # noqa: F401  # required for pytest-respx fixture
@@ -307,6 +308,70 @@ class TestMockedCompletion:
         assert len(respx_mock.calls) > 0
         request = respx_mock.calls[0].request
         assert "/zen/go/" in request.url.path
+
+    def test_go_chat_sends_session_id_from_litellm_session_id(self, respx_mock, monkeypatch):
+        """Go rejects requests without x-opencode-session, so the conversation's session id fills it."""
+        respx_mock.post("https://opencode.ai/zen/go/v1/chat/completions").mock(
+            return_value=Response(200, json=_make_response("deepseek-v4-flash", "ok"))
+        )
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.completion(
+            model="opencode_go/deepseek-v4-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="sk-fake",
+            litellm_session_id="sess-123",
+        )
+
+        assert respx_mock.calls[0].request.headers["x-opencode-session"] == "sess-123"
+
+    def test_go_chat_keeps_caller_session_header(self, respx_mock, monkeypatch):
+        """A session header the client already sent is forwarded as-is, not replaced or duplicated."""
+        respx_mock.post("https://opencode.ai/zen/go/v1/chat/completions").mock(
+            return_value=Response(200, json=_make_response("deepseek-v4-flash", "ok"))
+        )
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.completion(
+            model="opencode_go/deepseek-v4-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="sk-fake",
+            headers={"X-OpenCode-Session": "from-client"},
+            litellm_session_id="sess-123",
+        )
+
+        assert respx_mock.calls[0].request.headers["x-opencode-session"] == "from-client"
+
+    def test_go_chat_generates_session_id_when_none_is_known(self, respx_mock, monkeypatch):
+        """With no session to reuse, a generated id still keeps the request from being rejected."""
+        respx_mock.post("https://opencode.ai/zen/go/v1/chat/completions").mock(
+            return_value=Response(200, json=_make_response("deepseek-v4-flash", "ok"))
+        )
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.completion(
+            model="opencode_go/deepseek-v4-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="sk-fake",
+        )
+
+        uuid.UUID(respx_mock.calls[0].request.headers["x-opencode-session"])
+
+    def test_zen_chat_sends_no_session_header(self, respx_mock, monkeypatch):
+        """Only the Go surface requires the header."""
+        respx_mock.post("https://opencode.ai/zen/v1/chat/completions").mock(
+            return_value=Response(200, json=_make_response("deepseek-v4-flash", "ok"))
+        )
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.completion(
+            model="opencode_zen/deepseek-v4-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="sk-fake",
+            litellm_session_id="sess-123",
+        )
+
+        assert "x-opencode-session" not in respx_mock.calls[0].request.headers
 
     def test_unknown_model_routes_to_chat_arm(self, respx_mock, monkeypatch):
         """Unknown models still route to the chat arm."""

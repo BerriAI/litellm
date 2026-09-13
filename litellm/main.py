@@ -3503,6 +3503,7 @@ def _complete_opencode(
     from litellm.llms.opencode.common_utils import (
         resolve_opencode_api_base,
         resolve_opencode_api_key,
+        with_opencode_session_header,
     )
 
     surface: Final = "go" if custom_llm_provider == "opencode_go" else "zen"
@@ -3513,7 +3514,11 @@ def _complete_opencode(
 
     api_key = resolve_opencode_api_key(surface, api_key)  # rebind-ok: resolved from module/env fallbacks
 
-    base_headers: Final = headers or litellm.headers or {}  # mutable-ok: empty dict fallback for headers
+    base_headers: Final = with_opencode_session_header(
+        surface,
+        headers or litellm.headers or {},  # mutable-ok: empty dict fallback for headers
+        litellm_params,
+    )
     _headers: Final = (
         {**base_headers, "Authorization": f"Bearer {api_key}"}  # mutable-ok: dict literal for request headers
         if api_key is not None

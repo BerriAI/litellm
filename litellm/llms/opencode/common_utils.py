@@ -1,3 +1,4 @@
+import uuid
 from collections.abc import Mapping
 from functools import lru_cache
 from types import MappingProxyType
@@ -195,3 +196,24 @@ def resolve_opencode_api_base(surface: str, api_base: str | None = None) -> str 
         or litellm.opencode_api_base
         or litellm.api_base
     )
+
+
+OPENCODE_SESSION_HEADER: Final = "x-opencode-session"
+
+
+def with_opencode_session_header(
+    surface: str,
+    headers: Mapping[str, str],
+    litellm_params: Mapping[str, object],
+) -> dict[str, str]:  # mutable-ok: request handlers keep mutating the headers they are given
+    """Return *headers* carrying the ``x-opencode-session`` id Go rejects requests without.
+
+    A header the client already sent wins. Otherwise the conversation's session id keeps
+    routing and prompt caching stable across turns, and a random id is the last resort:
+    it avoids the rejection but earns no caching.
+    """
+    if surface != "go" or any(name.lower() == OPENCODE_SESSION_HEADER for name in headers):
+        return {**headers}  # mutable-ok: request handlers keep mutating the headers they are given
+    known: Final = litellm_params.get("litellm_session_id") or litellm_params.get("litellm_trace_id")
+    session_id: Final = known if isinstance(known, str) else str(uuid.uuid4())
+    return {**headers, OPENCODE_SESSION_HEADER: session_id}  # mutable-ok: request handlers keep mutating the headers
