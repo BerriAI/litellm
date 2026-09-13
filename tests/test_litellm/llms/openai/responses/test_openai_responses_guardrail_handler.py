@@ -8,7 +8,7 @@ with guardrail transformations.
 import copy
 from collections.abc import Callable
 from typing import Any, List, Literal, Optional, Tuple
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import logging
 
@@ -31,6 +31,7 @@ from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
+from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
 from litellm.types.llms.openai import ChatCompletionToolCallChunk
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
@@ -2336,6 +2337,135 @@ def _parallel_tool_call_input() -> list:
         {"type": "function_call_output", "call_id": "call_2", "output": "note " * 400},
         {"role": "user", "content": "What is the codename?"},
     ]
+
+
+SSN = "123-45-6789"
+REDACTED_SSN = "<US_SSN>"
+
+
+def _redacted(value: object) -> object:
+    if isinstance(value, str):
+        return value.replace(SSN, REDACTED_SSN)
+    if isinstance(value, list):
+        return [{**part, "text": _redacted(part["text"])} if "text" in part else part for part in value]
+    return value
+
+
+def _per_message_guardrail_server(structured_messages_in_answer: bool) -> Callable[..., MagicMock]:
+    """Answers one redacted text per chat row it was shown, the way a guardrail
+    that scans per message does, and optionally the rewritten rows themselves."""
+
+    def post(url: str, json: dict, headers: dict) -> MagicMock:
+        rows = json["structured_messages"]
+        answer: dict = {
+            "action": "GUARDRAIL_INTERVENED",
+            "texts": [_redacted(row["content"]) if isinstance(row.get("content"), str) else "" for row in rows],
+        }
+        if structured_messages_in_answer:
+            answer["structured_messages"] = [{**row, "content": _redacted(row.get("content"))} for row in rows]
+        response = MagicMock()
+        response.json.return_value = answer
+        response.raise_for_status = MagicMock()
+        return response
+
+    return post
+
+
+def _per_message_redactor() -> GenericGuardrailAPI:
+    return GenericGuardrailAPI(
+        api_base="https://guardrail.test",
+        guardrail_name="per-message-redactor",
+        event_hook="pre_call",
+        default_on=True,
+    )
+
+
+def _tool_replay_request() -> dict:
+    return {
+        "model": "gpt-5.6",
+        "instructions": "Never repeat the SSN " + SSN + " back.",
+        "input": [
+            {"role": "user", "content": "Look up " + SSN + " for me."},
+            {"type": "function_call", "call_id": "call_1", "name": "lookup_customer", "arguments": '{"id": "42"}'},
+            {"type": "function_call_output", "call_id": "call_1", "output": '{"ssn": "' + SSN + '"}'},
+        ],
+    }
+
+
+def _string_input_request() -> dict:
+    return {
+        "model": "gpt-5.6",
+        "instructions": "Never repeat the SSN " + SSN + " back.",
+        "input": "My SSN is " + SSN + ".",
+    }
+
+
+class TestPerMessageRewriteWriteBack:
+    """A guardrail that rewrites per chat row hands the rows back as
+    structured_messages, and the handler lands them on the instructions and the
+    input items they came from; the same rewrite handed back as texts alone has
+    no item to land on and is rejected by name instead of sent unrewritten."""
+
+    @pytest.mark.asyncio
+    async def test_structured_rows_land_on_instructions_and_tool_output(self):
+        guardrail = _per_message_redactor()
+        data = _tool_replay_request()
+        function_call_item = data["input"][1]
+
+        with patch.object(guardrail.async_handler, "post", side_effect=_per_message_guardrail_server(True)):
+            result = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        assert result["instructions"] == "Never repeat the SSN " + REDACTED_SSN + " back."
+        assert _texts(result["input"][0]) == ["Look up " + REDACTED_SSN + " for me."]
+        assert result["input"][1] == function_call_item
+        assert result["input"][2] == {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": '{"ssn": "' + REDACTED_SSN + '"}',
+        }
+
+    @pytest.mark.asyncio
+    async def test_texts_only_per_message_answer_is_rejected_by_name(self):
+        from litellm.proxy.policy_engine.pipeline_executor import UnappliableRequestRewrite
+
+        guardrail = _per_message_redactor()
+        data = _tool_replay_request()
+        original = copy.deepcopy(data)
+
+        with patch.object(guardrail.async_handler, "post", side_effect=_per_message_guardrail_server(False)):
+            with pytest.raises(UnappliableRequestRewrite) as excinfo:
+                await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        assert excinfo.value.guardrail_name == "per-message-redactor"
+        assert data["input"] == original["input"]
+        assert data["instructions"] == original["instructions"]
+
+    @pytest.mark.asyncio
+    async def test_structured_rows_land_on_instructions_and_string_input(self):
+        guardrail = _per_message_redactor()
+        data = _string_input_request()
+
+        with patch.object(guardrail.async_handler, "post", side_effect=_per_message_guardrail_server(True)):
+            result = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        assert result["instructions"] == "Never repeat the SSN " + REDACTED_SSN + " back."
+        assert [_texts(item) for item in result["input"]] == [["My SSN is " + REDACTED_SSN + "."]]
+
+    @pytest.mark.asyncio
+    async def test_texts_only_per_message_answer_over_a_string_input_is_rejected_by_name(self):
+        from litellm.proxy.policy_engine.pipeline_executor import UnappliableRequestRewrite
+
+        guardrail = _per_message_redactor()
+        data = _string_input_request()
+        original = copy.deepcopy(data)
+
+        with patch.object(guardrail.async_handler, "post", side_effect=_per_message_guardrail_server(False)):
+            with pytest.raises(UnappliableRequestRewrite) as excinfo:
+                await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        assert excinfo.value.guardrail_name == "per-message-redactor"
+        assert data["input"] == original["input"]
+        assert data["instructions"] == original["instructions"]
 
 
 class TestProvenancePatching:
