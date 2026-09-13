@@ -3316,9 +3316,6 @@ def test_convert_response_output_folds_preamble_message_into_tool_calls_choice()
 
 
 def test_convert_response_output_shifts_later_preamble_annotation_offsets():
-    """When several annotated preamble messages precede the tool call their text is
-    concatenated, so citation offsets from the second message onward must be moved
-    by the length of the text before them or they point at the wrong span."""
     from openai.types.responses import (
         ResponseFunctionToolCall,
         ResponseOutputMessage,
