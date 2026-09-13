@@ -1,5 +1,6 @@
 import { useState } from "react";
 import useCan from "@/app/(dashboard)/hooks/useCan";
+import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
 import AuditLogsPanel from "./AuditLogsPanel";
@@ -33,7 +34,7 @@ const tabContentClassName = (tabId: LogsTabId): string =>
 export default function SpendLogsTable({ accessToken, token, userRole, userID, premiumUser }: SpendLogsTableProps) {
   const [activeTab, setActiveTab] = useState<LogsTabId>(REQUEST_LOGS_TAB.id);
   const canViewAuditLogs = useCan("viewAuditLogs");
-  const canViewDeletedTeams = useCan("viewDeletedTeams");
+  const canViewDeletedTeams = useCan("viewDeletedTeams") || useIsOrgAdmin();
 
   if (!accessToken || !token || !userRole || !userID) {
     return (
