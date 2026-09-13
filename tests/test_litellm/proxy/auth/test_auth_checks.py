@@ -588,6 +588,119 @@ def test_can_object_call_model_team_alias_takes_precedence_over_router_alias():
     )
 
 
+def _router_with_team_deployment(public_name: str, team_id: str, internal_name: str) -> "Router":
+    from litellm import Router
+
+    return Router(
+        model_list=[
+            {"model_name": public_name, "litellm_params": {"model": "gpt-4o", "api_key": "test-api-key"}},
+            {
+                "model_name": internal_name,
+                "litellm_params": {"model": "gpt-4o", "api_key": "test-api-key"},
+                "model_info": {"team_id": team_id, "team_public_model_name": public_name},
+            },
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    ("aliases", "bypass", "live_target", "sibling", "expected_model", "expected_reason"),
+    [
+        (None, False, True, False, "gpt-4o-group", "not_alias"),
+        ({"gpt-4o-group": "openai/gpt-4.1-mini"}, False, True, False, "openai/gpt-4.1-mini", "applied"),
+        ({"gpt-4o-group": "model_name_team-1_x"}, False, False, False, "gpt-4o-group", "deleted_target"),
+        ({"gpt-4o-group": "model_name_team-1_x"}, False, True, False, "model_name_team-1_x", "applied"),
+        ({"gpt-4o-group": "model_name_team-1_x"}, True, True, True, "gpt-4o-group", "sibling_bypassed"),
+        ({"gpt-4o-group": "model_name_team-1_x"}, False, True, True, "model_name_team-1_x", "sibling_warned"),
+    ],
+)
+def test_resolve_team_model_alias_follows_routing(
+    aliases, bypass, live_target, sibling, expected_model, expected_reason
+):
+    """The resolver returns the model name the request will be routed with."""
+    from litellm.proxy.auth.auth_checks import resolve_team_model_alias
+
+    class _Router:
+        model_name_to_deployment_indices = {"model_name_team-1_x": [0]} if live_target else {}
+        team_model_to_deployment_indices = {("team-1", "gpt-4o-group"): [1]} if sibling else {}
+
+    resolution: Final = resolve_team_model_alias(
+        model="gpt-4o-group",
+        team_model_aliases=aliases,
+        team_id="team-1",
+        llm_router=_Router(),  # pyright: ignore[reportArgumentType]  # only the two index maps are read
+        stale_alias_bypass=bypass,
+    )
+
+    assert (resolution.model, resolution.reason) == (expected_model, expected_reason)
+
+
+def test_can_object_call_model_deleted_team_alias_target_checks_requested_name(monkeypatch):
+    """An alias whose team-scoped target has no deployment is authorized as the requested name."""
+    from litellm.proxy.auth import auth_checks
+
+    monkeypatch.setattr(auth_checks, "stale_team_alias_bypass_enabled", lambda: False)
+    llm_router: Final = _router_with_team_deployment("gpt-4o-group", "team-1", "model_name_team-1_live")
+    aliases: Final = {"gpt-4o-group": "model_name_team-1_deadbeef"}
+
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model="gpt-4o-group",
+            llm_router=llm_router,
+            models=["model_name_team-1_deadbeef"],
+            team_model_aliases=aliases,
+            team_id="team-1",
+            object_type="key",
+        )
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+    assert _can_object_call_model(
+        model="gpt-4o-group",
+        llm_router=llm_router,
+        models=["gpt-4o-group"],
+        team_model_aliases=aliases,
+        team_id="team-1",
+        object_type="key",
+    )
+
+
+def test_can_object_call_model_bypassed_stale_alias_checks_requested_name(monkeypatch):
+    """With the stale alias bypass on and a team deployment for the name, the requested name is checked."""
+    from litellm.proxy.auth import auth_checks
+
+    monkeypatch.setattr(auth_checks, "stale_team_alias_bypass_enabled", lambda: True)
+    llm_router: Final = _router_with_team_deployment("gpt-4o-group", "team-1", "model_name_team-1_live")
+    aliases: Final = {"gpt-4o-group": "model_name_team-1_live"}
+
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model="gpt-4o-group",
+            llm_router=llm_router,
+            models=["model_name_team-1_live"],
+            team_model_aliases=aliases,
+            team_id="team-1",
+            object_type="key",
+        )
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+    assert _can_object_call_model(
+        model="gpt-4o-group",
+        llm_router=llm_router,
+        models=["gpt-4o-group"],
+        team_model_aliases=aliases,
+        team_id="team-1",
+        object_type="key",
+    )
+
+    monkeypatch.setattr(auth_checks, "stale_team_alias_bypass_enabled", lambda: False)
+    assert _can_object_call_model(
+        model="gpt-4o-group",
+        llm_router=llm_router,
+        models=["model_name_team-1_live"],
+        team_model_aliases=aliases,
+        team_id="team-1",
+        object_type="key",
+    )
+
+
 def test_resolve_key_models_teamless_all_team_models_returns_empty():
     """_resolve_key_models_for_auth_check must return [] for a teamless key
     with all-team-models, making it equivalent to an unscoped key (unrestricted

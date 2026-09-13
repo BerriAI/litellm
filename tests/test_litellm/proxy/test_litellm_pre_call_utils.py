@@ -6249,6 +6249,42 @@ def test_team_alias_targeting_live_team_deployment_still_rewrites(monkeypatch):
     assert test_data.get("model") == "model_name_team-1_live-uuid"
 
 
+@pytest.mark.parametrize(
+    ("alias_target", "live_target", "sibling", "bypass"),
+    [
+        ("openai/gpt-4.1-mini", False, False, False),
+        ("model_name_team-1_dead", False, False, False),
+        ("model_name_team-1_live", True, False, False),
+        ("model_name_team-1_live", True, True, True),
+        ("model_name_team-1_live", True, True, False),
+    ],
+)
+def test_team_alias_rewrite_matches_auth_resolution(monkeypatch, alias_target, live_target, sibling, bypass):
+    """Routing rewrites the model to exactly what the auth resolver reports."""
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+    from litellm.proxy.auth.auth_checks import resolve_team_model_alias
+    from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
+
+    monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "true" if bypass else "false")
+    pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
+
+    class _MockRouter:
+        model_name_to_deployment_indices = {alias_target: [0]} if live_target else {}
+        team_model_to_deployment_indices = {("team-1", "gpt-4"): [1]} if sibling else {}
+
+    aliases = {"gpt-4": alias_target}
+    test_data = {"model": "gpt-4"}
+    user_api_key_dict = UserAPIKeyAuth(api_key="test_key", team_id="team-1", team_model_aliases=aliases)
+
+    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+        _update_model_if_team_alias_exists(data=test_data, user_api_key_dict=user_api_key_dict)
+
+    expected = resolve_team_model_alias(
+        model="gpt-4", team_model_aliases=aliases, team_id="team-1", llm_router=_MockRouter(), stale_alias_bypass=bypass
+    )
+    assert test_data["model"] == expected.model
+
+
 def test_warn_stale_team_alias_once_logs_once_per_key(monkeypatch):
     from collections import OrderedDict
 

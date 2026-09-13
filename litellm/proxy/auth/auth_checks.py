@@ -10,12 +10,13 @@ Run checks for:
 """
 
 import asyncio
+import functools
 import math
 import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Optional, Protocol, cast
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
@@ -120,6 +121,7 @@ from litellm.repositories.table_repositories import (
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.router import Router
+from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.utils import get_utc_datetime
 
@@ -3930,6 +3932,41 @@ def _resolve_all_team_model_sentinel_for_auth_check(
     return list(dict.fromkeys(non_sentinel_models + proxy_models))
 
 
+TeamAliasReason = Literal["not_alias", "applied", "deleted_target", "sibling_bypassed", "sibling_warned"]
+
+
+class TeamAliasResolution(NamedTuple):
+    model: str
+    reason: TeamAliasReason
+    target: str | None
+
+
+@functools.cache
+def stale_team_alias_bypass_enabled() -> bool:
+    return get_secret_bool("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", False) is True
+
+
+def resolve_team_model_alias(
+    model: str,
+    team_model_aliases: Mapping[str, str] | None,
+    team_id: str | None,
+    llm_router: Router | None,
+    stale_alias_bypass: bool,
+) -> TeamAliasResolution:
+    target: Final = team_model_aliases.get(model) if team_model_aliases else None
+    if target is None:
+        return TeamAliasResolution(model=model, reason="not_alias", target=None)
+    if llm_router is None or not target.startswith(f"model_name_{team_id}_"):
+        return TeamAliasResolution(model=target, reason="applied", target=target)
+    if target not in llm_router.model_name_to_deployment_indices:
+        return TeamAliasResolution(model=model, reason="deleted_target", target=target)
+    if (team_id, model) not in llm_router.team_model_to_deployment_indices:
+        return TeamAliasResolution(model=target, reason="applied", target=target)
+    if stale_alias_bypass:
+        return TeamAliasResolution(model=model, reason="sibling_bypassed", target=target)
+    return TeamAliasResolution(model=target, reason="sibling_warned", target=target)
+
+
 def _check_model_access_helper(
     model: str,
     llm_router: Router | None,
@@ -3940,8 +3977,13 @@ def _check_model_access_helper(
     ## check if model in allowed model names
     from collections import defaultdict
 
-    team_alias_target: Final = team_model_aliases.get(model) if team_model_aliases else None
-    effective_model: Final = team_alias_target if team_alias_target is not None else model
+    effective_model: Final = resolve_team_model_alias(
+        model=model,
+        team_model_aliases=team_model_aliases,
+        team_id=team_id,
+        llm_router=llm_router,
+        stale_alias_bypass=stale_team_alias_bypass_enabled(),
+    ).model
 
     access_groups: dict[str, list[str]] = defaultdict(list)
 
@@ -4018,8 +4060,13 @@ def _can_object_call_model(
             )
         return True
 
-    team_alias_target: Final = team_model_aliases.get(model) if team_model_aliases else None
-    resolved_model: Final = team_alias_target if team_alias_target is not None else model
+    resolved_model: Final = resolve_team_model_alias(
+        model=model,
+        team_model_aliases=team_model_aliases,
+        team_id=team_id,
+        llm_router=llm_router,
+        stale_alias_bypass=stale_team_alias_bypass_enabled(),
+    ).model
     potential_models: Final = [resolved_model]
     if resolved_model in litellm.model_alias_map:
         potential_models.append(litellm.model_alias_map[resolved_model])
