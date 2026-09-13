@@ -168,6 +168,29 @@ class TestModelRateLimitingCheck:
         # Verify redis_cache.async_get_cache was called directly to fetch live cluster count
         mock_redis.async_get_cache.assert_called_once()
 
+    def test_pre_call_check_queries_remote_cache_when_redis_configured(self):
+        """Test that pre_call_check queries redis_cache directly when configured to observe global cluster counter."""
+        mock_cache = MagicMock()
+        mock_redis = MagicMock()
+        mock_redis.get_cache.return_value = 1000
+        mock_cache.redis_cache = mock_redis
+
+        check = ModelRateLimitingCheck(dual_cache=mock_cache)
+
+        deployment = {
+            "tpm": 1000,
+            "litellm_params": {"model": "gpt-4"},
+            "model_info": {"id": "test-id"},
+            "model_name": "test-model",
+        }
+
+        with pytest.raises(litellm.RateLimitError):
+            check.pre_call_check(deployment)
+
+        # Verify redis_cache.get_cache was called directly to fetch live cluster count
+        mock_redis.get_cache.assert_called_once()
+
+
     def test_log_success_event_increments_cache(self):
         """Test that log_success_event correctly increments the cache."""
         mock_cache = MagicMock()
