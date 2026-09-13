@@ -4640,3 +4640,51 @@ def test_spend_log_request_id_is_the_response_id_a_bridged_messages_caller_recei
         )
         == "resp_01Lit6806Bridged"
     )
+
+
+@pytest.mark.asyncio
+async def test_get_logging_payload_honors_disable_flag():
+    """Test that get_logging_payload correctly suppresses end_user_id when disable_end_user_cost_tracking is True."""
+    litellm.disable_end_user_cost_tracking = True
+    kwargs = {
+        "litellm_params": {"metadata": {"user_api_key_end_user_id": "test-user-123"}},
+        "call_type": "completion",
+        "standard_logging_object": {
+            "metadata": {"user_api_key_end_user_id": "test-user-123"},
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+            "model_map_information": {},
+        },
+    }
+    response_obj = {"id": "chatcmpl-123", "usage": {"total_tokens": 15}}
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+    try:
+        payload = get_logging_payload(kwargs, response_obj, start_time, end_time)
+        assert payload["end_user"] == ""
+    finally:
+        litellm.disable_end_user_cost_tracking = False
+
+
+@pytest.mark.asyncio
+async def test_get_logging_payload_tracks_when_not_disabled():
+    """Test that get_logging_payload correctly includes end_user_id when disable_end_user_cost_tracking is False."""
+    litellm.disable_end_user_cost_tracking = False
+    kwargs = {
+        "litellm_params": {"metadata": {"user_api_key_end_user_id": "test-user-456"}},
+        "call_type": "completion",
+        "standard_logging_object": {
+            "metadata": {"user_api_key_end_user_id": "test-user-456"},
+            "model_map_information": {},
+        },
+    }
+    response_obj = {"id": "chatcmpl-456"}
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+    try:
+        payload = get_logging_payload(kwargs, response_obj, start_time, end_time)
+        assert payload["end_user"] == "test-user-456"
+    finally:
+        litellm.disable_end_user_cost_tracking = False
+
