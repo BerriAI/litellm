@@ -158,6 +158,30 @@ test.describe("Proxy Admin - Keys", () => {
     expect(after?.team_id, "editing limits left the key's team untouched").toEqual(before?.team_id);
   });
 
+  test("Key edit form scrolls inside the content pane, not the window", async ({ page }) => {
+    await navigateToPage(page, Page.ApiKeys);
+    await dismissFeedbackPopup(page);
+    const keyRow = page.getByRole("row").filter({ hasText: E2E_UPDATE_LIMITS_KEY_ALIAS });
+    await expect(keyRow).toBeVisible({ timeout: 10_000 });
+    await keyRow.getByRole("button", { name: E2E_UPDATE_LIMITS_KEY_ALIAS }).click();
+    await expect(page.getByText("Back to Keys")).toBeVisible({ timeout: 10_000 });
+    await page.getByRole("tab", { name: "Settings" }).click();
+    await page.getByRole("button", { name: "Edit Settings" }).click();
+
+    const saveButton = page.getByRole("button", { name: "Save Changes" });
+    await expect(saveButton).toBeAttached();
+    await saveButton.scrollIntoViewIfNeeded();
+    await page.mouse.wheel(0, 20_000);
+
+    await expect(saveButton).toBeInViewport();
+    await expect(page.getByRole("banner")).toBeInViewport();
+    const overflow = await page.evaluate(() => ({
+      windowScrollY: window.scrollY,
+      documentOverflow: document.documentElement.scrollHeight - document.documentElement.clientHeight,
+    }));
+    expect(overflow).toEqual({ windowScrollY: 0, documentOverflow: 0 });
+  });
+
   test("Delete key", async ({ page }) => {
     // Deleting the seeded key leaves nothing for the next attempt, so the retries CI runs with are
     // guaranteed to fail and the suite cannot run twice against one database. Bring our own.
