@@ -64,6 +64,7 @@ _UNATTRIBUTED_TRACKABLE_CALL_TYPES: Final[frozenset[str]] = frozenset(
         CallTypes.pass_through.value,
         CallTypes.llm_passthrough_route.value,
         CallTypes.allm_passthrough_route.value,
+        CallTypes.call_mcp_tool.value,
         # CheckBatchCost's synthetic logging_obj for a completed managed batch carries
         # whatever LiteLLM_ManagedObjectTable stored at create time, and all of it is
         # None for a batch created before those columns were persisted, or by the master
@@ -180,7 +181,7 @@ class _ProxyDBLogger(CustomLogger):
         # here because the input above is constructed non-None.
         _error_information = cast(
             StandardLoggingPayloadErrorInformation,
-            _sanitize_error_information_for_spend_logs(_error_information),
+            _sanitize_error_information_for_spend_logs(_error_information, original_exception=original_exception),
         )
         _metadata["error_information"] = _error_information
 

@@ -62,34 +62,48 @@ pub(crate) async fn transform_request_body<B>(
     request: &LiteLLMOcrRequest,
     url: &str,
     headers: &[(String, String)],
+    retains_document: bool,
     body: B,
     validate: impl FnOnce(&B) -> Result<(), OcrRequestError>,
 ) -> Result<reqwest::Request, OcrError>
 where
     B: Serialize + DeserializeOwned,
 {
-    let body = if request.hooks.has_guardrails() {
+    let (body, headers) = if request.hooks.intercepts_requests() {
+        let body = serde_json::to_value(body).map_err(|_| OcrRequestError::RequestField {
+            path: "body".into(),
+        })?;
+        let retained_fields = request
+            .optional_params
+            .keys()
+            .filter(|name| body.get(*name).is_some())
+            .cloned()
+            .chain(retains_document.then(|| "document".to_string()))
+            .collect();
         let changed = request
             .hooks
             .during_call(OcrDuringCallRequest {
                 model: request.model.clone(),
                 custom_llm_provider: request.adapter.provider().as_str().into(),
                 url: url.into(),
-                body: serde_json::to_value(body).map_err(|_| OcrRequestError::RequestField {
-                    path: "body".into(),
-                })?,
+                headers: headers.to_vec(),
+                body,
+                retained_fields,
             })
             .await?;
         let body = OcrWireBody::<B>::decode(changed.body)?;
         validate(&body.body)?;
-        body
+        (body, changed.headers)
     } else {
-        OcrWireBody {
-            body,
-            extra: Map::new(),
-        }
+        (
+            OcrWireBody {
+                body,
+                extra: Map::new(),
+            },
+            headers.to_vec(),
+        )
     };
-    build_http_request(client, request, url, headers, &body)
+    build_http_request(client, request, url, &headers, &body)
 }
 
 pub(crate) fn build_http_request<B: Serialize>(
@@ -113,9 +127,10 @@ pub(crate) fn build_http_request<B: Serialize>(
 pub(crate) async fn guardrail_document(
     request: &LiteLLMOcrRequest,
     url: &str,
-) -> Result<OcrDocument, OcrError> {
-    if !request.hooks.has_guardrails() {
-        return Ok(request.document.clone());
+    headers: &[(String, String)],
+) -> Result<(OcrDocument, Vec<(String, String)>), OcrError> {
+    if !request.hooks.intercepts_requests() {
+        return Ok((request.document.clone(), headers.to_vec()));
     }
     let changed = request
         .hooks
@@ -123,14 +138,17 @@ pub(crate) async fn guardrail_document(
             model: request.model.clone(),
             custom_llm_provider: request.adapter.provider().as_str().into(),
             url: url.into(),
+            headers: headers.to_vec(),
             body: serde_json::to_value(&request.document).map_err(|_| {
                 OcrRequestError::RequestField {
                     path: "document".into(),
                 }
             })?,
+            retained_fields: Vec::new(),
         })
         .await?;
-    super::wire::decode_request_value(changed.body, "guardrail.document").map_err(OcrError::from)
+    let document = super::wire::decode_request_value(changed.body, "guardrail.document")?;
+    Ok((document, changed.headers))
 }
 
 #[derive(Serialize)]

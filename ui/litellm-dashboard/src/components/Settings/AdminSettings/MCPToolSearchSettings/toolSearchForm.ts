@@ -1,7 +1,7 @@
 import type { MCPToolSearchSettings } from "@/app/(dashboard)/hooks/mcpToolSearchSettings/useMCPToolSearchSettings";
 
 export interface ToolSearchFormValues {
-  embedding_model: string;
+  embedding_model: string | null;
   top_k: number;
   similarity_threshold: number;
   core_tools_text: string;
@@ -11,7 +11,7 @@ export const TOP_K_MIN = 1;
 export const TOP_K_MAX = 100;
 
 export const DEFAULT_FORM_VALUES: ToolSearchFormValues = {
-  embedding_model: "",
+  embedding_model: null,
   top_k: 5,
   similarity_threshold: 0,
   core_tools_text: "",
@@ -42,7 +42,7 @@ export const storedValuesToForm = (values: Record<string, unknown>): ToolSearchF
 });
 
 export const formToPayload = (form: ToolSearchFormValues): MCPToolSearchSettings => ({
-  embedding_model: form.embedding_model.trim() === "" ? null : form.embedding_model.trim(),
+  embedding_model: form.embedding_model?.trim() || null,
   top_k: clampTopK(form.top_k),
   similarity_threshold: form.similarity_threshold,
   core_tools: parseCoreTools(form.core_tools_text),

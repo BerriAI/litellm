@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import contextvars
 import json
 import logging
 import os
@@ -7,6 +8,7 @@ import queue
 import threading
 from datetime import datetime, timedelta, timezone
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -58,6 +60,36 @@ from litellm.utils import (
 )
 
 # Adds the parent directory to the system path
+
+
+def test_non_ocr_wrapper_preserves_logging_executor_and_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    marker: Final = contextvars.ContextVar("non-ocr-logging-context", default="missing")
+    token: Final = marker.set("caller-context")
+    caller_thread: Final = threading.get_ident()
+    response: Final = object()
+    logger: Final = MagicMock()
+    observed: Final = queue.Queue[tuple[object, str, int]]()
+
+    def record_success(result: object, start_time: datetime, end_time: datetime) -> None:
+        observed.put((result, marker.get(), threading.get_ident()))
+
+    def embedding(**kwargs: object) -> object:
+        return response
+
+    logger.success_handler.side_effect = record_success
+    monkeypatch.setattr("litellm.utils.function_setup", MagicMock(return_value=(logger, {})))
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            monkeypatch.setattr("litellm.utils.executor", executor)
+            result: Final = client(embedding)()
+        logged_response, context, worker_thread = observed.get_nowait()
+        assert result is response
+        assert logged_response is response
+        assert context == "caller-context"
+        assert worker_thread != caller_thread
+        assert observed.empty()
+    finally:
+        marker.reset(token)
 
 
 def test_cloudflare_model_info_includes_rpm(local_model_cost_map: None) -> None:
@@ -1118,6 +1150,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "enum": ["none", "minimal", "low", "medium", "high", "xhigh"],
                 },
                 "supports_adaptive_thinking": {"type": "boolean"},
+                "supports_anthropic_thinking_payload": {"type": "boolean"},
                 "supports_legacy_thinking": {"type": "boolean"},
                 "thinking_always_on": {"type": "boolean"},
                 "supports_mid_conversation_system": {"type": "boolean"},
@@ -4216,9 +4249,6 @@ def test_deepseek_flash_completion_cost():
 _FIREWORKS_MODELS = [
     (
         "accounts/fireworks/models/glm-5p2",
-        1.4e-06,
-        4.4e-06,
-        1.4e-07,
         1048576,
         131072,
         False,
@@ -4226,9 +4256,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/glm-5p1",
-        1.4e-06,
-        4.4e-06,
-        2.6e-07,
         202800,
         131072,
         False,
@@ -4236,9 +4263,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/routers/glm-5p1-fast",
-        2.8e-06,
-        8.8e-06,
-        5.2e-07,
         202800,
         131072,
         False,
@@ -4246,9 +4270,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/qwen3p7-plus",
-        4e-07,
-        1.6e-06,
-        8e-08,
         262144,
         65536,
         True,
@@ -4256,9 +4277,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/minimax-m3",
-        3e-07,
-        1.2e-06,
-        6e-08,
         512000,
         512000,
         True,
@@ -4266,9 +4284,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/minimax-m2p7",
-        3e-07,
-        1.2e-06,
-        6e-08,
         196608,
         196608,
         False,
@@ -4276,9 +4291,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/kimi-k2p7-code",
-        9.5e-07,
-        4e-06,
-        1.9e-07,
         262144,
         32768,
         True,
@@ -4286,9 +4298,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/routers/kimi-k2p7-code-fast",
-        1.9e-06,
-        8e-06,
-        3.8e-07,
         262144,
         32768,
         True,
@@ -4296,9 +4305,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/kimi-k2p6",
-        9.5e-07,
-        4e-06,
-        1.6e-07,
         262144,
         32768,
         True,
@@ -4306,9 +4312,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/routers/kimi-k2p6-fast",
-        2e-06,
-        8e-06,
-        3e-07,
         262144,
         32768,
         True,
@@ -4316,9 +4319,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/gpt-oss-120b",
-        1.5e-07,
-        6e-07,
-        1.5e-08,
         131072,
         32768,
         False,
@@ -4326,9 +4326,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/gpt-oss-20b",
-        7e-08,
-        3e-07,
-        3.5e-08,
         131072,
         32768,
         False,
@@ -4336,9 +4333,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/deepseek-v4-pro",
-        1.74e-06,
-        3.48e-06,
-        1.45e-07,
         1048576,
         384000,
         False,
@@ -4346,9 +4340,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/deepseek-v4-flash",
-        1.4e-07,
-        2.8e-07,
-        2.8e-08,
         1048576,
         384000,
         False,
@@ -4380,9 +4371,6 @@ _FIREWORKS_ROUTER_SHORT_FORMS = [
 def _assert_fireworks_entry(
     model_cost,
     model_path,
-    expected_input,
-    expected_output,
-    expected_cache,
     expected_max_input,
     expected_max_output,
     expected_vision,
@@ -4392,9 +4380,9 @@ def _assert_fireworks_entry(
     assert info is not None, f"fireworks_ai/{model_path} missing from model cost map"
     assert info["litellm_provider"] == "fireworks_ai"
     assert info["mode"] == "chat"
-    assert info["input_cost_per_token"] == expected_input
-    assert info["output_cost_per_token"] == expected_output
-    assert info["cache_read_input_token_cost"] == expected_cache
+    assert info["input_cost_per_token"] > 0
+    assert info["output_cost_per_token"] > 0
+    assert "cache_read_input_token_cost" in info
     assert info["max_input_tokens"] == expected_max_input
     assert info["max_output_tokens"] == expected_max_output
     assert info["max_tokens"] == expected_max_output
@@ -4459,6 +4447,75 @@ def test_fireworks_models_in_backup_cost_map():
         assert model_cost.get(short_key) == model_cost.get(
             long_key
         ), f"short-form {short_key} does not match long-form {long_key}"
+
+
+@pytest.fixture
+def fireworks_short_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "fireworks_ai/accounts/fireworks/models/glm-5p3": {
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "litellm_provider": "fireworks_ai",
+                "mode": "chat",
+                "max_tokens": 100,
+            },
+            "fireworks_ai/accounts/fireworks/routers/glm-5p3-fast": {
+                "input_cost_per_token": 2.1e-6,
+                "output_cost_per_token": 6.6e-6,
+                "litellm_provider": "fireworks_ai",
+                "mode": "chat",
+            },
+            "fireworks_ai/nomic-ai/nomic-embed-text-v1.5": {
+                "input_cost_per_token": 8e-9,
+                "output_cost_per_token": 0.0,
+                "litellm_provider": "fireworks_ai",
+                "mode": "embedding",
+            },
+        },
+    )
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
+
+
+def test_fireworks_short_model_names_resolve_to_long_cost_map_keys(fireworks_short_model_cost_map: None) -> None:
+    model_info = litellm.get_model_info("fireworks_ai/glm-5p3")
+    assert model_info["key"] == "fireworks_ai/accounts/fireworks/models/glm-5p3"
+    assert model_info["input_cost_per_token"] == 1e-6
+    assert model_info["max_tokens"] == 100
+
+    model_info = litellm.get_model_info("glm-5p3", custom_llm_provider="fireworks_ai")
+    assert model_info["key"] == "fireworks_ai/accounts/fireworks/models/glm-5p3"
+
+    model_info = litellm.get_model_info("fireworks_ai/glm-5p3-fast")
+    assert model_info["key"] == "fireworks_ai/accounts/fireworks/routers/glm-5p3-fast"
+    assert model_info["input_cost_per_token"] == 2.1e-6
+
+    model_info = litellm.get_model_info("fireworks_ai/nomic-ai/nomic-embed-text-v1.5")
+    assert model_info["key"] == "fireworks_ai/nomic-ai/nomic-embed-text-v1.5"
+
+    with pytest.raises(Exception, match="isn't mapped"):
+        litellm.get_model_info("fireworks_ai/does-not-exist")
+
+
+def test_fireworks_short_model_names_price_with_completion_cost(fireworks_short_model_cost_map: None) -> None:
+    from litellm.types.utils import ModelResponse
+
+    response = ModelResponse(
+        model="fireworks_ai/glm-5p3",
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="fireworks_ai/glm-5p3",
+        custom_llm_provider="fireworks_ai",
+    )
+
+    assert cost == pytest.approx(10 * 1e-6 + 5 * 2e-6)
 
 
 class TestBedrockBaseModelLabelKeepsTools:

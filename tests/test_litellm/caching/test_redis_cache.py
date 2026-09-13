@@ -1,10 +1,12 @@
 import asyncio
 import time
 from collections.abc import Iterator
+from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import litellm
 from litellm._service_logger import ServiceLogging
 from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
 
@@ -679,7 +681,6 @@ def test_sync_batch_get_cache_survives_a_service_callback_that_raises(
     from concurrent.futures import ThreadPoolExecutor
 
     import litellm
-
     from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
 
     cache, service_logger = sync_batch_cache_with_service_logger
@@ -1202,3 +1203,191 @@ async def test_a_probe_overtaken_by_a_later_outage_leaves_the_breaker_to_the_new
     new_probe_release.set()
     assert await new_probe == "new probe"
     assert breaker._state == breaker.CLOSED
+
+
+@pytest.mark.asyncio
+async def test_pool_wait_timeout_is_a_timeout_failure_not_hard_connectivity():
+    """A saturated blocking pool must not open the breaker before the timeout minimum duration.
+
+    redis-py's async BlockingConnectionPool gives up waiting for a free connection by raising
+    ConnectionError("No connection available.") chained from asyncio.TimeoutError. Redis itself
+    is healthy in that case, so the failure has to be classed as a timeout and stay behind the
+    duration gate instead of being counted as a hard connectivity failure.
+    """
+    from fakeredis import FakeServer
+    from fakeredis.aioredis import FakeConnection
+    from redis.asyncio import BlockingConnectionPool, Redis
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    from litellm.caching.redis_cache import RedisCircuitBreaker, _run_under_circuit_breaker
+
+    pool = BlockingConnectionPool(connection_class=FakeConnection, server=FakeServer(), max_connections=1, timeout=0.01)
+    client = Redis(connection_pool=pool)
+    breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, timeout_min_duration=5.0)
+
+    busy_connection = await pool.get_connection()
+    try:
+        for _ in range(breaker.failure_threshold * 2):
+            with pytest.raises(RedisConnectionError, match="No connection available"):
+                await _run_under_circuit_breaker(breaker, "op", lambda: client.get("k"))
+    finally:
+        await pool.release(busy_connection)
+
+    assert breaker.is_open() is False, "a busy pool is a timeout gated on duration, not a dead Redis"
+    assert await _run_under_circuit_breaker(breaker, "op", lambda: client.get("k")) is None
+    await client.aclose()
+
+
+def test_timeout_classification_follows_the_explicit_cause_chain_only():
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    from litellm.caching.redis_cache import _is_redis_timeout_failure
+
+    def raise_chained_from_timeout() -> None:
+        try:
+            raise asyncio.TimeoutError()
+        except asyncio.TimeoutError as err:
+            raise RedisConnectionError("No connection available.") from err
+
+    def raise_while_handling_timeout() -> None:
+        try:
+            raise asyncio.TimeoutError()
+        except asyncio.TimeoutError:
+            raise RedisConnectionError("refused")
+
+    with pytest.raises(RedisConnectionError) as chained:
+        raise_chained_from_timeout()
+    with pytest.raises(RedisConnectionError) as contextual:
+        raise_while_handling_timeout()
+
+    assert _is_redis_timeout_failure(chained.value) is True
+    assert _is_redis_timeout_failure(contextual.value) is False
+    assert _is_redis_timeout_failure(RedisConnectionError("refused")) is False
+
+
+class _RoundTripCountingRedis:
+    """Fake redis.asyncio client: one round trip per awaited command or pipeline execute."""
+
+    def __init__(self, ttl: int) -> None:
+        self.values: dict[str, float] = {}
+        self.ttls: dict[str, int] = {}
+        self.round_trips = 0
+        self._initial_ttl = ttl
+
+    async def incrbyfloat(self, name: str, amount: float) -> float:
+        self.round_trips += 1
+        return self._incr(name, amount)
+
+    async def expire(self, name: str, time: int) -> bool:
+        self.round_trips += 1
+        self.ttls[name] = time
+        return True
+
+    def _incr(self, name: str, amount: float) -> float:
+        self.values[name] = self.values.get(name, 0.0) + amount
+        self.ttls.setdefault(name, self._initial_ttl)
+        return self.values[name]
+
+    def pipeline(self, transaction: bool) -> "_RoundTripCountingRedis._Pipeline":
+        return _RoundTripCountingRedis._Pipeline(self)
+
+    class _Pipeline:
+        def __init__(self, client: "_RoundTripCountingRedis") -> None:
+            self._client = client
+            self._commands: list[tuple[str, tuple[object, ...]]] = []
+
+        async def __aenter__(self) -> "_RoundTripCountingRedis._Pipeline":
+            return self
+
+        async def __aexit__(self, *exc_info: object) -> None:
+            return None
+
+        def incrbyfloat(self, name: str, amount: float) -> None:
+            self._commands.append(("incrbyfloat", (name, amount)))
+
+        def expire(self, name: str, time: int) -> None:
+            self._commands.append(("expire", (name, time)))
+
+        def ttl(self, name: str) -> None:
+            self._commands.append(("ttl", (name,)))
+
+        async def execute(self) -> list[object]:
+            self._client.round_trips += 1
+            results: list[object] = []
+            for command, args in self._commands:
+                if command == "incrbyfloat":
+                    results.append(self._client._incr(str(args[0]), float(args[1])))  # pyright: ignore[reportArgumentType]  # fake stores str/float
+                elif command == "expire":
+                    self._client.ttls[str(args[0])] = int(args[1])  # pyright: ignore[reportArgumentType]  # fake stores int
+                    results.append(True)
+                else:
+                    results.append(self._client.ttls.get(str(args[0]), -2))
+            return results
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("refresh_ttl", "existing_ttl", "expected_round_trips", "expected_ttl"),
+    [
+        pytest.param(True, 100, 2, 60, id="refresh_ttl: INCRBYFLOAT+EXPIRE in one round trip each"),
+        pytest.param(False, 100, 2, 100, id="keep ttl: INCRBYFLOAT+TTL in one round trip each, no EXPIRE"),
+        pytest.param(False, -1, 3, 60, id="unexpiring key: INCRBYFLOAT+TTL then EXPIRE once, 1 trip after"),
+    ],
+)
+async def test_async_increment_pipelines_the_ttl_command(
+    monkeypatch, redis_no_ping, refresh_ttl, existing_ttl, expected_round_trips, expected_ttl
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace="ns")
+    client = _RoundTripCountingRedis(ttl=existing_ttl)
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        first = await redis_cache.async_increment(key="spend:key:k", value=1.5, ttl=60, refresh_ttl=refresh_ttl)
+        second = await redis_cache.async_increment(key="spend:key:k", value=2.0, ttl=60, refresh_ttl=refresh_ttl)
+
+    assert (first, second) == (1.5, 3.5)
+    assert client.values == {"ns:spend:key:k": 3.5}
+    assert client.ttls == {"ns:spend:key:k": expected_ttl}
+    assert client.round_trips == expected_round_trips
+
+
+class _SetRecordingPipeline:
+    def __init__(self) -> None:
+        self.sets: list[tuple[str, str, timedelta | None]] = []
+        self.executes = 0
+
+    async def __aenter__(self) -> "_SetRecordingPipeline":
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        return None
+
+    def set(self, name: str, value: str, ex: timedelta | None) -> None:
+        self.sets.append((name, value, ex))
+
+    async def execute(self) -> list[bool]:
+        self.executes += 1
+        return [True] * len(self.sets)
+
+
+@pytest.mark.asyncio
+async def test_async_set_cache_pipeline_with_ttls_keeps_each_entry_ttl(monkeypatch, redis_no_ping):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    monkeypatch.setattr(litellm, "default_redis_ttl", 300)
+    redis_cache = RedisCache(namespace="ns")
+    pipe = _SetRecordingPipeline()
+    client = MagicMock()
+    client.pipeline = MagicMock(return_value=pipe)
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        await redis_cache.async_set_cache_pipeline_with_ttls(
+            (("team_id:t1", {"team_id": "t1"}, 60), ("u1", {"user_id": "u1"}, 7), ("org_id:o1", {"a": 1}, None))
+        )
+
+    client.pipeline.assert_called_once_with(transaction=False)
+    assert pipe.executes == 1
+    assert pipe.sets == [
+        ("ns:team_id:t1", '{"team_id": "t1"}', timedelta(seconds=60)),
+        ("ns:u1", '{"user_id": "u1"}', timedelta(seconds=7)),
+        ("ns:org_id:o1", '{"a": 1}', timedelta(seconds=300)),
+    ]
