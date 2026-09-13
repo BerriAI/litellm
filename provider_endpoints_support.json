@@ -2438,6 +2438,23 @@
         "interactions": true
       }
     },
+    "tium": {
+      "display_name": "Tium (`tium`)",
+      "url": "https://docs.litellm.ai/docs/providers/tium",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "together_ai": {
       "display_name": "Together AI (`together_ai`)",
       "url": "https://docs.litellm.ai/docs/providers/togetherai",

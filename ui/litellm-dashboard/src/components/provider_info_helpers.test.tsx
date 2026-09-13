@@ -73,6 +73,17 @@ describe("provider_info_helpers", () => {
       expect(fromEnumKey.logo).toBe(providerLogoMap[Providers.SCX_AI]);
     });
 
+    it("should map tium slug and TIUM enum key to the Tium display name and logo", () => {
+      const fromSlug = getProviderLogoAndName("tium");
+      expect(fromSlug.displayName).toBe(Providers.TIUM);
+      expect(fromSlug.logo).toBe(providerLogoMap[Providers.TIUM]);
+      expect(fromSlug.logo).toBeTruthy();
+
+      const fromEnumKey = getProviderLogoAndName("TIUM");
+      expect(fromEnumKey.displayName).toBe(Providers.TIUM);
+      expect(fromEnumKey.logo).toBe(providerLogoMap[Providers.TIUM]);
+    });
+
     it("should map bedrock_mantle slug to Bedrock Mantle display name and logo", () => {
       const result = getProviderLogoAndName("bedrock_mantle");
       expect(result.displayName).toBe(Providers.BedrockMantle);
@@ -203,6 +214,10 @@ describe("provider_info_helpers", () => {
 
     it("should return an scx-ai model placeholder for SCX_AI provider", () => {
       expect(getPlaceholder(Providers.SCX_AI)).toBe("scx-ai/GLM-5.2");
+    });
+
+    it("should return a tium model placeholder for TIUM provider", () => {
+      expect(getPlaceholder(Providers.TIUM)).toBe("tium/glm-5.3");
     });
 
     it("should return claude-3-opus placeholder for Anthropic provider", () => {
