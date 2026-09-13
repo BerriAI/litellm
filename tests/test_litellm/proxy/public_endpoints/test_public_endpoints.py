@@ -346,6 +346,38 @@ def test_chatgpt_provider_fields():
     assert chatgpt["credential_fields"] == []
 
 
+def test_tencent_provider_fields():
+    """Tencent TokenHub must be selectable in the Add Model flow.
+
+    The dropdown is driven entirely by /public/providers/fields, so a missing
+    entry means Tencent cannot be added through the UI at all. The credential
+    fields must match what the backend honors: a required api_key (TENCENT_API_KEY)
+    and an optional api_base override (TENCENT_API_BASE).
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    tencent = next((p for p in providers if p["provider"] == "Tencent"), None)
+    assert tencent is not None, "Tencent provider entry not found"
+
+    assert tencent["provider_display_name"] == "Tencent"
+    assert tencent["litellm_provider"] == LlmProviders.TENCENT.value
+    assert tencent["default_model_placeholder"].startswith("tencent/")
+
+    fields_by_key = {f["key"]: f for f in tencent["credential_fields"]}
+
+    assert fields_by_key["api_key"]["required"] is True
+    assert fields_by_key["api_key"]["field_type"] == "password"
+
+    assert fields_by_key["api_base"]["field_type"] == "text"
+    assert fields_by_key["api_base"]["required"] is False
+
+
 ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
     {
         "a2a",
@@ -381,7 +413,6 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "scaleway",
         "stability",
         "synthetic",
-        "tencent",
         "tensormesh",
         "text-completion-inception",
         "valkey",
