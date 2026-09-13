@@ -14,7 +14,7 @@ import copy
 import json
 import math
 import traceback
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -1903,6 +1903,39 @@ def validate_team_org_change(
     return True
 
 
+def _member_user_ids(members_with_roles: Sequence[dict[str, object]]) -> tuple[str, ...]:
+    """Extract the string ``user_id`` of each team member, dropping rows without one.
+
+    ``members_with_roles`` is a Prisma-deserialized JSON column, so its ``user_id`` is typed
+    ``object``; the ``isinstance`` narrows it to the ``str`` ``invalidate_team_member_spend_state`` needs.
+    """
+    return tuple(user_id for member in members_with_roles if isinstance((user_id := member.get("user_id")), str))
+
+
+async def _evict_created_membership_caches(
+    user_ids: Iterable[str],
+    team_id: str,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    """Evict the ``get_team_membership`` negative-cache sentinel for members whose row was just created.
+
+    A session-token request caches ``NO_TEAM_MEMBERSHIP_SENTINEL`` for a member with no
+    ``LiteLLM_TeamMembership`` row. When a create path (``/team/member_add`` or the ``/team/update``
+    budget backfill) later writes that row with a per-member budget, the stale sentinel keeps the
+    member's budget unenforced until the membership cache TTL expires, so it must be evicted here.
+    """
+    await asyncio.gather(
+        *(
+            invalidate_team_member_spend_state(
+                user_id=user_id,
+                team_id=team_id,
+                user_api_key_cache=user_api_key_cache,
+            )
+            for user_id in user_ids
+        )
+    )
+
+
 @router.post("/team/update", tags=["team management"], dependencies=[Depends(user_api_key_auth)])
 @management_endpoint_wrapper
 async def update_team(
@@ -2238,6 +2271,11 @@ async def update_team(
                     members_with_roles=existing_team_row.members_with_roles,
                     team_member_budget_id=_backfill_budget_id,
                     prisma_client=prisma_client,
+                )
+                await _evict_created_membership_caches(
+                    user_ids=_member_user_ids(existing_team_row.members_with_roles),
+                    team_id=data.team_id,
+                    user_api_key_cache=user_api_key_cache,
                 )
         elif _team_member_fields_in_request:
             updated_kv = await TeamMemberBudgetHandler.clear_team_member_budget_fields(
@@ -3189,6 +3227,12 @@ async def team_member_add(
         prisma_client=prisma_client,
         user_api_key_dict=user_api_key_dict,
         litellm_proxy_admin_name=litellm_proxy_admin_name,
+    )
+
+    await _evict_created_membership_caches(
+        user_ids=(tm.user_id for tm in updated_team_memberships),
+        team_id=data.team_id,
+        user_api_key_cache=user_api_key_cache,
     )
 
     _emit_team_members_metric(complete_team_data)

@@ -2527,6 +2527,180 @@ class TestToolTransformation:
             "type": "object",
         }
 
+    @pytest.mark.parametrize(
+        "model, custom_llm_provider",
+        [
+            ("bedrock/converse/global.anthropic.claude-sonnet-5", "bedrock_converse"),
+            ("anthropic.claude-sonnet-4-5-20250929-v1:0", "bedrock"),
+            ("claude-sonnet-5", "vertex_ai"),
+            ("gemini-3.1-pro-preview", "vertex_ai"),
+            ("moonshotai.kimi-k2-thinking", "bedrock_mantle"),
+        ],
+    )
+    def test_reasoning_summary_still_yields_a_string_reasoning_effort(self, model, custom_llm_provider):
+        """
+        A Responses request carrying ``reasoning.summary`` must still reach a chat provider as a
+        plain ``reasoning_effort`` string. ``summary`` is Responses-only, and forwarding the whole
+        object turns reasoning off: Bedrock Converse and Vertex silently discard a non-string
+        ``reasoning_effort``, and Bedrock Mantle rejects the request outright.
+        """
+        responses_api_request = {"reasoning": {"effort": "medium", "summary": "auto"}}
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="hi",
+            responses_api_request=responses_api_request,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        assert result["reasoning_effort"] == "medium"
+
+    @pytest.mark.parametrize(
+        "model, custom_llm_provider",
+        [
+            ("gpt-5.4-pro", "azure_ai"),
+            ("gpt-5", "openai"),
+            ("gpt-5.1", "openai"),
+            ("gpt-5", "azure"),
+        ],
+    )
+    def test_bridged_model_carries_the_summary_as_an_alias(self, model, custom_llm_provider):
+        """
+        ``summary`` reaches a bridged model through the ``reasoning_summary`` alias, never smuggled
+        inside ``reasoning_effort``. ``litellm.completion`` reads that alias back with
+        ``peek_reasoning_summary_aliases`` and reassembles ``{effort, summary}``, so the far end
+        gets the same object it always did while no chat provider ever sees a non-string effort.
+        """
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="hi",
+            responses_api_request={"reasoning": {"effort": "medium", "summary": "auto"}},
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        assert result["reasoning_effort"] == "medium"
+        assert result["reasoning_summary"] == "auto"
+
+    @pytest.mark.parametrize(
+        "model, custom_llm_provider",
+        [
+            ("gpt-5", "openai"),
+            ("gpt-5.1", "openai"),
+            ("gpt-5", "azure"),
+        ],
+    )
+    def test_gpt_5_summary_survives_the_bridge_it_claims_to_take(self, model, custom_llm_provider):
+        """
+        Regression for the probe disagreeing with the real decision. The transform asked
+        ``responses_api_bridge_check`` with ``reasoning_summary`` taken straight off the Responses
+        object, but ``litellm.completion`` reads it from ``optional_params`` via
+        ``peek_reasoning_summary_aliases``, which the bridged request never populated. So these
+        models answered "bridging" to the probe and "not bridging" for real, and the object landed
+        on Chat Completions, which only takes a string. Emitting the alias makes the two agree.
+        """
+        from litellm.main import responses_api_bridge_check
+        from litellm.utils import get_optional_params, peek_reasoning_summary_aliases
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="hi",
+            responses_api_request={"reasoning": {"effort": "medium", "summary": "auto"}},
+            custom_llm_provider=custom_llm_provider,
+        )
+        optional_params = get_optional_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            reasoning_effort=result["reasoning_effort"],
+            reasoning_summary=result["reasoning_summary"],
+        )
+        model_info, _ = responses_api_bridge_check(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            reasoning_effort=result["reasoning_effort"],
+            reasoning_summary=peek_reasoning_summary_aliases(optional_params),
+        )
+
+        assert model_info.get("mode") == "responses"
+
+    def test_a_failing_bridge_probe_falls_back_to_the_string_effort(self, monkeypatch):
+        """
+        The probe is a capability question, so a model-info lookup blowing up must not fail the
+        request. It degrades to the chat-safe form: a string effort and no alias.
+        """
+        import litellm.main
+
+        def _boom(**_kwargs):
+            raise RuntimeError("model info unavailable")
+
+        monkeypatch.setattr(litellm.main, "responses_api_bridge_check", _boom)
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="gpt-5.4-pro",
+            input="hi",
+            responses_api_request={"reasoning": {"effort": "medium", "summary": "auto"}},
+            custom_llm_provider="azure_ai",
+        )
+
+        assert result["reasoning_effort"] == "medium"
+        assert "reasoning_summary" not in result
+
+    @pytest.mark.parametrize(
+        "reasoning, expected",
+        [
+            ({"effort": "high"}, "high"),
+            ("low", "low"),
+            ({"summary": "auto"}, None),
+            ({}, None),
+            (None, None),
+        ],
+    )
+    def test_reasoning_param_shapes_map_to_reasoning_effort(self, reasoning, expected):
+        """
+        An object without ``effort`` carries nothing Chat Completions can use, so no
+        ``reasoning_effort`` is sent at all (the bridge drops None-valued params).
+        """
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            input="hi",
+            responses_api_request={"reasoning": reasoning},
+            custom_llm_provider="bedrock",
+        )
+
+        assert result.get("reasoning_effort") == expected
+        assert ("reasoning_effort" in result) is (expected is not None)
+
+    @pytest.mark.parametrize(
+        "model, expected_thinking",
+        [
+            ("global.anthropic.claude-sonnet-5", {"type": "adaptive"}),
+            (
+                "anthropic.claude-sonnet-4-5-20250929-v1:0",
+                {"type": "enabled", "budget_tokens": 2048},
+            ),
+        ],
+    )
+    def test_reasoning_summary_still_enables_thinking_on_bedrock(self, model, expected_thinking):
+        """
+        End to end through Bedrock Converse's own param mapping: the effort a Responses request asks
+        for must survive into ``thinking``, whether the model takes an adaptive effort or a legacy
+        token budget. Forwarding the object instead leaves ``thinking`` unset and the model never
+        reasons, which is the failure this guards.
+        """
+        from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+        bridged = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="hi",
+            responses_api_request={"reasoning": {"effort": "medium", "summary": "auto"}},
+            custom_llm_provider="bedrock",
+        )
+
+        mapped = AmazonConverseConfig().map_openai_params(
+            {"reasoning_effort": bridged["reasoning_effort"]}, {}, model, True
+        )
+
+        assert expected_thinking.items() <= mapped["thinking"].items()
+
     def test_bedrock_anthropic_responses_tools_yield_only_function_toolspec(self):
         """
         End-to-end (no network) of the LIT-3858 acceptance criterion: the mixed tools array
