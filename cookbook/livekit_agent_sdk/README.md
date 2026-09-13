@@ -32,7 +32,7 @@ Set these environment variables if needed:
 
 ```bash
 export LITELLM_PROXY_URL="http://localhost:4000"
-export LITELLM_API_KEY="sk-1234"
+export LITELLM_API_KEY="sk-<your-litellm-api-key>"
 export LITELLM_MODEL="grok-voice-agent"
 ```
 
@@ -59,7 +59,7 @@ model_list:
       mode: realtime
 
 general_settings:
-  master_key: sk-1234
+  master_key: os.environ/LITELLM_MASTER_KEY
 ```
 
 Then start: `litellm --config config.yaml --port 4000`
@@ -73,7 +73,7 @@ from livekit.plugins import xai
 
 model = xai.realtime.RealtimeModel(
     voice="ara",
-    api_key="sk-1234",              # LiteLLM proxy key
+    api_key="sk-<your-litellm-api-key>",              # LiteLLM proxy key
     base_url="http://localhost:4000", # Point to LiteLLM
 )
 ```

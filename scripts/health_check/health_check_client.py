@@ -400,7 +400,7 @@ class LiteLLMHealthCheckClient:
 async def main():
     """Main entry point."""
     base_url = os.environ.get("LITELLM_BASE_URL", "http://localhost:4000")
-    api_key = os.environ.get("LITELLM_API_KEY", "sk-1234")
+    api_key = os.environ.get("LITELLM_API_KEY", "sk-<your-litellm-api-key>")
     yaml_path = os.environ.get("LITELLM_MODELS_YAML")
     custom_auth_header = os.environ.get(
         "LITELLM_CUSTOM_AUTH_HEADER"

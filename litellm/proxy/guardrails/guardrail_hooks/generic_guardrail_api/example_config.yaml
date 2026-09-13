@@ -25,7 +25,7 @@ litellm_settings:
 
 # 1. Apply guardrail to a specific request:
 # curl --location 'http://localhost:4000/chat/completions' \
-#   --header 'Authorization: Bearer sk-1234' \
+#   --header "Authorization: Bearer $LITELLM_API_KEY" \
 #   --header 'Content-Type: application/json' \
 #   --data '{
 #     "model": "gpt-4",
@@ -35,7 +35,7 @@ litellm_settings:
 
 # 2. Apply guardrail with dynamic parameters:
 # curl --location 'http://localhost:4000/chat/completions' \
-#   --header 'Authorization: Bearer sk-1234' \
+#   --header "Authorization: Bearer $LITELLM_API_KEY" \
 #   --header 'Content-Type: application/json' \
 #   --data '{
 #     "model": "gpt-4",

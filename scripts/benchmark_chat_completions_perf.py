@@ -36,7 +36,7 @@ from aiohttp import web
 
 
 DEFAULT_MODEL = "perf-test-model"
-DEFAULT_API_KEY = "sk-1234"
+DEFAULT_API_KEY = "sk-<your-litellm-api-key>"
 
 
 @dataclass

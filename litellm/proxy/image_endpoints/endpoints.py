@@ -253,7 +253,7 @@ async def image_edit_api(
     curl -s -D >(grep -i x-request-id >&2) \
     -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png) \
     -X POST "http://localhost:4000/v1/images/edits" \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_API_KEY" \
         -F "model=gpt-image-1" \
         -F "image[]=@soap.png" \
         -F 'prompt=Create a studio ghibli image of this'

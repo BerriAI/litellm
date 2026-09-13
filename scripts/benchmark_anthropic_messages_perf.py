@@ -41,7 +41,7 @@ import aiohttp
 from aiohttp import web
 
 DEFAULT_MODEL = "claude-perf-test"
-DEFAULT_API_KEY = "sk-1234"
+DEFAULT_API_KEY = "sk-<your-litellm-api-key>"
 
 
 @dataclass

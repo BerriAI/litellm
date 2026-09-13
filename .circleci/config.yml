@@ -1769,6 +1769,7 @@ jobs:
               -e LANGFUSE_PROJECT2_SECRET=$LANGFUSE_PROJECT2_SECRET \
               -e RECORDER_OPENAI_BASE_URL=http://host.docker.internal:8090/v1 \
               -e LITELLM_LOG=ERROR \
+              -e LITELLM_MASTER_KEY="sk-1234" \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/proxy_server_config.yaml:/app/config.yaml \

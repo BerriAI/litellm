@@ -262,7 +262,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     """
     Handles budgets for model + virtual key
 
-    Example: key=sk-1234567890, model=gpt-4o, max_budget=100, time_period=1d
+    Example: key=sk-<virtual-key>, model=gpt-4o, max_budget=100, time_period=1d
     """
 
     def __init__(self, dual_cache: DualCache):
@@ -431,7 +431,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         """
         Track spend for virtual key + model in DualCache
 
-        Example: key=sk-1234567890, model=gpt-4o, max_budget=100, time_period=1d
+        Example: key=sk-<virtual-key>, model=gpt-4o, max_budget=100, time_period=1d
         """
         verbose_proxy_logger.debug("in RouterBudgetLimiting.async_log_success_event")
         standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)

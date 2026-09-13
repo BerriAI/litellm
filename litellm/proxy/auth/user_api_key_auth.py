@@ -403,7 +403,7 @@ def _get_bearer_token_or_received_api_key(api_key: str) -> str:
         api_key = api_key.replace("bearer ", "")
     elif api_key.startswith("AWS4-HMAC-SHA256"):
         # Handle AWS Signature V4 format from LangChain
-        # Format: AWS4-HMAC-SHA256 Credential=Bearer sk-12345/date/region/service/aws4_request, SignedHeaders=..., Signature=...
+        # Format: AWS4-HMAC-SHA256 Credential=Bearer sk-<your-litellm-api-key>/date/region/service/aws4_request, SignedHeaders=..., Signature=...
         # Extract the Bearer token from the Credential field
         match = re.search(r"Credential=Bearer\s+([^/\s,]+)", api_key)
         if match:
@@ -499,7 +499,7 @@ def _get_bearer_token(
         api_key = api_key.replace("bearer ", "")
     elif api_key.startswith("AWS4-HMAC-SHA256"):
         # Handle AWS Signature V4 format from LangChain
-        # Format: AWS4-HMAC-SHA256 Credential=Bearer sk-12345/date/region/service/aws4_request, SignedHeaders=..., Signature=...
+        # Format: AWS4-HMAC-SHA256 Credential=Bearer sk-<your-litellm-api-key>/date/region/service/aws4_request, SignedHeaders=..., Signature=...
         # Extract the Bearer token from the Credential field
         match = re.search(r"Credential=Bearer\s+([^/\s,]+)", api_key)
         if match:
@@ -1363,7 +1363,7 @@ async def _user_api_key_auth_builder(
             route=route,
             request=request,
         )
-        # if user wants to pass LiteLLM_Master_Key as a custom header, example pass litellm keys as X-LiteLLM-Key: Bearer sk-1234
+        # if user wants to pass LiteLLM_Master_Key as a custom header, example pass litellm keys as X-LiteLLM-Key: Bearer sk-<your-litellm-api-key>
         custom_litellm_key_header_name: Final = general_settings.get("litellm_key_header_name")
         if custom_litellm_key_header_name is not None:
             api_key = get_api_key_from_custom_header(

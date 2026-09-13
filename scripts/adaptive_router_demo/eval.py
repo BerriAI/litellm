@@ -11,7 +11,7 @@ For each test case:
 Run:
   uv run python scripts/adaptive_router_demo/eval.py \
       --proxy-url   http://localhost:4000 \
-      --api-key     sk-1234 \
+      --api-key     sk-<your-litellm-api-key> \
       --router      smart-cheap-router \
       --judge-model smart
 """

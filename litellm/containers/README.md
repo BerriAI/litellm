@@ -183,14 +183,14 @@ def get_provider_container_config(
 ```bash
 # Create container via Azure
 curl -X POST "http://localhost:4000/v1/containers" \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_API_KEY" \
     -H "custom-llm-provider: azure" \
     -H "Content-Type: application/json" \
     -d '{"name": "My Azure Container"}'
 
 # List container files via Azure
 curl -X GET "http://localhost:4000/v1/containers/cntr_123/files" \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_API_KEY" \
     -H "custom-llm-provider: azure"
 ```
 
@@ -224,7 +224,7 @@ cd litellm/proxy && python proxy_cli.py --config proxy_config.yaml --port 4000
 
 # Test endpoints
 curl -X GET "http://localhost:4000/v1/containers/cntr_123/files" \
-    -H "Authorization: Bearer sk-1234"
+    -H "Authorization: Bearer $LITELLM_API_KEY"
 ```
 
 ---

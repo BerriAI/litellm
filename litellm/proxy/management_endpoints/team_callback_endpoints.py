@@ -295,7 +295,7 @@ async def add_team_callbacks(
     ```
     curl -X POST 'http:/localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback' \
         -H 'Content-Type: application/json' \
-        -H 'Authorization: Bearer sk-1234' \
+        -H "Authorization: Bearer $LITELLM_API_KEY" \
         -d '{
         "callback_name": "langfuse",
         "callback_type": "success",
@@ -467,7 +467,7 @@ async def delete_team_callback(
     Example curl:
     ```
     curl -X DELETE 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback/langsmith' \
-        -H 'Authorization: Bearer sk-1234'
+        -H "Authorization: Bearer $LITELLM_API_KEY"
     ```
 
     Covers callbacks registered through POST /team/{team_id}/callback and the Admin UI. Teams still
@@ -603,7 +603,7 @@ async def disable_team_logging(
     Example curl:
     ```
     curl -X POST 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/disable_logging' \
-        -H 'Authorization: Bearer sk-1234'
+        -H "Authorization: Bearer $LITELLM_API_KEY"
     ```
 
 
@@ -735,7 +735,7 @@ async def get_team_callbacks(
     Example curl:
     ```
     curl -X GET 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback' \
-        -H 'Authorization: Bearer sk-1234'
+        -H "Authorization: Bearer $LITELLM_API_KEY"
     ```
 
     This will return the callback settings for the team with id dbe2f686-a686-4896-864a-4c3924458709

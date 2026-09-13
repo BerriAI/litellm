@@ -123,7 +123,7 @@ async def create_batch(
     Example Curl
     ```
     curl http://localhost:4000/v1/batches \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_API_KEY" \
         -H "Content-Type: application/json" \
         -d '{
             "input_file_id": "file-abc123",
@@ -417,7 +417,7 @@ async def retrieve_batch(
     Example Curl
     ```
     curl http://localhost:4000/v1/batches/batch_abc123 \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_API_KEY" \
     -H "Content-Type: application/json" \
 
     ```
@@ -710,7 +710,7 @@ async def list_batches(
     Example Curl
     ```
     curl http://localhost:4000/v1/batches?limit=2 \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_API_KEY" \
     -H "Content-Type: application/json" \
 
     ```
@@ -891,7 +891,7 @@ async def cancel_batch(
     Example Curl
     ```
     curl http://localhost:4000/v1/batches/batch_abc123/cancel \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_API_KEY" \
         -H "Content-Type: application/json" \
         -X POST
 

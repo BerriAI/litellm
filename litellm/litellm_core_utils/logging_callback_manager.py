@@ -175,7 +175,7 @@ class LoggingCallbackManager:
                 callback_type: generic_api
                 endpoint: https://webhook-test.com/30343bc33591bc5e6dc44217ceae3e0a
                 headers:
-                Authorization: Bearer sk-1234
+                Authorization: Bearer sk-<your-litellm-api-key>
         """
         callback_config: Final = litellm.callback_settings.get(callback)
 

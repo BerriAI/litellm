@@ -59,7 +59,7 @@ const HowItWorks: React.FC = () => {
           language="bash"
           code={`curl -X POST -i http://your-proxy:4000/chat/completions \\
   -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer sk-1234" \\
+  -H "Authorization: Bearer sk-<your-litellm-api-key>" \\
   -d '{
     "model": "gemini/gemini-2.5-pro",
     "messages": [{"role": "user", "content": "Hello"}]

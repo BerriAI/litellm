@@ -87,7 +87,7 @@ async def create_fine_tuning_job(
     ```
     curl http://localhost:4000/v1/fine_tuning/jobs \
       -H "Content-Type: application/json" \
-      -H "Authorization: Bearer sk-1234" \
+      -H "Authorization: Bearer $LITELLM_API_KEY" \
       -d '{
         "model": "gpt-3.5-turbo",
         "training_file": "file-abc123",
