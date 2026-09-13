@@ -3412,6 +3412,30 @@ async def test_load_config_user_url_validation_handles_null_and_string_false(tmp
 
 
 @pytest.mark.asyncio
+async def test_load_config_warns_per_worker_login_counters_without_general_settings(tmp_path, monkeypatch, caplog):
+    """Regression: the failed-login throttle is on by default, so a multi-worker proxy with no
+    Redis must hear that its counters are per worker even when the config has no general_settings."""
+    import logging
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.auth.login_throttle import warn_login_counters_are_per_worker
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    for redis_var in ("REDIS_HOST", "REDIS_URL", "REDIS_CLUSTER_NODES", "REDIS_SENTINEL_NODES"):
+        monkeypatch.delenv(redis_var, raising=False)
+    monkeypatch.setenv("NUM_WORKERS", "4")
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", None)
+    warn_login_counters_are_per_worker.cache_clear()
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("model_list: []\n")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+
+    assert "Running 4 workers but Redis is not configured" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_load_environment_variables_direct_and_os_environ():
     """
     Test _load_environment_variables method with direct values and os.environ/ prefixed values

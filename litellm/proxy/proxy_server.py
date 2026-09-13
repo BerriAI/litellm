@@ -5748,6 +5748,13 @@ class ProxyConfig:
         general_settings = config.get("general_settings", {})
         if general_settings is None:
             general_settings = {}
+
+        ### FAILED-LOGIN ACCOUNTING MULTI-INSTANCE PREREQUISITE CHECK ###
+        # Failed Admin UI sign-in counters live in redis_usage_cache when available so a
+        # brute-force run is counted once across workers instead of once per worker.
+        if os.getenv("NUM_WORKERS", "1") != "1" and redis_usage_cache is None:
+            warn_login_counters_are_per_worker(os.getenv("NUM_WORKERS", "1"))
+
         _bg_hc_model_groups: Final = parse_background_health_check_model_groups(general_settings)
         _enable_hc_routing = False
         _hc_staleness = None
@@ -5843,12 +5850,6 @@ class ProxyConfig:
                         "Configure Redis via the 'cache' section in your proxy config, "
                         "or ensure sticky sessions for single-instance deployments."
                     )
-
-            ### FAILED-LOGIN ACCOUNTING MULTI-INSTANCE PREREQUISITE CHECK ###
-            # Failed Admin UI sign-in counters live in redis_usage_cache when available so a
-            # brute-force run is counted once across workers instead of once per worker.
-            if os.getenv("NUM_WORKERS", "1") != "1" and redis_usage_cache is None:
-                warn_login_counters_are_per_worker(os.getenv("NUM_WORKERS", "1"))
 
             ### STORE MODEL IN DB ### feature flag for `/model/new`
             store_model_in_db = general_settings.get("store_model_in_db", False)
