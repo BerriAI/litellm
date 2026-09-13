@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -871,3 +872,32 @@ async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
     assert records[0].levelname == expect_level
     expected_logger_name = "LiteLLM Proxy.stdout" if expect_level == "WARNING" else "LiteLLM Proxy"
     assert records[0].name == expected_logger_name
+
+
+@pytest.mark.asyncio
+async def test_missing_api_key_returns_401_when_prisma_is_not_installed():
+    """
+    On a DB-less proxy (config + master key, no DATABASE_URL) the optional
+    prisma package is absent. Classifying the "no api key passed in" failure
+    must not crash on that missing import, or the intended 401 is replaced by a
+    generic 500 from the catch-all handler.
+    """
+    prisma_absent = dict.fromkeys(
+        ("prisma", "prisma.errors", "prisma.engine", "prisma.engine.errors"), None
+    )
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    with patch.dict(sys.modules, prisma_absent):
+        with pytest.raises(ProxyException) as exc_info:
+            await handler._handle_authentication_error(
+                Exception("No api key passed in."),
+                MagicMock(),
+                {},
+                "/v1/chat/completions",
+                None,
+                None,
+            )
+
+    assert exc_info.value.type == ProxyErrorTypes.auth_error
+    assert exc_info.value.code == str(status.HTTP_401_UNAUTHORIZED)
+    assert "No api key passed in." in exc_info.value.message
