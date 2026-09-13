@@ -2605,3 +2605,34 @@ def test_build_summary_messages_keeps_midturn_system_correction_in_place():
     assert summary_messages[0]["content"] == "caller system prompt"
     assert summary_messages[2]["content"] == "use the corrected result"
     assert summary_messages[-1]["content"] == "summarize the conversation"
+
+
+async def test_threshold_check_counts_tokens_off_the_event_loop(monkeypatch):
+    from tests.large_text import text
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    from litellm.llms.anthropic.experimental_pass_through.context_management.constants import (
+        COMPACT_SUMMARY_MODEL_SETTING_KEY,
+    )
+    from litellm.proxy.proxy_server import general_settings
+
+    monkeypatch.setitem(general_settings, COMPACT_SUMMARY_MODEL_SETTING_KEY, "claude-haiku-4-5")
+    warm_tokenizer(MODEL)
+    messages = [{"role": "user", "content": text * 100}, *_simple_messages()]
+    result, took, lags = await timed_with_loop_lags(
+        lambda: apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec={"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 10_000_000}},
+        )
+    )
+
+    assert result.messages == messages
+    assert result.compaction_block is None
+    assert_loop_stayed_free(took, lags)

@@ -4917,3 +4917,50 @@ class TestStableStreamingResponseId:
         )
         wrapper.response_id = "chatcmpl-from-provider"
         assert wrapper.model_response_creator().id == "chatcmpl-from-provider"
+
+
+@pytest.mark.asyncio
+async def test_async_stream_without_usage_counts_tokens_off_the_event_loop():
+    from tests.large_text import text
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    model = "gpt-5.6-luna"
+    warm_tokenizer(model)
+    messages = [{"role": "user", "content": text * 100}]
+    content_chunks = [_make_chunk(text) for _ in range(100)]
+    stop_chunk = ModelResponseStream(
+        id="test",
+        created=1741037890,
+        model=model,
+        choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+    )
+    logging_obj = Logging(
+        model=model,
+        messages=messages,
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="12345",
+        function_id="1245",
+    )
+    wrapper = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=content_chunks + [stop_chunk]),
+        model=model,
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+        stream_options={"include_usage": True},
+    )
+
+    async def consume() -> list[ModelResponseStream]:
+        return [chunk async for chunk in wrapper]
+
+    chunks, took, lags = await timed_with_loop_lags(consume)
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == text * 100
+    assert chunks[-1].usage.prompt_tokens > 100_000
+    assert chunks[-1].usage.completion_tokens > 100_000
+    assert_loop_stayed_free(took, lags)

@@ -100,3 +100,57 @@ async def test_custom_logger_only_never_submits_sync_success_handler(monkeypatch
 
     assert recorder.async_hook_fired is True
     assert recording_executor.submitted_for(logging_obj) == []
+
+
+class _AgentChunk:
+    def __init__(self, text: str):
+        self._text = text
+
+    def model_dump(self, mode: str, exclude_none: bool) -> dict:
+        return {"result": {"kind": "message", "role": "agent", "parts": [{"kind": "text", "text": self._text}]}}
+
+
+@pytest.mark.asyncio
+async def test_stream_completion_counts_tokens_off_the_event_loop(monkeypatch):
+    from tests.large_text import text
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    warm_tokenizer("gpt-5.6-luna")
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    logging_obj = LitellmLogging(
+        model="a2a/test-agent",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="a2a_send_message_streaming",
+        start_time=time.time(),
+        litellm_call_id="lit-7190-test",
+        function_id="lit-7190-test",
+    )
+
+    async def _stream():
+        yield _AgentChunk(text * 100)
+
+    iterator = A2AStreamingIterator(
+        stream=_stream(),
+        request=SimpleNamespace(
+            params=SimpleNamespace(message={"role": "user", "parts": [{"kind": "text", "text": text * 100}]})
+        ),
+        logging_obj=logging_obj,
+        agent_name="test-agent",
+    )
+
+    async def drain() -> int:
+        return len([chunk async for chunk in iterator])
+
+    yielded, took, lags = await timed_with_loop_lags(drain)
+
+    assert yielded == 1
+    usage = logging_obj.model_call_details["usage"]
+    assert usage.prompt_tokens > 100_000
+    assert usage.completion_tokens > 100_000
+    assert_loop_stayed_free(took, lags)
