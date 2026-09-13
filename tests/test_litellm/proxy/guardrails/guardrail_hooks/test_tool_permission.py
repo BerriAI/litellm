@@ -5,6 +5,7 @@ Unit tests for Tool Permission Guardrail (OpenAI tool_calls semantics)
 import json
 import logging
 import re
+from typing import Literal
 from unittest.mock import patch
 
 import pytest
@@ -24,6 +25,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     PermissionError,
 )
 from litellm.types.utils import (
+    CallTypesLiteral,
     ChatCompletionMessageToolCall,
     Choices,
     ModelResponse,
@@ -1177,7 +1179,7 @@ class TestToolPermissionGuardrailAnthropicMessages:
     def _tool_use(self, name, tool_id="tu_1"):
         return {"type": "tool_use", "id": tool_id, "name": name, "input": {"command": "ls"}}
 
-    def _always_on_pre_call(self, on_disallowed_action):
+    def _always_on_pre_call(self, on_disallowed_action: Literal["block", "rewrite"]) -> ToolPermissionGuardrail:
         return ToolPermissionGuardrail(
             guardrail_name=f"anthropic-pre-call-{on_disallowed_action}",
             rules=self.rules,
@@ -1197,7 +1199,7 @@ class TestToolPermissionGuardrailAnthropicMessages:
         ],
         ids=["anthropic", "anthropic_custom_type", "responses_api_flat_function"],
     )
-    async def test_pre_call_blocks_denied_request_tool_in_flat_format(self, denied_tool):
+    async def test_pre_call_blocks_denied_request_tool_in_flat_format(self, denied_tool: dict[str, object]) -> None:
         data = {"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "hi"}], "tools": [denied_tool]}
 
         with pytest.raises(HTTPException) as excinfo:
@@ -1231,8 +1233,12 @@ class TestToolPermissionGuardrailAnthropicMessages:
         ids=["anthropic", "responses_api"],
     )
     async def test_pre_call_rewrite_strips_denied_flat_tool_and_forced_choice(
-        self, tool_shape, tool_choice, call_type, expected_tool_choice
-    ):
+        self,
+        tool_shape: dict[str, object],
+        tool_choice: dict[str, str],
+        call_type: CallTypesLiteral,
+        expected_tool_choice: dict[str, str] | str,
+    ) -> None:
         data = {
             "model": "claude-sonnet-4-5",
             "messages": [{"role": "user", "content": "hi"}],
