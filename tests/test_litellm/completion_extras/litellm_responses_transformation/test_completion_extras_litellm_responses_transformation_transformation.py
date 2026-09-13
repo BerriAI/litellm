@@ -3662,12 +3662,56 @@ def test_transform_response_incomplete_content_filter_maps_finish_reason():
     assert result.choices[0].message.content == ""
 
 
-def test_transform_response_zero_choices_not_incomplete_still_raises():
+def test_transform_response_zero_choices_not_completed_still_raises():
     handler = LiteLLMResponsesTransformationHandler()
     raw_response = _make_empty_responses_api_response()
+    raw_response.status = "in_progress"
 
     with pytest.raises(ValueError, match="Unknown items"):
         _call_transform_response(handler, raw_response)
+
+
+def test_transform_response_unknown_completed_item_still_raises():
+    handler = LiteLLMResponsesTransformationHandler()
+    raw_response = _make_empty_responses_api_response()
+    raw_response.output = [{"type": "mystery_item", "id": "x_1"}]
+
+    with pytest.raises(ValueError, match="Unknown items"):
+        _call_transform_response(handler, raw_response)
+
+
+def test_transform_response_empty_completed_output_returns_silent_stop_choice():
+    """A ``status: completed`` response with ``output: []`` is a legal silent turn
+    (seen live from gpt-5.6 on Bedrock Mantle right after a tool result). The
+    bridge mirrors Chat Completions: one empty assistant message with
+    finish_reason "stop", usage preserved, instead of a 500 (#37039)."""
+    handler = LiteLLMResponsesTransformationHandler()
+    raw_response = _make_empty_responses_api_response()
+
+    result = _call_transform_response(handler, raw_response)
+
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+    assert choice.finish_reason == "stop"
+    assert choice.index == 0
+    assert choice.message.role == "assistant"
+    assert choice.message.content == ""
+    assert not choice.message.tool_calls
+    assert result.usage.total_tokens == 2
+
+
+def test_transform_response_reasoning_only_completed_output_returns_silent_stop_choice():
+    handler = LiteLLMResponsesTransformationHandler()
+    raw_response = _make_empty_responses_api_response()
+    raw_response.output = [_make_reasoning_only_output_item()]
+
+    result = _call_transform_response(handler, raw_response)
+
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+    assert choice.finish_reason == "stop"
+    assert choice.message.content == ""
+    assert choice.message.reasoning_items[0]["encrypted_content"] == "enc_abc"
 
 
 def test_transform_response_completed_with_reasonless_incomplete_details_keeps_stop():
