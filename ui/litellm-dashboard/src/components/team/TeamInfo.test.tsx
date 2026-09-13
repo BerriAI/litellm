@@ -52,6 +52,7 @@ vi.mock("@/components/networking", () => ({
   listMCPTools: vi.fn().mockResolvedValue({ tools: [] }),
   vectorStoreListCall: vi.fn().mockResolvedValue({ data: [] }),
   getAgentsList: vi.fn().mockResolvedValue({ agents: [] }),
+  getClaudeCodePluginsList: vi.fn().mockResolvedValue({ plugins: [], count: 0 }),
 }));
 
 const can = vi.fn();
@@ -1990,6 +1991,7 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     agents: [],
     agent_access_groups: [],
     vector_stores: ["vs-1"],
+    skills: [],
   };
 
   it("leaves every team member key out of the request body for an untouched save with both sections closed", async () => {
@@ -2050,6 +2052,47 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     const objectPermission = wireBody(payload).object_permission as Record<string, unknown>;
     expect(objectPermission.agents).toStrictEqual([]);
     expect(objectPermission.agent_access_groups).toStrictEqual([]);
+  });
+
+  it("resends the stored skills when the selector is left untouched", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({ models: ["gpt-4"], object_permission: { skills: ["private-skill"] } }),
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+
+    const payload = await save(user);
+
+    const objectPermission = wireBody(payload).object_permission as Record<string, unknown>;
+    expect(objectPermission.skills).toStrictEqual(["private-skill"]);
+  });
+
+  it("sends an empty skills array after the last skill chip is removed", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({ models: ["gpt-4"], object_permission: { skills: ["private-skill"] } }),
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+
+    await user.click(within(screen.getByLabelText("private-skill")).getByRole("button"));
+    expect(screen.queryByLabelText("private-skill")).not.toBeInTheDocument();
+
+    const payload = await save(user);
+
+    const objectPermission = wireBody(payload).object_permission as Record<string, unknown>;
+    expect(objectPermission.skills).toStrictEqual([]);
   });
 
   it("sends an empty vector_stores array after the last vector store chip is removed", async () => {

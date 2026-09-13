@@ -206,6 +206,45 @@ variable "gateway_num_workers" {
   }
 }
 
+variable "gateway_connection_pool_enabled" {
+  description = <<-EOT
+    Run an in-container PgBouncer (transaction mode, loopback) in each gateway
+    instance, shared by every uvicorn worker. Without it each of the
+    `gateway_num_workers` workers opens its own Prisma pool straight to
+    Cloud SQL, so an instance's footprint against the database connection
+    ceiling is workers x connection_limit and grows with every instance. Sets
+    LITELLM_PGBOUNCER_ENABLED / LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS /
+    LITELLM_PGBOUNCER_MAX_CLIENT_CONN on the gateway container only. The
+    module's Cloud SQL authenticates with the static password in Secret
+    Manager, which is what the pooler needs. Mirrors the AWS stack's
+    gateway_connection_pool_enabled.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "gateway_pool_max_db_connections" {
+  description = "Upstream Cloud SQL connections one gateway instance may hold when gateway_connection_pool_enabled is set, regardless of gateway_num_workers. 20 suits 4 workers."
+  type        = number
+  default     = 20
+
+  validation {
+    condition     = var.gateway_pool_max_db_connections >= 1
+    error_message = "gateway_pool_max_db_connections must be >= 1."
+  }
+}
+
+variable "gateway_pool_max_client_conn" {
+  description = "Client connections the in-container PgBouncer accepts from the gateway workers when gateway_connection_pool_enabled is set."
+  type        = number
+  default     = 1000
+
+  validation {
+    condition     = var.gateway_pool_max_client_conn >= 1
+    error_message = "gateway_pool_max_client_conn must be >= 1."
+  }
+}
+
 # Cloud Run autoscales out of the box (request-rate driven). The min/max
 # bounds mirror the HPA replica bounds in helm/litellm/values.yaml so each
 # stack scales over the same range. Cloud Run has no direct CPU-utilization
@@ -517,6 +556,44 @@ variable "otel_capture_message_content" {
   }
 }
 
+# ---------- Prometheus metrics sidecar ----------
+
+variable "gateway_metrics_port" {
+  description = <<-EOT
+    Serve Prometheus /metrics from a `metrics` sidecar container in the
+    gateway Cloud Run service on this port (a whole number 1-65535, not 4000
+    or 13133), so the collector's scrape never runs on an inference worker.
+    The sidecar runs the gateway image with
+    `python -m litellm.proxy.prometheus_metrics_server` and aggregates the
+    workers' PROMETHEUS_MULTIPROC_DIR samples over an in-memory volume shared
+    with the gateway container. Cloud Run only routes ingress to the gateway
+    container, so the sidecar port is reachable on localhost inside the
+    instance only; a Managed Service for Prometheus collector sidecar
+    (gateway_metrics_collector_image) scrapes it and writes the series to
+    Cloud Monitoring. The load balancer keeps serving the authenticated
+    /metrics on the gateway port as before. Null (the default) leaves /metrics
+    on the gateway port only. Needs gateway_image v1.101.0 or newer.
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.gateway_metrics_port == null || (var.gateway_metrics_port >= 1 && var.gateway_metrics_port <= 65535 && floor(var.gateway_metrics_port) == var.gateway_metrics_port && !contains([4000, 13133], var.gateway_metrics_port))
+    error_message = "gateway_metrics_port must be a whole number between 1 and 65535 and must not be 4000 (the gateway port) or 13133 (the collector health port)."
+  }
+}
+
+variable "gateway_metrics_collector_image" {
+  description = <<-EOT
+    Managed Service for Prometheus sidecar image that scrapes
+    localhost:<gateway_metrics_port>/metrics and writes to Cloud Monitoring.
+    Override only to pin a different release or pull through your own
+    Artifact Registry. Ignored when gateway_metrics_port is null.
+  EOT
+  type        = string
+  default     = "us-docker.pkg.dev/cloud-ops-agents-artifacts/cloud-run-gmp-sidecar/cloud-run-gmp-sidecar:1.9.2"
+}
+
 # ---------- Enterprise billing metrics ----------
 #
 # License-gated request metering. Opt-in and gated entirely on
@@ -578,4 +655,74 @@ variable "billing_metrics_ca_cert_pem" {
   type        = string
   default     = ""
   sensitive   = true
+}
+
+# ---------- Collector sidecar ----------
+#
+# Opt-in offload of spend tracking from the gateway's uvicorn workers to a
+# `python -m litellm.proxy.collector` sidecar container in the same Cloud Run
+# instance (helm's `gateway.collector`, mirrors the AWS stack). Containers
+# in one instance share localhost, so the sidecar listens on loopback TCP.
+# Disabled (the default) adds nothing to the service.
+
+variable "collector_enabled" {
+  description = "Run the collector sidecar next to the gateway container and have the gateway ship spend events to it (sets LITELLM_COLLECTOR_ENABLED=true on both). The sidecar shares the instance's request-based CPU allocation, so pair it with a non-zero gateway_min_instances if spend must keep flowing between requests."
+  type        = bool
+  default     = false
+}
+
+variable "collector_port" {
+  description = "Loopback TCP port the sidecar listens on (LITELLM_COLLECTOR_ADDRESS=tcp://127.0.0.1:<port>)."
+  type        = number
+  default     = 4010
+
+  validation {
+    condition     = var.collector_port >= 1024 && var.collector_port <= 65535 && !contains([4000, 13133], var.collector_port)
+    error_message = "collector_port must be in 1024-65535 and not 4000 (the gateway port) or 13133 (the metrics sidecar health port)."
+  }
+}
+
+variable "collector_cpu" {
+  description = "Cloud Run CPU limit for the sidecar container, on top of gateway_cpu. Matches helm's collector.resources.limits.cpu."
+  type        = string
+  default     = "1000m"
+}
+
+variable "collector_memory" {
+  description = "Cloud Run memory limit for the sidecar container, on top of gateway_memory. Matches helm's collector.resources.limits.memory."
+  type        = string
+  default     = "2Gi"
+}
+
+variable "collector_buffer_size" {
+  description = "Per-worker in-memory queue of spend events waiting to be shipped to the sidecar (LITELLM_COLLECTOR_BUFFER_SIZE)."
+  type        = number
+  default     = 1000
+
+  validation {
+    condition     = var.collector_buffer_size >= 1
+    error_message = "collector_buffer_size must be >= 1."
+  }
+}
+
+variable "collector_on_unavailable" {
+  description = "What the gateway does with spend events when the sidecar is unreachable or the buffer is full (LITELLM_COLLECTOR_ON_UNAVAILABLE): `fallback` runs the pipeline in-process, `drop` discards them."
+  type        = string
+  default     = "fallback"
+
+  validation {
+    condition     = contains(["fallback", "drop"], var.collector_on_unavailable)
+    error_message = "collector_on_unavailable must be one of: fallback, drop."
+  }
+}
+
+variable "collector_drain_timeout_seconds" {
+  description = "Seconds a gateway worker waits on shutdown for its buffered spend events to reach the sidecar (LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS)."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.collector_drain_timeout_seconds > 0
+    error_message = "collector_drain_timeout_seconds must be > 0."
+  }
 }

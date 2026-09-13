@@ -17,6 +17,7 @@ AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
         "aws_web_identity_token",
         "aws_sts_endpoint",
         "aws_external_id",
+        "aws_session_tags",
         "aws_bedrock_runtime_endpoint",
         "aws_bedrock_project_id",
     }

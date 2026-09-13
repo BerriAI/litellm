@@ -12,8 +12,8 @@ asserting once.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
-from typing import Literal
+from collections.abc import Callable, Iterator
+from typing import Final, Literal
 
 import pytest
 
@@ -21,8 +21,11 @@ from e2e_config import unique_marker
 from e2e_http import NoBody, StreamingResponse, unwrap
 from lifecycle import ResourceManager
 from management_client import ManagementClient
-from models import KeyDeleteBody, KeyGenerateBody, KeyUpdateBody
-from pydantic import BaseModel
+from models import (
+    CLEAR, ChatResponse, KeyDeleteBody, KeyGenerateBody, KeyInfo, KeyUpdateBody,
+    LiteLLMParamsBody, OrgNewBody, TeamNewBody,
+)
+from pydantic import BaseModel, RootModel
 
 pytestmark = pytest.mark.e2e
 
@@ -131,7 +134,93 @@ def _unblock(client: ManagementClient, key: str) -> None:
     )
 
 
+class ProjectIdentity(BaseModel):
+    project_id: str
+
+
+class ProjectCreateBody(BaseModel):
+    team_id: str
+    project_alias: str
+    models: list[str]
+
+
+class ProjectBlockBody(ProjectIdentity):
+    blocked: bool
+
+
+class ProjectDeleteBody(BaseModel):
+    project_ids: list[str]
+
+
+@pytest.fixture
+def project_resources(client: ManagementClient) -> Iterator[ResourceManager]:
+    manager: Final = ResourceManager(client=client.proxy, strict_cleanup=True)
+    yield manager
+    manager.teardown()
+
+
 class TestKeyManagementRoutes:
+    @pytest.mark.covers("mgmt.key.update.persists")
+    def test_project_detachment_preserves_key_scope_and_refreshes_auth(
+        self, client: ManagementClient, project_resources: ResourceManager
+    ) -> None:
+        resources: Final = project_resources
+        name: Final = f"e2e-detach-{unique_marker()}"
+        model_id: Final = client.proxy.create_model(
+            name, LiteLLMParamsBody(model="openai/synthetic-detachment", api_key="synthetic", mock_response="orbit")
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        org_id: Final = client.create_org(OrgNewBody(organization_alias=name, models=[name]))
+        resources.defer(lambda: client.delete_org(org_id))
+        team_id: Final = client.create_team(TeamNewBody(team_alias=name, organization_id=org_id, models=[name]))
+        resources.defer(lambda: client.delete_team(team_id))
+        project: Final = unwrap(client.proxy.transport.post(
+            "/project/new", headers=client.proxy.transport.master,
+            json=ProjectCreateBody(team_id=team_id, project_alias=name, models=[name]),
+            response_type=ProjectIdentity,
+        ))
+        resources.defer(lambda: unwrap(client.proxy.transport.delete(
+            "/project/delete", headers=client.proxy.transport.master,
+            json=ProjectDeleteBody(project_ids=[project.project_id]), response_type=RootModel[list[ProjectIdentity]],
+        )))
+        key: Final = _generate_key(client, resources, KeyGenerateBody(
+            key_alias=name, team_id=team_id, organization_id=org_id, project_id=project.project_id,
+            models=[name], max_budget=5, tpm_limit=12345, rpm_limit=97,
+        ))
+        initial: Final = client.chat_status(key, name, "project attached")
+        assert initial.ok, initial.body
+        _ = unwrap(client.update_key(KeyUpdateBody(key=key, key_alias=f"{name}-saved")))
+        assert client.proxy.key_info(key).project_id == project.project_id
+        _ = unwrap(client.update_key(KeyUpdateBody(key=key, project_id=project.project_id)))
+        rejected: Final = client.proxy.transport.send(
+            "/key/update", headers=client.proxy.transport.master,
+            json=KeyUpdateBody(key=key, project_id=f"{name}-different"),
+        )
+        assert rejected.status_code == 400 and "reassignment" in rejected.body
+        assert client.proxy.key_info(key).project_id == project.project_id
+        _ = unwrap(client.proxy.transport.post(
+            "/project/update", headers=client.proxy.transport.master,
+            json=ProjectBlockBody(project_id=project.project_id, blocked=True), response_type=NoBody,
+        ))
+        blocked: Final = client.chat_status(key, name, "project blocked")
+        assert not blocked.ok and "is blocked" in blocked.body
+        detached: Final = unwrap(client.proxy.transport.post(
+            "/key/update", headers=client.proxy.transport.master,
+            json=KeyUpdateBody(key=key, project_id=CLEAR), response_type=KeyInfo,
+        ))
+        assert detached.project_id is None
+        saved: Final = client.proxy.key_info(key)
+        assert (saved.project_id, saved.team_id, saved.organization_id) == (None, team_id, org_id)
+        assert (saved.models, saved.max_budget, saved.tpm_limit, saved.rpm_limit) == ([name], 5, 12345, 97)
+        allowed: Final = client.chat_status(key, name, "project detached")
+        assert allowed.ok, allowed.body
+        message: Final = ChatResponse.model_validate_json(allowed.body).choices[0].message
+        assert message is not None and message.content == "orbit"
+        _ = unwrap(client.update_key(KeyUpdateBody(key=key, project_id=CLEAR)))
+        assert client.proxy.key_info(key).project_id is None
+        denied: Final = client.chat_status(key, f"{name}-outside", "outside key scope")
+        assert denied.status_code in (401, 403), denied.body
+
     @pytest.mark.covers("mgmt.key.info.persists")
     def test_info_reflects_the_fields_the_key_was_created_with(
         self, client: ManagementClient, resources: ResourceManager

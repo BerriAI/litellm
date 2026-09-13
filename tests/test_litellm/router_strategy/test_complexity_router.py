@@ -5,13 +5,19 @@ Tests the rule-based complexity scoring and tier assignment logic.
 """
 
 import asyncio
+import json
 import logging
 import sys
 import time
-from typing import Dict, Final, List
+from collections.abc import AsyncIterator, Mapping
+from copy import deepcopy
+from functools import partial
+from typing import Dict, Final, List, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 from pydantic import ValidationError
 
 import litellm
@@ -64,8 +70,11 @@ from litellm.router_strategy.complexity_router.tier_predictor import (
 from litellm.types.router import (
     Deployment,
     LiteLLM_Params,
+    RouterErrors,
     TaggedPreRoutingStrategy,
 )
+from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
 requires_semantic_router = pytest.mark.skipif(
@@ -194,7 +203,14 @@ class TestComplexityRouterInit:
             complexity_router_config=basic_config,
         )
 
-        assert router._reminder_markers == (("<system-reminder>", "</system-reminder>"),)
+        from litellm.router_strategy.complexity_router.complexity_router import _extract_current_ask_and_system_prompt
+
+        assert (
+            _extract_current_ask_and_system_prompt(
+                [{"role": "user", "content": "<system-reminder>noise</system-reminder>hello"}], router._reminder_markers
+            )[0]
+            == "hello"
+        )
 
     def test_init_without_config(self, mock_router_instance):
         """Test initialization without configuration uses defaults."""
@@ -2482,6 +2498,367 @@ class TestTierLabels:
         assert set(config.tier_boundaries) == {"simple_medium", "medium_complex", "complex_reasoning"}
 
 
+def _encrypted_agent_task() -> dict[str, object]:
+    return {
+        "type": "agent_message",
+        "author": "/root",
+        "recipient": "/root/child",
+        "content": [
+            {"type": "input_text", "text": "Message Type: NEW_TASK\nTask name: /root/child\nPayload:\nHello"},
+            {"type": "encrypted_content", "encrypted_content": "opaque-provider-task"},
+        ],
+    }
+
+
+def _native_classifier_response(content: str) -> ResponsesAPIResponse:
+    response: Final = ResponsesAPIResponse(
+        id="resp_classifier",
+        created_at=0,
+        status="completed",
+        output=[{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": content}]}],
+    )
+    response._hidden_params = {"response_cost": 0.0001}
+    return response
+
+
+def _native_classifier_router(
+    output: str = '{"tier":"REASONING"}',
+    classifier_type: str = "llm",
+    deployment_model: str = "openai/gpt-6-astra",
+    failure: Exception | None = None,
+    native_router: Router | None = None,
+    http_handler: AsyncHTTPHandler | None = None,
+) -> tuple[ComplexityRouter, MagicMock]:
+    dependency: Final = MagicMock(
+        aresponses=(
+            native_router.factory_function(partial(litellm.aresponses, client=http_handler), call_type="aresponses")
+            if native_router is not None
+            else AsyncMock(return_value=_native_classifier_response(output), side_effect=failure)
+        ),
+        acompletion=AsyncMock(return_value=_llm_response('{"tier":"SIMPLE"}')),
+        get_model_list=(
+            native_router.get_model_list
+            if native_router is not None
+            else MagicMock(return_value=[{"litellm_params": {"model": deployment_model}}])
+        ),
+    )
+    return (
+        ComplexityRouter(
+            model_name="encrypted-router",
+            litellm_router_instance=dependency,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "cheap-model", "REASONING": "deep-model"},
+                "classifier_type": classifier_type,
+                "classifier_llm_config": {
+                    "model": "classifier",
+                    "timeout_ms": 5000 if native_router is not None else 100,
+                    "reasoning_effort": "low",
+                },
+                "heuristic_first_max_tier": "SIMPLE" if classifier_type == "heuristic_first" else None,
+                "hybrid_boundary_margin": 0.01 if classifier_type == "hybrid" else None,
+                "classifier_fallback": "default_model",
+                "default_model": "deep-model",
+                "session_affinity": False,
+                "deployment_affinity": False,
+            },
+        ),
+        dependency,
+    )
+
+
+@pytest.fixture
+async def native_classifier_http() -> AsyncIterator[tuple[AsyncHTTPHandler, MagicMock]]:
+    respond: Final = MagicMock(
+        return_value=httpx.Response(200, json=_native_classifier_response('{"tier":"REASONING"}').model_dump())
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        handler: Final = AsyncHTTPHandler()
+        await handler.client.aclose()
+        handler.client = client
+        yield handler, respond
+
+
+class TestEncryptedTaskClassifier:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("classifier_type", ["llm", "heuristic_first", "hybrid"])
+    @pytest.mark.parametrize("codex", [True, False])
+    @pytest.mark.parametrize(
+        "reminder",
+        [
+            "<environment_context>cwd=/repo</environment_context>",
+            "<user_instructions>Keep answers concise</user_instructions>",
+        ],
+    )
+    async def test_encrypted_task_detection_uses_request_reminder_markers(
+        self, classifier_type: str, codex: bool, reminder: str
+    ):
+        router, dependency = _native_classifier_router(classifier_type=classifier_type)
+        task: Final = _encrypted_agent_task()
+        request: Final = {
+            "input": [task, {"role": "user", "content": reminder}],
+            "metadata": {"user_agent": "codex-tui" if codex else "curl/8.7.1"},
+        }
+        original: Final = deepcopy(request)
+
+        result: Final = await router.async_pre_routing_hook(model="encrypted-router", request_kwargs=request)
+
+        assert request == original
+        assert result.model == ("deep-model" if codex else "cheap-model")
+        if codex:
+            assert result.routing_decision["cause"] == "llm_classifier"
+            assert result.routing_decision["tier"] == "REASONING"
+            dependency.aresponses.assert_awaited_once()
+            assert dependency.aresponses.call_args.kwargs["input"][-1] == task
+            dependency.acompletion.assert_not_called()
+        else:
+            dependency.aresponses.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("classifier_type", ["llm", "heuristic_first", "hybrid"])
+    @pytest.mark.parametrize("tier,model", [("SIMPLE", "cheap-model"), ("REASONING", "deep-model")])
+    async def test_encrypted_task_routes_by_native_verdict(self, classifier_type: str, tier: str, model: str):
+        router, dependency = _native_classifier_router(json.dumps({"tier": tier}), classifier_type)
+        task: Final = _encrypted_agent_task()
+        request: Final = {
+            "input": [
+                {"role": "user", "content": "Prior task context"},
+                task,
+                {"type": "function_call_output", "call_id": "call_1", "output": "Tool output"},
+                {"role": "user", "content": "<system-reminder>Injected reminder</system-reminder>"},
+            ],
+            "instructions": "Caller constraints",
+            "proxy_server_request": {"body": {"input": [task], "metadata": {"authorization": "source-secret"}}},
+            "tools": [{"type": "function", "name": "execute"}],
+            "previous_response_id": "resp_parent",
+            "litellm_session_id": "parent-session",
+            "litellm_trace_id": "parent-trace",
+            "turn_off_message_logging": True,
+            "litellm_metadata": {"user_api_key_hash": "caller-key-hash"},
+        }
+        original: Final = deepcopy(request)
+
+        result: Final = await router.async_pre_routing_hook(model="encrypted-router", request_kwargs=request)
+
+        assert result.model == model
+        assert result.routing_decision["tier"] == tier
+        assert result.routing_decision["cause"] == "llm_classifier"
+        assert result.routing_decision["classifier_cost"] == 0.0001
+        assert result.messages is None
+        assert request == original
+        dependency.acompletion.assert_not_called()
+        call: Final = dependency.aresponses.call_args.kwargs
+        assert call["input"][-1] == task
+        assert "opaque-provider-task" not in json.dumps(call["input"][:-1])
+        assert "Prior task context" in json.dumps(call["input"][:-1])
+        assert "Caller constraints" in json.dumps(call["input"][:-1])
+        assert "Caller constraints" not in call["instructions"]
+        assert "SIMPLE" in call["instructions"] and "REASONING" in call["instructions"]
+        assert call["text"]["format"]["schema"]["properties"]["tier"]["enum"] == [
+            "SIMPLE",
+            "MEDIUM",
+            "COMPLEX",
+            "REASONING",
+        ]
+        assert call["text"]["format"]["strict"] is True
+        assert call["reasoning"] == {"effort": "low"}
+        assert call["store"] is False
+        assert call["_require_encrypted_task_support"] is True
+        assert call["stream"] is False
+        assert "tools" not in call and "previous_response_id" not in call
+        assert "messages" not in call and "response_format" not in call
+        assert call["timeout"] == 0.1 and call["num_retries"] == 0 and call["disable_fallbacks"] is True
+        assert call["litellm_session_id"] == "parent-session"
+        assert call["litellm_trace_id"] == "parent-trace"
+        assert call["turn_off_message_logging"] is True
+        assert call["metadata"]["user_api_key_hash"] == "caller-key-hash"
+        assert call["proxy_server_request"]["body"]["input"] == call["input"]
+        assert call["proxy_server_request"]["originating_request_masked"] == {
+            "input": [task],
+            "metadata": {"authorization": "REDACTED"},
+        }
+        assert "source-secret" not in json.dumps(call)
+        assert "originating_request_masked" not in call["proxy_server_request"]["body"]
+
+    @pytest.mark.asyncio
+    async def test_claude_code_encrypted_task_omits_caller_instructions(self):
+        router, dependency = _native_classifier_router()
+        task: Final = _encrypted_agent_task()
+        request: Final = {
+            "input": [task],
+            "instructions": "CLAUDE_CODE_SYSTEM",
+            "litellm_metadata": {"user_agent": "claude-cli/2.1.233"},
+        }
+        original: Final = deepcopy(request)
+
+        result: Final = await router.async_pre_routing_hook(model="encrypted-router", request_kwargs=request)
+
+        assert result.routing_decision["cause"] == "llm_classifier"
+        assert request == original
+        call: Final = dependency.aresponses.call_args.kwargs
+        assert call["instructions"] == classification_system_prompt(router.config.classifier_context_window_size)
+        assert "CLAUDE_CODE_SYSTEM" not in json.dumps(call["input"][:-1])
+        assert call["input"][-1] == task
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "items",
+        [
+            [
+                {"type": "reasoning", "encrypted_content": "opaque-history", "summary": []},
+                {"role": "user", "content": "hi"},
+            ],
+            [_encrypted_agent_task(), {"role": "user", "content": "hi"}],
+            [{**_encrypted_agent_task(), "content": [{"type": "input_text", "text": "hi"}]}],
+            [{"role": "user", "content": "gAAAA is plain text"}],
+            [
+                {"role": "user", "content": "hi"},
+                {"type": "function_call_output", "call_id": "call_1", "output": "opaque-provider-task"},
+            ],
+        ],
+        ids=[
+            "historical-reasoning",
+            "older-encrypted-task",
+            "plaintext-agent",
+            "ciphertext-looking-text",
+            "tool-output",
+        ],
+    )
+    async def test_other_asks_keep_chat_classifier(self, items: list[dict[str, object]]):
+        router, dependency = _native_classifier_router()
+
+        result: Final = await router.async_pre_routing_hook(model="encrypted-router", request_kwargs={"input": items})
+
+        assert result.model == "cheap-model"
+        assert result.routing_decision["cause"] == "llm_classifier"
+        dependency.aresponses.assert_not_called()
+        dependency.acompletion.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("output", ["", "not-json", '{"tier":"UNKNOWN"}'])
+    async def test_invalid_native_verdict_uses_existing_fallback(self, output: str):
+        router, dependency = _native_classifier_router(output=output)
+
+        result: Final = await router.async_pre_routing_hook(
+            model="encrypted-router", request_kwargs={"input": [_encrypted_agent_task()]}
+        )
+
+        assert result.model == "deep-model"
+        assert result.routing_decision["cause"] == "default_model_fallback"
+        dependency.aresponses.assert_awaited_once()
+        dependency.acompletion.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "deployment_model",
+        ["anthropic/test-classifier", "openai/chat_completions/gpt-6-astra", "xai/test-classifier"],
+    )
+    async def test_incompatible_classifier_does_not_flatten_encryption(
+        self, deployment_model: str, native_classifier_http: tuple[AsyncHTTPHandler, MagicMock]
+    ):
+        handler, respond = native_classifier_http
+        native: Final = Router(
+            model_list=[
+                {
+                    "model_name": "classifier",
+                    "litellm_params": {
+                        "model": deployment_model,
+                        "api_key": "test-key",
+                        "api_base": "https://classifier.test/v1",
+                    },
+                }
+            ],
+            num_retries=0,
+        )
+        router, _ = _native_classifier_router(native_router=native, http_handler=handler)
+
+        result: Final = await router.async_pre_routing_hook(
+            model="encrypted-router", request_kwargs={"input": [_encrypted_agent_task()]}
+        )
+
+        assert result.model == "deep-model"
+        assert result.routing_decision["cause"] == "default_model_fallback"
+        respond.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("blocked", [True, False])
+    async def test_native_classifier_validates_selected_deployment(
+        self, blocked: bool, native_classifier_http: tuple[AsyncHTTPHandler, MagicMock]
+    ):
+        handler, respond = native_classifier_http
+        native: Final = Router(
+            model_list=[
+                {
+                    "model_name": "classifier",
+                    "litellm_params": {"model": "anthropic/test-classifier", "api_key": "test-key", "order": 0},
+                    "model_info": {"id": "incompatible", "blocked": blocked},
+                },
+                {
+                    "model_name": "classifier",
+                    "litellm_params": {
+                        "model": "openai/gpt-6-astra",
+                        "api_key": "test-key",
+                        "order": 1,
+                        "api_base": "https://classifier.test/v1",
+                    },
+                    "model_info": {"id": "compatible"},
+                },
+            ],
+            num_retries=0,
+        )
+        router, _ = _native_classifier_router(native_router=native, http_handler=handler)
+        task: Final = _encrypted_agent_task()
+
+        result: Final = await router.async_pre_routing_hook(model="encrypted-router", request_kwargs={"input": [task]})
+
+        assert result.model == "deep-model"
+        assert result.routing_decision["cause"] == ("llm_classifier" if blocked else "default_model_fallback")
+        if blocked:
+            respond.assert_called_once()
+            request: Final = respond.call_args.args[0]
+            assert request.url.path == "/v1/responses"
+            body: Final = json.loads(request.content)
+            assert body["input"][-1] == task
+            assert "_require_encrypted_task_support" not in body
+        else:
+            respond.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("classifier_type", ["llm", "heuristic_first", "hybrid"])
+    @pytest.mark.parametrize(
+        "input_items",
+        [
+            ["unsupported-input-item"],
+            [{**_encrypted_agent_task(), "content": [{"type": "input_text", "text": "hi"}, None]}],
+        ],
+    )
+    async def test_encrypted_detection_does_not_reject_other_input_shapes(
+        self, classifier_type: str, input_items: list[object]
+    ):
+        router, dependency = _native_classifier_router(classifier_type=classifier_type)
+
+        result: Final = await router.aclassify("hi", request_kwargs={"input": input_items})
+
+        assert result.cause != "default_model_fallback"
+        assert result.tier == ComplexityTier.SIMPLE
+        dependency.aresponses.assert_not_called()
+        if classifier_type == "llm":
+            dependency.acompletion.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("failure", [ValueError("invalid_encrypted_content"), TimeoutError("classifier timed out")])
+    async def test_native_provider_failure_uses_existing_fallback(self, failure: Exception):
+        router, dependency = _native_classifier_router(failure=failure)
+
+        result: Final = await router.async_pre_routing_hook(
+            model="encrypted-router", request_kwargs={"input": [_encrypted_agent_task()]}
+        )
+
+        assert result.model == "deep-model"
+        assert result.routing_decision["cause"] == "default_model_fallback"
+        dependency.aresponses.assert_awaited_once()
+        dependency.acompletion.assert_not_called()
+
+
 class TestLLMClassifier:
     """Test the LLM-based classifier path (aclassify) and its fallback behavior."""
 
@@ -2939,6 +3316,33 @@ class TestLLMClassifier:
             "COMPLEX",
             "REASONING",
         ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "source_body",
+        [
+            {"model": "router", "messages": [{"role": "user", "content": "source-only"}]},
+            {"model": "router", "system": "source-only", "messages": [{"role": "user", "content": "ask"}]},
+            {"model": "router", "instructions": "source-only", "input": "ask"},
+        ],
+    )
+    async def test_classifier_source_is_masked_and_separate_from_provider_input(
+        self, llm_complexity_router, mock_router_instance, source_body
+    ):
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+        outcome = await llm_complexity_router.aclassify(
+            "classify-this-ask",
+            request_kwargs={
+                "proxy_server_request": {"body": {**source_body, "metadata": {"authorization": "source-secret"}}}
+            },
+        )
+        assert outcome.cause == "llm_classifier"
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        source = call_kwargs["proxy_server_request"]["originating_request_masked"]
+        assert source == {**source_body, "metadata": {"authorization": "REDACTED"}}
+        assert "source-only" not in str(call_kwargs["messages"])
+        assert "source-only" not in str(call_kwargs["proxy_server_request"]["body"])
+        assert "classify-this-ask" in str(call_kwargs["messages"])
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("reasoning_effort", [None, "none", "low"], ids=["omitted", "none", "low"])
@@ -7601,10 +8005,383 @@ _ASKED = {"role": "user", "content": _ASK}
 _ANSWERED = {"role": "assistant", "content": "Working on it."}
 _TOOL_RESULT = {"type": "tool_result", "tool_use_id": "x", "content": "out"}
 _REMINDER = "<system-reminder>Budget: 42 tokens remaining. Do not mention this.</system-reminder>"
+_CODEX_NEW_TASK: Final = (
+    "Message Type: NEW_TASK\nTask name: /root/cache_worker\nSender: /root\nPayload:\n"
+    "Implement and test a thread-safe bounded LRU cache."
+)
+_CODEX_ENVELOPES: Final = (
+    "<environment_context>LITELLM ESCALATE cwd=/repo</environment_context>",
+    "<recommended_plugins>LITELLM ESCALATE plugin list</recommended_plugins>",
+    "<user_instructions>LITELLM ESCALATE preferences</user_instructions>",
+    "<environments_instructions>LITELLM ESCALATE environment</environments_instructions>",
+    "# AGENTS.md instructions for /repo with spaces/中文\n<INSTRUCTIONS>LITELLM ESCALATE instructions</INSTRUCTIONS>",
+)
 
 
 class TestContextAwareClassifier:
     """Test the new classifier context window and trajectory signals."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "request_metadata,forwards_system",
+        [
+            ({"metadata": {"user_agent": "claude-cli/2.1.233"}}, False),
+            ({"litellm_metadata": {"user_agent": "claude-code/2.1.233"}}, False),
+            ({"metadata": {"user_agent": "curl/8.7.1"}}, True),
+            ({"litellm_metadata": {}}, True),
+            (
+                {"metadata": {"user_agent": "claude-cli/2.1.233"}, "litellm_metadata": {"user_agent": "curl/8.7.1"}},
+                False,
+            ),
+            ({"metadata": {"user_agent": "Claude-Code/2.1.233"}}, True),
+        ],
+    )
+    async def test_claude_code_classifier_omits_harness_system_prompt(
+        self,
+        llm_classifier_config: dict[str, object],
+        request_metadata: dict[str, object],
+        forwards_system: bool,
+    ) -> None:
+        dependency: Final = MagicMock(acompletion=AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}')))
+        router: Final = ComplexityRouter(
+            "test-complexity-router",
+            dependency,
+            {
+                **llm_classifier_config,
+                "classifier_context_include_assistant_turns": True,
+            },
+        )
+        messages: Final = [
+            {"role": "user", "content": "Design the retry state machine"},
+            {"role": "assistant", "content": "The design needs a lease and fencing token"},
+            {"role": "user", "content": "Now prove it cannot livelock"},
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "ENVIRONMENT_CATALOG\nAGENT_CATALOG\nSKILL_CATALOG"}],
+            },
+        ]
+        top_level_system: Final = [{"type": "text", "text": "TOP_LEVEL_HARNESS_SYSTEM"}]
+        claude_kwargs: Final = {
+            "metadata": {"user_agent": "claude-cli/2.1.233"},
+            "system": top_level_system,
+            "proxy_server_request": {"body": {"system": top_level_system}},
+        }
+        compared_kwargs: Final = {
+            **request_metadata,
+            "system": top_level_system,
+            "proxy_server_request": {"body": {"system": top_level_system}},
+        }
+        original_messages: Final = deepcopy(messages)
+        original_kwargs: Final = deepcopy((claude_kwargs, compared_kwargs))
+        results: Final = (
+            await router.async_pre_routing_hook("test-complexity-router", claude_kwargs, messages),
+            await router.async_pre_routing_hook("test-complexity-router", compared_kwargs, messages),
+        )
+
+        assert all(result is not None and result.routing_decision["cause"] == "llm_classifier" for result in results)
+        assert all(result is not None and result.messages == original_messages for result in results)
+        assert messages == original_messages
+        assert (claude_kwargs, compared_kwargs) == original_kwargs
+        calls: Final = tuple(call.kwargs["messages"] for call in dependency.acompletion.await_args_list)
+        assert calls[0][0]["content"] == calls[1][0]["content"] == classification_system_prompt(
+            router.config.classifier_context_window_size
+        )
+        payloads: Final = (calls[0][1]["content"], calls[1][1]["content"])
+        for payload, expected_system in zip(payloads, (False, forwards_system)):
+            assert payload.endswith("Classify this message:\nNow prove it cannot livelock")
+            assert ("ENVIRONMENT_CATALOG" in payload) is expected_system
+            assert ("AGENT_CATALOG" in payload) is expected_system
+            assert ("SKILL_CATALOG" in payload) is expected_system
+            assert "Design the retry state machine" in payload
+            assert "lease and fencing token" in payload
+            assert "TOP_LEVEL_HARNESS_SYSTEM" not in payload
+            assert "Conversation so far: ~35 tokens across the request" in payload
+
+    @pytest.mark.asyncio
+    async def test_claude_code_first_turn_without_context_omits_harness_system_prompt(
+        self, llm_classifier_config: dict[str, object]
+    ) -> None:
+        dependency: Final = MagicMock(acompletion=AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}')))
+        router: Final = ComplexityRouter(
+            "test-complexity-router",
+            dependency,
+            {**llm_classifier_config, "classifier_context_window_size": 0},
+        )
+        messages: Final = [
+            {"role": "user", "content": "What is two plus two?"},
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "ENVIRONMENT_CATALOG\nAGENT_CATALOG\nSKILL_CATALOG"}],
+            },
+        ]
+        request_kwargs: Final = {"litellm_metadata": {"user_agent": "claude-code/2.1.233"}}
+        original: Final = deepcopy((messages, request_kwargs))
+
+        result: Final = await router.async_pre_routing_hook("test-complexity-router", request_kwargs, messages)
+
+        assert result is not None and result.routing_decision["cause"] == "llm_classifier"
+        assert result.messages == messages == original[0]
+        assert request_kwargs == original[1]
+        classifier_messages: Final = dependency.acompletion.call_args.kwargs["messages"]
+        assert classifier_messages[0]["content"] == classification_system_prompt(
+            router.config.classifier_context_window_size
+        )
+        assert classifier_messages[1]["content"].strip() == "Classify this message:\nWhat is two plus two?"
+
+    @pytest.mark.parametrize(
+        "tail,expected",
+        (
+            ([{"role": "user", "content": [{"type": "text", "text": _CODEX_ENVELOPES[0]}]}], True),
+            ([{"role": "assistant", "content": _CODEX_ENVELOPES[0]}], False),
+            ([{"role": "tool", "content": _CODEX_ENVELOPES[0]}], False),
+            ([{"role": "user", "content": " "}], False),
+            (
+                [{"role": "user", "content": [_TOOL_RESULT, {"type": "text", "text": _CODEX_ENVELOPES[0]}]}],
+                False,
+            ),
+            (
+                [{"role": "user", "content": [{"type": "image_url"}, {"type": "text", "text": _CODEX_ENVELOPES[0]}]}],
+                False,
+            ),
+        ),
+    )
+    def test_only_text_reminder_tails_are_ignored_for_new_asks(
+        self, tail: list[dict[str, object]], expected: bool
+    ) -> None:
+        from litellm.router_strategy.complexity_router.complexity_router import (
+            _CODEX_REMINDER_MARKERS,
+            _newest_turn_is_human_ask,
+        )
+
+        assert _newest_turn_is_human_ask([_ASKED, *tail], _CODEX_REMINDER_MARKERS) is expected
+        assert _newest_turn_is_human_ask(tail, _CODEX_REMINDER_MARKERS) is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("new_ask", (_CODEX_NEW_TASK, "Now design cache invalidation"))
+    @pytest.mark.parametrize("responses_api", (False, True))
+    @pytest.mark.parametrize("session_affinity", (False, True))
+    async def test_codex_tail_preserves_new_ask_and_tool_continuation_boundaries(
+        self, new_ask: str, responses_api: bool, session_affinity: bool
+    ) -> None:
+        completion: Final = AsyncMock(
+            side_effect=[_llm_response('{"tier":"SIMPLE"}'), _llm_response('{"tier":"COMPLEX"}')]
+        )
+        router: Final = ComplexityRouter(
+            model_name="router",
+            litellm_router_instance=MagicMock(acompletion=completion, cache=DualCache()),
+            complexity_router_config={
+                "tiers": {"SIMPLE": "simple-model", "COMPLEX": "task-model"},
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "classifier-model"},
+                "classification_mode": "user_turn",
+                "session_affinity": session_affinity,
+                "escalation_keywords": [],
+            },
+        )
+        metadata: Final = {"user_agent": "codex-tui", "session_id": "codex-tail-session"}
+        first_messages: Final = [{"role": "user", "content": "Hello"}]
+        tail: Final = [{"role": "user", "content": envelope} for envelope in _CODEX_ENVELOPES]
+        new_messages: Final = [
+            *first_messages,
+            {"role": "assistant", "content": "Hello"},
+            {"role": "user", "content": new_ask},
+            *tail,
+        ]
+        continuation: Final = [
+            *new_messages,
+            {"role": "assistant", "content": "Working on it"},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "read-cache", "content": "cache source"},
+                    {"type": "text", "text": _CODEX_ENVELOPES[0]},
+                ],
+            },
+            *tail,
+        ]
+        results: Final = [
+            await router.async_pre_routing_hook(
+                model="router",
+                request_kwargs=(
+                    {"input": messages, "litellm_metadata": {**metadata, "user_api_key_request_route": "/v1/responses"}}
+                    if responses_api
+                    else {"metadata": metadata}
+                ),
+                messages=None if responses_api else messages,
+                input=messages if responses_api else None,
+            )
+            for messages in (first_messages, new_messages, continuation)
+        ]
+
+        assert [result.model for result in results] == (
+            ["simple-model", "simple-model", "simple-model"]
+            if session_affinity
+            else ["simple-model", "task-model", "task-model"]
+        )
+        assert completion.await_count == (1 if session_affinity else 2)
+        assert results[-1].routing_decision["cause"] == (
+            "session_affinity_pin" if session_affinity else "user_turn_continuation"
+        )
+        if not session_affinity:
+            assert completion.call_args.kwargs["messages"][1]["content"].endswith(f"Classify this message:\n{new_ask}")
+        assert results[1].messages == (None if responses_api else new_messages)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("envelope", _CODEX_ENVELOPES)
+    @pytest.mark.parametrize("user_agent", (None, "curl/8.7.1", "codexify/1.0"))
+    async def test_non_codex_requests_preserve_tagged_asks(self, envelope: str, user_agent: str | None) -> None:
+        completion: Final = AsyncMock(return_value=_llm_response('{"tier":"COMPLEX"}'))
+        router: Final = ComplexityRouter(
+            model_name="router",
+            litellm_router_instance=MagicMock(acompletion=completion),
+            complexity_router_config={
+                "tiers": {"COMPLEX": "task-model"},
+                "default_model": "fallback-model",
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "classifier-model"},
+                "escalation_keywords": [],
+            },
+        )
+
+        response: Final = await router.async_pre_routing_hook(
+            model="router",
+            request_kwargs={"metadata": {"user_agent": user_agent}} if user_agent is not None else {},
+            messages=[{"role": "user", "content": envelope}],
+        )
+
+        assert response is not None
+        assert response.model == "task-model"
+        completion.assert_awaited_once()
+        assert completion.call_args.kwargs["messages"][1]["content"].strip() == f"Classify this message:\n{envelope}"
+
+    @pytest.mark.parametrize("envelope", _CODEX_ENVELOPES)
+    def test_codex_envelopes_preserve_delegated_task_and_prior_context(self, envelope: str) -> None:
+        from litellm.router_strategy.complexity_router.complexity_router import (
+            _CODEX_REMINDER_MARKERS,
+            _extract_current_ask_and_system_prompt,
+            _extract_prior_turns,
+            _newest_turn_ask,
+            _newest_turn_is_human_ask,
+        )
+
+        messages: Final = [
+            {"role": "user", "content": f"{envelope}\nDesign cache invalidation"},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": envelope}, {"type": "text", "text": _CODEX_NEW_TASK}],
+            },
+            {"role": "developer", "content": "<permissions instructions>developer scope</permissions instructions>"},
+            {"role": "user", "content": envelope},
+        ]
+
+        assert _extract_current_ask_and_system_prompt(messages, _CODEX_REMINDER_MARKERS)[0] == _CODEX_NEW_TASK
+        assert _extract_prior_turns(messages, _CODEX_NEW_TASK, 1, 100, None, False, _CODEX_REMINDER_MARKERS) == (
+            ("user", "Design cache invalidation"),
+        )
+        assert _newest_turn_ask(messages, _CODEX_REMINDER_MARKERS) is None
+        assert _newest_turn_is_human_ask(messages, _CODEX_REMINDER_MARKERS) is False
+        assert _extract_current_ask_and_system_prompt([messages[-1]], _CODEX_REMINDER_MARKERS)[0] is None
+
+    @pytest.mark.parametrize("envelope", _CODEX_ENVELOPES)
+    def test_codex_marker_override_and_incomplete_blocks_preserve_text(self, envelope: str) -> None:
+        from litellm.router_strategy.complexity_router.complexity_router import (
+            _CODEX_REMINDER_MARKERS,
+            _strip_reminder_blocks,
+        )
+
+        incomplete: Final = envelope.rsplit("</", 1)[0]
+        assert _strip_reminder_blocks(f"before {envelope.upper()} after", _CODEX_REMINDER_MARKERS) == "before after"
+        assert _strip_reminder_blocks(incomplete, _CODEX_REMINDER_MARKERS) == incomplete
+        assert _strip_reminder_blocks(envelope) == envelope
+        assert _strip_reminder_blocks(f"<custom>noise</custom>{envelope}", (("<custom>", "</custom>"),)) == envelope
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("responses_api", (False, True))
+    async def test_codex_routing_preserves_original_request(self, responses_api: bool) -> None:
+        completion: Final = AsyncMock(return_value=_llm_response('{"tier":"COMPLEX"}'))
+        router: Final = ComplexityRouter(
+            model_name="codex-router",
+            litellm_router_instance=MagicMock(acompletion=completion),
+            complexity_router_config={
+                "tiers": {"COMPLEX": "task-model", "REASONING": "escalated-model"},
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "classifier-model"},
+                "keyword_tier_rules": [{"keywords": ["LITELLM ESCALATE"], "tier": "REASONING"}],
+            },
+        )
+        messages: Final = [
+            {"role": "user", "content": _CODEX_NEW_TASK},
+            {"role": "user", "content": "\n".join(_CODEX_ENVELOPES)},
+        ]
+        original: Final = deepcopy(messages)
+        request_kwargs: Final = (
+            {
+                "input": messages,
+                "litellm_metadata": {"user_api_key_request_route": "/v1/responses", "user_agent": "codex-tui"},
+            }
+            if responses_api
+            else {"metadata": {"user_agent": "codex-tui"}}
+        )
+
+        response: Final = await router.async_pre_routing_hook(
+            model="codex-router",
+            request_kwargs=request_kwargs,
+            messages=None if responses_api else messages,
+            input=messages if responses_api else None,
+        )
+
+        assert response is not None
+        assert response.model == "task-model"
+        completion.assert_awaited_once()
+        assert completion.call_args.kwargs["messages"][1]["content"].strip() == (
+            f"Classify this message:\n{_CODEX_NEW_TASK}"
+        )
+        assert messages == original
+        if responses_api:
+            assert response.messages is None
+            assert request_kwargs["input"] == original
+        else:
+            assert response.messages == original
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("custom_markers", (False, True))
+    async def test_codex_markers_are_request_scoped_and_respect_overrides(self, custom_markers: bool) -> None:
+        completion: Final = AsyncMock(return_value=_llm_response('{"tier":"COMPLEX"}'))
+        router: Final = ComplexityRouter(
+            model_name="router",
+            litellm_router_instance=MagicMock(acompletion=completion),
+            complexity_router_config={
+                "tiers": {"COMPLEX": "task-model"},
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "classifier-model"},
+                "classifier_context_window_size": 2,
+                "escalation_keywords": [],
+                **({"reminder_markers": [{"open": "<custom>", "close": "</custom>"}]} if custom_markers else {}),
+            },
+        )
+        envelope: Final = "\n".join(_CODEX_ENVELOPES)
+        prior: Final = f"{envelope}\nDesign cache invalidation"
+        messages: Final = [
+            {"role": "user", "content": prior},
+            {"role": "user", "content": _CODEX_NEW_TASK},
+            {"role": "user", "content": envelope},
+        ]
+        for user_agent in ("codex-tui", "curl/8.7.1", "codex_cli_rs/0.62.0"):
+            response: Final = await router.async_pre_routing_hook(
+                model="router", request_kwargs={"metadata": {"user_agent": user_agent}}, messages=messages
+            )
+            assert response is not None
+            assert response.model == "task-model"
+            payload: Final = completion.call_args.kwargs["messages"][1]["content"]
+            if user_agent.startswith("codex") and not custom_markers:
+                assert payload.endswith(f"Classify this message:\n{_CODEX_NEW_TASK}")
+                assert "Design cache invalidation" in payload
+                assert "LITELLM ESCALATE" not in payload
+            else:
+                assert payload.endswith(f"Classify this message:\n{envelope}")
+                assert prior in payload
+            assert response.messages == messages
+        assert completion.await_count == 3
 
     @pytest.mark.parametrize(
         "messages,expected_ask",
@@ -12454,6 +13231,528 @@ class TestModalityRouting:
         assert cache.async_set_cache.await_args.kwargs["value"] == {"model": "text-cheap", "tier": "SIMPLE"}
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
+class TestHealthFallbackDispatch:
+    @pytest.fixture(autouse=True)
+    def httpx_transport(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    @staticmethod
+    def _router(
+        surface: str = "chat",
+        *,
+        peer: bool = False,
+        session: bool = False,
+        tagged: bool = False,
+        budgeted: bool = False,
+        config: Mapping[str, object] | None = None,
+    ) -> Router:
+        provider: Final = "anthropic/claude-sonnet-5" if surface == "messages" else "openai/gpt-5.6"
+        base_suffix: Final = "" if surface == "messages" else "/v1"
+        return Router(
+            model_list=[
+                {
+                    "model_name": "health-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_default_model": (config or {}).get("default_model", "fallback"),
+                        "complexity_router_config": {
+                            "tiers": {"SIMPLE": ["primary", "peer"] if peer else "primary", "MEDIUM": "primary"},
+                            "session_affinity": session,
+                            "deployment_affinity": False,
+                            "max_tokens_from_tier_model": False,
+                            **(config or {}),
+                        },
+                    },
+                },
+                *[
+                    {
+                        "model_name": name,
+                        "litellm_params": {
+                            "model": provider,
+                            "api_key": "test-only",
+                            "api_base": f"https://{name}.test{base_suffix}",
+                            **({"tags": [name]} if tagged else {}),
+                            **(
+                                {"max_budget": 1.0, "budget_duration": "1d"}
+                                if budgeted and name == "primary"
+                                else {}
+                            ),
+                        },
+                        "model_info": {"id": f"{name}-id"},
+                    }
+                    for name in ("primary", "peer", "fallback")
+                ],
+            ],
+            num_retries=0,
+            enable_health_check_routing=True,
+            enable_tag_filtering=tagged,
+        )
+
+    @staticmethod
+    def _unavailable(router: Router, model_id: str, source: Literal["health", "cooldown"]) -> None:
+        if source == "health":
+            router.health_state_cache.set_deployment_health_states(
+                {model_id: {"is_healthy": False, "timestamp": time.time()}}
+            )
+        else:
+            router.cooldown_cache.add_deployment_to_cooldown(
+                model_id=model_id,
+                original_exception=RuntimeError("unavailable"),
+                exception_status=503,
+                cooldown_time=60,
+            )
+
+    @staticmethod
+    def _http_response(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        text: Final = request.url.host.split(".")[0]
+        payload: Final[Mapping[str, object]]
+        events: Final[tuple[Mapping[str, object], ...]]
+        if request.url.path.endswith("/responses"):
+            from litellm.responses.main import mock_responses_api_response
+
+            payload = mock_responses_api_response(text).model_dump()
+            events = (
+                {"type": "response.created", "response": {**payload, "status": "in_progress"}, "sequence_number": 0},
+                {
+                    "type": "response.output_text.delta",
+                    "delta": text,
+                    "item_id": "msg_test",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "sequence_number": 1,
+                },
+                {"type": "response.completed", "response": payload, "sequence_number": 2},
+            )
+        elif request.url.path.endswith("/messages"):
+            payload = {
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "model": body["model"],
+                "content": [{"type": "text", "text": text}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            }
+            events = (
+                {"type": "message_start", "message": {**payload, "content": [], "stop_reason": None}},
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+                {"type": "content_block_stop", "index": 0},
+                {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}},
+                {"type": "message_stop"},
+            )
+        else:
+            payload = {
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 1,
+                "model": body["model"],
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+            }
+            events = (
+                {
+                    **payload,
+                    "object": "chat.completion.chunk",
+                    "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}],
+                },
+                {
+                    **payload,
+                    "object": "chat.completion.chunk",
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                },
+            )
+        if not body.get("stream"):
+            return httpx.Response(200, json=payload)
+        wire: Final = "".join(
+            (f"event: {event['type']}\n" if "type" in event else "") + f"data: {json.dumps(event)}\n\n"
+            for event in events
+        )
+        return httpx.Response(
+            200,
+            text=wire + ("data: [DONE]\n\n" if "type" not in events[0] else ""),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    @staticmethod
+    async def _request(router: Router, surface: str, stream: bool, metadata: dict[str, object]) -> str:
+        if surface == "responses":
+            result = await router.aresponses(
+                model="health-router", input="Hello!", stream=stream, litellm_metadata=metadata
+            )
+        elif surface == "messages":
+            result = await router.aanthropic_messages(
+                model="health-router",
+                messages=[{"role": "user", "content": "Hello!"}],
+                max_tokens=32,
+                stream=stream,
+                litellm_metadata=metadata,
+            )
+        else:
+            result = await router.acompletion(
+                model="health-router",
+                messages=[{"role": "user", "content": "Hello!"}],
+                stream=stream,
+                metadata=metadata,
+            )
+        if not stream:
+            payload = result if isinstance(result, dict) else result.model_dump()
+            if surface == "responses":
+                return payload["output"][0]["content"][0]["text"]
+            if surface == "messages":
+                return payload["content"][0]["text"]
+            return payload["choices"][0]["message"]["content"]
+        if surface == "messages":
+            wire: Final = b"".join([chunk async for chunk in result]).decode()
+            events = tuple(json.loads(line[6:]) for line in wire.splitlines() if line.startswith("data: "))
+            assert events[-1]["type"] == "message_stop"
+            return "".join(c["delta"]["text"] for c in events if c["type"] == "content_block_delta")
+        chunks: Final = [chunk.model_dump() async for chunk in result]
+        if surface == "responses":
+            assert chunks[-1]["type"] == "response.completed"
+            return "".join(c["delta"] for c in chunks if c["type"] == "response.output_text.delta")
+        assert chunks[-1]["choices"][0]["finish_reason"] == "stop"
+        return "".join(c["choices"][0]["delta"].get("content") or "" for c in chunks if c["choices"])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+    @pytest.mark.parametrize("stream", [False, True])
+    @pytest.mark.parametrize("source", ["health", "cooldown"])
+    async def test_public_call_falls_back_and_recovers(
+        self, surface: str, stream: bool, source: Literal["health", "cooldown"]
+    ) -> None:
+        router: Final = self._router(surface, session=True)
+        self._unavailable(router, "primary-id", source)
+        metadata: Final[dict[str, object]] = {"session_id": "outage"}
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(primary|peer|fallback)\.test$").mock(side_effect=self._http_response)
+            assert await self._request(router, surface, stream, metadata) == "fallback"
+            assert metadata["routing_decision"]["cause"] == "health_default_fallback"
+            assert "tier" not in metadata["routing_decision"]
+            assert "health_displaced:primary" in metadata["routing_decision"]["signals"]
+            assert [c.request.url.host for c in upstream.calls] == ["fallback.test"]
+            strategy: Final = router.complexity_routers["health-router"][0].strategy
+            key: Final = strategy._get_session_affinity_cache_key("outage", {})
+            assert await router.cache.async_get_cache(key=key) is None
+            if source == "health":
+                router.health_state_cache.set_deployment_health_states(
+                    {"primary-id": {"is_healthy": True, "timestamp": time.time()}}
+                )
+            else:
+                router.cooldown_cache.cooldown_store.delete_cache(
+                    router.cooldown_cache.get_cooldown_cache_key("primary-id")
+                )
+            recovered: Final[dict[str, object]] = {"session_id": "outage"}
+            assert await self._request(router, surface, stream, recovered) == "primary"
+            assert recovered["routing_decision"]["routed_model"] == "primary"
+            assert [c.request.url.host for c in upstream.calls] == ["fallback.test", "primary.test"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("source", ["health", "cooldown"])
+    async def test_partial_group_then_peer_then_default(self, source: Literal["health", "cooldown"]) -> None:
+        router: Final = self._router(peer=True, session=True)
+        router.add_deployment(
+            Deployment(
+                model_name="primary",
+                litellm_params=LiteLLM_Params(
+                    model="openai/gpt-5.6", api_key="test-only", api_base="https://primary.test/v1"
+                ),
+                model_info={"id": "primary-sibling-id"},
+            )
+        )
+        strategy: Final = router.complexity_routers["health-router"][0].strategy
+        key: Final = strategy._get_session_affinity_cache_key("precedence", {})
+        await router.cache.async_set_cache(key=key, value={"model": "primary", "tier": "SIMPLE"}, ttl=600)
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(primary|peer|fallback)\.test$").mock(side_effect=self._http_response)
+            for model_id, expected, cause in (
+                ("primary-id", "primary", "session_affinity_pin"),
+                ("primary-sibling-id", "peer", "health_failover"),
+                ("peer-id", "fallback", "health_default_fallback"),
+            ):
+                self._unavailable(router, model_id, source)
+                metadata: Final[dict[str, object]] = {"session_id": "precedence"}
+                assert await self._request(router, "chat", False, metadata) == expected
+                assert metadata["routing_decision"]["cause"] == cause
+                assert await router.cache.async_get_cache(key=key) == {"model": "primary", "tier": "SIMPLE"}
+            assert [c.request.url.host for c in upstream.calls] == ["primary.test", "peer.test", "fallback.test"]
+
+    @pytest.mark.asyncio
+    async def test_spent_deployment_budget_falls_back_to_the_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A spent budget leaves the tier with nothing that may serve the request, and the budget
+        filter reports that as a bare ValueError instead of a typed router error. Reading it as
+        capacity skips the recovery and fails the request the recovery exists for."""
+
+        async def _no_sync(*args: object, **kwargs: object) -> None:
+            return None
+
+        monkeypatch.setattr(
+            "litellm.router_strategy.budget_limiter.RouterBudgetLimiting.periodic_sync_in_memory_spend_with_redis",
+            _no_sync,
+        )
+        monkeypatch.setattr(litellm, "callbacks", [])
+        router: Final = self._router(budgeted=True)
+        limiter: Final = router.router_budget_logger
+        assert limiter is not None, "a deployment max_budget must install the budget limiter"
+        await router.cache.async_set_cache(key="deployment_spend:primary-id:1d", value=2.0)
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(primary|fallback)\.test$").mock(side_effect=self._http_response)
+            metadata: Final[dict[str, object]] = {}
+            assert await self._request(router, "chat", False, metadata) == "fallback"
+            assert metadata["routing_decision"]["cause"] == "health_default_fallback"
+            assert [c.request.url.host for c in upstream.calls] == ["fallback.test"]
+
+    @pytest.mark.asyncio
+    async def test_concurrent_tag_scopes_keep_fallbacks_request_local(self) -> None:
+        router: Final = self._router(tagged=True)
+        router.add_deployment(
+            Deployment(
+                model_name="fallback",
+                litellm_params=LiteLLM_Params(
+                    model="openai/gpt-5.6", api_key="test-only", api_base="https://peer.test/v1", tags=["peer"]
+                ),
+                model_info={"id": "fallback-peer-id"},
+            )
+        )
+        self._unavailable(router, "primary-id", "cooldown")
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(peer|fallback)\.test$").mock(side_effect=self._http_response)
+            scopes: Final = tuple({"tags": [name], "session_id": name} for name in ("peer", "fallback"))
+            results: Final = await asyncio.gather(
+                *(self._request(router, "chat", False, metadata) for metadata in scopes)
+            )
+            assert results == ["peer", "fallback"]
+            assert [m["tags"] for m in scopes] == [["peer"], ["fallback"]]
+            assert [m["routing_decision"]["routed_model"] for m in scopes] == ["fallback", "fallback"]
+            assert sorted(c.request.url.host for c in upstream.calls) == ["fallback.test", "peer.test"]
+
+    @pytest.mark.asyncio
+    async def test_probe_preserves_consumed_request_exclusions(self) -> None:
+        router: Final = self._router()
+        self._unavailable(router, "primary-id", "cooldown")
+        kwargs: Final = {"_excluded_deployment_ids": ["fallback-id"], "_target_order": 1}
+        strategy: Final = router.complexity_routers["health-router"][0].strategy
+        response: Final = await strategy.async_pre_routing_hook(
+            model="health-router", messages=[{"role": "user", "content": "Hello!"}], request_kwargs=kwargs
+        )
+        assert response.model == "primary"
+        assert kwargs == {"_excluded_deployment_ids": ["fallback-id"], "_target_order": 1}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("default_state", ["cooldown", "unconfigured", "same-model"])
+    async def test_unavailable_default_preserves_no_deployment_error(self, default_state: str) -> None:
+        from litellm.types.router import RouterRateLimitError
+
+        router: Final = self._router(config={"default_model": "primary"} if default_state == "same-model" else None)
+        self._unavailable(router, "primary-id", "cooldown")
+        if default_state == "unconfigured":
+            router.delete_deployment(id="fallback-id")
+        elif default_state == "cooldown":
+            self._unavailable(router, "fallback-id", "cooldown")
+        with respx.mock(assert_all_mocked=True) as upstream:
+            with pytest.raises(RouterRateLimitError, match="No deployments available"):
+                await self._request(router, "chat", False, {})
+            assert not upstream.calls
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("plan_active", [False, True])
+    async def test_plan_floor_outage_cannot_use_untiered_default(self, plan_active: bool) -> None:
+        from litellm.types.router import RouterRateLimitError
+
+        router: Final = self._router(
+            config={"tiers": {"SIMPLE": "primary", "MEDIUM": "peer"}, "plan_mode_min_tier": "MEDIUM"}
+        )
+        self._unavailable(router, "primary-id", "cooldown")
+        self._unavailable(router, "peer-id", "cooldown")
+        metadata: Final = {}
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as upstream:
+            upstream.post(host="fallback.test").mock(side_effect=self._http_response)
+            if plan_active:
+                with pytest.raises(RouterRateLimitError, match="No deployments available"):
+                    await router.acompletion(
+                        model="health-router",
+                        messages=[
+                            {"role": "system", "content": "Plan mode is active"},
+                            {"role": "user", "content": "Hello!"},
+                        ],
+                        metadata=metadata,
+                    )
+                assert not upstream.calls
+                assert metadata["routing_decision"]["routed_model"] == "peer"
+                assert metadata["routing_decision"]["tier"] == "MEDIUM"
+            else:
+                assert await self._request(router, "chat", False, metadata) == "fallback"
+
+    @pytest.mark.asyncio
+    async def test_default_dispatch_drops_displaced_tier_params(self) -> None:
+        router: Final = self._router(
+            config={"tiers": {"SIMPLE": {"model_name": "primary", "litellm_params": {"max_tokens": 9}}}}
+        )
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(primary|fallback)\.test$").mock(side_effect=self._http_response)
+            await router.acompletion(
+                model="health-router", messages=[{"role": "user", "content": "Hello!"}], max_tokens=32
+            )
+            assert json.loads(upstream.calls[-1].request.content)["max_completion_tokens"] == 9
+            self._unavailable(router, "primary-id", "cooldown")
+            await router.acompletion(
+                model="health-router", messages=[{"role": "user", "content": "Hello!"}], max_tokens=32
+            )
+            assert json.loads(upstream.calls[-1].request.content)["max_completion_tokens"] == 32
+            assert upstream.calls[-1].request.url.host == "fallback.test"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("source", ["health", "cooldown"])
+    async def test_pinned_session_returns_to_primary_after_outage(self, source: Literal["health", "cooldown"]) -> None:
+        router: Final = self._router(session=True)
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(primary|fallback)\.test$").mock(side_effect=self._http_response)
+            assert await self._request(router, "chat", False, {"session_id": "pinned"}) == "primary"
+            self._unavailable(router, "primary-id", source)
+            outage: Final[dict[str, object]] = {"session_id": "pinned"}
+            assert await self._request(router, "chat", False, outage) == "fallback"
+            assert outage["routing_decision"]["cause"] == "health_default_fallback"
+            if source == "health":
+                router.health_state_cache.set_deployment_health_states(
+                    {"primary-id": {"is_healthy": True, "timestamp": time.time()}}
+                )
+            else:
+                router.cooldown_cache.cooldown_store.delete_cache(
+                    router.cooldown_cache.get_cooldown_cache_key("primary-id")
+                )
+            recovered: Final[dict[str, object]] = {"session_id": "pinned"}
+            assert await self._request(router, "chat", False, recovered) == "primary"
+            assert recovered["routing_decision"]["cause"] == "session_affinity_pin"
+            assert [c.request.url.host for c in upstream.calls] == ["primary.test", "fallback.test", "primary.test"]
+
+    @pytest.mark.asyncio
+    async def test_policy_plugin_does_not_escape_to_live_default(self) -> None:
+        from litellm.types.router import RouterRateLimitError, RoutingContext
+
+        class PrimaryOnly:
+            async def run(self, context: RoutingContext) -> RoutingContext:
+                context.candidate_models = [name for name in context.candidate_models if name == "primary"]
+                return context
+
+        router: Final = self._router(peer=True, config={"plugins": [PrimaryOnly()]})
+        self._unavailable(router, "primary-id", "cooldown")
+        with respx.mock(assert_all_mocked=True) as upstream:
+            with pytest.raises(RouterRateLimitError, match="No deployments available"):
+                await self._request(router, "chat", False, {})
+            assert not upstream.calls
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("live_tier", [True, False])
+    @pytest.mark.parametrize("default_fits", [True, False])
+    async def test_context_recovery_precedes_default_with_prechecks_off(
+        self, live_tier: bool, default_fits: bool
+    ) -> None:
+        from litellm.types.router import RouterRateLimitError
+
+        router: Final = self._router(config={"tiers": {"SIMPLE": "primary", "MEDIUM": "peer", "COMPLEX": "large"}})
+        router.add_deployment(
+            Deployment(
+                model_name="large",
+                litellm_params=LiteLLM_Params(
+                    model="openai/gpt-5.6", api_key="test-only", api_base="https://large.test/v1"
+                ),
+                model_info={"id": "large-id", "max_input_tokens": 10000},
+            )
+        )
+        for deployment in router.model_list:
+            deployment["model_info"]["max_input_tokens"] = (
+                10
+                if deployment["model_name"] == "primary"
+                or (deployment["model_name"] == "fallback" and not default_fits)
+                else 10000
+            )
+        self._unavailable(router, "peer-id", "cooldown")
+        if not live_tier:
+            self._unavailable(router, "large-id", "cooldown")
+        assert router.enable_pre_call_checks is False
+        metadata: Final = {}
+        messages: Final = [{"role": "user", "content": "hello " * 100}]
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as upstream:
+            upstream.post(host__regex=r"^(large|fallback)\.test$").mock(side_effect=self._http_response)
+            if not live_tier and not default_fits:
+                with pytest.raises(RouterRateLimitError, match="No deployments available"):
+                    await router.acompletion(model="health-router", messages=messages, metadata=metadata)
+                assert not upstream.calls
+            else:
+                result: Final = await router.acompletion(model="health-router", messages=messages, metadata=metadata)
+                expected: Final = "large" if live_tier else "fallback"
+                assert result.choices[0].message.content == expected
+                assert upstream.calls[-1].request.url.host == f"{expected}.test"
+                assert metadata["routing_decision"].get("tier") == ("COMPLEX" if live_tier else None)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("live_tier", [True, False])
+    async def test_modality_recovery_precedes_default(self, live_tier: bool) -> None:
+        router: Final = self._router(
+            config={"modality_routing": True, "tiers": {"SIMPLE": "primary", "MEDIUM": "peer", "COMPLEX": "vision"}}
+        )
+        router.add_deployment(
+            Deployment(
+                model_name="vision",
+                litellm_params=LiteLLM_Params(
+                    model="openai/gpt-5.6", api_key="test-only", api_base="https://vision.test/v1"
+                ),
+                model_info={"id": "vision-id", "supports_vision": True},
+            )
+        )
+        for deployment in router.model_list:
+            deployment["model_info"]["supports_vision"] = deployment["model_name"] != "primary"
+        self._unavailable(router, "peer-id", "cooldown")
+        if not live_tier:
+            self._unavailable(router, "vision-id", "cooldown")
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(vision|fallback)\.test$").mock(side_effect=self._http_response)
+            result: Final = await router.acompletion(
+                model="health-router",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Hello!"},
+                            {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGk="}},
+                        ],
+                    }
+                ],
+            )
+            expected: Final = "vision" if live_tier else "fallback"
+            assert result.choices[0].message.content == expected
+            assert upstream.calls[-1].request.url.host == f"{expected}.test"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("default_fits", [True, False])
+    async def test_modality_default_must_also_fit_context(self, default_fits: bool) -> None:
+        router: Final = self._router(config={"modality_routing": True, "tiers": {"SIMPLE": "primary"}})
+        for deployment in router.model_list:
+            deployment["model_info"]["supports_vision"] = deployment["model_name"] == "fallback"
+            deployment["model_info"]["max_input_tokens"] = 10000 if default_fits else 10
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as upstream:
+            upstream.post(host="fallback.test").mock(side_effect=self._http_response)
+            messages: Final = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "hello " * 100},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGk="}},
+                    ],
+                }
+            ]
+            if default_fits:
+                result: Final = await router.acompletion(model="health-router", messages=messages)
+                assert result.choices[0].message.content == "fallback"
+            else:
+                with pytest.raises(litellm.BadRequestError, match="modality_routing is enabled"):
+                    await router.acompletion(model="health-router", messages=messages)
+                assert not upstream.calls
+
+
 class TestTierHealthFailover:
     """A tier whose decided model group is entirely in cooldown falls back to a live peer."""
 
@@ -12488,7 +13787,7 @@ class TestTierHealthFailover:
         probed_prompts = []
 
         async def get_healthy_deployments(
-            model, request_kwargs, messages=None, input=None, parent_otel_span=None, **kwargs
+            model, request_kwargs, messages=None, input=None, parent_otel_span=None, health_check_probe=False
         ):
             probed_kwargs.append(request_kwargs)
             probed_prompts.append((messages, input))
@@ -12989,6 +14288,51 @@ class TestTierHealthFailover:
             probed_input == "summarize this document for me"
             for _, probed_input in router.litellm_router_instance.probed_prompts
         ), "the eligibility probe must forward `input` to the owner"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "raised, expected",
+        [
+            (ValueError(f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model=b"), {"live-c"}),
+            (
+                ValueError(f"{RouterErrors.no_deployments_with_provider_budget_routing.value}: b over budget"),
+                {"live-c"},
+            ),
+            (ValueError("cannot unpack non-sequence"), {"exhausted-b", "live-c"}),
+        ],
+    )
+    async def test_a_marked_exhaustion_value_error_is_a_verdict_and_an_unmarked_one_is_not(
+        self, mock_router_instance, raised, expected
+    ):
+        """Budget and tag filters exhaust a group without a typed error, signalling it only by a
+        RouterErrors marker on a bare ValueError. Those are verdicts; any other ValueError is a
+        fault, and a fault must still read as capacity rather than silently rerouting."""
+        router = self._router(
+            mock_router_instance,
+            {
+                "tiers": {
+                    "SIMPLE": ["dead-a", "exhausted-b", "live-c"],
+                    "MEDIUM": "mid",
+                    "COMPLEX": "big",
+                    "REASONING": "top",
+                },
+                "session_affinity": True,
+            },
+            {"dead-a": ["id-a1"], "exhausted-b": ["id-b1"], "live-c": ["id-c1"]},
+            cooling=("id-a1",),
+            raises_for={"exhausted-b": raised},
+        )
+        key = router._get_session_affinity_cache_key("sess-exhausted", {})
+        await router.litellm_router_instance.cache.async_set_cache(
+            key=key, value={"model": "dead-a", "tier": "SIMPLE"}, ttl=600
+        )
+        results = [
+            await router.async_pre_routing_hook(
+                model="m", request_kwargs={"metadata": {"session_id": "sess-exhausted"}}, messages=self.SIMPLE_MESSAGE
+            )
+            for _ in range(20)
+        ]
+        assert {r.model for r in results} == expected
 
     @pytest.mark.asyncio
     async def test_a_group_the_router_has_no_deployment_for_is_not_a_failover_target(self, mock_router_instance):
@@ -13661,6 +15005,7 @@ class _OutputCeilingRecorder(CustomLogger):
 
     def log_pre_api_call(self, model, messages, kwargs):
         self.seen.append((model, kwargs.get("optional_params", {}).get("max_tokens")))
+
 
 NON_REASONING_TIERS: Final = {
     "NON_REASONING": "gpt-4o-mini",

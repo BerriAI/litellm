@@ -1106,6 +1106,11 @@ class BedrockTag(TypedDict):
     value: str
 
 
+class AwsSessionTag(TypedDict):
+    Key: str  # writable-ok: boto3's STS stubs type assume_role Tags as writable TagTypeDef, which rejects ReadOnly
+    Value: str  # writable-ok: boto3's STS stubs type assume_role Tags as writable TagTypeDef, which rejects ReadOnly
+
+
 class BedrockCreateBatchRequest(TypedDict, total=False):
     """
     Request structure for creating a Bedrock batch inference job.

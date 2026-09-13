@@ -510,6 +510,37 @@ async def _call(session: ClientSession, tool_id: str, a: int = 3, b: int = 4) ->
     return await session.call_tool("call_tool", arguments={"tool_id": tool_id, "arguments": {"a": a, "b": b}})
 
 
+async def _raw_rpc(
+    proxy_server_url: str, key: str | None, method: str, params: dict[str, object], **headers: str
+) -> httpx.Response:
+    async with httpx.AsyncClient() as client:
+        return await client.post(
+            f"{proxy_server_url}/mcp/proxy",
+            headers={
+                "Accept": "application/json, text/event-stream",
+                **({"Authorization": f"Bearer {key}"} if key else {}),
+                **headers,
+            },
+            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
+        )
+
+
+async def _raw_initialize(proxy_server_url: str, key: str | None) -> httpx.Response:
+    return await _raw_rpc(
+        proxy_server_url,
+        key,
+        "initialize",
+        {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "auth-test", "version": "1"}},
+    )
+
+
+def _rpc_result(response: httpx.Response) -> dict[str, typing.Any]:
+    if response.headers["content-type"].startswith("text/event-stream"):
+        data_line = next(line for line in response.text.splitlines() if line.startswith("data:"))
+        return json.loads(data_line.removeprefix("data:"))["result"]
+    return response.json()["result"]
+
+
 def _assert_unauthorized(result: CallToolResult) -> None:
     assert result.isError is True
     assert result.content[0].text == "Unknown or unauthorized tool_id"
@@ -527,13 +558,31 @@ class TestProxyMcpAuthorizationScope:
             _assert_unauthorized(await _call(ungranted, restricted_id))
 
     @pytest.mark.asyncio
-    async def test_no_mcp_servers_sentinel_hides_every_tool(self, proxy_server_url: str) -> None:
+    async def test_no_mcp_servers_sentinel_rejects_initialize_and_hides_every_tool(self, proxy_server_url: str) -> None:
         async with _scoped_session(proxy_server_url) as granted:
             tool_id = (await _search(granted, "add"))["math_stdio-add"]
-        async with _scoped_session(proxy_server_url, "sk-none") as session:
-            assert await _search(session, "add") == {}
-            _assert_unauthorized(await session.call_tool("get_tool_schema", {"tool_id": tool_id}))
-            _assert_unauthorized(await _call(session, tool_id))
+        response = await _raw_initialize(proxy_server_url, "sk-none")
+        assert response.status_code == 403, response.text
+        assert "no MCP servers granted" in response.json()["detail"]["error"]
+
+        async def raw_call(name: str, arguments: dict[str, object]) -> dict[str, typing.Any]:
+            call = await _raw_rpc(proxy_server_url, "sk-none", "tools/call", {"name": name, "arguments": arguments})
+            assert call.status_code == 200, call.text
+            return _rpc_result(call)
+
+        listed = await _raw_rpc(proxy_server_url, "sk-none", "tools/list", {})
+        assert listed.status_code == 200, listed.text
+        assert {tool["name"] for tool in _rpc_result(listed)["tools"]} == {"search_tools", "get_tool_schema", "call_tool"}
+        search = await raw_call("search_tools", {"query": "add"})
+        assert search["isError"] is False, search
+        assert json.loads(search["content"][0]["text"]) == []
+        for name, arguments in (
+            ("get_tool_schema", {"tool_id": tool_id}),
+            ("call_tool", {"tool_id": tool_id, "arguments": {"a": 3, "b": 4}}),
+        ):
+            denied = await raw_call(name, arguments)
+            assert denied["isError"] is True, denied
+            assert denied["content"][0]["text"] == "Unknown or unauthorized tool_id"
 
     @pytest.mark.asyncio
     async def test_tool_grant_hides_ungranted_tools_and_blocks_their_ids(self, proxy_server_url: str) -> None:
@@ -581,24 +630,7 @@ class TestProxyMcpAuthorizationScope:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("key", [None, "sk-invalid"])
     async def test_missing_or_invalid_key_cannot_initialize(self, proxy_server_url: str, key: str | None) -> None:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{proxy_server_url}/mcp/proxy",
-                headers={
-                    "Accept": "application/json, text/event-stream",
-                    **({"Authorization": f"Bearer {key}"} if key else {}),
-                },
-                json={
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "initialize",
-                    "params": {
-                        "protocolVersion": "2025-03-26",
-                        "capabilities": {},
-                        "clientInfo": {"name": "auth-test", "version": "1"},
-                    },
-                },
-            )
+        response = await _raw_initialize(proxy_server_url, key)
         assert response.status_code == 401, response.text
 
     @pytest.mark.asyncio
@@ -646,25 +678,28 @@ class TestProxyMcpAuthorizationScope:
 
     @pytest.mark.asyncio
     async def test_proxy_scope_exception_returns_iserror_and_emits_failure_log(self, proxy_server_url: str) -> None:
-        async with _scoped_session(
+        response = await _raw_rpc(
             proxy_server_url,
             "sk-none",
+            "tools/call",
+            {"name": "call_tool", "arguments": {"tool_id": "denied-scope", "arguments": {}}},
             **{"x-mcp-servers": "math_restricted", "x-litellm-call-id": "proxy-scope-denial"},
-        ) as session:
-            result = await session.call_tool("call_tool", {"tool_id": "denied-scope", "arguments": {}})
-            assert result.isError is True
-            assert result.content[0].text == (
-                "Error: The key is not allowed to access the requested MCP servers: math_restricted"
-            )
-            async with asyncio.timeout(10):
-                while True:
-                    payload = json.loads(await asyncio.to_thread(proxy_call_recorder.failures.get, True, 5))
-                    if payload["id"] == "proxy-scope-denial":
-                        break
-            assert payload["call_type"] == "call_mcp_tool"
-            assert payload["status"] == "failure"
-            assert payload["response_cost"] == 0
-            assert "math_restricted" in payload["error_str"]
+        )
+        assert response.status_code == 200, response.text
+        result = _rpc_result(response)
+        assert result["isError"] is True
+        assert result["content"][0]["text"] == (
+            "Error: The key is not allowed to access the requested MCP servers: math_restricted"
+        )
+        async with asyncio.timeout(10):
+            while True:
+                payload = json.loads(await asyncio.to_thread(proxy_call_recorder.failures.get, True, 5))
+                if payload["id"] == "proxy-scope-denial":
+                    break
+        assert payload["call_type"] == "call_mcp_tool"
+        assert payload["status"] == "failure"
+        assert payload["response_cost"] == 0
+        assert "math_restricted" in payload["error_str"]
 
     @pytest.mark.parametrize("arguments", ["wrong", False, None, [], 0])
     def test_handler_rejects_non_object_arguments(
