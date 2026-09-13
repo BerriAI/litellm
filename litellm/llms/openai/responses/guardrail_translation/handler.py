@@ -56,6 +56,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     stream_item_field,
     stream_item_fingerprint,
     stream_item_items,
+    unappliable_request_rewrite,
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
 from litellm.responses.litellm_completion_transformation.transformation import (
@@ -495,13 +496,13 @@ class OpenAIResponsesHandler(BaseTranslation):
                 data["instructions"] = written_back.instructions  # rebind-ok: data is an out-param
         elif isinstance(input_data, str):
             guardrailed_texts: Final = guardrailed_inputs.get("texts") or ()
+            if len(guardrailed_texts) > 1:
+                raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
             data["input"] = guardrailed_texts[0] if guardrailed_texts else input_data  # rebind-ok: data is an out-param
         else:
             rewritten_texts: Final = guardrailed_inputs.get("texts") or ()
             if len(rewritten_texts) != len(extracted.task_mappings):
-                from litellm.proxy.policy_engine.pipeline_executor import UnappliableRequestRewrite
-
-                raise UnappliableRequestRewrite(guardrail_to_apply.guardrail_name or "unknown")
+                raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
             await self._apply_guardrail_responses_to_input(
                 messages=input_data,
                 responses=rewritten_texts,

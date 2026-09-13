@@ -42,6 +42,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     stream_item_field,
     stream_item_fingerprint,
     stream_item_items,
+    unappliable_request_rewrite,
 )
 from litellm.main import stream_chunk_builder
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -197,9 +198,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 # Step 3: Map guardrail responses back to original message structure
                 if guardrailed_texts and texts_to_check:
                     if len(guardrailed_texts) != len(text_task_mappings):
-                        from litellm.proxy.policy_engine.pipeline_executor import UnappliableRequestRewrite
-
-                        raise UnappliableRequestRewrite(guardrail_to_apply.guardrail_name or "unknown")
+                        raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
                     await self._apply_guardrail_responses_to_input_texts(
                         messages=messages,
                         responses=guardrailed_texts,

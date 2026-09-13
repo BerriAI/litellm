@@ -2272,6 +2272,58 @@ class TestAnthropicMessagesHandlerStreamingScanKey:
         assert ended_key != open_key
 
 
+class PerRowTextGuardrail(CustomGuardrail):
+    """Answers one redacted text per chat row it was shown, the way a guardrail
+    that scans per message does, and hands back only texts."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="per-row-redactor")
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        rows = inputs.get("structured_messages") or []
+        return {**inputs, "texts": [str(row.get("content")).replace("123-45-6789", "<US_SSN>") for row in rows]}
+
+
+class TestPerMessageTextWriteBack:
+    """Texts that no longer pair one-to-one with what the handler extracted must be
+    rejected by name instead of sliding onto the wrong messages."""
+
+    @pytest.mark.asyncio
+    async def test_one_text_per_row_over_a_system_prompt_is_rejected_by_name(self):
+        from litellm.proxy.policy_engine.pipeline_executor import UnappliableRequestRewrite
+
+        data = {
+            "model": "claude-sonnet-4-5",
+            "system": "Reply with exactly the SSN you were given.",
+            "messages": [{"role": "user", "content": "My SSN is 123-45-6789."}],
+        }
+        original = json.loads(json.dumps(data))
+
+        with pytest.raises(UnappliableRequestRewrite) as excinfo:
+            await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=PerRowTextGuardrail())
+
+        assert excinfo.value.guardrail_name == "per-row-redactor"
+        assert data["system"] == original["system"], "a rejected rewrite must leave the request untouched"
+        assert data["messages"] == original["messages"], "a rejected rewrite must leave the request untouched"
+
+    @pytest.mark.asyncio
+    async def test_one_text_per_row_without_a_system_prompt_is_applied(self):
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [{"role": "user", "content": "My SSN is 123-45-6789."}],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=PerRowTextGuardrail())
+
+        assert data["messages"] == [{"role": "user", "content": "My SSN is <US_SSN>."}]
+
+
 class TestAnthropicMessagesHandlerPostCallHookResponse:
     def test_openai_shaped_stream_assembly_reaches_the_hook_as_a_messages_response(self):
         from litellm.types.utils import Choices, Message, ModelResponse, Usage
