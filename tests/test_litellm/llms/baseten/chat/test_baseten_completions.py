@@ -54,5 +54,50 @@ class TestBasetenModelAPI:
         assert api_key == "test-key"
 
 
+class TestBasetenReasoningEffort:
+    """Test reasoning_effort support for Baseten reasoning models.
+
+    Baseten's Model API accepts a top-level `reasoning_effort` parameter and
+    validates it server-side (invalid values return 400), so LiteLLM should
+    forward it verbatim instead of dropping it:
+    https://docs.baseten.co/inference/model-apis/reasoning
+    """
+
+    def test_reasoning_effort_is_supported(self):
+        """reasoning_effort is advertised as a supported param"""
+        config = BasetenConfig()
+
+        assert "reasoning_effort" in config.get_supported_openai_params(
+            model="moonshotai/Kimi-K3"
+        )
+
+    def test_reasoning_effort_passthrough_with_drop_params(self):
+        """reasoning_effort survives drop_params=True and is forwarded verbatim"""
+        config = BasetenConfig()
+
+        result = config.map_openai_params(
+            non_default_params={"reasoning_effort": "high", "max_tokens": 100},
+            optional_params={},
+            model="deepseek-ai/DeepSeek-V4-Flash-0731",
+            drop_params=True,
+        )
+
+        assert result["reasoning_effort"] == "high"
+        assert result["max_tokens"] == 100
+
+    def test_reasoning_effort_none_passthrough(self):
+        """reasoning_effort="none" (disable thinking) is forwarded verbatim"""
+        config = BasetenConfig()
+
+        result = config.map_openai_params(
+            non_default_params={"reasoning_effort": "none"},
+            optional_params={},
+            model="moonshotai/Kimi-K3",
+            drop_params=True,
+        )
+
+        assert result["reasoning_effort"] == "none"
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
