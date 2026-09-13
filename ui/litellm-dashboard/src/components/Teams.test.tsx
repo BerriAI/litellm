@@ -1187,6 +1187,7 @@ describe("Teams - which fields reach the create payload depends on the open sect
       "organization_id",
       "rpm_limit",
       "team_alias",
+      "tpd_limit",
       "tpm_limit",
     ]);
     expect(payload.team_alias).toBe("Closed Sections Team");
@@ -1314,6 +1315,7 @@ describe("Teams - the exact bytes the create call sends", () => {
       budget_duration: undefined,
       tpm_limit: undefined,
       rpm_limit: undefined,
+      tpd_limit: undefined,
       metadata: undefined,
     });
     expect(wireBody(payload)).toStrictEqual({
@@ -1341,6 +1343,7 @@ describe("Teams - the exact bytes the create call sends", () => {
       budget_duration: undefined,
       tpm_limit: undefined,
       rpm_limit: undefined,
+      tpd_limit: undefined,
       metadata: undefined,
       team_id: undefined,
       team_member_budget: undefined,
@@ -1513,6 +1516,7 @@ describe("Teams - the exact bytes the create call sends", () => {
       budget_duration: undefined,
       tpm_limit: undefined,
       rpm_limit: undefined,
+      tpd_limit: undefined,
       metadata: undefined,
       team_id: undefined,
       team_member_budget: undefined,

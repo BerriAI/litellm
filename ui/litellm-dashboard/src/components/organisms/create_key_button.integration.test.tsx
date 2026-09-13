@@ -143,6 +143,7 @@ const OPTIONAL_OPEN_PAYLOAD = {
   tpm_limit_type: null,
   rpm_limit: undefined,
   rpm_limit_type: null,
+  tpd_limit: undefined,
   throttle_on_budget_exceeded: undefined,
   enable_prompt_caching: undefined,
   guardrails: undefined,
@@ -395,6 +396,7 @@ describe("CreateKey", () => {
     it.each([
       ["Tokens per minute Limit (TPM)", "tpm_limit"],
       ["Requests per minute Limit (RPM)", "rpm_limit"],
+      ["Tokens per day Limit (TPD)", "tpd_limit"],
     ])("routes a typed %s into the %s payload key", async (label, key) => {
       await openModal();
       await nameTheKey();

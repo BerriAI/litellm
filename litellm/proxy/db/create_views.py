@@ -80,6 +80,7 @@ async def create_missing_views(db: SupportsRawQueries) -> None:
                 t.max_budget AS team_max_budget,
                 t.tpm_limit AS team_tpm_limit,
                 t.rpm_limit AS team_rpm_limit,
+                t.tpd_limit AS team_tpd_limit,
                 p.project_alias AS project_alias
                 FROM "LiteLLM_VerificationToken" v
                 LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id

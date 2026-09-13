@@ -1968,6 +1968,7 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     models: ["gpt-4"],
     tpm_limit: 1000,
     rpm_limit: 1000,
+    tpd_limit: null,
     model_tpm_limit: {},
     model_rpm_limit: {},
     max_budget: 100,
