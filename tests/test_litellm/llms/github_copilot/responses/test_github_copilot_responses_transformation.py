@@ -7,8 +7,8 @@ transformations for the Responses API.
 Source: litellm/llms/github_copilot/responses/transformation.py
 """
 
-from unittest.mock import patch, MagicMock
-
+import os
+from unittest.mock import MagicMock, patch
 
 import pytest
 import litellm
@@ -100,7 +100,9 @@ class TestGithubCopilotResponsesAPITransformation:
         assert "x-request-id" not in headers
         assert "x-vscode-user-agent-library-version" not in headers
 
-    @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
+    @patch(  # test-quality-ok: matches the Authenticator-mocking convention already used throughout this file
+        "litellm.llms.github_copilot.responses.transformation.Authenticator"
+    )
     def test_validate_environment_headers_from_environment(self, mock_authenticator_class):
         mock_auth_instance = MagicMock()
         mock_auth_instance.get_api_key.return_value = "test-api-key-123"
@@ -133,7 +135,9 @@ class TestGithubCopilotResponsesAPITransformation:
         assert headers["x-github-api-version"] == "2099-01-01"
         assert headers["x-vscode-user-agent-library-version"] == "custom-library"
 
-    @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
+    @patch(  # test-quality-ok: matches the Authenticator-mocking convention already used throughout this file
+        "litellm.llms.github_copilot.responses.transformation.Authenticator"
+    )
     def test_empty_environment_header_omits_default(self, mock_authenticator_class):
         mock_auth_instance = MagicMock()
         mock_auth_instance.get_api_key.return_value = "test-api-key-123"
