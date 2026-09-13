@@ -141,30 +141,30 @@ def resolve_authoritative_response_cost(
             else None
         )
     )
-    raw_cost: Final = (
+    raw_cost: Final[object] = (
         response_cost
         if response_cost is not None
         else (
             sl_payload.get("response_cost")
-            if sl_payload is not None and sl_payload.get("response_cost") is not None
+            if sl_payload is not None
             else (kwargs.get("response_cost") if kwargs is not None else None)
         )
     )
     if isinstance(raw_cost, (int, float)) and not isinstance(raw_cost, bool) and raw_cost > 0.0:
         return float(raw_cost)
-    is_cache_hit: Final = (sl_payload is not None and sl_payload.get("cache_hit") is True) or (
-        kwargs is not None and kwargs.get("cache_hit") is True
+    is_cache_hit: Final = (bool(sl_payload.get("cache_hit")) if sl_payload is not None else False) or (
+        bool(kwargs.get("cache_hit")) if kwargs is not None else False
     )
     if is_cache_hit:
         return 0.0
     if sl_payload is not None:
         cost_breakdown: Final = sl_payload.get("cost_breakdown")
-        total_cost: Final = cost_breakdown.get("total_cost") if cost_breakdown is not None else None
-        if isinstance(total_cost, (int, float)) and not isinstance(total_cost, bool) and total_cost > 0.0:
-            return float(total_cost)
         if cost_breakdown is not None:
-            input_cost: Final = cost_breakdown.get("input_cost")
-            output_cost: Final = cost_breakdown.get("output_cost")
+            total_cost: Final[object] = cost_breakdown.get("total_cost")
+            if isinstance(total_cost, (int, float)) and not isinstance(total_cost, bool) and total_cost > 0.0:
+                return float(total_cost)
+            input_cost: Final[object] = cost_breakdown.get("input_cost")
+            output_cost: Final[object] = cost_breakdown.get("output_cost")
             input_val: Final = (
                 float(input_cost) if isinstance(input_cost, (int, float)) and not isinstance(input_cost, bool) else 0.0
             )
