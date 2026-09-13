@@ -26,18 +26,21 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     Member,
     ProxyException,
+    RegenerateKeyRequest,
     ResetSpendRequest,
     UpdateKeyRequest,
 )
 from litellm.proxy.auth.auth_checks import _delete_cache_key_object, _project_cache_key
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     _check_org_key_limits,
     _check_project_key_limits,
     _check_team_key_limits,
     _common_key_generation_helper,
     _enforce_upperbound_key_params,
+    _execute_virtual_key_regeneration,
     _get_and_validate_existing_key,
     _list_key_helper,
     _persist_deleted_verification_tokens,
@@ -11935,6 +11938,10 @@ async def test_execute_virtual_key_regeneration_rejects_over_limit_duration(monk
             "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
             new_callable=AsyncMock,
         ),
+        patch(  # test-quality-ok: archival path is outside upperbound rejection
+            "litellm.proxy.management_endpoints.key_management_endpoints._persist_deleted_verification_tokens",
+            new_callable=AsyncMock,
+        ) as persist_deleted_verification_tokens,
         patch(
             "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
             new_callable=AsyncMock,
@@ -11955,6 +11962,7 @@ async def test_execute_virtual_key_regeneration_rejects_over_limit_duration(monk
     assert exc_info.value.status_code == 400
     assert "duration" in str(exc_info.value.detail)
     # Rejected regenerate must not reach the DB update.
+    persist_deleted_verification_tokens.assert_not_awaited()
     assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 0
 
 
@@ -12011,6 +12019,164 @@ async def test_execute_virtual_key_regeneration_allows_within_limit_duration(mon
             user_api_key_cache=MagicMock(),
             proxy_logging_obj=MagicMock(),
         )
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_virtual_key_regeneration_rejects_when_custom_key_update_hook_denies():
+    existing_key = _make_regenerate_existing_key()
+    data = RegenerateKeyRequest(duration="3000d")
+    mock_prisma_client = _make_regenerate_mock_prisma()
+    received_data: list[UpdateKeyRequest] = []
+
+    async def hook(data: UpdateKeyRequest) -> dict[str, object]:
+        received_data.append(data)
+        if data.duration and duration_in_seconds(data.duration) > duration_in_seconds("7d"):
+            return {"decision": False, "message": "duration must be <= 7d"}
+        return {"decision": True}
+
+    with (
+        patch(  # test-quality-ok: deterministic token setup for policy rejection
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_new_token",
+            new_callable=AsyncMock,
+            return_value="sk-newtoken1234ab12",
+        ),
+        patch(  # test-quality-ok: grace-period path is outside policy rejection
+            "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
+            new_callable=AsyncMock,
+        ) as insert_deprecated_key,
+        patch(  # test-quality-ok: archival path is outside policy rejection
+            "litellm.proxy.management_endpoints.key_management_endpoints._persist_deleted_verification_tokens",
+            new_callable=AsyncMock,
+        ) as persist_deleted_verification_tokens,
+        patch(  # test-quality-ok: cache eviction is outside policy rejection
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: rotation callback is outside policy rejection
+            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_rotated_hook",
+            new_callable=AsyncMock,
+        ),
+        patch("litellm.proxy.proxy_server.user_custom_key_update", hook),  # test-quality-ok: inject policy hook
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await _execute_virtual_key_regeneration(
+                prisma_client=mock_prisma_client,
+                key_in_db=existing_key,
+                hashed_api_key="abc123",
+                key="abc123",
+                data=data,
+                user_api_key_dict=_make_regenerate_user_api_key_dict(),
+                litellm_changed_by=None,
+                user_api_key_cache=MagicMock(),
+                proxy_logging_obj=MagicMock(),
+            )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "duration must be <= 7d"
+    insert_deprecated_key.assert_not_awaited()
+    persist_deleted_verification_tokens.assert_not_awaited()
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 0
+    assert len(received_data) == 1
+    assert received_data[0].key == "abc123"
+    assert received_data[0].duration == "3000d"
+
+
+@pytest.mark.asyncio
+async def test_execute_virtual_key_regeneration_allows_when_custom_key_update_hook_approves():
+    existing_key = _make_regenerate_existing_key()
+    data = RegenerateKeyRequest(duration="5d")
+    mock_prisma_client = _make_regenerate_mock_prisma()
+    received_data: list[UpdateKeyRequest] = []
+
+    async def hook(data: UpdateKeyRequest) -> dict[str, object]:
+        received_data.append(data)
+        if data.duration and duration_in_seconds(data.duration) > duration_in_seconds("7d"):
+            return {"decision": False, "message": "duration must be <= 7d"}
+        return {"decision": True}
+
+    with (
+        patch(  # test-quality-ok: deterministic token setup for policy approval
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_new_token",
+            new_callable=AsyncMock,
+            return_value="sk-newtoken1234ab12",
+        ),
+        patch(  # test-quality-ok: grace-period path is outside policy approval
+            "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: verify archival follows policy approval
+            "litellm.proxy.management_endpoints.key_management_endpoints._persist_deleted_verification_tokens",
+            new_callable=AsyncMock,
+        ) as persist_deleted_verification_tokens,
+        patch(  # test-quality-ok: cache eviction is outside policy approval
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: rotation callback is outside policy approval
+            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_rotated_hook",
+            new_callable=AsyncMock,
+        ),
+        patch("litellm.proxy.proxy_server.user_custom_key_update", hook),  # test-quality-ok: inject policy hook
+    ):
+        await _execute_virtual_key_regeneration(
+            prisma_client=mock_prisma_client,
+            key_in_db=existing_key,
+            hashed_api_key="abc123",
+            key="abc123",
+            data=data,
+            user_api_key_dict=_make_regenerate_user_api_key_dict(),
+            litellm_changed_by=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 1
+    persist_deleted_verification_tokens.assert_awaited_once()
+    assert persist_deleted_verification_tokens.call_args.kwargs["keys"] == [existing_key]
+    assert len(received_data) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("data", [None, RegenerateKeyRequest()])
+async def test_execute_virtual_key_regeneration_skips_custom_key_update_hook_without_changes(data):
+    mock_prisma_client = _make_regenerate_mock_prisma()
+
+    async def hook(data: UpdateKeyRequest) -> dict[str, object]:
+        raise AssertionError(f"custom key update hook called with {data}")
+
+    with (
+        patch(  # test-quality-ok: deterministic token setup for unchanged request
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_new_token",
+            new_callable=AsyncMock,
+            return_value="sk-newtoken1234ab12",
+        ),
+        patch(  # test-quality-ok: grace-period path is outside unchanged request
+            "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: cache eviction is outside unchanged request
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: rotation callback is outside unchanged request
+            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_rotated_hook",
+            new_callable=AsyncMock,
+        ),
+        patch("litellm.proxy.proxy_server.user_custom_key_update", hook),  # test-quality-ok: inject policy hook
+    ):
+        await _execute_virtual_key_regeneration(
+            prisma_client=mock_prisma_client,
+            key_in_db=_make_regenerate_existing_key(),
+            hashed_api_key="abc123",
+            key="abc123",
+            data=data,
+            user_api_key_dict=_make_regenerate_user_api_key_dict(),
+            litellm_changed_by=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
     assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 1
 
 
@@ -13773,10 +13939,6 @@ async def test_regenerate_applies_normalized_mcp_object_permission():
         ),
         patch(
             "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_vector_stores_against_team",
-            new_callable=AsyncMock,
-        ),
-        patch(
-            "litellm.proxy.management_endpoints.key_management_endpoints._persist_deleted_verification_tokens",
             new_callable=AsyncMock,
         ),
         patch(
