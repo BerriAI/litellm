@@ -884,6 +884,50 @@ describe("CreateKey", () => {
   });
 
   describe("user search debounce", () => {
+    it("should offer users without typing and assign the selected owner to the key", async () => {
+      vi.mocked(userFilterUICall).mockResolvedValue([
+        { user_id: "u-77", user_email: "alice@example.com" },
+        { user_id: "u-no-email", user_email: null },
+      ]);
+      await openModal();
+      await nameTheKey();
+      await userEvent.click(screen.getByRole("radio", { name: "Another User" }));
+      await userEvent.click(await userSearchInput());
+
+      expect(await screen.findByRole("option", { name: /^u-no-email$/ })).toBeInTheDocument();
+      await userEvent.click(await screen.findByRole("option", { name: "alice@example.com (u-77)" }));
+      await submit();
+
+      expect((await createdPayload()).user_id).toBe("u-77");
+    });
+
+    it("should keep filtered users when the initial list arrives after a search", async () => {
+      const answers = new Map<string, (users: { user_id: string; user_email: string }[]) => void>();
+      vi.mocked(userFilterUICall).mockImplementation(
+        (_accessToken, params) =>
+          new Promise((resolve) => {
+            answers.set(params.get("user_email") ?? "", resolve);
+          }) as never,
+      );
+      renderCreateKey({ autoOpenCreate: true, prefillData: { owned_by: "another_user" } });
+      const search = await userSearchInput();
+      await userEvent.click(search);
+      await screen.findByText("Searching...");
+      await userEvent.type(search, "alice");
+      await waitFor(() => expect(answers.has("alice")).toBe(true));
+
+      await act(async () => {
+        answers.get("alice")?.([{ user_id: "u-77", user_email: "alice@example.com" }]);
+      });
+      await screen.findByRole("option", { name: "alice@example.com (u-77)" });
+      await act(async () => {
+        answers.get("")?.([{ user_id: "u-88", user_email: "bob@example.com" }]);
+      });
+
+      expect(screen.queryByRole("option", { name: "bob@example.com (u-88)" })).not.toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "alice@example.com (u-77)" })).toBeInTheDocument();
+    });
+
     it("fires exactly one search carrying the last typed value", async () => {
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
       vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -892,14 +936,24 @@ describe("CreateKey", () => {
         const search = await userSearchInput();
 
         await user.type(search, "ali");
-        expect(vi.mocked(userFilterUICall)).not.toHaveBeenCalled();
+        expect(
+          vi
+            .mocked(userFilterUICall)
+            .mock.calls.map(([, params]) => params.get("user_email"))
+            .filter(Boolean),
+        ).toEqual([]);
 
         await user.type(search, "ce");
-        await vi.advanceTimersByTimeAsync(400);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(400);
+        });
 
-        expect(vi.mocked(userFilterUICall)).toHaveBeenCalledTimes(1);
-        const params = vi.mocked(userFilterUICall).mock.calls[0][1] as URLSearchParams;
-        expect(params.get("user_email")).toBe("alice");
+        expect(
+          vi
+            .mocked(userFilterUICall)
+            .mock.calls.map(([, params]) => params.get("user_email"))
+            .filter(Boolean),
+        ).toEqual(["alice"]);
       } finally {
         vi.useRealTimers();
       }
@@ -937,14 +991,16 @@ describe("CreateKey", () => {
       expect(screen.getByRole("option", { name: "alice.smith@example.com (u-smith)" })).toBeInTheDocument();
     });
 
-    it("stops searching once the box is cleared and the abandoned search answers", async () => {
+    it("should restore default users when cleared and ignore the abandoned search", async () => {
       const answers = new Map<string, (users: { user_id: string; user_email: string }[]) => void>();
-      vi.mocked(userFilterUICall).mockImplementation(
-        (_accessToken, params) =>
-          new Promise((resolve) => {
-            answers.set(params.get("user_email") ?? "", resolve);
-          }) as never,
-      );
+      vi.mocked(userFilterUICall).mockImplementation((_accessToken, params) => {
+        if (!params.get("user_email")) {
+          return Promise.resolve([{ user_id: "u-88", user_email: "bob@example.com" }]) as never;
+        }
+        return new Promise((resolve) => {
+          answers.set(params.get("user_email") ?? "", resolve);
+        }) as never;
+      });
 
       const user = userEvent.setup();
       renderCreateKey({ autoOpenCreate: true, prefillData: { owned_by: "another_user" } });
@@ -952,17 +1008,15 @@ describe("CreateKey", () => {
 
       await user.type(search, "ali");
       await waitFor(() => expect(answers.has("ali")).toBe(true), { timeout: 3000 });
-      await screen.findByText("Searching...");
-
       await user.clear(search);
-      await screen.findByText("No users found");
+      await screen.findByRole("option", { name: "bob@example.com (u-88)" });
 
       await act(async () => {
         answers.get("ali")?.([{ user_id: "u-jones", user_email: "alice.jones@example.com" }]);
       });
 
       expect(screen.queryByRole("option", { name: "alice.jones@example.com (u-jones)" })).not.toBeInTheDocument();
-      expect(screen.getByText("No users found")).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "bob@example.com (u-88)" })).toBeInTheDocument();
     });
 
     it("keeps searching while a newer search is still in flight", async () => {
@@ -1040,7 +1094,7 @@ describe("CreateKey", () => {
         answers.get("alice.smith@example.comx")?.reject(new Error("search failed"));
       });
 
-      expect(toast.fromError).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(toast.fromError).toHaveBeenCalledTimes(1));
     });
   });
 
@@ -1067,13 +1121,21 @@ describe("CreateKey", () => {
         const search = await userSearchInput();
 
         await user.type(search, "alice");
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(400);
+        });
         await user.click(await screen.findByRole("option", { name: "alice@example.com (u-77)" }));
         await act(async () => {
           await vi.advanceTimersByTimeAsync(1000);
         });
 
         expect(search).toHaveValue("alice@example.com (u-77)");
-        expect(vi.mocked(userFilterUICall)).toHaveBeenCalledTimes(1);
+        expect(
+          vi
+            .mocked(userFilterUICall)
+            .mock.calls.map(([, params]) => params.get("user_email"))
+            .filter(Boolean),
+        ).toEqual(["alice"]);
       } finally {
         vi.useRealTimers();
       }
