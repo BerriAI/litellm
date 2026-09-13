@@ -829,7 +829,7 @@ class RedisCache(BaseCache):
         return _LUA_COUNT.validate_python(count)
 
     @_redis_circuit_breaker_guard_sync
-    def batch_get_counts(self, key_list: list[str]) -> tuple[int | None, ...]:
+    def batch_get_counts(self, key_list: list[str] | tuple[str, ...]) -> tuple[int | None, ...]:
         """Read integer counters for ``key_list``, in order, raising when Redis cannot answer.
 
         ``batch_get_cache`` swallows every failure and returns an empty dict, which the caller
@@ -840,7 +840,7 @@ class RedisCache(BaseCache):
         return _decoded_counts(self._run_redis_mget_operation(keys=namespaced_keys))
 
     @_redis_circuit_breaker_guard
-    async def async_batch_get_counts(self, key_list: list[str]) -> tuple[int | None, ...]:
+    async def async_batch_get_counts(self, key_list: list[str] | tuple[str, ...]) -> tuple[int | None, ...]:
         """Async twin of ``batch_get_counts``, raising on failure the same way."""
         namespaced_keys: Final = [self.check_and_fix_namespace(key=key) for key in key_list]
         return _decoded_counts(await self._async_run_redis_mget_operation(keys=namespaced_keys))

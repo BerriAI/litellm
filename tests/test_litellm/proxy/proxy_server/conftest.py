@@ -511,3 +511,46 @@ def make_key(
         max_budget=max_budget,
         **kwargs,
     )
+
+
+@pytest.fixture(autouse=True)
+def reset_login_throttle(monkeypatch):
+    """Clear the Admin UI failed-login counters between tests.
+
+    `client` is session scoped and the counters live in shared module stores with a 900s
+    window, so without this a failed sign-in test could return 429 in unrelated tests later.
+    Only the throttle's own keys are removed, so other cache entries remain untouched.
+    """
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy.auth import login_throttle
+    from litellm.proxy.auth.login_throttle import (
+        _CACHE_KEY_PREFIX,
+        _FAILED_LOGIN_SOURCE_CACHE,
+        _FAILED_LOGIN_USERNAME_CACHE,
+    )
+
+    async def _no_delay(_seconds: float) -> None:
+        """The escalating wait on a rejected sign-in, replaced so the route tests stay fast."""
+
+    monkeypatch.setattr(login_throttle, "_sleep", _no_delay)
+
+    def _drop_throttle_keys() -> None:
+        login_throttle._DELAYS_IN_FLIGHT.clear()
+        for cache in (_FAILED_LOGIN_USERNAME_CACHE, _FAILED_LOGIN_SOURCE_CACHE):
+            in_memory = getattr(cache, "in_memory_cache", None)
+            if in_memory is None:
+                continue
+            tracked = tuple(
+                key
+                for store in (getattr(in_memory, "cache_dict", None), getattr(in_memory, "ttl_dict", None))
+                if isinstance(store, dict)
+                for key in tuple(store)
+                if str(key).startswith(_CACHE_KEY_PREFIX)
+            )
+            for key in tracked:
+                in_memory.delete_cache(key)
+
+    monkeypatch.setattr(ps, "redis_usage_cache", None)
+    _drop_throttle_keys()
+    yield _drop_throttle_keys
+    _drop_throttle_keys()

@@ -22,7 +22,6 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 
-
 import litellm
 import litellm.proxy.proxy_server as proxy_server_module
 from litellm.caching.caching import RedisCache
@@ -30,6 +29,7 @@ from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import LitellmUserRoles, TokenCountRequest, UserAPIKeyAuth
+from litellm.proxy.auth.login_throttle import LoginThrottle
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app, initialize
 from litellm.utils import _invalidate_model_cost_lowercase_map
@@ -127,13 +127,14 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
     }
     assert response.cookies.get("token") == "signed-token"
 
-    mock_authenticate_user.assert_awaited_once_with(
-        username="alice",
-        password="secret",
-        master_key="test-master-key",
-        prisma_client=mock_prisma_client,
-        general_settings={},
-    )
+    mock_authenticate_user.assert_awaited_once()
+    auth_kwargs = mock_authenticate_user.call_args.kwargs
+    assert auth_kwargs["username"] == "alice"
+    assert auth_kwargs["password"] == "secret"
+    assert auth_kwargs["master_key"] == "test-master-key"
+    assert auth_kwargs["prisma_client"] is mock_prisma_client
+    assert auth_kwargs["general_settings"] == {}
+    assert isinstance(auth_kwargs["throttle"], LoginThrottle), "the endpoint must thread a throttle through"
     mock_create_ui_token_object.assert_called_once_with(
         login_result=mock_login_result,
         general_settings={},
@@ -3408,6 +3409,30 @@ async def test_load_config_user_url_validation_handles_null_and_string_false(tmp
 
     await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(false_config_file))
     assert litellm.user_url_validation is False
+
+
+@pytest.mark.asyncio
+async def test_load_config_warns_per_worker_login_counters_without_general_settings(tmp_path, monkeypatch, caplog):
+    """Regression: the failed-login throttle is on by default, so a multi-worker proxy with no
+    Redis must hear that its counters are per worker even when the config has no general_settings."""
+    import logging
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.auth.login_throttle import warn_login_counters_are_per_worker
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    for redis_var in ("REDIS_HOST", "REDIS_URL", "REDIS_CLUSTER_NODES", "REDIS_SENTINEL_NODES"):
+        monkeypatch.delenv(redis_var, raising=False)
+    monkeypatch.setenv("NUM_WORKERS", "4")
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", None)
+    warn_login_counters_are_per_worker.cache_clear()
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("model_list: []\n")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+
+    assert "Running 4 workers but Redis is not configured" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -13032,6 +13057,35 @@ async def test_authoritative_floor_spend_keeps_a_reset_marker_written_during_the
     assert real_spend_counter_cache.in_memory_cache.get_cache(key=marker_key) == 0.0, (
         "the in-flight DB read clobbered the post-reset floor marker with the stale pre-reset value"
     )
+
+
+@pytest.mark.asyncio
+async def test_login_throttle_settings_are_not_hot_applied_from_the_database():
+    """LIT-5285: a stored sign-in limit does not take effect on a live worker.
+
+    _update_general_settings copies an allowlist of keys out of the DB row on every config
+    poll. Adding these to it would let a stored value outrank config.yaml without a restart,
+    so an operator locked out by a bad value could not fix it by editing YAML and restarting.
+    """
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    original = dict(ps.general_settings)
+    try:
+        ps.general_settings.clear()
+        await ProxyConfig()._update_general_settings(
+            db_general_settings={
+                "max_failed_login_attempts": 999,
+                "max_failed_login_attempts_per_source": 999,
+                "failed_login_window_seconds": 1,
+            }
+        )
+        assert "max_failed_login_attempts" not in ps.general_settings
+        assert "max_failed_login_attempts_per_source" not in ps.general_settings
+        assert "failed_login_window_seconds" not in ps.general_settings
+    finally:
+        ps.general_settings.clear()
+        ps.general_settings.update(original)
 
 
 @pytest.mark.asyncio
