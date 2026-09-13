@@ -18452,9 +18452,10 @@ async def _key_logging_status_after_gcs_flush(sent: int, failed: int) -> Logging
     caller: Final = UserAPIKeyAuth(api_key="sk-1", team_id="team-gcs", metadata={"logging": []}, team_metadata={})
     with (
         patch("litellm.proxy.proxy_server.proxy_config", _default_team_gcs_proxy_config("team-gcs")),  # test-quality-ok: test_key_logging reads the module-level proxy config
-        patch(  # test-quality-ok: the registered logger is a process-wide registry, not an injectable
-            "litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class",
-            return_value=_gcs_logger_whose_flush_reports(sent=sent, failed=failed),
+        patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: the mock completion's GCS success event is premium-gated
+        patch(  # test-quality-ok: the mock completion and the flush both look the logger up in this process-wide registry
+            "litellm.litellm_core_utils.litellm_logging._in_memory_loggers",
+            [_gcs_logger_whose_flush_reports(sent=sent, failed=failed)],
         ),
     ):
         return await test_key_logging(user_api_key_dict=caller, request=request, logging_callbacks=("gcs_bucket",))
