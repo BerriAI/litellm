@@ -7760,7 +7760,9 @@ export interface paths {
          * @description Check the health of the key
          *
          *     Checks:
-         *     - If key based logging is configured correctly - sends a test log
+         *     - If the logging that applies to this key (key metadata, team metadata, or
+         *       `default_team_settings` in the config) is configured correctly - sends a test log
+         *       and, for gcs_bucket, flushes the queue and reports the upload result
          *
          *     Usage
          *

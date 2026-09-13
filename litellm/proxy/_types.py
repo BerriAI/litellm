@@ -1,7 +1,7 @@
 import enum
 import json
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple
@@ -4442,7 +4442,7 @@ class CurrentItemRateLimit(TypedDict):
 
 
 class LoggingCallbackStatus(TypedDict, total=False):
-    callbacks: list[str]
+    callbacks: ReadOnly[Sequence[str]]
     status: Literal["healthy", "unhealthy"]
     details: str | None
 

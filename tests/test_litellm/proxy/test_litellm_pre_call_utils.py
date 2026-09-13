@@ -2170,6 +2170,87 @@ def test_key_dynamic_logging_settings():
     assert result is None
 
 
+def test_empty_key_logging_list_is_unset_while_empty_team_logging_list_is_kept():
+    """A UI-generated key `logging: []` is no override; a team's `logging: []` is /disable_logging's state"""
+    auth = UserAPIKeyAuth(api_key="test-key", metadata={"logging": []}, team_metadata={"logging": []})
+
+    assert KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(auth) is None
+    assert KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(auth) == []
+
+
+def test_empty_key_logging_falls_back_to_team_logging():
+    auth = UserAPIKeyAuth(
+        api_key="test-key",
+        team_id="team-1",
+        metadata={"logging": []},
+        team_metadata={
+            "logging": [
+                {
+                    "callback_name": "gcs_bucket",
+                    "callback_type": "success_and_failure",
+                    "callback_vars": {"gcs_bucket_name": "team-bucket"},
+                }
+            ]
+        },
+    )
+
+    result = _get_dynamic_logging_metadata(user_api_key_dict=auth, proxy_config=MagicMock())
+
+    assert result is not None
+    assert result.success_callback == ["gcs_bucket"]
+    assert result.failure_callback == ["gcs_bucket"]
+    assert result.callback_vars == {"gcs_bucket_name": "team-bucket"}
+
+
+def _default_team_gcs_config():
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    pc = ProxyConfig()
+    pc.config = {
+        "litellm_settings": {
+            "default_team_settings": [
+                {
+                    "team_id": "team-gcs",
+                    "success_callback": ["gcs_bucket"],
+                    "failure_callback": ["gcs_bucket"],
+                    "turn_off_message_logging": True,
+                }
+            ]
+        }
+    }
+    return pc
+
+
+def test_empty_key_logging_without_team_logging_falls_back_to_default_team_settings():
+    auth = UserAPIKeyAuth(api_key="test-key", team_id="team-gcs", metadata={"logging": []}, team_metadata={})
+
+    result = _get_dynamic_logging_metadata(user_api_key_dict=auth, proxy_config=_default_team_gcs_config())
+
+    assert result is not None
+    assert result.success_callback == ["gcs_bucket"]
+    assert result.failure_callback == ["gcs_bucket"]
+    assert result.callback_vars == {"turn_off_message_logging": "True"}
+
+
+@pytest.mark.parametrize(
+    "team_metadata",
+    [
+        {"logging": []},
+        {"logging": [], "callback_settings": {"success_callback": [], "failure_callback": []}},
+    ],
+    ids=["last team callback removed", "POST /team/{team_id}/disable_logging"],
+)
+def test_team_with_logging_disabled_does_not_inherit_default_team_settings(team_metadata: dict):
+    auth = UserAPIKeyAuth(
+        api_key="test-key", team_id="team-gcs", metadata={"logging": []}, team_metadata=team_metadata
+    )
+
+    result = _get_dynamic_logging_metadata(user_api_key_dict=auth, proxy_config=_default_team_gcs_config())
+
+    effective = () if result is None else (*(result.success_callback or ()), *(result.failure_callback or ()))
+    assert effective == ()
+
+
 def test_team_dynamic_logging_settings():
     """
     Test KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings method with arize and langfuse callbacks

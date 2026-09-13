@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeV
 import fastapi
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from pydantic import ValidationError as PydanticValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -70,10 +71,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     publish_auth_cache_invalidation,
 )
 from litellm.proxy.common_utils.callback_config_validation import logging_metadata_config_error
-from litellm.proxy.common_utils.callback_utils import (
-    decrypt_callback_vars,
-    encrypt_callback_vars,
-)
+from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
@@ -163,6 +161,8 @@ if TYPE_CHECKING:
     import prisma
     from prisma import Prisma
     from prisma import models as prisma_models
+
+    from litellm.integrations.custom_logger import CustomLogger
 
 _RepositoryModelT = TypeVar("_RepositoryModelT", bound=BaseModel)
 
@@ -6978,7 +6978,9 @@ async def key_health(
     Check the health of the key
 
     Checks:
-    - If key based logging is configured correctly - sends a test log
+    - If the logging that applies to this key (key metadata, team metadata, or
+      `default_team_settings` in the config) is configured correctly - sends a test log
+      and, for gcs_bucket, flushes the queue and reports the upload result
 
     Usage 
 
@@ -7020,29 +7022,55 @@ async def key_health(
     }
     ```
     """
+    from litellm.proxy.litellm_pre_call_utils import (
+        KeyAndTeamLoggingSettings,
+        _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # the request-time resolver; the health check must report the same callbacks a request would use
+    )
+    from litellm.proxy.proxy_server import proxy_config
+
     try:
-        # Get the key's metadata
-        key_metadata: Final = user_api_key_dict.metadata
+        key_logging_entries: Final = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
+        if key_logging_entries is not None:
+            _raise_if_key_logging_missing_callback_name(key_logging_entries)
 
-        health_status: Final[KeyHealthResponse] = KeyHealthResponse(
-            key="healthy",
-            logging_callbacks=None,
+        configured_entries: Final = (
+            key_logging_entries or KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict) or ()
         )
-
-        # Check if logging is configured in metadata
-        if key_metadata and "logging" in key_metadata:
-            logging_statuses: Final = await test_key_logging(
-                user_api_key_dict=user_api_key_dict,
-                request=request,
-                key_logging=decrypt_callback_vars(key_metadata)["logging"],
+        invalid_entries: Final = _describe_invalid_callback_entries(configured_entries)
+        if invalid_entries is not None:
+            return KeyHealthResponse(
+                key="unhealthy",
+                logging_callbacks=LoggingCallbackStatus(
+                    callbacks=_configured_callback_names(configured_entries),
+                    status="unhealthy",
+                    details=invalid_entries,
+                ),
             )
-            health_status["logging_callbacks"] = logging_statuses
 
-            # Check if any logging callback is unhealthy
-            if logging_statuses.get("status") == "unhealthy":
-                health_status["key"] = "unhealthy"
+        callback_settings: Final = _get_dynamic_logging_metadata(
+            user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
+        )
+        logging_callbacks: Final = (
+            ()
+            if callback_settings is None
+            else tuple(
+                dict.fromkeys(
+                    (*(callback_settings.success_callback or ()), *(callback_settings.failure_callback or ()))
+                )
+            )
+        )
+        if not logging_callbacks:
+            return KeyHealthResponse(key="healthy", logging_callbacks=None)
 
-        return KeyHealthResponse(**health_status)
+        logging_statuses: Final = await test_key_logging(
+            user_api_key_dict=user_api_key_dict,
+            request=request,
+            logging_callbacks=logging_callbacks,
+        )
+        return KeyHealthResponse(
+            key="unhealthy" if logging_statuses.get("status") == "unhealthy" else "healthy",
+            logging_callbacks=logging_statuses,
+        )
 
     except Exception as e:
         raise ProxyException(
@@ -7077,30 +7105,69 @@ async def _can_user_query_key_info(
     return False
 
 
+def _raise_if_key_logging_missing_callback_name(key_logging: Sequence[Mapping[str, str]]) -> None:
+    if any(callback.get("callback_name") is None for callback in key_logging):
+        raise ValueError("callback_name is required in key_logging")
+
+
+def _configured_callback_names(entries: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(name for entry in entries if isinstance(name := entry.get("callback_name"), str)))
+
+
+def _describe_invalid_callback_entries(entries: Sequence[Mapping[str, object]]) -> str | None:
+    errors: Final = tuple(
+        f"{entry.get('callback_name')}: {error}"
+        for entry in entries
+        if (error := _callback_entry_error(entry)) is not None
+    )
+    if not errors:
+        return None
+    return f"Invalid callback metadata, requests ignore these entries: {'; '.join(errors)}"
+
+
+def _callback_entry_error(entry: Mapping[str, object]) -> str | None:
+    try:
+        AddTeamCallback.model_validate(entry)
+    except PydanticValidationError as e:
+        return ", ".join(
+            f"{'.'.join(str(part) for part in err['loc'])} {err['msg']}"
+            for err in e.errors(include_url=False, include_input=False)
+        )
+    return None
+
+
+async def flush_gcs_and_describe_failures(gcs_logger: "CustomLogger | None", health_check_event_id: str) -> str | None:
+    from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
+
+    if not isinstance(gcs_logger, GCSBucketLogger):
+        return "gcs_bucket callback was selected but no GCS logger was initialized"
+    flush_result: Final = await gcs_logger.flush_queue_and_report()
+    if health_check_event_id in flush_result.failed_ids:
+        return (
+            f"GCS upload failed for the /key/health event and {flush_result.failed - 1} other event(s), "
+            f"{flush_result.sent} uploaded"
+        )
+    return None
+
+
 async def test_key_logging(
     user_api_key_dict: UserAPIKeyAuth,
     request: Request,
-    key_logging: Sequence[Mapping[str, str]],
+    logging_callbacks: Sequence[str],
 ) -> LoggingCallbackStatus:
     """
-    Test the key-based logging
+    Test the logging callbacks that apply to this key
 
-    - Test that key logging is correctly formatted and all args are passed correctly
     - Make a mock completion call -> user can check if it's correctly logged
+    - For gcs_bucket, flush the queue and report whether the upload succeeded
     - Check if any logger.exceptions were triggered -> if they were then returns it to the user client side
     """
     import logging
     from io import StringIO
 
+    from litellm.litellm_core_utils.litellm_logging import get_custom_logger_compatible_class
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
     from litellm.proxy.proxy_server import general_settings, proxy_config
-
-    logging_callbacks: Final[list[str]] = []
-    for callback in key_logging:
-        if callback.get("callback_name") is not None:
-            logging_callbacks.append(callback["callback_name"])
-        else:
-            raise ValueError("callback_name is required in key_logging")
 
     log_capture_string: Final = StringIO()
     ch: Final = logging.StreamHandler(log_capture_string)
@@ -7126,7 +7193,7 @@ async def test_key_logging(
             request=request,
         )
         data["mock_response"] = "test response"
-        await litellm.acompletion(**data)  # make mock completion call to trigger key based callbacks
+        health_check_response: Final = await litellm.acompletion(**data)
     except Exception as e:
         return LoggingCallbackStatus(
             callbacks=logging_callbacks,
@@ -7135,22 +7202,37 @@ async def test_key_logging(
         )
 
     await asyncio.sleep(2)  # wait for callbacks to run, callbacks use batching so wait for the flush event
+    callback_log_contents: Final = log_capture_string.getvalue()
 
-    # Check if any logger exceptions were triggered
-    log_contents: Final = log_capture_string.getvalue()
+    health_check_event_id: Final = (
+        health_check_response.id if isinstance(health_check_response, litellm.ModelResponse) else ""
+    )
+    gcs_failure: Final = (
+        await flush_gcs_and_describe_failures(get_custom_logger_compatible_class("gcs_bucket"), health_check_event_id)
+        if "gcs_bucket" in logging_callbacks
+        else None
+    )
     logger.removeHandler(ch)
-    if log_contents:
+    flush_log_contents: Final = (
+        log_capture_string.getvalue()[len(callback_log_contents) :] if gcs_failure is not None else ""
+    )
+    if gcs_failure is not None or callback_log_contents:
         return LoggingCallbackStatus(
             callbacks=logging_callbacks,
             status="unhealthy",
-            details=f"Logger exceptions triggered, system is unhealthy: {log_contents}",
+            details=(
+                "Logger exceptions triggered, system is unhealthy: "
+                f"{gcs_failure or ''} {callback_log_contents}{flush_log_contents}"
+            ).strip(),
         )
-    else:
-        return LoggingCallbackStatus(
-            callbacks=logging_callbacks,
-            status="healthy",
-            details=f"No logger exceptions triggered, system is healthy. Manually check if logs were sent to {logging_callbacks} ",
-        )
+    return LoggingCallbackStatus(
+        callbacks=logging_callbacks,
+        status="healthy",
+        details=(
+            "No logger exceptions triggered, system is healthy. "
+            f"Manually check if logs were sent to {', '.join(logging_callbacks)}"
+        ),
+    )
 
 
 _KEY_ALIAS_PATTERN: Final = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_\-/\.@]{0,253}[a-zA-Z0-9]$")
