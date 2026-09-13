@@ -127,6 +127,22 @@ def _get_router_metadata_for_spend_log(
     )
 
 
+def _resolve_spend_for_spend_log(
+    kwargs: Mapping[str, object],
+    standard_logging_payload: StandardLoggingPayload | None,
+) -> float:
+    response_cost: Final = kwargs.get("response_cost")
+    if isinstance(response_cost, (int, float)) and not isinstance(response_cost, bool) and response_cost:
+        return float(response_cost)
+    cost_breakdown: Final = (
+        standard_logging_payload.get("cost_breakdown") if standard_logging_payload is not None else None
+    )
+    total_cost: Final = cost_breakdown.get("total_cost") if cost_breakdown is not None else None
+    if isinstance(total_cost, (int, float)) and not isinstance(total_cost, bool):
+        return float(total_cost)
+    return 0.0
+
+
 def _get_spend_logs_metadata(
     metadata: dict | None,
     applied_guardrails: list[str] | None = None,
@@ -590,7 +606,10 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             organization_id=metadata.get("user_api_key_org_id") or "",
             metadata=safe_dumps(clean_metadata),
             cache_key=cache_key,
-            spend=kwargs.get("response_cost", 0),
+            spend=_resolve_spend_for_spend_log(
+                kwargs=cast(Mapping[str, object], kwargs),
+                standard_logging_payload=standard_logging_payload,
+            ),
             total_tokens=usage.get("total_tokens", standard_logging_total_tokens),
             prompt_tokens=usage.get("prompt_tokens", standard_logging_prompt_tokens),
             completion_tokens=usage.get("completion_tokens", standard_logging_completion_tokens),

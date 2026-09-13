@@ -4120,6 +4120,35 @@ def test_autorouter_savings_flow_from_logging_payload_into_spend_log_metadata():
     assert metadata["autorouter_savings"] == 0.42
 
 
+@pytest.mark.parametrize("response_cost", [None, 0.0])
+def test_spend_reads_cost_breakdown_when_response_cost_is_missing_or_zero(response_cost):
+    """A streamed request can finish with no usable response_cost on kwargs while its
+    logged breakdown holds the real price, so the spend column must read the breakdown
+    instead of writing zero."""
+    kwargs = {
+        "model": "azure_ai/gpt-5.5",
+        "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+        "standard_logging_object": {
+            "cost_breakdown": {"total_cost": 0.42},
+            "metadata": {},
+            "model_map_information": None,
+        },
+    }
+    if response_cost is not None:
+        kwargs["response_cost"] = response_cost
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=litellm.ModelResponse(
+            id="chatcmpl-azure-40100",
+            choices=[],
+            usage=litellm.Usage(prompt_tokens=1000, completion_tokens=100),
+        ),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["spend"] == pytest.approx(0.42)
+
+
 @pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
 def test_caller_forged_autorouter_savings_is_discarded(bucket):
     """The raw request bucket is client-writable and _get_spend_logs_metadata projects
