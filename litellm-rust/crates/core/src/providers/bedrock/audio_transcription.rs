@@ -70,6 +70,8 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
         if let Some(temperature) = optional_params.get("temperature") {
             inference_config.insert("temperature".to_string(), temperature.clone());
         }
+        // Bedrock 400s if `system` accompanies audio content; Voxtral gets
+        // its instruction from the `text` block above instead.
         Ok(AudioTranscriptionRequestData {
             body: json!({
                 "messages": [{
@@ -79,7 +81,6 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
                         {"text": instruction}
                     ]
                 }],
-                "system": [{"text": "You are a transcription assistant."}],
                 "inferenceConfig": inference_config,
             }),
         })
@@ -179,9 +180,25 @@ mod tests {
                         {"text": "Transcribe the audio. Respond with only the transcript. The audio language is en. Additional context: Speaker names"}
                     ]
                 }],
-                "system": [{"text": "You are a transcription assistant."}],
                 "inferenceConfig": {"maxTokens": 4096, "temperature": 0}
             })
+        );
+    }
+
+    #[test]
+    fn request_omits_system_message_alongside_audio_content() {
+        // Regression test: Bedrock 400s if `system` accompanies audio content.
+        let result = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG
+            .transform_transcription_request(
+                "mistral.voxtral-mini-3b-2507",
+                json!({"data": "AQI=", "format": "wav", "filename": "sample.wav"}),
+                Map::new(),
+            )
+            .expect("request");
+        assert!(
+            result.body.get("system").is_none(),
+            "request body must not carry a `system` block alongside an audio content block: {}",
+            result.body
         );
     }
 
