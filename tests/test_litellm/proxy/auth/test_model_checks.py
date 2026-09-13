@@ -992,3 +992,27 @@ def test_wildcard_expansion_skips_catalog_when_fetch_returns_none(monkeypatch):
     )
 
     assert result == ["openai/gpt-4o"]
+
+
+def test_partial_wildcard_filters_on_unprefixed_model_id(monkeypatch):
+    from litellm.litellm_core_utils import gateway_catalog_cache
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(
+        model_checks,
+        "get_provider_models",
+        lambda provider, litellm_params=None: [
+            "openrouter/anthropic/claude-3-opus",
+            "openrouter/openai/gpt-4o",
+        ],
+    )
+    monkeypatch.setattr(gateway_catalog_cache, "get_catalog", lambda provider, api_key, api_base: None)
+
+    result = get_known_models_from_wildcard(
+        wildcard_model="openrouter/anthropic/*",
+        litellm_params=LiteLLM_Params(model="openrouter/anthropic/*", custom_llm_provider="openrouter"),
+    )
+
+    assert result == ["openrouter/anthropic/claude-3-opus"]

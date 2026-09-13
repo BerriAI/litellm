@@ -312,6 +312,10 @@ def _register_gateway_catalog(
         register_catalog_into_model_cost(public_prefix, catalog)
 
 
+def _model_id_without_provider(model: str, provider: str) -> str:
+    return model.removeprefix(f"{provider}/")
+
+
 def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_Params | None = None) -> list[str]:
     wildcard_model_to_expand: Final = (
         litellm_params.model
@@ -352,13 +356,25 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
         ## CHECK IF PARTIAL FILTER e.g. `gemini-*`
         model_prefix: Final = wildcard_suffix.replace("*", "")
 
-        is_partial_filter: Final = any(wc_model.startswith(model_prefix) for wc_model in wildcard_models)
+        is_partial_filter: Final = any(
+            _model_id_without_provider(wc_model, provider).startswith(model_prefix) for wc_model in wildcard_models
+        )
         if is_partial_filter:
-            filtered_wildcard_models = [wc_model for wc_model in wildcard_models if wc_model.startswith(model_prefix)]
+            filtered_wildcard_models = [
+                wc_model
+                for wc_model in wildcard_models
+                if _model_id_without_provider(wc_model, provider).startswith(model_prefix)
+            ]
             wildcard_models = filtered_wildcard_models
         else:
             # add model prefix to wildcard models
-            wildcard_models = [f"{model_prefix}{model}" for model in wildcard_models]
+            prefix: Final = f"{provider}/"
+            wildcard_models = [
+                f"{provider}/{model_prefix}{model[len(prefix) :]}"
+                if model.startswith(prefix)
+                else f"{model_prefix}{model}"
+                for model in wildcard_models
+            ]
 
     known_providers: Final = {provider.value for provider in LlmProviders}
     suffix_appended_wildcard_models: Final = []
