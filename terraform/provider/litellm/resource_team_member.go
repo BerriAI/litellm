@@ -58,9 +58,9 @@ func resourceLiteLLMTeamMemberCreate(d *schema.ResourceData, m interface{}) erro
 				"user_email": d.Get("user_email").(string),
 			},
 		},
-		"team_id":            d.Get("team_id").(string),
-		"max_budget_in_team": d.Get("max_budget_in_team").(float64),
+		"team_id": d.Get("team_id").(string),
 	}
+	addOptionalTeamMemberBudget(d, memberData)
 
 	log.Printf("[DEBUG] Create team member request payload: %+v", memberData)
 
@@ -94,12 +94,12 @@ func resourceLiteLLMTeamMemberUpdate(d *schema.ResourceData, m interface{}) erro
 	client := m.(*Client)
 
 	updateData := map[string]interface{}{
-		"user_id":            d.Get("user_id").(string),
-		"user_email":         d.Get("user_email").(string),
-		"team_id":            d.Get("team_id").(string),
-		"role":               d.Get("role").(string),
-		"max_budget_in_team": d.Get("max_budget_in_team").(float64),
+		"user_id":    d.Get("user_id").(string),
+		"user_email": d.Get("user_email").(string),
+		"team_id":    d.Get("team_id").(string),
+		"role":       d.Get("role").(string),
 	}
+	addOptionalTeamMemberBudget(d, updateData)
 
 	log.Printf("[DEBUG] Update team member request payload: %+v", updateData)
 
@@ -116,6 +116,12 @@ func resourceLiteLLMTeamMemberUpdate(d *schema.ResourceData, m interface{}) erro
 	log.Printf("[INFO] Successfully updated team member with ID: %s", d.Id())
 
 	return resourceLiteLLMTeamMemberRead(d, m)
+}
+
+func addOptionalTeamMemberBudget(d *schema.ResourceData, payload map[string]interface{}) {
+	if budget, configured := d.GetOkExists("max_budget_in_team"); configured {
+		payload["max_budget_in_team"] = budget.(float64)
+	}
 }
 
 func resourceLiteLLMTeamMemberDelete(d *schema.ResourceData, m interface{}) error {
