@@ -237,10 +237,15 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         )
         hoisted: Final = hoist_additional_tools(input, params.get("tools"))
         normalized_input: Final = self._normalize_codex_input_items(hoisted.input)
+        request_params: Final = (
+            self._params_with_hoisted_tools(params, hoisted)
+            if hoisted.hoisted
+            else response_api_optional_request_params
+        )
         return super().transform_responses_api_request(
             model=model,
             input=normalized_input,
-            response_api_optional_request_params=self._params_with_hoisted_tools(params, hoisted),
+            response_api_optional_request_params=request_params,
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -249,8 +254,6 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
     def _params_with_hoisted_tools(
         cls, params: Mapping[str, object], hoisted: HoistedAdditionalTools
     ) -> dict[str, object]:
-        if not hoisted.hoisted:
-            return dict(params)
         supported_tools: Final = cls._filter_unsupported_tools(list(hoisted.tools))
         if supported_tools:
             return {**params, "tools": supported_tools}

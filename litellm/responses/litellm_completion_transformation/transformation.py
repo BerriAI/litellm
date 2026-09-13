@@ -109,6 +109,7 @@ NamespaceTool: TypeAlias = Mapping[str, object]
 ResponseTools: TypeAlias = Sequence[Mapping[str, object]] | None
 ChatToolParam: TypeAlias = ChatCompletionToolParam | OpenAIMcpServerTool
 NAMESPACE_DESCRIPTION_SEPARATOR: Final = "\n\n"
+NAMESPACE_MEMBER_TYPES_WITH_CHAT_TOOLS: Final = frozenset({"function", "custom"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -1891,7 +1892,7 @@ class LiteLLMCompletionResponsesConfig:
         nested: bool,
     ) -> ChatCompletionToolParam | None:
         tool_type: Final = namespace_tool.get("type")
-        if nested and tool_type not in ("function", "custom"):
+        if nested and tool_type not in NAMESPACE_MEMBER_TYPES_WITH_CHAT_TOOLS:
             return None
 
         raw_description: Final = str(namespace_tool.get("description") or "")
