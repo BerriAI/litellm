@@ -84,6 +84,23 @@ class TestCoroutineChecker:
         assert self.checker.is_async_callable(obj.sync_method) is False
         assert self.checker.is_async_callable(SyncCallable()) is False
 
+    def test_instance_attribute_dunder_call_is_not_callable(self):
+        """An async __call__ set on the instance does not make the object callable."""
+
+        async def async_func():
+            return "async"
+
+        class NotCallable:
+            pass
+
+        obj = NotCallable()
+        obj.__call__ = async_func  # readable attribute, but never used for a call
+
+        with pytest.raises(TypeError):
+            obj()
+
+        assert self.checker.is_async_callable(obj) is False
+
     def test_is_async_callable_caching(self):
         """Test that is_async_callable caches callable objects."""
 
