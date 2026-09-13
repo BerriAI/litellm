@@ -7,8 +7,9 @@
 
 import asyncio
 import contextvars
-from collections.abc import AsyncIterator, Coroutine, Iterator
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from functools import partial
+from types import MappingProxyType
 from typing import Any, Final, cast
 
 import litellm
@@ -418,6 +419,32 @@ def validate_anthropic_api_metadata(metadata: dict | None = None) -> dict | None
     return anthropic_metadata_obj.model_dump(exclude_none=True)
 
 
+def _drop_unsupported_anthropic_messages_params(
+    anthropic_messages_optional_request_params: Mapping[str, Any],
+    model: str,
+    custom_llm_provider: str | None,
+    additional_drop_params: Sequence[str] | None = None,
+) -> Mapping[str, Any]:
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    additional_drop_params_list: Final = additional_drop_params if isinstance(additional_drop_params, list) else None
+    supports_effort: Final = AnthropicConfig._model_supports_effort_param(model, custom_llm_provider or "anthropic")  # pyright: ignore[reportPrivateUsage]  # shared Anthropic capability gate
+    supports_reasoning: Final = AnthropicConfig._supports_model_capability(  # pyright: ignore[reportPrivateUsage]  # shared Anthropic capability gate
+        model, "supports_reasoning", custom_llm_provider or "anthropic"
+    )
+    drop_context_management: Final = custom_llm_provider in ("vertex_ai", "bedrock") and "haiku" in model.lower()
+    return MappingProxyType(
+        {
+            k: v
+            for k, v in anthropic_messages_optional_request_params.items()
+            if not (additional_drop_params_list is not None and k in additional_drop_params_list)
+            and (k != "output_config" or supports_effort)
+            and (k != "thinking" or supports_reasoning)
+            and (k != "context_management" or not drop_context_management)
+        }
+    )
+
+
 def anthropic_messages_handler(
     max_tokens: int,
     messages: list[dict],
@@ -641,19 +668,47 @@ def anthropic_messages_handler(
             custom_llm_provider=custom_llm_provider,
         )
     )
-    if is_reasoning_auto_summary_enabled():
-        thinking_param: Final = anthropic_messages_optional_request_params.get("thinking")
-        if isinstance(thinking_param, dict) and thinking_param.get("type") != "disabled":
-            anthropic_messages_optional_request_params["thinking"] = {
-                **thinking_param,
-                "display": "summarized",
+
+    should_drop_params: Final = (
+        litellm.drop_params is True
+        or getattr(litellm_params, "drop_params", None) is True
+        or kwargs.get("drop_params") is True
+    )
+
+    filtered_anthropic_messages_params: Final = (
+        _drop_unsupported_anthropic_messages_params(
+            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            additional_drop_params=kwargs.get("additional_drop_params"),
+        )
+        if should_drop_params
+        else anthropic_messages_optional_request_params
+    )
+    thinking_param: Final = filtered_anthropic_messages_params.get("thinking")
+    final_anthropic_messages_params: Final = (
+        MappingProxyType(
+            {
+                **filtered_anthropic_messages_params,
+                "thinking": {  # mutable-ok: construct the summarized payload before freezing
+                    **thinking_param,
+                    "display": "summarized",
+                },
             }
+        )
+        if is_reasoning_auto_summary_enabled()
+        and isinstance(thinking_param, dict)
+        and thinking_param.get("type") != "disabled"
+        else filtered_anthropic_messages_params
+    )
 
     return base_llm_http_handler.anthropic_messages_handler(
         model=model,
         messages=strip_provider_specific_fields_from_anthropic_messages(messages),
         anthropic_messages_provider_config=anthropic_messages_provider_config,
-        anthropic_messages_optional_request_params=dict(anthropic_messages_optional_request_params),
+        anthropic_messages_optional_request_params=dict(  # mutable-ok: downstream handler requires a dict
+            final_anthropic_messages_params
+        ),
         _is_async=is_async,
         client=client,
         custom_llm_provider=custom_llm_provider,
