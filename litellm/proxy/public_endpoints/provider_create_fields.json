@@ -2852,6 +2852,34 @@
     "default_model_placeholder": "sap/gpt-4"
   },
   {
+    "provider": "GITGOT",
+    "provider_display_name": "GitGot",
+    "litellm_provider": "gitgot",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://inference.gitgot.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "gitgot/openai/gpt-oss-120b"
+  },
+  {
     "provider": "SCX_AI",
     "provider_display_name": "SCX.ai",
     "litellm_provider": "scx-ai",

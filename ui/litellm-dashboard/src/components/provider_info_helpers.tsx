@@ -52,6 +52,7 @@ import runwayLogo from "../../public/assets/logos/runway.png";
 import sambanovaLogo from "../../public/assets/logos/sambanova.svg";
 import sapLogo from "../../public/assets/logos/sap.png";
 import scxAiLogo from "../../public/assets/logos/scx_ai.svg";
+import gitgotLogo from "../../public/assets/logos/gitgot.svg";
 import snowflakeLogo from "../../public/assets/logos/snowflake.svg";
 import sonioxLogo from "../../public/assets/logos/soniox.svg";
 import togetheraiLogo from "../../public/assets/logos/togetherai.svg";
@@ -160,6 +161,7 @@ export enum Providers {
   Sambanova = "Sambanova",
   SAP = "SAP Generative AI Hub",
   SCX_AI = "SCX.ai",
+  GitGot = "GitGot",
   Snowflake = "Snowflake",
   Soniox = "Soniox",
   TEXT_COMPLETION_CODESTRAL = "Text-Completion-Codestral",
@@ -276,6 +278,7 @@ export const provider_map: Record<string, string> = {
   Sambanova: "sambanova",
   SAP: "sap",
   SCX_AI: "scx-ai",
+  GitGot: "gitgot",
   Snowflake: "snowflake",
   Soniox: "soniox",
   TEXT_COMPLETION_CODESTRAL: "text-completion-codestral",
@@ -373,6 +376,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.Sambanova]: sambanovaLogo.src,
   [Providers.SAP]: sapLogo.src,
   [Providers.SCX_AI]: scxAiLogo.src,
+  [Providers.GitGot]: gitgotLogo.src,
   [Providers.Snowflake]: snowflakeLogo.src,
   [Providers.Soniox]: sonioxLogo.src,
   [Providers.TEXT_COMPLETION_CODESTRAL]: mistralLogo.src,
@@ -440,6 +444,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.RunwayML]: "runwayml/gen4_turbo",
   [Providers.SageMaker]: "sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b",
   [Providers.SCX_AI]: "scx-ai/GLM-5.2",
+  [Providers.GitGot]: "gitgot/openai/gpt-oss-120b",
   [Providers.Snowflake]: "snowflake/mistral-7b",
   [Providers.Vertex_AI]: "gemini-pro",
   [Providers.VolcEngine]: "volcengine/<any-model-on-volcengine>",
