@@ -2,7 +2,7 @@
 Dynamic configuration class generator for JSON-based providers.
 """
 
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from typing import Any, Final, Literal, Protocol, overload, runtime_checkable
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -20,14 +20,14 @@ from .json_loader import SimpleProviderConfig
 class BaseModelAwareConfig(Protocol):
     supports_base_model_hint: bool
 
-    def map_openai_params(
+    def map_openai_params_with_base_model(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],  # mutable-ok: BaseConfig mapping updates the caller-owned output dict
         model: str,
         drop_params: bool,
         base_model: str | None = None,
-    ) -> dict: ...
+    ) -> dict[str, object]: ...  # mutable-ok: BaseConfig mapping returns the same caller-owned output dict
 
 
 def create_config_class(provider: SimpleProviderConfig):
@@ -102,7 +102,7 @@ def create_config_class(provider: SimpleProviderConfig):
 
             return api_base
 
-        def _get_supported_openai_params_for_model(self, model: str) -> list:
+        def _get_supported_openai_params_for_model(self, model: str) -> tuple[str, ...]:
             from litellm.utils import supports_function_calling, supports_reasoning
 
             tool_params: Final = ("tools", "tool_choice", "function_call", "functions", "parallel_tool_calls")
@@ -119,14 +119,17 @@ def create_config_class(provider: SimpleProviderConfig):
                 supports_reasoning(model=model, custom_llm_provider=provider.slug)
                 and "reasoning_effort" not in supported_params
             ):
-                return [*supported_params, "reasoning_effort"]
-            return list(supported_params)
+                return (*supported_params, "reasoning_effort")
+            return supported_params
 
-        def get_supported_openai_params(self, model: str, base_model: str | None = None) -> list:
+        def get_supported_openai_params(self, model: str, base_model: str | None = None) -> list[str]:
             supported_params: Final = self._get_supported_openai_params_for_model(model)
-            if not base_model or base_model == model:
-                return supported_params
-            return list(dict.fromkeys([*supported_params, *self._get_supported_openai_params_for_model(base_model)]))
+            combined_params: Final = (
+                tuple(dict.fromkeys((*supported_params, *self._get_supported_openai_params_for_model(base_model))))
+                if base_model and base_model != model
+                else supported_params
+            )
+            return list(combined_params)
 
         def map_openai_params(
             self,
@@ -170,6 +173,8 @@ def create_config_class(provider: SimpleProviderConfig):
                 optional_params["temperature"] = temp
 
             return optional_params
+
+        map_openai_params_with_base_model: Final = map_openai_params
 
         @property
         def custom_llm_provider(self) -> str | None:

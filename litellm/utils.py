@@ -4718,7 +4718,7 @@ def get_optional_params(
         from litellm.llms.openai_like.dynamic_config import BaseModelAwareConfig
 
         if isinstance(provider_config, BaseModelAwareConfig):
-            optional_params = provider_config.map_openai_params(
+            optional_params = provider_config.map_openai_params_with_base_model(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=model,
