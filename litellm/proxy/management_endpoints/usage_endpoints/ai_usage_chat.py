@@ -13,6 +13,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_COMPETITOR_DISCOVERY_MODEL
+from litellm.router import Router
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
@@ -495,13 +496,14 @@ async def _process_tool_call(
     chat_messages: list[Mapping[str, object]],
     user_id: str | None,
     is_admin: bool,
+    tool_handlers: Mapping[str, ToolHandler],
 ) -> AsyncIterator[str]:
     """Execute a single tool call, yielding SSE events for status."""
     fn_name: Final[str] = tc.function.name
     fn_args: Final[Mapping[str, str]] = json.loads(tc.function.arguments)
 
     allowed_names: Final = {t["function"]["name"] for t in get_tools_for_role(is_admin)}
-    handler: Final = TOOL_HANDLERS.get(fn_name)
+    handler: Final = tool_handlers.get(fn_name)
 
     if fn_name not in allowed_names or not handler:
         chat_messages.append(
@@ -532,7 +534,22 @@ async def _process_tool_call(
     chat_messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
 
 
-def _resolve_completion_fn(model: str) -> Callable[..., Awaitable[ModelResponse | CustomStreamWrapper]]:
+class CompletionDeps(NamedTuple):
+    """Where to send a chat completion: the proxy's Router when it knows the model, else bare litellm."""
+
+    router: Router | None
+    acompletion: Callable[..., Awaitable[ModelResponse | CustomStreamWrapper]]
+
+
+def _default_completion_deps() -> CompletionDeps:
+    from litellm.proxy.proxy_server import llm_router
+
+    return CompletionDeps(router=llm_router, acompletion=litellm.acompletion)
+
+
+def _resolve_completion_fn(
+    model: str, deps: CompletionDeps
+) -> Callable[..., Awaitable[ModelResponse | CustomStreamWrapper]]:
     """Pick the Router when it knows the model, else a direct litellm call.
 
     The "Ask AI" dropdown is populated from the proxy's model_list, so `model` is
@@ -543,18 +560,18 @@ def _resolve_completion_fn(model: str) -> Callable[..., Awaitable[ModelResponse 
     with no Router and for strings the Router does not recognise, such as a genuine
     provider-prefixed model or an unregistered DEFAULT_COMPETITOR_DISCOVERY_MODEL.
     """
-    from litellm.proxy.proxy_server import llm_router
-
-    if llm_router is not None and llm_router.get_model_list(model_name=model):
-        return llm_router.acompletion  # pyright: ignore[reportUnknownVariableType]  # untyped upstream signature
-    return litellm.acompletion  # pyright: ignore[reportUnknownVariableType]  # untyped upstream signature
+    if deps.router is not None and deps.router.get_model_list(model_name=model):
+        return deps.router.acompletion  # pyright: ignore[reportUnknownVariableType]  # untyped upstream signature
+    return deps.acompletion
 
 
-async def _stream_final_response(model: str, chat_messages: list[dict[str, Any]]) -> AsyncIterator[str]:
+async def _stream_final_response(
+    model: str, chat_messages: list[dict[str, Any]], deps: CompletionDeps
+) -> AsyncIterator[str]:
     """Stream the final LLM response after tool results are appended."""
     yield _sse({"type": "status", "message": "Analyzing results..."})
 
-    acompletion = _resolve_completion_fn(model)
+    acompletion = _resolve_completion_fn(model, deps)
     response = await acompletion(
         model=model,
         messages=chat_messages,
@@ -572,8 +589,13 @@ async def stream_usage_ai_chat(
     model: str | None = None,
     user_id: str | None = None,
     is_admin: bool = False,
+    *,
+    deps: CompletionDeps | None = None,
+    tool_handlers: Mapping[str, ToolHandler] | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream SSE events: status → tool_call → chunk → done."""
+    resolved_deps: Final = deps if deps is not None else _default_completion_deps()
+    resolved_handlers: Final = tool_handlers if tool_handlers is not None else TOOL_HANDLERS
     resolved_model: Final = (model or "").strip() or DEFAULT_COMPETITOR_DISCOVERY_MODEL
     truncated: Final = messages[-MAX_CHAT_MESSAGES:] if len(messages) > MAX_CHAT_MESSAGES else messages
     chat_messages: Final[list[Mapping[str, object]]] = [
@@ -584,7 +606,7 @@ async def stream_usage_ai_chat(
     try:
         yield _sse({"type": "status", "message": "Thinking..."})
         tools = get_tools_for_role(is_admin)
-        acompletion = _resolve_completion_fn(resolved_model)
+        acompletion = _resolve_completion_fn(resolved_model, resolved_deps)
         response = await acompletion(
             model=resolved_model,
             messages=chat_messages,
@@ -601,9 +623,9 @@ async def stream_usage_ai_chat(
 
         chat_messages.append(choice.message.model_dump())
         for tc in choice.message.tool_calls:
-            async for event in _process_tool_call(tc, chat_messages, user_id, is_admin):
+            async for event in _process_tool_call(tc, chat_messages, user_id, is_admin, resolved_handlers):
                 yield event
-        async for event in _stream_final_response(resolved_model, chat_messages):
+        async for event in _stream_final_response(resolved_model, chat_messages, resolved_deps):
             yield event
         yield _sse({"type": "done"})
 
