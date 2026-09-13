@@ -48,8 +48,13 @@ class AmazonBedrockResponsesAPIConfig(OpenAIResponsesAPIConfig, BaseAWSLLM):
         )[0]
         return f"{endpoint_url.rstrip('/')}/openai/v1/responses"
 
-    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:  # mutable-ok: provider interface
-        return {**headers, "Content-Type": headers.get("Content-Type", "application/json")}  # mutable-ok: provider interface
+    def validate_environment(
+        self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None
+    ) -> dict:  # mutable-ok: provider interface
+        return {
+            **headers,
+            "Content-Type": headers.get("Content-Type", "application/json"),
+        }  # mutable-ok: provider interface
 
     def sign_request(
         self,
@@ -75,6 +80,9 @@ class AmazonBedrockResponsesAPIConfig(OpenAIResponsesAPIConfig, BaseAWSLLM):
         )
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers  # mutable-ok: provider interface
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict[str, object] | httpx.Headers,  # mutable-ok: provider interface
     ) -> BaseLLMException:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)

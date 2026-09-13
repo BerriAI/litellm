@@ -141,14 +141,14 @@ def test_native_chat_sigv4_auth(monkeypatch):
     assert headers["Authorization"].startswith("AWS4-HMAC-SHA256")
 
 
-def test_native_messages_preserves_body_and_urls():
+def test_native_messages_preserves_body_and_urls(monkeypatch):
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "token")
     config = AmazonBedrockNativeMessagesConfig()  # rebind-ok: test capture
     request = {  # mutable-ok: provider interface  # rebind-ok: test capture
         "model": "claude-native",
         "messages": [{"role": "user", "content": "hello"}],  # mutable-ok: provider interface
         "stream": True,
         "cache_control": {"ttl": "5m"},  # mutable-ok: provider interface
-        "unknown_field": "kept",
     }
     body = config.transform_anthropic_messages_request(  # rebind-ok: test capture
         model=request["model"],
@@ -156,7 +156,6 @@ def test_native_messages_preserves_body_and_urls():
         anthropic_messages_optional_request_params={  # mutable-ok: provider interface
             "stream": request["stream"],
             "cache_control": request["cache_control"],
-            "unknown_field": request["unknown_field"],
         },
         litellm_params={},  # mutable-ok: provider interface
         headers={},  # mutable-ok: provider interface
@@ -170,6 +169,14 @@ def test_native_messages_preserves_body_and_urls():
     assert mantle_native_messages_config().get_complete_url(
         None, None, "claude-native", {"aws_region_name": "us-west-2"}, {}  # mutable-ok: provider interface
     ) == "https://bedrock-mantle.us-west-2.api.aws/anthropic/v1/messages"
+    headers, signed_body = config.sign_request(
+        {},  # mutable-ok: provider interface
+        {"aws_region_name": "us-west-2"},  # mutable-ok: provider interface
+        body,  # mutable-ok: provider interface
+        "https://bedrock-runtime.us-west-2.amazonaws.com/anthropic/v1/messages",
+    )
+    assert headers["Authorization"] == "Bearer token"
+    assert signed_body is not None
 
 
 def test_native_messages_selection_is_not_cached(monkeypatch):
@@ -279,7 +286,6 @@ async def test_anthropic_messages_forwards_native_body(monkeypatch):
             model="bedrock/native-model",
             messages=[{"role": "user", "content": "hello"}],  # mutable-ok: provider interface
             max_tokens=10,
-            unknown_field="kept",
             api_base="https://bedrock-runtime.us-west-2.amazonaws.com",
             api_key="token",
         )
@@ -290,7 +296,6 @@ async def test_anthropic_messages_forwards_native_body(monkeypatch):
             {  # mutable-ok: provider interface
                 "max_tokens": 10,
                 "stream": False,
-                "unknown_field": "kept",
                 "model": "native-model",
                 "messages": [{"role": "user", "content": "hello"}],  # mutable-ok: provider interface
             },

@@ -99,6 +99,9 @@ class AmazonBedrockOpenAIChatCompletionsConfig(OpenAIGPTConfig, BaseAWSLLM):
         )
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers  # mutable-ok: provider interface
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict[str, object] | httpx.Headers,  # mutable-ok: provider interface
     ) -> BedrockError:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)

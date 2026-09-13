@@ -38,7 +38,6 @@ from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler
 from ..responses_adapters.handler import LiteLLMMessagesToResponsesAPIHandler
 from ..utils import is_reasoning_auto_summary_enabled
 from .interceptors import get_messages_interceptors
-from .native_utils import get_native_messages_request_params
 from .utils import AnthropicMessagesRequestUtils, mock_response
 
 # Providers that are routed directly to the OpenAI Responses API instead of
@@ -642,11 +641,6 @@ def anthropic_messages_handler(
             custom_llm_provider=custom_llm_provider,
         )
     )
-    forwarded_anthropic_messages_optional_request_params: Final = get_native_messages_request_params(
-        optional_params=anthropic_messages_optional_request_params,
-        kwargs=kwargs,
-        preserves_request_body=getattr(anthropic_messages_provider_config, "preserves_request_body", False),
-    )
     if is_reasoning_auto_summary_enabled():
         thinking_param: Final = anthropic_messages_optional_request_params.get("thinking")
         if isinstance(thinking_param, dict) and thinking_param.get("type") != "disabled":
@@ -659,7 +653,7 @@ def anthropic_messages_handler(
         model=model,
         messages=strip_provider_specific_fields_from_anthropic_messages(messages),
         anthropic_messages_provider_config=anthropic_messages_provider_config,
-        anthropic_messages_optional_request_params=forwarded_anthropic_messages_optional_request_params,
+        anthropic_messages_optional_request_params=dict(anthropic_messages_optional_request_params),
         _is_async=is_async,
         client=client,
         custom_llm_provider=custom_llm_provider,

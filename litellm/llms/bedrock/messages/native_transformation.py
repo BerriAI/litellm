@@ -1,6 +1,4 @@
-import json
-from collections.abc import Callable
-from typing import Final
+from typing import Final, Protocol
 
 import httpx
 
@@ -13,13 +11,16 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token
 from litellm.llms.bedrock.common_utils import BedrockError, build_mantle_messages_url
 from litellm.types.router import GenericLiteLLMParams
 
-MessagesURLBuilder = Callable[[str | None, str | None, str], str]  # mutable-ok: provider interface  # rebind-ok: test capture
-BearerTokenResolver = Callable[[str | None], str | None]  # mutable-ok: provider interface  # rebind-ok: test capture
+
+class MessagesURLBuilder(Protocol):
+    def __call__(self, api_base: str | None, endpoint: str | None, region: str) -> str: ...
+
+
+class BearerTokenResolver(Protocol):
+    def __call__(self, api_key: str | None) -> str | None: ...
 
 
 class AmazonBedrockNativeMessagesConfig(BaseAWSLLM, AnthropicMessagesConfig):
-    preserves_request_body: bool = True
-
     def __init__(
         self,
         custom_llm_provider: str = "bedrock",
@@ -100,23 +101,23 @@ class AmazonBedrockNativeMessagesConfig(BaseAWSLLM, AnthropicMessagesConfig):
         stream: bool | None = None,
         fake_stream: bool | None = None,
     ) -> tuple[dict, bytes | None]:  # mutable-ok: provider interface
-        bearer: Final = self._bearer_token_resolver(api_key)
-        if bearer:
-            return {**headers, "Authorization": f"Bearer {bearer}"}, json.dumps(request_data).encode()  # mutable-ok: provider interface
         return self._sign_request(
             service_name="bedrock",
             headers=headers,
             optional_params=optional_params,
             request_data=request_data,
             api_base=api_base,
-            api_key=api_key,
+            api_key=self._bearer_token_resolver(api_key),
             model=model,
             stream=stream,
             fake_stream=fake_stream,
         )
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers  # mutable-ok: provider interface
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict[str, object] | httpx.Headers,  # mutable-ok: provider interface
     ) -> BaseLLMException:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
