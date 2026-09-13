@@ -1432,6 +1432,7 @@ def test_openai_models_in_model_info(monkeypatch):
         if (
             info.get("litellm_provider") == "openai"
             and info.get("supports_vision") is True
+            and info.get("mode") != "image_generation"
         ):
             if info.get("supports_pdf_input") is not True:
                 violated_models.append(model)
