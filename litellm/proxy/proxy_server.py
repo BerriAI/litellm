@@ -6498,8 +6498,7 @@ class ProxyConfig:
     def _add_config_models(self, config_models: list | None = None) -> int:
         if config_models is None:
             config_state = self.get_config_state()
-            if isinstance(config_state, dict):
-                config_models = config_state.get("model_list", None)
+            config_models = config_state.get("model_list", None)
             if not config_models and user_config_file_path and os.path.exists(user_config_file_path):
                 try:
                     with open(user_config_file_path, "r") as f:
@@ -6510,6 +6509,9 @@ class ProxyConfig:
                     pass
 
         if not config_models:
+            return 0
+
+        if llm_router is None:
             return 0
 
         added_count = 0
