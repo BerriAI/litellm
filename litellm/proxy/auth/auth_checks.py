@@ -10,12 +10,13 @@ Run checks for:
 """
 
 import asyncio
+import functools
 import math
 import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Optional, Protocol, cast
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
@@ -123,6 +124,7 @@ from litellm.repositories.table_repositories import (
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.router import Router
+from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.utils import get_utc_datetime
 
@@ -3951,6 +3953,41 @@ def _resolve_all_team_model_sentinel_for_auth_check(
     return list(dict.fromkeys(non_sentinel_models + proxy_models))
 
 
+TeamAliasReason = Literal["not_alias", "applied", "deleted_target", "sibling_bypassed", "sibling_warned"]
+
+
+class TeamAliasResolution(NamedTuple):
+    model: str
+    reason: TeamAliasReason
+    target: str | None
+
+
+@functools.cache
+def stale_team_alias_bypass_enabled() -> bool:
+    return get_secret_bool("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", False) is True
+
+
+def resolve_team_model_alias(
+    model: str,
+    team_model_aliases: Mapping[str, str] | None,
+    team_id: str | None,
+    llm_router: Router | None,
+    stale_alias_bypass: bool,
+) -> TeamAliasResolution:
+    target: Final = team_model_aliases.get(model) if team_model_aliases else None
+    if target is None:
+        return TeamAliasResolution(model=model, reason="not_alias", target=None)
+    if llm_router is None or not target.startswith(f"model_name_{team_id}_"):
+        return TeamAliasResolution(model=target, reason="applied", target=target)
+    if target not in llm_router.model_name_to_deployment_indices:
+        return TeamAliasResolution(model=model, reason="deleted_target", target=target)
+    if (team_id, model) not in llm_router.team_model_to_deployment_indices:
+        return TeamAliasResolution(model=target, reason="applied", target=target)
+    if stale_alias_bypass:
+        return TeamAliasResolution(model=model, reason="sibling_bypassed", target=target)
+    return TeamAliasResolution(model=target, reason="sibling_warned", target=target)
+
+
 def _check_model_access_helper(
     model: str,
     llm_router: Router | None,
@@ -3961,10 +3998,18 @@ def _check_model_access_helper(
     ## check if model in allowed model names
     from collections import defaultdict
 
+    effective_model: Final = resolve_team_model_alias(
+        model=model,
+        team_model_aliases=team_model_aliases,
+        team_id=team_id,
+        llm_router=llm_router,
+        stale_alias_bypass=stale_team_alias_bypass_enabled(),
+    ).model
+
     access_groups: dict[str, list[str]] = defaultdict(list)
 
     if llm_router:
-        access_groups = llm_router.get_model_access_groups(model_name=model, team_id=team_id)
+        access_groups = llm_router.get_model_access_groups(model_name=effective_model, team_id=team_id)
 
     models = _resolve_all_team_model_sentinel_for_auth_check(
         models=models,
@@ -3980,10 +4025,7 @@ def _check_model_access_helper(
     # Filter out models that are access_groups
     filtered_models: Final = [m for m in models if m not in access_groups]
 
-    if _model_in_team_aliases(model=model, team_model_aliases=team_model_aliases):
-        return True
-
-    if _model_matches_any_wildcard_pattern_in_list(model=model, allowed_model_list=filtered_models):
+    if _model_matches_any_wildcard_pattern_in_list(model=effective_model, allowed_model_list=filtered_models):
         return True
 
     all_model_access: bool = False
@@ -3994,7 +4036,7 @@ def _check_model_access_helper(
     if SpecialModelNames.all_proxy_models.value in filtered_models:
         all_model_access = True
 
-    if model is not None and model not in filtered_models and all_model_access is False:
+    if effective_model not in filtered_models and all_model_access is False:
         return False
     return True
 
@@ -4039,11 +4081,18 @@ def _can_object_call_model(
             )
         return True
 
-    potential_models: Final = [model]
-    if model in litellm.model_alias_map:
-        potential_models.append(litellm.model_alias_map[model])
-    elif llm_router and model in llm_router.model_group_alias:
-        _model: Final = llm_router._get_model_from_alias(model)
+    resolved_model: Final = resolve_team_model_alias(
+        model=model,
+        team_model_aliases=team_model_aliases,
+        team_id=team_id,
+        llm_router=llm_router,
+        stale_alias_bypass=stale_team_alias_bypass_enabled(),
+    ).model
+    potential_models: Final = [resolved_model]
+    if resolved_model in litellm.model_alias_map:
+        potential_models.append(litellm.model_alias_map[resolved_model])
+    elif llm_router and resolved_model in llm_router.model_group_alias:
+        _model: Final = llm_router._get_model_from_alias(resolved_model)
         if _model:
             potential_models.append(_model)
 
@@ -4053,7 +4102,6 @@ def _can_object_call_model(
             model=m,
             llm_router=llm_router,
             models=models,
-            team_model_aliases=team_model_aliases,
             team_id=team_id,
         ):
             return True
@@ -4064,24 +4112,6 @@ def _can_object_call_model(
         param="model",
         code=status.HTTP_403_FORBIDDEN,
     )
-
-
-def _model_in_team_aliases(model: str, team_model_aliases: dict[str, str] | None = None) -> bool:
-    """
-    Returns True if `model` being accessed is an alias of a team model
-
-    - `model=gpt-4o`
-    - `team_model_aliases={"gpt-4o": "gpt-4o-team-1"}`
-        - returns True
-
-    - `model=gp-4o`
-    - `team_model_aliases={"o-3": "o3-preview"}`
-        - returns False
-    """
-    if team_model_aliases:
-        if model in team_model_aliases:
-            return True
-    return False
 
 
 def _resolve_key_models_for_auth_check(valid_token: UserAPIKeyAuth) -> list[str]:
