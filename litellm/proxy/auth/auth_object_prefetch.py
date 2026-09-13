@@ -4,6 +4,7 @@ the readers and the fallback, so enforcement never depends on this running."""
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -14,7 +15,6 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import RedisCache
-from litellm.constants import DEFAULT_IN_MEMORY_TTL
 from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.models.team import LiteLLM_TeamTableCachedObj
 from litellm.models.team_membership import LiteLLM_TeamMembership
@@ -191,13 +191,13 @@ def _iter_entries(refs: AuthObjectRefs, management_ttl: float) -> Iterator[_Cach
         )
     if refs.organization_id is not None:
         yield _CacheEntry(
-            f"org_id:{refs.organization_id}", "organization_row", LiteLLM_OrganizationTable, DEFAULT_IN_MEMORY_TTL
+            f"org_id:{refs.organization_id}", "organization_row", LiteLLM_OrganizationTable, management_ttl
         )
         yield _CacheEntry(
             f"org_id:{refs.organization_id}:with_budget",
             "organization_row",
             LiteLLM_OrganizationTable,
-            DEFAULT_IN_MEMORY_TTL,
+            management_ttl,
         )
     if refs.project_id is not None:
         yield _CacheEntry(f"project_id:{refs.project_id}", "project_row", LiteLLM_ProjectTableCachedObj, management_ttl)
@@ -229,13 +229,24 @@ async def _fill_from_redis(entries: Sequence[_CacheEntry], redis_cache: RedisCac
             _set_in_memory(memory, entry.cache_key, value, entry.ttl)
 
 
+def _row_columns(row_value: object) -> Mapping[str, object] | None:
+    payload: Final = json.loads(row_value) if isinstance(row_value, str) else row_value
+    try:
+        return _RowValues.validate_python(payload)
+    except (TypeError, ValidationError, json.JSONDecodeError):
+        return None
+
+
 def _validate_row(
     row_value: object, model_type: type[BaseModel], row: _RowKind, refreshed_at: float
 ) -> BaseModel | None:
     if row_value is None:
         return None
+    columns: Final = _row_columns(row_value)
+    if columns is None:
+        verbose_proxy_logger.warning("auth prefetch: %s was not a JSON object", row)
+        return None
     try:
-        columns: Final = _RowValues.validate_python(row_value)
         if row in _REFRESH_STAMPED_ROWS:
             stamped: Final = {**columns, "last_refreshed_at": refreshed_at}  # mutable-ok: validators write into it
             return model_type.model_validate(stamped)

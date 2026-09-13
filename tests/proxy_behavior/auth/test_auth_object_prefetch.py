@@ -25,6 +25,10 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 def _dead_db() -> MagicMock:
     prisma = MagicMock(name="prisma_client")
     prisma.db.query_first = AsyncMock(return_value=None)
+    prisma.db.litellm_organizationtable.find_unique = AsyncMock(return_value=None)
+    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
     return prisma
 
 
