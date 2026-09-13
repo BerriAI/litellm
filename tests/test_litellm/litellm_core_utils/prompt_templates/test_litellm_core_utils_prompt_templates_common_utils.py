@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_any_messages_to_chat_completion_str_messages_conversion,
     hoist_images_from_tool_messages,
     is_encrypted_reasoning_block,
+    parse_tool_call_arguments,
     responses_reasoning_items_from_thinking_blocks,
     split_concatenated_json_objects,
     strip_encrypted_reasoning_from_messages,
@@ -266,6 +267,65 @@ def test_split_concatenated_json_salvages_prefix_before_truncated_tail():
     """
     result = split_concatenated_json_objects('{"a": 1}{"b": 2}{"c":')
     assert result == [{"a": 1}, {"b": 2}]
+
+
+def test_parse_tool_call_arguments_salvages_concatenated_objects():
+    """
+    Regression test for #40582.
+
+    Models sometimes emit several JSON objects concatenated into a single
+    tool-call ``arguments`` string.  ``json.loads`` fails on this with
+    ``Extra data``, and ``_attempt_json_repair`` cannot help because nothing is
+    truncated.  Previously this raised ``ValueError``, which the chat
+    completions caller converted into ``{}`` - silently discarding the tool
+    call.  ``split_concatenated_json_objects`` already handled this exact shape
+    on the Bedrock request path (#20543); the response path must salvage it too.
+    """
+    raw = (
+        '{"args": "{\\"flag\\": true}"}'
+        '{"args": "{\\"box\\": \\"A\\", \\"limit\\": 50}"}'
+        '{"args": "{\\"since\\": \\"01-Jan-2025\\"}"}'
+    )
+
+    result = parse_tool_call_arguments(raw, tool_name="demo", context="chat completions")
+
+    # The first object is kept, mirroring the "first call keeps the original
+    # tool id" semantics already used in factory.py for the Bedrock path.
+    assert result == {"args": '{"flag": true}'}
+
+
+def test_parse_tool_call_arguments_concatenated_is_not_dropped_silently():
+    """
+    The chat completions caller must no longer turn a concatenated-arguments
+    tool call into an empty dict, which is indistinguishable from the model
+    asking for nothing.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _parse_tool_call_arguments,
+    )
+
+    result = _parse_tool_call_arguments('{"a": 1}{"b": 2}', tool_name="demo", context="chat completions")
+
+    assert result == {"a": 1}
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"a": 1}{"b":',  # truncated tail
+        '{"a": 1} garbage',  # trailing garbage
+        '{"a": 1}{"b": 2} x',  # complete objects followed by junk
+        '{"a": 1}[1, 2]',  # valid JSON, but not an object
+    ],
+)
+def test_parse_tool_call_arguments_rejects_incomplete_concatenation(raw):
+    """
+    Salvage is restricted to input wholly consumed as complete JSON objects.
+    Tool call arguments are executed, so a truncated or trailing-garbage
+    payload must keep failing rather than invoke a tool with partial input.
+    """
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments"):
+        parse_tool_call_arguments(raw, tool_name="demo", context="chat completions")
 
 
 # ---------------------------------------------------------------------------
