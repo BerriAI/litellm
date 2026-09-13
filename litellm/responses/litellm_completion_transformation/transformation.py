@@ -117,6 +117,14 @@ class ResponsesToolChatForm:
     web_search_options: OpenAIWebSearchOptions | None
 
 
+@dataclass(frozen=True, slots=True)
+class ResponsesReasoningChatForm:
+    """The Responses ``reasoning`` object as the two params Chat Completions takes."""
+
+    effort: str | None
+    summary: str | None
+
+
 if TYPE_CHECKING:
     from openai.types.responses.response_apply_patch_tool_call import (
         ResponseApplyPatchToolCall,
@@ -315,14 +323,15 @@ class LiteLLMCompletionResponsesConfig:
         custom_llm_provider: str | None,
         tools: Sequence[ChatCompletionToolParam | OpenAIMcpServerTool] | None,
         web_search_options: OpenAIWebSearchOptions | None,
-        reasoning_param: Reasoning,
+        reasoning_effort: str | None,
+        reasoning_summary: str | None,
         api_base: str | None,
     ) -> bool:
         """
         Whether ``litellm.completion`` will route this model back onto the Responses API.
 
-        Delegates to the same check ``litellm.completion`` itself runs, so the two cannot
-        disagree about which models take the Responses-shaped params.
+        Delegates to the same check ``litellm.completion`` itself runs, and is asked with the
+        params this transform is about to emit, so the two cannot reach different answers.
         """
         from litellm.main import responses_api_bridge_check
 
@@ -332,8 +341,8 @@ class LiteLLMCompletionResponsesConfig:
                 custom_llm_provider=custom_llm_provider or "",
                 web_search_options=web_search_options,
                 tools=tools,
-                reasoning_effort=reasoning_param,
-                reasoning_summary=reasoning_param.get("summary"),
+                reasoning_effort=reasoning_effort,
+                reasoning_summary=reasoning_summary,
                 api_base=api_base,
             )
         except Exception as e:  # noqa: BLE001  # a capability probe must never fail the request it probes for
@@ -342,37 +351,44 @@ class LiteLLMCompletionResponsesConfig:
         return model_info.get("mode") == "responses"
 
     @staticmethod
-    def _transform_reasoning_to_reasoning_effort(
+    def _transform_reasoning_for_chat_completion(
         reasoning_param: Reasoning | str | None,
         model: str,
         custom_llm_provider: str | None,
         tools: Sequence[ChatCompletionToolParam | OpenAIMcpServerTool] | None = None,
         web_search_options: OpenAIWebSearchOptions | None = None,
         api_base: str | None = None,
-    ) -> Reasoning | str | None:
+    ) -> ResponsesReasoningChatForm:
         """
-        Map the Responses ``reasoning`` param onto Chat Completions ``reasoning_effort``.
+        Split the Responses ``reasoning`` object into the params Chat Completions understands.
 
-        Chat Completions defines ``reasoning_effort`` as a string enum, and ``summary`` is a
-        Responses-only field with no Chat Completions equivalent. Sending the whole object to a
-        chat provider is rejected or silently discarded, which turns reasoning off. The object is
-        kept only when ``litellm.completion`` will bridge this model back onto the Responses API,
-        the one caller that can consume it.
+        ``reasoning_effort`` is a string enum there, so the object is never forwarded whole: a chat
+        provider either rejects it or silently drops it, and dropping it turns reasoning off while
+        still billing for the turn. ``summary`` has no chat equivalent, so it rides the
+        ``reasoning_summary`` alias, which ``litellm.completion`` reassembles into ``{effort,
+        summary}`` when it bridges the model back onto the Responses API, and is sent to nothing
+        else.
         """
         if not reasoning_param:
-            return None
+            return ResponsesReasoningChatForm(effort=None, summary=None)
         if isinstance(reasoning_param, str):
-            return reasoning_param
-        if LiteLLMCompletionResponsesConfig._completion_bridges_back_to_responses_api(
+            return ResponsesReasoningChatForm(effort=reasoning_param, summary=None)
+
+        effort: Final = reasoning_param.get("effort")
+        summary: Final = reasoning_param.get("summary")
+        if summary is None:
+            return ResponsesReasoningChatForm(effort=effort, summary=None)
+
+        bridges_back: Final = LiteLLMCompletionResponsesConfig._completion_bridges_back_to_responses_api(
             model=model,
             custom_llm_provider=custom_llm_provider,
             tools=tools,
             web_search_options=web_search_options,
-            reasoning_param=reasoning_param,
+            reasoning_effort=effort,
+            reasoning_summary=summary,
             api_base=api_base,
-        ):
-            return reasoning_param
-        return reasoning_param.get("effort")
+        )
+        return ResponsesReasoningChatForm(effort=effort, summary=summary if bridges_back else None)
 
     @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
@@ -404,15 +420,13 @@ class LiteLLMCompletionResponsesConfig:
         if text_param:
             response_format = LiteLLMCompletionResponsesConfig._transform_text_format_to_response_format(text_param)
 
-        reasoning_effort: Final[Reasoning | str | None] = (
-            LiteLLMCompletionResponsesConfig._transform_reasoning_to_reasoning_effort(
-                reasoning_param=responses_api_request.get("reasoning"),
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                tools=tools,
-                web_search_options=web_search_options,
-                api_base=kwargs.get("api_base"),
-            )
+        reasoning: Final = LiteLLMCompletionResponsesConfig._transform_reasoning_for_chat_completion(
+            reasoning_param=responses_api_request.get("reasoning"),
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            tools=tools,
+            web_search_options=web_search_options,
+            api_base=kwargs.get("api_base"),
         )
 
         litellm_completion_request: dict = {
@@ -436,7 +450,8 @@ class LiteLLMCompletionResponsesConfig:
             "service_tier": kwargs.get("service_tier"),
             "web_search_options": web_search_options,
             "response_format": response_format,
-            "reasoning_effort": reasoning_effort,
+            "reasoning_effort": reasoning.effort,
+            "reasoning_summary": reasoning.summary,
             "context_management": responses_api_request.get("context_management"),
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
