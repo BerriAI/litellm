@@ -127,6 +127,7 @@ class TestModelRateLimitingCheck:
     def test_pre_call_check_raises_rate_limit_error_when_over_tpm(self):
         """Test that RateLimitError is raised when TPM limit is exceeded."""
         mock_cache = MagicMock()
+        mock_cache.redis_cache = None
         mock_cache.get_cache.return_value = 1000  # Already at limit
 
         check = ModelRateLimitingCheck(dual_cache=mock_cache)
@@ -143,6 +144,52 @@ class TestModelRateLimitingCheck:
 
         assert "TPM limit=1000" in str(exc_info.value)
         assert "current usage=1000" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_check_queries_remote_cache_when_redis_configured(self):
+        """Test that async_pre_call_check queries redis_cache directly when configured to observe global cluster counter."""
+        mock_cache = MagicMock()
+        mock_redis = MagicMock()
+        mock_redis.async_get_cache = AsyncMock(return_value=1000)
+        mock_cache.redis_cache = mock_redis
+
+        check = ModelRateLimitingCheck(dual_cache=mock_cache)
+
+        deployment = {
+            "tpm": 1000,
+            "litellm_params": {"model": "gpt-4"},
+            "model_info": {"id": "test-id"},
+            "model_name": "test-model",
+        }
+
+        with pytest.raises(litellm.RateLimitError):
+            await check.async_pre_call_check(deployment)
+
+        # Verify redis_cache.async_get_cache was called directly to fetch live cluster count
+        mock_redis.async_get_cache.assert_called_once()
+
+    def test_pre_call_check_queries_remote_cache_when_redis_configured(self):
+        """Test that pre_call_check queries redis_cache directly when configured to observe global cluster counter."""
+        mock_cache = MagicMock()
+        mock_redis = MagicMock()
+        mock_redis.get_cache.return_value = 1000
+        mock_cache.redis_cache = mock_redis
+
+        check = ModelRateLimitingCheck(dual_cache=mock_cache)
+
+        deployment = {
+            "tpm": 1000,
+            "litellm_params": {"model": "gpt-4"},
+            "model_info": {"id": "test-id"},
+            "model_name": "test-model",
+        }
+
+        with pytest.raises(litellm.RateLimitError):
+            check.pre_call_check(deployment)
+
+        # Verify redis_cache.get_cache was called directly to fetch live cluster count
+        mock_redis.get_cache.assert_called_once()
+
 
     def test_log_success_event_increments_cache(self):
         """Test that log_success_event correctly increments the cache."""
@@ -229,6 +276,7 @@ class TestModelRateLimitingCheckAsync:
     async def test_async_pre_call_check_raises_rate_limit_error_when_over_tpm(self):
         """Test that RateLimitError is raised when TPM limit is exceeded (async)."""
         mock_cache = MagicMock()
+        mock_cache.redis_cache = None
         mock_cache.async_get_cache = AsyncMock(return_value=1000)  # Already at limit
 
         check = ModelRateLimitingCheck(dual_cache=mock_cache)
