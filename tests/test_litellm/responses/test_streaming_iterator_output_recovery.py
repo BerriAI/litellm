@@ -33,10 +33,10 @@ def _make_iterator():
 
     return BaseResponsesAPIStreamingIterator(
         response=response,
-        model="chatgpt/gpt-5.4",
+        model="openai/gpt-4o",
         responses_api_provider_config=OpenAIResponsesAPIConfig(),
         logging_obj=logging_obj,
-        custom_llm_provider="chatgpt",
+        custom_llm_provider="openai",
         request_data={},
     )
 
