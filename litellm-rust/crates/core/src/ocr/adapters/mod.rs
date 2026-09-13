@@ -5,15 +5,16 @@ use serde::de::DeserializeOwned;
 use super::OcrClient;
 use super::error::{OcrError, OcrResponseError};
 use super::registry::OcrProvider;
-use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrResponseFormat};
-use super::wire::DecodedOcrResponse;
+use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
 
 mod azure;
+mod cohere;
 mod mistral;
 mod reducto;
 mod vertex;
 
-pub(crate) use azure::{AzureDocumentIntelligenceAdapter, AzureMistralAdapter};
+pub(crate) use azure::{AzureCohereAdapter, AzureDocumentIntelligenceAdapter, AzureMistralAdapter};
+pub(crate) use cohere::CohereAdapter;
 pub(crate) use mistral::MistralAdapter;
 pub(crate) use reducto::{ReductoLegacyAdapter, ReductoV3Adapter};
 pub(crate) use vertex::{VertexDeepSeekAdapter, VertexMistralAdapter};
@@ -55,18 +56,27 @@ pub(crate) trait OcrAdapter: Send + Sync + Sized + 'static {
         _url: &str,
         _headers: &[(String, String)],
         request: &LiteLLMOcrRequest,
-    ) -> impl Future<Output = Result<DecodedOcrResponse<Self::ProviderResponse>, OcrError>> + Send
-    {
-        let retain_native = request
-            .response_format()
-            .map(|format| format == OcrResponseFormat::Native);
-        async move { super::client::read_json_response(response, retain_native?).await }
+    ) -> impl Future<
+        Output = Result<super::wire::DecodedOcrResponse<Self::ProviderResponse>, OcrError>,
+    > + Send {
+        async move {
+            let bytes =
+                super::client::read_response_bytes(response, request.connection.max_response_bytes)
+                    .await?;
+            super::handler::post_call(&request.hooks, &bytes).await?;
+            Ok(super::wire::decode_response(
+                &bytes,
+                request.response_format()? == super::types::OcrResponseFormat::Native,
+            )?)
+        }
     }
 }
 
 macro_rules! for_each_ocr_adapter {
     ($callback:ident) => {
         $callback! {
+            Cohere, $crate::ocr::adapters::CohereAdapter, $crate::ocr::adapters::CohereAdapter, Cohere;
+            AzureCohere, $crate::ocr::adapters::AzureCohereAdapter, $crate::ocr::adapters::AzureCohereAdapter, AzureAi;
             Mistral, $crate::ocr::adapters::MistralAdapter, $crate::ocr::adapters::MistralAdapter, Mistral;
             AzureMistral, $crate::ocr::adapters::AzureMistralAdapter, $crate::ocr::adapters::AzureMistralAdapter, AzureAi;
             AzureDocumentIntelligence, $crate::ocr::adapters::AzureDocumentIntelligenceAdapter, $crate::ocr::adapters::AzureDocumentIntelligenceAdapter, AzureAi;

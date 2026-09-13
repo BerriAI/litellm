@@ -247,6 +247,7 @@ interface ModelRowActionsProps {
   model: ModelData;
   userRole: string;
   userID: string;
+  isViewOnly: boolean;
   isPausing: boolean;
   onDeleteClick?: (modelId: string) => void;
   onTogglePauseClick?: (modelId: string, blocked: boolean) => void | Promise<void>;
@@ -256,14 +257,15 @@ function ModelRowActions({
   model,
   userRole,
   userID,
+  isViewOnly,
   isPausing,
   onDeleteClick,
   onTogglePauseClick,
 }: ModelRowActionsProps) {
   const modelId = model.model_info?.id;
   const isConfigModel = !model.model_info?.db_model;
-  const isAdmin = userRole === "Admin";
-  const canEditModel = isAdmin || model.model_info?.created_by === userID;
+  const isAdmin = userRole === "Admin" && !isViewOnly;
+  const canEditModel = !isViewOnly && (isAdmin || model.model_info?.created_by === userID);
   const isBlocked = model.model_info?.blocked === true;
   const isPauseToggleable = !isConfigModel && isAdmin && Boolean(onTogglePauseClick);
 
@@ -340,6 +342,7 @@ function ModelRowActions({
 export interface ModelsTableColumnDeps {
   userRole: string;
   userID: string;
+  isViewOnly: boolean;
   onModelIdClick: (modelId: string) => void;
   onTeamIdClick: (teamId: string) => void;
   onDeleteClick?: (modelId: string) => void;
@@ -350,6 +353,7 @@ export interface ModelsTableColumnDeps {
 export const getModelsTableColumns = ({
   userRole,
   userID,
+  isViewOnly,
   onModelIdClick,
   onTeamIdClick,
   onDeleteClick,
@@ -479,6 +483,7 @@ export const getModelsTableColumns = ({
         model={row.original}
         userRole={userRole}
         userID={userID}
+        isViewOnly={isViewOnly}
         isPausing={pausingModelId === row.original.model_info?.id}
         onDeleteClick={onDeleteClick}
         onTogglePauseClick={onTogglePauseClick}

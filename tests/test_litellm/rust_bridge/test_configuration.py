@@ -52,6 +52,18 @@ def test_resolution_precedence(
 def test_release_default_remains_disabled() -> None:
     assert configuration.DEFAULT_RUST_ENABLED is False
     assert configuration.rust_enabled() is False
+    assert configuration.rust_ocr_enabled() is True
+
+
+@pytest.mark.parametrize("process", [None, False, True])
+@pytest.mark.parametrize("environment", [None, "0", "1", "off"])
+def test_ocr_configuration(monkeypatch: pytest.MonkeyPatch, process: bool | None, environment: str | None) -> None:
+    if environment is not None:
+        monkeypatch.setenv("LITELLM_RUST", environment)
+    if process is not None:
+        configuration.rust(process)
+
+    assert configuration.rust_ocr_enabled() is (environment not in {"0", "off"} and process is not False)
 
 
 def test_process_override_wins_over_environment(monkeypatch: pytest.MonkeyPatch) -> None:

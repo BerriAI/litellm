@@ -1195,6 +1195,61 @@ async def test_health_services_endpoint_newrelic_allows_proxy_admin(admin_role):
         mock_instance.async_health_check.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "role",
+    [
+        None,
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        LitellmUserRoles.TEAM,
+        LitellmUserRoles.CUSTOMER,
+    ],
+)
+async def test_health_services_endpoint_webhook_blocks_non_admin(role):
+    """
+    /health/services?service=webhook fires a real budget_crossed alert for the
+    caller's user_id and writes the same dedup cache entry the auth-time user
+    budget alert uses, so a non-admin could suppress their own real alert for
+    the cache TTL. Only proxy admins may trigger it.
+    """
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.budget_alerts = AsyncMock()
+    user_api_key_dict = UserAPIKeyAuth(token="non-admin-token", user_id="non-admin-user", user_role=role)
+
+    with patch(  # test-quality-ok: endpoint reads proxy_server module globals, same pattern as sibling tests
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+        mock_proxy_logging,
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await health_services_endpoint(user_api_key_dict=user_api_key_dict, service="webhook")
+
+    assert str(exc_info.value.code) == "403"
+    mock_proxy_logging.budget_alerts.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "admin_role",
+    [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY],
+)
+async def test_health_services_endpoint_webhook_allows_proxy_admin(admin_role):
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.budget_alerts = AsyncMock()
+    user_api_key_dict = UserAPIKeyAuth(token="admin-token", user_id="admin-user", user_role=admin_role)
+
+    with patch(  # test-quality-ok: endpoint reads proxy_server module globals, same pattern as sibling tests
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+        mock_proxy_logging,
+    ):
+        await health_services_endpoint(user_api_key_dict=user_api_key_dict, service="webhook")
+
+    mock_proxy_logging.budget_alerts.assert_awaited_once()
+    sent = mock_proxy_logging.budget_alerts.await_args.kwargs
+    assert sent["type"] == "user_budget"
+    assert sent["user_info"].user_id == "admin-user"
+
+
 @pytest.fixture(scope="function")
 def proxy_client(monkeypatch):
     """

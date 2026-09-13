@@ -114,6 +114,7 @@ mod tests {
     #[rstest]
     #[case("table_format", json!("html"))]
     #[case("confidence_scores_granularity", json!("word"))]
+    #[case("confidence_scores_granularity", json!("block"))]
     #[case("document_annotation_prompt", json!("extract"))]
     #[case("include_blocks", json!(true))]
     #[case("id", json!("req-123"))]
@@ -133,6 +134,7 @@ mod tests {
 
     #[rstest]
     #[case("pages", json!([0, 2]))]
+    #[case("pages", json!("0,2-4"))]
     #[case("include_image_base64", json!(true))]
     #[case("image_limit", json!(2))]
     #[case("image_min_size", json!(100))]
@@ -196,8 +198,16 @@ mod tests {
     #[rstest]
     fn transform_ocr_response_preserves_blocks_and_confidence_scores() {
         let response: MistralOcrResponse = serde_json::from_value(json!({
-            "pages":[{"index":0,"markdown":"hello","blocks":[{"type":"title"}],"confidence_scores":{"mean":0.99}}],
+            "pages":[{
+                "index":0,
+                "markdown":"hello",
+                "images":[{"id":"img-0","image_base64":"data:image/png;base64,AA=="}],
+                "dimensions":{"width":612,"height":792,"dpi":72},
+                "blocks":[{"type":"title","bbox":{"x":1},"confidence_scores":{"mean":0.98}}],
+                "confidence_scores":{"average_page_confidence_score":0.99,"minimum_page_confidence_score":0.97}
+            }],
             "model":"returned-model",
+            "document_annotation":"{\"language\":\"en\"}",
             "usage_info":{"pages_processed":1}
         }))
         .unwrap();
@@ -205,7 +215,20 @@ mod tests {
             .unwrap()
             .into_json();
         assert_eq!(result["pages"][0]["blocks"][0]["type"], "title");
-        assert_eq!(result["pages"][0]["confidence_scores"]["mean"], 0.99);
+        assert_eq!(result["pages"][0]["blocks"][0]["bbox"]["x"], 1);
+        assert_eq!(
+            result["pages"][0]["blocks"][0]["confidence_scores"]["mean"],
+            0.98
+        );
+        assert_eq!(
+            result["pages"][0]["confidence_scores"]["average_page_confidence_score"],
+            0.99
+        );
+        assert_eq!(result["pages"][0]["images"][0]["id"], "img-0");
+        assert_eq!(result["pages"][0]["dimensions"]["dpi"], 72);
+        assert_eq!(result["model"], "returned-model");
+        assert_eq!(result["document_annotation"], "{\"language\":\"en\"}");
+        assert_eq!(result["usage_info"]["pages_processed"], 1);
     }
 
     #[rstest]
