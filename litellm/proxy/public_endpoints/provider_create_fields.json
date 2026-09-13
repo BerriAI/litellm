@@ -2852,6 +2852,34 @@
     "default_model_placeholder": "sap/gpt-4"
   },
   {
+    "provider": "HUBRIS",
+    "provider_display_name": "Hubris",
+    "litellm_provider": "hubris",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.hubris.pw/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "hubris/anthropic/claude-sonnet-5"
+  },
+  {
     "provider": "SCX_AI",
     "provider_display_name": "SCX.ai",
     "litellm_provider": "scx-ai",
