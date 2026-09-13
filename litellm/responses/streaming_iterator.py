@@ -20,6 +20,7 @@ import litellm
 from litellm.constants import (
     EMPTY_MAPPING,
     LITELLM_MAX_STREAMING_DURATION_SECONDS,
+    RESPONSES_SSE_MAX_CONTENT_INDEX,
     STREAM_SSE_DONE_STRING,
 )
 from litellm.exceptions import MidStreamFallbackError, RateLimitError
@@ -439,8 +440,6 @@ class BaseResponsesAPIStreamingIterator:
                                 ]
                                 _response_obj.output = _backfill  # mutable-ok: patching response obj from provider before it's stored; no immutable path here
                             except Exception:  # noqa: BLE001  # best-effort backfill; any failure must not crash the stream
-                                from litellm._logging import verbose_logger
-
                                 verbose_logger.warning(
                                     "streaming_iterator: failed to backfill %s output",
                                     _chunk_type,
@@ -727,9 +726,7 @@ class BaseResponsesAPIStreamingIterator:
                 and _text_output_index not in self._streamed_output_items
             ):
                 _content_index: Final = getattr(chunk, "content_index", 0) or 0
-                from litellm.responses.sse_output_recovery import MAX_CONTENT_INDEX
-
-                if 0 <= _content_index <= MAX_CONTENT_INDEX:
+                if 0 <= _content_index <= RESPONSES_SSE_MAX_CONTENT_INDEX:
                     _item_id: Final = getattr(chunk, "item_id", None) or f"msg_{_text_output_index}"
                     _existing: Final = self._streamed_text_only_items.get(_text_output_index)
                     _existing_content: Final = list(  # mutable-ok: copy existing content for slot replacement
