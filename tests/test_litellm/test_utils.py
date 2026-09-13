@@ -29,6 +29,7 @@ from litellm._logging import (
     verbose_logger,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
 from litellm.proxy.utils import is_valid_api_key
 from litellm.types.utils import (
@@ -5387,6 +5388,26 @@ def test_websearch_interception_control_fields_never_reach_the_provider():
         f"{sorted(set(non_default) - {'a_real_provider_specific_param'})}"
     )
     assert set(WEBSEARCH_INTERNAL_CONTROL_FIELDS) <= set(all_litellm_params)
+
+
+def test_get_litellm_params_keys_never_reach_the_provider():
+    """Bridges (chat <-> Responses, agentic loop follow-ups) forward litellm_params as
+    `completion()` kwargs. Any key the param builder does not recognize is swept into
+    extra_body, and OpenAI rejects the call with `Unknown parameter: 'model_alias_map'`.
+    """
+    litellm_param_keys = frozenset(get_litellm_params()) - {"drop_params"}
+    kwargs = {
+        "a_real_provider_specific_param": 1,
+        "model_alias_map": {"alias": "gpt-5.4"},
+        **{key: "configured-value" for key in litellm_param_keys - {"model_alias_map"}},
+    }
+
+    non_default = get_non_default_completion_params(kwargs)
+
+    assert non_default == {"a_real_provider_specific_param": 1}, (
+        "litellm params leaked into the provider params: "
+        f"{sorted(set(non_default) - {'a_real_provider_specific_param'})}"
+    )
 
 
 def test_bedrock_batch_params_never_reach_the_provider():
