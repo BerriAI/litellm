@@ -1,5 +1,6 @@
 import json
 import time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -612,6 +613,90 @@ def test_streaming_handler_with_stop_chunk(
         **args, model_response=ModelResponseStream()
     )
     assert returned_chunk is None
+
+
+def test_usage_only_openai_chunk_preserves_usage_details(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    initialized_custom_stream_wrapper.custom_llm_provider = "openai"
+    initialized_custom_stream_wrapper.stream_options = {"include_usage": True}
+    chunk = SimpleNamespace(
+        id="chatcmpl-test",
+        model="glm-4.7",
+        choices=[],
+        usage={
+            "completion_tokens": 28,
+            "prompt_tokens": 3721,
+            "total_tokens": 3749,
+            "completion_tokens_details": {
+                "accepted_prediction_tokens": None,
+                "audio_tokens": 0,
+                "reasoning_tokens": 0,
+                "rejected_prediction_tokens": None,
+                "image_tokens": 0,
+            },
+            "prompt_tokens_details": {
+                "audio_tokens": 0,
+                "cache_write_tokens": 0,
+                "cached_tokens": 3237,
+                "video_tokens": 0,
+            },
+            "cost": 0.0003777566,
+            "is_byok": False,
+            "cost_details": {
+                "upstream_inference_cost": 0.0003777566,
+                "upstream_inference_prompt_cost": 0.0003494206,
+                "upstream_inference_completions_cost": 0.000028336,
+            },
+        },
+    )
+
+    response = initialized_custom_stream_wrapper.chunk_creator(chunk)
+
+    assert response.usage.prompt_tokens_details.cached_tokens == 3237
+    assert response.usage.completion_tokens_details.reasoning_tokens == 0
+
+
+def test_openai_sdk_usage_is_preserved_in_stream_assembly():
+    from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
+
+    stream = CustomStreamWrapper(
+        completion_stream=None,
+        model="z-ai/glm-5.2",
+        logging_obj=SimpleNamespace(
+            model_call_details={"litellm_params": {}},
+            messages=[{"role": "user", "content": "Reply with exactly: ok"}],
+            stream_options={"include_usage": True},
+        ),
+        custom_llm_provider="openai",
+    )
+    chunk = ChatCompletionChunk.model_validate(
+        {
+            "id": "gen-test",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "z-ai/glm-5.2",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "length"}],
+            "usage": {
+                "prompt_tokens": 17,
+                "completion_tokens": 4,
+                "total_tokens": 21,
+                "prompt_tokens_details": {"cached_tokens": 15},
+                "completion_tokens_details": {"reasoning_tokens": 4},
+            },
+        }
+    )
+
+    assembled = litellm.stream_chunk_builder(
+        chunks=[stream.chunk_creator(chunk)], messages=stream.messages
+    )
+
+    assert assembled is not None
+    assert assembled.usage.prompt_tokens == 17
+    assert assembled.usage.completion_tokens == 4
+    assert assembled.usage.total_tokens == 21
+    assert assembled.usage.prompt_tokens_details.cached_tokens == 15
+    assert assembled.usage.completion_tokens_details.reasoning_tokens == 4
 
 
 def test_finish_reason_chunk_preserves_non_openai_attributes(
