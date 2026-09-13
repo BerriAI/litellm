@@ -3249,13 +3249,15 @@ def test_convert_response_output_folds_preamble_message_into_tool_calls_choice()
     message ("I'll inspect ...") followed by the function call. Emitting the message
     as choices[0] with finish_reason=stop and the tool call as choices[1] made chat
     clients that read only the first choice (agent harnesses) see no tool call and
-    fail the turn. Both must land in one choice with the text as content."""
+    fail the turn. Both must land in one choice with the text as content, and the
+    preamble's annotations must ride along."""
     from openai.types.responses import (
         ResponseFunctionToolCall,
         ResponseOutputMessage,
         ResponseOutputText,
         ResponseReasoningItem,
     )
+    from openai.types.responses.response_output_text import AnnotationURLCitation
     from openai.types.responses.response_reasoning_item import Summary
 
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -3269,7 +3271,21 @@ def test_convert_response_output_folds_preamble_message_into_tool_calls_choice()
             type="message",
             role="assistant",
             status="completed",
-            content=[ResponseOutputText(type="output_text", text="I'll inspect the repo first.", annotations=[])],
+            content=[
+                ResponseOutputText(
+                    type="output_text",
+                    text="I'll inspect the repo first.",
+                    annotations=[
+                        AnnotationURLCitation(
+                            type="url_citation",
+                            url="https://docs.djangoproject.com/en/dev/ref/checks/",
+                            title="System check framework",
+                            start_index=0,
+                            end_index=28,
+                        )
+                    ],
+                )
+            ],
         ),
         ResponseFunctionToolCall(
             id="fc_1",
@@ -3290,6 +3306,9 @@ def test_convert_response_output_folds_preamble_message_into_tool_calls_choice()
     assert choice.message.content == "I'll inspect the repo first."
     assert choice.message.reasoning_content == "plan"
     assert choice.message.reasoning_items[0]["id"] == "rs_1"
+    assert len(choice.message.annotations) == 1
+    assert choice.message.annotations[0]["type"] == "url_citation"
+    assert choice.message.annotations[0]["url"] == "https://docs.djangoproject.com/en/dev/ref/checks/"
     assert len(choice.message.tool_calls) == 1
     assert choice.message.tool_calls[0].id == "call_bash1"
     assert choice.message.tool_calls[0].function.name == "bash"

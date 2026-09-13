@@ -5,6 +5,7 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 import json
 import os
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, Union, cast, get_args
 
@@ -105,6 +106,43 @@ class _BuiltReasoningItem(TypedDict):
     id: str
     encrypted_content: str | None
     summary: Sequence[_ReasoningSummaryText]
+
+
+@dataclass(frozen=True, slots=True)
+class _PreambleMessage:
+    text: str
+    annotations: Sequence[ChatCompletionAnnotation]
+    reasoning_content: str | None
+    reasoning_item: _BuiltReasoningItem | None
+
+
+def _merge_preamble_into_tool_calls_choice(
+    preambles: Sequence[_PreambleMessage],
+    tool_calls: Sequence[Mapping[str, object]],
+    reasoning_content: str | None,
+    reasoning_item: _BuiltReasoningItem | None,
+) -> "Choices":
+    from litellm.types.utils import Choices, Message
+
+    text: Final = "".join(preamble.text for preamble in preambles)
+    annotations: Final = [annotation for preamble in preambles for annotation in preamble.annotations]
+    merged_reasoning_content: Final = reasoning_content or next(
+        (preamble.reasoning_content for preamble in preambles if preamble.reasoning_content), None
+    )
+    merged_reasoning_item: Final = reasoning_item or next(
+        (preamble.reasoning_item for preamble in preambles if preamble.reasoning_item is not None), None
+    )
+    message: Final = Message(
+        content=text or None,
+        tool_calls=list(tool_calls),
+        annotations=annotations or None,
+        reasoning_content=merged_reasoning_content,
+        reasoning_items=cast(
+            list[ChatCompletionReasoningItem] | None,
+            ([merged_reasoning_item] if merged_reasoning_item is not None else None),
+        ),
+    )
+    return Choices(message=message, finish_reason="tool_calls", index=0)
 
 
 def _get_reasoning_items(
@@ -672,8 +710,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         index = 0
         reasoning_content: str | None = None
         pending_reasoning_item: _BuiltReasoningItem | None = None
-        preamble_reasoning_content: str | None = None
-        preamble_reasoning_item: _BuiltReasoningItem | None = None
+        preambles: Final[list[_PreambleMessage]] = []
 
         # Collect all tool calls to put them in a single choice
         # (Chat Completions API expects all tool calls in one message)
@@ -716,8 +753,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         )
                     )
 
-                    preamble_reasoning_content = preamble_reasoning_content or reasoning_content
-                    preamble_reasoning_item = preamble_reasoning_item or pending_reasoning_item
+                    preambles.append(
+                        _PreambleMessage(
+                            text=response_text,
+                            annotations=annotations or (),
+                            reasoning_content=reasoning_content,
+                            reasoning_item=pending_reasoning_item,
+                        )
+                    )
                     reasoning_content = None  # flush
                     pending_reasoning_item = None  # flush
                     index += 1
@@ -771,18 +814,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if not accumulated_tool_calls:
             return choices
 
-        preamble_text: Final = "".join(choice.message.content or "" for choice in choices)
-        merged_reasoning_item: Final = pending_reasoning_item or preamble_reasoning_item
-        merged_message: Final = Message(
-            content=preamble_text or None,
-            tool_calls=accumulated_tool_calls,
-            reasoning_content=reasoning_content or preamble_reasoning_content,
-            reasoning_items=cast(
-                list[ChatCompletionReasoningItem] | None,
-                ([merged_reasoning_item] if merged_reasoning_item is not None else None),
-            ),
-        )
-        return [Choices(message=merged_message, finish_reason="tool_calls", index=0)]
+        return [
+            _merge_preamble_into_tool_calls_choice(
+                preambles=preambles,
+                tool_calls=accumulated_tool_calls,
+                reasoning_content=reasoning_content,
+                reasoning_item=pending_reasoning_item,
+            )
+        ]
 
     @staticmethod
     def _build_empty_incomplete_choice(
