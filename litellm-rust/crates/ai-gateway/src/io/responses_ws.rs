@@ -1,114 +1,27 @@
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
+use litellm_core::AuthError;
 use litellm_core::Error;
+use litellm_core::auth::error::MissingCredential;
 use litellm_core::providers::openai::responses::transformation::OPENAI_RESPONSES_WS_CONFIG;
 use litellm_core::responses::types::ResponsesWsEvent;
 use litellm_core::responses::websocket::ResponsesWebSocketProviderConfig;
-use tokio::net::TcpStream;
-use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
-use tokio_tungstenite::tungstenite::http::header::{AUTHORIZATION, HeaderName};
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 
-use crate::io::tls::connect_upstream;
+use litellm_core::responses::websocket::{ResponsesUpstreamWs, connect_upstream};
 
 use crate::constants::{
     DEFAULT_RESPONSES_WS_CONNECT_TIMEOUT_SECS, DEFAULT_RESPONSES_WS_IDLE_TIMEOUT_SECS,
 };
 
 const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
-const MISSING_KEY_MESSAGE: &str = "Missing OpenAI API Key - a Responses WebSocket call is being made but no key was passed via params or the OPENAI_API_KEY environment variable";
-
-pub type ResponsesUpstreamWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type UpstreamTx = SplitSink<ResponsesUpstreamWs, Message>;
 type UpstreamRx = SplitStream<ResponsesUpstreamWs>;
-
-#[derive(Clone)]
-pub struct ResponsesWebSocketConnection {
-    socket: Arc<Mutex<Option<ResponsesUpstreamWs>>>,
-}
-
-impl ResponsesWebSocketConnection {
-    pub async fn connect_url(
-        url: &str,
-        headers: &HashMap<String, String>,
-        timeout: Option<Duration>,
-    ) -> Result<Self, Error> {
-        let mut request = url
-            .into_client_request()
-            .map_err(|error| Error::Network(error.to_string()))?;
-        for (name, value) in headers {
-            let header_name = name
-                .parse::<HeaderName>()
-                .map_err(|error| Error::InvalidRequest(error.to_string()))?;
-            let header_value = HeaderValue::from_str(value)
-                .map_err(|error| Error::InvalidRequest(error.to_string()))?;
-            request.headers_mut().insert(header_name, header_value);
-        }
-        let connect = connect_upstream(request);
-        let result = match timeout {
-            Some(timeout) => tokio::time::timeout(timeout, connect).await.map_err(|_| {
-                Error::Network("Responses WebSocket connection timed out".to_string())
-            })?,
-            None => connect.await,
-        };
-        let (socket, _) = result.map_err(|error| match *error {
-            tokio_tungstenite::tungstenite::Error::Http(response) => Error::Http {
-                status: response.status().as_u16(),
-                body: String::new(),
-            },
-            other => Error::Network(other.to_string()),
-        })?;
-        Ok(Self {
-            socket: Arc::new(Mutex::new(Some(socket))),
-        })
-    }
-
-    pub async fn send_text(&self, text: String) -> Result<(), Error> {
-        let mut socket = self.socket.lock().await;
-        let Some(socket) = socket.as_mut() else {
-            return Err(Error::Network("Responses WebSocket is closed".to_string()));
-        };
-        socket
-            .send(Message::Text(text))
-            .await
-            .map_err(|error| Error::Network(error.to_string()))
-    }
-
-    pub async fn recv_text(&self) -> Result<Option<String>, Error> {
-        let mut socket_guard = self.socket.lock().await;
-        let Some(socket) = socket_guard.as_mut() else {
-            return Ok(None);
-        };
-        match socket.next().await {
-            Some(Ok(Message::Text(text))) => Ok(Some(text)),
-            Some(Ok(Message::Binary(bytes))) => String::from_utf8(bytes.to_vec())
-                .map(Some)
-                .map_err(|error| Error::InvalidResponse(error.to_string())),
-            Some(Ok(Message::Close(_))) | None => Ok(None),
-            Some(Ok(_)) => Ok(None),
-            Some(Err(error)) => Err(Error::Network(error.to_string())),
-        }
-    }
-
-    pub async fn close(&self) -> Result<(), Error> {
-        let mut socket = self.socket.lock().await;
-        if let Some(socket) = socket.as_mut() {
-            socket
-                .close(None)
-                .await
-                .map_err(|error| Error::Network(error.to_string()))?;
-        }
-        *socket = None;
-        Ok(())
-    }
-}
 
 pub(crate) fn resolve_api_key(api_key: Option<&str>) -> Result<String, Error> {
     api_key
@@ -120,7 +33,7 @@ pub(crate) fn resolve_api_key(api_key: Option<&str>) -> Result<String, Error> {
                 .ok()
                 .filter(|value| !value.trim().is_empty())
         })
-        .ok_or_else(|| Error::Auth(MISSING_KEY_MESSAGE.to_string()))
+        .ok_or_else(|| Error::from(AuthError::from(MissingCredential::OpenAiResponsesApiKey)))
 }
 
 async fn dial_upstream(

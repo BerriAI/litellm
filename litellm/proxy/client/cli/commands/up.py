@@ -23,11 +23,12 @@ from .auth import CliContextObj, context_secret_vault, get_stored_api_key, load_
 from .claude_settings import (
     BACKUP_PATH,
     CLAUDE_SETTINGS_PATH,
-    ApiKeyHelper,
     ClaudeSettingsError,
+    StaticToken,
+    install_statusline_script,
     load_json_or_empty,
     merge_claude_settings,
-    resolve_api_key_helper,
+    write_claude_settings,
 )
 
 
@@ -98,8 +99,7 @@ def restore_claude_settings(settings_path: Path | None = None, backup_path: Path
         return None
     if record.existed and record.content is not None:
         resolved_settings_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(resolved_settings_path, "w") as f:
-            json.dump(record.content, f, indent=2)
+        write_claude_settings(resolved_settings_path, record.content)
     elif resolved_settings_path.exists():
         resolved_settings_path.unlink()
     resolved_backup_path.unlink()
@@ -134,13 +134,10 @@ def ensure_fresh_login(ctx: click.Context) -> None:
     pkce: Final = _stored_login_is_pkce(vault)
     login_command: Final = "lite login --pkce" if pkce else "lite login"
     if not sys.stdin.isatty():
-        raise UpError(
-            f"No fresh LiteLLM login found for this proxy. Run `{login_command}` first (apiKeyHelper "
-            "reads this token on every Claude Code request)."
-        )
+        raise UpError(f"No fresh LiteLLM login found for this proxy. Run `{login_command}` first.")
 
     click.echo("No fresh LiteLLM login found for this proxy; starting login...")
-    ctx.invoke(login, pkce=pkce)
+    ctx.invoke(login, config_claude=False, pkce=pkce)
     if not _usable_login(get_stored_api_key(expected_base_url=base_url, vault=vault), vault):
         raise UpError("Login did not produce a usable token.")
 
@@ -162,7 +159,9 @@ def up(ctx: click.Context) -> None:
     """Route every Claude Code session through your LiteLLM proxy until stopped.
 
     Patches ~/.claude/settings.json so Claude Code picks up the proxy on its own
-    next startup, from any terminal -- no need to launch it through `lite`.
+    next startup, from any terminal -- no need to launch it through `lite`. The
+    key written is the one this command resolved (your fresh `lite login`, or an
+    explicit --api-key), copied in as a static token for as long as `up` runs.
     Press Ctrl-C to stop and restore your original settings. Assumes the proxy
     is already running (this does not start one for you). Cursor is not
     supported: it has no equivalent file-based config to patch.
@@ -180,7 +179,7 @@ def up(ctx: click.Context) -> None:
                 "running (or crashed without cleanup). Run `lite down` first."
             )
 
-        api_key_helper: Final = resolve_api_key_helper(base_url)
+        status_line: Final = install_statusline_script()
         original_existed: Final = CLAUDE_SETTINGS_PATH.exists()
         original_settings: Final = load_json_or_empty(CLAUDE_SETTINGS_PATH)
         write_backup(
@@ -191,9 +190,10 @@ def up(ctx: click.Context) -> None:
         )
 
         CLAUDE_SETTINGS_PATH.parent.mkdir(exist_ok=True)
-        merged: Final = merge_claude_settings(original_settings, base_url, ApiKeyHelper(api_key_helper))
-        with open(CLAUDE_SETTINGS_PATH, "w") as f:
-            json.dump(merged, f, indent=2)
+        merged: Final = merge_claude_settings(
+            original_settings, base_url, StaticToken(api_key), status_line=status_line
+        )
+        write_claude_settings(CLAUDE_SETTINGS_PATH, merged)
     except (AgentRunError, ClaudeSettingsError) as e:
         raise click.ClickException(str(e))
 
@@ -248,7 +248,6 @@ __all__ = [
     "load_json_or_empty",
     "merge_claude_settings",
     "read_backup",
-    "resolve_api_key_helper",
     "restore_claude_settings",
     "up",
     "write_backup",

@@ -659,12 +659,14 @@ model LiteLLM_SpendLogs {
   mcp_namespaced_tool_name String? 
   agent_id            String?
   proxy_server_request Json?     @default("{}")
+  litellm_call_id     String?
   created_at          DateTime   @default(now()) @map("created_at")
   updated_at          DateTime   @default(now()) @updatedAt @map("updated_at")
   @@index([startTime])
   @@index([startTime, request_id])
   @@index([end_user])
   @@index([session_id])
+  @@index([litellm_call_id])
 }
 
 model LiteLLM_BudgetWindowSpend {
@@ -1514,6 +1516,7 @@ model LiteLLM_AutoRouterSession {
   classifier_cost       Float    @default(0)
   classifier_cost_recorded_turns Int @default(0)
   tier_turns            Json     @default("{}")
+  baseline_models       Json     @default("{}")
 
   @@id([api_key, session_id, router_name])
   @@index([last_turn_at], map: "idx_autorouter_session_last_turn")

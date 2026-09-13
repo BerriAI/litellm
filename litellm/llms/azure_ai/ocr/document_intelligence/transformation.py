@@ -92,6 +92,18 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     def get_api_key_env_var(self) -> str | None:
         return AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV_VAR
 
+    def resolve_connection_params(
+        self,
+        *,
+        api_key: str | None,
+        api_base: str | None,
+        dynamic_api_key: str | None,
+        dynamic_api_base: str | None,
+    ) -> tuple[str | None, str | None]:
+        explicit_api_key: Final = None if api_key is None else dynamic_api_key or api_key
+        explicit_api_base: Final = None if api_base is None else dynamic_api_base or api_base
+        return explicit_api_key, explicit_api_base
+
     def get_supported_ocr_params(self, model: str) -> list:
         """
         Get supported OCR parameters for Azure Document Intelligence.
@@ -618,7 +630,11 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         except SSRFError as ssrf_err:
             raise ValueError(f"Azure Document Intelligence: rejected polling URL ({ssrf_err})")
 
-        poll_headers = {"Ocp-Apim-Subscription-Key": raw_response.request.headers.get("Ocp-Apim-Subscription-Key", "")}
+        poll_headers: Final = {
+            header: raw_response.request.headers[header]
+            for header in ("Ocp-Apim-Subscription-Key", "Authorization")
+            if header in raw_response.request.headers
+        }
         return operation_url, poll_headers
 
     @staticmethod

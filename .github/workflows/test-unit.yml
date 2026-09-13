@@ -200,6 +200,7 @@ jobs:
               tests/test_litellm/proxy/types_utils
               tests/test_litellm/proxy/logging_endpoints
               tests/test_litellm/proxy/test_*.py
+              tests/test_gateway
             workers: 4
             reruns: 2
             timeout-minutes: 20

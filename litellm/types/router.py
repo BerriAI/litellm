@@ -268,6 +268,12 @@ class CredentialLiteLLMParams(BaseModel):
     # callers see it, breaking Azure deployments configured with
     # ``azure_ad_token`` instead of a static ``api_key`` (#30235).
     azure_ad_token: str | None = None
+    tenant_id: str | None = None
+    client_id: str | None = None
+    client_secret: str | None = None
+    azure_scope: str | None = None
+    azure_username: str | None = None
+    azure_password: str | None = None
     ## VERTEX AI ##
     vertex_project: str | None = None
     vertex_location: str | None = None
@@ -612,6 +618,24 @@ class Deployment(BaseModel):
     def __setitem__(self, key, value) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
+
+
+@dataclass(frozen=True, slots=True)
+class DeploymentModelListingInfo:
+    """What the deployments behind a model name contribute to its OpenAI-compatible listing entry.
+
+    ``cost_map_keys`` are the names those deployments' underlying models are known by in
+    ``litellm.model_cost`` (``base_model`` when set, else ``litellm_params.model``), which
+    is what a request actually reaches; the public model name they are listed under is an
+    arbitrary alias and often absent from the cost map. Keys are deduplicated in config
+    order, so the ordinary group -- several interchangeable deployments of one model --
+    carries exactly one. The token limits are the widest explicitly set in any
+    deployment's ``model_info``, which outrank anything the cost map says.
+    """
+
+    cost_map_keys: tuple[str, ...]
+    max_input_tokens: int | None
+    max_output_tokens: int | None
 
 
 class RouterErrors(enum.Enum):
