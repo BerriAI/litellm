@@ -3850,3 +3850,58 @@ async def test_ProxyConfig__init_guardrails_in_db_skips_only_the_unloadable_row(
 
     assert sorted(handler.IN_MEMORY_GUARDRAILS) == ["first", "last"]
     assert handler.reconciled_with == [{"first", "broken", "last"}]
+
+
+# ---------------------------------------------------------------------------
+# add_deployment: UI settings convergence
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_add_deployment_re_reads_ui_settings_so_other_pods_converge(monkeypatch):
+    """The periodic config reload picks up a UI setting written through another pod.
+
+    Startup used to be the only read, so a proxy admin flipping a runtime flag reached the pod
+    that served the PATCH and nowhere else until every other pod restarted.
+    """
+    general_settings: Dict[str, Any] = {"allow_agents_for_team_admins": False}
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_config.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+    prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_uisettings.find_unique = AsyncMock(
+        return_value=SimpleNamespace(
+            ui_settings=json.dumps({"allow_agents_for_team_admins": True, "enable_chat_ui": False})
+        )
+    )
+
+    config = ProxyConfig()
+    config._should_load_db_object = MagicMock(return_value=False)
+    config._init_non_llm_objects_in_db = AsyncMock()
+
+    await config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=MagicMock())
+
+    prisma_client.db.litellm_uisettings.find_unique.assert_awaited_once_with(where={"id": "ui_settings"})
+    assert general_settings["allow_agents_for_team_admins"] is True
+    assert "enable_chat_ui" not in general_settings
+
+
+@pytest.mark.asyncio
+async def test_add_deployment_syncs_ui_settings_even_when_the_model_reconcile_fails(monkeypatch):
+    """A broken model reconcile must not strand every pod on stale settings."""
+    general_settings: Dict[str, Any] = {"allow_agents_for_team_admins": False}
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_uisettings.find_unique = AsyncMock(
+        return_value=SimpleNamespace(ui_settings={"allow_agents_for_team_admins": True})
+    )
+
+    config = ProxyConfig()
+    config._should_load_db_object = MagicMock(side_effect=RuntimeError("db down"))
+
+    await config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=MagicMock())
+
+    assert general_settings["allow_agents_for_team_admins"] is True
