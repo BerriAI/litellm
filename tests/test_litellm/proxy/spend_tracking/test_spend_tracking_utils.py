@@ -665,17 +665,34 @@ def test_sanitize_request_body_for_spend_logs_payload_circular_reference():
 
 
 @pytest.mark.parametrize(
-    ("store_responses", "expected_text"),
+    ("store_responses", "expected_response_stored"),
     [
-        (False, REDACTED_BY_LITELM_STRING),
-        (True, "sensitive information"),
+        (False, False),
+        (True, True),
     ],
 )
 def test_get_vector_store_request_for_spend_logs_payload_uses_response_setting(
-    store_responses: bool, expected_text: str
+    store_responses: bool, expected_response_stored: bool
 ):
     vector_store_request: Final[list[StandardLoggingVectorStoreRequest]] = [
-        {"vector_store_search_response": {"data": [{"content": [{"text": "sensitive information", "type": "text"}]}]}}
+        {
+            "vector_store_id": "vs-123",
+            "custom_llm_provider": "openai",
+            "query": "request content",
+            "start_time": 1.0,
+            "end_time": 2.0,
+            "vector_store_search_response": {
+                "search_query": "request content",
+                "data": [
+                    {
+                        "file_id": "file-123",
+                        "filename": "sensitive-filename.txt",
+                        "attributes": {"source_url": "https://sensitive.example"},
+                        "content": [{"text": "sensitive information", "type": "text"}],
+                    }
+                ],
+            },
+        }
     ]
 
     result: Final = _get_vector_store_request_for_spend_logs_payload(
@@ -684,8 +701,16 @@ def test_get_vector_store_request_for_spend_logs_payload_uses_response_setting(
     )
 
     assert result is not None
-    assert result[0]["vector_store_search_response"]["data"][0]["content"][0]["text"] == expected_text
-    assert result[0]["vector_store_search_response"]["data"][0]["content"][0]["type"] == "text"
+    assert result[0]["vector_store_id"] == "vs-123"
+    assert result[0]["custom_llm_provider"] == "openai"
+    assert result[0]["query"] == "request content"
+    assert result[0]["start_time"] == 1.0
+    assert result[0]["end_time"] == 2.0
+    expected_response: Final = (
+        vector_store_request[0]["vector_store_search_response"] if expected_response_stored else None
+    )
+    assert result[0].get("vector_store_search_response") == expected_response
+    assert ("vector_store_search_response" in result[0]) is expected_response_stored
 
 
 def test_get_vector_store_request_for_spend_logs_payload_null_input():

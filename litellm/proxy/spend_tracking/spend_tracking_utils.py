@@ -53,7 +53,6 @@ from litellm.types.utils import (
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
     StandardLoggingVectorStoreRequest,
-    VectorStoreSearchResponse,
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
 
@@ -1350,16 +1349,13 @@ def _get_vector_store_request_for_spend_logs_payload(
 
     if vector_store_request_metadata is None:
         return None
-    for vector_store_request in vector_store_request_metadata:
-        vector_store_search_response: VectorStoreSearchResponse = (
-            vector_store_request.get("vector_store_search_response") or VectorStoreSearchResponse()
+    return [
+        cast(
+            StandardLoggingVectorStoreRequest,
+            {key: value for key, value in vector_store_request.items() if key != "vector_store_search_response"},
         )
-        response_data = vector_store_search_response.get("data", []) or []
-        for response_item in response_data:
-            for content_item in response_item.get("content", []) or []:
-                if "text" in content_item:
-                    content_item["text"] = REDACTED_BY_LITELM_STRING
-    return vector_store_request_metadata
+        for vector_store_request in vector_store_request_metadata
+    ]
 
 
 def _get_response_for_spend_logs_payload(
