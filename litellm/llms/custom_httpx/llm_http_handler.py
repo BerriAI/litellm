@@ -1611,7 +1611,9 @@ class BaseLLMHTTPHandler:
                 api_key=api_key,
                 timeout=timeout,
                 client=client,
-                optional_rerank_params=optional_rerank_params,
+                optional_rerank_params=cast(  # cast-ok: untyped caller dict
+                    Mapping[str, object], optional_rerank_params
+                ),
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -1672,6 +1674,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
+        resolved_optional_rerank_params: Final = dict(optional_rerank_params or {})
         return provider_config.transform_rerank_response(
             model=model,
             raw_response=response,
@@ -1679,7 +1682,7 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             api_key=api_key,
             request_data=request_data,
-            optional_params=optional_rerank_params,
+            optional_params=resolved_optional_rerank_params,
         )
 
     def _prepare_decisions_request(

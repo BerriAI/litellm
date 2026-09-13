@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from typing import Final
 
 import httpx
 
@@ -16,7 +17,7 @@ class CloudflareEmbeddingConfig(VercelAIGatewayEmbeddingConfig):
         litellm_params: Mapping[object, object],
         stream: bool | None = None,
     ) -> str:
-        resolved_base = CloudflareChatConfig.resolve_api_base(api_base).rstrip("/")
+        resolved_base: Final = CloudflareChatConfig.resolve_api_base(api_base).rstrip("/")
         if resolved_base.endswith("/embeddings"):
             return resolved_base
         return f"{resolved_base}/embeddings"
@@ -25,6 +26,6 @@ class CloudflareEmbeddingConfig(VercelAIGatewayEmbeddingConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: Mapping[object, object] | httpx.Headers,
+        headers: Mapping[str, str] | httpx.Headers,
     ) -> CloudflareError:
         return CloudflareError(status_code=status_code, message=error_message)
