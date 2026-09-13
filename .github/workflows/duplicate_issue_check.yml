@@ -1,0 +1,170 @@
+name: Duplicate issue check (Codex)
+
+# Semantic duplicate detection for newly opened issues. This replaces the
+# title-similarity bot in check_duplicate_issues.yml, which only matched
+# wording and so missed the same bug reported in different words.
+#
+# DRY-RUN BY DEFAULT: set the repo variable DUPLICATE_CHECK_ENABLED=true to let
+# it comment and label. Until then the verdict only appears in the job summary.
+
+on:
+  issues:
+    types: [opened]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number to check manually."
+        required: true
+
+permissions: {}
+
+jobs:
+  classify:
+    if: github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      verdict: ${{ steps.codex.outputs.final-message }}
+    steps:
+      - name: Checkout prompt
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          sparse-checkout: .github/prompts
+          persist-credentials: false
+
+      # Fetched through the API rather than interpolated from github.event, so
+      # no issue text ever reaches a shell or an action input as template text.
+      - name: Fetch the issue under review
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
+        run: |
+          set -euo pipefail
+          gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+            --json number,title,body,createdAt > issue.json
+
+      - name: Require the LiteLLM endpoint
+        env:
+          LITELLM_API_BASE: ${{ vars.LITELLM_API_BASE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LITELLM_API_BASE}" ]; then
+            echo "Set the LITELLM_API_BASE repo variable (e.g. https://llm.example.com) so Codex routes through LiteLLM." >&2
+            echo "Without it the LiteLLM virtual key would be sent to api.openai.com and rejected." >&2
+            exit 1
+          fi
+
+      - name: Run Codex
+        id: codex
+        uses: openai/codex-action@10cb888d2ed3b99867f7e7ccff174a861a75aeb6 # v1.9
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Routed through LiteLLM, so the credential is a virtual key and the
+          # spend lands in the proxy's own logs. The action hands this key to
+          # codex-responses-api-proxy, which forwards to the endpoint below.
+          openai-api-key: ${{ secrets.LITELLM_API_KEY }}
+          responses-api-endpoint: ${{ vars.LITELLM_API_BASE }}/v1/responses
+          prompt-file: .github/prompts/duplicate-issue-check.md
+          output-schema-file: .github/prompts/duplicate-issue-check.schema.json
+          sandbox: read-only
+          # read-only still denies network, and the whole method is Codex
+          # searching the issue tracker with `gh`, so it needs egress.
+          codex-args: '["-c", "sandbox_permissions=[\"network-full-access\"]"]'
+          model: ${{ vars.DUPLICATE_CHECK_MODEL || 'gpt-5.6' }}
+          # Issue authors are external users without write access, and the
+          # action's default is to refuse to run for them. Safe to open up
+          # here: the prompt is fixed, the sandbox is read-only, and the only
+          # credential Codex holds is a read-only token for a public repo.
+          allow-users: "*"
+
+      - name: Summary
+        env:
+          VERDICT: ${{ steps.codex.outputs.final-message }}
+        run: |
+          {
+            echo '### Duplicate check'
+            echo '```json'
+            echo "${VERDICT}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  flag:
+    needs: classify
+    if: needs.classify.outputs.verdict != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Comment and label
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          VERDICT: ${{ needs.classify.outputs.verdict }}
+          ENABLED: ${{ vars.DUPLICATE_CHECK_ENABLED }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            let verdict;
+            try {
+              verdict = JSON.parse(process.env.VERDICT);
+            } catch (e) {
+              core.warning(`Codex did not return JSON: ${e.message}`);
+              return;
+            }
+            const { duplicate_of: original, confidence, evidence } = verdict;
+            // 0.95, not 0.8: over a full week of issues the 0.80 gate posted 21
+            // comments of which 6 were wrong, while 0.95 posts 12 with 1 wrong
+            // and still catches 9 of the 11 real duplicates.
+            if (!Number.isInteger(original) || confidence < 0.95) {
+              core.notice(`No duplicate flagged (duplicate_of=${original}, confidence=${confidence}).`);
+              return;
+            }
+            const issue_number = Number(process.env.ISSUE_NUMBER);
+            const { owner, repo } = context.repo;
+
+            const existing = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+            if (existing.some((c) => c.body?.includes('litellm:potential-duplicate'))) {
+              core.notice(`#${issue_number} already carries a duplicate notice.`);
+              return;
+            }
+
+            const { data: prior } = await github.rest.issues.get({ owner, repo, issue_number: original });
+            const { data: self } = await github.rest.issues.get({ owner, repo, issue_number });
+            const lead = prior.state === 'closed'
+              ? `**Already reported in #${original}**, which is closed`
+              : `**Possible duplicate of #${original}**`;
+            const ask = prior.state === 'closed'
+              ? `If that issue covers this one, follow up there. If this is a new case, say so here and the label comes off.`
+              : `If that is right, add a thumbs-up to #${original} and follow along there. If it is not, say so here and the label comes off.`;
+
+            // Mirrors normalizeTitle in scripts/auto-close-duplicates.ts. That
+            // sweep can close this issue on the marker below, but only when the
+            // titles match exactly, so only warn when they actually do.
+            const normalize = (t) => t.toLowerCase().replace(/^\s*\[[^\]]*\]\s*:?/, '').replace(/[^a-z0-9]+/g, ' ').trim();
+            const autoCloses = prior.state === 'open' && normalize(self.title) === normalize(prior.title);
+            const warning = autoCloses
+              ? `\n\nYour title is identical to #${original}, so this issue closes automatically in 3 days unless someone responds here.`
+              : '';
+
+            // Same marker the title bot posts, so auto-close-duplicates.yml sees
+            // one pipeline. That sweep still needs an identical title to close,
+            // which a semantic-only match will almost never have.
+            const body = [
+              `<!-- litellm:potential-duplicate candidates=${original}, -->`,
+              lead,
+              '',
+              evidence,
+              '',
+              ask + warning,
+            ].join('\n');
+            if (process.env.ENABLED !== 'true') {
+              core.notice(`DRY RUN. Would have commented on #${issue_number}:\n${body}`);
+              return;
+            }
+            await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            await github.rest.issues.addLabels({ owner, repo, issue_number, labels: ['potential-duplicate'] });
