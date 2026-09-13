@@ -45,6 +45,7 @@ class CodestralTextCompletionConfig(OpenAITextCompletionConfig):
             "top_p",
             "max_tokens",
             "max_completion_tokens",
+            "min_tokens",
             "stream",
             "seed",
             "stop",
