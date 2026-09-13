@@ -45,17 +45,15 @@ import hashlib
 import re
 import threading
 from collections import deque
-from collections.abc import Mapping, Sequence
-from contextlib import closing
+from collections.abc import Generator, Mapping, Sequence
+from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import islice
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Generator, Literal, assert_never
+from typing import Final, Literal, assert_never
 from urllib.parse import parse_qsl, urlsplit
-
-from pydantic import JsonValue, TypeAdapter
 
 from e2e_http import (
     NetworkError,
@@ -94,6 +92,7 @@ from fixture_mode import (
     current_test_key,
     parse_fixture_mode,
 )
+from pydantic import JsonValue, TypeAdapter
 
 EDGE_MOUNTS: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -495,7 +494,29 @@ class ReplayEdge:
     source: ReplaySource
 
 
-type EdgeBackend = RecordEdge | ReplayEdge
+@dataclass(frozen=True, slots=True)
+class LiveEdge:
+    pass
+
+
+type EdgeBackend = RecordEdge | ReplayEdge | LiveEdge
+
+
+@dataclass(slots=True)
+class ProviderRequestObservation:
+    marker: str
+    _count: int = field(default=0, init=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+
+    def observe(self, body: bytes | None) -> None:
+        if body is not None and self.marker.encode() in body:
+            with self._lock:
+                self._count += 1
+
+    @property
+    def count(self) -> int:
+        with self._lock:
+            return self._count
 
 
 @dataclass(frozen=True, slots=True)
@@ -721,6 +742,24 @@ def _handle_record(
             assert_never(head)
 
 
+def _handle_live(
+    method: str, url: str, headers: Mapping[str, str], body: bytes | None, timeout: float
+) -> EdgeOutcome:
+    forwarded: Final = {
+        name: value for name, value in headers.items() if name.lower() not in _REQUEST_DROPPED_HEADERS
+    }
+    head: Final = forward_stream(method, url, headers=forwarded, body=body, timeout=timeout)
+    match head:
+        case NetworkError(message=message):
+            return _recorded_outcome(_network_error_response(message))
+        case StreamHead() if _is_streamed(head.headers):
+            return EdgeStream(head.status_code, _filtered_response_headers(head.headers), head.steps)
+        case StreamHead():
+            return _recorded_outcome(_drain_to_response(head))
+        case _:
+            assert_never(head)
+
+
 def _handle_replay(source: ReplaySource, request: RecordedRequest) -> EdgeOutcome:
     try:
         interaction: Final = source.next_interaction(request)
@@ -753,6 +792,10 @@ def handle_edge_request(
         method, split.path, split.query, body, _header_value(headers, "content-type")
     )
     match backend:
+        case LiveEdge():
+            return _handle_live(
+                method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout
+            )
         case RecordEdge():
             return _handle_record(
                 backend,
@@ -792,6 +835,8 @@ class _EdgeHandler(BaseHTTPRequestHandler):
         assert isinstance(edge_server, _EdgeHTTPServer)
         length: Final = int(self.headers.get("content-length") or "0")
         body: Final = self.rfile.read(length) if length else None
+        if edge_server.observation is not None:
+            edge_server.observation.observe(body)
         outcome: Final = handle_edge_request(
             edge_server.backend,
             edge_server.mounts,
@@ -857,11 +902,13 @@ class _EdgeHTTPServer(ThreadingHTTPServer):
         backend: EdgeBackend,
         mounts: Mapping[str, str],
         forward_timeout: float,
+        observation: ProviderRequestObservation | None,
     ) -> None:
         super().__init__(bind, _EdgeHandler)
         self.backend: Final = backend
         self.mounts: Final = mounts
         self.forward_timeout: Final = forward_timeout
+        self.observation: Final = observation
 
 
 @dataclass(frozen=True, slots=True)
@@ -890,13 +937,14 @@ def start_provider_edge(
     bind_host: str = "127.0.0.1",
     advertise_host: str | None = None,
     forward_timeout: float = 60.0,
+    observation: ProviderRequestObservation | None = None,
 ) -> RunningEdge:
     """Boot an edge server on an OS-assigned port in a daemon thread.
     ``advertise_host`` is what api_base URLs name (it differs from the bind
     host when the proxy runs in a container and reaches the host machine via
     a gateway address like host.docker.internal)."""
     server: Final = _EdgeHTTPServer(
-        (bind_host, 0), backend=backend, mounts=mounts, forward_timeout=forward_timeout
+        (bind_host, 0), backend=backend, mounts=mounts, forward_timeout=forward_timeout, observation=observation
     )
     thread: Final = threading.Thread(target=server.serve_forever, name="e2e-provider-edge", daemon=True)
     thread.start()
@@ -979,3 +1027,40 @@ def provider_edge_api_base(
             return _shared_edge(mode, bundle_dir, bind_host, advertise_host, forward_timeout).api_base(mount)
         case _:
             assert_never(mode)
+
+
+def _observed_backend(mode_raw: str, bundle_dir: Path) -> EdgeBackend:
+    mode: Final = parse_fixture_mode(mode_raw)
+    match mode:
+        case InvalidFixtureMode(value=value):
+            raise ValueError(f"E2E_FIXTURE_MODE={value!r} is not one of {', '.join(FIXTURE_MODES)}")
+        case "live":
+            return LiveEdge()
+        case "record":
+            return RecordEdge(_shared_recorder(bundle_dir), threading.Lock())
+        case "replay":
+            return ReplayEdge(_shared_replay_source(bundle_dir))
+        case _:
+            assert_never(mode)
+
+
+@contextmanager
+def observed_provider_edge(
+    observation: ProviderRequestObservation,
+    *,
+    mode_raw: str,
+    bundle_dir: Path,
+    bind_host: str,
+    advertise_host: str,
+    forward_timeout: float = 60.0,
+    mounts: Mapping[str, str] = EDGE_MOUNTS,
+) -> Generator[ProviderEdge, None, None]:
+    running: Final = start_provider_edge(
+        _observed_backend(mode_raw, bundle_dir), mounts=mounts,
+        bind_host=bind_host, advertise_host=advertise_host,
+        forward_timeout=forward_timeout, observation=observation,
+    )
+    try:
+        yield running.edge
+    finally:
+        running.shutdown()

@@ -58,6 +58,13 @@ impl PythonLogger {
                 params.set_item(name, value)?;
             }
         }
+        for name in custom_pricing_fields(py)? {
+            if let Some(value) = kwargs.bind(py).get_item(&name)?
+                && !value.is_none()
+            {
+                params.set_item(name, value)?;
+            }
+        }
         update.set_item("litellm_params", params)?;
         update.set_item("custom_llm_provider", &pre_call.custom_llm_provider)?;
         self.object(py)
@@ -118,6 +125,17 @@ impl PythonLogger {
         }
         Ok(())
     }
+}
+
+fn custom_pricing_fields(py: Python<'_>) -> PyResult<Vec<String>> {
+    py.import("litellm.types.utils")?
+        .getattr("CustomPricingLiteLLMParams")?
+        .getattr("model_fields")?
+        .cast_into::<PyDict>()?
+        .keys()
+        .iter()
+        .map(|name| name.extract::<String>())
+        .collect()
 }
 
 fn redact(
