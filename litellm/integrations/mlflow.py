@@ -189,15 +189,21 @@ class MlflowLogger(CustomLogger):
         }
         standard_obj: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
         if standard_obj:
+            token_usage = {
+                "input_tokens": standard_obj.get("prompt_tokens"),
+                "output_tokens": standard_obj.get("completion_tokens"),
+                "total_tokens": standard_obj.get("total_tokens"),
+            }
+            cache_read, cache_creation = self._extract_cache_token_usage(standard_obj)
+            if cache_read is not None:
+                token_usage["cache_read_input_tokens"] = cache_read
+            if cache_creation is not None:
+                token_usage["cache_creation_input_tokens"] = cache_creation
             attributes.update(
                 {
                     "api_base": standard_obj.get("api_base"),
                     "cache_hit": standard_obj.get("cache_hit"),
-                    "mlflow.chat.tokenUsage": {
-                        "input_tokens": standard_obj.get("prompt_tokens"),
-                        "output_tokens": standard_obj.get("completion_tokens"),
-                        "total_tokens": standard_obj.get("total_tokens"),
-                    },
+                    "mlflow.chat.tokenUsage": token_usage,
                     "raw_llm_response": standard_obj.get("response"),
                     "response_cost": standard_obj.get("response_cost"),
                     "saved_cache_cost": standard_obj.get("saved_cache_cost"),
@@ -216,6 +222,36 @@ class MlflowLogger(CustomLogger):
                 }
             )
         return attributes
+
+    def _extract_cache_token_usage(self, standard_obj: StandardLoggingPayload) -> "tuple[int | None, int | None]":
+        """
+        Extract cache read and cache creation token counts from the raw response usage.
+
+        The flattened logging payload does not carry cache token fields, but MLflow
+        needs them to price cached tokens at their discounted rates. Anthropic-style
+        usage reports top-level cache fields while OpenAI-style usage nests them
+        under prompt_tokens_details.
+        """
+        response = standard_obj.get("response")
+        usage = response.get("usage") if isinstance(response, dict) else None
+        if not isinstance(usage, dict):
+            return None, None
+
+        details = usage.get("prompt_tokens_details")
+        if not isinstance(details, dict):
+            details = None
+
+        cache_read = usage.get("cache_read_input_tokens")
+        if cache_read is None and details is not None:
+            cache_read = details.get("cached_tokens")
+
+        cache_creation = usage.get("cache_creation_input_tokens")
+        if cache_creation is None and details is not None:
+            cache_creation = details.get("cache_creation_tokens")
+        if cache_creation is None and details is not None:
+            cache_creation = details.get("cache_write_tokens")
+
+        return cache_read, cache_creation
 
     def _get_span_type(self, call_type: str | None) -> str:
         from mlflow.entities import SpanType
