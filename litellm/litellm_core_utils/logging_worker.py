@@ -147,8 +147,6 @@ class LoggingWorker:
             self._sem = None
             self._worker_task = None
             self._running_tasks.clear()
-            # The summary task is bound to the old loop; drop it and its pending burst so
-            # timeouts on the new loop arm a fresh summary instead of a stale, stuck one.
             self._timeout_summary_task = None
             self._timeout_burst_count = 0
             self._queue = new_queue
@@ -176,8 +174,6 @@ class LoggingWorker:
                 try:
                     await asyncio.wait_for(callback_task, timeout=self.timeout)
                 except asyncio.TimeoutError as e:
-                    # wait_for cancels the callback when our own deadline expires; a callback that
-                    # raised TimeoutError itself did not hit our deadline, so keep its traceback.
                     if callback_task.cancelled():
                         self._record_callback_timeout(task["coroutine"])
                     else:
@@ -456,8 +452,6 @@ class LoggingWorker:
     async def stop(self) -> None:
         """Stop the logging worker and clean up resources."""
         if self._timeout_summary_task is not None:
-            # Cancel the debounced sleeper and emit any pending burst now, so a summary
-            # armed just before shutdown is not lost when the loop tears down.
             self._timeout_summary_task.cancel()
             self._timeout_summary_task = None
         self._emit_timeout_summary()
