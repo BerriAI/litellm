@@ -1078,6 +1078,66 @@ def test_response_completed_with_function_calls_emits_tool_calls_finish_reason()
     ), "response.completed with function_call output should emit finish_reason='tool_calls'"
 
 
+@pytest.mark.parametrize("tool_type", ("function_call", "custom_tool_call"))
+@pytest.mark.parametrize(
+    ("terminal_event", "reason", "expected"),
+    (
+        ("response.completed", None, "tool_calls"),
+        ("response.incomplete", "max_output_tokens", "length"),
+        ("response.incomplete", "content_filter", "content_filter"),
+    ),
+)
+def test_streamed_tool_calls_with_empty_terminal_output(
+    tool_type: Literal["function_call", "custom_tool_call"],
+    terminal_event: Literal["response.completed", "response.incomplete"],
+    reason: str | None,
+    expected: str,
+) -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(iter(()), sync_stream=True)
+    for index in (1, 2):
+        item: Final = {
+            "type": tool_type,
+            "id": f"fc_{index}",
+            "call_id": f"call_{index}",
+            "name": "read_file",
+            **({"arguments": "{}"} if tool_type == "function_call" else {"input": "file.txt"}),
+        }
+        added: Final = iterator.chunk_parser(
+            {"type": "response.output_item.added", "output_index": index, "item": item}
+        )
+        assert added.choices[0].delta.tool_calls[0].function.name == "read_file"
+        assert added.choices[0].delta.tool_calls[0].index == index - 1
+        assert added.choices[0].finish_reason is None
+        done: Final = iterator.chunk_parser(
+            {"type": "response.output_item.done", "output_index": index, "item": {**item, "status": "completed"}}
+        )
+        assert done.choices[0].finish_reason is None
+        assert not done.choices[0].delta.tool_calls
+
+    terminal: Final = {
+        "type": terminal_event,
+        "response": {
+            "status": "completed" if reason is None else "incomplete",
+            "output": [],
+            "incomplete_details": None if reason is None else {"reason": reason},
+        },
+    }
+    result: Final = iterator.chunk_parser(terminal)
+    assert result.choices[0].finish_reason == expected
+    assert not result.choices[0].delta.tool_calls
+
+    other_stream: Final = OpenAiResponsesToChatCompletionStreamIterator(iter(()), sync_stream=True)
+    assert other_stream.chunk_parser(terminal).choices[0].finish_reason == ("stop" if reason is None else expected)
+    stateless: Final = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+        terminal
+    )
+    assert stateless.choices[0].finish_reason == ("stop" if reason is None else expected)
+
+
 def test_response_completed_with_message_only_emits_stop_finish_reason():
     """
     Test that response.completed with only message output (no function_call) emits finish_reason='stop'.
@@ -1281,13 +1341,9 @@ def test_text_plus_tool_calls_sequence():
         function_done_result.choices[0].finish_reason is None
     ), "output_item.done for function_call must not emit finish_reason"
 
-    # Check response.completed (index 6) has finish_reason='stop'
-    # (the mock chunk has no nested 'response' data, so has_function_calls is False → 'stop')
     completed_result = results[6]
     assert len(completed_result.choices) > 0, "response.completed should have choices"
-    assert (
-        completed_result.choices[0].finish_reason == "stop"
-    ), "response.completed should have finish_reason='stop'"
+    assert completed_result.choices[0].finish_reason == "tool_calls"
 
 
 # =============================================================================
