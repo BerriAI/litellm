@@ -4499,7 +4499,7 @@ def _init_custom_logger_compatible_class(
                 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 
                 for callback in _in_memory_loggers:
-                    if isinstance(callback, OpenTelemetryV2) and callback.callback_name is None:
+                    if isinstance(callback, OpenTelemetryV2) and callback.serves_generic_collector:
                         return callback
                 otel_settings: Final = _get_custom_logger_settings_from_proxy_server(callback_name=logging_integration)
                 otel_logger_v2: Final = build_otel_v2_logger(

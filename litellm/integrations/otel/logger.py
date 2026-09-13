@@ -206,6 +206,11 @@ class OpenTelemetryV2(CustomLogger):
         """The provider this logger emits through, read-only to its callers."""
         return self._tracer_provider
 
+    @property
+    def serves_generic_collector(self) -> bool:
+        """Every exporter is the operator's ``OTEL_*`` destination, as for ``otel`` and mapper-only presets."""
+        return all(spec.owner is None for spec in self.config.exporters)
+
     def _init_metrics(self, meter_provider: "MeterProvider | None") -> "GenAIMetricRecorder | None":
         """Create the six GenAI histograms when metrics are enabled, else ``None``.
 
@@ -263,10 +268,14 @@ class OpenTelemetryV2(CustomLogger):
             setattr(proxy_server, "open_telemetry_logger", self)
 
     def _outranks_for_proxy_slot(self, holder: object) -> bool:
-        """``otel`` owns the slot whenever configured; a preset holds it only until ``otel`` is built."""
+        """The collector's logger owns the slot; a vendor preset holds it only until that logger is built."""
         if holder is None:
             return True
-        return self.callback_name is None and isinstance(holder, OpenTelemetryV2) and holder.callback_name is not None
+        return (
+            self.serves_generic_collector
+            and isinstance(holder, OpenTelemetryV2)
+            and not holder.serves_generic_collector
+        )
 
     # ====================================================================== #
     #  LLM-call callbacks — the span is opened at the ``pre_call`` boundary and
@@ -864,7 +873,7 @@ def select_global_otel_v2_logger(
     if registered is not None:
         return registered
     v2_loggers: Final = tuple(cb for cb in in_memory_loggers if isinstance(cb, OpenTelemetryV2))
-    generic: Final = next((cb for cb in v2_loggers if cb.callback_name is None), None)
+    generic: Final = next((cb for cb in v2_loggers if cb.serves_generic_collector), None)
     if generic is not None:
         return generic
     return v2_loggers[0] if v2_loggers else OpenTelemetryV2()

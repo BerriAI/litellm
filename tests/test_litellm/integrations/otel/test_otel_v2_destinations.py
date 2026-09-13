@@ -1815,15 +1815,36 @@ class TestDestinationOwnership:
         assert select_global_otel_v2_logger(loggers) is generic
         assert proxy_server.open_telemetry_logger is generic
 
+    def test_the_otel_entry_reuses_a_mapper_only_preset_that_already_serves_the_collector(self, monkeypatch):
+        """``callbacks: [langtrace, otel]``: Langtrace owns no backend of its own, it is the operator's
+        collector plus a mapper, so a second generic logger would export every span there twice."""
+        sinks = self._capture_exporters(monkeypatch)
+        self._operator_with(monkeypatch, "langfuse_otel")
+        loggers: list[CustomLogger] = []
+        monkeypatch.setattr(litellm_logging, "_in_memory_loggers", loggers)
+
+        langtrace = in_fresh_context(_maybe_construct_otel_v2, "langtrace", loggers)
+        generic = in_fresh_context(_init_custom_logger_compatible_class, "otel", None, None)
+        is_otel_v2_enabled.cache_clear()
+
+        assert isinstance(langtrace, OpenTelemetryV2) and generic is langtrace
+        assert "langtrace" in langtrace.config.mapper_names
+        emit(langtrace.tracer_provider, "chat")
+        langtrace.tracer_provider.force_flush()
+        assert [s.name for s in sinks[_COLLECTOR].get_finished_spans()] == ["chat"]
+
     @pytest.mark.parametrize("otel_first", [True, False])
     def test_the_otel_callback_holds_the_proxy_slot_whatever_the_order(self, monkeypatch, otel_first):
         from litellm.proxy import proxy_server
 
         monkeypatch.setattr(proxy_server, "open_telemetry_logger", None)
-        config = OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory")])
+        generic = OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory")])
+        vendor = OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory", owner=ExporterOwner.LANGFUSE_OTEL)])
 
         def build(name):
-            return build_otel_v2_logger(config, callback_name=None if name == "otel" else name)
+            if name == "otel":
+                return build_otel_v2_logger(generic)
+            return build_otel_v2_logger(vendor, callback_name=name)
 
         order = ("otel", "langfuse_otel") if otel_first else ("langfuse_otel", "otel")
         built = {name: build(name) for name in order}
@@ -1834,9 +1855,14 @@ class TestDestinationOwnership:
         from litellm.proxy import proxy_server
 
         monkeypatch.setattr(proxy_server, "open_telemetry_logger", None)
-        config = OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory")])
-        first = build_otel_v2_logger(config, callback_name="langfuse_otel")
-        second = build_otel_v2_logger(config, callback_name="arize")
+        first = build_otel_v2_logger(
+            OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory", owner=ExporterOwner.LANGFUSE_OTEL)]),
+            callback_name="langfuse_otel",
+        )
+        second = build_otel_v2_logger(
+            OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory", owner=ExporterOwner.ARIZE_AX)]),
+            callback_name="arize",
+        )
 
         assert proxy_server.open_telemetry_logger is first
         assert select_global_otel_v2_logger([first, second]) is first
