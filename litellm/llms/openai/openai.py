@@ -340,6 +340,12 @@ _NO_EXTRA_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
 _SDK_OPTION_KEYS: Final = frozenset(("extra_headers", "extra_query", "extra_body"))
 
 
+def _as_mapping(value: object) -> Mapping[str, object]:
+    if not isinstance(value, dict):
+        return types.MappingProxyType({})
+    return types.MappingProxyType({key: item for key, item in value.items()})
+
+
 def _embedding_request_without_sdk_defaults(
     data: Mapping[str, object], timeout: float | httpx.Timeout
 ) -> tuple[Mapping[str, object], RequestOptions]:
@@ -354,6 +360,37 @@ def _embedding_request_without_sdk_defaults(
         timeout=timeout,
     )
     return body, options
+
+
+def _image_generation_request_data(
+    data: Mapping[str, object], headers: Mapping[str, object] | None
+) -> tuple[dict[str, object], Mapping[str, object]]:
+    extra_body_source: Final = _as_mapping(data.get("extra_body"))
+    extra_body: Final = types.MappingProxyType(
+        {key: item for key, item in extra_body_source.items() if key != "extra_headers"}
+    )
+    extra_headers: Final = types.MappingProxyType(
+        {
+            **_as_mapping(extra_body_source.get("extra_headers")),
+            **_as_mapping(data.get("extra_headers")),
+            **_as_mapping(headers),
+        }
+    )
+    extra_query: Final = _as_mapping(data.get("extra_query"))
+    logged_body: Final = {  # mutable-ok: loggers isinstance-check this payload as a dict
+        key: item for key, item in data.items() if key not in _SDK_OPTION_KEYS
+    }
+    request_data: Final = types.MappingProxyType(
+        dict(
+            (
+                *logged_body.items(),
+                *((("extra_headers", extra_headers),) if extra_headers else ()),
+                *((("extra_query", extra_query),) if extra_query else ()),
+                *((("extra_body", extra_body),) if extra_body else ()),
+            )
+        )
+    )
+    return logged_body, request_data
 
 
 class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
@@ -1415,6 +1452,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 client=client,
             )
 
+            logged_body, request_data = _image_generation_request_data(data, headers)
             logging_obj.pre_call(
                 input=prompt,
                 api_key=openai_aclient.api_key,
@@ -1422,20 +1460,17 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     "headers": {"Authorization": f"Bearer {openai_aclient.api_key}"},  # mutable-ok: logged header map
                     "api_base": str(openai_aclient.base_url),
                     "acompletion": True,
-                    "complete_input_dict": data,
+                    "complete_input_dict": logged_body,
                 },
             )
 
-            request_data: Final = (  # mutable-ok: the OpenAI SDK takes the request body as a dict
-                {**data, "extra_headers": headers} if headers else data
-            )
             response = await openai_aclient.images.generate(**request_data, timeout=timeout)
             stringified_response: Final = response.model_dump()
             ## LOGGING
             logging_obj.post_call(
                 input=prompt,
                 api_key=api_key,
-                additional_args={"complete_input_dict": data},
+                additional_args={"complete_input_dict": logged_body},
                 original_response=stringified_response,
             )
             return convert_to_model_response_object(
@@ -1499,6 +1534,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 client=client,
             )
 
+            logged_body, request_data = _image_generation_request_data(data, headers)
+
             ## LOGGING
             logging_obj.pre_call(
                 input=prompt,
@@ -1507,14 +1544,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     "headers": {"Authorization": f"Bearer {openai_client.api_key}"},
                     "api_base": openai_client._base_url._uri_reference,
                     "acompletion": True,
-                    "complete_input_dict": data,
+                    "complete_input_dict": logged_body,
                 },
             )
 
             ## COMPLETION CALL
-            request_data: Final = (  # mutable-ok: the OpenAI SDK takes the request body as a dict
-                {**data, "extra_headers": headers} if headers else data
-            )
             _response: Final = openai_client.images.generate(**request_data, timeout=timeout)
 
             response: Final = _response.model_dump()
@@ -1522,7 +1556,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             logging_obj.post_call(
                 input=prompt,
                 api_key=api_key,
-                additional_args={"complete_input_dict": data},
+                additional_args={"complete_input_dict": logged_body},
                 original_response=response,
             )
             return convert_to_model_response_object(
