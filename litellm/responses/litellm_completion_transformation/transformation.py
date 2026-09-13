@@ -2166,7 +2166,6 @@ class LiteLLMCompletionResponsesConfig:
         if finish_reason == "content_filter":
             return IncompleteDetails(reason="content_filter")
         if finish_reason == "refusal":
-            # no matching reason in the Responses API enum
             return IncompleteDetails(reason=None)
         return None
 
