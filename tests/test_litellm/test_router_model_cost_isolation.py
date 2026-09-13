@@ -2281,3 +2281,111 @@ def test_every_declaring_deployment_is_named(caplog):
     assert "azure-ptu-east" in warnings[0]
     assert "azure-ptu-west" in warnings[0]
     assert "plain-gpt-4o" not in warnings[0]
+
+
+def _simulate_price_data_reload_with_provider_sets(monkeypatch, fetched_catalog):
+    """Like `_simulate_price_data_reload`, plus the provider model-set refresh the proxy's
+    `_swap_in_model_cost_map` does before replaying, so bare names in the new catalog resolve."""
+    monkeypatch.setattr(litellm, "model_cost", fetched_catalog)
+    _invalidate_model_cost_lowercase_map()
+    litellm.add_known_models(model_cost_map=fetched_catalog)
+    reapply_runtime_model_cost_registrations()
+
+
+def test_a_config_deployment_dropped_by_a_stale_cost_map_comes_back_on_reload(monkeypatch):
+    """
+    Booting on the bundled backup, a bare model that only the remote catalog knows
+    cannot be provider-resolved, so the proxy router (ignore_invalid_deployments) drops
+    it. Once a reload brings in a catalog that knows the model, the deployment must be
+    served again with its access groups, and exactly once however many reloads follow.
+    """
+    backend = "lit-5766-only-in-remote-catalog"
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "new-model",
+                    "litellm_params": {"model": backend, "api_key": "k"},
+                    "model_info": {"id": "new-id", "access_groups": ["team-models"]},
+                },
+                {
+                    "model_name": "control-model",
+                    "litellm_params": {"model": "hosted_vllm/control-backend", "api_key": "k"},
+                    "model_info": {"id": "control-id", "access_groups": ["team-models"]},
+                },
+            ],
+            ignore_invalid_deployments=True,
+        )
+        assert router.get_model_names() == ["control-model"]
+        assert router.get_model_access_groups(model_name="new-model") == {}
+
+        fresh_catalog = {**litellm.model_cost, backend: {"litellm_provider": "openai", "mode": "chat"}}
+        _simulate_price_data_reload_with_provider_sets(monkeypatch, fresh_catalog)
+        _simulate_price_data_reload_with_provider_sets(monkeypatch, fresh_catalog)
+
+        assert sorted(router.get_model_names()) == ["control-model", "new-model"]
+        assert router.get_model_access_groups(model_name="new-model") == {"team-models": ["new-model"]}
+        assert [d["model_info"]["id"] for d in router.model_list] == ["control-id", "new-id"]
+        assert "new-id" in litellm.model_cost
+    finally:
+        litellm.open_ai_chat_completion_models.discard(backend)
+        litellm.models_by_provider["openai"].discard(backend)
+
+
+def test_a_config_deployment_dropped_for_a_permanent_reason_is_not_retried_on_reload(monkeypatch):
+    """
+    Only provider-resolution drops can be healed by a fresh catalog. A deployment that
+    fails after its provider resolved (here a pass-through vertex entry with no project)
+    has already touched router state, so replaying it on every reload would leak into
+    `deployment_names` each time.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "vertex-passthrough",
+                "litellm_params": {"model": "vertex_ai/gemini-2.5-flash", "use_in_pass_through": True},
+                "model_info": {"id": "vertex-id"},
+            },
+            {
+                "model_name": "control-model",
+                "litellm_params": {"model": "hosted_vllm/control-backend", "api_key": "k"},
+                "model_info": {"id": "control-id"},
+            },
+        ],
+        ignore_invalid_deployments=True,
+    )
+    assert router.get_model_names() == ["control-model"]
+    names_after_boot = list(router.deployment_names)
+
+    _simulate_price_data_reload_with_provider_sets(monkeypatch, dict(litellm.model_cost))
+
+    assert router.get_model_names() == ["control-model"]
+    assert router.deployment_names == names_after_boot
+
+
+def test_price_data_reload_refreshes_the_cached_model_group_and_deployment_info(monkeypatch):
+    """
+    Budget reservation reads pricing through the router's lru-cached group and
+    deployment lookups. A reload swaps the catalog without touching model_list, so
+    unless the replay clears those caches the next reservation prices against the
+    old catalog until some unrelated model-list change happens to evict it.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "grp",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k"},
+                "model_info": {"id": "dep-a"},
+            }
+        ]
+    )
+    old_price = router.cached_model_group_info("grp").input_cost_per_token
+    assert router.cached_deployment_model_info("dep-a", "openai/gpt-4o")["input_cost_per_token"] == old_price
+
+    new_price = old_price * 10
+    fresh_catalog = copy.deepcopy(litellm.model_cost)
+    fresh_catalog["gpt-4o"]["input_cost_per_token"] = new_price
+    _simulate_price_data_reload_with_provider_sets(monkeypatch, fresh_catalog)
+
+    assert router.cached_model_group_info("grp").input_cost_per_token == new_price
+    assert router.cached_deployment_model_info("dep-a", "openai/gpt-4o")["input_cost_per_token"] == new_price

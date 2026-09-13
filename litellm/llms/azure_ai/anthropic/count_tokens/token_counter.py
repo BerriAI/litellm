@@ -28,12 +28,12 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
     async def count_tokens(
         self,
         model_to_use: str,
-        messages: list[dict[str, Any]] | None,
-        contents: list[dict[str, Any]] | None,
+        messages: list[dict[str, object]] | None,
+        contents: list[dict[str, object]] | None,
         deployment: dict[str, Any] | None = None,
         request_model: str = "",
-        tools: list[dict[str, Any]] | None = None,
-        system: Any | None = None,
+        tools: list[dict[str, object]] | None = None,
+        system: object | None = None,
     ) -> TokenCountResponse | None:
         """
         Count tokens using Azure AI Anthropic's CountTokens API.

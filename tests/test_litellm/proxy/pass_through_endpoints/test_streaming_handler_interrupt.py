@@ -9,6 +9,8 @@ import httpx
 import pytest
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy.pass_through_endpoints.streaming_handler import (
     PassThroughStreamingHandler,
@@ -632,3 +634,207 @@ async def test_chunk_processor_enqueues_immediately_on_disconnect_even_when_arme
 
     mock_enqueue.assert_called_once()
     assert logging_obj._deferred_stream_complete_args is None
+
+
+class _EventRecorder(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.failure_kwargs = []
+        self.success_kwargs = []
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.failure_kwargs.append(kwargs)
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.success_kwargs.append(kwargs)
+
+
+def _anthropic_sse(event: str, payload: dict) -> bytes:
+    return f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode()
+
+
+def _anthropic_stream_that_times_out_mid_stream():
+    mock = MagicMock(spec=httpx.Response)
+    mock.status_code = 200
+
+    async def _aiter_bytes():
+        yield _anthropic_sse(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-5",
+                    "content": [],
+                    "stop_reason": None,
+                    "usage": {"input_tokens": 52, "output_tokens": 1},
+                },
+            },
+        )
+        yield _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        )
+        yield _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "partial"}},
+        )
+        raise httpx.ReadTimeout("Timeout on reading data from socket")
+
+    mock.aiter_bytes = _aiter_bytes
+    return mock
+
+
+@pytest.mark.asyncio
+async def test_chunk_processor_logs_failure_not_success_on_mid_stream_exception():
+    """A stream that dies after the first chunks is a failed request: the failure
+    callbacks must fire once with the partial usage and cost, and the success
+    routing must never run for it."""
+    recorder = _EventRecorder()
+    logging_obj = LiteLLMLoggingObj(
+        model="claude-sonnet-5",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="test-mid-stream-timeout",
+        function_id="test-mid-stream-timeout",
+        dynamic_async_success_callbacks=[recorder],
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    success_routes = []
+
+    async def _record_success_route(**kwargs):
+        success_routes.append(kwargs)
+
+    received = []
+
+    async def _consume_stream():
+        async for chunk in PassThroughStreamingHandler.chunk_processor(
+            response=_anthropic_stream_that_times_out_mid_stream(),
+            request_body={"model": "claude-sonnet-5", "stream": True},
+            litellm_logging_obj=logging_obj,
+            endpoint_type=EndpointType.ANTHROPIC,
+            start_time=datetime.now(),
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/v1/messages",
+            route_streaming_logging=_record_success_route,
+        ):
+            received.append(chunk)
+
+    with pytest.raises(httpx.ReadTimeout):
+        await _consume_stream()
+
+    for _ in range(300):
+        if recorder.failure_kwargs:
+            break
+        await asyncio.sleep(0.01)
+
+    assert len(received) == 3
+    assert success_routes == []
+    assert recorder.success_kwargs == []
+    assert len(recorder.failure_kwargs) == 1
+    failure_payload = recorder.failure_kwargs[0]["standard_logging_object"]
+    assert failure_payload["status"] == "failure"
+    assert failure_payload["prompt_tokens"] == 52
+    assert failure_payload["response_cost"] > 0
+    assert isinstance(recorder.failure_kwargs[0]["exception"], httpx.ReadTimeout)
+
+
+def _google_sse(prompt_tokens: int, completion_tokens: int, text: str) -> bytes:
+    payload = {
+        "candidates": [{"content": {"parts": [{"text": text}], "role": "model"}, "index": 0}],
+        "usageMetadata": {
+            "promptTokenCount": prompt_tokens,
+            "candidatesTokenCount": completion_tokens,
+            "totalTokenCount": prompt_tokens + completion_tokens,
+        },
+        "modelVersion": "gemini-3.8-flash",
+    }
+    return f"data: {json.dumps(payload)}\r\n\r\n".encode()
+
+
+def _google_stream_that_times_out_mid_stream():
+    mock = MagicMock(spec=httpx.Response)
+    mock.status_code = 200
+
+    async def _aiter_bytes():
+        yield _google_sse(9, 4, "The sea")
+        yield _google_sse(9, 12, " is wide and restless")
+        raise httpx.ReadTimeout("Timeout on reading data from socket")
+
+    mock.aiter_bytes = _aiter_bytes
+    return mock
+
+
+@pytest.mark.parametrize(
+    "endpoint_type, url_route",
+    [
+        (EndpointType.GEMINI, "/gemini/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse"),
+        (
+            EndpointType.VERTEX_AI,
+            "/vertex_ai/v1/projects/p/locations/us-central1/publishers/google/models/gemini-3.8-flash:streamGenerateContent?alt=sse",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_chunk_processor_bills_partial_google_usage_on_mid_stream_exception(endpoint_type, url_route):
+    """Google streams carry cumulative usage on every chunk, so a stream that
+    dies mid-way must log a failure billed at what was already delivered rather
+    than a failure at zero usage."""
+    recorder = _EventRecorder()
+    logging_obj = LiteLLMLoggingObj(
+        model="gemini-3.8-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id=f"test-google-mid-stream-timeout-{endpoint_type.value}",
+        function_id="test-google-mid-stream-timeout",
+        dynamic_async_success_callbacks=[recorder],
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="gemini-3.8-flash",
+        user="unknown",
+        optional_params={},
+        litellm_params={"metadata": {}},
+        call_type="pass_through_endpoint",
+    )
+    success_routes = []
+
+    async def _record_success_route(**kwargs):
+        success_routes.append(kwargs)
+
+    async def _consume_stream():
+        async for _ in PassThroughStreamingHandler.chunk_processor(
+            response=_google_stream_that_times_out_mid_stream(),
+            request_body={"contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
+            litellm_logging_obj=logging_obj,
+            endpoint_type=endpoint_type,
+            start_time=datetime.now(),
+            passthrough_success_handler_obj=MagicMock(),
+            url_route=url_route,
+            route_streaming_logging=_record_success_route,
+        ):
+            pass
+
+    with pytest.raises(httpx.ReadTimeout):
+        await _consume_stream()
+
+    for _ in range(300):
+        if recorder.failure_kwargs:
+            break
+        await asyncio.sleep(0.01)
+
+    assert success_routes == []
+    assert recorder.success_kwargs == []
+    assert len(recorder.failure_kwargs) == 1
+    failure_payload = recorder.failure_kwargs[0]["standard_logging_object"]
+    assert failure_payload["status"] == "failure"
+    assert failure_payload["prompt_tokens"] == 9
+    assert failure_payload["completion_tokens"] == 12
+    assert failure_payload["response_cost"] > 12 * 3.75e-06
+    assert isinstance(recorder.failure_kwargs[0]["exception"], httpx.ReadTimeout)

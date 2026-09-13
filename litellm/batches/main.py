@@ -319,6 +319,7 @@ def create_batch(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 create_batch_data=_create_batch_request,
+                custom_endpoint=optional_params.get("custom_endpoint"),
             )
         else:
             raise litellm.exceptions.BadRequestError(

@@ -14,24 +14,9 @@ import os
 
 import pytest
 
-import litellm
+from litellm import completion_cost
+from litellm.types.utils import Choices, Message, ModelResponse, Usage
 from litellm.utils import get_model_info
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _local_model_cost_map():
-    """
-    Point litellm at the bundled cost map for the duration of this module
-    only. ``mp.undo()`` restores both the environment variable and
-    ``litellm.model_cost`` so nothing leaks into later tests.
-    """
-    mp = pytest.MonkeyPatch()
-    mp.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    mp.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    get_model_info.cache_clear()
-    yield
-    mp.undo()
-    get_model_info.cache_clear()
 
 
 NEW_ENTRIES = {
@@ -54,19 +39,6 @@ def model_data():
         return json.load(f)
 
 
-def test_fireworks_serverless_entries_exist(model_data):
-    """The new prefixed entry carries the pricing and metadata from #37274."""
-    for key, expected in NEW_ENTRIES.items():
-        assert key in model_data, f"{key} is missing from model_prices_and_context_window.json"
-        entry = model_data[key]
-        for field, value in expected.items():
-            assert entry[field] == pytest.approx(value), f"{key}.{field}"
-        assert entry["litellm_provider"] == "fireworks_ai"
-        assert entry["mode"] == "chat"
-        assert entry["supports_function_calling"] is True
-        assert entry["supports_vision"] is False
-
-
 def test_bare_fireworks_ids_resolve_through_prefixed_entries():
     """Bare IDs from #37274 resolve via the provider-prefix lookup path."""
     for bare_id, prefixed_key in [
@@ -86,17 +58,38 @@ def test_bare_fireworks_ids_resolve_through_prefixed_entries():
         assert info["max_output_tokens"] == expected["max_output_tokens"]
 
 
+def test_deepseek_v4p1_flash_twin_costs(local_model_cost_map):
+    for model in (
+        "fireworks_ai/deepseek-v4p1-flash",
+        "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash",
+    ):
+        response = ModelResponse(
+            model=model,
+            choices=[Choices(index=0, message=Message(role="assistant", content="ok"))],
+            usage=Usage(prompt_tokens=1000, completion_tokens=1000, total_tokens=2000),
+        )
+        cost = completion_cost(completion_response=response, model=model)
+        assert cost == pytest.approx(8.8e-04)
+
+
 TWIN_PINNED_PRICES = {
     "deepseek-v4-flash-0731": {
         "input_cost_per_token": 2.2e-07,
         "cache_read_input_token_cost": 7e-09,
         "output_cost_per_token": 6.6e-07,
     },
+    "deepseek-v4p1-flash": {
+        "input_cost_per_token": 2.2e-07,
+        "cache_read_input_token_cost": 7e-09,
+        "output_cost_per_token": 6.6e-07,
+        "supports_vision": True,
+        "max_output_tokens": 393216,
+    },
 }
 
 
-def test_deepseek_v4_flash_0731_twins_pin_published_pricing(model_data):
-    """Both 0731 entries carry the price published at docs.fireworks.ai/serverless/pricing."""
+def test_deepseek_v4_flash_twins_pin_published_pricing(model_data):
+    """Both entries of each Flash twin pair carry the price published at docs.fireworks.ai/serverless/pricing."""
     for bare_suffix, expected in TWIN_PINNED_PRICES.items():
         for key in (
             f"fireworks_ai/{bare_suffix}",

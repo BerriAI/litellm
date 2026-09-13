@@ -10,6 +10,7 @@ import json
 import time
 import uuid
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -32,6 +33,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+_EMPTY_FUNCTION: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def is_valid_json(value: str) -> bool:
@@ -111,11 +115,9 @@ class GigaChatConfig(BaseConfig):
         """
         Set up headers with OAuth token.
         """
-        # Get access token
         credentials: Final = api_key or get_secret_str("GIGACHAT_CREDENTIALS") or get_secret_str("GIGACHAT_API_KEY")
         access_token: Final = get_access_token(credentials=credentials, litellm_params=litellm_params)
 
-        # Store credentials for image uploads
         self._current_credentials = credentials
         self._current_api_base = api_base
 
@@ -208,18 +210,18 @@ class GigaChatConfig(BaseConfig):
 
     def _convert_tools_to_functions(self, tools: Sequence) -> Sequence[dict]:
         """Convert OpenAI tools format to GigaChat functions format."""
-        functions: Final[list[dict]] = []  # mutable-ok: accumulator for building functions list
-        for tool in tools:
-            if isinstance(tool, dict) and tool.get("type") == "function":
-                func = tool.get("function", {})
-                functions.append(
-                    {
-                        "name": func.get("name", ""),
-                        "description": func.get("description", ""),
-                        "parameters": func.get("parameters", {}),
-                    }
-                )
-        return functions
+        return [
+            {
+                "name": function.get("name", ""),
+                "description": function.get("description", ""),
+                "parameters": function.get("parameters", {}),
+            }
+            for function in (
+                tool.get("function", _EMPTY_FUNCTION)
+                for tool in tools
+                if isinstance(tool, dict) and tool.get("type") == "function"
+            )
+        ]
 
     def _map_tool_choice(self, tool_choice: str | Mapping[str, object]) -> str | Mapping[str, object] | None:
         """
@@ -299,7 +301,6 @@ class GigaChatConfig(BaseConfig):
                 if part.get("type") == "text":
                     texts.append(part.get("text", ""))
                 elif part.get("type") == "image_url":
-                    # Extract image URL and upload to GigaChat
                     image_url: object = part.get("image_url", {})
                     upload_url: str
                     if isinstance(image_url, str):
@@ -322,16 +323,13 @@ class GigaChatConfig(BaseConfig):
         headers: Mapping[str, object],
     ) -> dict:  # mutable-ok: request payload sent to httpx
         """Transform OpenAI request to GigaChat format."""
-        # Transform messages
         giga_messages: Final = self._transform_messages(messages)
 
-        # Build request
         request_data: Final[dict[str, object]] = {
             "model": model.replace("gigachat/", ""),
             "messages": giga_messages,
         }
 
-        # Add optional params
         for key in [
             "temperature",
             "top_p",
@@ -343,7 +341,6 @@ class GigaChatConfig(BaseConfig):
             if key in optional_params:
                 request_data[key] = optional_params[key]
 
-        # Add functions if present
         if "functions" in optional_params:
             request_data["functions"] = optional_params["functions"]
         if "function_call" in optional_params:
@@ -358,10 +355,8 @@ class GigaChatConfig(BaseConfig):
         for i, msg in enumerate(messages):
             message = dict(msg)
 
-            # Remove unsupported fields
             message.pop("name", None)
 
-            # Transform roles
             role = message.get("role", "user")
             if role == "developer":
                 message["role"] = "system"
@@ -374,18 +369,15 @@ class GigaChatConfig(BaseConfig):
                 if not isinstance(content, str) or not is_valid_json(content):
                     message["content"] = json.dumps(content, ensure_ascii=False)
 
-            # Handle None content
             if message.get("content") is None:
                 message["content"] = ""
 
-            # Handle list content (multimodal) - extract text and images
             content = message.get("content")
             if isinstance(content, list):
                 message["content"], attachments = self._transform_list_content(content)
                 if attachments:
                     message["attachments"] = attachments
 
-            # Transform tool_calls to function_call
             tool_calls = message.get("tool_calls")
             if tool_calls and isinstance(tool_calls, list) and len(tool_calls) > 0:
                 tool_call = tool_calls[0]
@@ -436,13 +428,11 @@ class GigaChatConfig(BaseConfig):
             message_data = choice.get("message", {})
             finish_reason = choice.get("finish_reason", "stop")
 
-            # Transform function_call to tool_calls or content
             if finish_reason == "function_call" and message_data.get("function_call"):
                 func_call = message_data["function_call"]
                 args = func_call.get("arguments", {})
 
                 if is_structured_output:
-                    # Convert to content for structured output
                     if isinstance(args, dict):
                         content = json.dumps(args, ensure_ascii=False)
                     else:
@@ -452,7 +442,6 @@ class GigaChatConfig(BaseConfig):
                     message_data.pop("functions_state_id", None)
                     finish_reason = "stop"
                 else:
-                    # Convert to tool_calls format
                     if isinstance(args, dict):
                         args = json.dumps(args, ensure_ascii=False)
                     message_data["tool_calls"] = [
@@ -468,7 +457,6 @@ class GigaChatConfig(BaseConfig):
                     message_data.pop("function_call", None)
                     finish_reason = "tool_calls"
 
-            # Clean up GigaChat-specific fields
             message_data.pop("functions_state_id", None)
 
             choices.append(

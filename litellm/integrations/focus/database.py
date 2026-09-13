@@ -96,7 +96,19 @@ class FocusLiteLLMDatabase:
 
         try:
             db_response: Final = await client.db.query_raw(query, *query_params)
-            return pl.DataFrame(db_response, infer_schema_length=None)
+            from litellm.proxy.spend_tracking.key_metadata_recovery import (
+                fill_missing_api_key_aliases,
+            )
+
+            usage_rows: Final = (
+                db_response.to_dicts()
+                if isinstance(db_response, pl.DataFrame)
+                else db_response
+                if isinstance(db_response, list)
+                else []
+            )
+            recovered_rows: Final = await fill_missing_api_key_aliases(client, usage_rows)
+            return pl.DataFrame([dict(row) for row in recovered_rows], infer_schema_length=None)
         except Exception as exc:
             raise RuntimeError(f"Error retrieving usage data: {exc}") from exc
 

@@ -18,11 +18,14 @@ import asyncio
 import os
 import threading
 import time
+from typing import Final
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+
+WRITER_PROBE_SQL: Final = "SELECT current_setting('transaction_read_only') AS transaction_read_only"
 
 
 @pytest.fixture(autouse=True)
@@ -260,7 +263,7 @@ async def test_run_reconnect_cycle_uses_direct_path_when_engine_alive(
     """Direct reconnect (engine alive) probes the writer first and skips the
     recreate when the probe is healthy.
 
-    The engine-alive path now runs a SELECT 1 probe before recreating. A
+    The engine-alive path now runs a writability probe before recreating. A
     healthy probe means the connection is fine — e.g. an IAM token refresh
     already replaced the engine (issue #29176) — so recreating would kill a
     working engine. Recreate happens only when the probe fails (covered in
@@ -278,7 +281,7 @@ async def test_run_reconnect_cycle_uses_direct_path_when_engine_alive(
         await engine_client._run_reconnect_cycle(timeout_seconds=5.0)
 
     engine_client.db.recreate_prisma_client.assert_not_awaited()
-    engine_client.db.query_raw.assert_awaited_once_with("SELECT 1")
+    engine_client.db.query_raw.assert_awaited_once_with(WRITER_PROBE_SQL)
     engine_client.db.disconnect.assert_not_awaited()
     engine_client._start_engine_watcher.assert_awaited_once()
 
@@ -296,7 +299,7 @@ async def test_run_reconnect_cycle_uses_direct_path_when_pid_unknown(
         await engine_client._run_reconnect_cycle(timeout_seconds=5.0)
 
     engine_client.db.recreate_prisma_client.assert_not_awaited()
-    engine_client.db.query_raw.assert_awaited_once_with("SELECT 1")
+    engine_client.db.query_raw.assert_awaited_once_with(WRITER_PROBE_SQL)
     engine_client.db.disconnect.assert_not_awaited()
     engine_client._start_engine_watcher.assert_awaited_once()
 

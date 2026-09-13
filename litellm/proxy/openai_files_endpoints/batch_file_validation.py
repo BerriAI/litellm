@@ -2,7 +2,9 @@ import json
 from collections.abc import Iterator
 from dataclasses import dataclass
 from itertools import chain
-from typing import BinaryIO, Final, NoReturn, assert_never
+from typing import BinaryIO, Final, NoReturn
+
+from typing_extensions import assert_never
 
 from litellm.proxy._types import ProxyException
 

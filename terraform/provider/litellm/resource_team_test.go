@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
@@ -82,6 +83,87 @@ func TestTeamCreateSendsSoftBudgetTagsAndAlertEmails(t *testing.T) {
 	}
 	if got := captured["metadata"]; !reflect.DeepEqual(got, wantMetadata) {
 		t.Fatalf("payload metadata = %v, want %v", got, wantMetadata)
+	}
+}
+
+func TestTeamCreateSendsConfiguredTeamID(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{"team_id":"platform-team","team_info":{"team_id":"platform-team","team_alias":"platform"},"keys":[],"team_memberships":[]}`)
+	defer srv.Close()
+
+	d := newTeamResourceData(t, map[string]interface{}{
+		"team_id":    "platform-team",
+		"team_alias": "platform",
+	})
+
+	if err := resourceLiteLLMTeamCreate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	if got := captured["team_id"]; got != "platform-team" {
+		t.Fatalf("payload team_id = %v, want platform-team", got)
+	}
+	if got := d.Id(); got != "platform-team" {
+		t.Fatalf("resource id = %q, want platform-team", got)
+	}
+	if got := d.Get("team_id"); got != "platform-team" {
+		t.Fatalf("state team_id = %v, want platform-team", got)
+	}
+}
+
+func TestTeamCreateGeneratesTeamIDWhenUnset(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{"team_id":"x","team_info":{"team_alias":"eng"},"keys":[],"team_memberships":[]}`)
+	defer srv.Close()
+
+	d := newTeamResourceData(t, map[string]interface{}{"team_alias": "eng"})
+
+	if err := resourceLiteLLMTeamCreate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	sent, _ := captured["team_id"].(string)
+	if _, err := uuid.Parse(sent); err != nil {
+		t.Fatalf("payload team_id = %q, want a generated UUID: %v", sent, err)
+	}
+	if d.Id() != sent || d.Get("team_id") != sent {
+		t.Fatalf("id = %q, state team_id = %v, want both to equal the sent id %q", d.Id(), d.Get("team_id"), sent)
+	}
+}
+
+func TestTeamReadSetsTeamIDFromResourceID(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{"team_id":"imported-team","team_info":{"team_id":"imported-team","team_alias":"imported"},"keys":[],"team_memberships":[]}`)
+	defer srv.Close()
+
+	d := newTeamResourceData(t, map[string]interface{}{})
+	d.SetId("imported-team")
+
+	if err := resourceLiteLLMTeamRead(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if got := d.Get("team_id"); got != "imported-team" {
+		t.Fatalf("team_id = %v, want imported-team", got)
+	}
+}
+
+func TestTeamIDChangeForcesReplacement(t *testing.T) {
+	res := ResourceLiteLLMTeam()
+	priorData := schema.TestResourceDataRaw(t, res.Schema, map[string]interface{}{
+		"team_id":    "old-team",
+		"team_alias": "eng",
+	})
+	priorData.SetId("old-team")
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{
+		"team_id":    "new-team",
+		"team_alias": "eng",
+	})
+	diff, err := res.Diff(context.Background(), priorData.State(), config, nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	if diff == nil || !diff.RequiresNew() {
+		t.Fatalf("changing team_id must force replacement, diff = %+v", diff)
 	}
 }
 
@@ -247,6 +329,77 @@ func TestTeamReadMapsNewFields(t *testing.T) {
 	}
 	if got := d.Get("team_member_rpm_limit").(int); got != 10 {
 		t.Errorf("team_member_rpm_limit = %v, want 10", got)
+	}
+}
+
+func TestTeamReadMapsPerModelLimitsFromMetadata(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{
+		"team_id": "team-1",
+		"team_info": {
+			"team_id": "team-1",
+			"team_alias": "eng",
+			"model_rpm_limit": null,
+			"model_tpm_limit": null,
+			"metadata": {
+				"department": "eng",
+				"model_rpm_limit": {"gpt-4o-mini": 250},
+				"model_tpm_limit": {"gpt-4o-mini": 5000}
+			}
+		}
+	}`)
+	defer srv.Close()
+
+	d := newTeamResourceData(t, map[string]interface{}{
+		"team_alias":      "eng",
+		"model_rpm_limit": map[string]interface{}{"gpt-4o-mini": 100},
+	})
+	d.SetId("team-1")
+
+	if err := resourceLiteLLMTeamRead(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("read returned error: %v", err)
+	}
+	if got := d.Get("model_rpm_limit"); !reflect.DeepEqual(got, map[string]interface{}{"gpt-4o-mini": 250}) {
+		t.Errorf("model_rpm_limit = %v, want server value 250", got)
+	}
+	if got := d.Get("model_tpm_limit"); !reflect.DeepEqual(got, map[string]interface{}{"gpt-4o-mini": 5000}) {
+		t.Errorf("model_tpm_limit = %v, want server value 5000", got)
+	}
+	if got := d.Get("metadata"); !reflect.DeepEqual(got, map[string]interface{}{"department": "eng"}) {
+		t.Errorf("metadata = %v, want per-model limits kept out of the string map", got)
+	}
+}
+
+func TestTeamUpdateClearsRemovedPerModelLimits(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{"team_id":"team-1","team_info":{"team_id":"team-1","team_alias":"eng"}}`)
+	defer srv.Close()
+
+	res := ResourceLiteLLMTeam()
+	priorData := schema.TestResourceDataRaw(t, res.Schema, map[string]interface{}{
+		"team_alias":      "eng",
+		"model_rpm_limit": map[string]interface{}{"gpt-4o-mini": 100},
+		"model_tpm_limit": map[string]interface{}{"gpt-4o-mini": 5000},
+	})
+	priorData.SetId("team-1")
+	prior := priorData.State()
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{"team_alias": "eng"})
+	diff, err := res.Diff(context.Background(), prior, config, nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	d, err := schema.InternalMap(res.Schema).Data(prior, diff)
+	if err != nil {
+		t.Fatalf("data failed: %v", err)
+	}
+
+	if err := resourceLiteLLMTeamUpdate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+	for _, k := range []string{"model_rpm_limit", "model_tpm_limit"} {
+		if got, ok := captured[k]; !ok || !reflect.DeepEqual(got, map[string]interface{}{}) {
+			t.Errorf("payload %s = %v (present=%v), want explicit empty map", k, got, ok)
+		}
 	}
 }
 

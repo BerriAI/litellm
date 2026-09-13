@@ -1,6 +1,7 @@
 import aimSecurityLogo from "../../../../../public/assets/logos/aim_security.jpeg";
 import aktoLogo from "../../../../../public/assets/logos/akto.svg";
 import aliceLogo from "../../../../../public/assets/logos/alice.svg";
+import conductLogo from "../../../../../public/assets/logos/conduct.png";
 import aporiaLogo from "../../../../../public/assets/logos/aporia.png";
 import bedrockLogo from "../../../../../public/assets/logos/bedrock.svg";
 import catoNetworksLogo from "../../../../../public/assets/logos/cato_networks.svg";
@@ -85,6 +86,7 @@ export const guardrail_provider_map: Record<string, string> = {
   QostodianNexus: "qostodian_nexus",
   Repelloai: "repelloai",
   Alice: "alice",
+  Conduct: "conduct",
 };
 
 // Function to populate provider map from API response - updates the original map
@@ -201,12 +203,14 @@ export const guardrailLogoMap = {
   XecGuard: xecguardLogo.src,
   "LiteLLM Content Filter": litellmLogo.src,
   "LiteLLM LLM as a Judge": litellmLogo.src,
+  "Hide Secrets": litellmLogo.src,
   Akto: aktoLogo.src,
   "DeepKeep AI Firewall": deepkeepLogo.src,
   "Qostodian Nexus": qohashLogo.src,
   "RepelloAI Argus": repelloAiLogo.src,
   Straiker: straikerLogo.src,
   Alice: aliceLogo.src,
+  "Conduct Guard": conductLogo.src,
 } satisfies Record<string, string>;
 
 export const getGuardrailLogo = (displayName: string): string | undefined =>

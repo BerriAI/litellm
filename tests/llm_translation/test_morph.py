@@ -3,6 +3,8 @@
 import os
 from unittest.mock import patch
 
+import pytest
+
 import litellm
 from litellm import MorphChatConfig, get_llm_provider
 
@@ -86,7 +88,7 @@ def test_morph_model_info():
 
     assert model_info["litellm_provider"] == "morph"
     assert model_info["mode"] == "chat"
-    assert model_info["max_tokens"] == 262144
+    assert model_info["max_tokens"] == 131072
     assert model_info["max_input_tokens"] == 262144
     assert model_info["max_output_tokens"] == 131072
     assert model_info["input_cost_per_token"] == 9e-07  # $0.9/1M tokens
@@ -114,7 +116,7 @@ def test_morph_open_model_info():
 def test_morph_supported_params():
     """Test that MorphChatConfig returns correct supported parameters."""
     config = MorphChatConfig()
-    supported_params = config.get_supported_openai_params("morph/morph-v3-large")
+    supported_params = config.get_supported_openai_params("morph/morph-glm53flash")
 
     expected_params = [
         "frequency_penalty",
@@ -133,6 +135,37 @@ def test_morph_supported_params():
     ]
 
     assert all(param in supported_params for param in expected_params)
+
+
+def test_morph_withholds_tool_params_for_models_without_function_calling():
+    config = MorphChatConfig()
+
+    for model in ["morph/morph-v3-large", "morph-v3-fast"]:
+        supported_params = config.get_supported_openai_params(model)
+
+        assert "tools" not in supported_params
+        assert "tool_choice" not in supported_params
+        assert "temperature" in supported_params
+
+
+def test_morph_passes_tool_params_for_models_missing_from_registry():
+    config = MorphChatConfig()
+    supported_params = config.get_supported_openai_params("morph/morph-unreleased-model")
+
+    assert "tools" in supported_params
+    assert "tool_choice" in supported_params
+
+
+def test_morph_rejects_tools_for_models_without_function_calling():
+    tools = [{"type": "function", "function": {"name": "noop", "parameters": {"type": "object", "properties": {}}}}]
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        litellm.get_optional_params(
+            model="morph-v3-large",
+            custom_llm_provider="morph",
+            tools=tools,
+            drop_params=False,
+        )
 
 
 def test_morph_maps_tool_and_response_format_params():

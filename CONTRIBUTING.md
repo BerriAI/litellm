@@ -315,10 +315,12 @@ Ensure the UI builds successfully before submitting your PR:
 npm run build
 ```
 
+Local lint and budget checks follow origin's current default branch. They refresh it from the remote instead of trusting cached `origin/HEAD`. For an intentional comparison against another branch or commit, use `make check BASE_REF=<ref>` or the standalone gate's `--base <ref>` option. An explicit ref can also be used offline once it has been fetched locally. Without an override, unavailable remote metadata stops the check
+
 ## Submitting Your PR
 
 1. **Push your branch**: `git push origin your-feature-branch`
-2. **Create a PR**: Go to GitHub and open a pull request against [`litellm_internal_staging`](https://github.com/BerriAI/litellm/tree/litellm_internal_staging), which is the default base branch. Do not target `main`.
+2. **Create a PR**: Go to GitHub and open a pull request against the repository's current default branch. Run `python3 scripts/default_branch.py --branch` to check its name
 3. **Fill out the PR template**: Provide clear description of changes
 4. **Wait for review**: Maintainers will review and provide feedback
 5. **Address feedback**: Make requested changes and push updates

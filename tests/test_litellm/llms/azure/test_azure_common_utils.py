@@ -385,6 +385,58 @@ def test_select_azure_base_url_called(setup_mocks):
     setup_mocks["select_url"].assert_called_once()
 
 
+def test_initialize_defaults_max_retries_to_litellm_default(setup_mocks):
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={},
+        api_key="test-api-key",
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version="2023-06-01",
+        is_async=False,
+    )
+
+    assert result["max_retries"] == litellm.constants.DEFAULT_MAX_RETRIES
+
+
+@pytest.mark.parametrize(
+    "configured, expected",
+    [(0, 0), (5, 5), (None, litellm.constants.DEFAULT_MAX_RETRIES)],
+)
+def test_initialize_honors_explicit_max_retries(setup_mocks, configured, expected):
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={"max_retries": configured},
+        api_key="test-api-key",
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version="2023-06-01",
+        is_async=False,
+    )
+
+    assert result["max_retries"] == expected
+
+
+def test_default_max_retries_env_var_reaches_azure_sdk_client():
+    import subprocess
+    import sys
+
+    code = (
+        "from litellm.llms.azure.common_utils import BaseAzureLLM\n"
+        "client = BaseAzureLLM().get_azure_openai_client("
+        "api_key='test-api-key', api_base='https://test.openai.azure.com', api_version='2024-02-01',"
+        " client=None, _is_async=True, litellm_params={}, model='gpt-4')\n"
+        "print(client.max_retries)"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        env={**os.environ, "DEFAULT_MAX_RETRIES": "0"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert completed.stdout.strip() == "0"
+
+
 @pytest.mark.parametrize(
     "call_type",
     [

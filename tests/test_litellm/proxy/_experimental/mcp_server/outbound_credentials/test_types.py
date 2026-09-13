@@ -75,6 +75,15 @@ def test_crederror_factory_sets_the_matching_tag(factory, expected_tag):
     assert "detail text" in err.summary
 
 
+def test_url_credentials_error_has_a_fixed_actionable_summary():
+    err = CredError.of_url_credentials_not_allowed()
+
+    assert err.tag == "url_credentials_not_allowed"
+    assert "Basic Auth" in err.summary
+    assert "auth_type: basic" in err.summary
+    assert "auth_value: username:password" in err.summary
+
+
 def test_apikeyconfig_requires_a_key_source():
     with pytest.raises(ValidationError):
         ApiKeyConfig()  # type: ignore[call-arg]

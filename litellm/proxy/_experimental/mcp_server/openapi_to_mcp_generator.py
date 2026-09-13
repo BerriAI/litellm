@@ -163,10 +163,14 @@ def load_openapi_spec(filepath: str) -> dict[str, Any]:
     return asyncio.run(load_openapi_spec_async(filepath))
 
 
-async def load_openapi_spec_async(filepath: str) -> dict[str, Any]:
+async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None) -> dict[str, Any]:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
-        r: Final[httpx.Response] = await async_safe_get(client, filepath)
+        r: Final[httpx.Response] = (
+            await async_safe_get(client, filepath)
+            if max_bytes is None
+            else await async_safe_get(client, filepath, max_response_bytes=max_bytes)
+        )
         r.raise_for_status()
         return r.json()
 

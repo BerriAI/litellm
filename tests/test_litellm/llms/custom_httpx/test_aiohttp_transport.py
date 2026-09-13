@@ -1,7 +1,11 @@
 import asyncio
 import concurrent.futures
+import socket
+import sys
+from typing import Final
 
 import aiohttp
+import aiohttp.abc
 import aiohttp.client_exceptions
 import aiohttp.http_exceptions
 import httpx
@@ -1140,3 +1144,55 @@ async def test_stopped_loop_session_disposed_synchronously_on_recycle():
     finally:
         await new_session.close()
         result["loop"].close()
+
+
+class _CancellingResolver(aiohttp.abc.AbstractResolver):
+    """Cancels the given task (or, by default, aiohttp's shielded DNS child task) mid-lookup."""
+
+    def __init__(self, task_to_cancel: "asyncio.Task[object] | None" = None):
+        self._task_to_cancel: Final = task_to_cancel
+
+    async def resolve(
+        self, host: str, port: int = 0, family: socket.AddressFamily = socket.AF_INET
+    ) -> list[aiohttp.abc.ResolveResult]:
+        target: Final = self._task_to_cancel or asyncio.current_task()
+        assert target is not None
+        target.cancel()
+        await asyncio.sleep(0)
+        raise OSError("resolver finished after the task was cancelled")
+
+    async def close(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    sys.version_info < (3, 11), reason="Task.cancelling() is needed to tell the two cancellations apart"
+)
+async def test_internal_dns_cancellation_maps_to_connect_error():
+    """A CancelledError the request task never asked for must surface as a mapped httpx transport error."""
+    session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(resolver=_CancellingResolver()))
+    transport = LiteLLMAiohttpTransport(client=session)
+    try:
+        with pytest.raises(httpx.ConnectError):
+            await transport.handle_async_request(httpx.Request("GET", "http://example.invalid/"))
+        current = asyncio.current_task()
+        assert current is not None and current.cancelling() == 0
+    finally:
+        await transport.aclose()
+
+
+@pytest.mark.asyncio
+async def test_genuine_request_cancellation_still_propagates():
+    """Cancelling the request task itself (client disconnect, shutdown) must still propagate unmapped."""
+    current = asyncio.current_task()
+    assert current is not None
+    session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(resolver=_CancellingResolver(current)))
+    transport = LiteLLMAiohttpTransport(client=session)
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await transport.handle_async_request(httpx.Request("GET", "http://example.invalid/"))
+    finally:
+        if sys.version_info >= (3, 11):
+            current.uncancel()
+        await transport.aclose()

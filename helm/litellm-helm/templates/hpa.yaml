@@ -18,12 +18,22 @@ spec:
   {{- end }}
   metrics:
     {{- if .Values.autoscaling.targetCPUUtilizationPercentage }}
+    {{- if and .Values.collector.enabled .Values.collector.scaleOnProxyContainerCpu }}
+    - type: ContainerResource
+      containerResource:
+        name: cpu
+        container: {{ include "litellm.name" . }}
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+    {{- else }}
     - type: Resource
       resource:
         name: cpu
         target:
           type: Utilization
           averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+    {{- end }}
     {{- end }}
     {{- if .Values.autoscaling.targetMemoryUtilizationPercentage }}
     - type: Resource
@@ -32,5 +42,23 @@ spec:
         target:
           type: Utilization
           averageUtilization: {{ .Values.autoscaling.targetMemoryUtilizationPercentage }}
+    {{- end }}
+    {{- with .Values.autoscaling.targetRequestsPerSecond }}
+    - type: Pods
+      pods:
+        metric:
+          name: litellm_requests_per_second
+        target:
+          type: AverageValue
+          averageValue: {{ toJson . | trimAll "\"" | quote }}
+    {{- end }}
+    {{- with .Values.autoscaling.targetTokensPerSecond }}
+    - type: Pods
+      pods:
+        metric:
+          name: litellm_tokens_per_second
+        target:
+          type: AverageValue
+          averageValue: {{ toJson . | trimAll "\"" | quote }}
     {{- end }}
 {{- end }}

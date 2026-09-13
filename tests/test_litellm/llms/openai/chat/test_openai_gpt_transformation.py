@@ -4,6 +4,7 @@ Tests for OpenAI GPT transformation (litellm/llms/openai/chat/gpt_transformation
 
 
 import pytest
+from typing import Final
 
 
 import litellm
@@ -1168,6 +1169,9 @@ class TestOpenAIPromptCacheBreakpointChatPath:
         assert "prompt_cache_options" not in request
 
 
+_ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
+
+
 class TestToolSchemaCombinatorFlatteningForOpenAI:
     """
     Regression tests for LIT-6488: OpenAI's chat completions validator rejects
@@ -1281,3 +1285,50 @@ class TestToolSchemaCombinatorFlatteningForOpenAI:
         parameters = request["tools"][0]["function"]["parameters"]
         assert "anyOf" not in parameters
         assert set(parameters["properties"]) == {"id", "enabled", "schedule"}
+
+    @staticmethod
+    def _artifact_tool():
+        return {
+            "type": "function",
+            "function": {
+                "name": "Artifact",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"field": {"type": "string", "pattern": _ARTIFACT_FIELD_PATTERN}},
+                    "required": ["field"],
+                },
+            },
+        }
+
+    def test_drops_non_python_regex_pattern_for_hosted_openai(self):
+        tool = self._artifact_tool()
+
+        request = self._transform(self.config, "gpt-4o", {"custom_llm_provider": "openai", "api_base": None}, [tool])
+
+        assert request["tools"][0]["function"]["parameters"] == {
+            "type": "object",
+            "properties": {"field": {"type": "string"}},
+            "required": ["field"],
+        }
+        assert tool == self._artifact_tool()
+
+    def test_custom_api_base_drops_non_python_regex_pattern_but_keeps_union(self):
+        tool = self._anyof_tool()
+        tool["function"]["parameters"]["properties"]["id"]["pattern"] = _ARTIFACT_FIELD_PATTERN
+
+        request = self._transform(
+            self.config, "gpt-4o", {"custom_llm_provider": "openai", "api_base": "http://localhost:8000/v1"}, [tool]
+        )
+
+        parameters = request["tools"][0]["function"]["parameters"]
+        assert parameters["properties"]["id"] == {"type": "string"}
+        assert parameters["anyOf"] == self._anyof_tool()["function"]["parameters"]["anyOf"]
+
+    def test_non_openai_provider_keeps_non_python_regex_pattern(self):
+        tool = self._artifact_tool()
+
+        request = self._transform(
+            self.config, "some-oss-model", {"custom_llm_provider": "groq", "api_base": None}, [tool]
+        )
+
+        assert request["tools"][0] is tool

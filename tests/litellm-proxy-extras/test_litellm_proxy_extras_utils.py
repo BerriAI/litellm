@@ -2,6 +2,7 @@ import glob
 import os
 import re
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -567,7 +568,7 @@ class TestResolveAllMigrationsLedger:
                 return _FakeCompleted()
             return _FakeCompleted()
 
-        monkeypatch.setattr(utils_module.subprocess, "run", fake_run)
+        monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", fake_run)
         ProxyExtrasDBManager._resolve_all_migrations(str(tmp_path), "schema.prisma")
         return calls
 
@@ -604,9 +605,9 @@ class TestPartitionedSpendLogsPushGuard:
         import litellm_proxy_extras.utils as utils_module
 
         def fail_run(cmd, **kwargs):
-            raise AssertionError(f"subprocess.run should not be called, got: {cmd}")
+            raise AssertionError(f"run_prisma should not be called, got: {cmd}")
 
-        monkeypatch.setattr(utils_module.subprocess, "run", fail_run)
+        monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", fail_run)
 
     def test_v1_db_push_fails_fast_with_guidance(self, monkeypatch):
         monkeypatch.setattr(
@@ -703,3 +704,236 @@ class TestSpendLogsPartitionDetectionMissingPsycopg:
         assert any(
             "psycopg is not installed" in record.message for record in caplog.records
         )
+
+
+_ATTEMPT_BUDGET = 4
+
+_P3005_STDERR = """Error: P3005
+
+The database schema is not empty. Read more about how to baseline an existing production database: https://pris.ly/d/migrate-baseline
+"""
+
+
+def _p3018_stderr(migration_name):
+    return f"""Error: P3018
+
+A migration failed to apply. New migrations cannot be applied before the error is recovered from.
+
+Migration name: {migration_name}
+
+Database error code: 42P07
+
+Database error:
+ERROR: relation "SomeTable" already exists
+"""
+
+
+class _MigrateDeployHarness:
+    """Drives _setup_database_v2 with a scripted sequence of
+    `prisma migrate deploy` outcomes, with every recovery command faked out so
+    nothing touches a database or the packaged migrations directory."""
+
+    def __init__(self, monkeypatch, tmp_path, outcomes, repeat_last=False):
+        import subprocess as subprocess_module
+
+        import litellm_proxy_extras.utils as utils_module
+
+        self.deploy_calls = []
+        self.resolved = []
+        self.baselines = 0
+        self._outcomes = list(outcomes)
+        self._repeat_last = repeat_last
+        self._subprocess_module = subprocess_module
+
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.setattr(
+            ProxyExtrasDBManager, "_get_prisma_dir", staticmethod(lambda: str(tmp_path))
+        )
+        monkeypatch.setattr(
+            ProxyExtrasDBManager,
+            "_create_baseline_migration",
+            staticmethod(self._fake_baseline),
+        )
+        monkeypatch.setattr(
+            ProxyExtrasDBManager,
+            "_roll_back_migration",
+            staticmethod(lambda name: None),
+        )
+        monkeypatch.setattr(
+            ProxyExtrasDBManager,
+            "_resolve_specific_migration",
+            staticmethod(self.resolved.append),
+        )
+        monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", self._fake_run)
+        monkeypatch.setattr(utils_module.time, "sleep", lambda seconds: None)
+
+        self.baseline_succeeds = True
+
+    def _fake_baseline(self, *args, **kwargs):
+        self.baselines += 1
+        return self.baseline_succeeds
+
+    def _next_outcome(self):
+        if self._outcomes:
+            if self._repeat_last and len(self._outcomes) == 1:
+                return self._outcomes[0]
+            return self._outcomes.pop(0)
+        raise AssertionError("prisma migrate deploy called more times than scripted")
+
+    def _fake_run(self, cmd, **kwargs):
+        assert cmd[1:] == ["migrate", "deploy"], f"unexpected prisma command: {cmd}"
+        self.deploy_calls.append(cmd)
+        outcome = self._next_outcome()
+        if outcome == "ok":
+            return _FakeCompleted()
+        if outcome == "timeout":
+            raise self._subprocess_module.TimeoutExpired(cmd, 1)
+        raise self._subprocess_module.CalledProcessError(1, cmd, stderr=outcome)
+
+    def run(self):
+        return ProxyExtrasDBManager._setup_database_v2(use_migrate=True)
+
+
+class TestMigrateDeployAttemptAccounting:
+    """A `prisma db push` database has a full schema and no ledger, so the v2
+    resolver baselines it and then works through every migration whose objects
+    already exist. Those recoveries make progress, so they must not spend the
+    retry budget, which is there to stop a run that is getting nowhere."""
+
+    def test_a_push_created_database_finishes_bootstrapping(
+        self, monkeypatch, tmp_path
+    ):
+        already_there = [
+            "20250329084805_new_cron_job_table",
+            "20250806095134_rename_alias_to_server_name_mcp_table",
+            "20260224203854_add_agent_object_permissions_table",
+            "20260301120000_fourth_table",
+            "20260302120000_fifth_table",
+            "20260303120000_sixth_table",
+        ]
+        harness = _MigrateDeployHarness(
+            monkeypatch,
+            tmp_path,
+            [_P3005_STDERR]
+            + [_p3018_stderr(name) for name in already_there]
+            + ["ok"],
+        )
+
+        assert harness.run() is True
+        assert harness.baselines == 1
+        assert harness.resolved == already_there
+        assert len(harness.deploy_calls) == len(already_there) + 2
+
+    def test_repeated_recovery_of_one_migration_still_gives_up(
+        self, monkeypatch, tmp_path
+    ):
+        harness = _MigrateDeployHarness(
+            monkeypatch,
+            tmp_path,
+            [_p3018_stderr("20250329084805_new_cron_job_table")],
+            repeat_last=True,
+        )
+
+        with pytest.raises(RuntimeError):
+            harness.run()
+        assert len(harness.deploy_calls) <= _ATTEMPT_BUDGET + 1
+
+    def test_timeouts_still_spend_the_budget(self, monkeypatch, tmp_path):
+        harness = _MigrateDeployHarness(
+            monkeypatch, tmp_path, ["timeout"], repeat_last=True
+        )
+
+        with pytest.raises(RuntimeError):
+            harness.run()
+        assert len(harness.deploy_calls) == _ATTEMPT_BUDGET
+
+    def test_a_baseline_that_never_lands_stops_after_the_budget(
+        self, monkeypatch, tmp_path
+    ):
+        harness = _MigrateDeployHarness(
+            monkeypatch, tmp_path, [_P3005_STDERR], repeat_last=True
+        )
+        harness.baseline_succeeds = False
+
+        with pytest.raises(RuntimeError):
+            harness.run()
+        assert len(harness.deploy_calls) == _ATTEMPT_BUDGET
+
+    def test_an_unrecoverable_error_is_not_retried(self, monkeypatch, tmp_path):
+        harness = _MigrateDeployHarness(
+            monkeypatch,
+            tmp_path,
+            ["Error: P3018\n\nMigration name: 20260101000000_x\n\nERROR: syntax error at or near \"SLECT\"\n"],
+            repeat_last=True,
+        )
+
+        with pytest.raises(RuntimeError):
+            harness.run()
+        assert len(harness.deploy_calls) == 1
+        assert harness.resolved == []
+
+
+class TestJWTKeyMappingCascade:
+    """Regression tests for issue #33702.
+
+    A virtual key referenced by a LiteLLM_JWTKeyMapping row could not be deleted
+    because LiteLLM_JWTKeyMapping_token_fkey was created ON DELETE RESTRICT, so
+    deleting the key (Admin UI, /key/delete, team delete, ...) raised a foreign
+    key violation. The mapping must be removed automatically when its key is
+    deleted, which the FK now enforces via ON DELETE CASCADE.
+    """
+
+    _FK_NAME = "LiteLLM_JWTKeyMapping_token_fkey"
+
+    def _effective_on_delete(self):
+        """Replay every migration in order and return the last ON DELETE action
+        declared for the JWT key mapping FK."""
+        action = None
+        for _migration_name, sql in _get_all_migrations():
+            for match in re.finditer(
+                rf'ADD\s+CONSTRAINT\s+"{re.escape(self._FK_NAME)}".*?'
+                r"ON\s+DELETE\s+(CASCADE|RESTRICT|SET\s+NULL|NO\s+ACTION|SET\s+DEFAULT)",
+                sql,
+                re.IGNORECASE | re.DOTALL,
+            ):
+                action = re.sub(r"\s+", " ", match.group(1).upper())
+        return action
+
+    def test_fk_effective_on_delete_is_cascade(self):
+        """The final FK definition across all migrations must cascade deletes."""
+        assert self._effective_on_delete() == "CASCADE", (
+            f"{self._FK_NAME} must end up ON DELETE CASCADE so deleting a "
+            "virtual key removes its JWT key mapping (issue #33702)"
+        )
+
+    def test_schema_declares_cascade_on_relation(self):
+        """schema.prisma must declare onDelete: Cascade on the mapping relation
+        so the generated client and DB agree."""
+        schema_paths = glob.glob(
+            os.path.abspath(
+                os.path.join(
+                    os.path.dirname(__file__), "../../**/schema.prisma"
+                )
+            ),
+            recursive=True,
+        )
+        declaring = tuple(
+            (path, schema)
+            for path, schema in ((p, Path(p).read_text()) for p in schema_paths)
+            if "model LiteLLM_JWTKeyMapping" in schema
+        )
+        assert declaring, "No schema.prisma declaring LiteLLM_JWTKeyMapping found"
+        for path, schema in declaring:
+            match = re.search(
+                r"litellm_verification_token\s+LiteLLM_VerificationToken\s+@relation\(([^)]*)\)",
+                schema,
+            )
+            assert match is not None, (
+                f"{path} declares LiteLLM_JWTKeyMapping but its verification token "
+                "relation could not be parsed, so this test cannot vouch for it "
+                "(issue #33702)"
+            )
+            assert "onDelete: Cascade" in match.group(1), (
+                f"{path} must declare onDelete: Cascade on the JWT key mapping "
+                "relation (issue #33702)"
+            )

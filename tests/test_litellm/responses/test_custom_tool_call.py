@@ -374,6 +374,8 @@ class TestTransformationCustomTools:
             "srvtoolu_01ServerCall",
             "toolu_01CustomCall",
         ]
+        assert result[1].type == "function_call"
+        assert result[1].name == "web_search"
 
     def test_transform_mixed_tool_calls(self):
         """Test transformation with both custom and regular tool calls."""

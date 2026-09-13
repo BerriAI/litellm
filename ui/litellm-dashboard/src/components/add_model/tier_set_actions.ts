@@ -4,11 +4,12 @@ import { pruneTierModelParams } from "./complexity_router_tiers";
 import {
   type ActiveTierRow,
   type TierRow,
-  TIER_ORDER,
+  ALL_BUILT_IN_TIERS,
   activeTierName,
   activeTierRows,
   rowParamsByTier,
   sameTierIdentity,
+  tierOrderFor,
   tierRowById,
   tierRowByName,
 } from "./tier_rows";
@@ -74,13 +75,13 @@ const rulesFollowingRows = (
 // Models and params both come from these rows, so the two cannot be keyed differently.
 const exitToBuiltInTiers = (value: ComplexityRouterConfigValue, rows: readonly ActiveTierRow[]) => {
   const { custom_tier_set: _dropped, ...rest } = value;
-  const builtInRows: ActiveTierRow[] = TIER_ORDER.map(
+  const builtInRows: ActiveTierRow[] = tierOrderFor(value.enable_non_reasoning_tier).map(
     (tier) =>
       tierRowById(rows, tier) ?? {
         id: tier,
         name: tier,
         definition: "",
-        models: value.tiers[tier],
+        models: value.tiers[tier] ?? [],
         params: value.tier_model_params?.[tier] ?? {},
       },
   );
@@ -121,7 +122,7 @@ const nextTierSetValue = (
     case "remove": {
       const removed = tierRowById(rows, action.id);
       const snapshot =
-        removed && (TIER_ORDER as string[]).includes(action.id)
+        removed && (ALL_BUILT_IN_TIERS as string[]).includes(action.id)
           ? { ...value, tiers: { ...value.tiers, [action.id]: removed.models } }
           : value;
       return commitTierRows(

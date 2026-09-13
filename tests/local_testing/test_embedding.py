@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
 from litellm import completion, completion_cost, embedding
+from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 
 litellm.set_verbose = False
 
@@ -269,11 +270,14 @@ def test_openai_azure_embedding_timeouts():
 def test_openai_embedding_timeouts():
     try:
         response = embedding(
-            model="text-embedding-ada-002",
+            model="openai/slow-endpoint",
             input=["good morning from litellm"],
-            timeout=0.00001,
+            api_base=FAKE_OPENAI_API_BASE,
+            api_key="fake-key",
+            timeout=0.5,
         )
         print(response)
+        pytest.fail("Expected timeout error, the request returned instead")
     except openai.APITimeoutError:
         print("Good job got OpenAI timeout error!")
         pass

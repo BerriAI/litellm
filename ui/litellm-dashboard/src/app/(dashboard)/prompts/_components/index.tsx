@@ -41,11 +41,12 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [selectedEnvironment, setSelectedEnvironment] = useState<string | undefined>(undefined);
   const [selectedPromptId, setSelectedPromptId] = useState<string | null>(null);
+  const [selectedPromptEnvironment, setSelectedPromptEnvironment] = useState<string | undefined>(undefined);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [showEditorView, setShowEditorView] = useState(false);
   const [editPromptData, setEditPromptData] = useState<any>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [promptToDelete, setPromptToDelete] = useState<{ id: string; name: string } | null>(null);
+  const [promptToDelete, setPromptToDelete] = useState<{ id: string; name: string; environment: string } | null>(null);
 
   // Admin Viewer follows the read-parity rule: see prompts, no writes.
   const canModify = userRole ? isProxyAdminRole(userRole) : false;
@@ -71,8 +72,9 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
     fetchPrompts();
   }, [accessToken, selectedEnvironment]);
 
-  const handlePromptClick = (promptId: string) => {
+  const handlePromptClick = (promptId: string, environment: string) => {
     setSelectedPromptId(promptId);
+    setSelectedPromptEnvironment(environment);
   };
 
   const handleAddPrompt = () => {
@@ -111,8 +113,8 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
     setSelectedPromptId(null);
   };
 
-  const handleDeleteClick = (promptId: string, promptName: string) => {
-    setPromptToDelete({ id: promptId, name: promptName });
+  const handleDeleteClick = (promptId: string, promptName: string, environment: string) => {
+    setPromptToDelete({ id: promptId, name: promptName, environment });
   };
 
   const handleDeleteConfirm = async () => {
@@ -120,8 +122,8 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
 
     setIsDeleting(true);
     try {
-      await deletePromptCall(accessToken, promptToDelete.id);
-      toast.success(`Prompt "${promptToDelete.name}" deleted successfully`);
+      await deletePromptCall(accessToken, promptToDelete.id, promptToDelete.environment);
+      toast.success(`Prompt "${promptToDelete.name}" deleted successfully from ${promptToDelete.environment}`);
       fetchPrompts(); // Refresh the list
     } catch (error) {
       console.error("Error deleting prompt:", error);
@@ -148,6 +150,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
       ) : selectedPromptId ? (
         <PromptInfoView
           promptId={selectedPromptId}
+          initialEnvironment={selectedPromptEnvironment}
           onClose={() => setSelectedPromptId(null)}
           accessToken={accessToken}
           isAdmin={canModify}
@@ -219,7 +222,8 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
             <AlertDialogHeader>
               <AlertDialogTitle>Delete Prompt</AlertDialogTitle>
               <AlertDialogDescription>
-                Are you sure you want to delete prompt: {promptToDelete.name} ? This action cannot be undone.
+                Are you sure you want to delete the {promptToDelete.environment} copy of prompt: {promptToDelete.name}?
+                This action cannot be undone.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
