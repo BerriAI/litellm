@@ -255,6 +255,7 @@ from litellm.types.utils import (
 )
 
 _CALL_TYPE_ENUM_MAP: Final[dict] = {ct.value: ct for ct in CallTypes}
+_BACKFILL_MODES: Final = frozenset({"chat", "responses"})
 
 # +-----------------------------------------------+
 # |                                               |
@@ -5820,7 +5821,7 @@ def _get_model_info_helper(
                     ):
                         _model_info = None
 
-            if _model_info is not None and key is not None:
+            if _model_info is not None and key is not None and _model_info.get("mode", "chat") in _BACKFILL_MODES:
                 backfill: Final = match_backfill_generalizations(key)
                 if backfill is not None:
                     _model_info = {**{k: v for k, v in backfill.items() if k not in _model_info}, **_model_info}

@@ -191,7 +191,10 @@ class _FallbackGeneralizations:
         matched = tuple(rule.model_info for rule in self.backfill_rules if rule.pattern.search(model) is not None)
         if not matched:
             return None
-        return {key: value for model_info in matched for key, value in model_info.items()}
+        backfill: Final = {
+            key: value for model_info in matched for key, value in model_info.items() if key != PROVIDER_KEY
+        }
+        return backfill or None
 
 
 _registry: Final = _FallbackGeneralizations()
