@@ -544,3 +544,47 @@ async def test_ollama_async_completion_inlines_remote_images_off_the_event_loop(
     assert response.choices[0].message.content == "Green"
     assert async_only_image_fetch.fetched == [image_url]
     assert captured["body"]["images"] == [async_only_image_fetch.base64_png]
+
+
+def test_ollama_transform_request_custom_prompt_optional_values():
+    config = OllamaConfig()
+    model = "custom-ollama-model"
+    messages = [{"role": "user", "content": "hello world"}]
+
+    litellm_params = {
+        "custom_prompt_dict": {
+            model: {
+                "roles": {
+                    "user": {"pre_message": "[INST] ", "post_message": " [/INST]"}
+                }
+            }
+        }
+    }
+    result = config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+    assert result["prompt"] == "[INST] hello world [/INST]"
+
+    litellm_params_initial_only = {
+        "custom_prompt_dict": {
+            model: {
+                "roles": {
+                    "user": {"pre_message": "Human: ", "post_message": "\n"}
+                },
+                "initial_prompt_value": "Instructions:\n",
+            }
+        }
+    }
+    result_initial = config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params={},
+        litellm_params=litellm_params_initial_only,
+        headers={},
+    )
+    assert result_initial["prompt"] == "Instructions:\nHuman: hello world\n"
+
