@@ -316,3 +316,83 @@ class TestNonAnthropicStreamingIntact:
         result = processor._calculate_usage_per_chunk(chunks=chunks)
         assert result["prompt_tokens"] == 0
         assert result["completion_tokens"] == 0
+
+
+class TestCacheWriteExplicitZeroUpdate:
+    """
+    Regression for #40736. A later usage event that reports
+    `cache_creation_input_tokens: 0` alongside real prompt-side counts replaces
+    the earlier cache-write count, so the stale positive stops leaking into the
+    merged usage and making the uncached input negative
+
+    An event with no prompt-side counts at all is not authoritative and leaves
+    the earlier values alone, which `test_all_zero_prompt_side_event_does_not_clobber`
+    and `test_cache_read_input_tokens_retained` in
+    test_streaming_chunk_builder_utils.py both pin
+    """
+
+    def test_explicit_zero_cache_write_replaces_earlier_positive(self):
+        """
+        The issue's trace: 2 uncached input tokens on both events, and
+        prompt_tokens already folds the cache counts in, so it is 58354 either
+        way. The first event charges the block as a write, the second restates
+        it as a read and reports the write as 0
+        """
+        start = Usage(prompt_tokens=58354, completion_tokens=1)
+        start.cache_read_input_tokens = 0
+        start.cache_creation_input_tokens = 58352
+
+        final = Usage(prompt_tokens=58354, completion_tokens=408)
+        final.cache_read_input_tokens = 58352
+        final.cache_creation_input_tokens = 0  # explicit zero
+
+        chunks = [_make_chunk(usage=start), _make_chunk(usage=final)]
+        result = ChunkProcessor(chunks=chunks, messages=[])._calculate_usage_per_chunk(
+            chunks=chunks
+        )
+
+        assert result["cache_creation_input_tokens"] == 0
+        assert result["cache_read_input_tokens"] == 58352
+        assert (
+            result["prompt_tokens"]
+            - result["cache_read_input_tokens"]
+            - result["cache_creation_input_tokens"]
+            == 2
+        )
+
+    def test_omitted_cache_write_after_positive_is_retained(self):
+        """
+        Providers that leave a cache field out of the usage object entirely, as
+        the generic streaming path does, must not have the earlier count cleared
+        """
+        start = Usage(prompt_tokens=58354, completion_tokens=1)
+        start.cache_creation_input_tokens = 58352
+
+        final = Usage(prompt_tokens=58354, completion_tokens=408)
+        final.cache_read_input_tokens = 58352
+
+        chunks = [_make_chunk(usage=start), _make_chunk(usage=final)]
+        result = ChunkProcessor(chunks=chunks, messages=[])._calculate_usage_per_chunk(
+            chunks=chunks
+        )
+
+        assert result["cache_creation_input_tokens"] == 58352
+        assert result["cache_read_input_tokens"] == 58352
+
+    def test_all_zero_prompt_side_event_does_not_clobber(self):
+        """An event reporting only output tokens must not zero the cache counts"""
+        start = Usage(prompt_tokens=11779, completion_tokens=5)
+        start.cache_read_input_tokens = 11775
+        start.cache_creation_input_tokens = 4
+
+        final = Usage(prompt_tokens=0, completion_tokens=214)
+        final.cache_read_input_tokens = 0
+        final.cache_creation_input_tokens = 0
+
+        chunks = [_make_chunk(usage=start), _make_chunk(usage=final)]
+        result = ChunkProcessor(chunks=chunks, messages=[])._calculate_usage_per_chunk(
+            chunks=chunks
+        )
+
+        assert result["cache_creation_input_tokens"] == 4
+        assert result["cache_read_input_tokens"] == 11775
