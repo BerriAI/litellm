@@ -165,7 +165,26 @@ def transform_friendli_data(data: list, local_data: dict) -> dict:
     return transformed
 
 # Synchronize local data with remote data
-def sync_local_data_with_remote(local_data, remote_data, replace_keys=frozenset()):
+def _stale_friendli_keys(local_data: dict[str, Any], remote_data: dict[str, Any]) -> set[str]:
+    """friendliai/* keys absent from a non-empty catalog must not survive the sync:
+    Friendli delists deprecated serverless models, so registry entries the catalog
+    no longer returns are dead — proxies keep billing stale prices against a model
+    that fails at the provider. Restricted to the friendliai prefix and gated on a
+    non-empty remote so a failed or empty fetch can never wipe entries."""
+    if not remote_data:
+        return set()
+    return {
+        key
+        for key in local_data
+        if key.startswith(f"{FRIENDLI_PROVIDER}/") and key not in remote_data
+    }
+
+
+def sync_local_data_with_remote(
+    local_data: dict[str, Any],
+    remote_data: dict[str, Any],
+    replace_keys: frozenset[str] = frozenset(),
+) -> None:
     # Update existing keys in local_data with values from remote_data
     # (replace_keys entries are swapped wholesale so a field the remote catalog
     #  dropped, e.g. cache pricing, cannot survive as a stale value)
@@ -178,6 +197,12 @@ def sync_local_data_with_remote(local_data, remote_data, replace_keys=frozenset(
     # Add new keys from remote_data to local_data
     for key in (set(remote_data) - set(local_data)):
         local_data[key] = remote_data[key]
+
+    # Drop friendliai keys the live catalog no longer returns (see docstring);
+    # other providers keep their entries — OpenRouter/Vercel list rows can lag
+    # or delist while users still route to them
+    for key in _stale_friendli_keys(local_data, remote_data):
+        del local_data[key]
 
 # Write data to the json file
 def write_to_file(file_path, data):

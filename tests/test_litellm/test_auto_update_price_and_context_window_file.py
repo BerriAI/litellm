@@ -220,3 +220,40 @@ def test_transform_inherits_allowlisted_keys_from_base_model_entry(sync_module):
     assert entry["supports_pdf_input"] is True
     assert entry["supports_assistant_prefill"] is True
     assert entry["input_cost_per_token"] == 1.5e-07
+
+
+def test_sync_drops_friendli_entries_absent_from_catalog(sync_module):
+    local = {
+        "friendliai/dead-model": {"litellm_provider": "friendliai", "input_cost_per_token": 1e-06},
+        "friendliai/zai-org/GLM-Test": {"litellm_provider": "friendliai"},
+        "openrouter/still-listed": {"input_cost_per_token": 1e-06},
+    }
+    remote = sync_module.transform_friendli_data([_reasoning_model()], local)
+    sync_module.sync_local_data_with_remote(local, remote, replace_keys=frozenset(remote))
+    assert "friendliai/dead-model" not in local
+    assert "friendliai/zai-org/GLM-Test" in local
+    # non-friendli entries are never deleted by absence
+    assert "openrouter/still-listed" in local
+
+
+def test_sync_keeps_all_entries_when_friendli_fetch_fails_or_is_empty(sync_module):
+    local = {
+        "friendliai/zai-org/GLM-Test": {"litellm_provider": "friendliai"},
+        "openrouter/kept": {"input_cost_per_token": 1e-06},
+    }
+    for failed_fetch in (None, []):
+        remote = sync_module.transform_friendli_data(failed_fetch, local)
+        assert remote == {}
+        sync_module.sync_local_data_with_remote(local, remote, replace_keys=frozenset(remote))
+        assert "friendliai/zai-org/GLM-Test" in local
+        assert "openrouter/kept" in local
+
+
+def test_sync_drops_legacy_friendli_entries_without_source_field(sync_module):
+    # pre-sync rows (no `source`) must be cleaned up too, not just synced ones
+    local = {
+        "friendliai/legacy-model": {"litellm_provider": "friendliai", "max_tokens": 8192},
+    }
+    remote = sync_module.transform_friendli_data([_reasoning_model()], local)
+    sync_module.sync_local_data_with_remote(local, remote, replace_keys=frozenset(remote))
+    assert "friendliai/legacy-model" not in local
