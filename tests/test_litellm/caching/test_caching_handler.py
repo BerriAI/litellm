@@ -11,7 +11,8 @@ from fastapi.testclient import TestClient
 from datetime import datetime
 from unittest.mock import AsyncMock
 
-from litellm.caching.caching_handler import LLMCachingHandler
+from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
+from litellm.types.utils import Embedding, EmbeddingResponse
 
 
 @pytest.mark.asyncio
@@ -693,3 +694,72 @@ async def test_cache_hit_records_the_looked_up_key_as_the_preset_cache_key(monke
     assert handler.preset_cache_key is not None
     assert logging_obj.litellm_params["preset_cache_key"] == handler.preset_cache_key
     assert hit.cached_result._hidden_params["cache_key"] == handler.preset_cache_key
+
+
+@pytest.mark.parametrize(
+    "cache_pattern",
+    [
+        pytest.param([True, True, False], id="cached_first"),
+        pytest.param([False, True, True], id="fresh_first"),
+        pytest.param([True, False, True, False], id="interleaved"),
+        pytest.param([False, False, False], id="all_fresh_control"),
+    ],
+)
+def test_embedding_cache_merge_preserves_input_index(cache_pattern):
+    """
+    A batch mixing cached and uncached inputs must return data[i].index == i (#41002).
+
+    Cache misses are forwarded upstream as a shorter batch, so the provider indexes
+    them relative to that subset. Those indices have to be re-keyed to the position
+    of the input in the original request, or clients that map data[i].embedding back
+    to input[data[i].index] silently pair embeddings with the wrong text.
+    """
+    handler = LLMCachingHandler(
+        original_function=MagicMock(),
+        request_kwargs={},
+        start_time=datetime.now(),
+    )
+
+    size = len(cache_pattern)
+    # Each input's embedding is [float(position)], whatever it came from, so the
+    # assertions below catch mis-placement as well as a mislabelled index.
+    cached_result = [
+        {"embedding": [float(i)], "index": i, "object": "embedding"} if hit else None
+        for i, hit in enumerate(cache_pattern)
+    ]
+
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+
+    kwargs = {"model": "text-embedding-ada-002", "input": [f"text-{i}" for i in range(size)]}
+    final_cached, _ = handler._process_async_embedding_cached_response(
+        final_embedding_cached_response=None,
+        cached_result=cached_result,
+        kwargs=kwargs,
+        logging_obj=logging_obj,
+        start_time=datetime.now(),
+        model="text-embedding-ada-002",
+    )
+
+    # What the upstream provider returns for the cache misses: indexed 0..k-1
+    # against the shortened batch it actually received.
+    missed_positions = [i for i, hit in enumerate(cache_pattern) if not hit]
+    api_response = EmbeddingResponse(
+        model="text-embedding-ada-002",
+        data=[
+            Embedding(embedding=[float(position)], index=subset_index, object="embedding")
+            for subset_index, position in enumerate(missed_positions)
+        ],
+    )
+
+    combined = handler._combine_cached_embedding_response_with_api_result(
+        _caching_handler_response=CachingHandlerResponse(
+            final_embedding_cached_response=final_cached
+        ),
+        embedding_response=api_response,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert [d["index"] for d in combined.data] == list(range(size))
+    assert [d["embedding"] for d in combined.data] == [[float(i)] for i in range(size)]
