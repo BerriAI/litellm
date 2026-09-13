@@ -289,6 +289,7 @@ editable-profile = "dev"
 include = [
     "litellm/proxy/_experimental/out/**",
     "litellm/router_strategy/complexity_router/artifacts/*.json",
+    "litellm/proxy/client/cli/commands/codex_base_instructions.md",
 ]
 exclude = [
     "litellm/proxy/enterprise",
