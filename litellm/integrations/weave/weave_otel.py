@@ -125,17 +125,8 @@ def weave_otel_endpoint(host: str | None) -> str:
     return normalized.rstrip("/") + WEAVE_OTEL_ENDPOINT
 
 
-def get_weave_otel_config() -> WeaveOtelConfig:
-    """
-    Retrieves the Weave OpenTelemetry configuration based on environment variables.
-
-    Environment Variables:
-        WANDB_API_KEY: Required. W&B API key for authentication.
-        WANDB_PROJECT_ID: Required. Project ID in format <entity>/<project_name>.
-        WANDB_HOST: Optional. Custom Weave host URL. Defaults to cloud endpoint.
-
-    Returns:
-        WeaveOtelConfig: A Pydantic model containing Weave OTEL configuration.
+def read_weave_otel_config() -> WeaveOtelConfig:
+    """Weave OTLP settings from ``WANDB_API_KEY``, ``WANDB_PROJECT_ID`` and optional ``WANDB_HOST``.
 
     Raises:
         ValueError: If required environment variables are missing.
@@ -158,16 +149,20 @@ def get_weave_otel_config() -> WeaveOtelConfig:
     auth_header: Final = _get_weave_authorization_header(api_key=api_key)
     otlp_auth_headers: Final = f"Authorization={auth_header},project_id={project_id}"
 
-    # Set standard OTEL environment variables
-    os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = endpoint
-    os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = otlp_auth_headers
-
     return WeaveOtelConfig(
         otlp_auth_headers=otlp_auth_headers,
         endpoint=endpoint,
         project_id=project_id,
         protocol="otlp_http",
     )
+
+
+def get_weave_otel_config() -> WeaveOtelConfig:
+    """``read_weave_otel_config`` plus the v1 side effect of publishing it as the process-wide ``OTEL_*`` env."""
+    config: Final = read_weave_otel_config()
+    os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = config.endpoint
+    os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = config.otlp_auth_headers
+    return config
 
 
 def set_weave_otel_attributes(span: Span, kwargs: Mapping[str, object], response_obj: object):

@@ -3,14 +3,14 @@
 import contextvars
 import time
 from base64 import b64encode
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from functools import reduce
 from types import MappingProxyType
 
 import pytest
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import Status, StatusCode
 
@@ -22,6 +22,7 @@ from litellm.integrations.otel.logger import (
     build_otel_v2_logger,
     fan_out_provider,
     publish_global_otel_v2_provider,
+    select_global_otel_v2_logger,
 )
 from litellm.integrations.otel.model.config import (
     ExporterOwner,
@@ -51,6 +52,11 @@ from litellm.integrations.otel.presets.destinations import (
     destination_for,
 )
 from litellm.integrations.otel.presets.langfuse import langfuse_preset
+from litellm.litellm_core_utils import litellm_logging
+from litellm.litellm_core_utils.litellm_logging import (
+    _init_custom_logger_compatible_class,
+    _maybe_construct_otel_v2,
+)
 from litellm.proxy._types import AddTeamCallback, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import (
     convert_key_logging_metadata_to_callback,
@@ -90,6 +96,12 @@ def in_fresh_context(fn, *args):
 def emit(provider: TracerProvider, name: str = "chat gpt-4") -> None:
     with get_tracer(provider, "litellm").start_as_current_span(name):
         pass
+
+
+def swap_exporter_factories(monkeypatch, **factories: Callable[[ExporterSpec], SpanExporter]) -> None:
+    """Swap the exporter built for each ``kind`` for the duration of one test."""
+    for kind, factory in factories.items():
+        monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, kind, factory)
 
 
 def wired_provider(dest_exporter: InMemorySpanExporter, global_exporter: InMemorySpanExporter) -> TracerProvider:
@@ -515,34 +527,6 @@ class TestFanOut:
 
         assert [s.name for s in langfuse.get_finished_spans()] == ["chat gpt-4"]
         assert [s.name for s in arize.get_finished_spans()] == ["chat gpt-4"]
-
-    def test_only_the_langfuse_destination_receives_the_langfuse_attributes(self):
-        langfuse, arize = InMemorySpanExporter(), InMemorySpanExporter()
-        by_endpoint = {"http://a.local": langfuse, "http://b.local": arize}
-        provider = TracerProvider()
-        provider.add_span_processor(
-            TenantFanOutSpanProcessor(processor_factory=lambda d: SimpleSpanProcessor(by_endpoint[d.endpoint]))
-        )
-
-        def run():
-            set_request_destinations(
-                (
-                    OtelDestination(endpoint="http://a.local", callback_name="langfuse_otel"),
-                    OtelDestination(endpoint="http://b.local", callback_name="arize"),
-                )
-            )
-            span = get_tracer(provider, "litellm").start_span("chat gpt-4")
-            span.set_attribute("gen_ai.request.model", "gpt-4")
-            span.set_attribute("langfuse.trace.name", "private-langfuse-only-name")
-            span.end()
-
-        in_fresh_context(run)
-
-        (langfuse_span,) = langfuse.get_finished_spans()
-        (arize_span,) = arize.get_finished_spans()
-        assert langfuse_span.attributes["langfuse.trace.name"] == "private-langfuse-only-name"
-        assert arize_span.attributes["gen_ai.request.model"] == "gpt-4"
-        assert [k for k in arize_span.attributes if k.startswith("langfuse.")] == []
 
     def test_a_destination_carries_the_tenants_service_name(self):
         """An overridden backend skips per-request tracer routing, so the service name
@@ -1473,8 +1457,6 @@ class TestPresetDegradation:
             langfuse_preset()
 
     def test_a_credential_less_proxy_builds_the_gated_logger_beside_a_v2_carrier(self, monkeypatch):
-        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
-
         credential_less_proxy(monkeypatch)
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
         carrier = build_otel_v2_logger(OpenTelemetryV2Config(exporter="in_memory"))
@@ -1494,8 +1476,6 @@ class TestPresetDegradation:
         """Nothing can use a credential-less langfuse here, so the operator has to get
         the same story as before v2: the legacy integration, not a global provider
         that exports nowhere."""
-        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
-
         credential_less_proxy(monkeypatch)
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
 
@@ -1505,9 +1485,10 @@ class TestPresetDegradation:
 
         assert logger is None
 
-    def test_a_valid_newrelic_base_exporter_survives_without_a_license_key(self, monkeypatch):
-        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
-
+    def test_a_credentialless_newrelic_does_not_take_over_the_operator_collector(self, monkeypatch):
+        """The ``OTEL_*`` collector belongs to the ``otel`` callback. A New Relic
+        entry with no license key has nowhere of its own to export, so it takes
+        the legacy path instead of shipping New Relic-shaped spans to the collector."""
         monkeypatch.delenv("NEW_RELIC_LICENSE_KEY", raising=False)
         monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector.local:4318")
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
@@ -1516,15 +1497,21 @@ class TestPresetDegradation:
         logger = in_fresh_context(_maybe_construct_otel_v2, "newrelic", [])
         is_otel_v2_enabled.cache_clear()
 
+        assert logger is None
+
+    def test_a_credentialed_newrelic_exports_only_to_new_relic(self, monkeypatch):
+        monkeypatch.setenv("NEW_RELIC_LICENSE_KEY", "nr-license")
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector.local:4318")
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+
+        is_otel_v2_enabled.cache_clear()
+        logger = in_fresh_context(_maybe_construct_otel_v2, "newrelic", [])
+        is_otel_v2_enabled.cache_clear()
+
         assert logger is not None
-        assert [spec.endpoint for spec in logger.config.exporters] == [
-            "http://collector.local:4318",
-            "https://otlp.nr-data.net",
-        ]
+        assert [spec.endpoint for spec in logger.config.exporters] == ["https://otlp.nr-data.net"]
 
     def test_a_credentialless_newrelic_without_a_base_exporter_falls_back(self, monkeypatch):
-        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
-
         monkeypatch.delenv("NEW_RELIC_LICENSE_KEY", raising=False)
         for name in _OTEL_SHORTHAND_ENV:
             monkeypatch.delenv(name, raising=False)
@@ -1536,12 +1523,10 @@ class TestPresetDegradation:
 
         assert logger is None
 
-    def test_an_explicit_console_exporter_keeps_a_credentialless_preset_on_v2(self, monkeypatch, capfd):
-        """``OTEL_EXPORTER=console`` reads exactly like the placeholder ``_normalize``
-        folds in, but the operator asked for it, so a credential-less New Relic keeps
-        the V2 logger and its spans reach stdout instead of the legacy path."""
-        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
-
+    def test_an_explicit_console_exporter_is_served_by_otel_not_by_a_credentialless_preset(self, monkeypatch):
+        """``OTEL_EXPORTER=console`` is the operator's generic destination. Only the
+        ``otel`` callback prints there; a credential-less New Relic has nothing of
+        its own to export to and takes the legacy path."""
         monkeypatch.delenv("NEW_RELIC_LICENSE_KEY", raising=False)
         for name in _OTEL_SHORTHAND_ENV:
             monkeypatch.delenv(name, raising=False)
@@ -1550,15 +1535,13 @@ class TestPresetDegradation:
 
         is_otel_v2_enabled.cache_clear()
         logger = in_fresh_context(_maybe_construct_otel_v2, "newrelic", [])
+        generic = build_otel_v2_logger(OpenTelemetryV2Config())
         is_otel_v2_enabled.cache_clear()
 
-        assert logger is not None
-        assert logger.config.exporters[0].kind == "console"
-        assert not logger.config.exporters[0].requires_headers
+        assert logger is None
+        assert [spec.kind for spec in generic.config.exporters] == ["console"]
 
     def test_a_destination_for_one_backend_does_not_degrade_another(self, monkeypatch):
-        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
-
         credential_less_proxy(monkeypatch)
         monkeypatch.delenv("WANDB_API_KEY", raising=False)
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
@@ -1576,8 +1559,6 @@ class TestPresetDegradation:
     def test_the_exporter_less_logger_is_not_reused_by_a_request_without_destinations(self, monkeypatch):
         """Reusing it would let one team's destination decide how every later request
         without one is logged, long after the degrade was justified."""
-        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
-
         credential_less_proxy(monkeypatch)
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
         loggers = [build_otel_v2_logger(OpenTelemetryV2Config(exporter="in_memory"))]
@@ -1595,8 +1576,6 @@ class TestPresetDegradation:
         assert plain is None
 
     def test_a_credentialed_logger_is_still_reused_across_requests(self, monkeypatch):
-        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
-
         monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-1")
         monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-1")
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
@@ -1612,8 +1591,6 @@ class TestPresetDegradation:
 
     @staticmethod
     def _degraded_langfuse_beside(loggers, monkeypatch):
-        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
-
         credential_less_proxy(monkeypatch)
         monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector.local:4318")
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
@@ -1643,8 +1620,6 @@ class TestPresetDegradation:
         """Only a V2 logger publishes the provider the fan-out rides on, so a legacy
         callback beside this one leaves the destination just as unreachable as no
         callback at all, and the operator keeps the pre-V2 story."""
-        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
-
         credential_less_proxy(monkeypatch)
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
 
@@ -1658,28 +1633,24 @@ class TestPresetDegradation:
 
         assert logger is None
 
-    def test_a_credentialed_logger_beside_another_v2_logger_keeps_every_exporter(self, monkeypatch):
-        """Only a degraded preset gives the collector up; an operator who configured
-        both the backend and the collector still exports to both, as on base."""
-        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
-
+    @pytest.mark.parametrize("beside", [(), ("collector",)])
+    def test_a_credentialed_langfuse_exports_only_to_langfuse(self, monkeypatch, beside):
+        """The operator's collector is the ``otel`` callback's destination whether or
+        not that callback is registered; Langfuse never inherits it."""
         monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-1")
         monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-1")
         monkeypatch.setenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
         monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector.local:4318")
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
-        collector_logger = build_otel_v2_logger(OpenTelemetryV2Config(exporter="in_memory"))
+        loggers = [build_otel_v2_logger(OpenTelemetryV2Config(exporter="in_memory")) for _ in beside]
 
         is_otel_v2_enabled.cache_clear()
-        logger = in_fresh_context(_maybe_construct_otel_v2, "langfuse_otel", [collector_logger])
+        logger = in_fresh_context(_maybe_construct_otel_v2, "langfuse_otel", loggers)
         is_otel_v2_enabled.cache_clear()
 
         assert logger is not None
-        assert [spec.endpoint for spec in logger.config.exporters] == [
-            "http://collector.local:4318",
-            "https://cloud.langfuse.com/api/public/otel",
-        ]
-        assert all(spec.headers for spec in logger.config.exporters if spec.requires_headers)
+        assert [spec.endpoint for spec in logger.config.exporters] == ["https://cloud.langfuse.com/api/public/otel"]
+        assert all(spec.headers for spec in logger.config.exporters)
 
 
 class TestContextIsolation:
@@ -1692,25 +1663,183 @@ class TestContextIsolation:
         assert in_fresh_context(request_destinations) == ()
 
 
-class TestOperatorShorthandSurvivesDegradation:
-    def test_a_generic_otlp_collector_keeps_receiving_when_langfuse_has_no_credentials(self, monkeypatch):
-        """Only the stdout placeholder is dropped. An operator who set the standard
-        OTLP env vars configured a real destination and must keep it."""
+class TestOperatorShorthandStaysWithOtel:
+    def test_a_credential_less_langfuse_leaves_the_operator_collector_to_the_otel_callback(self, monkeypatch):
         monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
         monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
         monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector.local:4318")
 
         config = langfuse_preset(allow_missing_credentials=True)
 
-        assert [spec.endpoint for spec in config.exporters] == ["http://collector.local:4318", None]
-        assert [spec.kind for spec in config.exporters] == ["otlp_http", "console"]
+        assert [spec.endpoint for spec in config.exporters] == [None]
+        assert [spec.owner for spec in config.exporters] == [ExporterOwner.LANGFUSE_OTEL]
 
-    def test_the_stdout_placeholder_is_still_dropped_when_it_is_the_only_exporter(self, monkeypatch):
+    def test_the_stdout_placeholder_is_never_inherited_by_a_credential_less_preset(self, monkeypatch):
         credential_less_proxy(monkeypatch)
 
         config = langfuse_preset(allow_missing_credentials=True)
 
         assert all(spec.requires_headers and not spec.headers for spec in config.exporters)
+
+    def test_a_lone_credentialed_preset_without_otel_env_prints_nothing_to_stdout(self, monkeypatch):
+        """``callbacks: [langfuse_otel]`` and no ``OTEL_*`` at all: the base config's stdout placeholder
+        belongs to ``otel``, so the Langfuse logger must not dump every span as JSON on the proxy log."""
+        for name in _OTEL_SHORTHAND_ENV:
+            monkeypatch.delenv(name, raising=False)
+        for name, value in _VENDOR_ENV["langfuse_otel"].items():
+            monkeypatch.setenv(name, value)
+        langfuse_sink, stdout = InMemorySpanExporter(), InMemorySpanExporter()
+        swap_exporter_factories(monkeypatch, otlp_http=lambda spec: langfuse_sink, console=lambda spec: stdout)
+
+        logger = build_otel_v2_logger(langfuse_preset(), callback_name="langfuse_otel")
+        emit(logger.tracer_provider, "vendor only")
+        logger.tracer_provider.force_flush()
+
+        assert [s.name for s in langfuse_sink.get_finished_spans()] == ["vendor only"]
+        assert stdout.get_finished_spans() == ()
+
+
+_COLLECTOR = "http://collector.local:4318"
+
+#: Env that gives each endpoint-owning preset its own credentials.
+_VENDOR_ENV = MappingProxyType(
+    {
+        "langfuse_otel": {
+            "LANGFUSE_PUBLIC_KEY": "pk",
+            "LANGFUSE_SECRET_KEY": "sk",
+            "LANGFUSE_HOST": "https://lf.local",
+        },
+        "arize": {"ARIZE_SPACE_ID": "space", "ARIZE_API_KEY": "key"},
+        "arize_phoenix": {
+            "PHOENIX_API_KEY": "key",
+            "PHOENIX_COLLECTOR_HTTP_ENDPOINT": "https://phoenix.local/v1/traces",
+        },
+        "newrelic": {"NEW_RELIC_LICENSE_KEY": "license"},
+        "agentops": {"AGENTOPS_API_KEY": "ao-key"},
+        "levo": {
+            "LEVOAI_API_KEY": "k",
+            "LEVOAI_ORG_ID": "org",
+            "LEVOAI_WORKSPACE_ID": "ws",
+            "LEVOAI_COLLECTOR_URL": "https://levo.local/v1/traces",
+        },
+        "weave_otel": {"WANDB_API_KEY": "wandb", "WANDB_PROJECT_ID": "entity/project"},
+    }
+)
+
+
+class TestDestinationOwnership:
+    """A callback exports only to the destination it owns: ``otel`` serves the operator's
+    ``OTEL_*`` collector and a preset serves its own backend. The leak this closes was every
+    preset inheriting the collector from the base config, so its vendor-vocabulary spans
+    (``langfuse.*``, OpenInference, ...) landed on the operator's collector too."""
+
+    @staticmethod
+    def _capture_exporters(monkeypatch) -> dict[str, InMemorySpanExporter]:
+        sinks: dict[str, InMemorySpanExporter] = {}
+
+        def factory(spec: ExporterSpec) -> InMemorySpanExporter:
+            return sinks.setdefault(spec.endpoint or "", InMemorySpanExporter())
+
+        swap_exporter_factories(monkeypatch, otlp_http=factory, otlp_grpc=factory, agentops=factory)
+        return sinks
+
+    @staticmethod
+    def _operator_with(monkeypatch, vendor: str) -> None:
+        for name in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", *_OTEL_SHORTHAND_ENV):
+            monkeypatch.delenv(name, raising=False)
+        for name, value in _VENDOR_ENV[vendor].items():
+            monkeypatch.setenv(name, value)
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", _COLLECTOR)
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+
+    @pytest.mark.parametrize("vendor", sorted(_VENDOR_ENV))
+    def test_a_presets_spans_never_reach_the_operator_collector(self, monkeypatch, vendor):
+        sinks = self._capture_exporters(monkeypatch)
+        self._operator_with(monkeypatch, vendor)
+        generic = build_otel_v2_logger(OpenTelemetryV2Config())
+        preset = in_fresh_context(_maybe_construct_otel_v2, vendor, [generic])
+        is_otel_v2_enabled.cache_clear()
+        assert preset is not None
+
+        emit(generic.tracer_provider, "from otel")
+        emit(preset.tracer_provider, "from preset")
+        generic.tracer_provider.force_flush()
+        preset.tracer_provider.force_flush()
+
+        assert [s.name for s in sinks[_COLLECTOR].get_finished_spans()] == ["from otel"]
+        vendor_sinks = {endpoint: sink for endpoint, sink in sinks.items() if endpoint != _COLLECTOR}
+        assert [[s.name for s in sink.get_finished_spans()] for sink in vendor_sinks.values()] == [["from preset"]]
+
+    @pytest.mark.parametrize("vendor", sorted(_VENDOR_ENV))
+    def test_a_preset_built_first_does_not_point_otel_at_its_own_backend(self, monkeypatch, vendor):
+        """``callbacks: [<vendor>, otel]``: reading the vendor's credentials must not rewrite the
+        process-wide ``OTEL_*`` env, or the ``otel`` built next inherits the vendor's endpoint and auth."""
+        sinks = self._capture_exporters(monkeypatch)
+        self._operator_with(monkeypatch, vendor)
+        preset = in_fresh_context(_maybe_construct_otel_v2, vendor, [])
+        generic = build_otel_v2_logger(OpenTelemetryV2Config())
+        is_otel_v2_enabled.cache_clear()
+        assert preset is not None
+
+        emit(generic.tracer_provider, "from otel")
+        generic.tracer_provider.force_flush()
+
+        assert [(spec.endpoint, spec.headers) for spec in generic.config.exporters] == [(_COLLECTOR, None)]
+        assert [s.name for s in sinks[_COLLECTOR].get_finished_spans()] == ["from otel"]
+
+    @pytest.mark.parametrize("otel_first", [True, False])
+    def test_the_otel_entry_never_reuses_a_preset_logger_whatever_the_order(self, monkeypatch, otel_first):
+        from litellm.proxy import proxy_server
+
+        self._operator_with(monkeypatch, "langfuse_otel")
+        monkeypatch.setattr(proxy_server, "open_telemetry_logger", None)
+        loggers: list[CustomLogger] = []
+        monkeypatch.setattr(litellm_logging, "_in_memory_loggers", loggers)
+
+        def build(name):
+            if name == "otel":
+                return _init_custom_logger_compatible_class("otel", None, None)
+            return _maybe_construct_otel_v2(name, loggers)
+
+        order = ("otel", "langfuse_otel") if otel_first else ("langfuse_otel", "otel")
+        built = {name: in_fresh_context(build, name) for name in order}
+        is_otel_v2_enabled.cache_clear()
+
+        generic, preset = built["otel"], built["langfuse_otel"]
+        assert isinstance(generic, OpenTelemetryV2) and isinstance(preset, OpenTelemetryV2)
+        assert generic is not preset
+        assert generic.callback_name is None and preset.callback_name == "langfuse_otel"
+        assert [spec.endpoint for spec in generic.config.exporters] == [_COLLECTOR]
+        assert [spec.endpoint for spec in preset.config.exporters] == ["https://lf.local/api/public/otel"]
+        assert select_global_otel_v2_logger(loggers) is generic
+        assert proxy_server.open_telemetry_logger is generic
+
+    @pytest.mark.parametrize("otel_first", [True, False])
+    def test_the_otel_callback_holds_the_proxy_slot_whatever_the_order(self, monkeypatch, otel_first):
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setattr(proxy_server, "open_telemetry_logger", None)
+        config = OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory")])
+
+        def build(name):
+            return build_otel_v2_logger(config, callback_name=None if name == "otel" else name)
+
+        order = ("otel", "langfuse_otel") if otel_first else ("langfuse_otel", "otel")
+        built = {name: build(name) for name in order}
+
+        assert proxy_server.open_telemetry_logger is built["otel"]
+
+    def test_a_lone_preset_keeps_the_proxy_slot_and_the_global(self, monkeypatch):
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setattr(proxy_server, "open_telemetry_logger", None)
+        config = OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory")])
+        first = build_otel_v2_logger(config, callback_name="langfuse_otel")
+        second = build_otel_v2_logger(config, callback_name="arize")
+
+        assert proxy_server.open_telemetry_logger is first
+        assert select_global_otel_v2_logger([first, second]) is first
 
 
 class TestBackendEndpointParity:
@@ -2611,75 +2740,6 @@ class TestEvictionSafety:
         self._settle(fan_out, held)
 
         assert held.shutdown_calls == 1
-
-
-class TestCredentialGatedExporters:
-    def test_layering_a_second_preset_does_not_eat_the_first_gated_exporter(self, monkeypatch):
-        """``base.Preset`` advertises ``config_overrides`` layering, and the gated spec
-        is itself a console exporter with no endpoint."""
-        credential_less_proxy(monkeypatch)
-        from litellm.integrations.otel.presets.utils import credential_gated_exporters
-
-        once = credential_gated_exporters((), ExporterOwner.LANGFUSE_OTEL)
-        twice = credential_gated_exporters(once, ExporterOwner.WEAVE_OTEL)
-
-        assert [spec.owner for spec in twice] == [ExporterOwner.LANGFUSE_OTEL, ExporterOwner.WEAVE_OTEL]
-
-    def test_an_exporter_the_operator_configured_survives(self):
-        from litellm.integrations.otel.presets.utils import credential_gated_exporters
-
-        operator_console = ExporterSpec(kind="console", use_simple_processor=True)
-
-        kept = credential_gated_exporters((operator_console,), ExporterOwner.LANGFUSE_OTEL)
-
-        assert kept[0] == operator_console
-
-    def test_an_otlp_exporter_on_its_default_endpoint_survives(self):
-        """``OTEL_EXPORTER=otlp_http`` with no endpoint is a real collector on the SDK's
-        default port, not the placeholder, so the transport is what tells them apart."""
-        from litellm.integrations.otel.presets.utils import credential_gated_exporters
-
-        operator_otlp = ExporterSpec(kind="otlp_http", endpoint=None, headers=None)
-
-        kept = credential_gated_exporters((operator_otlp,), ExporterOwner.LANGFUSE_OTEL)
-
-        assert kept[0] == operator_otlp
-
-    def test_an_in_memory_exporter_the_operator_asked_for_survives(self):
-        """``OTEL_EXPORTER=in_memory`` stores spans, so it is a destination the operator
-        chose, not the placeholder that stands in for choosing nothing."""
-        from litellm.integrations.otel.presets.utils import credential_gated_exporters
-
-        operator_memory = ExporterSpec(kind="in_memory", endpoint=None, headers=None)
-
-        kept = credential_gated_exporters((operator_memory,), ExporterOwner.LANGFUSE_OTEL)
-
-        assert kept[0] == operator_memory
-
-    def test_the_synthesized_stdout_placeholder_is_dropped(self, monkeypatch):
-        from litellm.integrations.otel.presets.utils import credential_gated_exporters
-
-        for name in _OTEL_SHORTHAND_ENV:
-            monkeypatch.delenv(name, raising=False)
-        placeholder = OpenTelemetryV2Config().exporters[0]
-
-        kept = credential_gated_exporters((placeholder,), ExporterOwner.LANGFUSE_OTEL)
-
-        assert [spec.owner for spec in kept] == [ExporterOwner.LANGFUSE_OTEL]
-
-    def test_a_console_exporter_the_operator_named_survives(self, monkeypatch):
-        """Same kind, endpoint and headers as the placeholder; only the fact that the
-        operator set ``OTEL_EXPORTER`` tells them apart."""
-        from litellm.integrations.otel.presets.utils import credential_gated_exporters
-
-        for name in _OTEL_SHORTHAND_ENV:
-            monkeypatch.delenv(name, raising=False)
-        monkeypatch.setenv("OTEL_EXPORTER", "console")
-        operator_console = OpenTelemetryV2Config().exporters[0]
-
-        kept = credential_gated_exporters((operator_console,), ExporterOwner.LANGFUSE_OTEL)
-
-        assert kept[0] is operator_console
 
 
 class TestTenantHostSsrfGuard:

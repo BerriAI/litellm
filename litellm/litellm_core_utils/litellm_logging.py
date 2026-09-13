@@ -4499,7 +4499,7 @@ def _init_custom_logger_compatible_class(
                 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 
                 for callback in _in_memory_loggers:
-                    if isinstance(callback, OpenTelemetryV2):
+                    if isinstance(callback, OpenTelemetryV2) and callback.callback_name is None:
                         return callback
                 otel_settings: Final = _get_custom_logger_settings_from_proxy_server(callback_name=logging_integration)
                 otel_logger_v2: Final = build_otel_v2_logger(
@@ -4862,13 +4862,13 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
     Returns ``None`` when V2 is off OR when there's no preset registered for
     ``callback_name`` — callers should then fall through to the legacy path.
 
-    A preset that needs operator credentials it cannot find is allowed to build
-    only when this request has a key/team destination for that backend and another
-    V2 logger is already registered to carry the fan-out. The resulting logger keeps
-    only its credential-gated exporter, while the registered logger owns operator
-    delivery. Without that carrier, a preset that raises or that ends up with nothing
-    but its gated exporter and the default console placeholder returns ``None``, so the
-    caller falls through to the legacy path exactly as before V2 landed.
+    Each preset exports only to the destination it owns; the operator's ``OTEL_*``
+    collector is served by the ``otel`` callback alone. A preset that needs operator
+    credentials it cannot find is allowed to build only when this request has a
+    key/team destination for that backend and another V2 logger is already registered
+    to carry the fan-out. Without that carrier, a preset that raises or that has nothing
+    but its credential-gated exporter returns ``None``, so the caller falls through to
+    the legacy path exactly as before V2 landed.
     """
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
@@ -4887,21 +4887,20 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
     for callback in _in_memory_loggers:
         if (
             isinstance(callback, OpenTelemetryV2)
-            and getattr(callback, "callback_name", None) == callback_name
+            and callback.callback_name == callback_name
             and (serves_a_destination or not _exports_nowhere(callback.config))
         ):
             return callback
     try:
-        built: Final = preset_fn(allow_missing_credentials=carried)
+        config: Final = preset_fn(allow_missing_credentials=carried)
     except Exception:
         # If env vars are missing or the preset raises, defer to the legacy path
         # so customers get the same error story they had before V2 landed.
         return None
-    gated: Final = _is_credential_gated(built)
-    if gated and not carried and not _has_operator_exporter(built):
+    exports_nowhere: Final = _exports_nowhere(config)
+    if exports_nowhere and not carried:
         return None
-    config: Final = _only_the_gated_exporter(built) if gated and carried else built
-    if _exports_nowhere(config):
+    if exports_nowhere:
         verbose_logger.warning(
             "OTel V2: no operator credentials for '%s'; only key/team destinations will receive its traces",
             callback_name,
@@ -4914,24 +4913,6 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
 def _exports_nowhere(config: "OpenTelemetryV2Config") -> bool:
     """Whether every exporter in ``config`` is waiting on credentials it never got."""
     return all(_is_gated(spec) for spec in config.exporters)
-
-
-def _is_credential_gated(config: "OpenTelemetryV2Config") -> bool:
-    """Whether the preset built without the operator's own credentials for its backend."""
-    return any(_is_gated(spec) for spec in config.exporters)
-
-
-def _has_operator_exporter(config: "OpenTelemetryV2Config") -> bool:
-    """Whether the operator configured somewhere real to export, beyond the default console placeholder."""
-    from litellm.integrations.otel.presets.utils import is_unconfigured_placeholder
-
-    return any(not _is_gated(spec) and not is_unconfigured_placeholder(spec) for spec in config.exporters)
-
-
-def _only_the_gated_exporter(config: "OpenTelemetryV2Config") -> "OpenTelemetryV2Config":
-    return config.model_copy(
-        update={"exporters": [spec for spec in config.exporters if _is_gated(spec)]}  # mutable-ok: model_copy update
-    )
 
 
 def _is_gated(spec: "ExporterSpec") -> bool:

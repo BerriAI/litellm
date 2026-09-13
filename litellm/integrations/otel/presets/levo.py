@@ -20,7 +20,6 @@ def levo_preset(
     return base.model_copy(
         update={
             "exporters": [
-                *base.exporters,
                 ExporterSpec(
                     kind="otlp_http",
                     endpoint=cfg.endpoint,

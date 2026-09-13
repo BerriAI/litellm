@@ -259,8 +259,14 @@ class OpenTelemetryV2(CustomLogger):
             self._register_in_callback_list(litellm._async_failure_callback)
         except Exception:
             pass
-        if getattr(proxy_server, "open_telemetry_logger", None) is None:
+        if self._outranks_for_proxy_slot(getattr(proxy_server, "open_telemetry_logger", None)):
             setattr(proxy_server, "open_telemetry_logger", self)
+
+    def _outranks_for_proxy_slot(self, holder: object) -> bool:
+        """``otel`` owns the slot whenever configured; a preset holds it only until ``otel`` is built."""
+        if holder is None:
+            return True
+        return self.callback_name is None and isinstance(holder, OpenTelemetryV2) and holder.callback_name is not None
 
     # ====================================================================== #
     #  LLM-call callbacks — the span is opened at the ``pre_call`` boundary and
@@ -842,10 +848,12 @@ def select_global_otel_v2_logger(
     ``proxy_server.open_telemetry_logger``), and every other v2 entry point —
     guardrail, identity seeding, phase spans — already routes through that same
     ``registered`` owner. Reuse it here too so the global provider has one source
-    of truth instead of a second, independently-derived guess; this is the logger
-    a preset (arize, langfuse, …) folds the ``OTEL_*`` base exporter and its own
-    exporter into, so the FastAPI server span and the gen-ai spans share one
-    provider and one trace.
+    of truth instead of a second, independently-derived guess. Each logger exports
+    only to the destination its callback owns (``otel`` serves ``OTEL_*``, a preset
+    serves its own backend), so the FastAPI server span and the request root land
+    at the ``otel`` callback's collector when one is configured and at the first
+    preset's backend otherwise, whatever the callback order; a preset stamps that
+    root only when its own provider created it.
 
     Fall back to ``in_memory_loggers`` for the SDK path, where no proxy global is
     set (selecting from there, not ``service_callback``, which a preset logger does
@@ -855,8 +863,11 @@ def select_global_otel_v2_logger(
     """
     if registered is not None:
         return registered
-    existing: Final = next((cb for cb in in_memory_loggers if isinstance(cb, OpenTelemetryV2)), None)
-    return existing if existing is not None else OpenTelemetryV2()
+    v2_loggers: Final = tuple(cb for cb in in_memory_loggers if isinstance(cb, OpenTelemetryV2))
+    generic: Final = next((cb for cb in v2_loggers if cb.callback_name is None), None)
+    if generic is not None:
+        return generic
+    return v2_loggers[0] if v2_loggers else OpenTelemetryV2()
 
 
 def publish_global_otel_v2_provider(

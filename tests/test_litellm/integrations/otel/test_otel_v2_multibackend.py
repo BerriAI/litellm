@@ -1,9 +1,9 @@
-"""Multi-backend fan-out: one TracerProvider, *N* SpanProcessors.
+"""Multi-backend fan-out within one callback: one TracerProvider, *N* SpanProcessors.
 
-V1 needed a separate ``TracerProvider`` per integration to avoid stepping on
-the global. V2 attaches a ``SpanProcessor`` per exporter to the *same*
-provider, so the same trace ID lights up every backend — no duplicate spans,
-no per-integration provider caches.
+A single ``OpenTelemetryV2Config`` may list several exporters (say two ``OTEL_*``
+collectors), and its provider attaches one ``SpanProcessor`` per exporter so the same
+span reaches each of them. Which exporters a config lists is decided per callback: a
+preset only lists the destination it owns, see ``TestDestinationOwnership``.
 """
 
 import pytest
@@ -14,8 +14,8 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 
-from litellm.integrations.otel.model.config import ExporterOwner, ExporterSpec, OpenTelemetryV2Config
-from litellm.integrations.otel.plumbing.providers import build_tracer_provider, register_exporter_factory
+from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
+from litellm.integrations.otel.plumbing.providers import build_tracer_provider
 
 
 def test_two_exporters_receive_the_same_span():
@@ -52,52 +52,6 @@ def test_two_exporters_receive_the_same_span():
     assert len(spans_a) == 1
     assert len(spans_b) == 1
     assert spans_a[0].context.span_id == spans_b[0].context.span_id
-
-
-def _capturing_kind(kind):
-    exporter = InMemorySpanExporter()
-    register_exporter_factory(kind, lambda _spec: exporter)
-    return exporter
-
-
-def _emit_langfuse_stamped_span(provider):
-    span = provider.get_tracer("test").start_span("chat proof-model")
-    span.set_attribute("gen_ai.request.model", "proof-model")
-    span.set_attribute("langfuse.trace.name", "private-langfuse-only-name")
-    span.set_attribute("langfuse.observation.input", '[{"role":"user","content":"hi"}]')
-    span.end()
-    return span.context.span_id
-
-
-def test_generic_exporter_does_not_receive_langfuse_attributes_the_langfuse_exporter_keeps():
-    generic = _capturing_kind("capture_generic_collector")
-    langfuse = _capturing_kind("capture_langfuse_sink")
-    cfg = OpenTelemetryV2Config(
-        exporters=[
-            ExporterSpec(kind="capture_generic_collector"),
-            ExporterSpec(kind="capture_langfuse_sink", owner=ExporterOwner.LANGFUSE_OTEL),
-        ]
-    )
-    span_id = _emit_langfuse_stamped_span(build_tracer_provider(cfg, tenant_overrides=True))
-
-    (generic_span,) = generic.get_finished_spans()
-    (langfuse_span,) = langfuse.get_finished_spans()
-    assert generic_span.context.span_id == span_id == langfuse_span.context.span_id
-    assert generic_span.attributes["gen_ai.request.model"] == "proof-model"
-    assert [k for k in generic_span.attributes if k.startswith("langfuse.")] == []
-    assert langfuse_span.attributes["langfuse.trace.name"] == "private-langfuse-only-name"
-    assert langfuse_span.attributes["langfuse.observation.input"] == '[{"role":"user","content":"hi"}]'
-
-
-def test_langfuse_mapper_on_a_plain_otlp_exporter_keeps_langfuse_attributes():
-    sink = _capturing_kind("capture_langfuse_mapper_sink")
-    cfg = OpenTelemetryV2Config(
-        mapper_names=["langfuse"], exporters=[ExporterSpec(kind="capture_langfuse_mapper_sink")]
-    )
-    _emit_langfuse_stamped_span(build_tracer_provider(cfg))
-
-    (span,) = sink.get_finished_spans()
-    assert span.attributes["langfuse.trace.name"] == "private-langfuse-only-name"
 
 
 def test_resource_attributes_apply_to_all_exporters():
