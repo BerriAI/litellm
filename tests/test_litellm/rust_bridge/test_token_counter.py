@@ -304,6 +304,70 @@ def test_disabled_token_counter_declines_every_model(monkeypatch: pytest.MonkeyP
     assert bridge.rust_tokenizer(O200K_MODEL) is None
 
 
+CHAT_MESSAGES: Final = ({"role": "system", "content": "be terse"}, {"role": "user", "content": "hello"})
+CHAT_TOOLS: Final = ({"type": "function", "function": {"name": "f", "parameters": {"type": "object"}}},)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", (MODEL, CL100K_MODEL, O200K_MODEL))
+async def test_chat_count_serializes_only_the_counted_fields(model: str) -> None:
+    factory: Final = _RecordingFactory()
+    litellm.rust(True)
+    bridge.TOKEN_COUNTER.override(factory)
+
+    count: Final = await bridge.count_chat_input_tokens(
+        model=model, messages=CHAT_MESSAGES, tools=CHAT_TOOLS, tool_choice="auto"
+    )
+
+    assert count == 42
+    assert [json.loads(body) for counter in factory.counters for body in counter.bodies] == [
+        {"model": model, "messages": list(CHAT_MESSAGES), "tools": list(CHAT_TOOLS), "tool_choice": "auto"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_chat_count_declines_before_serializing_when_the_bridge_is_off() -> None:
+    factory: Final = _RecordingFactory()
+    litellm.rust(False)
+    bridge.TOKEN_COUNTER.override(factory)
+
+    assert await bridge.count_chat_input_tokens(model=O200K_MODEL, messages=CHAT_MESSAGES) is None
+    assert factory.counters == []
+
+
+@pytest.mark.asyncio
+async def test_chat_count_declines_models_without_a_rust_tokenizer(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm, "open_ai_chat_completion_models", litellm.open_ai_chat_completion_models | {"text-davinci-003"}
+    )
+    factory: Final = _RecordingFactory()
+    litellm.rust(True)
+    bridge.TOKEN_COUNTER.override(factory)
+
+    assert await bridge.count_chat_input_tokens(model="text-davinci-003", messages=CHAT_MESSAGES) is None
+    assert factory.counters == []
+
+
+@pytest.mark.asyncio
+async def test_chat_count_declines_when_the_native_counter_declines() -> None:
+    litellm.rust(True)
+    bridge.TOKEN_COUNTER.override(_RaisingFactory(_FakeDeclined("unsupported content block")))
+
+    assert await bridge.count_chat_input_tokens(model=O200K_MODEL, messages=CHAT_MESSAGES) is None
+
+
+@pytest.mark.asyncio
+async def test_chat_count_declines_an_unserializable_body() -> None:
+    factory: Final = _RecordingFactory()
+    litellm.rust(True)
+    bridge.TOKEN_COUNTER.override(factory)
+
+    messages: Final = ({"role": "user", "content": object()},)
+
+    assert await bridge.count_chat_input_tokens(model=O200K_MODEL, messages=messages) is None
+    assert factory.counters == []
+
+
 PARITY_REQUESTS: Final[tuple[dict[str, object], ...]] = (
     {"model": MODEL, "messages": [{"role": "user", "content": "Hello, how are you today?"}]},
     {
@@ -442,3 +506,45 @@ async def test_native_declines_shapes_python_prices_differently(
     litellm.rust(True)
 
     assert await bridge.count_input_tokens(json.dumps(request_body).encode(), tokenizer) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", (MODEL, CL100K_MODEL, O200K_MODEL))
+@pytest.mark.parametrize(
+    "request_body", tuple(body for body in PARITY_REQUESTS if isinstance(body.get("messages"), list))
+)
+async def test_native_chat_count_matches_python_token_counter(
+    monkeypatch: pytest.MonkeyPatch, request_body: dict[str, object], model: str
+) -> None:
+    native: Final = pytest.importorskip("litellm.rust_bridge._native")
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
+    litellm.rust(True)
+    messages: Final = request_body["messages"]
+    assert isinstance(messages, list)
+
+    rust_count: Final = await bridge.count_chat_input_tokens(
+        model=model, messages=messages, tools=request_body.get("tools"), tool_choice=request_body.get("tool_choice")
+    )
+
+    assert rust_count == litellm.token_counter(
+        model=model, messages=messages, tools=request_body.get("tools"), tool_choice=request_body.get("tool_choice")
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "block",
+    (
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}},
+        {"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}},
+    ),
+)
+async def test_native_chat_count_declines_multimodal_blocks(
+    monkeypatch: pytest.MonkeyPatch, block: dict[str, object]
+) -> None:
+    native: Final = pytest.importorskip("litellm.rust_bridge._native")
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
+    litellm.rust(True)
+    messages: Final = ({"role": "user", "content": [{"type": "text", "text": "look"}, block]},)
+
+    assert await bridge.count_chat_input_tokens(model=O200K_MODEL, messages=messages) is None

@@ -59,6 +59,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
     response_has_hidden_params,
 )
+from litellm.rust_bridge.token_counter import count_chat_input_tokens
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject, ResponseAPIUsage
 from litellm.types.utils import (
@@ -3283,6 +3284,42 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             estimated_input_tokens, _ = self._estimate_input_and_output_tokens(data=data, call_type=call_type)
             return estimated_input_tokens + audio_token_estimate
 
+    def _counts_messages_as_chat(self, data: Mapping[str, object], call_type: str | None) -> bool:
+        return (
+            data.get("prompt") is None
+            and data.get("input") is None
+            and call_type not in RESPONSES_API_CALL_TYPES
+            and call_type not in RERANK_API_CALL_TYPES
+            and call_type not in TEXT_COMPLETION_API_CALL_TYPES
+            and call_type not in GOOGLE_GENAI_NATIVE_CALL_TYPES
+            and not self._is_embedding_request(data, call_type)
+        )
+
+    async def _estimate_admission_input_tokens(
+        self, data: Mapping[str, object], model: str | None, call_type: str | None
+    ) -> int:
+        """
+        ``_estimate_precise_input_tokens`` with the Rust counter in front of it for plain chat bodies, the one
+        shape whose Rust count equals ``token_counter``'s. Rust declines image and audio blocks, so those and
+        every other API shape keep the Python path with its image defaults and audio add-on.
+        """
+        messages: Final = data.get("messages")
+        rust_count: Final = (
+            await count_chat_input_tokens(
+                model=model or "",
+                messages=messages,
+                tools=data.get("tools"),
+                tool_choice=data.get("tool_choice"),
+            )
+            if isinstance(messages, list) and self._counts_messages_as_chat(data, call_type)
+            else None
+        )
+        if rust_count is not None:
+            return rust_count
+        return await offload_token_count(self._estimate_precise_input_tokens)(
+            data=data, model=model, call_type=call_type
+        )
+
     async def _reserve_project_io_tokens_or_raise(
         self,
         descriptors: Sequence[RateLimitDescriptor],
@@ -3328,7 +3365,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             min_configured_tpm_limit=min_configured_otpm_limit,
             call_type=call_type,
         )
-        raw_estimated_input_tokens: Final = await offload_token_count(self._estimate_precise_input_tokens)(
+        raw_estimated_input_tokens: Final = await self._estimate_admission_input_tokens(
             data=data, model=requested_model, call_type=call_type
         )
         estimated_input_tokens: Final = max(raw_estimated_input_tokens, 1)
