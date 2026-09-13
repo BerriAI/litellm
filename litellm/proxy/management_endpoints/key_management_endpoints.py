@@ -433,12 +433,17 @@ def _effective_key_for_generate(data: GenerateKeyRequest, now: datetime) -> Lite
     )
 
 
+_EMPTY_DURATION_MEANS_UNCHANGED: Final = frozenset({"duration", "budget_duration"})
+
+
 def _regenerate_request_as_update_request(key: str, data: RegenerateKeyRequest) -> UpdateKeyRequest | None:
     changed_fields: Final = MappingProxyType(
         {
             field: value
             for field, value in data.model_dump(exclude_unset=True).items()
-            if field in UpdateKeyRequest.model_fields and field != "key"
+            if field in UpdateKeyRequest.model_fields
+            and field != "key"
+            and not (field in _EMPTY_DURATION_MEANS_UNCHANGED and value == "")
         }
     )
     if not changed_fields:

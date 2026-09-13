@@ -12142,7 +12142,10 @@ async def test_execute_virtual_key_regeneration_allows_when_custom_key_update_ho
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("data", [None, RegenerateKeyRequest()])
+@pytest.mark.parametrize(
+    "data",
+    [None, RegenerateKeyRequest(), RegenerateKeyRequest(duration=""), RegenerateKeyRequest(budget_duration="")],
+)
 async def test_execute_virtual_key_regeneration_skips_custom_key_update_hook_without_changes(data):
     mock_prisma_client = _make_regenerate_mock_prisma()
 
@@ -12182,6 +12185,58 @@ async def test_execute_virtual_key_regeneration_skips_custom_key_update_hook_wit
         )
 
     assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_virtual_key_regeneration_hides_the_untouched_modal_expiry_from_the_custom_key_update_hook():
+    mock_prisma_client = _make_regenerate_mock_prisma()
+    untouched_modal_body = RegenerateKeyRequest(
+        key_alias=None, max_budget=None, tpm_limit=None, rpm_limit=None, duration="", grace_period=""
+    )
+    received_data: list[UpdateKeyRequest] = []
+
+    async def hook(data: UpdateKeyRequest) -> dict[str, object]:
+        received_data.append(data)
+        if data.duration is not None and duration_in_seconds(data.duration) > duration_in_seconds("7d"):
+            return {"decision": False, "message": "duration must be <= 7d"}
+        return {"decision": True}
+
+    with (
+        patch(  # test-quality-ok: deterministic token setup for the untouched modal body
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_new_token",
+            new_callable=AsyncMock,
+            return_value="sk-newtoken1234ab12",
+        ),
+        patch(  # test-quality-ok: grace-period path is outside the hook input
+            "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: cache eviction is outside the hook input
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: rotation callback is outside the hook input
+            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_rotated_hook",
+            new_callable=AsyncMock,
+        ),
+        patch("litellm.proxy.proxy_server.user_custom_key_update", hook),  # test-quality-ok: inject policy hook
+    ):
+        await _execute_virtual_key_regeneration(
+            prisma_client=mock_prisma_client,
+            key_in_db=_make_regenerate_existing_key(),
+            hashed_api_key="abc123",
+            key="abc123",
+            data=untouched_modal_body,
+            user_api_key_dict=_make_regenerate_user_api_key_dict(),
+            litellm_changed_by=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 1
+    assert len(received_data) == 1
+    assert "duration" not in received_data[0].model_fields_set
+    assert received_data[0].model_fields_set >= {"key", "key_alias", "max_budget", "tpm_limit", "rpm_limit"}
 
 
 _POLICY_DENIAL_MESSAGE = "key duration must be 7d or less"
