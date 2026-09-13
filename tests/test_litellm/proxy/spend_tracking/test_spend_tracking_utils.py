@@ -4122,7 +4122,7 @@ def test_autorouter_savings_flow_from_logging_payload_into_spend_log_metadata():
 
 @pytest.mark.parametrize("response_cost", [None, 0.0])
 def test_spend_reads_cost_breakdown_when_response_cost_is_missing_or_zero(response_cost):
-    kwargs = {
+    kwargs: Final = {
         "model": "azure_ai/gpt-5.5",
         "litellm_params": {"metadata": {"user_api_key": "test-key"}},
         "standard_logging_object": {
@@ -4130,10 +4130,9 @@ def test_spend_reads_cost_breakdown_when_response_cost_is_missing_or_zero(respon
             "metadata": {},
             "model_map_information": None,
         },
+        **({"response_cost": response_cost} if response_cost is not None else {}),
     }
-    if response_cost is not None:
-        kwargs["response_cost"] = response_cost
-    payload = get_logging_payload(
+    payload: Final = get_logging_payload(
         kwargs=kwargs,
         response_obj=litellm.ModelResponse(
             id="chatcmpl-azure-40100",
@@ -4147,7 +4146,7 @@ def test_spend_reads_cost_breakdown_when_response_cost_is_missing_or_zero(respon
 
 
 def test_spend_stays_zero_on_a_cache_hit_with_a_cost_breakdown():
-    payload = get_logging_payload(
+    payload: Final = get_logging_payload(
         kwargs={
             "model": "azure_ai/gpt-5.5",
             "response_cost": 0.0,

@@ -166,9 +166,7 @@ def resolve_authoritative_response_cost(
             input_cost: Final = cost_breakdown.get("input_cost")
             output_cost: Final = cost_breakdown.get("output_cost")
             input_val: Final = (
-                float(input_cost)
-                if isinstance(input_cost, (int, float)) and not isinstance(input_cost, bool)
-                else 0.0
+                float(input_cost) if isinstance(input_cost, (int, float)) and not isinstance(input_cost, bool) else 0.0
             )
             output_val: Final = (
                 float(output_cost)
