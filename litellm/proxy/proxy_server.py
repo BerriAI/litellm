@@ -3410,6 +3410,16 @@ async def increment_spend_counter(counter_key: str, increment: float):
     return await _increment_spend_counter_cache(counter_key=counter_key, increment=increment)
 
 
+async def refresh_spend_counter_ttl(counter_key: str) -> bool:
+    if spend_counter_cache.redis_cache is None:
+        return False
+    try:
+        return await spend_counter_cache.redis_cache.async_refresh_ttl(key=counter_key)
+    except Exception as e:
+        verbose_proxy_logger.debug("spend counter TTL refresh skipped for %s: %s", counter_key, e)
+        return False
+
+
 async def _increment_spend_counter_cache(counter_key: str, increment: float):
     if spend_counter_cache.redis_cache is not None:
         try:

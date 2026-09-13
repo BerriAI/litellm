@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -99,6 +100,48 @@ def get_reserved_counter_keys(budget_reservation: dict | None) -> set:
     return {
         entry["counter_key"] for entry in entries if isinstance(entry, dict) and entry.get("counter_key") is not None
     }
+
+
+_lease_renewals: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: asyncio only weak-refs pending tasks
+
+
+def _start_reservation_lease_renewal(budget_reservation: Mapping[str, object], counter_keys: frozenset[str]) -> None:
+    """A reservation lives inside spend counter keys that expire on their Redis TTL. Renew the TTL
+    while the request is in flight so a request longer than the TTL does not drop its
+    reservation and admit concurrent requests against the DB floor on any worker."""
+    from litellm.proxy.proxy_server import spend_counter_cache
+
+    if spend_counter_cache.redis_cache is None or not counter_keys:
+        return
+    task: Final = asyncio.create_task(
+        _renew_reservation_lease(
+            budget_reservation=budget_reservation,
+            counter_keys=counter_keys,
+            interval=spend_counter_cache.redis_cache.default_ttl / 2,
+            request_task=asyncio.current_task(),
+        )
+    )
+    _lease_renewals.add(task)
+    task.add_done_callback(_lease_renewals.discard)
+
+
+async def _renew_reservation_lease(
+    budget_reservation: Mapping[str, object],
+    counter_keys: frozenset[str],
+    interval: float,
+    request_task: asyncio.Task[object] | None,
+) -> None:
+    """Stops on finalization or once the request task that took the reservation is gone, so a
+    disconnect path that skipped reconciliation falls back to the plain counter TTL."""
+    from litellm.proxy.proxy_server import refresh_spend_counter_ttl
+
+    deadline: Final = time.monotonic() + litellm.request_timeout
+    while time.monotonic() < deadline:
+        await asyncio.sleep(interval)
+        if budget_reservation.get("finalized") is True or (request_task is not None and request_task.done()):
+            return
+        for counter_key in counter_keys:
+            await refresh_spend_counter_ttl(counter_key=counter_key)
 
 
 def _key_reservation_should_release_for_throttle(counter_key: str, valid_token: UserAPIKeyAuth | None) -> bool:
@@ -315,13 +358,18 @@ async def reserve_budget_for_request(
         llm_router=llm_router,
         input_token_counts=input_token_counts,
     )
-    return {
+    budget_reservation: Final = {
         "reserved_cost": reservation_cost,
         "entries": applied_entries,
         "finalized": False,
         "input_cost": min(float(input_cost or 0.0), reservation_cost),
         "input_tokens": max(input_token_counts.values(), default=None),
     }
+    _start_reservation_lease_renewal(
+        budget_reservation=budget_reservation,
+        counter_keys=frozenset(get_reserved_counter_keys(budget_reservation=budget_reservation)),
+    )
+    return budget_reservation
 
 
 async def reconcile_budget_reservation(
