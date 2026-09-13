@@ -2,6 +2,7 @@
 Tests for JSON-based provider configuration system.
 """
 
+import json
 import os
 import sys
 from unittest.mock import patch
@@ -526,13 +527,13 @@ class TestCoralBricks:
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         model, provider, api_key, api_base = get_llm_provider(
-            model="coralbricks/glm-5.2-fp4",
+            model="coralbricks/glm-5.3-fp4",
             custom_llm_provider=None,
             api_base=None,
             api_key=None,
         )
 
-        assert model == "glm-5.2-fp4"
+        assert model == "glm-5.3-fp4"
         assert provider == "coralbricks"
         assert api_key is None
         assert api_base == "https://inference.coralbricks.ai/v1"
@@ -554,7 +555,8 @@ class TestCoralBricksPricing:
     the four pricing records and the zero-cost cached-input behavior."""
 
     EXPECTED = {
-        "coralbricks/glm-5.2-fp4": (1.12e-06, 4.4e-06),
+        "coralbricks/glm-5.3-fp4": (1.12e-06, 4.4e-06),
+        "coralbricks/glm-5.3-flash-fp4": (1.5e-07, 5e-07),
         "coralbricks/kimi-k3": (3e-06, 1.5e-05),
         "coralbricks/gpt-oss-120b": (1.2e-07, 6e-07),
     }
@@ -578,7 +580,7 @@ class TestCoralBricksPricing:
         """completion_cost prices cached input tokens at zero for coralbricks."""
         from litellm import ModelResponse, Usage, completion_cost
 
-        model = "coralbricks/glm-5.2-fp4"
+        model = "coralbricks/glm-5.3-fp4"
         inp, out = self.EXPECTED[model]
         # register_model makes the test deterministic regardless of which
         # cost map (local backup vs remote) the environment loaded.
