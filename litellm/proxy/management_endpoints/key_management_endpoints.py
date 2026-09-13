@@ -1528,6 +1528,21 @@ def _collect_key_team_limit_warnings(
     )
 
 
+
+def _maybe_add_key_team_limit_warnings(
+    payload: dict[str, object],
+    data: GenerateKeyRequest | UpdateKeyRequest,
+    team_table: LiteLLM_TeamTable | LiteLLM_TeamTableCachedObj | None,
+) -> dict[str, object]:
+    """Attach team-limit warnings to a key update payload when caps are exceeded."""
+    if team_table is None:
+        return payload
+    warnings = _collect_key_team_limit_warnings(data=data, team_table=team_table)
+    if not warnings:
+        return payload
+    return {**payload, "warnings": list(warnings)}
+
+
 async def _check_team_key_limits(
     team_table: LiteLLM_TeamTableCachedObj,
     data: GenerateKeyRequest | UpdateKeyRequest,
@@ -2671,12 +2686,11 @@ async def _process_single_key_update(
 
     updated_key_info.pop("token", None)
 
-    team_limit_warnings: Final = (
-        _collect_key_team_limit_warnings(data=update_key_request, team_table=team_obj) if team_obj is not None else ()
+    return _maybe_add_key_team_limit_warnings(
+        updated_key_info,
+        update_key_request,
+        team_obj,
     )
-    if team_limit_warnings:
-        return {**updated_key_info, "warnings": list(team_limit_warnings)}
-    return updated_key_info
 
 
 async def _validate_mcp_servers_for_key_update(
