@@ -30,6 +30,11 @@ external = [
 # grows over time; typing it concretely (`object`) broke that forwarding call outright —
 # basedpyright turned every named param into a reportArgumentType error. Any is correct here.
 "litellm/proxy/guardrails/guardrail_hooks/alice/alice.py" = ["ANN401"]
+# `serialize_a2a_data_part`'s `data` param is the payload of an A2A `data`-kind part,
+# which the A2A protocol defines as arbitrary JSON-serializable content with no fixed
+# shape. `object` was not viable: json.dumps requires the narrower JSON-value types,
+# so typing it `object` just moves the Any into a cast at every call site instead.
+"litellm/llms/a2a/common_utils.py" = ["ANN401"]
 
 [lint.mccabe]
 max-complexity = 15
