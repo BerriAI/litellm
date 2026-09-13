@@ -25,6 +25,11 @@ describe("createTabRoutes.slugFromPathname", () => {
   it("returns empty string when the base segment is not in the path", () => {
     expect(routes.slugFromPathname("/teams")).toBe("");
   });
+
+  it("reads the route base after a server-root prefix that repeats the segment name", () => {
+    expect(routes.slugFromPathname("/logs/ui/logs/audit/")).toBe("audit");
+    expect(routes.slugFromPathname("/logs/ui/logs/")).toBe("");
+  });
 });
 
 describe("createTabRoutes.tabHref", () => {
