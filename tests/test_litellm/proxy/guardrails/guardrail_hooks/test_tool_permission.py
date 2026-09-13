@@ -1177,6 +1177,16 @@ class TestToolPermissionGuardrailAnthropicMessages:
     def _tool_use(self, name, tool_id="tu_1"):
         return {"type": "tool_use", "id": tool_id, "name": name, "input": {"command": "ls"}}
 
+    def _always_on_pre_call(self, on_disallowed_action):
+        return ToolPermissionGuardrail(
+            guardrail_name=f"anthropic-pre-call-{on_disallowed_action}",
+            rules=self.rules,
+            default_action="deny",
+            on_disallowed_action=on_disallowed_action,
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+        )
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "denied_tool",
@@ -1190,14 +1200,13 @@ class TestToolPermissionGuardrailAnthropicMessages:
     async def test_pre_call_blocks_denied_request_tool_in_flat_format(self, denied_tool):
         data = {"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "hi"}], "tools": [denied_tool]}
 
-        with patch.object(self.blocking, "should_run_guardrail", return_value=True):
-            with pytest.raises(HTTPException) as excinfo:
-                await self.blocking.async_pre_call_hook(
-                    user_api_key_dict=UserAPIKeyAuth(),
-                    cache=DualCache(default_in_memory_ttl=1),
-                    data=data,
-                    call_type="anthropic_messages",
-                )
+        with pytest.raises(HTTPException) as excinfo:
+            await self._always_on_pre_call("block").async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(default_in_memory_ttl=1),
+                data=data,
+                call_type="anthropic_messages",
+            )
 
         assert excinfo.value.status_code == 400
         assert excinfo.value.detail["detection_message"] == "Tool 'Read' denied by rule 'deny_read'"
@@ -1231,13 +1240,12 @@ class TestToolPermissionGuardrailAnthropicMessages:
             "tool_choice": tool_choice,
         }
 
-        with patch.object(self.rewriting, "should_run_guardrail", return_value=True):
-            result = await self.rewriting.async_pre_call_hook(
-                user_api_key_dict=UserAPIKeyAuth(),
-                cache=DualCache(default_in_memory_ttl=1),
-                data=data,
-                call_type=call_type,
-            )
+        result = await self._always_on_pre_call("rewrite").async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=DualCache(default_in_memory_ttl=1),
+            data=data,
+            call_type=call_type,
+        )
 
         assert [tool["name"] for tool in result["tools"]] == ["Bash"]
         assert result["tool_choice"] == expected_tool_choice
