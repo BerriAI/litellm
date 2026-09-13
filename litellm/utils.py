@@ -6029,8 +6029,10 @@ def _get_model_info_helper(
                 tpm=_model_info.get("tpm", None),
                 rpm=_model_info.get("rpm", None),
                 ocr_cost_per_page=_model_info.get("ocr_cost_per_page", None),
+                ocr_cost_per_page_batches=_model_info.get("ocr_cost_per_page_batches", None),
                 ocr_cost_per_credit=_model_info.get("ocr_cost_per_credit", None),
                 annotation_cost_per_page=_model_info.get("annotation_cost_per_page", None),
+                annotation_cost_per_page_batches=_model_info.get("annotation_cost_per_page_batches", None),
                 provider_specific_entry=_model_info.get("provider_specific_entry", None),
                 uses_embed_content=_model_info.get("uses_embed_content", None),
                 supports_image_size=_model_info.get("supports_image_size", None),
@@ -9005,6 +9007,10 @@ class ProviderConfigManager:
             from litellm.llms.anthropic.files.transformation import AnthropicFilesConfig
 
             return AnthropicFilesConfig()
+        elif LlmProviders.MISTRAL == provider:
+            from litellm.llms.mistral.files.transformation import MistralFilesConfig
+
+            return MistralFilesConfig()
         return None
 
     @staticmethod
@@ -9016,6 +9022,10 @@ class ProviderConfigManager:
             from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
 
             return BedrockBatchesConfig()
+        elif LlmProviders.MISTRAL == provider:
+            from litellm.llms.mistral.batches.transformation import MistralBatchesConfig
+
+            return MistralBatchesConfig()
         return None
 
     @staticmethod

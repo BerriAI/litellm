@@ -29589,6 +29589,8 @@ export interface components {
             allow_client_keepalive_override: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
+            /** Annotation Cost Per Page Batches */
+            annotation_cost_per_page_batches?: number | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -29812,6 +29814,8 @@ export interface components {
             ocr_cost_per_credit?: number | null;
             /** Ocr Cost Per Page */
             ocr_cost_per_page?: number | null;
+            /** Ocr Cost Per Page Batches */
+            ocr_cost_per_page_batches?: number | null;
             /** Organization */
             organization?: string | null;
             /** Otpm */
@@ -39803,6 +39807,8 @@ export interface components {
             allow_client_keepalive_override: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
+            /** Annotation Cost Per Page Batches */
+            annotation_cost_per_page_batches?: number | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -40026,6 +40032,8 @@ export interface components {
             ocr_cost_per_credit?: number | null;
             /** Ocr Cost Per Page */
             ocr_cost_per_page?: number | null;
+            /** Ocr Cost Per Page Batches */
+            ocr_cost_per_page_batches?: number | null;
             /** Organization */
             organization?: string | null;
             /** Otpm */

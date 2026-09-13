@@ -69,7 +69,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     apply_team_provider_credentials,
     encode_file_id_with_model,
     extract_file_creation_params,
-    get_credentials_for_model,
+    get_authorized_credentials_for_model,
     handle_model_based_routing,
     prepare_data_with_credentials,
     validate_file_list_limit,
@@ -270,9 +270,10 @@ async def route_create_file(
     # NEW: Handle model-based routing (no DB required)
     if model is not None:
         # Get credentials from model_list via router
-        credentials: Final = get_credentials_for_model(
+        credentials: Final = await get_authorized_credentials_for_model(
             llm_router=llm_router,
             model_id=model,
+            user_api_key_dict=user_api_key_dict,
             operation_context="file upload",
         )
 
@@ -910,11 +911,12 @@ async def get_file_content(
                 model_used,
                 original_file_id,
                 credentials,
-            ) = handle_model_based_routing(
+            ) = await handle_model_based_routing(
                 file_id=file_id,
                 request=request,
                 llm_router=llm_router,
                 data=data,
+                user_api_key_dict=user_api_key_dict,
                 check_file_id_encoding=True,
             )
 
@@ -1125,15 +1127,16 @@ async def get_file(
             model_used,
             original_file_id,
             credentials,
-        ) = handle_model_based_routing(
+        ) = await handle_model_based_routing(
             file_id=file_id,
             request=request,
             llm_router=llm_router,
             data=data,
+            user_api_key_dict=user_api_key_dict,
             check_file_id_encoding=True,
         )
 
-        if should_route:
+        if should_route and credentials is not None:
             # Use model-based routing with credentials from config
             prepare_data_with_credentials(
                 data=data,
@@ -1142,7 +1145,10 @@ async def get_file(
                 include_internal_credentials=True,
             )
 
-            response = await litellm.afile_retrieve(**data)
+            response = await litellm.afile_retrieve(
+                custom_llm_provider=credentials["custom_llm_provider"],
+                **data,
+            )
 
             # Keep the encoded ID in response if it was originally encoded
             if original_file_id and response and hasattr(response, "id") and response.id:
@@ -1335,11 +1341,12 @@ async def delete_file(
             model_used,
             original_file_id,
             credentials,
-        ) = handle_model_based_routing(
+        ) = await handle_model_based_routing(
             file_id=file_id,
             request=request,
             llm_router=llm_router,
             data=data,
+            user_api_key_dict=user_api_key_dict,
             check_file_id_encoding=True,
         )
 
@@ -1528,11 +1535,12 @@ async def list_files(
         response: Any | None = None
 
         # Check for model-based credential routing (no file_id encoding check for list)
-        should_route, model_used, _, credentials = handle_model_based_routing(
+        should_route, model_used, _, credentials = await handle_model_based_routing(
             file_id="",  # No file_id for list endpoint
             request=request,
             llm_router=llm_router,
             data=data,
+            user_api_key_dict=user_api_key_dict,
             check_file_id_encoding=False,
         )
 
@@ -1559,9 +1567,10 @@ async def list_files(
                     status_code=500,
                     detail="LLM Router not initialized. Ensure models added to proxy.",
                 )
-            credentials = get_credentials_for_model(
+            credentials = await get_authorized_credentials_for_model(
                 llm_router=llm_router,
                 model_id=target_model_names_list[0],
+                user_api_key_dict=user_api_key_dict,
                 operation_context="file list",
             )
             prepare_data_with_credentials(data=data, credentials=credentials, include_internal_credentials=True)

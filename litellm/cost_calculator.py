@@ -140,6 +140,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
         Logging as LitellmLoggingObject,
     )
+    from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 else:
     LitellmLoggingObject = Any
 
@@ -2051,6 +2052,69 @@ def ocr_cost(
     ocr_pages_cost: Final = (ocr_cost_per_page or 0.0) * (pages_processed or 0)
     annotation_pages_cost: Final = (annotation_rate or 0.0) * annotation_pages
     return ocr_pages_cost + annotation_pages_cost, 0.0
+
+
+_OCR_PRICING_KEYS: Final = (
+    "ocr_cost_per_page",
+    "ocr_cost_per_page_batches",
+    "annotation_cost_per_page",
+    "annotation_cost_per_page_batches",
+)
+
+
+def ocr_batch_cost(
+    model: str,
+    custom_llm_provider: str | None,
+    usage_info: "OCRUsageInfo",
+    model_info: ModelInfo | None = None,
+) -> tuple[float, float]:
+    """Per-page cost of one OCR result inside a batch output file.
+
+    Batch OCR is billed per page at the ``*_batches`` rate, falling back to the
+    synchronous per-page rate when a model has no batch price recorded, the same
+    fallback ``batch_cost_calculator`` applies to per-token batch pricing. Returns
+    ``(prompt_cost, completion_cost)`` with the whole cost in the first slot, like
+    ``ocr_cost``.
+    """
+    has_ocr_pricing: Final = model_info is not None and any(model_info.get(k) is not None for k in _OCR_PRICING_KEYS)
+    resolved_info: Final = (
+        model_info
+        if has_ocr_pricing
+        else _lookup_model_info_or_none(model=model, custom_llm_provider=custom_llm_provider)
+    )
+    if resolved_info is None:
+        verbose_logger.warning(
+            "OCR batch cost: model=%s custom_llm_provider=%s has no pricing entry; returning 0.0 cost.",
+            model,
+            custom_llm_provider,
+        )
+        return 0.0, 0.0
+
+    page_rate: Final = _first_price(resolved_info, "ocr_cost_per_page_batches", "ocr_cost_per_page")
+    annotation_rate: Final = _first_price(resolved_info, "annotation_cost_per_page_batches", "annotation_cost_per_page")
+    pages_processed: Final = usage_info.pages_processed or 0
+    annotation_pages: Final = usage_info.pages_processed_annotation or 0
+    if page_rate is None and pages_processed > 0:
+        verbose_logger.warning(
+            "OCR batch cost: model=%s custom_llm_provider=%s reported pages_processed=%s but no "
+            "ocr_cost_per_page is configured; returning 0.0 cost for those pages.",
+            model,
+            custom_llm_provider,
+            pages_processed,
+        )
+    effective_annotation_rate: Final = annotation_rate if annotation_rate is not None else page_rate
+    return (page_rate or 0.0) * pages_processed + (effective_annotation_rate or 0.0) * annotation_pages, 0.0
+
+
+def _lookup_model_info_or_none(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
+    try:
+        return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:
+        return None
+
+
+def _first_price(model_info: ModelInfo, *keys: str) -> float | None:
+    return next((price for price in (model_info.get(k) for k in keys) if isinstance(price, (int, float))), None)
 
 
 def vector_store_search_cost(

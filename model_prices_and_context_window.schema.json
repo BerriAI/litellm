@@ -53,6 +53,10 @@
           "type": "number",
           "minimum": 0
         },
+        "annotation_cost_per_page_batches": {
+          "type": "number",
+          "minimum": 0
+        },
         "audio_transcription_config": {
           "type": "string"
         },
@@ -429,6 +433,10 @@
           "minimum": 0
         },
         "ocr_cost_per_page": {
+          "type": "number",
+          "minimum": 0
+        },
+        "ocr_cost_per_page_batches": {
           "type": "number",
           "minimum": 0
         },

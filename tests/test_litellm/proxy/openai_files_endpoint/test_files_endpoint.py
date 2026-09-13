@@ -1877,7 +1877,7 @@ def test_get_file_content_streams_openai_direct_path(
     monkeypatch.setattr(litellm, "afile_content", _mock_afile_content)
     monkeypatch.setattr(
         "litellm.proxy.openai_files_endpoints.files_endpoints.handle_model_based_routing",
-        lambda **kwargs: (False, None, None, None),
+        AsyncMock(return_value=(False, None, None, None)),
     )
 
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
@@ -1942,15 +1942,17 @@ def test_get_file_content_routed_provider_skips_streaming_when_resolved_provider
     )
     monkeypatch.setattr(
         "litellm.proxy.openai_files_endpoints.files_endpoints.handle_model_based_routing",
-        lambda **kwargs: (
-            True,
-            "azure-gpt-3-5-turbo",
-            "file-original-123",
-            {
-                "custom_llm_provider": "azure",
-                "api_key": "azure-key",
-                "api_base": "https://azure.example.com",
-            },
+        AsyncMock(
+            return_value=(
+                True,
+                "azure-gpt-3-5-turbo",
+                "file-original-123",
+                {
+                    "custom_llm_provider": "azure",
+                    "api_key": "azure-key",
+                    "api_base": "https://azure.example.com",
+                },
+            )
         ),
     )
 
@@ -2015,7 +2017,7 @@ def test_get_file_content_non_openai_provider_skips_streaming_handler(
     )
     monkeypatch.setattr(
         "litellm.proxy.openai_files_endpoints.files_endpoints.handle_model_based_routing",
-        lambda **kwargs: (False, None, None, None),
+        AsyncMock(return_value=(False, None, None, None)),
     )
 
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
@@ -2520,14 +2522,16 @@ def test_list_files_model_routing_does_not_forward_custom_llm_provider_twice(
     monkeypatch.setattr(litellm, "afile_list", _mock_afile_list)
     monkeypatch.setattr(
         "litellm.proxy.openai_files_endpoints.files_endpoints.handle_model_based_routing",
-        lambda **kwargs: (
-            True,
-            "azure-gpt-4o",
-            None,
-            {
-                "custom_llm_provider": "azure",
-                "api_key": "azure-key",
-            },
+        AsyncMock(
+            return_value=(
+                True,
+                "azure-gpt-4o",
+                None,
+                {
+                    "custom_llm_provider": "azure",
+                    "api_key": "azure-key",
+                },
+            )
         ),
     )
 
@@ -5119,3 +5123,204 @@ def test_get_file_content_keeps_the_status_of_a_rejection_raised_inside_the_rout
     error = response.json()["error"]
     assert error["message"].startswith("Storage backend error")
     assert (error["type"], error["param"], error["code"]) == ("invalid_request_error", "file_id", "400")
+
+
+def test_get_file_model_routed_id_forwards_deployment_provider(mocker: MockerFixture, monkeypatch):
+    """
+    Regression: a file id encoded with a non-OpenAI deployment (here Mistral) must be
+    retrieved from that deployment's provider. Before the fix the retrieve path only
+    forwarded the credentials and let ``custom_llm_provider`` default to openai, so a
+    Mistral file id was sent to api.openai.com with the Mistral key and 401'd.
+    """
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.openai_files_endpoints.common_utils import encode_file_id_with_model
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "mistral-ocr",
+                "litellm_params": {"model": "mistral/mistral-ocr-latest", "api_key": "mistral-key"},
+                "model_info": {"id": "mistral-ocr-id"},
+            }
+        ]
+    )
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+
+    captured_kwargs: dict = {}
+
+    async def _mock_afile_retrieve(**kwargs):
+        captured_kwargs.update(kwargs)
+        return OpenAIFileObject(
+            id="7a13fa8e-fcf8-42c5-aa61-c93c10e2c7df",
+            object="file",
+            bytes=2,
+            created_at=1234567890,
+            filename="batch.jsonl",
+            purpose="batch",
+            status="uploaded",
+        )
+
+    monkeypatch.setattr(litellm, "afile_retrieve", _mock_afile_retrieve)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key", user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
+    encoded_id = encode_file_id_with_model("7a13fa8e-fcf8-42c5-aa61-c93c10e2c7df", "mistral-ocr")
+
+    try:
+        response = client.get(f"/v1/files/{encoded_id}", headers={"Authorization": "Bearer test-key"})
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert captured_kwargs["custom_llm_provider"] == "mistral"
+    assert captured_kwargs["api_key"] == "mistral-key"
+    assert captured_kwargs["file_id"] == "7a13fa8e-fcf8-42c5-aa61-c93c10e2c7df"
+    assert response.json()["id"] == encoded_id
+
+
+def _mistral_plus_anthropic_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "mistral-ocr",
+                "litellm_params": {"model": "mistral/mistral-ocr-latest", "api_key": "mistral-key"},
+                "model_info": {"id": "mistral-ocr-id"},
+            },
+            {
+                "model_name": "claude-opus-4-6",
+                "litellm_params": {"model": "anthropic/claude-opus-4-6", "api_key": "anthropic-key"},
+                "model_info": {"id": "claude-id"},
+            },
+        ]
+    )
+
+
+def _restricted_key(key_models: list[str]) -> UserAPIKeyAuth:
+    from litellm.proxy._types import LitellmUserRoles
+
+    return UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+        team_id="team-a",
+        team_models=["claude-opus-4-6", "mistral-ocr"],
+        models=key_models,
+    )
+
+
+@pytest.mark.parametrize(
+    "http_method, path_suffix, litellm_fn",
+    [
+        ("get", "", "afile_retrieve"),
+        ("get", "/content", "afile_content"),
+        ("delete", "", "afile_delete"),
+    ],
+)
+def test_model_routed_file_ops_reject_key_without_model_grant(
+    mocker: MockerFixture, monkeypatch, http_method: str, path_suffix: str, litellm_fn: str
+):
+    """
+    Regression: a key whose allowlist does not include the deployment named in a
+    model-encoded file id must be refused before that deployment's server-side
+    credentials are resolved. Previously any key could name any deployment via the
+    id (or the x-litellm-model header) and act on that provider account's files.
+    """
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.openai_files_endpoints.common_utils import encode_file_id_with_model
+
+    router = _mistral_plus_anthropic_router()
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+
+    upstream = mocker.AsyncMock(side_effect=AssertionError("provider must not be called"))
+    monkeypatch.setattr(litellm, litellm_fn, upstream)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: _restricted_key(["claude-opus-4-6"])
+    encoded_id = encode_file_id_with_model("7a13fa8e-fcf8-42c5-aa61-c93c10e2c7df", "mistral-ocr")
+
+    try:
+        response = getattr(client, http_method)(
+            f"/v1/files/{encoded_id}{path_suffix}", headers={"Authorization": "Bearer test-key"}
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 403, response.text
+    assert "not allowed to access model" in response.text
+    upstream.assert_not_called()
+
+
+def test_list_files_header_model_rejects_key_without_model_grant(mocker: MockerFixture, monkeypatch):
+    import litellm.proxy.proxy_server as ps
+
+    router = _mistral_plus_anthropic_router()
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+
+    upstream = mocker.AsyncMock(side_effect=AssertionError("provider must not be called"))
+    monkeypatch.setattr(litellm, "afile_list", upstream)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: _restricted_key(["claude-opus-4-6"])
+
+    try:
+        response = client.get(
+            "/v1/files", headers={"Authorization": "Bearer test-key", "x-litellm-model": "mistral-ocr"}
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 403, response.text
+    upstream.assert_not_called()
+
+
+def test_model_routed_file_retrieve_allows_key_with_model_grant(mocker: MockerFixture, monkeypatch):
+    """The grant check must not break the happy path: a key allowed the deployment still resolves its credentials."""
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.openai_files_endpoints.common_utils import encode_file_id_with_model
+
+    router = _mistral_plus_anthropic_router()
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+
+    captured_kwargs: dict = {}
+
+    async def _mock_afile_retrieve(**kwargs):
+        captured_kwargs.update(kwargs)
+        return OpenAIFileObject(
+            id="7a13fa8e-fcf8-42c5-aa61-c93c10e2c7df",
+            object="file",
+            bytes=2,
+            created_at=1234567890,
+            filename="batch.jsonl",
+            purpose="batch",
+            status="uploaded",
+        )
+
+    monkeypatch.setattr(litellm, "afile_retrieve", _mock_afile_retrieve)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: _restricted_key(["mistral-ocr"])
+    encoded_id = encode_file_id_with_model("7a13fa8e-fcf8-42c5-aa61-c93c10e2c7df", "mistral-ocr")
+
+    try:
+        response = client.get(f"/v1/files/{encoded_id}", headers={"Authorization": "Bearer test-key"})
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert captured_kwargs["api_key"] == "mistral-key"
+    assert captured_kwargs["custom_llm_provider"] == "mistral"

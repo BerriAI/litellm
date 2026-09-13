@@ -324,8 +324,10 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_second_720p: ReadOnly[float | None]
     output_cost_per_second_4k: ReadOnly[float | None]
     ocr_cost_per_page: float | None  # for OCR models
+    ocr_cost_per_page_batches: ReadOnly[float | None]
     ocr_cost_per_credit: float | None  # for OCR models priced by credit
     annotation_cost_per_page: float | None  # for OCR models
+    annotation_cost_per_page_batches: ReadOnly[float | None]
     search_context_cost_per_query: SearchContextCostPerQuery | None  # Cost for using web search tool
     web_search_billing_unit: (
         Literal["per_query", "per_prompt"] | None
@@ -3609,8 +3611,10 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_token_above_512k_tokens: float | None = None
     output_vector_size: int | None = None
     ocr_cost_per_page: float | None = None
+    ocr_cost_per_page_batches: float | None = None
     ocr_cost_per_credit: float | None = None
     annotation_cost_per_page: float | None = None
+    annotation_cost_per_page_batches: float | None = None
     regional_processing_uplift_multiplier_eu: float | None = None
     regional_processing_uplift_multiplier_us: float | None = None
     regional_endpoint_uplift_multiplier: float | None = None
