@@ -277,3 +277,75 @@ def test_update_valid_token_db_values_override_custom_auth_when_set():
     # DB values should win
     assert result.end_user_tpm_limit == 500
     assert result.end_user_model_max_budget == db_budget
+
+
+def test_update_valid_token_copies_end_user_max_budget():
+    valid_token = UserAPIKeyAuth(token="test_token", end_user_id="customer-1")
+
+    end_user_params = {
+        "end_user_id": "customer-1",
+        "end_user_max_budget": 0.000000001,
+    }
+
+    result = update_valid_token_with_end_user_params(valid_token, end_user_params)
+
+    assert result.end_user_max_budget == 0.000000001
+
+
+def test_update_valid_token_preserves_custom_auth_max_budget_when_db_has_none():
+    valid_token = UserAPIKeyAuth(
+        token="test_token",
+        end_user_id="customer-1",
+        end_user_max_budget=50.0,
+    )
+
+    end_user_params = {
+        "end_user_id": "customer-1",
+    }
+
+    result = update_valid_token_with_end_user_params(valid_token, end_user_params)
+
+    assert result.end_user_max_budget == 50.0
+
+
+@pytest.mark.asyncio
+async def test_end_user_budget_counter_created_from_token_max_budget():
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        _get_end_user_budget_counter,
+    )
+
+    token = UserAPIKeyAuth(
+        token="test_token",
+        end_user_id="customer-1",
+        end_user_max_budget=0.000000001,
+    )
+
+    counter = await _get_end_user_budget_counter(
+        valid_token=token,
+        end_user_id="customer-1",
+        end_user_object=None,
+    )
+
+    assert counter is not None
+    assert counter.max_budget == 0.000000001
+    assert counter.counter_key == "spend:end_user:customer-1"
+
+
+@pytest.mark.asyncio
+async def test_end_user_budget_counter_none_when_max_budget_missing():
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        _get_end_user_budget_counter,
+    )
+
+    token = UserAPIKeyAuth(
+        token="test_token",
+        end_user_id="customer-1",
+    )
+
+    counter = await _get_end_user_budget_counter(
+        valid_token=token,
+        end_user_id="customer-1",
+        end_user_object=None,
+    )
+
+    assert counter is None
