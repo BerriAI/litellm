@@ -1083,7 +1083,9 @@ def _should_strip_caller_authorization(
 
     has_explicit_litellm_admission_header: Final = _has_explicit_litellm_admission_header(raw_headers)
     if is_delegated_oauth:
-        return not has_explicit_litellm_admission_header
+        return not has_explicit_litellm_admission_header or _authorization_is_litellm_admission_credential(
+            raw_headers, user_api_key_auth
+        )
     return _authorization_is_litellm_admission_credential(raw_headers, user_api_key_auth) or (
         user_api_key_auth is None and not has_explicit_litellm_admission_header
     )
@@ -1110,15 +1112,11 @@ def _authorization_is_litellm_admission_credential(
     That is the case when no usable ``x-litellm-api-key`` was sent, or when the client repeated the
     same key in both headers.
     """
-    if user_api_key_auth is None or not user_api_key_auth.api_key:
-        return False
     admission_header: Final = _raw_header_value(raw_headers, "x-litellm-api-key")
-    if not admission_header:
-        return True
     authorization: Final = _raw_header_value(raw_headers, "authorization")
-    return authorization is not None and strip_auth_scheme(authorization, "Bearer") == strip_auth_scheme(
-        admission_header, "Bearer"
-    )
+    if admission_header and authorization:
+        return strip_auth_scheme(authorization, "Bearer") == strip_auth_scheme(admission_header, "Bearer")
+    return bool(user_api_key_auth and user_api_key_auth.api_key and not admission_header)
 
 
 def _format_byok_openapi_auth_header(mcp_server: MCPServer, mcp_auth_header: str) -> str:
