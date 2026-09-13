@@ -388,6 +388,7 @@ async def asend_message(
     litellm_params: dict[str, object] | None = None,
     agent_id: str | None = None,
     agent_extra_headers: dict[str, str] | None = None,
+    agent_card_params: dict[str, object] | None = None,
     **kwargs: object,
 ) -> LiteLLMSendMessageResponse:
     """
@@ -474,7 +475,11 @@ async def asend_message(
         # Overlay agent-level headers (agent headers take precedence over LiteLLM internal ones)
         if agent_extra_headers:
             extra_headers.update(agent_extra_headers)
-        a2a_client = await create_a2a_client(base_url=api_base, extra_headers=extra_headers)
+        a2a_client = await create_a2a_client(
+            base_url=api_base,
+            extra_headers=extra_headers,
+            agent_card_params=agent_card_params,
+        )
 
     # Type assertion: a2a_client is guaranteed to be non-None here
     assert a2a_client is not None
@@ -610,6 +615,7 @@ async def asend_message_streaming(
     metadata: dict[str, object] | None = None,
     proxy_server_request: dict[str, object] | None = None,
     agent_extra_headers: dict[str, str] | None = None,
+    agent_card_params: dict[str, object] | None = None,
     **kwargs: object,
 ) -> AsyncIterator[Any]:
     """
@@ -699,6 +705,7 @@ async def asend_message_streaming(
             base_url=api_base,
             extra_headers=extra_headers,
             streaming=True,
+            agent_card_params=agent_card_params,
         )
 
     assert a2a_client is not None
@@ -745,6 +752,7 @@ async def create_a2a_client(
     timeout: float = DEFAULT_A2A_AGENT_TIMEOUT,
     extra_headers: dict[str, str] | None = None,
     streaming: bool = False,
+    agent_card_params: dict[str, object] | None = None,
 ) -> "A2AClientType":
     """
     Create an A2A client for the given agent URL.
@@ -787,10 +795,31 @@ async def create_a2a_client(
     if extra_headers:
         verbose_proxy_logger.debug("A2A client created with extra_headers=%s", list(extra_headers.keys()))
 
-    resolver: Final = A2ACardResolver(httpx_client=httpx_client, base_url=base_url)
-    agent_card: Final = normalize_agent_card_interfaces(
-        await resolver.get_agent_card(http_kwargs={"headers": extra_headers} if extra_headers else None)
-    )
+    agent_card: AgentCard | None = None
+
+    if agent_card_params:
+        from a2a.compat.v0_3 import conversions as _conversions
+        from a2a.compat.v0_3.types import AgentCard as _CompatAgentCard
+        from pydantic import ValidationError as _ValidationError
+
+        try:
+            compat_card = _CompatAgentCard.model_validate(agent_card_params)
+            agent_card = normalize_agent_card_interfaces(_conversions.to_core_agent_card(compat_card))
+            verbose_logger.info("Using pre-registered agent card for %s (skipping well-known discovery)", base_url)
+        except _ValidationError as e:
+            verbose_logger.warning(
+                "Stored agent_card_params for %s failed AgentCard validation (%s); "
+                "falling back to well-known discovery.",
+                base_url,
+                e,
+            )
+            agent_card = None
+
+    if agent_card is None:
+        resolver: Final = A2ACardResolver(httpx_client=httpx_client, base_url=base_url)
+        agent_card = normalize_agent_card_interfaces(
+            await resolver.get_agent_card(http_kwargs={"headers": extra_headers} if extra_headers else None)
+        )
 
     a2a_client: Final = await create_client(  # pyright: ignore[reportOptionalCall]
         agent_card,
