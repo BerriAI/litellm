@@ -100,6 +100,7 @@ def mock_prisma_client(mocker):
 def mock_in_memory_handler(mocker):
     """Mock InMemoryGuardrailHandler for testing"""
     mock_handler = mocker.Mock(spec=InMemoryGuardrailHandler)
+    mock_handler.is_enabled.return_value = True
     mock_handler.list_in_memory_guardrails.return_value = [MOCK_CONFIG_GUARDRAIL]
     mock_handler.get_guardrail_by_id.return_value = MOCK_CONFIG_GUARDRAIL
     mock_handler.get_source.return_value = "config"
@@ -179,6 +180,7 @@ async def test_list_guardrails_v2_skips_stale_db_backed_in_memory_entries(mocker
     mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
 
     mock_in_memory_handler = mocker.Mock()
+    mock_in_memory_handler.is_enabled.return_value = True
     mock_in_memory_handler.list_in_memory_guardrails.return_value = [stale_guardrail]
     mock_in_memory_handler.get_source.return_value = "db"
 
@@ -246,6 +248,7 @@ async def test_list_guardrails_v2_masks_sensitive_data_in_db_guardrails(mocker):
     )
 
     mock_in_memory_handler = mocker.Mock()
+    mock_in_memory_handler.is_enabled.return_value = True
     mock_in_memory_handler.list_in_memory_guardrails.return_value = []
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -299,6 +302,7 @@ async def test_list_guardrails_v2_masks_sensitive_data_in_config_guardrails(mock
     mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
 
     mock_in_memory_handler = mocker.Mock()
+    mock_in_memory_handler.is_enabled.return_value = True
     mock_in_memory_handler.list_in_memory_guardrails.return_value = [
         config_guardrail_with_secrets
     ]
@@ -360,6 +364,7 @@ async def test_list_guardrails_v2_admin_viewer_sees_guardrails_of_teams_they_are
     )
 
     mock_in_memory_handler = mocker.Mock()
+    mock_in_memory_handler.is_enabled.return_value = True
     mock_in_memory_handler.list_in_memory_guardrails.return_value = []
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -409,6 +414,7 @@ async def test_list_guardrails_v2_masks_sensitive_data_for_admin_viewer(mocker):
     )
 
     mock_in_memory_handler = mocker.Mock()
+    mock_in_memory_handler.is_enabled.return_value = True
     mock_in_memory_handler.list_in_memory_guardrails.return_value = []
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -1762,6 +1768,7 @@ async def test_get_guardrail_info_endpoint_config_guardrail(mocker):
 
     # Mock IN_MEMORY_GUARDRAIL_HANDLER at its source to return config guardrail
     mock_in_memory_handler = mocker.Mock()
+    mock_in_memory_handler.is_enabled.return_value = True
     mock_in_memory_handler.get_guardrail_by_id.return_value = MOCK_CONFIG_GUARDRAIL
     mock_in_memory_handler.get_source.return_value = "config"
     mocker.patch(
@@ -1807,6 +1814,7 @@ async def test_get_guardrail_info_endpoint_db_guardrail(mocker):
 
     # Mock IN_MEMORY_GUARDRAIL_HANDLER to return None
     mock_in_memory_handler = mocker.Mock()
+    mock_in_memory_handler.is_enabled.return_value = True
     mock_in_memory_handler.get_guardrail_by_id.return_value = None
     mocker.patch(
         "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
@@ -2709,3 +2717,161 @@ def test_field_type_inference_handles_pep604_unions():
     assert _get_field_type_from_annotation(list[str] | None) == "array"
     assert _get_field_type_from_annotation(bool | None) == "boolean"
     assert _unwrap_optional_type(str | None) is str
+
+
+def _prisma_with_config_store(mocker, stored: dict, db_guardrails: list):
+    async def find_unique(*, where):
+        value = stored.get(where["param_name"])
+        return None if value is None else mocker.Mock(param_name=where["param_name"], param_value=value)
+
+    async def upsert(*, where, data):
+        stored[where["param_name"]] = data["update"]["param_value"]
+        return mocker.Mock()
+
+    prisma_client = mocker.Mock()
+    prisma_client.db.litellm_config.find_unique = find_unique
+    prisma_client.db.litellm_config.upsert = upsert
+    prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=db_guardrails)
+    prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(
+        side_effect=lambda where: next(
+            (g for g in db_guardrails if g["guardrail_id"] == where["guardrail_id"]), None
+        )
+    )
+    return prisma_client
+
+
+def _real_handler_with_config_guardrail(mocker, name: str):
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    registry_module.guardrail_initializer_registry["toggle_endpoint_test"] = lambda litellm_params, guardrail: (
+        CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"], event_hook=GuardrailEventHooks.pre_call, default_on=True
+        )
+    )
+    handler = InMemoryGuardrailHandler()
+    result = handler.initialize_guardrail(
+        guardrail={
+            "guardrail_name": name,
+            "litellm_params": {"guardrail": "toggle_endpoint_test", "mode": "pre_call"},
+        }
+    )
+    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", handler)  # test-quality-ok: endpoint reads these module globals; no injection seam
+    return handler, result["guardrail_id"]
+
+
+@pytest.mark.asyncio
+async def test_set_guardrail_enabled_requires_admin(mocker):
+    from litellm.proxy.guardrails.guardrail_endpoints import set_guardrail_enabled
+    from litellm.types.guardrails import SetGuardrailEnabledRequest
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mocker.Mock())  # test-quality-ok: endpoint reads these module globals; no injection seam
+
+    with pytest.raises(HTTPException) as exc_info:
+        await set_guardrail_enabled(
+            guardrail_id="any",
+            request=SetGuardrailEnabledRequest(enabled=False),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_set_guardrail_enabled_toggles_config_guardrail_and_surfaces_in_list_and_info(mocker):
+    """
+    End to end through the endpoints: a config.yaml guardrail (no DB row) is
+    disabled, the disabled id is persisted to LiteLLM_Config, the live callback
+    stops running, /v2/guardrails/list and /guardrails/{id}/info report
+    enabled=false, and re-enabling reverses all of it.
+    """
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+    from litellm.proxy.guardrails.guardrail_endpoints import set_guardrail_enabled
+    from litellm.types.guardrails import GuardrailEventHooks, SetGuardrailEnabledRequest
+
+    stored: dict = {}
+    prisma_client = _prisma_with_config_store(mocker, stored, db_guardrails=[])
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: endpoint reads these module globals; no injection seam
+    try:
+        handler, gid = _real_handler_with_config_guardrail(mocker, "headroom-compression")
+        instance = handler.guardrail_id_to_custom_guardrail[gid]
+
+        disabled = await set_guardrail_enabled(
+            guardrail_id=gid, request=SetGuardrailEnabledRequest(enabled=False), user_api_key_dict=MOCK_ADMIN_USER
+        )
+
+        assert disabled.model_dump() == {"guardrail_id": gid, "guardrail_name": "headroom-compression", "enabled": False}
+        assert stored["disabled_guardrails"] == json.dumps([gid])
+        assert instance.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is False
+        listed = await list_guardrails_v2(user_api_key_dict=MOCK_ADMIN_USER)
+        assert [(g.guardrail_id, g.enabled, g.guardrail_definition_location) for g in listed.guardrails] == [
+            (gid, False, "config")
+        ]
+        assert (await get_guardrail_info(gid)).enabled is False
+
+        enabled = await set_guardrail_enabled(
+            guardrail_id=gid, request=SetGuardrailEnabledRequest(enabled=True), user_api_key_dict=MOCK_ADMIN_USER
+        )
+
+        assert enabled.enabled is True
+        assert stored["disabled_guardrails"] == "[]"
+        assert instance.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is True
+        assert (await list_guardrails_v2(user_api_key_dict=MOCK_ADMIN_USER)).guardrails[0].enabled is True
+        assert (await get_guardrail_info(gid)).enabled is True
+    finally:
+        registry_module.guardrail_initializer_registry.pop("toggle_endpoint_test", None)
+
+
+@pytest.mark.asyncio
+async def test_set_guardrail_enabled_disables_db_guardrail_without_touching_its_row(mocker):
+    from litellm.proxy.guardrails.guardrail_endpoints import set_guardrail_enabled
+    from litellm.types.guardrails import SetGuardrailEnabledRequest
+
+    stored: dict = {}
+    prisma_client = _prisma_with_config_store(mocker, stored, db_guardrails=[MOCK_DB_GUARDRAIL])
+    prisma_client.db.litellm_guardrailstable.update = AsyncMock()
+    prisma_client.db.litellm_guardrailstable.delete = AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: endpoint reads these module globals; no injection seam
+    handler = InMemoryGuardrailHandler()
+    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", handler)  # test-quality-ok: endpoint reads these module globals; no injection seam
+
+    result = await set_guardrail_enabled(
+        guardrail_id="test-db-guardrail",
+        request=SetGuardrailEnabledRequest(enabled=False),
+        user_api_key_dict=MOCK_ADMIN_USER,
+    )
+
+    assert result.enabled is False
+    assert result.guardrail_name == "Test DB Guardrail"
+    assert stored["disabled_guardrails"] == '["test-db-guardrail"]'
+    assert handler.is_enabled("test-db-guardrail") is False
+    prisma_client.db.litellm_guardrailstable.update.assert_not_called()
+    prisma_client.db.litellm_guardrailstable.delete.assert_not_called()
+    listed = await list_guardrails_v2(user_api_key_dict=MOCK_ADMIN_USER)
+    assert [(g.guardrail_id, g.enabled) for g in listed.guardrails] == [("test-db-guardrail", False)]
+
+
+@pytest.mark.asyncio
+async def test_set_guardrail_enabled_404s_unknown_and_stale_db_backed_ids(mocker):
+    from litellm.proxy.guardrails.guardrail_endpoints import set_guardrail_enabled
+    from litellm.types.guardrails import SetGuardrailEnabledRequest
+
+    stored: dict = {}
+    prisma_client = _prisma_with_config_store(mocker, stored, db_guardrails=[])
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: endpoint reads these module globals; no injection seam
+    handler = mocker.Mock(spec=InMemoryGuardrailHandler)
+    handler.get_guardrail_by_id.return_value = MOCK_CONFIG_GUARDRAIL
+    handler.get_source.return_value = "db"
+    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", handler)  # test-quality-ok: endpoint reads these module globals; no injection seam
+
+    with pytest.raises(HTTPException) as exc_info:
+        await set_guardrail_enabled(
+            guardrail_id="stale-db-id",
+            request=SetGuardrailEnabledRequest(enabled=False),
+            user_api_key_dict=MOCK_ADMIN_USER,
+        )
+
+    assert exc_info.value.status_code == 404
+    assert stored == {}
+    handler.set_disabled_guardrails.assert_not_called()

@@ -10,6 +10,7 @@ vi.mock("@/components/networking", () => ({
   getGuardrailUISettings: vi.fn(),
   getGuardrailProviderSpecificParams: vi.fn(),
   updateGuardrailCall: vi.fn(),
+  setGuardrailEnabledCall: vi.fn(),
 }));
 
 // Mock ContentFilterManager
@@ -36,9 +37,66 @@ vi.mock("./content_filter/ContentFilterManager", () => ({
   }),
 }));
 
+const preCallUISettings = {
+  supported_entities: [],
+  supported_actions: [],
+  pii_entity_categories: [],
+  supported_modes: ["pre_call"],
+};
+
+const disabledConfigGuardrail = {
+  guardrail_id: "cfg-1",
+  guardrail_name: "Headroom",
+  litellm_params: { guardrail: "headroom", mode: "pre_call", default_on: true },
+  guardrail_definition_location: "config",
+  enabled: false,
+};
+
+const disabledDbGuardrail = {
+  guardrail_id: "123",
+  guardrail_name: "Test Guardrail",
+  litellm_params: { guardrail: "presidio", mode: "pre_call", default_on: true },
+  guardrail_definition_location: "db",
+  enabled: false,
+};
+
 describe("Guardrail Info", () => {
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("lets an admin re-enable a disabled config guardrail from the overview and refetches it", async () => {
+    vi.mocked(networking.getGuardrailInfo)
+      .mockResolvedValueOnce(disabledConfigGuardrail)
+      .mockResolvedValueOnce({ ...disabledConfigGuardrail, enabled: true });
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue(preCallUISettings);
+    vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
+    vi.mocked(networking.setGuardrailEnabledCall).mockResolvedValue({ guardrail_id: "cfg-1", enabled: true });
+
+    render(<GuardrailInfoView guardrailId="cfg-1" onClose={() => {}} accessToken="tok" isAdmin={true} />);
+
+    const toggle = await screen.findByRole("switch", { name: "Enable guardrail" });
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByText("Disabled")).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(networking.setGuardrailEnabledCall).toHaveBeenCalledWith("tok", "cfg-1", true);
+    });
+    expect(await screen.findByText("Enabled", { selector: "[data-slot='badge']" })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Enable guardrail" })).toBeChecked();
+  });
+
+  it("hides the enable switch from non-admins but still shows the state", async () => {
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue(disabledDbGuardrail);
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue(preCallUISettings);
+    vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
+
+    render(<GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="tok" isAdmin={false} />);
+
+    expect(await screen.findByText("Disabled")).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "Enable guardrail" })).not.toBeInTheDocument();
   });
 
   it("should render the guardrail info after loading", async () => {

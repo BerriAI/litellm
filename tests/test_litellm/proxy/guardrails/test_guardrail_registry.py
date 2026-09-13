@@ -1084,3 +1084,109 @@ def test_sync_guardrail_from_db_applies_db_dict_params_to_live_instance():
     finally:
         for cb_list, snapshot in zip(lists, snapshots):
             cb_list[:] = snapshot
+
+
+def test_set_disabled_guardrails_gates_should_run_and_re_enables():
+    """
+    A disabled guardrail must stay registered and listed but never run: the
+    runtime gate returns False even for a default_on guardrail, and flipping it
+    back on takes effect immediately without re-initializing anything.
+    """
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    def _initializer(litellm_params, guardrail):
+        return CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+        )
+
+    registry_module.guardrail_initializer_registry["toggle_test"] = _initializer
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        handler = InMemoryGuardrailHandler()
+        result = handler.initialize_guardrail(guardrail=_config_guardrail("headroom-compression", "toggle_test"))
+        gid = result["guardrail_id"]
+        instance = handler.guardrail_id_to_custom_guardrail[gid]
+
+        assert handler.is_enabled(gid) is True
+        assert instance.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is True
+
+        handler.set_disabled_guardrails(frozenset({gid}))
+        assert handler.is_enabled(gid) is False
+        assert instance.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is False
+        assert handler.get_guardrail_by_id(gid) is not None
+        assert instance in handler._tracked_callbacks(gid)
+
+        handler.set_disabled_guardrails(frozenset())
+        assert handler.is_enabled(gid) is True
+        assert instance.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is True
+    finally:
+        registry_module.guardrail_initializer_registry.pop("toggle_test", None)
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+def test_guardrail_initialized_after_disable_starts_disabled():
+    """
+    Persisted disabled ids are loaded before DB guardrails are (re)initialized on
+    a pod, so a callback created later for a disabled id must come up disabled
+    rather than silently re-enabling itself on the next sync.
+    """
+    registry_module = _register_noop_initializer("late_init_test")
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        handler = InMemoryGuardrailHandler()
+        handler.set_disabled_guardrails(frozenset({"db-guardrail-1"}))
+        handler.initialize_guardrail(
+            guardrail=_config_guardrail("late", "late_init_test", guardrail_id="db-guardrail-1")
+        )
+
+        instance = handler.guardrail_id_to_custom_guardrail["db-guardrail-1"]
+        assert instance.enabled is False
+        assert instance.should_run_guardrail(
+            data={"metadata": {"guardrails": ["late"]}}, event_type=GuardrailEventHooks.pre_call
+        ) is False
+    finally:
+        registry_module.guardrail_initializer_registry.pop("late_init_test", None)
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+@pytest.mark.asyncio
+async def test_set_guardrail_enabled_in_db_round_trips_through_config_table():
+    """
+    The disabled set lives in LiteLLM_Config so config.yaml guardrails, which have
+    no row in the guardrails table, can be switched off too. Disable adds the id,
+    enable removes it, and the stored JSON reads back as the same set.
+    """
+    stored: dict = {}
+
+    async def find_unique(*, where):
+        value = stored.get(where["param_name"])
+        if value is None:
+            return None
+        return MagicMock(param_name=where["param_name"], param_value=value)
+
+    async def upsert(*, where, data):
+        stored[where["param_name"]] = data["update"]["param_value"]
+        return MagicMock()
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_config.find_unique = find_unique
+    prisma_client.db.litellm_config.upsert = upsert
+
+    assert await GuardrailRegistry.get_disabled_guardrail_ids_from_db(prisma_client) == frozenset()
+
+    assert await GuardrailRegistry.set_guardrail_enabled_in_db("b", enabled=False, prisma_client=prisma_client) == {"b"}
+    assert await GuardrailRegistry.set_guardrail_enabled_in_db("a", enabled=False, prisma_client=prisma_client) == {
+        "a",
+        "b",
+    }
+    assert stored["disabled_guardrails"] == '["a", "b"]'
+    assert await GuardrailRegistry.get_disabled_guardrail_ids_from_db(prisma_client) == frozenset({"a", "b"})
+
+    assert await GuardrailRegistry.set_guardrail_enabled_in_db("b", enabled=True, prisma_client=prisma_client) == {"a"}
+    assert await GuardrailRegistry.get_disabled_guardrail_ids_from_db(prisma_client) == frozenset({"a"})

@@ -8023,6 +8023,9 @@ class ProxyConfig:
                 # Drop in-memory DB-backed entries whose row was deleted on another
                 # pod. Config-loaded entries are never touched.
                 IN_MEMORY_GUARDRAIL_HANDLER.reconcile_db_guardrails(db_guardrail_ids=db_guardrail_ids)
+                IN_MEMORY_GUARDRAIL_HANDLER.set_disabled_guardrails(
+                    await GuardrailRegistry.get_disabled_guardrail_ids_from_db(prisma_client=prisma_client)
+                )
         except Exception as e:
             verbose_proxy_logger.exception("litellm.proxy.proxy_server.py::ProxyConfig:_init_guardrails_in_db - %s", e)
 

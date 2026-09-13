@@ -2,7 +2,7 @@ import { parseAsString, useQueryState } from "nuqs";
 import React, { useState, useEffect } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChevronDown, Code, Plus } from "lucide-react";
-import { getGuardrailsList, deleteGuardrailCall } from "@/components/networking";
+import { getGuardrailsList, deleteGuardrailCall, setGuardrailEnabledCall } from "@/components/networking";
 import { buttonVariants } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -126,6 +126,20 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
     setGuardrailToDelete(null);
   };
 
+  const handleToggleEnabled = async (guardrailId: string, enabled: boolean) => {
+    if (!accessToken) return;
+    const guardrail = guardrailsList.find((g) => g.guardrail_id === guardrailId);
+    const label = guardrail?.guardrail_name || guardrailId;
+    try {
+      await setGuardrailEnabledCall(accessToken, guardrailId, enabled);
+      toast.success(`Guardrail "${label}" ${enabled ? "enabled" : "disabled"}`);
+    } catch (error) {
+      console.error("Error updating guardrail enabled state:", error);
+      toast.fromError(`Failed to ${enabled ? "enable" : "disable"} guardrail`);
+    }
+    await fetchGuardrails();
+  };
+
   const providerDisplayName =
     guardrailToDelete && guardrailToDelete.litellm_params
       ? getGuardrailLogoAndName(guardrailToDelete.litellm_params.guardrail).displayName
@@ -193,6 +207,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
                   isLoading={isLoading}
                   onDeleteClick={handleDeleteClick}
                   onGuardrailClick={(id) => void setSelectedGuardrailId(id)}
+                  onToggleEnabled={handleToggleEnabled}
                 />
               )}
 

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from itertools import chain, count
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, cast
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import Router
@@ -39,6 +39,7 @@ from litellm.proxy.guardrails.guardrail_hooks.tool_permission import (
 )
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import GuardrailsRepository
 from litellm.secret_managers.main import get_secret
@@ -89,6 +90,9 @@ guardrail_initializer_registry: Final = {
 }
 
 CONFIG_GUARDRAIL_ID_NAMESPACE: Final = uuid.UUID("625f63f4-935a-50e5-98b5-fbe77babc74a")
+
+DISABLED_GUARDRAILS_CONFIG_PARAM: Final = "disabled_guardrails"
+_DISABLED_IDS_ADAPTER: Final = TypeAdapter(list[str])
 
 GuardrailCallbacks: TypeAlias = tuple[CustomGuardrail, ...]
 
@@ -414,6 +418,25 @@ class GuardrailRegistry:
         except Exception as e:
             raise Exception(f"Error getting guardrail from DB: {e}")
 
+    @staticmethod
+    async def get_disabled_guardrail_ids_from_db(prisma_client: PrismaClient) -> frozenset[str]:
+        param: Final = await ConfigRepository(prisma_client).get_param(DISABLED_GUARDRAILS_CONFIG_PARAM)
+        if param is None:
+            return frozenset()
+        try:
+            return frozenset(_DISABLED_IDS_ADAPTER.validate_python(param.param_value))
+        except ValidationError:
+            return frozenset()
+
+    @staticmethod
+    async def set_guardrail_enabled_in_db(
+        guardrail_id: str, enabled: bool, prisma_client: PrismaClient
+    ) -> frozenset[str]:
+        current: Final = await GuardrailRegistry.get_disabled_guardrail_ids_from_db(prisma_client)
+        updated: Final = current - {guardrail_id} if enabled else current | {guardrail_id}
+        await ConfigRepository(prisma_client).set_param(DISABLED_GUARDRAILS_CONFIG_PARAM, sorted(updated))
+        return updated
+
 
 def _apply_configured_bool_overrides(instance: CustomGuardrail, litellm_params: LitellmParams) -> None:
     """Override the parallel/raw-scan flags only when ``litellm_params`` explicitly
@@ -486,6 +509,8 @@ class InMemoryGuardrailHandler:
         and never deleted by reconciliation.
         """
 
+        self._disabled_guardrail_ids: frozenset[str] = frozenset()
+
     def _stable_guardrail_id(self, guardrail_name: str) -> str:
         seeds: Final = chain((guardrail_name,), (f"{guardrail_name}:{occurrence}" for occurrence in count(1)))
         candidate_ids: Final = (str(uuid.uuid5(CONFIG_GUARDRAIL_ID_NAMESPACE, seed.encode("utf-8"))) for seed in seeds)
@@ -545,6 +570,7 @@ class InMemoryGuardrailHandler:
         )
         for custom_guardrail_callback in created_callbacks:
             _configure_callback_scoping(custom_guardrail_callback, guardrail["guardrail_name"], litellm_params)
+            custom_guardrail_callback.enabled = guardrail_id not in self._disabled_guardrail_ids
 
         parsed_guardrail: Final = Guardrail(
             guardrail_id=guardrail.get("guardrail_id"),
@@ -701,6 +727,15 @@ class InMemoryGuardrailHandler:
         Return the provenance of an in-memory guardrail.
         """
         return self._sources.get(guardrail_id)
+
+    def is_enabled(self, guardrail_id: str) -> bool:
+        return guardrail_id not in self._disabled_guardrail_ids
+
+    def set_disabled_guardrails(self, disabled_guardrail_ids: frozenset[str]) -> None:
+        self._disabled_guardrail_ids = disabled_guardrail_ids
+        for guardrail_id in self.IN_MEMORY_GUARDRAILS:
+            for callback in self._tracked_callbacks(guardrail_id):
+                callback.enabled = guardrail_id not in disabled_guardrail_ids
 
     def list_config_guardrails(self) -> list[Guardrail]:
         """

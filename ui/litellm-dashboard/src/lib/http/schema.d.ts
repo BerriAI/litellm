@@ -6717,6 +6717,48 @@ export interface paths {
         patch: operations["patch_guardrail_guardrails__guardrail_id__patch"];
         trace?: never;
     };
+    "/guardrails/{guardrail_id}/enabled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Set Guardrail Enabled
+         * @description Turn a guardrail off or back on at runtime without editing or deleting it
+         *
+         *     Works for guardrails defined in config.yaml as well as ones created in the DB.
+         *     A disabled guardrail stays registered but skips every request until it is
+         *     re-enabled. The state is persisted, so it survives restarts and applies to
+         *     all proxy instances sharing the DB.
+         *
+         *     Example Request:
+         *     ```bash
+         *     curl -X PATCH "http://localhost:4000/guardrails/123e4567-e89b-12d3-a456-426614174000/enabled" \
+         *         -H "Authorization: Bearer <your_api_key>" \
+         *         -H "Content-Type: application/json" \
+         *         -d '{"enabled": false}'
+         *     ```
+         *
+         *     Example Response:
+         *     ```json
+         *     {
+         *         "guardrail_id": "123e4567-e89b-12d3-a456-426614174000",
+         *         "guardrail_name": "headroom-compression",
+         *         "enabled": false
+         *     }
+         *     ```
+         */
+        patch: operations["set_guardrail_enabled_guardrails__guardrail_id__enabled_patch"];
+        trace?: never;
+    };
     "/guardrails/{guardrail_id}/info": {
         parameters: {
             query?: never;
@@ -28090,6 +28132,11 @@ export interface components {
         GuardrailInfoResponse: {
             /** Created At */
             created_at?: string | null;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
             /** @default config */
             guardrail_definition_location: components["schemas"]["GUARDRAIL_DEFINITION_LOCATION"];
             /** Guardrail Id */
@@ -36143,6 +36190,20 @@ export interface components {
             search_provider: string;
             /** Timeout */
             timeout?: number | null;
+        };
+        /** SetGuardrailEnabledRequest */
+        SetGuardrailEnabledRequest: {
+            /** Enabled */
+            enabled: boolean;
+        };
+        /** SetGuardrailEnabledResponse */
+        SetGuardrailEnabledResponse: {
+            /** Enabled */
+            enabled: boolean;
+            /** Guardrail Id */
+            guardrail_id: string;
+            /** Guardrail Name */
+            guardrail_name: string;
         };
         /**
          * ShadowEvalJobResponse
@@ -49296,6 +49357,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_guardrail_enabled_guardrails__guardrail_id__enabled_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                guardrail_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetGuardrailEnabledRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetGuardrailEnabledResponse"];
                 };
             };
             /** @description Validation Error */

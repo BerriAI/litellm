@@ -10625,6 +10625,11 @@
               ],
               "title": "Created At"
             },
+            "enabled": {
+              "default": true,
+              "title": "Enabled",
+              "type": "boolean"
+            },
             "guardrail_definition_location": {
               "$ref": "#/components/schemas/GUARDRAIL_DEFINITION_LOCATION",
               "default": "config"
@@ -13074,6 +13079,42 @@
           "title": "RegisterGuardrailResponse",
           "type": "object"
         },
+        "SetGuardrailEnabledRequest": {
+          "properties": {
+            "enabled": {
+              "title": "Enabled",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enabled"
+          ],
+          "title": "SetGuardrailEnabledRequest",
+          "type": "object"
+        },
+        "SetGuardrailEnabledResponse": {
+          "properties": {
+            "enabled": {
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "guardrail_id": {
+              "title": "Guardrail Id",
+              "type": "string"
+            },
+            "guardrail_name": {
+              "title": "Guardrail Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "guardrail_id",
+            "guardrail_name",
+            "enabled"
+          ],
+          "title": "SetGuardrailEnabledResponse",
+          "type": "object"
+        },
         "TestCustomCodeGuardrailRequest": {
           "description": "Request model for testing custom code guardrails.",
           "properties": {
@@ -15004,6 +15045,64 @@
             }
           ],
           "summary": "Update Guardrail",
+          "tags": [
+            "guardrails"
+          ]
+        }
+      },
+      "/guardrails/{guardrail_id}/enabled": {
+        "patch": {
+          "description": "Turn a guardrail off or back on at runtime without editing or deleting it\n\nWorks for guardrails defined in config.yaml as well as ones created in the DB.\nA disabled guardrail stays registered but skips every request until it is\nre-enabled. The state is persisted, so it survives restarts and applies to\nall proxy instances sharing the DB.\n\nExample Request:\n```bash\ncurl -X PATCH \"http://localhost:4000/guardrails/123e4567-e89b-12d3-a456-426614174000/enabled\" \\\n    -H \"Authorization: Bearer <your_api_key>\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\"enabled\": false}'\n```\n\nExample Response:\n```json\n{\n    \"guardrail_id\": \"123e4567-e89b-12d3-a456-426614174000\",\n    \"guardrail_name\": \"headroom-compression\",\n    \"enabled\": false\n}\n```",
+          "operationId": "set_guardrail_enabled_guardrails__guardrail_id__enabled_patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "guardrail_id",
+              "required": true,
+              "schema": {
+                "title": "Guardrail Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetGuardrailEnabledRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SetGuardrailEnabledResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Set Guardrail Enabled",
           "tags": [
             "guardrails"
           ]

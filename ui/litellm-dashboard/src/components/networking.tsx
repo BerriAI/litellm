@@ -6229,6 +6229,9 @@ export const getAgentInfo = async (accessToken: string, agentId: string) => {
   }
 };
 
+export const setGuardrailEnabledCall = async (accessToken: string, guardrailId: string, enabled: boolean) =>
+  apiClient.patch(`/guardrails/${guardrailId}/enabled`, { accessToken, body: { enabled } });
+
 export const getGuardrailInfo = async (accessToken: string, guardrailId: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}/info` : `/guardrails/${guardrailId}/info`;
