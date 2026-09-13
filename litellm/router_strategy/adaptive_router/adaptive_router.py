@@ -227,9 +227,7 @@ class AdaptiveRouter:
         return {
             "savings_baseline_model": baseline.model,
             **(
-                {"savings_baseline_deployment_id": baseline.deployment_id}
-                if baseline.deployment_id is not None
-                else {}
+                {"savings_baseline_deployment_id": baseline.deployment_id} if baseline.deployment_id is not None else {}
             ),
         }
 
