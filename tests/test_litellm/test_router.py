@@ -15314,6 +15314,8 @@ async def test_async_routing_strategy_pre_call_checks_failure_logging_is_coordin
             type(hook_error),
         )
 
+    assert hook_error.failed_deployment_id == deployment["model_info"]["id"]
+
 
 @pytest.mark.asyncio
 async def test_async_callback_filter_deployments_failure_logging_is_coordinated():
