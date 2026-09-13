@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from contextlib import ExitStack
 from typing import Final
 import json
@@ -18,6 +19,7 @@ from litellm.proxy._types import (
     GenerateKeyRequest,
     NewUserRequest,
     LiteLLM_BudgetTable,
+    LiteLLM_ObjectPermissionBase,
     LiteLLM_OrganizationTable,
     LiteLLM_ProjectTableCachedObj,
     LiteLLM_TeamTableCachedObj,
@@ -1035,7 +1037,7 @@ async def test_key_generation_with_mcp_tool_permissions(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_key_update_object_permissions_existing_permission(monkeypatch):
+async def test_key_update_object_permissions_existing_permission():
     """
     Test updating object permissions when a key already has an existing object_permission_id.
 
@@ -1055,9 +1057,7 @@ async def test_key_update_object_permissions_existing_permission(monkeypatch):
         _handle_update_object_permission,
     )
 
-    # Mock prisma client
     mock_prisma_client = AsyncMock()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     # Mock existing key with object_permission_id
     existing_key_row = LiteLLM_VerificationToken(
@@ -1097,6 +1097,7 @@ async def test_key_update_object_permissions_existing_permission(monkeypatch):
     result = await _handle_update_object_permission(
         data_json=data_json,
         existing_key_row=existing_key_row,
+        prisma_client=mock_prisma_client,
     )
 
     # Verify the object_permission was removed from data_json and object_permission_id was set
@@ -1111,7 +1112,7 @@ async def test_key_update_object_permissions_existing_permission(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_key_update_object_permissions_no_existing_permission(monkeypatch):
+async def test_key_update_object_permissions_no_existing_permission():
     """
     Test creating object permissions when a key has no existing object_permission_id.
 
@@ -1131,9 +1132,7 @@ async def test_key_update_object_permissions_no_existing_permission(monkeypatch)
         _handle_update_object_permission,
     )
 
-    # Mock prisma client
     mock_prisma_client = AsyncMock()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     existing_key_row_no_perm = LiteLLM_VerificationToken(
         token="test_token_hash_2",
@@ -1164,6 +1163,7 @@ async def test_key_update_object_permissions_no_existing_permission(monkeypatch)
     result = await _handle_update_object_permission(
         data_json=data_json,
         existing_key_row=existing_key_row_no_perm,
+        prisma_client=mock_prisma_client,
     )
 
     # Verify new object_permission_id was set
@@ -1174,7 +1174,7 @@ async def test_key_update_object_permissions_no_existing_permission(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_key_update_object_permissions_missing_permission_record(monkeypatch):
+async def test_key_update_object_permissions_missing_permission_record():
     """
     Test creating object permissions when existing object_permission_id record is not found.
 
@@ -1194,9 +1194,7 @@ async def test_key_update_object_permissions_missing_permission_record(monkeypat
         _handle_update_object_permission,
     )
 
-    # Mock prisma client
     mock_prisma_client = AsyncMock()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     existing_key_row_missing_perm = LiteLLM_VerificationToken(
         token="test_token_hash_3",
@@ -1227,6 +1225,7 @@ async def test_key_update_object_permissions_missing_permission_record(monkeypat
     result = await _handle_update_object_permission(
         data_json=data_json,
         existing_key_row=existing_key_row_missing_perm,
+        prisma_client=mock_prisma_client,
     )
 
     # Verify new object_permission_id was set
@@ -12468,6 +12467,153 @@ async def test_process_single_key_update_rejects_when_custom_key_policy_denies()
     assert exc_info.value.detail == _POLICY_DENIAL_MESSAGE
     mock_prisma_client.update_data.assert_not_awaited()
     assert [policy_request.operation for policy_request in received] == ["update"]
+
+
+_OBJECT_PERMISSION_ID_AFTER_POLICY = "perm-after-policy"
+
+
+def _record_object_permission_writes(mock_prisma_client: AsyncMock, events: list[str]) -> None:
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=None)
+
+    async def upsert(**_kwargs: object) -> MagicMock:
+        events.append("permission row upsert")
+        return MagicMock(object_permission_id=_OBJECT_PERMISSION_ID_AFTER_POLICY)
+
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock(side_effect=upsert)
+
+
+def _recording_policy(events: list[str], allowed: bool):
+    async def policy(policy_request: CustomKeyPolicyRequest) -> dict[str, object]:
+        events.append("policy")
+        return {"decision": allowed, "message": "key max_budget must be 1000 or less"}
+
+    return policy
+
+
+def _assert_permission_row_written_after_policy(events: list[str], written: Mapping[str, object]) -> None:
+    assert events == ["policy", "permission row upsert"]
+    assert written["object_permission_id"] == _OBJECT_PERMISSION_ID_AFTER_POLICY
+    assert "object_permission" not in written
+
+
+def _assert_permission_row_untouched(mock_prisma_client: AsyncMock, events: list[str]) -> None:
+    assert events == ["policy"]
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_not_awaited()
+
+
+def _update_with_object_permission(max_budget: float) -> UpdateKeyRequest:
+    return UpdateKeyRequest(
+        key=_POLICY_HASHED_TOKEN,
+        max_budget=max_budget,
+        object_permission=LiteLLM_ObjectPermissionBase(vector_stores=["vs-1"]),
+    )
+
+
+def _setup_update_key_fn_object_permission_mocks(monkeypatch, allowed: bool) -> tuple[AsyncMock, list[str]]:
+    mock_prisma_client = _setup_update_key_fn_policy_mocks(monkeypatch, _policy_existing_team_key())
+    events: list[str] = []
+    _record_object_permission_writes(mock_prisma_client, events)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_key_policy", _recording_policy(events, allowed))
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object", AsyncMock()
+    )
+    return mock_prisma_client, events
+
+
+async def _update_key_fn_with_object_permission(max_budget: float):
+    from litellm.proxy.management_endpoints.key_management_endpoints import update_key_fn
+
+    return await update_key_fn(
+        request=MagicMock(),
+        data=_update_with_object_permission(max_budget=max_budget),
+        user_api_key_dict=_make_regenerate_user_api_key_dict(),
+        litellm_changed_by=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_key_fn_writes_the_object_permission_row_only_after_the_policy_allows(monkeypatch):
+    mock_prisma_client, events = _setup_update_key_fn_object_permission_mocks(monkeypatch, allowed=True)
+
+    await _update_key_fn_with_object_permission(max_budget=50.0)
+
+    _assert_permission_row_written_after_policy(events, mock_prisma_client.update_data.await_args.kwargs["data"])
+
+
+@pytest.mark.asyncio
+async def test_update_key_fn_denied_by_the_policy_leaves_the_object_permission_row_untouched(monkeypatch):
+    mock_prisma_client, events = _setup_update_key_fn_object_permission_mocks(monkeypatch, allowed=False)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _update_key_fn_with_object_permission(max_budget=5000.0)
+
+    assert str(exc_info.value.code) == "403"
+    _assert_permission_row_untouched(mock_prisma_client, events)
+    mock_prisma_client.update_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_single_key_update_writes_the_object_permission_row_only_after_the_policy_allows():
+    mock_prisma_client = AsyncMock()
+    updated_row = MagicMock()
+    updated_row.model_dump.return_value = {"max_budget": 50.0, "team_id": "team-a"}
+    mock_prisma_client.update_data = AsyncMock(return_value={"data": updated_row})
+    events: list[str] = []
+    _record_object_permission_writes(mock_prisma_client, events)
+
+    await _process_single_key_update_under_policy(
+        mock_prisma_client, _update_with_object_permission(max_budget=50.0), _recording_policy(events, allowed=True)
+    )
+
+    _assert_permission_row_written_after_policy(events, mock_prisma_client.update_data.await_args.kwargs["data"])
+
+
+@pytest.mark.asyncio
+async def test_process_single_key_update_denied_by_the_policy_leaves_the_object_permission_row_untouched():
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.update_data = AsyncMock()
+    events: list[str] = []
+    _record_object_permission_writes(mock_prisma_client, events)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _process_single_key_update_under_policy(
+            mock_prisma_client, _update_with_object_permission(max_budget=5000.0), _recording_policy(events, allowed=False)
+        )
+
+    assert exc_info.value.status_code == 403
+    _assert_permission_row_untouched(mock_prisma_client, events)
+    mock_prisma_client.update_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_regenerate_writes_the_object_permission_row_only_after_the_policy_allows():
+    mock_prisma_client = _make_regenerate_mock_prisma()
+    events: list[str] = []
+    _record_object_permission_writes(mock_prisma_client, events)
+    data = RegenerateKeyRequest(max_budget=50.0, object_permission=LiteLLM_ObjectPermissionBase(vector_stores=["vs-1"]))
+
+    with _regenerate_policy_mocks(_recording_policy(events, allowed=True), AsyncMock(), AsyncMock()):
+        await _regenerate_under_policy(mock_prisma_client, _make_regenerate_existing_key(), data)
+
+    _assert_permission_row_written_after_policy(
+        events, mock_prisma_client.db.litellm_verificationtoken.update.await_args.kwargs["data"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_regenerate_denied_by_the_policy_leaves_the_object_permission_row_untouched():
+    mock_prisma_client = _make_regenerate_mock_prisma()
+    events: list[str] = []
+    _record_object_permission_writes(mock_prisma_client, events)
+    data = RegenerateKeyRequest(max_budget=5000.0, object_permission=LiteLLM_ObjectPermissionBase(vector_stores=["vs-1"]))
+
+    with _regenerate_policy_mocks(_recording_policy(events, allowed=False), AsyncMock(), AsyncMock()):
+        with pytest.raises(HTTPException) as exc_info:
+            await _regenerate_under_policy(mock_prisma_client, _make_regenerate_existing_key(), data)
+
+    assert exc_info.value.status_code == 403
+    _assert_permission_row_untouched(mock_prisma_client, events)
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 0
 
 
 @pytest.mark.asyncio
