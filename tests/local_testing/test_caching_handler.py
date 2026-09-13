@@ -286,6 +286,7 @@ def test_combine_cached_embedding_response_with_api_result():
     assert result.data[0].embedding == [0.1, 0.2, 0.3]
     assert result.data[1].embedding == [0.4, 0.5, 0.6]
     assert result.data[2].embedding == [0.7, 0.8, 0.9]
+    assert [item.index for item in result.data] == [0, 1, 2]
     assert result._hidden_params["cache_hit"] == True
     assert isinstance(result._response_ms, float)
     assert result._response_ms > 0
@@ -344,6 +345,131 @@ def test_combine_cached_embedding_response_multiple_missing_values():
     assert result.data[1].embedding == [0.4, 0.5, 0.6]
     assert result.data[2].embedding == [0.4, 0.5, 0.6]
     assert result.data[3].embedding == [0.7, 0.8, 0.9]
+    assert [item.index for item in result.data] == [0, 1, 2, 3, 4]
+
+
+def test_combine_cached_embedding_response_reindexes_api_items_from_zero():
+    """
+    Issue #41002: When an upstream API returns embeddings for uncached inputs,
+    it returns zero-based indices (e.g. index=0).
+    The combined response must update indices to match the original batch position.
+    """
+    caching_handler = LLMCachingHandler(
+        original_function=lambda: None, request_kwargs={}, start_time=datetime.now()
+    )
+    start_time = datetime.now()
+    end_time = start_time + timedelta(seconds=1)
+
+    # 3 inputs: index 0 and 1 cached, index 2 uncached
+    cached_response = EmbeddingResponse(
+        data=[
+            Embedding(embedding=[0.1], index=0, object="embedding"),
+            Embedding(embedding=[0.2], index=1, object="embedding"),
+            None,
+        ]
+    )
+    caching_handler_response = CachingHandlerResponse(
+        final_embedding_cached_response=cached_response
+    )
+    # Upstream API only receives the 1 uncached item, so returns index=0
+    api_response = EmbeddingResponse(
+        data=[Embedding(embedding=[0.3], index=0, object="embedding")]
+    )
+
+    result = caching_handler._combine_cached_embedding_response_with_api_result(
+        _caching_handler_response=caching_handler_response,
+        embedding_response=api_response,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    assert len(result.data) == 3
+    assert [item.index for item in result.data] == [0, 1, 2]
+    assert result.data[2].embedding == [0.3]
+
+
+def test_combine_cached_embedding_response_interleaved_no_duplicate_indices():
+    """
+    Issue #41002: Interleaved batch: [cached, uncached, cached, uncached].
+    Upstream API returns index 0 and 1 for the 2 uncached inputs.
+    Combined result must have indices [0, 1, 2, 3] without duplicate index 0 or misplaced index 1.
+    """
+    caching_handler = LLMCachingHandler(
+        original_function=lambda: None, request_kwargs={}, start_time=datetime.now()
+    )
+    start_time = datetime.now()
+    end_time = start_time + timedelta(seconds=1)
+
+    cached_response = EmbeddingResponse(
+        data=[
+            Embedding(embedding=[0.1], index=0, object="embedding"),
+            None,
+            Embedding(embedding=[0.3], index=2, object="embedding"),
+            None,
+        ]
+    )
+    caching_handler_response = CachingHandlerResponse(
+        final_embedding_cached_response=cached_response
+    )
+    # Upstream returns 2 items with indices 0 and 1
+    api_response = EmbeddingResponse(
+        data=[
+            Embedding(embedding=[0.2], index=0, object="embedding"),
+            Embedding(embedding=[0.4], index=1, object="embedding"),
+        ]
+    )
+
+    result = caching_handler._combine_cached_embedding_response_with_api_result(
+        _caching_handler_response=caching_handler_response,
+        embedding_response=api_response,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    assert len(result.data) == 4
+    assert [item.index for item in result.data] == [0, 1, 2, 3]
+    assert result.data[0].embedding == [0.1]
+    assert result.data[1].embedding == [0.2]
+    assert result.data[2].embedding == [0.3]
+    assert result.data[3].embedding == [0.4]
+
+
+def test_combine_cached_embedding_response_uncached_first():
+    """
+    Issue #41002: Fresh input first: [uncached, cached, cached].
+    Upstream API returns index 0.
+    Combined result must have indices [0, 1, 2].
+    """
+    caching_handler = LLMCachingHandler(
+        original_function=lambda: None, request_kwargs={}, start_time=datetime.now()
+    )
+    start_time = datetime.now()
+    end_time = start_time + timedelta(seconds=1)
+
+    cached_response = EmbeddingResponse(
+        data=[
+            None,
+            Embedding(embedding=[0.2], index=1, object="embedding"),
+            Embedding(embedding=[0.3], index=2, object="embedding"),
+        ]
+    )
+    caching_handler_response = CachingHandlerResponse(
+        final_embedding_cached_response=cached_response
+    )
+    api_response = EmbeddingResponse(
+        data=[Embedding(embedding=[0.1], index=0, object="embedding")]
+    )
+
+    result = caching_handler._combine_cached_embedding_response_with_api_result(
+        _caching_handler_response=caching_handler_response,
+        embedding_response=api_response,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    assert len(result.data) == 3
+    assert [item.index for item in result.data] == [0, 1, 2]
+    assert result.data[0].embedding == [0.1]
 
 
 @pytest.mark.asyncio

@@ -619,6 +619,35 @@ class LLMCachingHandler:
         except Exception:
             return None
 
+    @staticmethod
+    def _set_embedding_index(item: Any, index: int) -> Any:
+        """
+        Helper method to update the index of an embedding item.
+        Handles mutable objects (like litellm Embedding), Pydantic models, and dicts.
+        """
+        if item is None:
+            return item
+        if hasattr(item, "index"):
+            try:
+                item.index = index
+                return item
+            except Exception:
+                pass
+        if hasattr(item, "model_copy"):
+            try:
+                return item.model_copy(update={"index": index})
+            except Exception:
+                pass
+        if hasattr(item, "copy"):
+            try:
+                return item.copy(update={"index": index})
+            except Exception:
+                pass
+        if isinstance(item, dict):
+            item["index"] = index
+            return item
+        return item
+
     def _combine_cached_embedding_response_with_api_result(
         self,
         _caching_handler_response: CachingHandlerResponse,
@@ -644,11 +673,15 @@ class LLMCachingHandler:
 
         idx = 0
         final_data_list: Final = []
-        for item in _caching_handler_response.final_embedding_cached_response.data:
-            if item is None and embedding_response.data is not None:
-                final_data_list.append(embedding_response.data[idx])
+        for final_idx, item in enumerate(_caching_handler_response.final_embedding_cached_response.data):
+            if item is None and embedding_response.data is not None and idx < len(embedding_response.data):
+                api_item = embedding_response.data[idx]
+                api_item = self._set_embedding_index(api_item, final_idx)
+                final_data_list.append(api_item)
                 idx += 1
             else:
+                if item is not None:
+                    item = self._set_embedding_index(item, final_idx)
                 final_data_list.append(item)
 
         _caching_handler_response.final_embedding_cached_response.data = final_data_list
