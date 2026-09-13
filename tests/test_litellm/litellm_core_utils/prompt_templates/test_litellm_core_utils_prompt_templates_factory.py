@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _convert_to_bedrock_tool_call_invoke,
     _convert_to_bedrock_tool_call_result,
     anthropic_messages_pt,
+    convert_to_anthropic_tool_result,
     convert_to_gemini_tool_call_result,
     make_valid_bedrock_tool_name,
     ollama_pt,
@@ -2219,6 +2220,7 @@ _BEDROCK_TOOL_USE_ID_RE = re.compile(r"^[a-zA-Z0-9_.:-]{1,64}$")
         "call|with|pipes",
         "call_" + "y" * 60 + "|end",
         "call:ok.dots-and_under",
+        "",
     ],
 )
 def test_bedrock_tool_use_id_is_sanitized_consistently_for_invoke_and_result(tool_call_id):
@@ -2289,6 +2291,21 @@ def test_bedrock_tool_call_invoke_concatenated_json_long_id_stays_within_limit()
     assert len(ids) == 2
     assert len(set(ids)) == 2
     assert all(_BEDROCK_TOOL_USE_ID_RE.match(i) for i in ids)
+
+
+@pytest.mark.parametrize(
+    ("tool_call_id", "expected"),
+    [
+        ("call|with|pipes", "call_with_pipes"),
+        ("call:ok.dots", "call_ok_dots"),
+        ("call_" + "x" * 100, "call_" + "x" * 100),
+        ("toolu_01AbC-xyz", "toolu_01AbC-xyz"),
+        ("", "tool_use_id"),
+    ],
+)
+def test_anthropic_tool_use_id_keeps_pattern_only_rewrite_with_no_cap_or_hash(tool_call_id, expected):
+    result = convert_to_anthropic_tool_result({"role": "tool", "tool_call_id": tool_call_id, "content": "ok"})
+    assert result["tool_use_id"] == expected
 
 
 def test_bedrock_tool_call_invoke_concatenated_json():
