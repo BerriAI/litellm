@@ -359,6 +359,8 @@ gateway:
     repository: ghcr.io/berriai/litellm-gateway
     tag: ""              # defaults to .Chart.AppVersion
     pullPolicy: IfNotPresent
+  command: []
+  args: []
   service:
     type: ClusterIP
     port: 4000
@@ -499,6 +501,8 @@ backend:
     repository: ghcr.io/berriai/litellm-backend
     tag: ""
     pullPolicy: IfNotPresent
+  command: []
+  args: []
   service:
     type: ClusterIP
     port: 4001
@@ -565,6 +569,8 @@ ui:
     repository: ghcr.io/berriai/litellm-ui
     tag: ""
     pullPolicy: IfNotPresent
+  command: []
+  args: []
   service:
     type: ClusterIP
     port: 3000
