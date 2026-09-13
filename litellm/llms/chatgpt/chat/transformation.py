@@ -23,6 +23,9 @@ class ChatGPTConfig(OpenAIConfig):
         super().__init__()
         self.authenticator = Authenticator()
 
+    def get_health_check_mode(self) -> str:
+        return "responses"
+
     def _get_openai_compatible_provider_info(
         self,
         model: str,
