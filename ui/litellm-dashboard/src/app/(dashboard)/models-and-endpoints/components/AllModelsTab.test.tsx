@@ -1,5 +1,5 @@
 import * as useAuthorizedModule from "@/app/(dashboard)/hooks/useAuthorized";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { configure, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -110,6 +110,11 @@ const setModelsInfo = (rows: Record<string, unknown>[], totalCount = rows.length
 };
 
 const lastModelsInfoCall = (): ModelsInfoArgs => modelsInfoCalls[modelsInfoCalls.length - 1];
+
+// Each interaction here waits on a debounced refetch, so the 1s default that
+// @testing-library/react gives waitFor/findBy* leaves no headroom on a loaded
+// CI runner. The same assertions take ~2.5s locally.
+configure({ asyncUtilTimeout: 10_000 });
 
 const SEARCH_SETTLE_MS = 400;
 
@@ -241,6 +246,30 @@ describe("AllModelsTab", () => {
       expect(lastModelsInfoCall().teamId).toBe("team-1");
     });
     expect(lastModelsInfoCall().page).toBe(1);
+  });
+
+  it("removes the team filter while viewing all available models", async () => {
+    const user = userEvent.setup();
+    setModelsInfo([makeRow()], 137);
+    render(<AllModelsTab {...defaultProps} />);
+
+    await user.click(screen.getByTestId("models-team-select"));
+    await user.click(await screen.findByRole("option", { name: "Engineering" }));
+    await waitFor(() => expect(lastModelsInfoCall().teamId).toBe("team-1"));
+
+    await user.click(screen.getByTestId("pagination-next"));
+    await waitFor(() => expect(lastModelsInfoCall().page).toBe(2));
+
+    await user.click(screen.getByTestId("models-view-select"));
+    await user.click(await screen.findByRole("option", { name: "All Available Models" }));
+
+    await waitFor(() => expect(lastModelsInfoCall().page).toBe(1));
+    expect(lastModelsInfoCall().teamId).toBeUndefined();
+
+    await user.click(screen.getByTestId("models-view-select"));
+    await user.click(await screen.findByRole("option", { name: "Current Team Models" }));
+
+    await waitFor(() => expect(lastModelsInfoCall().teamId).toBe("team-1"));
   });
 
   it("debounces the model name search into the server query", async () => {
