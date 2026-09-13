@@ -771,17 +771,7 @@ class _MigrateDeployHarness:
         self.confirmed_migrations = set(confirmed_migrations)
 
         monkeypatch.delenv("DATABASE_URL", raising=False)
-        monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", staticmethod(lambda: str(tmp_path)))
-        monkeypatch.setattr(
-            ProxyExtrasDBManager,
-            "_roll_back_migration",
-            staticmethod(lambda name: None),
-        )
-        monkeypatch.setattr(
-            ProxyExtrasDBManager,
-            "_resolve_specific_migration",
-            staticmethod(self.resolved.append),
-        )
+        monkeypatch.setenv("LITELLM_MIGRATION_DIR", str(tmp_path))
         monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", self._fake_run)
         monkeypatch.setattr(utils_module, "_get_prisma_env", lambda: {})
         monkeypatch.setattr(utils_module.time, "sleep", lambda seconds: None)

@@ -50,7 +50,8 @@ def pool(database: Database, output: Path) -> Generator[str]:
         f"[databases]\n* = host={url.hostname} port={url.port} user={url.username} password={url.password}\n"
         "[pgbouncer]\nlisten_addr = 0.0.0.0\nlisten_port = 6432\nauth_type = trust\nauth_file = /pool/users.txt\n"
         "pool_mode = transaction\ndefault_pool_size = 1\nreserve_pool_size = 0\nmax_client_conn = 100\n"
-        "max_prepared_statements = 100\nquery_wait_timeout = 8\nignore_startup_parameters = extra_float_digits,options\n"
+        'max_prepared_statements = 100\nquery_wait_timeout = 8\nignore_startup_parameters = '
+        'extra_float_digits,options\n'
     )
     try:
         docker(

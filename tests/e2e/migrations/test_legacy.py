@@ -15,7 +15,9 @@ def adopt_legacy(containers: Containers, database: Database) -> None:
     count: Final = database.query("SELECT count(*) FROM _prisma_migrations")[0][0]
     existing_keys: Final = database.query('SELECT token FROM "LiteLLM_VerificationToken" ORDER BY token')
     database.execute(
-        "INSERT INTO \"LiteLLM_ShadowEvalJob\" (id, group_id, target_id, router_name, judge_model, shadow_percentage, max_turns, ends_at, stopped_at) VALUES ('migration-legacy', 'migration-legacy', 'target', 'router', 'judge', 1, 1, now(), now())"
+        'INSERT INTO "LiteLLM_ShadowEvalJob" (id, group_id, target_id, router_name, judge_model, '
+        "shadow_percentage, max_turns, ends_at, stopped_at) VALUES ('migration-legacy', "
+        "'migration-legacy', 'target', 'router', 'judge', 1, 1, now(), now())"
     )
     database.execute("DROP TABLE _prisma_migrations")
     with ExitStack() as stack:
@@ -30,7 +32,8 @@ def adopt_legacy(containers: Containers, database: Database) -> None:
             assert detail in logs
     assert database.query("SELECT count(*) FROM _prisma_migrations") == ((count,),)
     assert database.query(
-        "SELECT count(*) FROM _prisma_migrations WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL OR applied_steps_count <> 0"
+        'SELECT count(*) FROM _prisma_migrations WHERE finished_at IS NULL OR rolled_back_at IS '
+        'NOT NULL OR applied_steps_count <> 0'
     ) == ((0,),)
     assert set(existing_keys).issubset(database.query('SELECT token FROM "LiteLLM_VerificationToken" ORDER BY token'))
     assert database.query("SELECT stopped_by FROM \"LiteLLM_ShadowEvalJob\" WHERE id = 'migration-legacy'") == (

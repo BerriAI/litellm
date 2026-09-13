@@ -859,7 +859,11 @@ class ProxyExtrasDBManager:
         def baseline_existing(migrations_dir: str) -> None:
             with migration_lock(lock_url) as coordinator:
                 baseline_current_schema(
-                    coordinator, schema, Path(migrations_dir), _get_prisma_command(), migration_environment(_get_prisma_env())
+                    coordinator,
+                    schema,
+                    Path(migrations_dir),
+                    _get_prisma_command(),
+                    migration_environment(_get_prisma_env()),
                 )
 
         while not ProxyExtrasDBManager._run_database_v2(True, recover_completed, baseline_existing):
@@ -1054,7 +1058,8 @@ class ProxyExtrasDBManager:
             migration_name = ProxyExtrasDBManager._v2_failed_migration_name(stderr)
             if migration_name and _MIGRATION_DEADLOCK_MARKER in stderr:
                 logger.info(
-                    "Migration %s deadlocked against a concurrent migrate deploy, rolling its ledger row back and retrying",
+                    "Migration %s deadlocked against a concurrent migrate deploy, "
+                    "rolling its ledger row back and retrying",
                     migration_name,
                 )
                 ProxyExtrasDBManager._v2_roll_back_migration_best_effort(migration_name)

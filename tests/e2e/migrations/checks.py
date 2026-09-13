@@ -29,7 +29,8 @@ def start_replicas(
 
 def assert_completed(database: Database, migration: Migration = COMPLETE) -> None:
     assert database.query(
-        "SELECT finished_at IS NOT NULL, rolled_back_at IS NULL, applied_steps_count FROM _prisma_migrations WHERE migration_name = %s",
+        'SELECT finished_at IS NOT NULL, rolled_back_at IS NULL, applied_steps_count FROM '
+        '_prisma_migrations WHERE migration_name = %s',
         (migration.name,),
     ) == ((True, True, 1),), "Expected exactly one successful SQL execution"
     assert database.query("SELECT id FROM migration_effect") == ((1,),)
@@ -47,7 +48,8 @@ def confirmed_history(database: Database) -> str:
 
 def assert_original_proof(database: Database, row_id: str, finished: bool) -> None:
     assert database.query(
-        "SELECT id, applied_steps_count, finished_at IS NOT NULL, rolled_back_at IS NULL FROM _prisma_migrations WHERE migration_name = %s",
+        'SELECT id, applied_steps_count, finished_at IS NOT NULL, rolled_back_at IS NULL FROM '
+        '_prisma_migrations WHERE migration_name = %s',
         (COMPLETE.name,),
     ) == ((row_id, 1, finished, True),), "Recovery lost or replaced the original durable SQL proof"
     assert database.query("SELECT id FROM migration_effect") == ((1,),)
@@ -59,7 +61,8 @@ def pause_completion(database: Database) -> None:
             "CREATE FUNCTION migration_pause() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
             "IF NEW.migration_name = {name} AND NEW.finished_at IS NOT NULL THEN "
             "PERFORM pg_advisory_lock({gate}); PERFORM pg_advisory_unlock({gate}); END IF; RETURN NEW; END $$; "
-            "CREATE TRIGGER migration_pause BEFORE UPDATE ON _prisma_migrations FOR EACH ROW EXECUTE FUNCTION migration_pause()"
+            'CREATE TRIGGER migration_pause BEFORE UPDATE ON _prisma_migrations FOR EACH ROW '
+            'EXECUTE FUNCTION migration_pause()'
         ).format(name=sql.Literal(COMPLETE.name), gate=sql.Literal(GATE_KEY))
     )
 
@@ -105,7 +108,8 @@ def unconfirmed(replicas: tuple[Replica, ...], database: Database) -> None:
     failed(replicas, "Migration completion could not be verified")
     started: Final = str(
         database.query(
-            "SELECT to_char(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') FROM _prisma_migrations WHERE migration_name = %s",
+            "SELECT to_char(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') FROM "
+            '_prisma_migrations WHERE migration_name = %s',
             (COMPLETE.name,),
         )[0][0]
     )
