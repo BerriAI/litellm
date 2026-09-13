@@ -123,6 +123,7 @@ from litellm.repositories.table_repositories import (
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.router import Router
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.utils import get_utc_datetime
 
@@ -369,6 +370,10 @@ def _get_router_zero_cost_cache(llm_router: Router) -> dict[str, bool] | None:
     return cache if isinstance(cache, dict) else None
 
 
+def _resolve_cost_model_group(model_name: str, llm_router: "Router") -> str:
+    return resolve_model_group_alias(llm_router.model_group_alias, model_name) or model_name
+
+
 def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None) -> bool:
     """
     Check if a model has zero cost (no configured pricing).
@@ -398,8 +403,9 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
                     return False
                 continue
         try:
+            target_group = _resolve_cost_model_group(model_name, llm_router)
             # Use router's get_model_group_info method directly for better reliability
-            model_group_info = llm_router.get_model_group_info(model_group=model_name)
+            model_group_info = llm_router.get_model_group_info(model_group=target_group)
 
             if model_group_info is None:
                 # Model not found or no pricing info available
@@ -439,7 +445,7 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
             # not from defaulted sparse auto-registration entries.
             # See: https://github.com/BerriAI/litellm/issues/24770
             safe_name = str(model_name).replace("\n", "").replace("\r", "")
-            if not _is_cost_explicitly_configured(model_name, llm_router):
+            if not _is_cost_explicitly_configured(target_group, llm_router):
                 verbose_proxy_logger.debug(
                     "Model %s has zero cost but no explicit cost "
                     "configuration in model_cost entry — treating as unknown "
@@ -450,7 +456,7 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
                     zero_cost_cache[model_name] = False
                 return False
 
-            if _has_ptu_flat_cost(model_name, llm_router):
+            if _has_ptu_flat_cost(target_group, llm_router):
                 verbose_proxy_logger.debug(
                     "Model %s prices reserved PTU capacity as a flat cost, so its zero per-token "
                     "rate is not a free model (enforce budget)",
