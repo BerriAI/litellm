@@ -8008,18 +8008,13 @@ class Router:
         fallbacks: list[dict[str, list[str]]],  # mutable-ok: mirrors the sibling resolver's contract
         lookup_groups: tuple[str, ...],
     ) -> list[str] | None:  # mutable-ok: mirrors the sibling resolver's contract
-        """First lookup group whose exact-key chain resolves (tier first, then requested group)."""
-        return next(
-            (
-                resolved
-                for resolved in (
-                    self._get_fallback_model_group_from_fallbacks(fallbacks=fallbacks, model_group=group)
-                    for group in lookup_groups
-                )
-                if resolved is not None
-            ),
-            None,
+        """First lookup group with a specifically-keyed chain wins (tier first, then requested
+        group); a generic "*" chain applies only once every group has missed a specific
+        match, so it cannot shadow a later group's own chain."""
+        fallback_model_group, _ = get_fallback_model_group_for_lookup_groups(
+            fallbacks=fallbacks, lookup_groups=lookup_groups
         )
+        return fallback_model_group
 
     def _get_first_default_fallback(self) -> str | None:
         """
