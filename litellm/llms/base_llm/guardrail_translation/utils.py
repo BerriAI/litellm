@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from types import MappingProxyType
 from typing import Final, TypeVar, cast  # noqa: TID251  # a rebuilt chat row has no typed constructor across roles
 
 from pydantic import BaseModel
@@ -390,13 +389,10 @@ def _part_with_text(part: object, text: str) -> object:
 
 
 def _content_with_slot_texts(content: Sequence[object], texts: Sequence[str]) -> Sequence[object]:
-    text_part_indices: Final = tuple(
-        index for index, part in enumerate(content) if _content_part_text(part) is not None
-    )
-    replacement_by_index: Final = MappingProxyType(dict(zip(text_part_indices, texts)))
+    remaining_texts: Final = iter(texts)
     return [  # mutable-ok: message content stays a JSON list
-        _part_with_text(part, replacement_by_index[index]) if index in replacement_by_index else part
-        for index, part in enumerate(content)
+        _part_with_text(part, next(remaining_texts)) if _content_part_text(part) is not None else part
+        for part in content
     ]
 
 
