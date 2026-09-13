@@ -94,10 +94,11 @@ export const buildCachePayload = (
   const type = !forTesting && semanticEnabled ? "redis-semantic" : "redis";
 
   const entries = CACHE_FIELDS.filter((field) => isFieldVisible(field, redisType)).flatMap((field) => {
-    // Semantic fields are always visible now, so clearing the toggle has to send an
-    // explicit null - omitting them would leave the previous values on the server.
+    // Semantic fields are always visible now, so leave them out when the toggle is off. The
+    // backend stores the payload as sent, which already clears them; an explicit null would
+    // reach Cache(semantic_cache_scope=None) and fail both the save and the connection test.
     if (field.section === "semantic" && !semanticEnabled) {
-      return [[field.name, null] as [string, CacheSavePayloadValue]];
+      return [];
     }
     const value = saveValueForField(field, values[field.name]);
     return value === undefined ? [] : [[field.name, value] as [string, CacheSavePayloadValue]];
