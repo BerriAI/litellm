@@ -1924,8 +1924,8 @@ def _deployment_model_info(
         return registered_deployment_info
     if litellm_logging_obj is None:
         return None
-    litellm_params: Final = getattr(litellm_logging_obj, "litellm_params", None)
-    if litellm_params is None:
+    litellm_params: Final = litellm_logging_obj.litellm_params
+    if not litellm_params:
         return None
     return next(
         (
@@ -1943,7 +1943,9 @@ def _ocr_model_info(
     router_model_id: str | None,
 ) -> OCRPricing | None:
     deployment_info: Final = _deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id)
-    litellm_params: Final = getattr(litellm_logging_obj, "litellm_params", None) if custom_pricing else None
+    litellm_params: Final = (
+        litellm_logging_obj.litellm_params if custom_pricing and litellm_logging_obj is not None else None
+    )
     if litellm_params is None:
         return deployment_info
     return _layered_ocr_pricing(litellm_params, deployment_info)

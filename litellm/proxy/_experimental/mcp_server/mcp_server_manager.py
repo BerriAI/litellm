@@ -3489,7 +3489,7 @@ class MCPServerManager:
                 passthrough_server_ids: Final = [
                     server.server_id
                     for server in self.get_registry().values()
-                    if getattr(server, "auth_type", None) == MCPAuth.true_passthrough
+                    if server.auth_type == MCPAuth.true_passthrough
                 ]
                 combined_servers.update(passthrough_server_ids)
 

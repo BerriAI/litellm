@@ -3667,7 +3667,7 @@ def is_server_derived_pricing_key(key: str) -> bool:
     return key in SERVER_DERIVED_PRICING_FIELDS or ABOVE_THRESHOLD_COST_KEY_PATTERN.search(key) is not None
 
 
-def without_server_derived_pricing(model_info: Mapping[str, Any]) -> Mapping[str, Any]:
+def without_server_derived_pricing(model_info: Mapping[str, object]) -> Mapping[str, object]:
     """Drop the pricing ``/model/info`` derives for display, keeping everything else.
 
     ``/model/info`` fills a deployment's missing pricing in from the cost map so the

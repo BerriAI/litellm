@@ -2094,8 +2094,10 @@ async def add_new_model(
             enforced=bool(general_settings.get(ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING, False)),
         )
 
-        model_params.model_info = ModelInfo(  # rebind-ok: downstream team-model handling mutates this same object
-            **without_server_derived_pricing(model_params.model_info.model_dump(exclude_none=True))
+        model_params.model_info = (
+            ModelInfo.model_validate(  # rebind-ok: downstream team-model handling mutates this same object
+                dict(without_server_derived_pricing(model_params.model_info.model_dump(exclude_none=True)))
+            )
         )
 
         model_response: prisma_models.LiteLLM_ProxyModelTable | LiteLLM_ProxyModelTable | None = None

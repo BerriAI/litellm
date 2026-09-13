@@ -2238,7 +2238,7 @@ class LiteLLMCompletionResponsesConfig:
     ) -> Mapping[str, ResponseFunctionWebSearch]:
         calls: Final[dict[str, ResponseFunctionWebSearch]] = {}  # mutable-ok: indexes provider-built calls
         for choice in chat_completion_response.choices:
-            provider_fields = getattr(choice.message, "provider_specific_fields", None)
+            provider_fields = choice.message.provider_specific_fields
             if not isinstance(provider_fields, Mapping):
                 continue
             web_search_calls = provider_fields.get("web_search_calls")
