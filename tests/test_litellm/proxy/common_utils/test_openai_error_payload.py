@@ -143,3 +143,21 @@ def test_a_status_carried_by_an_exception_drives_the_type_it_reports():
     exc = HTTPException(status_code=403, detail="blocked by policy")
 
     assert openai_error_type(exc, error_status_code(exc, 400)) == "permission_error"
+
+
+def test_the_stringified_none_an_older_upstream_proxy_sent_is_treated_as_absent():
+    """A proxy fronting a proxy older than 1.102 receives {"type": "None", "param": "None"} on
+    the wire; the SDK now keeps that body on the mapped exception, and re-emitting the literal
+    is the exact bug this module exists to stop."""
+    from litellm.exceptions import BadRequestError
+
+    carried = BadRequestError(
+        message="Content blocked",
+        model="claude-haiku-4-5",
+        llm_provider="litellm_proxy",
+        body={"message": "Content blocked", "type": "None", "param": "None", "code": "400"},
+    )
+
+    assert carried.type == "None"
+    assert openai_error_type(carried, 400) == "invalid_request_error"
+    assert openai_error_param(carried) is None

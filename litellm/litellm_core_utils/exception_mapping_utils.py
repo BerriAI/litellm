@@ -1,6 +1,7 @@
 import json
 import re
 import traceback
+from collections.abc import Mapping
 from typing import Any, Final, Protocol, cast
 
 import httpx
@@ -254,6 +255,15 @@ class _ProviderHTTPException(Protocol):
     llm_provider: str
 
 
+def _litellm_proxy_response_headers(
+    original_exception: _ProviderHTTPException, custom_llm_provider: str
+) -> Mapping[str, str] | None:
+    if custom_llm_provider != "litellm_proxy":
+        return None
+    headers: Final = getattr(original_exception, "headers", None)
+    return headers if isinstance(headers, Mapping) else None
+
+
 def _map_openai_exception(
     *,
     model: str,
@@ -264,6 +274,7 @@ def _map_openai_exception(
     exception_provider: str,
     extra_information: str,
 ) -> None:
+    upstream_headers: Final = _litellm_proxy_response_headers(original_exception, custom_llm_provider)
     # custom_llm_provider is openai, make it OpenAI
     message = get_error_message(error_obj=original_exception)
     if message is None:
@@ -348,6 +359,7 @@ def _map_openai_exception(
             response=getattr(original_exception, "response", None),
             litellm_debug_info=extra_information,
             body=getattr(original_exception, "body", None),
+            headers=upstream_headers,
         )
     elif "invalid_request_error" in error_str and "Incorrect API key provided" not in error_str:
         raise BadRequestError(
@@ -357,6 +369,7 @@ def _map_openai_exception(
             response=getattr(original_exception, "response", None),
             litellm_debug_info=extra_information,
             body=getattr(original_exception, "body", None),
+            headers=upstream_headers,
         )
     elif (
         "Web server is returning an unknown error" in error_str
@@ -404,6 +417,8 @@ def _map_openai_exception(
                 model=model,
                 response=getattr(original_exception, "response", None),
                 litellm_debug_info=extra_information,
+                body=getattr(original_exception, "body", None),
+                headers=upstream_headers,
             )
         elif original_exception.status_code == 401:
             raise AuthenticationError(
@@ -436,6 +451,7 @@ def _map_openai_exception(
                 response=getattr(original_exception, "response", None),
                 litellm_debug_info=extra_information,
                 body=getattr(original_exception, "body", None),
+                headers=upstream_headers,
             )
         elif original_exception.status_code == 429:
             raise RateLimitError(

@@ -3985,6 +3985,21 @@ class TestHandleLLMApiExceptionFramingHeaders:
         assert proxy_exc.headers["x-custom-safe"] == "1"
         assert proxy_exc.headers["x-request-id"] == "abc-123"
 
+    async def test_strips_the_date_and_server_headers_of_an_upstream_litellm_proxy(self):
+        """A proxy fronting another LiteLLM proxy gets the upstream's date and server
+        on the mapped exception; forwarding them would duplicate the Date header
+        uvicorn adds to every response and leak the upstream server identity."""
+        exc = litellm.BadRequestError(
+            message="Content blocked",
+            llm_provider="litellm_proxy",
+            model="claude-haiku-4-5",
+            headers={"date": "Sun, 13 Sep 2026 08:43:51 GMT", "server": "uvicorn", "x-request-id": "abc-123"},
+        )
+        proxy_exc = await self._invoke(exc)
+        assert "date" not in proxy_exc.headers
+        assert "server" not in proxy_exc.headers
+        assert proxy_exc.headers["x-request-id"] == "abc-123"
+
 
 class TestAsyncStreamingDataGeneratorFastPath:
     """Fast/slow path branching in async_streaming_data_generator."""

@@ -10,7 +10,7 @@
 ## LiteLLM versions of the OpenAI Exception Types
 
 import enum
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
 import httpx
@@ -226,6 +226,7 @@ class BadRequestError(openai.BadRequestError):
         max_retries: int | None = None,
         num_retries: int | None = None,
         body: dict | None = None,
+        headers: Mapping[str, str] | None = None,
     ):
         self.status_code = 400
         self.message = f"litellm.BadRequestError: {message}"
@@ -234,6 +235,7 @@ class BadRequestError(openai.BadRequestError):
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
+        self.headers: dict[str, str] | None = {k: str(v) for k, v in headers.items()} if headers else None
         # Use response if it's a valid httpx.Response with a request, otherwise use minimal error response
         # Note: We check _request (not .request property) to avoid RuntimeError when _request is None
         if (
