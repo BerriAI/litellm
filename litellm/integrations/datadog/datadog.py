@@ -563,11 +563,10 @@ class DataDogLogger(
         if standard_logging_object.get("status") == "failure":
             status = DataDogStatus.ERROR
 
-        # Build the initial payload
-        self.truncate_standard_logging_payload_content(standard_logging_object)
+        truncated_payload: Final = self.truncate_standard_logging_payload_content(standard_logging_object)
 
         dd_payload: Final = self._create_datadog_logging_payload_helper(
-            standard_logging_object=standard_logging_object,
+            standard_logging_object=truncated_payload,
             status=status,
         )
         return dd_payload
