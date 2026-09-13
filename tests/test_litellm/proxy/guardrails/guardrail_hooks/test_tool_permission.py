@@ -1178,6 +1178,54 @@ class TestToolPermissionGuardrailAnthropicMessages:
         return {"type": "tool_use", "id": tool_id, "name": name, "input": {"command": "ls"}}
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "denied_tool",
+        [
+            {"name": "Read", "input_schema": {"type": "object", "properties": {}}},
+            {"type": "custom", "name": "Read", "input_schema": {"type": "object", "properties": {}}},
+            {"type": "function", "name": "Read", "parameters": {"type": "object", "properties": {}}},
+        ],
+        ids=["anthropic", "anthropic_custom_type", "responses_api_flat_function"],
+    )
+    async def test_pre_call_blocks_denied_request_tool_in_flat_format(self, denied_tool):
+        data = {"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "hi"}], "tools": [denied_tool]}
+
+        with patch.object(self.blocking, "should_run_guardrail", return_value=True):
+            with pytest.raises(HTTPException) as excinfo:
+                await self.blocking.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(),
+                    cache=DualCache(default_in_memory_ttl=1),
+                    data=data,
+                    call_type="anthropic_messages",
+                )
+
+        assert excinfo.value.status_code == 400
+        assert excinfo.value.detail["detection_message"] == "Tool 'Read' denied by rule 'deny_read'"
+
+    @pytest.mark.asyncio
+    async def test_pre_call_rewrite_strips_denied_anthropic_tool_and_forced_choice(self):
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [
+                {"name": "Bash", "input_schema": {"type": "object", "properties": {}}},
+                {"name": "Read", "input_schema": {"type": "object", "properties": {}}},
+            ],
+            "tool_choice": {"type": "tool", "name": "Read"},
+        }
+
+        with patch.object(self.rewriting, "should_run_guardrail", return_value=True):
+            result = await self.rewriting.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(default_in_memory_ttl=1),
+                data=data,
+                call_type="anthropic_messages",
+            )
+
+        assert [tool["name"] for tool in result["tools"]] == ["Bash"]
+        assert result["tool_choice"] == {"type": "none"}
+
+    @pytest.mark.asyncio
     async def test_denied_anthropic_tool_use_is_blocked(self):
         response = self._response({"type": "text", "text": "reading"}, self._tool_use("Read"))
 
