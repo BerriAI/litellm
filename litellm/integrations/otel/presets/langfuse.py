@@ -10,10 +10,7 @@ from litellm.integrations.otel.model.config import (
     ExporterSpec,
     OpenTelemetryV2Config,
 )
-from litellm.integrations.otel.presets.utils import (
-    credential_gated_exporters,
-    ensure_mappers,
-)
+from litellm.integrations.otel.presets.utils import ensure_mappers
 from litellm.types.utils import StandardCallbackDynamicParams
 
 
@@ -31,7 +28,7 @@ def langfuse_preset(
             raise
         return base.model_copy(
             update={  # mutable-ok: pydantic model_copy takes a plain update mapping
-                "exporters": credential_gated_exporters(base.exporters, ExporterOwner.LANGFUSE_OTEL),
+                "exporters": [ExporterSpec(owner=ExporterOwner.LANGFUSE_OTEL, requires_headers=True)],
                 "mapper_names": mappers,
             }
         )
@@ -39,7 +36,6 @@ def langfuse_preset(
     return base.model_copy(
         update={
             "exporters": [
-                *base.exporters,
                 ExporterSpec(
                     kind=kind,
                     endpoint=cfg.endpoint,

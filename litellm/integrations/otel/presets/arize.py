@@ -35,7 +35,6 @@ def arize_preset(
     return base.model_copy(
         update={
             "exporters": [
-                *base.exporters,
                 ExporterSpec(
                     kind=arize_cfg.protocol or "otlp_grpc",
                     endpoint=arize_cfg.endpoint or "https://otlp.arize.com/v1",
