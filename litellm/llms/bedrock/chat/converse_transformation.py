@@ -127,6 +127,12 @@ class AmazonConverseConfig(BaseConfig):
     temperature: int | None
     topP: int | None
     topK: int | None
+    # Opaque-id fallback for adaptive-thinking capability resolution (an
+    # application inference profile ARN in `model` carries no version
+    # substring). Set by the caller (get_optional_params) before
+    # map_openai_params runs; not a constructor param, so map_openai_params's
+    # override stays signature-compatible with BaseConfig.
+    configured_base_model: str | None = None
 
     def __init__(
         self,
@@ -423,7 +429,13 @@ class AmazonConverseConfig(BaseConfig):
             }
         }
 
-    def _handle_reasoning_effort_parameter(self, model: str, reasoning_effort: str, optional_params: dict) -> None:
+    def _handle_reasoning_effort_parameter(
+        self,
+        model: str,
+        reasoning_effort: str,
+        optional_params: dict,
+        base_model: str | None = None,
+    ) -> None:
         """
         Handle the reasoning_effort parameter based on the model type.
 
@@ -431,7 +443,9 @@ class AmazonConverseConfig(BaseConfig):
         - OpenAI GPT-5.x and GPT-6 models: mapped to ``reasoning.effort`` via additionalModelRequestFields.
         - Nova 2 models: transformed to reasoningConfig.
         - Anthropic models: mapped to ``thinking`` (and ``output_config.effort`` on
-          adaptive Claude 4.6 / 4.7).
+          adaptive Claude 4.6 / 4.7). ``base_model`` is the opaque-id fallback for
+          an application inference profile ARN — see
+          ``AnthropicModelInfo._supports_model_capability``.
         """
         if "gpt-oss" in model or "deepseek" in model:
             optional_params["reasoning_effort"] = reasoning_effort
@@ -453,7 +467,7 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params.pop("output_config", None)
             else:
                 optional_params["thinking"] = mapped_thinking
-                if AnthropicConfig._is_adaptive_thinking_model(model, "bedrock"):
+                if AnthropicConfig._is_adaptive_thinking_model(model, "bedrock", base_model=base_model):
                     mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort)
                     if mapped_effort is None:
                         AnthropicConfig._raise_invalid_reasoning_effort(
@@ -903,6 +917,14 @@ class AmazonConverseConfig(BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        # Application inference profile ARNs carry no version substring, so the
+        # adaptive-thinking capability lookup below resolves nothing for them.
+        # `configured_base_model` is the opaque-id fallback set by the caller
+        # (get_optional_params, from litellm_params.base_model) — same role as
+        # Azure's base_model, threaded via an instance attribute rather than a
+        # map_openai_params parameter so the override stays compatible with
+        # BaseConfig's shared signature.
+        base_model: Final = self.configured_base_model
         is_thinking_enabled: Final = self.is_thinking_enabled(non_default_params)
         base_model: Final = BedrockModelInfo.get_base_model(model)
         drop_thinking_param: Final = self._is_deepseek_model(model=model, base_model=base_model)
@@ -966,7 +988,7 @@ class AmazonConverseConfig(BaseConfig):
                 if (
                     isinstance(value, dict)
                     and value.get("type") == "adaptive"
-                    and not AnthropicConfig._is_adaptive_thinking_model(model, "bedrock")
+                    and not AnthropicConfig._is_adaptive_thinking_model(model, "bedrock", base_model=base_model)
                 ):
                     max_tokens = non_default_params.get("max_completion_tokens") or non_default_params.get("max_tokens")
                     legacy_thinking = AnthropicConfig._map_reasoning_effort(
@@ -986,7 +1008,10 @@ class AmazonConverseConfig(BaseConfig):
                 else:
                     optional_params["thinking"] = value
                     AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
-                        model=model, optional_params=optional_params, custom_llm_provider="bedrock"
+                        model=model,
+                        optional_params=optional_params,
+                        custom_llm_provider="bedrock",
+                        base_model=base_model,
                     )
             elif param == "reasoning_effort" and isinstance(value, str) and drop_reasoning_effort_param:
                 verbose_logger.debug(
@@ -995,7 +1020,7 @@ class AmazonConverseConfig(BaseConfig):
                 )
             elif param == "reasoning_effort" and isinstance(value, str):
                 self._handle_reasoning_effort_parameter(
-                    model=model, reasoning_effort=value, optional_params=optional_params
+                    model=model, reasoning_effort=value, optional_params=optional_params, base_model=base_model
                 )
             elif param == "output_config" and isinstance(value, dict):
                 mapped_output_config = dict(value)
@@ -1434,6 +1459,7 @@ class AmazonConverseConfig(BaseConfig):
         model: str,
         headers: dict | None,
         additional_request_params: dict,
+        configured_base_model: str | None = None,
     ) -> tuple[list[ToolBlock], list]:
         """Process tools and collect anthropic_beta values."""
         bedrock_tools: list[ToolBlock] = []
@@ -1546,7 +1572,7 @@ class AmazonConverseConfig(BaseConfig):
             if (
                 isinstance(output_config, dict)
                 and output_config.get("effort") is not None
-                and not AnthropicConfig._is_adaptive_thinking_model(model, "bedrock")
+                and not AnthropicConfig._is_adaptive_thinking_model(model, "bedrock", base_model=configured_base_model)
             ):
                 from litellm.types.llms.anthropic import (
                     ANTHROPIC_EFFORT_BETA_HEADER,
@@ -1642,10 +1668,20 @@ class AmazonConverseConfig(BaseConfig):
                     "has no thinking_blocks. The model won't use extended thinking for this turn."
                 )
 
+        # Application inference profile ARNs (litellm_params.model) carry no
+        # version substring, so the adaptive-thinking capability lookup below
+        # resolves nothing for them. litellm_params.base_model is the same
+        # opaque-id fallback Azure deployments use for model-type detection —
+        # thread it through so a chart/config pin (e.g. base_model:
+        # claude-sonnet-5) still gets the right adaptive-thinking behavior.
+        _raw_base_model: Final = litellm_params.get("base_model") if isinstance(litellm_params, Mapping) else None
+        _base_model: Final = _raw_base_model if isinstance(_raw_base_model, str) else None
+
         AnthropicModelInfo.maybe_drop_disabled_thinking(
             model=model,
             optional_params=optional_params,
             custom_llm_provider="bedrock",
+            base_model=_base_model,
         )
 
         # Prepare and separate parameters
@@ -1660,7 +1696,7 @@ class AmazonConverseConfig(BaseConfig):
 
         # Process tools and collect beta values
         bedrock_tools, anthropic_beta_list = self._process_tools_and_beta(
-            original_tools, model, headers, additional_request_params
+            original_tools, model, headers, additional_request_params, configured_base_model=_base_model
         )
 
         # Append cachePoint to tools if cache_control_injection_points has tool_config
