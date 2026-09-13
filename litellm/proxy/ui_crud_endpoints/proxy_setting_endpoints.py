@@ -1021,10 +1021,10 @@ async def get_sso_settings():
 
 def _restored_sso_secret(
     secret_field: str,
-    incoming_secret: object,
+    incoming_secret: JsonValue,
     submitted_fields: AbstractSet[str],
-    before_sso_data: Mapping[str, object] | None,
-) -> object:
+    before_sso_data: Mapping[str, JsonValue] | None,
+) -> JsonValue:
     """Return the value to persist for one SSO secret field.
 
     The stored secret is kept when the client could not have meant to change it:
@@ -1040,17 +1040,16 @@ def _restored_sso_secret(
     if not stored_secret:
         return incoming_secret
     masked: Final = mask_sensitive_keys({secret_field: stored_secret}, {secret_field})  # mutable-ok: dict/set API
-    masked_secret: Final = masked[secret_field]
-    if secret_field not in submitted_fields or incoming_secret == masked_secret:
+    if secret_field not in submitted_fields or incoming_secret == masked[secret_field]:
         return stored_secret
     return incoming_secret
 
 
 def _restore_masked_sso_secrets(
-    sso_data: Mapping[str, object],
+    sso_data: Mapping[str, JsonValue],
     submitted_fields: AbstractSet[str],
-    before_sso_data: Mapping[str, object] | None,
-) -> dict[str, object]:  # mutable-ok: dict API downstream
+    before_sso_data: Mapping[str, JsonValue] | None,
+) -> dict[str, JsonValue]:  # mutable-ok: dict API downstream
     """Return a copy of ``sso_data`` with stored SSO secrets restored where the
     client could not have meant to change them (#38177); see _restored_sso_secret.
 
@@ -1136,7 +1135,7 @@ async def update_sso_settings(
     for field_name, value in sso_data.items():
         if field_name in SSO_FIELD_ENV_VARS:
             env_var_name = SSO_FIELD_ENV_VARS[field_name]
-            if value:
+            if isinstance(value, str) and value:
                 os.environ[env_var_name] = value
             else:
                 # Clear environment variable if value is null/empty
