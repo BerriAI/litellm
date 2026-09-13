@@ -468,7 +468,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
 
             # process tool calls - if complete function arg - add id to tool call
             tool_calls: Final = chunk["message"].get("tool_calls")
-            if tool_calls is not None:
+            if tool_calls:
                 self.seen_tool_calls = True
                 for tool_call in tool_calls:
                     function_args = tool_call.get("function").get("arguments")
