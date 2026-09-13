@@ -858,6 +858,9 @@
           "minimum": 0,
           "description": "Provider default tokens-per-minute limit."
         },
+        "use_bedrock_runtime_chat_completions": {
+          "type": "boolean"
+        },
         "use_openai_responses_path": {
           "type": "boolean"
         },

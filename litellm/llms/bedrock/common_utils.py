@@ -780,6 +780,20 @@ def strip_bedrock_routing_prefix(model: str) -> str:
     return model
 
 
+def uses_bedrock_runtime_chat_completions(model: str) -> bool:
+    """Whether this Bedrock model should use runtime native Chat Completions.
+
+    Data-driven from the price-map ``use_bedrock_runtime_chat_completions`` flag
+    so onboarding a model is a JSON change. Explicit ``converse/`` still wins in
+    ``get_bedrock_route`` because prefix routes are checked first.
+    """
+    stripped: Final = strip_bedrock_routing_prefix(model)
+    return any(
+        (litellm.model_cost.get(key) or {}).get("use_bedrock_runtime_chat_completions") is True
+        for key in (model, stripped)
+    )
+
+
 def strip_bedrock_throughput_suffix(model: str) -> str:
     """Strip throughput tier suffixes and context window suffixes from Bedrock model names."""
     import re
@@ -1107,6 +1121,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
         "async_invoke",
         "openai",
         "mantle",
+        "chat_completions",
     ]:
         """
         Get the bedrock route for the given model.
@@ -1123,6 +1138,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
                 "async_invoke",
                 "openai",
                 "mantle",
+                "chat_completions",
             ],
         ] = {
             "invoke/": "invoke",
@@ -1151,6 +1167,9 @@ class BedrockModelInfo(BaseLLMModelInfo):
 
         if is_bedrock_application_inference_profile_arn(model):
             return "converse"
+
+        if uses_bedrock_runtime_chat_completions(model):
+            return "chat_completions"
 
         base_model: Final = BedrockModelInfo.get_base_model(model)
         alt_model: Final = BedrockModelInfo.get_non_litellm_routing_model_name(model=model)
@@ -1328,6 +1347,8 @@ def get_bedrock_chat_config(model: str):
         return litellm.AmazonConverseConfig()
     elif bedrock_route == "openai":
         return litellm.AmazonBedrockOpenAIConfig()
+    elif bedrock_route == "chat_completions":
+        return litellm.AmazonBedrockRuntimeChatCompletionsConfig()
     elif bedrock_route == "agent":
         from litellm.llms.bedrock.chat.invoke_agent.transformation import (
             AmazonInvokeAgentConfig,
