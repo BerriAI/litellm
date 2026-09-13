@@ -6261,6 +6261,7 @@ def test_team_alias_targeting_live_team_deployment_still_rewrites(monkeypatch):
 )
 def test_team_alias_rewrite_matches_auth_resolution(monkeypatch, alias_target, live_target, sibling, bypass):
     """Routing rewrites the model to exactly what the auth resolver reports."""
+    from litellm.proxy import proxy_server
     from litellm.proxy.auth.auth_checks import resolve_team_model_alias, stale_team_alias_bypass_enabled
     from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
 
@@ -6275,8 +6276,8 @@ def test_team_alias_rewrite_matches_auth_resolution(monkeypatch, alias_target, l
     test_data = {"model": "gpt-4"}
     user_api_key_dict = UserAPIKeyAuth(api_key="test_key", team_id="team-1", team_model_aliases=aliases)
 
-    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
-        _update_model_if_team_alias_exists(data=test_data, user_api_key_dict=user_api_key_dict)
+    monkeypatch.setattr(proxy_server, "llm_router", _MockRouter())
+    _update_model_if_team_alias_exists(data=test_data, user_api_key_dict=user_api_key_dict)
 
     assert stale_team_alias_bypass_enabled() is bypass
     expected = resolve_team_model_alias(
