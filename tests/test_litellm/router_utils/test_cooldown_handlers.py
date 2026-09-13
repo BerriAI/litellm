@@ -437,3 +437,53 @@ class TestRoutingGroupCooldownAlternatives:
             )
             is False
         )
+
+
+class TestTeamModelCooldownAlternatives:
+    def _router(self, team_deployments: int):
+        from litellm import Router
+
+        return Router(
+            model_list=[
+                {
+                    "model_name": f"model_name_team-1_{i}",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                    "model_info": {
+                        "id": f"team-deploy-{i}",
+                        "team_id": "team-1",
+                        "team_public_model_name": "team-gpt-4o-mini",
+                    },
+                }
+                for i in range(team_deployments)
+            ]
+        )
+
+    def test_429_on_team_deployment_with_sibling_cools_down(self):
+        from litellm.router_utils.cooldown_handlers import _should_cooldown_deployment
+
+        router = self._router(team_deployments=2)
+        assert (
+            _should_cooldown_deployment(
+                litellm_router_instance=router,
+                deployment="team-deploy-0",
+                exception_status=429,
+                original_exception=Exception("rate limited"),
+                requested_model_group="team-gpt-4o-mini",
+            )
+            is True
+        )
+
+    def test_429_on_only_team_deployment_keeps_single_deployment_exemption(self):
+        from litellm.router_utils.cooldown_handlers import _should_cooldown_deployment
+
+        router = self._router(team_deployments=1)
+        assert (
+            _should_cooldown_deployment(
+                litellm_router_instance=router,
+                deployment="team-deploy-0",
+                exception_status=429,
+                original_exception=Exception("rate limited"),
+                requested_model_group="team-gpt-4o-mini",
+            )
+            is False
+        )
