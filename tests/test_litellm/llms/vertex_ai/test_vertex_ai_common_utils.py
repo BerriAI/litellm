@@ -143,6 +143,195 @@ def test_anyof_with_excessive_nesting():
         convert_anyof_null_to_nullable(schema)
 
 
+def test_normalize_boolean_schemas_items_true():
+    from copy import deepcopy
+
+    from litellm.llms.vertex_ai.common_utils import _normalize_boolean_schemas
+
+    schema = {
+        "type": "object",
+        "properties": {"rows": {"type": "array", "items": {"type": "array", "items": True}}},
+    }
+    original = deepcopy(schema)
+
+    normalized = _normalize_boolean_schemas(schema)
+
+    assert normalized["properties"]["rows"]["items"]["items"] == {}
+    assert schema == original
+
+
+def test_normalize_boolean_schemas_properties_and_anyof_true():
+    from copy import deepcopy
+
+    from litellm.llms.vertex_ai.common_utils import _normalize_boolean_schemas
+
+    schema = {
+        "type": "object",
+        "properties": {"free_form": True, "typed": {"type": "string"}},
+        "anyOf": [True, {"type": "string"}],
+    }
+    original = deepcopy(schema)
+
+    normalized = _normalize_boolean_schemas(schema)
+
+    assert normalized["properties"]["free_form"] == {}
+    assert normalized["properties"]["typed"] == {"type": "string"}
+    assert normalized["anyOf"] == [{}, {"type": "string"}]
+    assert schema == original
+
+
+def test_normalize_boolean_schemas_keeps_legitimate_bools():
+    from litellm.llms.vertex_ai.common_utils import _normalize_boolean_schemas
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "flag": {"type": "boolean", "nullable": True},
+            "choice": {"enum": ["yes", "no", True]},
+        },
+    }
+
+    assert _normalize_boolean_schemas(schema) == schema
+
+
+def test_normalize_boolean_schemas_tuple_items_passthrough():
+    from copy import deepcopy
+
+    from litellm.llms.vertex_ai.common_utils import _normalize_boolean_schemas
+
+    schema = {"type": "array", "items": [{"type": "string"}]}
+    original = deepcopy(schema)
+
+    normalized = _normalize_boolean_schemas(schema)
+
+    assert normalized == schema
+    assert schema == original
+
+
+def test_normalize_boolean_schemas_excessive_depth_raises():
+    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+    from litellm.llms.vertex_ai.common_utils import _normalize_boolean_schemas
+
+    with pytest.raises(
+        ValueError,
+        match=f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema.",
+    ):
+        _normalize_boolean_schemas({"type": "object"}, depth=DEFAULT_MAX_RECURSE_DEPTH + 1)
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        {"type": "object", "properties": {"v": {"type": "array", "items": False}}},
+        {"type": "object", "properties": {"v": False}},
+        {"type": "object", "properties": {"v": {"anyOf": [False, {"type": "string"}]}}},
+    ],
+)
+def test_normalize_boolean_schemas_false_raises(schema):
+    from litellm.llms.vertex_ai.common_utils import _normalize_boolean_schemas
+
+    with pytest.raises(ValueError, match="rejects every value"):
+        _normalize_boolean_schemas(schema)
+
+
+def _assert_no_boolean_sub_schemas(node: object) -> None:
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in ("items", "additionalProperties") and isinstance(value, bool):
+                raise AssertionError(f"boolean sub-schema under {key!r}")
+            if key == "properties" and isinstance(value, dict):
+                for child in value.values():
+                    if isinstance(child, bool):
+                        raise AssertionError("boolean sub-schema in properties")
+                    _assert_no_boolean_sub_schemas(child)
+            elif key in ("anyOf", "oneOf", "allOf") and isinstance(value, list):
+                for member in value:
+                    if isinstance(member, bool):
+                        raise AssertionError(f"boolean sub-schema in {key}")
+                    _assert_no_boolean_sub_schemas(member)
+            else:
+                _assert_no_boolean_sub_schemas(value)
+    elif isinstance(node, list):
+        for item in node:
+            _assert_no_boolean_sub_schemas(item)
+
+
+def test_build_vertex_schema_with_mcp_boolean_items():
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    parameters = {
+        "type": "object",
+        "properties": {
+            "rows": {
+                "items": {"items": True, "anyOf": [{"type": "array"}], "nullable": True},
+                "anyOf": [{"type": "array"}],
+                "nullable": True,
+            },
+            "headers": {
+                "items": {"type": "string"},
+                "anyOf": [{"type": "array"}],
+                "nullable": True,
+            },
+        },
+    }
+
+    _assert_no_boolean_sub_schemas(_build_vertex_schema(parameters))
+
+
+def test_build_vertex_schema_with_boolean_anyof_member():
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    parameters = {"type": "object", "properties": {"value": {"anyOf": [True, {"type": "null"}]}}}
+
+    result = _build_vertex_schema(parameters)
+
+    _assert_no_boolean_sub_schemas(result)
+    assert result["properties"]["value"]["anyOf"][0]["nullable"] is True
+
+
+def test_build_vertex_schema_with_false_property_raises():
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    with pytest.raises(ValueError, match="rejects every value"):
+        _build_vertex_schema({"type": "object", "properties": {"v": False}})
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"type": "object", "properties": {"v": {"type": "string"}}, "additionalProperties": False},
+        {
+            "type": "object",
+            "properties": {
+                "inner": {"type": "object", "properties": {"a": {"type": "string"}}, "additionalProperties": False}
+            },
+        },
+        {"type": "object", "properties": {"v": {"type": "string"}}, "patternProperties": {"^x": False}},
+        {"type": "object", "properties": {"v": {"allOf": [False, {"type": "string"}]}}},
+        {"type": "object", "properties": {"v": {"oneOf": [False, {"type": "string"}]}}},
+    ],
+)
+def test_build_vertex_schema_unsupported_keywords_do_not_reach_vertex(parameters):
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    result = _build_vertex_schema(parameters)
+
+    _assert_no_boolean_sub_schemas(result)
+
+    def has_unsupported_keyword(node: object) -> bool:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in ("additionalProperties", "patternProperties", "oneOf", "allOf"):
+                    return True
+                if has_unsupported_keyword(value):
+                    return True
+        elif isinstance(node, list):
+            return any(has_unsupported_keyword(item) for item in node)
+        return False
+
+    assert not has_unsupported_keyword(result)
+
+
 @pytest.mark.asyncio
 async def test_get_supports_system_message():
     """Test get_supports_system_message with different models"""
