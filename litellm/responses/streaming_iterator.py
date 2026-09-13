@@ -31,7 +31,6 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
@@ -553,6 +552,8 @@ class BaseResponsesAPIStreamingIterator:
         )
 
     def _map_error_event_exception(self, error_obj: object) -> Exception:
+        from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
         error_message, error_type, error_code = _error_event_fields(error_obj)
         status_code: Final = _status_code_for_error_fields(error_type, error_code)
         error_body: Final = {"message": error_message, "type": error_type, "code": error_code}

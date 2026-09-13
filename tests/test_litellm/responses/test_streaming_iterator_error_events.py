@@ -287,15 +287,12 @@ async def test_async_iterator_content_policy_violation_after_first_chunk_carries
         ]
     )
 
-    chunks = []
-
-    async def _drain():
-        async for chunk in iterator:
-            chunks.append(chunk)
+    stream = aiter(iterator)
+    first_chunk = await anext(stream)
+    assert first_chunk is not None
 
     with pytest.raises(MidStreamFallbackError) as exc_info:
-        await _drain()
-    assert len(chunks) == 1
+        await anext(stream)
     assert isinstance(exc_info.value.original_exception, litellm.ContentPolicyViolationError)
     assert exc_info.value.is_pre_first_chunk is False
     assert exc_info.value.generated_content == "partial "
@@ -316,14 +313,13 @@ async def test_async_iterator_error_after_first_chunk_carries_generated_content(
         ]
     )
 
-    chunks = []
-    async def _drain():
-        async for chunk in iterator:
-            chunks.append(chunk)
+    stream = aiter(iterator)
+    first_chunk = await anext(stream)
+    second_chunk = await anext(stream)
+    assert first_chunk is not None and second_chunk is not None
 
     with pytest.raises(MidStreamFallbackError) as exc_info:
-        await _drain()
-    assert len(chunks) == 2
+        await anext(stream)
     assert exc_info.value.status_code == 500
     assert exc_info.value.is_pre_first_chunk is False
     assert exc_info.value.generated_content == "hello world"
