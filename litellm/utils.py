@@ -216,6 +216,7 @@ from litellm.types.llms.openai import (
     OpenAIWebSearchOptions,
 )
 from litellm.types.utils import (
+    ABOVE_THRESHOLD_COST_KEY_PATTERN,
     OPENAI_RESPONSE_HEADERS,
     CallTypes,
     ChatCompletionDeltaToolCall,
@@ -2848,6 +2849,12 @@ def supports_reasoning(model: str, custom_llm_provider: str | None = None) -> bo
     Check if the given model supports reasoning and return a boolean value.
     """
     return _supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_reasoning")
+
+
+def supports_anthropic_thinking_payload(model: str, custom_llm_provider: str | None = None) -> bool:
+    return _supports_factory(
+        model=model, custom_llm_provider=custom_llm_provider, key="supports_anthropic_thinking_payload"
+    )
 
 
 def supports_none_reasoning_effort(model: str, custom_llm_provider: str | None = None) -> bool:
@@ -5556,12 +5563,21 @@ def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> P
 
         split_model = strip_bedrock_routing_prefix(split_model)
 
+    provider_model_info: Final = (
+        ProviderConfigManager.get_provider_model_info(model=split_model, provider=LlmProviders(custom_llm_provider))
+        if custom_llm_provider in LlmProvidersSet
+        else None
+    )
+    provider_cost_key: Final = (
+        provider_model_info.get_model_cost_key(split_model) if provider_model_info is not None else None
+    )
+
     return PotentialModelNamesAndCustomLLMProvider(
         split_model=split_model,
         combined_model_name=combined_model_name,
         stripped_model_name=stripped_model_name,
         combined_stripped_model_name=combined_stripped_model_name,
-        provider_prefixed_model_name=provider_prefixed_model_name,
+        provider_prefixed_model_name=provider_cost_key or provider_prefixed_model_name,
         custom_llm_provider=cast(str, custom_llm_provider),
     )
 
@@ -5637,7 +5653,7 @@ def _is_potential_model_name_in_model_cost(
     )
 
 
-_ABOVE_THRESHOLD_COST_KEY: Final = re.compile(r"_above_\d+k?_tokens$")
+_ABOVE_THRESHOLD_COST_KEY: Final = ABOVE_THRESHOLD_COST_KEY_PATTERN
 
 
 def _get_model_info_helper(
@@ -5996,6 +6012,7 @@ def _get_model_info_helper(
                 thinking_always_on=_model_info.get("thinking_always_on", None),
                 supports_tool_search=_model_info.get("supports_tool_search", None),
                 supports_mid_conversation_system=_model_info.get("supports_mid_conversation_system", None),
+                supports_anthropic_thinking_payload=_model_info.get("supports_anthropic_thinking_payload", None),
                 supports_none_reasoning_effort=_model_info.get("supports_none_reasoning_effort", None),
                 supports_minimal_reasoning_effort=_model_info.get("supports_minimal_reasoning_effort", None),
                 supports_low_reasoning_effort=_model_info.get("supports_low_reasoning_effort", None),
@@ -9285,6 +9302,10 @@ class ProviderConfigManager:
             from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 
             return GeminiRealtimeConfig()
+        if LlmProviders.META == provider:
+            from litellm.llms.meta.realtime.transformation import MetaRealtimeConfig
+
+            return MetaRealtimeConfig()
         return None
 
     @staticmethod

@@ -138,6 +138,14 @@ it("shows a loading state on initial load and hides the data", () => {
   expect(screen.queryByText("Acme Team")).not.toBeInTheDocument();
 });
 
+it("replaces the previous rows with the loading state while a new search is pending", () => {
+  mockUseTeamsTable.mockReturnValue(teamsResult([mockTeam], {}, { isPlaceholderData: true, isFetching: true }));
+  renderTable();
+
+  expect(screen.getByText("Loading teams...")).toBeInTheDocument();
+  expect(screen.queryByText("Acme Team")).not.toBeInTheDocument();
+});
+
 describe("sort contract – only backend-sortable columns are sortable", () => {
   it("requests the default created_at descending sort on first render", () => {
     renderTable();

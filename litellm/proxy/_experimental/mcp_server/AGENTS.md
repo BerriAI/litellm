@@ -67,9 +67,8 @@ module materially harder to understand.
   auth, SSE, streamable HTTP, and stdio as separate flows. Do not collapse them
   behind a single generic branch unless tests prove every mode still behaves
   correctly.
-- Be especially careful with `available_on_public_internet: false` combined with
-  `delegate_auth_to_upstream: true`. The local `CLAUDE.md` explains the anonymous
-  upstream PKCE path that must remain intentional.
+- Be especially careful with legacy `delegate_auth_to_upstream: true`. The local
+  `CLAUDE.md` explains its admitted replacement and public discovery contract.
 - Keep database-backed fields in sync across migrations, typed models under
   `litellm/types/mcp.py` or `litellm/types/mcp_server/`, config loading, this
   package, and dashboard state when the field is user-visible.

@@ -6,6 +6,7 @@ This allows the same policy to be attached to multiple scopes.
 """
 
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -141,8 +142,11 @@ class AttachmentRegistry:
             ),
             key=_attachment_specificity,
         )
+        broadest_attachment_by_policy: Final = MappingProxyType(
+            {attachment.policy: attachment for attachment in reversed(matching_attachments)}
+        )
         unique_attachments: Final = tuple(
-            next(attachment for attachment in matching_attachments if attachment.policy == policy_name)
+            broadest_attachment_by_policy[policy_name]
             for policy_name in dict.fromkeys(attachment.policy for attachment in matching_attachments)
         )
 

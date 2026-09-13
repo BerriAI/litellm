@@ -4,7 +4,6 @@ from types import TracebackType
 from typing import Final
 from unittest.mock import MagicMock, patch
 
-
 import pytest
 
 import litellm
@@ -150,6 +149,33 @@ async def test_vertex_credential_resolution_bounds_a_thread_offloaded_refresh():
             timeout_seconds=0.05,
         )
     assert time.monotonic() - start < 5
+
+
+@pytest.mark.asyncio
+async def test_meta_realtime_dispatches_to_base_handler_with_meta_config(monkeypatch: pytest.MonkeyPatch):
+    from litellm.llms.meta.realtime.transformation import MetaRealtimeConfig
+
+    captured: dict[str, object] = {}
+
+    def mock_get_llm_provider(model, api_base, api_key):
+        return model.removeprefix("meta/"), "meta", None, api_base
+
+    async def mock_async_realtime(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
+    monkeypatch.setattr(realtime_main.base_llm_http_handler, "async_realtime", mock_async_realtime)
+
+    await realtime_main._arealtime.__wrapped__(
+        model="meta/muse-voice-transcribe-1.0",
+        websocket=MagicMock(),
+        litellm_logging_obj=FakeLogging(),
+        query_params={"model": "meta/muse-voice-transcribe-1.0", "intent": "transcription"},
+    )
+
+    assert isinstance(captured["provider_config"], MetaRealtimeConfig)
+    assert captured["model"] == "muse-voice-transcribe-1.0"
+    assert captured["query_params"] == {"model": "muse-voice-transcribe-1.0", "intent": "transcription"}
 
 
 @pytest.mark.asyncio
