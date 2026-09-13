@@ -1,5 +1,7 @@
+from collections.abc import Mapping
 from datetime import datetime
 from enum import Enum
+from types import MappingProxyType
 from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -134,6 +136,8 @@ class SupportedGuardrailIntegrations(Enum):
     HEADROOM = "headroom"
     COMPRESR = "compresr"
     STRAIKER = "straiker"
+    ALICE = "alice"
+    CONDUCT = "conduct"
 
 
 class Role(Enum):
@@ -550,6 +554,40 @@ class BedrockGuardrailConfigModel(BaseModel):
     )
 
 
+class BedrockGuardrailStreamingParams(BaseModel):
+    streaming_buffer_until_moderated: bool = Field(
+        default=True,
+        description="If True (default), withhold every streamed chunk until the end-of-stream "
+        "ApplyGuardrail scan passes, so no flagged content reaches the client before a block. "
+        "If False, chunks stream through unbuffered, so flagged content can reach the client "
+        "before the scan finishes; a flagged scan still ends the stream, with a block message "
+        "when disable_exception_on_block is true and an in-stream error frame otherwise.",
+    )
+    streaming_sampling_rate: int = Field(
+        default=5,
+        ge=1,
+        description="When not buffering and not end-of-stream-only, scan the accumulated response "
+        "every Nth streamed chunk. Each sampled scan is a full ApplyGuardrail call that delays "
+        "that chunk, so lower values add latency and AWS text-unit cost.",
+    )
+    streaming_end_of_stream_only: bool = Field(
+        default=False,
+        description="When not buffering, skip per-chunk sampling and run one ApplyGuardrail scan "
+        "on the assembled response at end of stream. Combined with "
+        "streaming_buffer_until_moderated=false the full response streams live before the scan "
+        "and the scan result lands in guardrail_information; a flagged response still ends the "
+        "stream with a block message (disable_exception_on_block=true) or an error frame.",
+    )
+
+    @classmethod
+    def from_extras(cls, extras: Mapping[str, object] | None) -> "BedrockGuardrailStreamingParams":
+        if not extras:
+            return cls()
+        return cls.model_validate(
+            MappingProxyType({name: extras[name] for name in cls.model_fields if extras.get(name) is not None})
+        )
+
+
 class LakeraV2GuardrailConfigModel(BaseModel):
     """Configuration parameters for the Lakera AI v2 guardrail"""
 
@@ -741,6 +779,9 @@ class ContentFilterConfigModel(BaseModel):
     )
 
 
+MCP_SECURITY_ON_VIOLATION: Final = frozenset({"block", "alert"})
+
+
 class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails
     api_key: str | None = Field(default=None, description="API key for the guardrail service")
     api_base: str | None = Field(default=None, description="Base URL for the guardrail service API")
@@ -795,6 +836,15 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
+    inspect_embeddings: bool | None = Field(
+        default=None,
+        description=(
+            "When True, the Aim and Cato Networks guardrails send /embeddings `input` to the vendor as "
+            "user messages. Off by default because embedding input is documents being indexed, not a "
+            "conversation."
+        ),
+    )
+
     # Lakera specific params
     category_thresholds: LakeraCategoryThresholds | None = Field(
         default=None,
@@ -840,9 +890,13 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default=None,
         description="For /v1/realtime sessions: automatically close the session after this many guardrail violations.",
     )
-    on_violation: Literal["warn", "end_session"] | None = Field(
+    on_violation: Literal["warn", "end_session", "block", "alert"] | None = Field(
         default=None,
-        description="For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.",
+        description=(
+            "For /v1/realtime sessions: 'warn' speaks the violation message and continues; "
+            "'end_session' speaks the message and closes the connection. "
+            "For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning."
+        ),
     )
     realtime_violation_message: str | None = Field(
         default=None,
@@ -1046,6 +1100,15 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
             return float(v)
         except (TypeError, ValueError) as e:
             raise ValueError(f"timeout must be numeric, got {v!r}") from e
+
+    @model_validator(mode="after")
+    def validate_on_violation_for_guardrail(self) -> "LitellmParams":
+        if (
+            self.on_violation in MCP_SECURITY_ON_VIOLATION
+            and self.guardrail != SupportedGuardrailIntegrations.MCP_SECURITY.value
+        ):
+            raise ValueError(f"on_violation={self.on_violation!r} is only supported by guardrail='mcp_security'")
+        return self
 
     def __init__(self, **kwargs) -> None:
         default_on: Final = kwargs.pop("default_on", None)

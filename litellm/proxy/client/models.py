@@ -1,4 +1,5 @@
 import builtins
+from collections.abc import Mapping
 from typing import Any, Final
 
 import requests
@@ -32,7 +33,7 @@ class ModelsManagementClient:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
 
-    def list(self, return_request: bool = False) -> list[dict[str, Any]] | requests.Request:
+    def list(self, return_request: bool = False) -> builtins.list[dict[str, Any]] | requests.Request:
         """
         Get the list of models supported by the server.
 
@@ -68,8 +69,8 @@ class ModelsManagementClient:
     def new(
         self,
         model_name: str,
-        model_params: dict[str, Any],
-        model_info: dict[str, Any] | None = None,
+        model_params: Mapping[str, object],
+        model_info: Mapping[str, object] | None = None,
         return_request: bool = False,
     ) -> dict[str, Any] | requests.Request:
         """
@@ -245,8 +246,8 @@ class ModelsManagementClient:
     def update(
         self,
         model_id: str,
-        model_params: dict[str, Any],
-        model_info: dict[str, Any] | None = None,
+        model_params: Mapping[str, object],
+        model_info: Mapping[str, object] | None = None,
         return_request: bool = False,
     ) -> dict[str, Any] | requests.Request:
         """

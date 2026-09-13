@@ -46,6 +46,7 @@ from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdate
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     WindowSpendTransaction,
     WindowSpendUpdateQueue,
+    to_wire_payload,
 )
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.caching import (
@@ -298,7 +299,7 @@ class RedisUpdateBuffer:
                 ServiceTypes.REDIS_DAILY_AGENT_SPEND_UPDATE_QUEUE,
             ),
             (
-                window_spend_update_transactions,
+                tuple(map(to_wire_payload, window_spend_update_transactions)),
                 REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY,
                 ServiceTypes.REDIS_WINDOW_SPEND_UPDATE_QUEUE,
             ),
@@ -484,7 +485,12 @@ class RedisUpdateBuffer:
             (daily_end_user_spend_update_transactions, REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY),
             (daily_agent_spend_update_transactions, REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY),
             (daily_tag_spend_update_transactions, REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY),
-            (window_spend_update_transactions, REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY),
+            (
+                None
+                if window_spend_update_transactions is None
+                else tuple(map(to_wire_payload, window_spend_update_transactions)),
+                REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY,
+            ),
         )
 
         rpush_list: Final = tuple(

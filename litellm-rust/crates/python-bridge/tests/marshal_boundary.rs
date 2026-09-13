@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const DISALLOWED_OUTSIDE_MARSHAL: &[&str] = &[
+const DISALLOWED_OUTSIDE_INTEROP: &[&str] = &[
     "py.import(\"json\")",
     "pythonize::",
     "serde_json::to_string",
@@ -33,18 +33,15 @@ fn rust_sources(directory: &Path) -> Vec<PathBuf> {
 }
 
 #[test]
-fn serialization_is_centralized_in_marshal_module() {
+fn serialization_uses_the_interop_boundary() {
     let root = source_root();
 
     for path in rust_sources(&root) {
-        if path == root.join("marshal.rs") {
-            continue;
-        }
         let source = fs::read_to_string(&path).expect("bridge source should be readable");
-        for disallowed in DISALLOWED_OUTSIDE_MARSHAL {
+        for disallowed in DISALLOWED_OUTSIDE_INTEROP {
             assert!(
                 !source.contains(disallowed),
-                "{} bypasses the typed marshal module with `{disallowed}`",
+                "{} bypasses litellm-python-interop with `{disallowed}`",
                 path.display()
             );
         }

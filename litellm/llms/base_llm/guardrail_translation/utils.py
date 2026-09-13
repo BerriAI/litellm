@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterator, Sequence
-from typing import Any, Final, TypeVar
+from typing import Final, TypeVar
+
+from pydantic import BaseModel
 
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.llms.openai import AllMessageValues, ResponseAPIUsage
 
 
-def _anthropic_stream_chunk_events(item: Any) -> list[dict]:
+def _anthropic_stream_chunk_events(item: object) -> list[dict]:
     if isinstance(item, dict):
         return [item]
     if isinstance(item, bytes):
@@ -36,7 +38,7 @@ def _anthropic_stream_chunk_events(item: Any) -> list[dict]:
     return events
 
 
-def _usage_from_anthropic_stream_chunks(original_response: list[Any]) -> AnthropicUsage | None:
+def _usage_from_anthropic_stream_chunks(original_response: Sequence[object]) -> AnthropicUsage | None:
     input_tokens = 0
     output_tokens = 0
     found_usage = False
@@ -79,7 +81,7 @@ def _usage_tokens(usage_obj: object, key: str, fallback_key: str) -> int:
     return int(getattr(usage_obj, key, getattr(usage_obj, fallback_key, 0)) or 0)
 
 
-def blocked_response_usage(original_response: Any | None) -> AnthropicUsage:
+def blocked_response_usage(original_response: object) -> AnthropicUsage:
     """
     Token usage for a synthetic guardrail-blocked response.
 
@@ -124,7 +126,72 @@ def blocked_responses_api_usage(original_response: object) -> ResponseAPIUsage:
     )
 
 
-def effective_skip_system_message_for_guardrail(guardrail_to_apply: Any) -> bool:
+def stream_item_field(item: object, field: str) -> object | None:
+    if isinstance(item, dict):
+        return item.get(field)
+    return getattr(item, field, None)
+
+
+def stream_item_fingerprint(item: object) -> str:
+    plain: Final = item.model_dump() if isinstance(item, BaseModel) else item
+    return json.dumps(plain, sort_keys=True, default=str)
+
+
+def stream_item_items(item: object, field: str) -> tuple[object, ...]:
+    value: Final = stream_item_field(item, field)
+    return tuple(value) if isinstance(value, (list, tuple)) else ()
+
+
+def blocked_chat_stream_usage(original_response: object) -> tuple[int, int]:
+    """
+    ``(prompt_tokens, completion_tokens)`` for a synthetic guardrail-blocked
+    chat completions stream.
+
+    A mid-stream block carries the chunks received so far as a list; real usage
+    rides on the final chunk when the upstream sent one
+    (``stream_options.include_usage``). Non-list originals defer to
+    ``blocked_response_usage``.
+    """
+    if not isinstance(original_response, list):
+        usage: Final = blocked_response_usage(original_response)
+        return usage.get("input_tokens", 0), usage.get("output_tokens", 0)
+    usage_obj: Final = next(
+        (
+            chunk_usage
+            for item in reversed(original_response)
+            if (chunk_usage := stream_item_field(item, "usage")) is not None
+        ),
+        None,
+    )
+    return (
+        _usage_tokens(usage_obj, "prompt_tokens", "input_tokens"),
+        _usage_tokens(usage_obj, "completion_tokens", "output_tokens"),
+    )
+
+
+def blocked_responses_stream_usage(original_response: object) -> ResponseAPIUsage:
+    """
+    ``ResponseAPIUsage`` for a synthetic guardrail-blocked /v1/responses stream.
+
+    A mid-stream block carries the events received so far as a list; real usage
+    rides on the ``response.completed`` event's response when the upstream sent
+    one. Non-list originals defer to ``blocked_responses_api_usage``.
+    """
+    if not isinstance(original_response, list):
+        return blocked_responses_api_usage(original_response)
+    completed: Final = next(
+        (
+            response
+            for item in reversed(original_response)
+            if stream_item_field(item, "type") == "response.completed"
+            and (response := stream_item_field(item, "response")) is not None
+        ),
+        None,
+    )
+    return blocked_responses_api_usage(completed)
+
+
+def effective_skip_system_message_for_guardrail(guardrail_to_apply: object) -> bool:
     per: Final = getattr(guardrail_to_apply, "skip_system_message_in_guardrail", None)
     if per is not None:
         return bool(per)
@@ -133,7 +200,7 @@ def effective_skip_system_message_for_guardrail(guardrail_to_apply: Any) -> bool
     return bool(getattr(litellm, "skip_system_message_in_guardrail", False))
 
 
-def effective_skip_tool_message_for_guardrail(guardrail_to_apply: Any) -> bool:
+def effective_skip_tool_message_for_guardrail(guardrail_to_apply: object) -> bool:
     per: Final = getattr(guardrail_to_apply, "skip_tool_message_in_guardrail", None)
     if per is not None:
         return bool(per)

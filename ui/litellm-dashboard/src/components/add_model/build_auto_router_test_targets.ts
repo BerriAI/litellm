@@ -4,6 +4,7 @@ export interface AutoRouterTestTarget {
   labels: string[];
   modelGroup: string;
   mode: AutoRouterTestMode;
+  requestParams?: Record<string, unknown>;
 }
 
 export interface BuildAutoRouterTestTargetsParams {
@@ -14,6 +15,7 @@ export interface BuildAutoRouterTestTargetsParams {
   /** The resolved default model - see resolveComplexityDefaultModel. A live fallback destination,
    * so it is probed even when no tier lists it. */
   defaultModel?: string;
+  classifier?: { model: string; reasoningEffort?: string };
 }
 
 export const buildAutoRouterTestTargets = ({
@@ -21,6 +23,7 @@ export const buildAutoRouterTestTargets = ({
   semanticMatchingEnabled,
   embeddingModel,
   defaultModel,
+  classifier,
 }: BuildAutoRouterTestTargetsParams): AutoRouterTestTarget[] => {
   const tieredByModel = tiers.reduce<Record<string, string[]>>((acc, [tier, models]) => {
     return models.reduce((tierAcc, rawModel) => {
@@ -50,5 +53,17 @@ export const buildAutoRouterTestTargets = ({
       ? [{ labels: ["Embedding"], modelGroup: embeddingModel.trim(), mode: "embedding" as const }]
       : [];
 
-  return [...tierTargets, ...embeddingTarget];
+  const classifierModel = classifier?.model.trim();
+  const classifierTarget: AutoRouterTestTarget[] = classifierModel
+    ? [
+        {
+          labels: ["Classifier"],
+          modelGroup: classifierModel,
+          mode: "chat",
+          ...(classifier?.reasoningEffort && { requestParams: { reasoning_effort: classifier.reasoningEffort } }),
+        },
+      ]
+    : [];
+
+  return [...tierTargets, ...embeddingTarget, ...classifierTarget];
 };
