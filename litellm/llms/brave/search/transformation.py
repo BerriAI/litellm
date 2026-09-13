@@ -16,6 +16,9 @@ _ISO_YMD: Final = re.compile(r"^\s*\d{4}[-/]\d{1,2}[-/]\d{1,2}\s*$")
 _UNIX_TIMESTAMP: Final = re.compile(r"^\s*-?\d+(\.\d+)?\s*$")
 BRAVE_SECTIONS: Final = ["web", "discussions", "faqs", "faq", "news", "videos"]
 
+import litellm
+from litellm.exceptions import UnsupportedParamsError
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
@@ -176,7 +179,10 @@ class BraveSearchConfig(BaseSearchConfig):
         - search_domain_filter → q (append domain filters)
         - country → country
         - start_date + end_date → freshness (combined as "YYYY-MM-DDtoYYYY-MM-DD";
-        only sent when both are provided — Brave's custom range requires both)
+        only sent when both are provided — Brave's custom range requires both); If only one is
+        provided then a raise/warn will occur depending on `drop_params`. If `drop_params` is False
+        and a fallback is provided with `freshness` an exception will be thrown. If `drop_params` is True
+        then native `freshness` will be passed in if present (otherwise warning).
         - max_tokens_per_page → (not applicable, ignored)
 
         All other Brave Search API-specific parameters are passed through as-is.
@@ -221,11 +227,32 @@ class BraveSearchConfig(BaseSearchConfig):
         end_date = remaining.pop("end_date", None)
         if start_date and end_date:
             request_data["freshness"] = f"{start_date}to{end_date}"
+            # unified value replaces native in this case
+            remaining.pop("freshness", None)
+        elif start_date or end_date:
+            message = (
+                "Brave's `freshness` field does not support one-sided date ranges; "
+                "both start_date and end_date are required together. "
+                "If a native `freshness` value was also provided, it will be used instead."
+            )
+
+            if litellm.drop_params:
+                verbose_logger.warning(message)
+            else:
+                raise UnsupportedParamsError(
+                    message=message,
+                    model="brave",
+                )
+
+        # query is a required unified arg; it always wins over native `q`
+        remaining.pop("q", None)
+
+        if optional_params.get("max_results"):
+            remaining.pop("count", None)
 
         if "country" in remaining:
             request_data["country"] = remaining.pop("country")
 
-        # Not applicable therefore popped and ignored
         if "max_tokens_per_page" in remaining:
             remaining.pop("max_tokens_per_page")
 
