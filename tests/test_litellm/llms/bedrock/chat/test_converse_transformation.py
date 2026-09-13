@@ -6953,3 +6953,40 @@ def test_transform_response_honors_json_mode_kwarg_when_optional_params_lack_it(
     )
     assert result.choices[0].message.tool_calls is None
     assert json.loads(result.choices[0].message.content) == {"city": "Paris", "population": 2100000}
+
+
+def test_transform_request_injects_dummy_tool_without_tools_param(monkeypatch):
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    monkeypatch.setattr(litellm, "modify_params", False)
+    config = AmazonConverseConfig()
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "content": "Calling tool",
+            "tool_calls": [
+                {
+                    "id": "tooluse_test_dummy",
+                    "type": "function",
+                    "function": {"name": "get_x", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "tooluse_test_dummy",
+            "content": "{}",
+        },
+    ]
+    result = config.transform_request(
+        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert "toolConfig" in result
+    assert "tools" in result["toolConfig"]
+    assert result["toolConfig"]["tools"][0]["toolSpec"]["name"] == "dummy_tool"
