@@ -253,6 +253,10 @@ class BaseResponsesAPIStreamingIterator:
         self._completed_response_logged = False
         self._completed_response_cache_hit: bool | None = None
         self._persist_completed_response_before_logging = True
+        # output_item.done events seen during the stream, keyed by output_index.
+        # Some providers emit a terminal response.completed event with an empty
+        # output array even though items were streamed; these are used to rebuild it.
+        self._streamed_output_items: dict[int, object] = {}
         self._stream_created_time: float = time.time()
 
         # track request context for hooks
@@ -356,6 +360,14 @@ class BaseResponsesAPIStreamingIterator:
                             custom_llm_provider=self.custom_llm_provider,
                             model_id=_stream_model_id,
                         )
+                if _event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
+                    _done_item: Final[object] = getattr(openai_responses_api_chunk, "item", None)
+                    if _done_item is not None:
+                        _output_index: Final = getattr(openai_responses_api_chunk, "output_index", None)
+                        _index: Final = (
+                            _output_index if isinstance(_output_index, int) else len(self._streamed_output_items)
+                        )
+                        self._streamed_output_items.setdefault(_index, _done_item)
                 elif _event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED:
                     _annotation: Final[object] = getattr(openai_responses_api_chunk, "annotation", None)
                     if _annotation is not None:
@@ -430,6 +442,16 @@ class BaseResponsesAPIStreamingIterator:
             # This ensures failures are logged even when _process_chunk is called directly
             self._handle_failure(e)
             raise
+
+    def get_streamed_output_items(self) -> list[object]:
+        """
+        Output items received via response.output_item.done events, ordered by output_index.
+
+        Used to rebuild a terminal response.completed payload whose output array is empty.
+        """
+        if not self._streamed_output_items:
+            return []
+        return [item for _, item in sorted(self._streamed_output_items.items())]
 
     def _log_completed_response(self, *, is_async: bool) -> None:
         if self._completed_response_logged:
