@@ -2101,6 +2101,37 @@ def test_generic_cost_per_token_azure_gpt_6_astra_foundry_price_sheet(
     assert completion_cost == pytest.approx(zone_multiplier * output_multiplier * completion_tokens * 5e-5)
 
 
+@pytest.mark.parametrize(
+    "model,input_rate,cache_read_rate,output_rate",
+    [
+        ("azure/gpt-chat-latest", 5e-6, 5e-7, 3e-5),
+        ("azure/chat-latest", 5e-6, 5e-7, 3e-5),
+        ("azure/us/gpt-chat-latest", 5.5e-6, 5.5e-7, 3.3e-5),
+    ],
+)
+def test_generic_cost_per_token_azure_gpt_chat_latest_price_sheet(
+    _local_model_cost_map, model, input_rate, cache_read_rate, output_rate
+):
+    """The Azure OpenAI price sheet lists GPT-Chat Latest at $5 input, $0.50 cached input and $30 output per 1M
+    tokens on Global, and $5.50, $0.55 and $33 on Data Zone. Foundry names the product gpt-chat-latest and the
+    OpenAI API names the same model chat-latest, so both spellings bill the Global sheet.
+    """
+    prompt_tokens = 100000
+    cached_tokens = 40000
+    completion_tokens = 1000
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="azure")
+
+    assert prompt_cost == pytest.approx((prompt_tokens - cached_tokens) * input_rate + cached_tokens * cache_read_rate)
+    assert completion_cost == pytest.approx(completion_tokens * output_rate)
+
+
 def test_generic_cost_per_token_azure_ai_gpt_6_astra_flex_bills_the_standard_rate(_local_model_cost_map):
     usage = Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100)
 
