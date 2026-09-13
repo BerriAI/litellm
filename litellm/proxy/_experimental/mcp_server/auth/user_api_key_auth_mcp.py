@@ -2163,6 +2163,10 @@ class MCPRequestHandler:
                 allowed_tools = cast(list[str], key_tools)
 
             allowed_tools = _as_list(
+                await MCPRequestHandler._apply_end_user_tool_ceiling(allowed_tools, server_id, user_api_key_auth)
+            )
+
+            allowed_tools = _as_list(
                 await MCPRequestHandler._apply_user_tool_ceiling(
                     allowed_tools, server_id, user_api_key_auth, keyless_source=keyless_source
                 )
@@ -3026,6 +3030,38 @@ class MCPRequestHandler:
         if allowed_tools is None:
             return list(user_tools)
         return list(set(allowed_tools) & set(user_tools))
+
+    @staticmethod
+    async def _apply_end_user_tool_ceiling(
+        allowed_tools: Sequence[str] | None,
+        server_id: str,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+    ) -> Sequence[str] | None:
+        """Narrow a key/team tool allowlist by the end user's (customer's) tool entitlement."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy.proxy_server import prisma_client
+
+        if user_api_key_auth is None or not user_api_key_auth.end_user_id or prisma_client is None:
+            return allowed_tools
+
+        object_permissions: Final = await MCPRequestHandler._get_end_user_object_permission(
+            user_api_key_auth, prisma_client
+        )
+        if object_permissions is None:
+            return allowed_tools
+
+        end_user_direct_tools: Final = global_mcp_server_manager.expand_tool_permissions(
+            object_permissions.mcp_tool_permissions
+        ).get(server_id)
+        end_user_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(object_permissions, server_id)
+        end_user_tools: Final = MCPRequestHandler._union_tool_grants(end_user_direct_tools, end_user_toolset_tools)
+        if end_user_tools is None:
+            return allowed_tools
+        if allowed_tools is None:
+            return list(end_user_tools)
+        return list(set(allowed_tools) & set(end_user_tools))
 
     # Sentinel stored in cache when an agent has no object_permission, so we
     # don't re-query the DB on every MCP request for that agent.

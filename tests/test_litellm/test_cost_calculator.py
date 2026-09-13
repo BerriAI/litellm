@@ -17,6 +17,8 @@ from litellm.cost_calculator import (
     handle_realtime_stream_cost_calculation,
     response_cost_calculator,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse, OCRUsageInfo
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
@@ -4768,3 +4770,228 @@ def test_collect_and_combine_realtime_usage_stores_partitioned_text_tokens() -> 
     assert combined.completion_tokens_details.reasoning_tokens == 95
     assert combined.completion_tokens_details.text_tokens == 38
     assert combined.completion_tokens_details.audio_tokens == 0
+
+
+UNMAPPED_OCR_MODEL: Final = "azure_ai/some-unmapped-ocr-model-for-testing"
+MAPPED_OCR_MODEL: Final = "mistral/mistral-ocr-4-0"
+
+
+def _ocr_response(model: str, pages_processed: int, credits: float | None = None) -> OCRResponse:
+    return OCRResponse(
+        pages=[OCRPage(index=index, markdown=f"page {index}") for index in range(pages_processed)],
+        model=model,
+        usage_info=OCRUsageInfo(pages_processed=pages_processed, credits=credits),
+    )
+
+
+def _ocr_logging_obj(litellm_params: dict[str, object]) -> Logging:
+    logging_obj: Final = Logging(
+        model=UNMAPPED_OCR_MODEL,
+        messages=[],
+        stream=False,
+        call_type="ocr",
+        start_time=None,
+        litellm_call_id="test-ocr-custom-pricing",
+        function_id="1234",
+    )
+    logging_obj.update_environment_variables(litellm_params=litellm_params, optional_params={})
+    return logging_obj
+
+
+@pytest.mark.parametrize("pages_processed", [1, 3, 10])
+def test_ocr_cost_uses_deployment_per_page_pricing_for_unmapped_model(pages_processed: int):
+    from litellm.cost_calculator import ocr_cost
+
+    assert UNMAPPED_OCR_MODEL not in litellm.model_cost
+    cost, _ = ocr_cost(
+        model=UNMAPPED_OCR_MODEL,
+        custom_llm_provider="azure_ai",
+        response=_ocr_response(UNMAPPED_OCR_MODEL, pages_processed=pages_processed),
+        model_info={"ocr_cost_per_page": 0.004},
+    )
+    assert cost == pytest.approx(0.004 * pages_processed)
+
+
+def test_ocr_cost_uses_deployment_annotation_only_pricing_for_unmapped_model():
+    from litellm.cost_calculator import ocr_cost
+
+    assert UNMAPPED_OCR_MODEL not in litellm.model_cost
+    response: Final = OCRResponse(
+        pages=[OCRPage(index=index, markdown=f"page {index}") for index in range(3)],
+        model=UNMAPPED_OCR_MODEL,
+        usage_info=OCRUsageInfo(pages_processed=3, pages_processed_annotation=2),
+    )
+    cost, _ = ocr_cost(
+        model=UNMAPPED_OCR_MODEL,
+        custom_llm_provider="azure_ai",
+        response=response,
+        model_info={"annotation_cost_per_page": 0.01},
+    )
+    assert cost == pytest.approx(0.01 * 2)
+
+
+def test_ocr_cost_annotation_only_override_keeps_mapped_per_page_rate():
+    from litellm.cost_calculator import ocr_cost
+
+    map_price: Final = litellm.model_cost[MAPPED_OCR_MODEL]["ocr_cost_per_page"]
+    response: Final = OCRResponse(
+        pages=[OCRPage(index=index, markdown=f"page {index}") for index in range(3)],
+        model=MAPPED_OCR_MODEL,
+        usage_info=OCRUsageInfo(pages_processed=3, pages_processed_annotation=2),
+    )
+    cost, _ = ocr_cost(
+        model=MAPPED_OCR_MODEL,
+        custom_llm_provider="mistral",
+        response=response,
+        model_info={"annotation_cost_per_page": 0.01},
+    )
+    assert cost == pytest.approx(map_price * 3 + 0.01 * 2)
+
+
+def test_ocr_cost_uses_deployment_per_credit_pricing_for_unmapped_model():
+    from litellm.cost_calculator import ocr_cost
+
+    cost, _ = ocr_cost(
+        model=UNMAPPED_OCR_MODEL,
+        custom_llm_provider="azure_ai",
+        response=_ocr_response(UNMAPPED_OCR_MODEL, pages_processed=2, credits=4),
+        model_info={"ocr_cost_per_credit": 0.25},
+    )
+    assert cost == pytest.approx(0.25 * 4)
+
+
+def test_ocr_cost_unmapped_model_without_deployment_pricing_bills_zero():
+    from litellm.cost_calculator import ocr_cost
+
+    cost, _ = ocr_cost(
+        model=UNMAPPED_OCR_MODEL,
+        custom_llm_provider="azure_ai",
+        response=_ocr_response(UNMAPPED_OCR_MODEL, pages_processed=5),
+        model_info={"id": "some-deployment-id"},
+    )
+    assert cost == 0.0
+
+
+@pytest.mark.usefixtures("_local_model_cost_map")
+def test_ocr_cost_deployment_pricing_overrides_cost_map_for_mapped_model():
+    from litellm.cost_calculator import ocr_cost
+
+    map_price: Final = litellm.get_model_info(MAPPED_OCR_MODEL)["ocr_cost_per_page"]
+    assert map_price is not None
+    override_price: Final = map_price * 10
+
+    cost, _ = ocr_cost(
+        model=MAPPED_OCR_MODEL,
+        custom_llm_provider="mistral",
+        response=_ocr_response(MAPPED_OCR_MODEL, pages_processed=2),
+        model_info={"ocr_cost_per_page": override_price},
+    )
+    assert cost == pytest.approx(override_price * 2)
+
+
+@pytest.mark.usefixtures("_local_model_cost_map")
+def test_ocr_cost_falls_through_to_cost_map_when_deployment_has_no_ocr_pricing():
+    from litellm.cost_calculator import ocr_cost
+
+    map_price: Final = litellm.get_model_info(MAPPED_OCR_MODEL)["ocr_cost_per_page"]
+    assert map_price is not None
+
+    cost, _ = ocr_cost(
+        model=MAPPED_OCR_MODEL,
+        custom_llm_provider="mistral",
+        response=_ocr_response(MAPPED_OCR_MODEL, pages_processed=2),
+        model_info={"id": "some-deployment-id"},
+    )
+    assert cost == pytest.approx(map_price * 2)
+
+
+@pytest.mark.usefixtures("_local_model_cost_map")
+def test_ocr_cost_ignores_deployment_credit_pricing_when_response_reports_no_credits():
+    from litellm.cost_calculator import ocr_cost
+
+    map_price: Final = litellm.get_model_info(MAPPED_OCR_MODEL)["ocr_cost_per_page"]
+    assert map_price is not None
+
+    cost, _ = ocr_cost(
+        model=MAPPED_OCR_MODEL,
+        custom_llm_provider="mistral",
+        response=_ocr_response(MAPPED_OCR_MODEL, pages_processed=2),
+        model_info={"ocr_cost_per_credit": 0.5},
+    )
+    assert cost == pytest.approx(map_price * 2)
+
+
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+def test_completion_cost_ocr_reads_deployment_pricing_from_logging_metadata(metadata_key: str):
+    logging_obj = _ocr_logging_obj({metadata_key: {"model_info": {"ocr_cost_per_page": 0.004}}})
+
+    cost = completion_cost(
+        completion_response=_ocr_response(UNMAPPED_OCR_MODEL, pages_processed=3),
+        model=UNMAPPED_OCR_MODEL,
+        custom_llm_provider="azure_ai",
+        call_type="ocr",
+        custom_pricing=True,
+        litellm_logging_obj=logging_obj,
+    )
+    assert cost == pytest.approx(0.004 * 3)
+
+
+def test_completion_cost_ocr_prefers_pricing_registered_under_router_model_id(monkeypatch: pytest.MonkeyPatch):
+    deployment_id: Final = "ocr-deployment-priced-through-litellm-params"
+    monkeypatch.setitem(
+        litellm.model_cost, deployment_id, {"mode": "ocr", "litellm_provider": "azure_ai", "ocr_cost_per_page": 0.05}
+    )
+    logging_obj = _ocr_logging_obj({"metadata": {"model_info": {"mode": "ocr"}}})
+
+    cost = completion_cost(
+        completion_response=_ocr_response(UNMAPPED_OCR_MODEL, pages_processed=3),
+        model=UNMAPPED_OCR_MODEL,
+        custom_llm_provider="azure_ai",
+        call_type="ocr",
+        custom_pricing=True,
+        router_model_id=deployment_id,
+        litellm_logging_obj=logging_obj,
+    )
+    assert cost == pytest.approx(0.05 * 3)
+
+
+def test_completion_cost_ocr_bills_request_level_pricing_for_direct_sdk_call():
+    logging_obj = _ocr_logging_obj({"ocr_cost_per_page": 0.05})
+
+    cost = completion_cost(
+        completion_response=_ocr_response(UNMAPPED_OCR_MODEL, pages_processed=3),
+        model=UNMAPPED_OCR_MODEL,
+        custom_llm_provider="azure_ai",
+        call_type="ocr",
+        custom_pricing=True,
+        litellm_logging_obj=logging_obj,
+    )
+    assert cost == pytest.approx(0.05 * 3)
+
+
+def test_completion_cost_ocr_request_level_pricing_fills_in_deployment_model_info_without_ocr_pricing():
+    logging_obj = _ocr_logging_obj({"ocr_cost_per_page": 0.05, "metadata": {"model_info": {"mode": "ocr"}}})
+
+    cost = completion_cost(
+        completion_response=_ocr_response(UNMAPPED_OCR_MODEL, pages_processed=3),
+        model=UNMAPPED_OCR_MODEL,
+        custom_llm_provider="azure_ai",
+        call_type="ocr",
+        custom_pricing=True,
+        litellm_logging_obj=logging_obj,
+    )
+    assert cost == pytest.approx(0.05 * 3)
+
+
+def test_completion_cost_ocr_ignores_deployment_pricing_without_custom_pricing_flag():
+    logging_obj = _ocr_logging_obj({"metadata": {"model_info": {"ocr_cost_per_page": 0.004}}})
+
+    cost = completion_cost(
+        completion_response=_ocr_response(UNMAPPED_OCR_MODEL, pages_processed=3),
+        model=UNMAPPED_OCR_MODEL,
+        custom_llm_provider="azure_ai",
+        call_type="ocr",
+        custom_pricing=False,
+        litellm_logging_obj=logging_obj,
+    )
+    assert cost == 0.0

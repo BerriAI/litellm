@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cva.config";
+import { orgDetailHref } from "@/utils/entityLinks";
 import { copyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils";
 
 import { Team } from "../key_team_helpers/key_list";
@@ -183,8 +184,8 @@ export const getTeamTableColumns = ({
         const displayValue = org?.organization_alias || orgId;
         const width = info.cell.column.getSize();
         return (
-          <span className="block truncate text-sm" style={{ maxWidth: width }} title={displayValue}>
-            {displayValue}
+          <span className="block" style={{ maxWidth: width }} title={displayValue}>
+            <IdentityCell title={displayValue} titleClassName="text-sm font-normal" href={orgDetailHref(orgId)} />
           </span>
         );
       },
