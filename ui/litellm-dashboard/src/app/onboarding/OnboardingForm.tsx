@@ -3,7 +3,7 @@ import React from "react";
 import { useSearchParams } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 import { useOnboardingCredentials, useClaimOnboardingToken } from "@/app/(dashboard)/hooks/onboarding/useOnboarding";
-import { getProxyBaseUrl } from "@/components/networking";
+import { getProxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
 import { clearTokenCookies, storeLoginToken } from "@/utils/cookieUtils";
 import { OnboardingLoadingView } from "./OnboardingLoadingView";
 import { OnboardingErrorView } from "./OnboardingErrorView";
@@ -30,11 +30,16 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
   const userEmail: string = decoded?.user_email ?? "";
   const userId: string | null = decoded?.user_id ?? null;
   const accessToken: string | null = decoded?.key ?? null;
+  const authHeaderName: string | null = decoded?.auth_header_name ?? null;
 
   const handleSubmit = (formValues: { password: string }) => {
     if (!accessToken || !userId || !inviteId) return;
 
     setClaimError(null);
+
+    if (authHeaderName) {
+      setGlobalLitellmHeaderName(authHeaderName);
+    }
 
     claimToken(
       { accessToken, inviteId, userId, password: formValues.password },
