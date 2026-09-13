@@ -37,6 +37,18 @@ class PromptSecurityGuardrailMissingSecrets(Exception):
     pass
 
 
+def _inputs_with_modifications(
+    inputs: GenericGuardrailAPIInputs,
+    modified_texts: list[str],
+    rewritten_messages: Sequence[AllMessageValues] | None,
+) -> GenericGuardrailAPIInputs:
+    texts_patch: Final[GenericGuardrailAPIInputs] = {"texts": modified_texts} if modified_texts else {}
+    messages_patch: Final[GenericGuardrailAPIInputs] = (
+        {"structured_messages": list(rewritten_messages)} if rewritten_messages is not None else {}
+    )
+    return {**inputs, **texts_patch, **messages_patch}
+
+
 class _ProtectVerdict(TypedDict, total=False):
     """One side (``prompt`` or ``response``) of an ``/api/protect`` verdict."""
 
@@ -280,14 +292,11 @@ class PromptSecurityGuardrail(CustomGuardrail):
             )
         elif action == "modify":
             modified_messages: Final = result.get("modified_messages", [])
-            modified_texts: Final = self._extract_texts_from_messages(modified_messages)
-            if modified_texts:
-                inputs["texts"] = modified_texts
-            rewritten_messages: Final = self._structured_messages_with_modifications(
-                structured_messages, modified_messages
+            return _inputs_with_modifications(
+                inputs,
+                self._extract_texts_from_messages(modified_messages),
+                self._structured_messages_with_modifications(structured_messages, modified_messages),
             )
-            if rewritten_messages is not None:
-                inputs["structured_messages"] = list(rewritten_messages)  # mutable-ok: guardrail inputs take a list
 
         return inputs
 
