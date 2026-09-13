@@ -152,9 +152,8 @@ describe("BudgetTable", () => {
   });
 
   it("should show n/a for missing rate limits and Unlimited for a missing max budget", () => {
-    const list = makeList({
-      rows: [makeBudget({ max_budget: null, tpm_limit: null, rpm_limit: null, tpd_limit: null })],
-    });
+    const noLimits = { max_budget: null, tpm_limit: null, rpm_limit: null, tpd_limit: null };
+    const list = makeList({ rows: [makeBudget(noLimits)] });
     renderWithProviders(<BudgetTable {...defaultProps} list={list} />);
     expect(screen.getAllByText("n/a")).toHaveLength(3);
     expect(screen.getByText("Unlimited")).toBeInTheDocument();
