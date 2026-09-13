@@ -32,9 +32,7 @@ def _fake_migrate_deploy_failure(returncode: int, stderr: str):
 def test_v2_p3018_permission_error_raises_runtime_error(monkeypatch, tmp_path):
     """v2: a permission failure during migrate deploy raises RuntimeError."""
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
-    monkeypatch.setattr(
-        ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None
-    )
+    monkeypatch.setattr(ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None)
     monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
     (tmp_path / "schema.prisma").write_text("// stub")
 
@@ -50,9 +48,7 @@ def test_v2_p3018_permission_error_raises_runtime_error(monkeypatch, tmp_path):
 def test_v2_non_idempotent_p3009_raises_runtime_error(monkeypatch, tmp_path):
     """v2: a non-idempotent migration failure raises (no silent recovery)."""
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
-    monkeypatch.setattr(
-        ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None
-    )
+    monkeypatch.setattr(ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None)
     monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
     (tmp_path / "schema.prisma").write_text("// stub")
 
@@ -61,7 +57,7 @@ def test_v2_non_idempotent_p3009_raises_runtime_error(monkeypatch, tmp_path):
         'Reason: syntax error at or near "BRKN" LINE 42'
     )
     with patch("litellm_proxy_extras.prisma_toolchain.run_prisma", side_effect=_fake_migrate_deploy_failure(1, stderr)):
-        with pytest.raises(RuntimeError, match="cannot be auto-recovered"):
+        with pytest.raises(RuntimeError, match="Migration completion could not be verified"):
             ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
 
 
@@ -176,51 +172,33 @@ def test_v2_warn_ahead_of_head_swallows_db_errors(monkeypatch, tmp_path):
     ProxyExtrasDBManager._warn_if_db_ahead_of_head(str(tmp_path))
 
 
-def test_v2_resolve_specific_migration_failure_raises_runtime_error(
-    monkeypatch, tmp_path
-):
-    """If marking a migration as applied fails inside P3009 idempotent
-    recovery, the subprocess error must be re-raised as RuntimeError so
-    proxy_cli.py catches it cleanly (instead of leaking CalledProcessError)."""
+def test_v2_duplicate_object_p3009_is_not_marked_applied(monkeypatch, tmp_path):
+    _stub_v2_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(ProxyExtrasDBManager, "_failed_migration_logs", lambda name: "relation already exists")
     monkeypatch.setattr(
-        ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None
+        ProxyExtrasDBManager,
+        "_v2_roll_back_migration_best_effort",
+        lambda name: pytest.fail("duplicate-object errors do not prove rollback is safe"),
     )
-    monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
-    (tmp_path / "schema.prisma").write_text("// stub")
     monkeypatch.setattr(
-        ProxyExtrasDBManager, "_roll_back_migration", lambda *a, **kw: None
+        ProxyExtrasDBManager,
+        "_resolve_specific_migration",
+        lambda name: pytest.fail("duplicate-object errors do not prove all SQL completed"),
     )
-
-    # First call: migrate deploy -> P3009 idempotent error.
-    # Recovery path tries _resolve_specific_migration; that also raises.
-    def _failing_resolve(*a, **kw):
-        raise subprocess.CalledProcessError(
-            returncode=1,
-            cmd="prisma migrate resolve --applied",
-            stderr="resolve failed",
-            output="",
-        )
-
-    monkeypatch.setattr(
-        ProxyExtrasDBManager, "_resolve_specific_migration", _failing_resolve
-    )
-
-    stderr = (
-        "Error: P3009\nMigration `20260101000000_some_migration` failed\n"
-        "relation already exists"
-    )
-    with patch("litellm_proxy_extras.prisma_toolchain.run_prisma", side_effect=_fake_migrate_deploy_failure(1, stderr)):
-        with pytest.raises(
-            RuntimeError, match="Failed to mark migration .* as applied"
-        ):
+    stderr = "Error: P3009\nMigration `20260101000000_some_migration` failed\nrelation already exists"
+    with patch(
+        "litellm_proxy_extras.prisma_toolchain.run_prisma", side_effect=_fake_migrate_deploy_failure(1, stderr)
+    ) as run:
+        with pytest.raises(RuntimeError, match="Migration completion could not be verified"):
             ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+    assert tuple(call.args[0][1:] for call in run.call_args_list if "migrate" in call.args[0]) == (
+        ["migrate", "deploy"],
+    )
 
 
 def test_v2_does_not_call_resolve_all_migrations(monkeypatch, tmp_path):
     """v2 must never call _resolve_all_migrations — that's the bug it fixes."""
-    monkeypatch.setattr(
-        ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None
-    )
+    monkeypatch.setattr(ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None)
     monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
     (tmp_path / "schema.prisma").write_text("// stub")
 
@@ -252,9 +230,7 @@ _DEADLOCK_P3018_STDERR = (
 
 def _stub_v2_env(monkeypatch, tmp_path):
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
-    monkeypatch.setattr(
-        ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None
-    )
+    monkeypatch.setattr(ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None)
     monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
     (tmp_path / "schema.prisma").write_text("// stub")
     monkeypatch.setattr("time.sleep", lambda _: None)
@@ -272,9 +248,7 @@ def _succeed_after(failures: int, stderr: str):
             return _OkResult()
         calls["n"] += 1
         if calls["n"] <= failures:
-            raise subprocess.CalledProcessError(
-                returncode=1, cmd=args[0], stderr=stderr, output=""
-            )
+            raise subprocess.CalledProcessError(returncode=1, cmd=args[0], stderr=stderr, output="")
         return _OkResult()
 
     return _run
@@ -288,7 +262,7 @@ def test_v2_p3018_deadlock_rolls_back_and_retries(monkeypatch, tmp_path):
     rolled_back = []
     monkeypatch.setattr(
         ProxyExtrasDBManager,
-        "_roll_back_migration",
+        "_v2_roll_back_migration_best_effort",
         lambda name: rolled_back.append(name),
     )
     monkeypatch.setattr(
@@ -306,7 +280,7 @@ def test_v2_p3018_deadlock_rolls_back_and_retries(monkeypatch, tmp_path):
 def test_v2_p3018_persistent_deadlock_exhausts_attempts(monkeypatch, tmp_path):
     """v2: a deadlock on every attempt still fails after the retry budget."""
     _stub_v2_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(ProxyExtrasDBManager, "_roll_back_migration", lambda name: None)
+    monkeypatch.setattr(ProxyExtrasDBManager, "_v2_roll_back_migration_best_effort", lambda name: None)
 
     with patch(
         "litellm_proxy_extras.prisma_toolchain.run_prisma",
@@ -335,7 +309,7 @@ def test_v2_p3009_deadlocked_ledger_row_rolls_back_and_retries(monkeypatch, tmp_
     rolled_back = []
     monkeypatch.setattr(
         ProxyExtrasDBManager,
-        "_roll_back_migration",
+        "_v2_roll_back_migration_best_effort",
         lambda name: rolled_back.append(name),
     )
     monkeypatch.setattr(
@@ -350,10 +324,8 @@ def test_v2_p3009_deadlocked_ledger_row_rolls_back_and_retries(monkeypatch, tmp_
     assert rolled_back == ["20260415120000_health_check_latest_per_model_index"]
 
 
-def test_v2_p3009_empty_ledger_logs_rolls_back_and_retries(monkeypatch, tmp_path):
-    """v2: empty failed ledger logs mean a concurrent deploy moved it on."""
+def test_v2_p3009_empty_ledger_logs_do_not_prove_completion(monkeypatch, tmp_path):
     _stub_v2_env(monkeypatch, tmp_path)
-
     stderr = (
         "Error: P3009\n"
         "migrate found failed migrations in the target database\n"
@@ -361,22 +333,19 @@ def test_v2_p3009_empty_ledger_logs_rolls_back_and_retries(monkeypatch, tmp_path
         "started at 2026-09-01 18:46:13 UTC failed"
     )
     monkeypatch.setattr(ProxyExtrasDBManager, "_failed_migration_logs", lambda name: "")
-    rolled_back = []
     monkeypatch.setattr(
         ProxyExtrasDBManager,
-        "_roll_back_migration",
-        lambda name: rolled_back.append(name),
+        "_v2_roll_back_migration_best_effort",
+        lambda name: pytest.fail("empty logs do not prove rollback is safe"),
     )
-    monkeypatch.setattr(
-        ProxyExtrasDBManager,
-        "_resolve_specific_migration",
-        lambda name: pytest.fail("a deadlocked migration must never be marked applied"),
+    with patch(
+        "litellm_proxy_extras.prisma_toolchain.run_prisma", side_effect=_fake_migrate_deploy_failure(1, stderr)
+    ) as run:
+        with pytest.raises(RuntimeError, match="Migration completion could not be verified"):
+            ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+    assert tuple(call.args[0][1:] for call in run.call_args_list if "migrate" in call.args[0]) == (
+        ["migrate", "deploy"],
     )
-    monkeypatch.setattr("litellm_proxy_extras.prisma_toolchain.run_prisma", _succeed_after(1, stderr))
-
-    ok = ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
-    assert ok is True
-    assert rolled_back == ["20260415120000_health_check_latest_per_model_index"]
 
 
 def test_v2_p3009_unreadable_ledger_still_raises(monkeypatch, tmp_path):
@@ -392,12 +361,12 @@ def test_v2_p3009_unreadable_ledger_still_raises(monkeypatch, tmp_path):
     monkeypatch.setattr(ProxyExtrasDBManager, "_failed_migration_logs", lambda name: None)
     monkeypatch.setattr(
         ProxyExtrasDBManager,
-        "_roll_back_migration",
+        "_v2_roll_back_migration_best_effort",
         lambda name: pytest.fail("an unreadable ledger must not trigger a retry"),
     )
     monkeypatch.setattr("litellm_proxy_extras.prisma_toolchain.run_prisma", _succeed_after(1, stderr))
 
-    with pytest.raises(RuntimeError, match="cannot be auto-recovered"):
+    with pytest.raises(RuntimeError, match="Migration completion could not be verified"):
         ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
 
 
@@ -418,7 +387,7 @@ def test_v2_p3009_non_deadlock_ledger_row_still_raises(monkeypatch, tmp_path):
     )
 
     with patch("litellm_proxy_extras.prisma_toolchain.run_prisma", side_effect=_fake_migrate_deploy_failure(1, stderr)):
-        with pytest.raises(RuntimeError, match="cannot be auto-recovered"):
+        with pytest.raises(RuntimeError, match="Migration completion could not be verified"):
             ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
 
 
