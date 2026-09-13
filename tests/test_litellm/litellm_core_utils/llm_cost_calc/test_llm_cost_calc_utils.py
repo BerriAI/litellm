@@ -5275,3 +5275,31 @@ def test_cache_read_breakdown_splits_cached_audio_at_the_audio_cache_rate(_local
     assert breakdown.rates is not None
     assert breakdown.rates.cache_read_input_audio_token_cost == pytest.approx(3e-7)
     assert prompt_cost == pytest.approx((1693 - 896) * 6e-7 + (3170 - 1920) * 1e-5 + breakdown.cache_read_cost)
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected_prompt_cost"),
+    (
+        pytest.param("azure/gpt-realtime-2025-08-28", "azure", 300 * 4e-6 + 100 * 4e-7 + 200 * 3.2e-5 + 400 * 4e-7, id="azure-gpt-realtime"),
+        pytest.param("azure/gpt-realtime-1.5-2026-02-23", "azure", 300 * 4e-6 + 100 * 4e-7 + 200 * 3.2e-5 + 400 * 4e-7, id="azure-gpt-realtime-1.5"),
+        pytest.param("azure/gpt-realtime-mini", "azure", 300 * 6e-7 + 100 * 6e-8 + 200 * 1e-5 + 400 * 3e-7, id="azure-gpt-realtime-mini"),
+        pytest.param("gpt-realtime-mini", "openai", 300 * 6e-7 + 100 * 6e-8 + 200 * 1e-5 + 400 * 3e-7, id="openai-gpt-realtime-mini"),
+    ),
+)
+def test_realtime_models_bill_cached_text_and_audio_at_their_cache_read_rates(
+    _local_model_cost_map: None, model: str, custom_llm_provider: str, expected_prompt_cost: float
+) -> None:
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=400,
+            audio_tokens=600,
+            cached_tokens=500,
+            cached_tokens_details={"text_tokens": 100, "audio_tokens": 400},
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(model=model, usage=usage, custom_llm_provider=custom_llm_provider)
+    assert prompt_cost == pytest.approx(expected_prompt_cost)
