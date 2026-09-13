@@ -1,8 +1,6 @@
-
 import pytest
 
-
-from litellm.llms.fireworks_ai.common_utils import resolve_fireworks_resource_name
+from litellm.llms.fireworks_ai.common_utils import fireworks_cost_map_key, resolve_fireworks_resource_name
 
 
 @pytest.mark.parametrize(
@@ -43,3 +41,15 @@ from litellm.llms.fireworks_ai.common_utils import resolve_fireworks_resource_na
 )
 def test_resolve_fireworks_resource_name(model, expected):
     assert resolve_fireworks_resource_name(model) == expected
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("deepseek-r1", "fireworks_ai/accounts/fireworks/models/deepseek-r1"),
+        ("glm-5p3-fast", "fireworks_ai/accounts/fireworks/routers/glm-5p3-fast"),
+        ("accounts/fireworks/models/deepseek-r1", "fireworks_ai/accounts/fireworks/models/deepseek-r1"),
+    ],
+)
+def test_fireworks_cost_map_key(model: str, expected: str) -> None:
+    assert fireworks_cost_map_key(model) == expected
