@@ -1341,6 +1341,257 @@ def _emit(logger: LangFuseLogger, *, metadata=None, headers=None):
     )
 
 
+@pytest.mark.parametrize("level", ["DEFAULT", "ERROR"])
+@pytest.mark.parametrize(
+    "headers,metadata,expected_id",
+    [
+        ({"x-litellm-session-id": "session-7125"}, {}, "call"),
+        ({"X-Claude-Code-Session-Id": "session-7125"}, {}, "call"),
+        ({"x-session-id": "session-7125"}, {}, "call"),
+        ({"session-id": "session-7125", "user-agent": "codex_cli_rs/1.0"}, {}, "call"),
+        ({"thread-id": "session-7125", "user-agent": "codex-tui"}, {}, "call"),
+        ({"session_id": "session-7125", "user-agent": "Codex 1.0"}, {}, "call"),
+        ({"conversation_id": "session-7125", "user-agent": "codex_vscode/1.0"}, {}, "call"),
+        ({"x-litellm-session-id": "short"}, {}, "call"),
+        ({"x-litellm-trace-id": "session-7125"}, {}, "session-7125"),
+        (
+            {"X-LiteLLM-Trace-Id": "session-7125", "x-litellm-session-id": "session-7125"},
+            {},
+            "session-7125",
+        ),
+        (
+            {"x-litellm-session-id": "session-7125", "langfuse_trace_id": "session-7125"},
+            {},
+            "session-7125",
+        ),
+        (
+            {"x-litellm-session-id": "session-7125", "langfuse_trace_id": "explicit-trace"},
+            {},
+            "explicit-trace",
+        ),
+        (
+            {"x-litellm-session-id": "session-7125", "langfuse_existing_trace_id": "existing-trace"},
+            {},
+            "existing-trace",
+        ),
+        (
+            {"x-litellm-session-id": "session-7125", "langfuse_session_id": "custom-session"},
+            {},
+            "call",
+        ),
+        (
+            {"x-litellm-session-id": "short", "langfuse_session_id": "custom-session"},
+            {},
+            "call",
+        ),
+        (
+            {"X-Claude-Code-Session-Id": "session-7125", "langfuse_session_id": "custom-session"},
+            {},
+            "call",
+        ),
+        (
+            {"x-session-id": "session-7125", "langfuse_session_id": "custom-session"},
+            {},
+            "call",
+        ),
+        (
+            {
+                "session-id": "session-7125",
+                "user-agent": "codex_cli_rs/1.0",
+                "langfuse_session_id": "custom-session",
+            },
+            {},
+            "call",
+        ),
+        (
+            {
+                "x-litellm-session-id": "session-7125",
+                "langfuse_session_id": "custom-session",
+                "x-litellm-trace-id": "explicit-trace",
+            },
+            {},
+            "explicit-trace",
+        ),
+        (
+            {
+                "x-litellm-session-id": "session-7125",
+                "langfuse_session_id": "custom-session",
+                "langfuse_trace_id": "explicit-trace",
+            },
+            {},
+            "explicit-trace",
+        ),
+        (
+            {
+                "x-litellm-session-id": "session-7125",
+                "langfuse_session_id": "custom-session",
+                "langfuse_existing_trace_id": "existing-trace",
+            },
+            {},
+            "existing-trace",
+        ),
+        ({}, {"trace_id": "session-7125", "session_id": "session-7125"}, "session-7125"),
+        ({}, {"trace_id": "explicit-trace", "session_id": "session-7125"}, "explicit-trace"),
+        (
+            {"x-vendor-session-id": "short"},
+            {"trace_id": "short", "session_id": "short"},
+            "short",
+        ),
+        (
+            {"x-session-id": "invalid value"},
+            {"trace_id": "invalid value", "session_id": "invalid value"},
+            "invalid value",
+        ),
+        (
+            {"session-id": "session-7125", "user-agent": "codexfoo/1.0"},
+            {"trace_id": "session-7125", "session_id": "session-7125"},
+            "session-7125",
+        ),
+        (
+            {"x-vendor-session-id": "short"},
+            {"trace_id": "session-7125", "session_id": "session-7125"},
+            "session-7125",
+        ),
+        ({}, {}, "call"),
+    ],
+)
+def test_session_header_trace_provenance(headers, metadata, expected_id, level):
+    from starlette.datastructures import Headers
+
+    from litellm.proxy.litellm_pre_call_utils import (
+        LiteLLMProxyRequestSetup,
+        clean_headers,
+        redact_credential_headers,
+    )
+
+    logger: Final = _steering_logger()
+    for turn in range(2):
+        call_id = f"call-{turn}"
+        request_headers = Headers(headers)
+        data = LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers=request_headers, data={"metadata": dict(metadata)}, _metadata_variable_name="metadata"
+        )
+        original_metadata = dict(data["metadata"])
+        now = datetime.datetime.now()
+        result = logger.log_event_on_langfuse(
+            kwargs={
+                "call_type": "completion",
+                "litellm_call_id": call_id,
+                "litellm_trace_id": data.get("litellm_trace_id"),
+                "litellm_params": {
+                    "metadata": data["metadata"],
+                    "proxy_server_request": {"headers": redact_credential_headers(clean_headers(request_headers))},
+                },
+                "messages": [{"role": "user", "content": f"turn {turn}"}],
+                "optional_params": {},
+            },
+            response_obj=(
+                None
+                if level == "ERROR"
+                else litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "OK"}}])
+            ),
+            start_time=now,
+            end_time=now,
+            level=level,
+            status_message="provider error" if level == "ERROR" else None,
+        )
+        trace_params = logger.Langfuse.trace.call_args.kwargs
+        assert trace_params["id"] == (call_id if expected_id == "call" else expected_id)
+        assert result["trace_id"] == trace_params["id"]
+        if expected_id != "existing-trace":
+            assert trace_params["session_id"] == headers.get("langfuse_session_id", original_metadata.get("session_id"))
+        steering = {key[len("langfuse_") :]: value for key, value in headers.items() if key.startswith("langfuse_")}
+        assert data["metadata"] == {**original_metadata, **steering}
+
+
+def test_session_header_trace_without_call_id_keeps_session_alias():
+    logger: Final = _steering_logger()
+    now: Final = datetime.datetime.now()
+
+    result: Final = logger.log_event_on_langfuse(
+        kwargs={
+            "call_type": "completion",
+            "litellm_call_id": "",
+            "litellm_params": {
+                "metadata": {"trace_id": "session-7125", "session_id": "session-7125"},
+                "proxy_server_request": {"headers": {"x-litellm-session-id": "session-7125"}},
+            },
+            "messages": [{"role": "user", "content": "no call id"}],
+            "optional_params": {},
+        },
+        response_obj=litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "OK"}}]),
+        start_time=now,
+        end_time=now,
+    )
+
+    assert logger.Langfuse.trace.call_args.kwargs["id"] == "session-7125"
+    assert result["trace_id"] == "session-7125"
+
+
+def test_every_proxy_session_header_shape_is_classified_as_a_session_alias():
+    """The classifier must cover every header shape the proxy turns into a chain id."""
+    from litellm.integrations.langfuse.langfuse import _is_session_header_trace
+    from litellm.proxy.litellm_pre_call_utils import (
+        _CODEX_SESSION_ID_HEADERS,
+        get_chain_id_from_headers,
+    )
+
+    session: Final = "session-7125-abcdef"
+    session_shapes: Final = (
+        {"x-litellm-session-id": session},
+        {"X-Claude-Code-Session-Id": session},
+        {"x-session-id": session},
+        *({header: session, "user-agent": "codex_cli_rs/1.0"} for header in _CODEX_SESSION_ID_HEADERS),
+    )
+    for headers in session_shapes:
+        assert get_chain_id_from_headers(dict(headers)) == session, headers
+        assert _is_session_header_trace(session, session, {"headers": headers}) is True, headers
+
+    explicit_trace: Final = {"x-litellm-trace-id": session, "x-litellm-session-id": session}
+    assert get_chain_id_from_headers(dict(explicit_trace)) == session
+    assert _is_session_header_trace(session, session, {"headers": explicit_trace}) is False
+
+
+@pytest.mark.parametrize(
+    "proxy_server_request",
+    [None, {}, {"headers": None}],
+    ids=["no-proxy-request", "no-headers-key", "null-headers"],
+)
+def test_sdk_caller_without_request_headers_keeps_its_trace(proxy_server_request):
+    """A direct SDK caller has no request headers, so a session-shaped trace id stays the caller's."""
+    logger: Final = _steering_logger()
+    now: Final = datetime.datetime.now()
+
+    result: Final = logger.log_event_on_langfuse(
+        kwargs={
+            "call_type": "completion",
+            "litellm_call_id": "call-0",
+            "litellm_params": {
+                "metadata": {"trace_id": "session-7125", "session_id": "session-7125"},
+                "proxy_server_request": proxy_server_request,
+            },
+            "messages": [{"role": "user", "content": "sdk turn"}],
+            "optional_params": {},
+        },
+        response_obj=litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "OK"}}]),
+        start_time=now,
+        end_time=now,
+    )
+
+    assert logger.Langfuse.trace.call_args.kwargs["id"] == "session-7125"
+    assert result["trace_id"] == "session-7125"
+
+
+def test_session_header_classifier_survives_non_string_header_keys():
+    """A non-string header key must not cost the caller its whole trace."""
+    from litellm.integrations.langfuse.langfuse import _is_session_header_trace
+
+    session: Final = "session-7125-abcdef"
+    headers: Final = {7: "numeric key", "x-litellm-session-id": session}
+    assert _is_session_header_trace(session, session, {"headers": headers}) is True
+    assert _is_session_header_trace(session, session, {"headers": {7: "numeric key"}}) is False
+
+
 def test_mask_input_header_false_keeps_the_prompt():
     logger = _steering_logger()
 

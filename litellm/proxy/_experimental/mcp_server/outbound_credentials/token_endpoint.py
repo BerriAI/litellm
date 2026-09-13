@@ -121,6 +121,23 @@ class TokenEndpointClient:
         return Ok(ExchangedToken(access_token=parsed.access_token, expires_in=parsed.expires_in))
 
 
+class _KeyGuard:
+    """The per-key single-flight lock plus the invalidation generation that lock protects.
+
+    Both live on one object so their lifetimes cannot diverge. `get_or_compute` binds the guard to
+    a local for its whole critical section, which keeps the weak map's entry alive for as long as
+    that compute could still write; an `invalidate` overlapping the compute therefore reaches the
+    very same object and its bump is guaranteed to be observed. Conversely a guard nobody holds is
+    collectible precisely because no write is outstanding for it to fence.
+    """
+
+    __slots__ = ("__weakref__", "generation", "lock")
+
+    def __init__(self) -> None:
+        self.lock = asyncio.Lock()
+        self.generation = 0
+
+
 class ExchangedTokenCache:
     """Memoizes the final token string per key, single-flighting concurrent misses on one lock."""
 
@@ -129,7 +146,7 @@ class ExchangedTokenCache:
             max_size_in_memory=MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE,
             default_ttl=MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL,
         )
-        self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
+        self._guards: weakref.WeakValueDictionary[str, _KeyGuard] = weakref.WeakValueDictionary()
 
     async def get_or_compute(
         self,
@@ -144,28 +161,50 @@ class ExchangedTokenCache:
         guaranteeing the token it gets back was minted for the *current* inputs: a stored entry
         whose fingerprint differs reads as a miss and is re-minted over. That keeps eviction
         addressable without the key having to encode the credential material it protects.
+
+        An `invalidate` landing while `compute` is in flight wins over that compute's write. The
+        token is still returned to the caller it was minted for, but it is not stored, so the next
+        resolution re-mints rather than serving a bearer that predates the invalidation for the
+        rest of its TTL.
         """
         cached = self._get(cache_key, fingerprint)
         if cached is not None:
             return Ok(cached)
-        async with self._lock(cache_key):
+        guard = self._guard(cache_key)
+        async with guard.lock:
             cached = self._get(cache_key, fingerprint)
             if cached is not None:
                 return Ok(cached)
+            generation = guard.generation
             match await compute():
                 case Ok(token):
-                    self._cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
-                        cache_key,
-                        (fingerprint, token.access_token),
-                        ttl=_cache_ttl_seconds(token.expires_in),
-                    )
+                    if guard.generation == generation:
+                        self._store(cache_key, fingerprint, token)
                     return Ok(token.access_token)
                 case Error(err):
                     return Error(err)
 
     def invalidate(self, cache_key: str) -> None:
-        """Evict one cached token so the next `get_or_compute` re-mints (e.g. after an upstream 401)."""
+        """Evict one cached token so the next `get_or_compute` re-mints (e.g. after an upstream 401).
+
+        Bumping the guard's generation is what makes the eviction stick against a compute already
+        awaiting the token endpoint: that compute snapshotted the old generation and so skips its
+        write. No guard means no compute is in flight, since an in-flight one pins its own.
+
+        Stays synchronous: callers invalidate from plain `def`s.
+        """
         self._cache.delete_cache(cache_key)  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
+        guard = self._guards.get(cache_key)
+        if guard is None:
+            return
+        guard.generation += 1
+
+    def _store(self, cache_key: str, fingerprint: str, token: ExchangedToken) -> None:
+        self._cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
+            cache_key,
+            (fingerprint, token.access_token),
+            ttl=_cache_ttl_seconds(token.expires_in),
+        )
 
     def _get(self, cache_key: str, fingerprint: str) -> str | None:
         """The stored token, or None when absent or minted for different inputs.
@@ -180,12 +219,12 @@ class ExchangedTokenCache:
             return None
         return token if stored_fingerprint == fingerprint else None
 
-    def _lock(self, cache_key: str) -> asyncio.Lock:
-        lock = self._locks.get(cache_key)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._locks[cache_key] = lock
-        return lock
+    def _guard(self, cache_key: str) -> _KeyGuard:
+        guard = self._guards.get(cache_key)
+        if guard is None:
+            guard = _KeyGuard()
+            self._guards[cache_key] = guard
+        return guard
 
 
 def _cache_ttl_seconds(expires_in: int | None) -> int:

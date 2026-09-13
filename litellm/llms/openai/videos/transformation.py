@@ -571,8 +571,8 @@ class OpenAIVideoConfig(BaseVideoConfig):
 
     def _add_image_to_files(
         self,
-        files_list: list[tuple[str, Any]],
-        image: Any,
+        files_list: list[tuple[str, FileTypes]],
+        image: FileContent,
         field_name: str,
     ) -> None:
         """Add an image to the files list with appropriate content type"""

@@ -28,6 +28,7 @@ from litellm.integrations.otel import (
 )
 from litellm.integrations.otel.mappers.genai import GenAIMapper
 from litellm.integrations.otel.model import spans as spans_mod
+from litellm.integrations.otel.model.metadata import LLMCallEvent, caller_trace_name
 from litellm.integrations.otel.model.payloads import (
     LLMCallSpanData,
     RequestIdentity,
@@ -720,6 +721,70 @@ def test_request_identity_falls_back_to_legacy_team_keys():
     ident = RequestIdentity.from_payload(payload)
     assert ident.team_id == "legacy-team"
     assert ident.team_alias == "legacy"
+
+
+@pytest.mark.parametrize(
+    ("request_data", "expected"),
+    [
+        ({"proxy_server_request": {"headers": {"langfuse_trace_name": "from-header"}}}, "from-header"),
+        ({"metadata": {"trace_name": "from-body"}}, "from-body"),
+        ({"litellm_metadata": {"trace_name": "from-anthropic-body"}}, "from-anthropic-body"),
+        (
+            {
+                "proxy_server_request": {"headers": {"langfuse_trace_name": "from-header"}},
+                "metadata": {"trace_name": "from-body"},
+            },
+            "from-header",
+        ),
+        ({"proxy_server_request": {"headers": {"langfuse_trace_name": ""}}, "metadata": {"trace_name": "body"}}, "body"),
+        ({"proxy_server_request": {"headers": {}}, "metadata": {"user_api_key_team_id": "t1"}}, None),
+        ({}, None),
+    ],
+    ids=["header", "body", "anthropic-body", "header-beats-body", "blank-header-falls-through", "neither", "empty"],
+)
+def test_caller_trace_name_prefers_the_langfuse_header_over_body_metadata(request_data, expected):
+    assert caller_trace_name({"litellm_params": request_data}) == expected
+    assert LLMCallEvent.from_dict({"litellm_params": request_data}).trace_name == expected
+
+
+def test_llm_span_data_carries_the_caller_trace_name():
+    data: Final = LLMCallSpanData.from_standard_logging_payload(_sample_payload(), trace_name="nightly-eval")
+
+    assert data.trace_name == "nightly-eval"
+    assert LLMCallSpanData.from_standard_logging_payload(_sample_payload()).trace_name is None
+
+
+def test_llm_span_carries_proxy_request_route():
+    """The LLM span records the proxy route the request arrived on, so it can be
+    filtered by endpoint (``/v1/responses`` vs ``/v1/chat/completions``) without
+    joining back to the root SERVER span's ``http.route``. The value is that
+    span's ``http.route`` verbatim, so a parameterized route reports the template
+    the SERVER span reports and not the path the caller happened to send."""
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _sample_payload(metadata={"user_api_key_request_route": "/v1/responses/resp_abc123"}),
+        request_route="/v1/responses/{response_id}",
+    )
+    attrs: Final = GenAIMapper().map(data)
+
+    assert attrs[LiteLLM.REQUEST_ROUTE] == "/v1/responses/{response_id}"
+
+
+def test_llm_span_falls_back_to_the_logged_route_without_a_server_span():
+    """The route the proxy recorded at auth is the backstop for a deployment whose
+    FastAPI instrumentation never mounted: there is no server span to disagree with
+    there, and an endpoint name is worth more than an absent attribute."""
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _sample_payload(metadata={"user_api_key_request_route": "/v1/responses"})
+    )
+
+    assert GenAIMapper().map(data)[LiteLLM.REQUEST_ROUTE] == "/v1/responses"
+
+
+def test_llm_span_omits_request_route_off_the_proxy():
+    """An SDK call has no inbound route, so the key is absent rather than empty."""
+    attrs: Final = GenAIMapper().map(LLMCallSpanData.from_standard_logging_payload(_sample_payload(metadata={})))
+
+    assert LiteLLM.REQUEST_ROUTE not in attrs
 
 
 def test_guardrail_span_data_block_carries_verdict_and_error():

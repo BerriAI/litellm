@@ -60,7 +60,6 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
         """
         Set up headers with OAuth token.
         """
-        # Get access token
         access_token: Final = get_access_token(credentials=api_key, litellm_params=litellm_params)
 
         headers["Authorization"] = f"Bearer {access_token}"  # rebind-ok: mutating for OAuth setup
@@ -82,7 +81,6 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
         from litellm.types.utils import LlmProviders, ModelResponse
         from litellm.utils import ProviderConfigManager
 
-        # cost tracking only for completions and embeddings
         if "completions" in endpoint:
             provider_chat_config: Final = ProviderConfigManager.get_provider_chat_config(
                 provider=LlmProviders(custom_llm_provider),

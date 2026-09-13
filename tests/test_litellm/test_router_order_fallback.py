@@ -18,10 +18,10 @@ from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.prompt_caching_cache import PromptCachingCache
 from litellm.types.router import RouterRateLimitError
-from litellm.utils import _get_deployment_order, _get_order_filtered_deployments
+from litellm.utils import _get_deployment_order, get_order_filtered_deployments
 
 # ---------------------------------------------------------------------------
-# Unit tests for _get_order_filtered_deployments
+# Unit tests for get_order_filtered_deployments
 # ---------------------------------------------------------------------------
 
 
@@ -42,7 +42,7 @@ class TestGetOrderFilteredDeployments:
             self._make_deployment(2, "b"),
             self._make_deployment(1, "c"),
         ]
-        result = _get_order_filtered_deployments(deps)
+        result = get_order_filtered_deployments(deps)
         assert len(result) == 2
         assert all(d["model_info"]["id"] in ("a", "c") for d in result)
 
@@ -52,7 +52,7 @@ class TestGetOrderFilteredDeployments:
             self._make_deployment(2, "b"),
             self._make_deployment(3, "c"),
         ]
-        result = _get_order_filtered_deployments(deps, target_order=2)
+        result = get_order_filtered_deployments(deps, target_order=2)
         assert len(result) == 1
         assert result[0]["model_info"]["id"] == "b"
 
@@ -61,7 +61,7 @@ class TestGetOrderFilteredDeployments:
             self._make_deployment(1, "a"),
             self._make_deployment(2, "b"),
         ]
-        result = _get_order_filtered_deployments(deps, target_order=99)
+        result = get_order_filtered_deployments(deps, target_order=99)
         assert result == []
 
     def test_target_order_no_match_does_not_reselect_lower_order(self):
@@ -70,7 +70,7 @@ class TestGetOrderFilteredDeployments:
             self._make_deployment(2, "b"),
         ]
         remaining_after_pre_call = [deps[0]]
-        result = _get_order_filtered_deployments(remaining_after_pre_call, target_order=2)
+        result = get_order_filtered_deployments(remaining_after_pre_call, target_order=2)
         assert result == []
 
     def test_no_order_set_returns_all(self):
@@ -78,11 +78,11 @@ class TestGetOrderFilteredDeployments:
             self._make_deployment(None, "a"),
             self._make_deployment(None, "b"),
         ]
-        result = _get_order_filtered_deployments(deps)
+        result = get_order_filtered_deployments(deps)
         assert len(result) == 2
 
     def test_empty_list(self):
-        result = _get_order_filtered_deployments([])
+        result = get_order_filtered_deployments([])
         assert result == []
 
     def test_single_order_returns_all_with_that_order(self):
@@ -90,7 +90,7 @@ class TestGetOrderFilteredDeployments:
             self._make_deployment(1, "a"),
             self._make_deployment(1, "b"),
         ]
-        result = _get_order_filtered_deployments(deps)
+        result = get_order_filtered_deployments(deps)
         assert len(result) == 2
 
 

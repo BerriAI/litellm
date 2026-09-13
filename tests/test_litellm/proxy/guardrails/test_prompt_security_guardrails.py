@@ -31,6 +31,7 @@ def test_prompt_security_guard_config(monkeypatch: pytest.MonkeyPatch):
                     "mode": "during_call",
                     "default_on": True,
                     "file_sanitization_fail_open": False,
+                    "block_on_file_modify": False,
                 },
             }
         ],
@@ -43,9 +44,11 @@ def test_prompt_security_guard_config(monkeypatch: pytest.MonkeyPatch):
     assert registered[0].default_on is True
     assert registered[0].event_hook == "during_call"
     assert registered[0].file_sanitization_fail_open is False
+    assert registered[0].block_on_file_modify is False
     config_model = registered[0].get_config_model()
     assert config_model is not None
     assert config_model().file_sanitization_fail_open is True
+    assert config_model().block_on_file_modify is True
 
 
 def test_prompt_security_guard_config_no_api_key(monkeypatch: pytest.MonkeyPatch):
@@ -377,6 +380,121 @@ async def test_file_sanitization(monkeypatch: pytest.MonkeyPatch):
 
     # Should complete without errors and return the data
     assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_file_sanitization_modify_blocks_by_default(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
+
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard", event_hook="pre_call", default_on=True
+    )
+    csv_data = b"name,email\nAlice,alice@example.com\n"
+    item = {
+        "type": "file",
+        "file": {
+            "data": base64.b64encode(csv_data).decode(),
+            "mime_type": "text/csv",
+        },
+    }
+    upload_response = Response(
+        json={"jobId": "modify-job"},
+        status_code=200,
+        request=Request(method="POST", url="https://test.prompt.security/api/sanitizeFile"),
+    )
+    poll_response = Response(
+        json={
+            "status": "done",
+            "content": "name,email\nAlice,[REDACTED]\n",
+            "metadata": {"action": "modify", "violations": ["Sensitive Data"]},
+        },
+        status_code=200,
+        request=Request(method="GET", url="https://test.prompt.security/api/sanitizeFile"),
+    )
+
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=upload_response)):
+        with patch.object(guardrail.async_handler, "get", AsyncMock(return_value=poll_response)):
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail._process_document_item(item, None)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Document blocked by Prompt Security. Violations: Sensitive Data"
+
+
+@pytest.mark.asyncio
+async def test_standalone_image_sanitization_modify_blocks_by_default(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
+
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard", event_hook="pre_call", default_on=True
+    )
+    guardrail.poll_interval = 0
+    image_url = "data:image/png;base64," + base64.b64encode(b"image-content").decode()
+    upload_response = Response(
+        json={"jobId": "modify-image-job"},
+        status_code=200,
+        request=Request(method="POST", url="https://test.prompt.security/api/sanitizeFile"),
+    )
+    poll_response = Response(
+        json={
+            "status": "done",
+            "content": "Email: [REDACTED]",
+            "metadata": {"action": "modify", "violations": ["Sensitive Data"]},
+        },
+        status_code=200,
+        request=Request(method="GET", url="https://test.prompt.security/api/sanitizeFile"),
+    )
+
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=upload_response)):
+        with patch.object(guardrail.async_handler, "get", AsyncMock(return_value=poll_response)):
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail._process_standalone_images([image_url], None)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Image blocked by Prompt Security. Violations: Sensitive Data"
+
+
+@pytest.mark.asyncio
+async def test_file_sanitization_modify_can_rewrite_when_blocking_disabled(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
+
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard",
+        event_hook="pre_call",
+        default_on=True,
+        block_on_file_modify=False,
+    )
+    csv_data = b"name,email\nAlice,alice@example.com\n"
+    item = {
+        "type": "file",
+        "file": {
+            "data": base64.b64encode(csv_data).decode(),
+            "mime_type": "text/csv",
+        },
+    }
+    upload_response = Response(
+        json={"jobId": "modify-job"},
+        status_code=200,
+        request=Request(method="POST", url="https://test.prompt.security/api/sanitizeFile"),
+    )
+    poll_response = Response(
+        json={
+            "status": "done",
+            "content": "name,email\nAlice,[REDACTED]\n",
+            "metadata": {"action": "modify", "violations": ["Sensitive Data"]},
+        },
+        status_code=200,
+        request=Request(method="GET", url="https://test.prompt.security/api/sanitizeFile"),
+    )
+
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=upload_response)):
+        with patch.object(guardrail.async_handler, "get", AsyncMock(return_value=poll_response)):
+            result = await guardrail._process_document_item(item, None)
+
+    assert base64.b64decode(result["file"]["data"]) == b"name,email\nAlice,[REDACTED]\n"
 
 
 @pytest.mark.asyncio

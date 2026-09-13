@@ -1,0 +1,45 @@
+name: Cost map guard
+
+on: # zizmor: ignore[dangerous-triggers] runs the base branch's code only; the PR's cost map files are read as data and never executed
+  pull_request_target:
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_staging
+      - "litellm_**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  cost-map-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - name: Fetch the pull request head and its merge base
+        id: revisions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          merge_base="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BASE_SHA}...${HEAD_SHA}" --jq '.merge_base_commit.sha')"
+          git fetch --no-tags --depth=1 origin "$merge_base" "$HEAD_SHA"
+          echo "merge_base=$merge_base" >> "$GITHUB_OUTPUT"
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+      - name: Run the guard
+        env:
+          MERGE_BASE: ${{ steps.revisions.outputs.merge_base }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          uv run --frozen python ci_cd/cost_map_guard.py --base "$MERGE_BASE" --head "$HEAD_SHA" --head-ref "$HEAD_REF"

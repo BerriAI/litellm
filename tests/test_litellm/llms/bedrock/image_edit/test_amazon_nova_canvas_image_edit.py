@@ -3,6 +3,7 @@
 import base64
 import io
 from typing import cast
+from unittest.mock import Mock, patch
 
 import httpx
 import pytest
@@ -655,3 +656,23 @@ def test_transform_response_empty_images_without_error_raises():
             raw_response=resp,
             logging_obj=None,  # type: ignore[arg-type]
         )
+
+
+def test_prepare_request_bearer_token_never_runs_the_sigv4_credential_chain(monkeypatch):
+    """The deployment's AWS profile does not exist, so resolving SigV4 credentials
+    raises; a bearer-token deployment must still sign the request with the
+    bearer token alone."""
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "env-bearer-token-12345")
+
+    request = BedrockImageEdit()._prepare_request(
+        model="amazon.nova-canvas-v1:0",
+        image=[io.BytesIO(b"fake-png")],
+        prompt="make it warmer",
+        optional_params={"aws_region_name": "us-west-2", "aws_profile_name": "litellm-no-such-aws-profile"},
+        api_base=None,
+        extra_headers=None,
+        logging_obj=Mock(),
+        api_key=None,
+    )
+
+    assert request.prepped.headers["Authorization"] == "Bearer env-bearer-token-12345"

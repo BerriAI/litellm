@@ -1,8 +1,8 @@
 # Sample realtime config for the LiteLLM Rust AI Gateway.
 #
-# The gateway loads this model_list at boot via the embedded python config
-# reader (litellm.proxy.read_model_list), which reuses the proxy's own reader —
-# so include:, os.environ/ secrets, and DB-stored models all work here too.
+# litellm-config resolves this model_list at boot through the Python config
+# reader (litellm.proxy.read_model_list), then the gateway builds its router.
+# Includes, environment secrets, and database-stored models still work.
 #
 # Secrets are referenced (never inlined) via os.environ/. A real deploy can
 # override this file (e.g. mount a Render secret file at LITELLM_CONFIG_PATH).

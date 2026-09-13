@@ -2361,3 +2361,31 @@ def test_a_config_deployment_dropped_for_a_permanent_reason_is_not_retried_on_re
 
     assert router.get_model_names() == ["control-model"]
     assert router.deployment_names == names_after_boot
+
+
+def test_price_data_reload_refreshes_the_cached_model_group_and_deployment_info(monkeypatch):
+    """
+    Budget reservation reads pricing through the router's lru-cached group and
+    deployment lookups. A reload swaps the catalog without touching model_list, so
+    unless the replay clears those caches the next reservation prices against the
+    old catalog until some unrelated model-list change happens to evict it.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "grp",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k"},
+                "model_info": {"id": "dep-a"},
+            }
+        ]
+    )
+    old_price = router.cached_model_group_info("grp").input_cost_per_token
+    assert router.cached_deployment_model_info("dep-a", "openai/gpt-4o")["input_cost_per_token"] == old_price
+
+    new_price = old_price * 10
+    fresh_catalog = copy.deepcopy(litellm.model_cost)
+    fresh_catalog["gpt-4o"]["input_cost_per_token"] = new_price
+    _simulate_price_data_reload_with_provider_sets(monkeypatch, fresh_catalog)
+
+    assert router.cached_model_group_info("grp").input_cost_per_token == new_price
+    assert router.cached_deployment_model_info("dep-a", "openai/gpt-4o")["input_cost_per_token"] == new_price

@@ -39,6 +39,7 @@ from litellm.llms.base_llm.files.transformation import (
 )
 from litellm.llms.vertex_ai.common_utils import (
     _convert_vertex_datetime_to_openai_datetime,
+    get_vertex_ai_fine_tuned_endpoint_id,
 )
 from litellm.llms.vertex_ai.gemini.transformation import _transform_request_body
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -707,20 +708,39 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
     def _get_gcs_object_name_from_batch_jsonl(
         self,
         openai_jsonl_content: list[dict[str, Any]],
+        deployment_model: str | None = None,
     ) -> str:
         """
         Gets a unique GCS object name for the VertexAI batch prediction job
 
         named as: litellm-vertex-{model}-{uuid}
+
+        The stored model path decides which Vertex model the batch job later executes against, so
+        `deployment_model` (the deployment's own configured model) wins over the user-supplied
+        JSONL `body.model`; the JSONL value is only a fallback for direct SDK calls that carry no
+        deployment config.
+
+        Fine-tuned Gemini deployments (numeric endpoint ids) are stored under
+        `endpoints/<id>` so the batch transformation can round-trip them into a
+        `projects/../locations/../endpoints/<id>` batch job model instead of a
+        nonexistent publisher model.
         """
-        _model = openai_jsonl_content[0].get("body", {}).get("model", "")
-        if "publishers/google/models" not in _model:
-            _model = f"publishers/google/models/{_model}"
-        safe_model_path: Final = sanitize_cloud_object_path(_model, fallback="model")
+        raw_model: Final = (
+            deployment_model.removeprefix("vertex_ai/")
+            if deployment_model
+            else openai_jsonl_content[0].get("body", {}).get("model", "")
+        )
+        endpoint_id: Final = get_vertex_ai_fine_tuned_endpoint_id(raw_model)
+        model_path: Final = (
+            f"endpoints/{endpoint_id}"
+            if endpoint_id is not None
+            else (raw_model if "publishers/google/models" in raw_model else f"publishers/google/models/{raw_model}")
+        )
+        safe_model_path: Final = sanitize_cloud_object_path(model_path, fallback="model")
         object_name: Final = f"{VERTEX_AI_MANAGED_GCS_PREFIX}{safe_model_path}/{uuid.uuid4()}"
         return object_name
 
-    def get_object_name(self, file_data: FileTypes, purpose: str) -> str:
+    def get_object_name(self, file_data: FileTypes, purpose: str, deployment_model: str | None = None) -> str:
         """
         Get the object name for the request.
 
@@ -728,10 +748,10 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         upload is never materialized just to derive the GCS object name.
         """
         if purpose == "batch":
-            ## 1. If jsonl, derive the object name from the first entry's model
+            ## 1. If jsonl, derive the object name from the deployment model (or the first entry's)
             first_entry: Final = next(_iter_openai_jsonl_entries(file_data), None)
             if first_entry is not None:
-                return self._get_gcs_object_name_from_batch_jsonl([first_entry])
+                return self._get_gcs_object_name_from_batch_jsonl([first_entry], deployment_model=deployment_model)
 
         ## 2. If not jsonl, store under a server-generated managed object name
         filename, _ = extract_file_metadata(file_data)
@@ -761,6 +781,16 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         """
         Get the complete url for the request
         """
+        if data.get("purpose") == "batch" and litellm_params.get("custom_endpoint"):
+            raise VertexAIError(
+                status_code=400,
+                message=(
+                    "Vertex AI batch prediction is not supported for `custom_endpoint` deployments. "
+                    "The OpenAI-compatible custom endpoint path has no batch surface in LiteLLM; "
+                    "remove this deployment from the batch request (e.g. `target_model_names`) or "
+                    "use a publisher model / fine-tuned Gemini endpoint instead."
+                ),
+            )
         bucket_name = self._get_configured_bucket_name(litellm_params)
         bucket_name, object_prefix = split_configured_cloud_bucket_name(bucket_name)
         file_data: Final = data.get("file")
@@ -769,7 +799,12 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             raise ValueError("file is required")
         if purpose is None:
             raise ValueError("purpose is required")
-        object_name = self.get_object_name(file_data, purpose)
+        configured_model: Final = litellm_params.get("model")
+        object_name = self.get_object_name(
+            file_data,
+            purpose,
+            deployment_model=configured_model if isinstance(configured_model, str) else None,
+        )
         if object_prefix:
             object_name = f"{object_prefix}/{object_name}"
         encoded_object_name: Final = encode_gcs_object_name_for_url(object_name)

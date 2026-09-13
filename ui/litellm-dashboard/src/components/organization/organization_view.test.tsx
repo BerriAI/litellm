@@ -12,8 +12,7 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 
-// Mock networking calls used by the component's mutation handlers. entityLinks -> migratedPages
-// imports serverRootPath from the same module, so the mock must export it too.
+// Mock networking calls used by the component's mutation handlers.
 vi.mock("../networking", () => {
   return {
     __esModule: true,

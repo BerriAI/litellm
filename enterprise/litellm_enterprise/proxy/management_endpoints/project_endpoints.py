@@ -780,7 +780,10 @@ async def update_project(
 
         # Handle budget updates
         budget_fields = LiteLLM_BudgetTable.model_fields.keys()
-        budget_updates = {k: v for k, v in update_data.items() if k in budget_fields}
+        budget_updates = {
+            **{k: v for k, v in update_data.items() if k in budget_fields},
+            **({"max_budget": None} if "max_budget" in data.model_fields_set and data.max_budget is None else {}),
+        }
 
         if budget_updates and existing_project.budget_id:
             # Update existing budget

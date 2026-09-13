@@ -242,6 +242,149 @@ this with `litellm_license`. To tune the export cadence, set
 `LITELLM_BILLING_METRICS_EXPORT_INTERVAL_MS` through `gateway_extra_env` /
 `backend_extra_env`
 
+### Prometheus metrics sidecar
+
+`gateway_metrics_port` adds a `metrics` sidecar
+(`python -m litellm.proxy.prometheus_metrics_server`) to the gateway task that
+aggregates the workers' samples over a shared task volume, so a scrape never
+runs on an inference worker. The ALB never routes to that port and the tasks
+security group only opens it to `gateway_metrics_scrape_cidrs`. Needs
+`gateway_image` v1.101.0 or newer. See
+[Prometheus metrics](https://docs.litellm.ai/docs/proxy/prometheus) for the
+metrics themselves.
+
+```hcl
+gateway_metrics_port         = 4001
+gateway_metrics_scrape_cidrs = ["10.0.0.0/16"]
+```
+
+### In-container connection pool
+
+Each of the `gateway_num_workers` uvicorn workers opens its own Prisma pool
+straight to Postgres, so one task holds `workers x connection_limit`
+connections and the fleet's footprint against the database ceiling grows with
+every task. `gateway_connection_pool_enabled` runs a PgBouncer (transaction
+mode, loopback) inside the gateway container that all workers share, capping
+the task at `gateway_pool_max_db_connections` upstream connections however
+many workers it runs. `gateway_pool_max_client_conn` bounds the worker-side
+connections the pooler accepts. The module sets
+`LITELLM_PGBOUNCER_ENABLED`, `LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS` and
+`LITELLM_PGBOUNCER_MAX_CLIENT_CONN` on the gateway container only; the backend
+and the migration task keep the direct connection.
+
+```hcl
+gateway_num_workers             = 4
+gateway_connection_pool_enabled = true
+gateway_pool_max_db_connections = 20
+gateway_pool_max_client_conn    = 1000
+```
+
+The pool works with the module-created Aurora as well as an existing database
+via `database_url`. Against Aurora it authenticates with the same rotating IAM
+tokens the workers used to (see [Aurora + IAM auth](#aurora--iam-auth)): the
+pooler mints a token from the task role, renews it before it expires and hands
+the workers a loopback URL with a static password instead
+
+The componentized `gateway_image` starts through `python -m gateway.launch`,
+which reads these variables, starts the pooler once per task and hands the
+workers its loopback URL; the classic `litellm` image honours them the same
+way.
+
+### Scaling the gateway on requests and tokens
+
+By default the gateway service target-tracks CPU (`gateway_cpu_target`) and
+memory (`gateway_memory_target`). Two more targets add workload signals next
+to them. Application Auto Scaling evaluates every attached policy and follows
+the one asking for the most tasks, so the resource policies keep working as a
+floor while requests or tokens drive scale-out
+
+Both targets are per task per second, the way load is usually quoted (1k
+rps, 75M tok/s). CloudWatch is the limit on how fast they react: target
+tracking evaluates every metric, predefined or custom, aggregated over
+60-second periods and has no period setting, so ECS reacts on a roughly
+one-minute cadence whatever unit the variable is written in. The Kubernetes
+charts get a faster signal because the Prometheus `rate()` window and scrape
+interval are theirs to shorten
+
+`gateway_target_requests_per_second` adds an `ALBRequestCountPerTarget`
+policy on the gateway target group. The ALB publishes that metric as requests
+per minute per registered task, so the policy's target value is 60 times the
+variable: 90 rps becomes a target of 5,400 per minute. No agent or sidecar is
+needed
+
+`gateway_target_tokens_per_second` adds a metric-math policy over a
+CloudWatch metric of the gateway's `litellm_total_tokens_metric_total`
+counter and the service's `RunningTaskCount` from Container Insights. Nothing
+native to ECS carries token throughput, so you publish that metric yourself
+with the CloudWatch agent's Prometheus scraper pointed at the metrics sidecar
+above. The agent emits the delta of a counter between scrapes, so `Sum` over
+the 60-second period is the tokens served in that minute; the expression
+divides by 60 (`tokens_per_second`) and then by the task count
+(`tokens_per_second_per_task`). Tokens are counted when a response completes,
+so long streams show up late in this signal. `gateway_tokens_metric` tells the
+policy where the agent publishes: the namespace, the metric name (defaults to
+the counter name) and the dimensions from your `metric_declaration`
+
+```hcl
+gateway_metrics_port               = 4001
+gateway_target_requests_per_second = 90
+gateway_target_tokens_per_second   = 6000000
+gateway_tokens_metric = {
+  namespace  = "LiteLLM/Prometheus"
+  dimensions = { ClusterName = "acme-litellm-prod", TaskDefinitionFamily = "acme-litellm-prod-gateway" }
+}
+```
+
+Worked example for the request policy: 1,000 rps across 10 tasks is 100 rps
+per task (the ALB reports it as 6,000 per minute per target) against a target
+of 90 (5,400), so target tracking sizes the service to
+`ceil(10 * 100 / 90) = 12` tasks. The token policy does the same arithmetic:
+ten tasks handle 4,200,000,000 tokens in a minute, `tokens / 60` is
+70,000,000 tokens per second and `tokens_per_second / running_tasks` is
+7,000,000 against a target of 6,000,000, so the service grows to
+`ceil(10 * 7000000 / 6000000) = 12`. Container Insights must be enabled on the
+cluster for `RunningTaskCount` to exist
+
+### Collector sidecar
+
+`collector_enabled = true` adds a second container to the gateway task
+that runs `python -m litellm.proxy.collector` from the gateway image, and sets
+`LITELLM_COLLECTOR_ENABLED=true` on the gateway so its uvicorn workers
+ship spend events (SpendLogs writes, key/team/user spend updates, budget
+alerts) to the sidecar instead of running that pipeline in the request
+path. This is the Terraform counterpart of helm's `gateway.collector`.
+The default (`false`) leaves the task definition exactly as before.
+
+Fargate tasks share one network namespace, so the sidecar listens on
+loopback TCP (`tcp://127.0.0.1:${collector_port}`, default 4010) instead
+of the Unix socket helm uses; the proxy rejects any non-loopback address.
+The sidecar gets the same database, Redis, master-key, license, proxy
+config, and `gateway_extra_env` / `gateway_extra_secrets` values as the
+gateway container, runs with `LITELLM_JOB_ROLE=collector`, and is
+non-essential with an ECS restart policy, so a sidecar crash restarts it in
+place while the gateway falls back to in-process spend tracking. With
+`gateway_connection_pool_enabled` it also gets the `LITELLM_PGBOUNCER_*` env,
+so with a password-authenticated database (`create_database = false`) its
+Prisma client goes through the task-local PgBouncer instead of opening a
+second pool straight to the database. Under IAM token auth (the module-managed
+Aurora cluster) the collector keeps its own direct connection on purpose: the
+pooler's auth file only holds the token the gateway container minted, which
+the sidecar cannot present, so it mints its own.
+
+```hcl
+collector_enabled = true
+# collector_cpu               = 512    # carved out of gateway_cpu
+# collector_memory            = 2048   # MiB, carved out of gateway_memory
+# collector_buffer_size       = 1000
+# collector_on_unavailable    = "fallback"  # or "drop"
+# collector_drain_timeout_seconds = 10
+```
+
+Both sidecar reservations must leave room for the gateway container inside
+`gateway_cpu` / `gateway_memory` (the plan fails otherwise). Service
+autoscaling keeps tracking the whole task's CPU and memory, sidecar
+included
+
 ## Tenant deployment
 
 Every resource the stack creates is named `${tenant}-litellm-${env}` (or

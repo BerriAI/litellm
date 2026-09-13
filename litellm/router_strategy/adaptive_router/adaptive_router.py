@@ -123,7 +123,12 @@ class AdaptiveRouter:
                 self._cells[(rt, model)] = initial_cell(prefs, rt)
 
     async def load_state_from_db(self, prisma_client: Any) -> None:
-        """Override cold-start cells with persisted state. Called once at startup."""
+        """Add each row's persisted delta to a freshly computed cold-start prior.
+
+        A row holds an accumulated delta, not a full posterior, and can be one-sided
+        (e.g. beta=0) - assigning it straight into the cell would zero out a Beta shape
+        parameter and crash thompson_sample() on every later draw for that cell.
+        """
         if prisma_client is None:
             return
         try:
@@ -139,7 +144,12 @@ class AdaptiveRouter:
                     continue
                 if row.model_name not in self.config.available_models:
                     continue
-                self._cells[(rt, row.model_name)] = BanditCell(alpha=row.alpha, beta=row.beta)
+                prefs = self.model_to_prefs.get(row.model_name) or _default_prefs()
+                prior = initial_cell(prefs, rt)
+                self._cells[(rt, row.model_name)] = BanditCell(
+                    alpha=prior.alpha + row.alpha,
+                    beta=prior.beta + row.beta,
+                )
                 loaded += 1
             verbose_router_logger.info(
                 "AdaptiveRouter[%s]: loaded %d cells from DB",
@@ -451,6 +461,8 @@ class AdaptiveRouter:
                 if d_alpha == 0 and d_beta == 0:
                     continue
                 cell_key = (attribution_type, target_model)
+                if cell_key not in self._cells:
+                    continue
                 self._cells[cell_key] = apply_delta(
                     self._cells[cell_key],
                     d_alpha,

@@ -108,6 +108,11 @@ _CALIBRATION_EXAMPLES: Final[Mapping[ClassificationRubric, str]] = MappingProxyT
 
 BUSINESS_TIER_CRITERIA: Final[Mapping[ComplexityTier, str]] = MappingProxyType(
     {
+        ComplexityTier.NON_REASONING: (
+            "operational requests whose whole job is to pass information along or put it in a requested "
+            "shape: relaying or reformatting tool or system output, acknowledging a completed action, or "
+            "extracting a stated field. Use it only when no judgment about the content is asked for."
+        ),
         ComplexityTier.SIMPLE: (
             "greetings, chitchat, or lookups of a fact, policy, price, or date with a short known answer. "
             "Never for analysis, strategy, or non-trivial work, even if the request is only one sentence."

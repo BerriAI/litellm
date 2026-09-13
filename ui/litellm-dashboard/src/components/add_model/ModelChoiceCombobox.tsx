@@ -17,8 +17,8 @@ export interface ModelChoice {
 
 interface ModelChoiceComboboxProps {
   id: string;
-  value: string;
-  onChange: (value: string) => void;
+  value: string | null;
+  onChange: (value: string | null) => void;
   choices: ModelChoice[];
   placeholder: string;
   ariaInvalid: true | undefined;
@@ -40,7 +40,7 @@ const ModelChoiceCombobox: React.FC<ModelChoiceComboboxProps> = ({
     <Combobox
       items={choices}
       value={selected}
-      onValueChange={(choice: ModelChoice | null) => onChange(choice?.value ?? "")}
+      onValueChange={(choice: ModelChoice | null) => onChange(choice?.value ?? null)}
       itemToStringLabel={(choice: ModelChoice) => choice.label}
       isItemEqualToValue={(choice: ModelChoice, current: ModelChoice) => choice.value === current.value}
     >
@@ -50,7 +50,7 @@ const ModelChoiceCombobox: React.FC<ModelChoiceComboboxProps> = ({
         aria-describedby={ariaDescribedBy}
         placeholder={placeholder}
         className="w-full"
-        showClear={value !== ""}
+        showClear={value != null && value !== ""}
       />
       <ComboboxContent>
         <ComboboxEmpty>No models found</ComboboxEmpty>

@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 import litellm
 from litellm.secret_managers.main import get_secret_str, normalize_nonempty_secret_str
 
-from .common_utils import OpenAIError
+from .common_utils import OpenAIError, is_openai_backed_api_base
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -16,7 +16,6 @@ if TYPE_CHECKING:
     from openai.auth import SubjectTokenProvider, WorkloadIdentity, WorkloadIdentityAuth
 
 OPENAI_WIF_CLIENT_ID: Final = "litellm"
-_OPENAI_API_HOST: Final = "api.openai.com"
 _SDK_UPGRADE_MESSAGE: Final = (
     "OpenAI workload identity federation requires openai>=2.32.0. "
     "Upgrade the installed openai package to use OPENAI_IDENTITY_PROVIDER_ID / "
@@ -75,7 +74,7 @@ def _targets_openai_api(api_base: str | None) -> bool:
     if api_base is None:
         return True
     parsed: Final = urlparse(api_base)
-    return parsed.scheme == "https" and parsed.hostname == _OPENAI_API_HOST
+    return parsed.scheme == "https" and is_openai_backed_api_base(api_base)
 
 
 @lru_cache(maxsize=16)

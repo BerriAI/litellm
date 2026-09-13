@@ -615,6 +615,27 @@ async def test_run_async_fallback_forwards_attempted_model_groups_to_nested_call
 
 
 @pytest.mark.asyncio
+async def test_run_async_fallback_can_target_the_requested_group_when_a_pre_router_replaced_it():
+    """The requested group was never called when a pre-router selected a tier, so a
+    tier fallback may legitimately target that originally requested group."""
+    router = RecordingRouter()
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=["requested-model"],
+        original_model_group="requested-model",
+        original_exception=RuntimeError("selected tier failed"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        model="requested-model",
+        metadata={"pre_routing_selected_model": "selected-tier"},
+    )
+
+    assert router.received_kwargs["model"] == "requested-model"
+    assert router.received_kwargs["attempted_targets"].keys == frozenset({"selected-tier", "requested-model"})
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "entry",
     [
@@ -1198,6 +1219,28 @@ class TestOrderedFallbackLookupGroups:
         assert fallback_lookup_groups(kwargs, "tier1") == ("tier1",)
         assert fallback_lookup_groups({}, "smart-router") == ("smart-router",)
         assert fallback_lookup_groups({}, None) == ()
+
+    def test_session_remap_keeps_the_bound_router_between_tier_and_requested_group(self):
+        from litellm.router_utils.fallback_event_handlers import (
+            PRE_ROUTING_SELECTED_MODEL_KEY,
+            fallback_lookup_groups,
+        )
+
+        kwargs = {
+            "litellm_metadata": {
+                PRE_ROUTING_SELECTED_MODEL_KEY: "tier1",
+                "model_group": "smart-router",
+            }
+        }
+
+        assert fallback_lookup_groups(kwargs, "requested-model") == (
+            "tier1",
+            "smart-router",
+            "requested-model",
+        )
+        assert fallback_lookup_groups({"metadata": {"model_group": []}}, "requested-model") == (
+            "requested-model",
+        )
 
     def test_first_resolving_group_wins_and_generic_idx_survives_a_miss(self):
         from litellm.router_utils.fallback_event_handlers import (

@@ -1,10 +1,12 @@
 import asyncio
 import json
 from datetime import datetime
+from unittest.mock import patch
 
 import pytest
 
 
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.experimental_pass_through.messages import streaming_iterator as streaming_iterator_module
 from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
@@ -32,7 +34,16 @@ class _RecordingLoggingIterator(BaseAnthropicMessagesStreamingIterator):
         self.logging_call_count += 1
 
 
-def _make_logging_obj(test_name: str) -> LiteLLMLoggingObj:
+class _FailureRecorder(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.failure_kwargs: list = []
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.failure_kwargs.append(kwargs)
+
+
+def _make_logging_obj(test_name: str, failure_recorder: _FailureRecorder | None = None) -> LiteLLMLoggingObj:
     return LiteLLMLoggingObj(
         model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
         messages=[{"role": "user", "content": "hi"}],
@@ -41,7 +52,17 @@ def _make_logging_obj(test_name: str) -> LiteLLMLoggingObj:
         start_time=datetime.now(),
         litellm_call_id=test_name,
         function_id=test_name,
+        dynamic_async_failure_callbacks=[failure_recorder] if failure_recorder is not None else None,
     )
+
+
+async def _wait_for_failure_event(recorder: _FailureRecorder) -> dict:
+    for _ in range(300):
+        if recorder.failure_kwargs:
+            break
+        await asyncio.sleep(0.01)
+    assert len(recorder.failure_kwargs) == 1, "expected exactly one failure event"
+    return recorder.failure_kwargs[0]
 
 
 def _make_iterator(test_name: str) -> BaseAnthropicMessagesStreamingIterator:
@@ -524,6 +545,25 @@ async def test_async_sse_wrapper_dispatches_deferred_logging_when_client_disconn
     await asyncio.wait_for(deferred_fired.wait(), timeout=5)
 
 
+class _DetachedFailureRecorder:
+    """Stands in for the closure the proxy arms so a detached-stream failure still reaches its failure hook."""
+
+    def __init__(self):
+        self.exceptions = []
+
+    async def __call__(self, exc: Exception) -> None:
+        self.exceptions.append(exc)
+
+
+async def _wait_for_detached_failure(recorder: _DetachedFailureRecorder) -> Exception:
+    for _ in range(200):
+        if recorder.exceptions:
+            await asyncio.sleep(0.02)
+            return recorder.exceptions[0]
+        await asyncio.sleep(0.01)
+    raise AssertionError("the detached failure hook never fired")
+
+
 class _ProviderStreamError(Exception):
     """Stand-in for a provider-specific streaming failure carrying a status code."""
 
@@ -539,7 +579,8 @@ async def test_async_sse_wrapper_reraises_upstream_error_to_connected_client():
     before message_stop must propagate the ORIGINAL provider exception to a
     still-connected client, so the proxy's failure handling keeps the
     provider-specific status. The pump must not swallow it into a generic
-    api_error event + normal termination.
+    api_error event + normal termination, and the request is logged as a
+    failure carrying the partial usage, never as a success.
     """
 
     async def _failing_stream():
@@ -547,10 +588,13 @@ async def test_async_sse_wrapper_reraises_upstream_error_to_connected_client():
         yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "partial"}}
         raise _ProviderStreamError("bedrock stream blew up", status_code=529)
 
+    recorder = _FailureRecorder()
     iterator = _RecordingLoggingIterator(
-        litellm_logging_obj=_make_logging_obj("test_reraises_upstream_error"),
+        litellm_logging_obj=_make_logging_obj("test_reraises_upstream_error", recorder),
         request_body={},
     )
+    detached_hook = _DetachedFailureRecorder()
+    iterator.litellm_logging_obj._on_detached_stream_failure = detached_hook
 
     received = []
 
@@ -561,18 +605,25 @@ async def test_async_sse_wrapper_reraises_upstream_error_to_connected_client():
     with pytest.raises(_ProviderStreamError) as excinfo:
         await _drain()
 
+    failure_kwargs = await _wait_for_failure_event(recorder)
+
     assert excinfo.value.status_code == 529
     assert received
     assert not any(c.startswith(b"event: error\n") for c in received)
     assert iterator.logged_chunks == []
+    assert failure_kwargs["standard_logging_object"]["status"] == "failure"
+    assert failure_kwargs["standard_logging_object"]["prompt_tokens"] == 52
+    await asyncio.sleep(0.05)
+    assert detached_hook.exceptions == [], "the relay re-raised the error, so the proxy failure hook already ran"
 
 
 @pytest.mark.asyncio
-async def test_async_sse_wrapper_salvages_partial_spend_on_upstream_error_after_disconnect():
+async def test_async_sse_wrapper_logs_failure_on_upstream_error_after_disconnect():
     """
     When the upstream errors AFTER the client has already disconnected there is
-    no live client to re-raise to and no failure hook will run, so the pump
-    salvages partial spend from what it collected instead of dropping the row.
+    no live client to re-raise to and no proxy failure hook will run, so the
+    pump logs the failure itself with the partial usage it collected; it must
+    never bill the broken stream as a success.
     """
     tail_gated = asyncio.Event()
 
@@ -582,34 +633,38 @@ async def test_async_sse_wrapper_salvages_partial_spend_on_upstream_error_after_
         await tail_gated.wait()
         raise _ProviderStreamError("late failure", status_code=500)
 
+    recorder = _FailureRecorder()
     iterator = _RecordingLoggingIterator(
-        litellm_logging_obj=_make_logging_obj("test_salvage_partial_on_late_error"),
+        litellm_logging_obj=_make_logging_obj("test_failure_logged_on_late_error", recorder),
         request_body={},
     )
+    detached_hook = _DetachedFailureRecorder()
+    iterator.litellm_logging_obj._on_detached_stream_failure = detached_hook
 
     gen = iterator.async_sse_wrapper(_gated_failing_stream())
     received = [await gen.__anext__(), await gen.__anext__()]
     await gen.aclose()  # client disconnects before the upstream error
 
     tail_gated.set()  # let the upstream raise now, after disconnect
-    for _ in range(100):
-        if iterator.logged_chunks:
-            break
-        await asyncio.sleep(0.01)
+    failure_kwargs = await _wait_for_failure_event(recorder)
 
     assert len(received) == 2
-    assert iterator.logged_chunks == received
+    assert iterator.logging_call_count == 0
+    assert failure_kwargs["standard_logging_object"]["status"] == "failure"
+    assert failure_kwargs["standard_logging_object"]["prompt_tokens"] == 52
+    assert isinstance(failure_kwargs["exception"], _ProviderStreamError)
+    assert await _wait_for_detached_failure(detached_hook) is failure_kwargs["exception"]
+    assert len(detached_hook.exceptions) == 1
 
 
 @pytest.mark.asyncio
-async def test_async_sse_wrapper_salvages_spend_when_queued_error_is_never_consumed():
+async def test_async_sse_wrapper_logs_failure_when_queued_error_is_never_consumed():
     """
     When the upstream errors while the client is still connected, the pump
-    forwards the exception through the queue expecting the relay to re-raise it
-    into the proxy's failure handling. If the client disconnects before
-    consuming that queued exception, the handoff never happens and no failure
-    hook runs, so the pump must notice the unconsumed exception at teardown and
-    salvage partial spend instead of dropping the row entirely.
+    forwards the exception through the queue for the relay to re-raise. If the
+    client disconnects before consuming that queued exception, no proxy failure
+    hook runs, so the failure logged by the pump itself is the only record of
+    the request; it must be a failure row, not a salvaged success.
     """
     upstream_errored = asyncio.Event()
 
@@ -619,23 +674,27 @@ async def test_async_sse_wrapper_salvages_spend_when_queued_error_is_never_consu
         upstream_errored.set()
         raise _ProviderStreamError("mid-stream failure", status_code=500)
 
+    recorder = _FailureRecorder()
     iterator = _RecordingLoggingIterator(
-        litellm_logging_obj=_make_logging_obj("test_salvage_on_unconsumed_queued_error"),
+        litellm_logging_obj=_make_logging_obj("test_failure_logged_on_unconsumed_queued_error", recorder),
         request_body={},
     )
+    detached_hook = _DetachedFailureRecorder()
+    iterator.litellm_logging_obj._on_detached_stream_failure = detached_hook
 
     gen = iterator.async_sse_wrapper(_failing_stream())
     received = [await gen.__anext__(), await gen.__anext__()]
     await upstream_errored.wait()  # exception is now queued behind the consumed chunks
     await gen.aclose()  # client disconnects without ever consuming the queued exception
 
-    for _ in range(100):
-        if iterator.logged_chunks:
-            break
-        await asyncio.sleep(0.01)
+    failure_kwargs = await _wait_for_failure_event(recorder)
 
-    assert iterator.logging_call_count == 1
-    assert iterator.logged_chunks == received
+    assert len(received) == 2
+    assert iterator.logging_call_count == 0
+    assert failure_kwargs["standard_logging_object"]["status"] == "failure"
+    assert failure_kwargs["standard_logging_object"]["prompt_tokens"] == 52
+    assert await _wait_for_detached_failure(detached_hook) is failure_kwargs["exception"]
+    assert len(detached_hook.exceptions) == 1
 
 
 @pytest.mark.asyncio
@@ -764,6 +823,174 @@ async def test_async_sse_wrapper_bills_partial_when_detached_drains_disabled(mon
     assert not any(c.startswith(b"event: message_stop\n") for c in iterator.logged_chunks)
     assert tail_reached is False, "pump kept draining despite detached drains being disabled"
     assert len(streaming_iterator_module._DETACHED_STREAM_DRAINS) == 0
+
+
+class _SuccessRecorder(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.success_kwargs: list = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.success_kwargs.append(kwargs)
+
+
+def _make_priced_logging_obj(call_id: str, recorder: _SuccessRecorder, model: str) -> LiteLLMLoggingObj:
+    logging_obj = LiteLLMLoggingObj(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id=call_id,
+        function_id=call_id,
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model=model,
+        user="",
+        optional_params={},
+        litellm_params={"custom_llm_provider": "anthropic"},
+        custom_llm_provider="anthropic",
+    )
+    return logging_obj
+
+
+class _UpstreamClosedOnDetach:
+    """Upstream that yields its events and then, like a socket read, waits until it is closed."""
+
+    def __init__(self, events: tuple[dict, ...]):
+        self._events = iter(events)
+        self._closed = asyncio.Event()
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> dict:
+        if self._closed.is_set():
+            raise StopAsyncIteration
+        try:
+            return next(self._events)
+        except StopIteration:
+            await self._closed.wait()
+            raise StopAsyncIteration
+
+    async def aclose(self) -> None:
+        self._closed.set()
+
+
+@pytest.mark.asyncio
+async def test_client_disconnect_partial_billing_prices_recovered_tokens(monkeypatch):
+    """
+    Regression (LIT-6872): a client disconnect that lands on partial billing
+    re-tokenizes the buffered text into completion_tokens, but the logged cost
+    stayed priced at the message_start placeholder (1 output token). The success
+    row's response_cost must match its recovered completion_tokens.
+    """
+    import litellm
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS", 0)
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", 4)
+    model = "claude-sonnet-5"
+    recorder = _SuccessRecorder()
+    iterator = BaseAnthropicMessagesStreamingIterator(
+        litellm_logging_obj=_make_priced_logging_obj("disconnect_partial_cost", recorder, model),
+        request_body={"model": model, "stream": True},
+    )
+    sentence = "The history of computing spans centuries of mechanical and electronic invention. "
+
+    async def _stream():
+        yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 29, "output_tokens": 1}}}
+        yield {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
+        for _ in range(100):
+            yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": sentence}}
+        yield {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1500}}
+        yield {"type": "message_stop"}
+
+    enqueued: list = []
+
+    def _capture(async_coroutine):
+        enqueued.append(async_coroutine)
+
+    with patch.object(  # test-quality-ok: GLOBAL_LOGGING_WORKER is a process-global singleton with no injection seam
+        GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue", side_effect=_capture
+    ):
+        gen = iterator.async_sse_wrapper(_stream())
+        for _ in range(4):
+            await gen.__anext__()
+        await gen.aclose()
+        for _ in range(500):
+            if enqueued:
+                break
+            await asyncio.sleep(0.01)
+
+    assert len(enqueued) == 1, "client disconnect never reached partial billing"
+    await enqueued[0]
+
+    assert len(recorder.success_kwargs) == 1
+    logged = recorder.success_kwargs[0]["standard_logging_object"]
+    assert 1 < logged["completion_tokens"] < 1500
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model=model, prompt_tokens=29, completion_tokens=logged["completion_tokens"]
+    )
+    assert logged["response_cost"] == pytest.approx(prompt_cost + completion_cost)
+
+
+@pytest.mark.asyncio
+async def test_proxy_disconnect_closing_upstream_prices_recovered_tokens():
+    """
+    Regression (LIT-6872), proxy path: after a client disconnect the proxy's
+    shielded cleanup closes the upstream stream while the pump is still reading
+    it, so the pump bills the chunks collected so far without ever seeing
+    message_delta. That row's response_cost must be priced from its recovered
+    completion_tokens, not from the message_start placeholder.
+    """
+    import litellm
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    model = "claude-sonnet-5"
+    recorder = _SuccessRecorder()
+    iterator = BaseAnthropicMessagesStreamingIterator(
+        litellm_logging_obj=_make_priced_logging_obj("disconnect_upstream_closed", recorder, model),
+        request_body={"model": model, "stream": True},
+    )
+    sentence = "The history of computing spans centuries of mechanical and electronic invention. "
+    upstream = _UpstreamClosedOnDetach(
+        (
+            {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 29, "output_tokens": 1}}},
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            *({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": sentence}} for _ in range(6)),
+        )
+    )
+    enqueued: list = []
+
+    def _capture(async_coroutine):
+        enqueued.append(async_coroutine)
+
+    with patch.object(  # test-quality-ok: GLOBAL_LOGGING_WORKER is a process-global singleton with no injection seam
+        GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue", side_effect=_capture
+    ):
+        gen = iterator.async_sse_wrapper(upstream)
+        for _ in range(4):
+            await gen.__anext__()
+        await gen.aclose()
+        assert not enqueued, "billing must wait for the upstream read to end, not the client detach"
+        await upstream.aclose()
+        for _ in range(500):
+            if enqueued:
+                break
+            await asyncio.sleep(0.01)
+
+    assert len(enqueued) == 1, "closing the upstream never reached partial billing"
+    await enqueued[0]
+
+    assert len(recorder.success_kwargs) == 1
+    logged = recorder.success_kwargs[0]["standard_logging_object"]
+    assert logged["completion_tokens"] > 1
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model=model, prompt_tokens=29, completion_tokens=logged["completion_tokens"]
+    )
+    assert logged["response_cost"] == pytest.approx(prompt_cost + completion_cost)
 
 
 @pytest.mark.asyncio
