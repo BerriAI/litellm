@@ -30,8 +30,9 @@ export const modelSentinelOptions = (
   keyTeamId: string | null | undefined,
   teamLoaded: boolean,
 ): { value: string; label: string }[] => {
-  if (keyTeamId == null) return [{ value: "all-proxy-models", label: "All Proxy Models" }];
-  return teamLoaded ? [{ value: "all-team-models", label: "All Team Models" }] : [];
+  const noDefaultModels = { value: "no-default-models", label: "No Default Models" };
+  if (keyTeamId == null) return [{ value: "all-proxy-models", label: "All Proxy Models" }, noDefaultModels];
+  return teamLoaded ? [{ value: "all-team-models", label: "All Team Models" }, noDefaultModels] : [];
 };
 
 export const currentValuePlaceholder = (
