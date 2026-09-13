@@ -233,6 +233,31 @@ def test_batch_session_outranks_the_per_request_trace_id():
     assert session_id == "batch-uid-1"
 
 
+def test_caller_litellm_session_id_wins_over_the_per_request_trace_id():
+    """A caller-supplied litellm_session_id is a real session, not a copied trace id; the
+    spend log must keep it instead of overwriting it with the per-call trace id."""
+    session_id: Final = _get_session_id_for_spend_log(
+        kwargs={"litellm_session_id": "sess-1", "litellm_trace_id": "trace-abc"},
+        metadata={"trace_id": "trace-abc"},
+        standard_logging_payload=_TRACE_ONLY_STANDARD_LOGGING,
+        omit_when_missing=False,
+    )
+    assert session_id == "sess-1"
+
+
+def test_batch_session_outranks_a_caller_litellm_session_id():
+    """The batch lifecycle grouping must survive even when the create call carries a
+    caller session id, or the poller's cost row would land in a different session."""
+    session_id: Final = _get_session_id_for_spend_log(
+        kwargs={"litellm_session_id": "sess-1", "litellm_trace_id": "trace-abc"},
+        metadata={"trace_id": "trace-abc"},
+        standard_logging_payload=_TRACE_ONLY_STANDARD_LOGGING,
+        omit_when_missing=False,
+        batch_trace_session_id="batch-uid-1",
+    )
+    assert session_id == "batch-uid-1"
+
+
 def test_omit_policy_still_suppresses_batch_sessions():
     session_id: Final = _get_session_id_for_spend_log(
         kwargs={},
