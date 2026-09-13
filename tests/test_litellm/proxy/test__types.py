@@ -10,9 +10,11 @@ from litellm.proxy._types import (
     LiteLLM_AuditLogs,
     LiteLLM_TeamMembership,
     LitellmUserRoles,
+    NewTeamRequest,
     OrganizationMemberUpdateRequest,
     ResetSpendRequest,
     UpdateKeyRequest,
+    UpdateTeamRequest,
     UpdateUserRequest,
     UserAPIKeyAuth,
 )
@@ -186,6 +188,15 @@ def test_an_organization_member_cannot_be_given_a_role_that_lives_outside_the_or
 
 def test_an_empty_max_budget_from_a_form_post_reads_as_no_budget_not_as_zero():
     assert GenerateKeyRequest(max_budget="").max_budget is None
+
+
+@pytest.mark.parametrize("blank", ("", "   "))
+def test_an_empty_budget_duration_from_a_form_post_reads_as_unset(blank):
+    assert GenerateKeyRequest(budget_duration=blank).budget_duration is None
+    assert NewTeamRequest(team_alias="my-team", budget_duration=blank).budget_duration is None
+    assert NewTeamRequest(team_alias="my-team", team_member_budget_duration=blank).team_member_budget_duration is None
+    assert UpdateTeamRequest(team_id="team-1", budget_duration=blank).budget_duration is None
+    assert UpdateTeamRequest(team_id="team-1", team_member_budget_duration=blank).team_member_budget_duration is None
 
 
 @pytest.mark.parametrize("sent", (0, 0.0, 25.5))
