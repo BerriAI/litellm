@@ -897,7 +897,9 @@ def test_arouter_test_team_model():
 
 
 def test_team_model_has_alternatives():
-    def team_deployment(deployment_id: str, team_id: str, public_model_name: str, blocked: bool = False):
+    def team_deployment(
+        deployment_id: str, team_id: str, public_model_name: str, blocked: bool = False
+    ) -> DeploymentTypedDict:
         return {
             "model_name": f"model_name_{team_id}_{deployment_id}",
             "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
