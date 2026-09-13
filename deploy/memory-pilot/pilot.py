@@ -14,6 +14,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from litellm.caching.caching import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.server_tool_responses import object_value
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -68,6 +69,7 @@ class PilotGateway:
         self.app = app
         self.registered_validation_slots = asyncio.Semaphore(12)
         self.enrollment_validation_slots = asyncio.Semaphore(4)
+        self.recently_validated = InMemoryCache(max_size_in_memory=1000, default_ttl=60)
         self.upstream = get_async_httpx_client(
             httpxSpecialProvider.PassThroughEndpoint,
             params={"timeout": 20, "client_alias": "memory-pilot-upstream"},
@@ -123,7 +125,11 @@ class PilotGateway:
                 {"error": "Upstream keys can only use inference and their own memories"}, status_code=403
             )(scope, receive, send)
             return
-        validation_slots: Final = self.registered_validation_slots if local_key else self.enrollment_validation_slots
+        validation_slots: Final = (
+            self.registered_validation_slots
+            if self.recently_validated.get_cache(digest)
+            else self.enrollment_validation_slots
+        )
         try:
             await asyncio.wait_for(validation_slots.acquire(), timeout=0.05)
         except TimeoutError:
@@ -137,6 +143,10 @@ class PilotGateway:
             models: Final = await self.upstream.get(
                 _UPSTREAM + "/v1/models", headers={"Authorization": "Bearer " + credential}
             )
+            if models.status_code in (401, 403):
+                self.recently_validated.delete_cache(digest)
+            elif models.is_success:
+                self.recently_validated.set_cache(digest, True)
         except httpx.HTTPError:
             await JSONResponse({"error": "Upstream gateway unavailable"}, status_code=503)(scope, receive, send)
             return
