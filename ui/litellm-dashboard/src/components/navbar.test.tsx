@@ -272,6 +272,13 @@ describe("Navbar", () => {
     expect(screen.queryByRole("button", { name: /^notifications$/i })).not.toBeInTheDocument();
   });
 
+  it("should keep the theme toggle on public pages", () => {
+    const publicPageProps = { ...defaultProps, isPublicPage: true };
+    renderWithProviders(<Navbar {...publicPageProps} />);
+
+    expect(screen.getByRole("button", { name: /^theme$/i })).toBeInTheDocument();
+  });
+
   it("should handle hide new feature indicators toggle", async () => {
     const user = userEvent.setup();
 
