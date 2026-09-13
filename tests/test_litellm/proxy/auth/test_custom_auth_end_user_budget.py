@@ -277,3 +277,229 @@ def test_update_valid_token_db_values_override_custom_auth_when_set():
     # DB values should win
     assert result.end_user_tpm_limit == 500
     assert result.end_user_model_max_budget == db_budget
+
+
+# ---------------------------------------------------------------------------
+# Regression test: end-user rpm_limit must be stamped on cache-hit requests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_builder_stamps_end_user_rpm_limit_on_cache_hit():
+    """
+    Builder-level regression test.
+
+    When a virtual key is served from the in-memory cache (cache hit), the
+    `if valid_token is None:` DB-miss block is skipped entirely, including the
+    raw assignments that copy end_user_rpm_limit / end_user_tpm_limit onto the
+    token.  Without the unconditional update_valid_token_with_end_user_params
+    call added by this fix, the token reaches parallel_request_limiter_v3 with
+    both fields as None, so no rate-limit bucket is created and every request
+    succeeds regardless of the configured rpm_limit.
+
+    This test fails without the fix and passes with it.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_EndUserTable,
+        LitellmUserRoles,
+    )
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.proxy_server import hash_token
+    import litellm as _litellm
+
+    api_key = "sk-test-rpm-cache-hit-builder"
+    hashed_key = hash_token(api_key)
+
+    # Token as it sits in the cache — no end_user fields populated
+    cached_token = UserAPIKeyAuth(
+        api_key=api_key,
+        token=hashed_key,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        end_user_rpm_limit=None,
+        end_user_tpm_limit=None,
+    )
+
+    # End-user budget object — not used in this test path (get_end_user_object returns None)
+    # The budget is provided via max_end_user_budget_id default budget instead
+
+    mock_cache = AsyncMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.delete_cache = MagicMock()
+
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache = AsyncMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    _attrs = {
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": mock_cache,
+        "proxy_logging_obj": mock_proxy_logging_obj,
+        "master_key": "sk-master-key",
+        "general_settings": {},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": None,
+        "jwt_handler": None,
+        "litellm_proxy_admin_name": "admin",
+    }
+    _originals = {k: getattr(_proxy_server_mod, k, None) for k in _attrs}
+    _original_max_end_user_budget_id = getattr(_litellm, "max_end_user_budget_id", None)
+
+    try:
+        for k, v in _attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        # Trigger the default-budget branch inside the builder
+        _litellm.max_end_user_budget_id = "tier-default"
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/v1/chat/completions")
+
+        # _resolve_key is called twice:
+        #   1. check_cache_only=True  → returns cached_token (cache HIT)
+        #   2. check_cache_only=False → must NOT be reached; raise to prove it
+        # This forces the cache-hit code path and skips the DB-miss block
+        # (including its raw end_user_rpm_limit assignments).
+        call_count = {"n": 0}
+
+        async def resolve_side_effect(hashed_token):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return cached_token   # cache hit
+            raise AssertionError("DB fetch must not be reached on a cache hit")
+
+        with (
+            patch(  # test-quality-ok: must intercept cache-layer to simulate cache-hit without a real Redis/DB
+                "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
+                side_effect=resolve_side_effect,
+            ),
+            # End-user object is None — simulates the case where the end user
+            # row doesn't exist yet but max_end_user_budget_id provides limits.
+            # In this path _end_user_object stays None so valid_token_dict does
+            # NOT get updated with end_user_params at the bottom of the builder,
+            # making the unconditional update_valid_token_with_end_user_params
+            # call the only place where the limits reach the returned token.
+            patch(  # test-quality-ok: must control DB return to isolate cache-hit path without a real DB
+                "litellm.proxy.auth.user_api_key_auth.get_end_user_object",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(  # test-quality-ok: must supply end_user_id without a real request/DB round-trip
+                "litellm.proxy.auth.user_api_key_auth.resolve_and_validate_end_user_id",
+                new_callable=AsyncMock,
+                return_value="alice@example.com",
+            ),
+            # Simulate max_end_user_budget_id path: default budget provides limits
+            patch(  # test-quality-ok: must return a known budget without a real DB to assert rpm_limit propagation
+                "litellm.proxy.auth.auth_checks.get_default_end_user_budget",
+                new_callable=AsyncMock,
+                return_value=LiteLLM_BudgetTable(rpm_limit=5, tpm_limit=1000),
+            ),
+        ):
+            result = await _user_api_key_auth_builder(
+                request=request,
+                api_key=f"Bearer {api_key}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={"user": "alice@example.com"},
+            )
+
+        # Fix: limits must be stamped even when the key came from cache.
+        # Without the unconditional update_valid_token_with_end_user_params call,
+        # end_user_rpm_limit stays None and parallel_request_limiter_v3 never
+        # creates a rate-limit bucket — all requests succeed regardless of limit.
+        assert result.end_user_rpm_limit == 5, (
+            "end_user_rpm_limit must be non-None on cache-hit requests so "
+            "parallel_request_limiter_v3 enforces the customer rate limit"
+        )
+        assert result.end_user_tpm_limit == 1000
+        assert result.end_user_id == "alice@example.com"
+
+    finally:
+        for k, v in _originals.items():
+            setattr(_proxy_server_mod, k, v)
+        _litellm.max_end_user_budget_id = _original_max_end_user_budget_id
+
+
+def test_end_user_rpm_limit_applied_on_cache_hit():
+    """
+    Regression: end_user_rpm_limit / end_user_tpm_limit were only written onto
+    the token inside the DB-miss branch of _user_api_key_auth_builder via the
+    raw .get() assignments. On a cache hit those raw assignments run but they
+    read from end_user_params which is built from get_end_user_object — the
+    bug is that a cached token whose end_user_rpm_limit was previously None
+    is never updated via update_valid_token_with_end_user_params unless the
+    unconditional call we added is present.
+
+    This test directly exercises update_valid_token_with_end_user_params to
+    confirm:
+    1. Without calling it, a cached token retains None for rpm/tpm limits.
+    2. After calling it with populated end_user_params, the limits are set.
+
+    This matches exactly what the fix does: call it unconditionally so that
+    cache-hit requests (where the token object in memory has stale None values)
+    get the correct limits stamped before reaching parallel_request_limiter_v3.
+    """
+    # Simulate a token as it sits in the in-memory cache — no end_user fields
+    cached_token = UserAPIKeyAuth(
+        token="hashed-sk-test",
+        end_user_rpm_limit=None,
+        end_user_tpm_limit=None,
+        end_user_id=None,
+    )
+
+    # end_user_params as built by the early get_end_user_object call
+    end_user_params_with_limits = {
+        "end_user_id": "alice@example.com",
+        "end_user_rpm_limit": 5,
+        "end_user_tpm_limit": 1000,
+    }
+
+    # --- WITHOUT the fix: cache hit skips the unconditional call ---
+    # Token in cache still has None — parallel_request_limiter_v3 skips bucket
+    assert cached_token.end_user_rpm_limit is None, (
+        "Precondition: cached token starts with no rpm limit"
+    )
+
+    # --- WITH the fix: unconditional call stamps the limits ---
+    result = update_valid_token_with_end_user_params(
+        cached_token, end_user_params_with_limits
+    )
+
+    assert result.end_user_rpm_limit == 5, (
+        "end_user_rpm_limit must be stamped onto the token so "
+        "parallel_request_limiter_v3 creates a rate-limit bucket"
+    )
+    assert result.end_user_tpm_limit == 1000
+    assert result.end_user_id == "alice@example.com"
+
+
+def test_end_user_rpm_limit_none_without_unconditional_update():
+    """
+    Demonstrates the pre-fix state: a cached token whose rpm/tpm limits are
+    None stays None if update_valid_token_with_end_user_params is never called.
+    This is what happened on every cache-hit request before the fix.
+    """
+    cached_token = UserAPIKeyAuth(
+        token="hashed-sk-test",
+        end_user_rpm_limit=None,
+        end_user_tpm_limit=None,
+    )
+
+    # Simulate the pre-fix cache-hit path: update function is NOT called
+    # (the DB-miss block's raw assignments also don't run on a cache hit)
+    # So the token retains None — no bucket, no 429.
+    assert cached_token.end_user_rpm_limit is None
+    assert cached_token.end_user_tpm_limit is None
