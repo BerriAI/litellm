@@ -68,6 +68,14 @@ class ExceptionCheckers:
         if "service tier capacity exceeded" in _error_str_lower:
             return True
 
+        #######################################
+        # Anthropic returns spend/usage-limit exhaustion typed as an
+        # invalid_request_error (HTTP 400), e.g. "You have reached your specified
+        # API usage limits." It is a usage limit and should map to 429. (#37599)
+        #######################################
+        if "api usage limit" in _error_str_lower:
+            return True
+
         return False
 
     @staticmethod
@@ -532,6 +540,17 @@ def _map_anthropic_exception(
         )
     if "content filtering policy" in error_str:
         raise ContentPolicyViolationError(
+            message=f"AnthropicError - {error_str}",
+            model=model,
+            llm_provider="anthropic",
+        )
+    # Anthropic returns usage/spend-limit exhaustion typed as invalid_request_error (400),
+    # but per the exception-mapping docs it should surface as a RateLimitError (429). Check
+    # before the generic 400 branches below, which would otherwise map it to BadRequestError.
+    if ExceptionCheckers.is_error_str_rate_limit(
+        error_str, getattr(original_exception, "status_code", None)
+    ):
+        raise RateLimitError(
             message=f"AnthropicError - {error_str}",
             model=model,
             llm_provider="anthropic",
