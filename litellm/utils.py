@@ -4961,6 +4961,17 @@ def _get_deployment_order(deployment: dict | Any) -> int | None:
     return order
 
 
+def get_distinct_deployment_orders(deployments: Sequence[Mapping[str, Any]]) -> tuple[int, ...]:
+    """
+    The ascending distinct `order` levels present across `deployments`, ignoring those without one.
+
+    More than one level means the router can retry a failure against a different deployment in the
+    same model group, so callers deciding whether an order-based retry is reachable read this rather
+    than each deployment's order.
+    """
+    return tuple(sorted({order for d in deployments for order in [_get_deployment_order(d)] if order is not None}))
+
+
 def get_order_filtered_deployments(healthy_deployments: list[dict], target_order: int | None = None) -> list:
     if target_order is not None:
         return [d for d in healthy_deployments if _get_deployment_order(d) == target_order]

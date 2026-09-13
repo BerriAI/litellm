@@ -423,6 +423,35 @@ _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
+_FALLBACK_LIST_ADAPTER: Final = TypeAdapter(list[object])
+_EXACT_KEY_FALLBACK_ENTRY_ADAPTER: Final = TypeAdapter(dict[str, list[str]])
+
+
+def _exact_key_fallback_entries(
+    fallbacks: object,
+) -> list[dict[str, list[str]]]:  # mutable-ok: mirrors the exact-key resolver's contract
+    """
+    The well-formed ``{model_group: [chain]}`` entries of an untyped fallback list, typed for
+    _get_fallback_model_group_for_lookup_groups.
+
+    Entries of any other shape are dropped rather than rejecting the whole list, because the
+    resolver walks entries one at a time and can return an earlier well-formed entry's chain
+    without ever reading a malformed one.
+    """
+    try:
+        entries: Final = _FALLBACK_LIST_ADAPTER.validate_python(fallbacks)
+    except ValidationError:
+        return []
+    return [typed for entry in entries if (typed := _as_exact_key_fallback_entry(entry)) is not None]
+
+
+def _as_exact_key_fallback_entry(entry: object) -> dict[str, list[str]] | None:
+    try:
+        return _EXACT_KEY_FALLBACK_ENTRY_ADAPTER.validate_python(entry)
+    except ValidationError:
+        return None
+
+
 def _as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:
     return tuple(item for item in value if isinstance(item, str)) if isinstance(value, tuple) else ()
 
@@ -542,6 +571,30 @@ def _anthropic_stream_commits_now(chunk: object, has_generated_content: bool, bu
     if has_generated_content:
         return False
     return is_anthropic_content_delta_chunk(chunk) or buffered_chunk_count >= MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS
+
+
+async def _anthropic_messages_stream_without_fallback_protection(
+    source_iterator: AsyncIterator[bytes],
+) -> AsyncGenerator[bytes, None]:
+    """No fallback is configured for the requested model group, so there is nothing the
+    buffer-until-content protection in Router._aanthropic_messages_streaming_iterator would
+    protect: forward the source iterator live instead of wrapping it.
+
+    A client that disconnects mid-stream leaves this generator suspended at `yield`
+    rather than exhausted, so the `finally` below - not the `async for` running to
+    completion - is what closes the upstream connection; without it, a disconnect
+    during a long adaptive-thinking pass would leak the request to the provider.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+        aclose_if_supported,
+    )
+
+    try:
+        async for chunk in source_iterator:
+            yield chunk
+    finally:
+        with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
+            await aclose_if_supported(source_iterator)
 
 
 class FallbackAwareAnthropicMessagesStream:
@@ -5440,6 +5493,17 @@ class Router:
 
         source_iterator: Final = response
 
+        model_group: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: kwargs always carries the model group
+        if fallbacks_disabled_for_request(initial_kwargs) or not self._has_any_configured_fallback(
+            model_group, initial_kwargs
+        ):
+            # Nothing to fall back to, so buffering lifecycle frames to protect a mid-stream
+            # fallback attempt would only add latency for no benefit: forward the source
+            # iterator live, exactly as it would stream without this wrapper.
+            return FallbackAwareAnthropicMessagesStream(
+                _anthropic_messages_stream_without_fallback_protection(source_iterator), source_iterator
+            )
+
         async def stream_with_fallbacks() -> AsyncGenerator[bytes, None]:
             from litellm.exceptions import MidStreamFallbackError
 
@@ -7334,12 +7398,7 @@ class Router:
         # Use wildcard-aware lookup so order-based fallback also works for model
         # groups resolved via pattern routing (e.g. `openai/*` -> `openai/gpt-4.1-mini`).
         all_deployments: Final = self.get_model_list(model_name=original_model_group, team_id=_request_team_id) or []
-        _order_set: Final[set] = {
-            litellm.utils._get_deployment_order(d)
-            for d in all_deployments
-            if litellm.utils._get_deployment_order(d) is not None
-        }
-        order_values: Final[list] = sorted(_order_set)
+        order_values: Final = litellm.utils.get_distinct_deployment_orders(all_deployments)
         if len(order_values) > 1 and not _skip_order_fallback:
             # Determine which order levels have already been tried
             current_target: Final = kwargs.get("_target_order")
@@ -8429,6 +8488,71 @@ class Router:
                 if "*" in fallback:
                     return True
         return False
+
+    def _has_any_configured_fallback(self, model_group: str, kwargs: Mapping[str, Any]) -> bool:
+        """
+        Whether any fallback deployment - general, context-window, content-policy, or a
+        catch-all default - could resolve for this model group.
+
+        Gates whether _aanthropic_messages_streaming_iterator's buffer-until-content
+        protection is worth paying for: that protection exists so a mid-stream provider
+        error can retry against a fallback deployment before any lifecycle frame commits
+        the client to this attempt. With no fallback destination configured at all, a
+        retry can never happen, so holding message_start/content_block_start hostage
+        until real content arrives protects nothing and only adds latency (most visibly
+        on adaptive-thinking models, where the first content_block_delta can lag
+        message_start by well over a minute).
+
+        Matching mirrors what async_function_with_fallbacks_common_utils actually resolves at
+        retry time, which is not one rule for all three lists. Generic ``fallbacks`` resolve
+        through get_fallback_model_group_for_lookup_groups, which accepts a stripped model-group
+        match (a fallback keyed by the bare model name still arming a request routed with a
+        provider prefix) and a "*" chain on top of an exact key, and a client-supplied
+        non-standard ``fallbacks`` list (a plain list of model names, or of full override params)
+        applies to every model group unconditionally rather than being keyed by one at all.
+        ``context_window_fallbacks`` and ``content_policy_fallbacks`` instead resolve through
+        self._get_fallback_model_group_for_lookup_groups, which matches an exact key only and
+        raises the original exception on a miss. Using one resolver for both kinds gets it wrong
+        in both directions: the permissive one arms the buffer on wildcard- or stripped-keyed
+        special fallbacks the retry path would reject, paying the lifecycle delay for a retry that
+        can never happen, and the strict one reports "nothing to fall back to" for a stripped or
+        wildcard generic chain a real error would in fact retry.
+
+        Two more retry paths in the same dispatcher fire without any of `fallbacks` /
+        `context_window_fallbacks` / `content_policy_fallbacks` configured at all: order-based
+        fallback (deployments in the model group at more than one `order` level) and weighted
+        intra-group failover (`enable_weighted_failover`), both of which pick a different
+        deployment for the retry, not the one that already streamed lifecycle frames live.
+        """
+        fallbacks: Final = kwargs.get("fallbacks", self.fallbacks)
+        if _check_non_standard_fallback_format(fallbacks=fallbacks):
+            return True
+        team_id: Final = (kwargs.get("metadata", {}) or {}).get("user_api_key_team_id")
+        all_deployments: Final = self.get_model_list(model_name=model_group, team_id=team_id) or []
+        if self.enable_weighted_failover:
+            strategy, _ = self._get_routing_context(model_group, kwargs)  # pyright: ignore[reportArgumentType]  # Mapping is read-only, safe for dict param
+            if strategy == "simple-shuffle" and len(all_deployments) > 1:
+                return True
+        if len(litellm.utils.get_distinct_deployment_orders(all_deployments)) > 1:
+            return True
+        lookup_groups: Final = fallback_lookup_groups(kwargs, model_group)
+        if (
+            fallbacks is not None
+            and get_fallback_model_group_for_lookup_groups(fallbacks=fallbacks, lookup_groups=lookup_groups)[0]
+            is not None
+        ):
+            return True
+        special_fallback_lists: Final = (
+            kwargs.get("context_window_fallbacks", self.context_window_fallbacks),
+            kwargs.get("content_policy_fallbacks", self.content_policy_fallbacks),
+        )
+        if any(
+            self._get_fallback_model_group_for_lookup_groups(fallbacks=entries, lookup_groups=lookup_groups) is not None
+            for entries in map(_exact_key_fallback_entries, special_fallback_lists)
+            if entries
+        ):
+            return True
+        return self._has_default_fallbacks()
 
     def _has_content_policy_fallback(self, model_group: str, kwargs: Mapping[str, Any]) -> bool:
         """
