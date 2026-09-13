@@ -577,6 +577,75 @@ class TestPostCallFailureHookLiftsStandardLoggingObject:
         assert "standard_logging_object" not in request_data
 
 
+class TestPostCallFailureHookLiftsCallTypeAndStartTime:
+    """A guardrail-blocked MCP tool call fails before any LLM call. The failure
+    spend row is built from request_data after ``litellm_logging_obj`` is popped,
+    so ``call_type`` and the request ``start_time`` must be lifted off the logging
+    object first, or the Logs page shows the row as an LLM call with a blank call
+    type and a 0s duration (LIT-7453).
+    """
+
+    @pytest.mark.asyncio
+    async def test_failed_mcp_tool_call_spend_row_keeps_call_type_model_and_duration(self):
+        import traceback
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+        from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+        request_start = real_datetime.datetime.now() - real_datetime.timedelta(seconds=2)
+        logging_obj = Logging(
+            model="MCP: deepwiki-ask_question",
+            messages=[],
+            stream=False,
+            call_type="call_mcp_tool",
+            start_time=request_start,
+            litellm_call_id="call-1",
+            function_id="fn-1",
+        )
+        logging_obj.update_environment_variables(
+            model="MCP: deepwiki-ask_question",
+            user="",
+            optional_params={},
+            litellm_params={"metadata": {"user_api_key_hash": "hashed"}},
+        )
+        blocked = Exception("Content blocked: keyword 'confidential' detected")
+        logging_obj.failure_handler(blocked, traceback.format_exc(), request_start, real_datetime.datetime.now())
+        request_data = {
+            "name": "deepwiki-ask_question",
+            "arguments": {"question": "confidential"},
+            "litellm_logging_obj": logging_obj,
+        }
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        spend_writer = SimpleNamespace(update_database=AsyncMock())
+        original_callbacks = list(litellm.callbacks)
+        litellm.callbacks = [_ProxyDBLogger(spend_writer=lambda: spend_writer)]
+        try:
+            with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+                await proxy_logging_obj.post_call_failure_hook(
+                    request_data=request_data,
+                    original_exception=blocked,
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+                )
+        finally:
+            litellm.callbacks = original_callbacks
+            ProxyLogging._callback_capabilities_cache.clear()
+
+        db_call = spend_writer.update_database.call_args.kwargs
+        payload = get_logging_payload(
+            kwargs=db_call["kwargs"],
+            response_obj=db_call["completion_response"],
+            start_time=db_call["start_time"],
+            end_time=db_call["end_time"],
+        )
+        assert payload["call_type"] == "call_mcp_tool"
+        assert payload["model"] == "MCP: deepwiki-ask_question"
+        assert payload["endTime"] - payload["startTime"] >= real_datetime.timedelta(seconds=2)
+
+
 class TestPostCallFailureHookEstimatesDispatchedInputTokens:
     """A non-stream request that failed after dispatch (timeout, provider
     error) consumed provider-billed input tokens but recovered no usage.
@@ -1844,13 +1913,14 @@ def test_a_failure_with_no_logging_object_lifts_nothing():
     assert dict(_failure_fields_to_lift({"litellm_logging_obj": _LoggingObj({})})) == {}
 
 
-def test_a_dispatched_failure_lifts_the_four_fields_the_spend_log_needs():
+def test_a_dispatched_failure_lifts_the_fields_the_spend_log_needs():
     from litellm.proxy.utils import _failure_fields_to_lift
 
     lifted = _failure_fields_to_lift(
         {
             "litellm_logging_obj": _LoggingObj(
                 {
+                    "start_time": 1699999999.0,
                     "first_api_call_start_time": 1700000000.0,
                     "call_type": "acompletion",
                     "model": FAILURE_USAGE_MODEL,
@@ -1862,12 +1932,16 @@ def test_a_dispatched_failure_lifts_the_four_fields_the_spend_log_needs():
     )
 
     assert set(lifted) == {
+        "start_time",
         "first_api_call_start_time",
+        "call_type",
         "combined_usage_object",
         "response_cost",
         "standard_logging_object",
     }
+    assert lifted["start_time"] == 1699999999.0
     assert lifted["first_api_call_start_time"] == 1700000000.0
+    assert lifted["call_type"] == "acompletion"
     assert lifted["response_cost"] == 0.0
     assert lifted["combined_usage_object"].prompt_tokens > 0
     assert lifted["standard_logging_object"] == {"id": "log-1"}

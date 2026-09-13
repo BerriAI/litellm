@@ -52,6 +52,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import can_team_access_model
+from litellm.proxy.auth.resolvers.grants import GrantResolver, UserLookup, canonical_user_id
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.team_grants import team_model_aliases
 from litellm.proxy.common_utils.user_api_key_cache import (
@@ -1656,9 +1657,7 @@ class JWTAuthManager:
         ``get_user_object`` resolved a legacy row with a different ``user_id``,
         use that row's id; otherwise keep the claim. GH #26789.
         """
-        if user_object is not None and user_object.user_id:
-            return user_object.user_id
-        return user_id
+        return canonical_user_id(user_id=user_id, user_object=user_object)
 
     @staticmethod
     async def get_objects(
@@ -1725,22 +1724,23 @@ class JWTAuthManager:
                 code=403,
             )
 
-        user_object: LiteLLM_UserTable | None = None
-        if user_id:
-            user_object = (
-                await get_user_object(
-                    user_id=user_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    user_id_upsert=jwt_handler.is_upsert_user_id(valid_user_email=valid_user_email),
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                    user_email=user_email,
-                    sso_user_id=user_id,
-                )
-                if user_id
-                else None
-            )
+        user_object, team_membership_object, effective_user_id = await GrantResolver(
+            prisma_client,
+            user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            load_user=get_user_object,
+            load_team=get_team_object,
+            load_membership=get_team_membership,
+        ).resolve_identity(
+            UserLookup(
+                user_id=user_id,
+                user_email=user_email,
+                sso_user_id=user_id,
+                upsert=jwt_handler.is_upsert_user_id(valid_user_email=valid_user_email),
+            ),
+            team_id=team_id,
+        )
 
         end_user_object: LiteLLM_EndUserTable | None = None
         if end_user_id:
@@ -1757,37 +1757,12 @@ class JWTAuthManager:
                 else None
             )
 
-        # Rebind to resolved DB user_id for team_membership + auth_builder (GH #26789).
-        effective_user_id: Final = JWTAuthManager._canonical_user_id_from_db(user_id=user_id, user_object=user_object)
-        if effective_user_id != user_id:
-            verbose_proxy_logger.debug(
-                "JWT Auth: rebinding user_id %r -> DB user_id %r (email/sso match)",
-                user_id,
-                effective_user_id,
-            )
-        user_id = effective_user_id
-
-        team_membership_object: LiteLLM_TeamMembership | None = None
-        if user_id and team_id:
-            team_membership_object = (
-                await get_team_membership(
-                    user_id=user_id,
-                    team_id=team_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                )
-                if user_id and team_id
-                else None
-            )
-
         return (
             user_object,
             org_object,
             end_user_object,
             team_membership_object,
-            user_id,
+            effective_user_id,
         )
 
     @staticmethod

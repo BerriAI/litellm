@@ -1,5 +1,7 @@
 import asyncio
+import json
 from datetime import datetime
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -7,6 +9,7 @@ import pytest
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.collector import SpendEventConsumer
+from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
 from litellm.proxy.hooks.proxy_track_cost_callback import (
     _get_budget_reservation_from_metadata,
@@ -15,6 +18,8 @@ from litellm.proxy.hooks.proxy_track_cost_callback import (
     _update_database_and_spend_counters,
     run_spend_event,
 )
+from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.proxy.spend_tracking.spend_event import SpendEventDecodeError, build_spend_event, decode_spend_event
 from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
@@ -1908,14 +1913,15 @@ async def test_track_cost_callback_keeps_guardrail_cost_on_cache_hit():
         ("allm_passthrough_route", True),
         ("aretrieve_batch", True),
         ("acompletion", False),
-        ("call_mcp_tool", False),
+        ("call_mcp_tool", True),
         (None, False),
     ],
 )
 def test_should_track_cost_callback_pass_through_without_owner(call_type, expected):
     """Regression for LIT-3782: unauthenticated pass-through requests (auth=false)
     carry no key/user/team/end-user, yet must still be tracked so they land in
-    LiteLLM_SpendLogs. Other call types with no owner stay untracked.
+    LiteLLM_SpendLogs. Explicit MCP passthrough calls require the same handling.
+    Other call types with no owner stay untracked.
 
     aretrieve_batch is included for the same reason: CheckBatchCost's synthetic
     logging_obj for a completed managed batch only ever carries
@@ -1935,10 +1941,26 @@ def test_should_track_cost_callback_pass_through_without_owner(call_type, expect
     )
 
 
+def test_should_track_cost_callback_respects_disabled_spend_updates(monkeypatch):
+    monkeypatch.setattr(ProxyUpdateSpend, "disable_spend_updates", staticmethod(lambda: True))
+
+    assert (
+        _should_track_cost_callback(
+            user_api_key="key",
+            user_id="user",
+            team_id="team",
+            end_user_id="end-user",
+            call_type="call_mcp_tool",
+        )
+        is False
+    )
+
+
 @pytest.mark.parametrize(
     "call_type, expect_spend_log",
     [
         ("pass_through_endpoint", True),
+        ("call_mcp_tool", True),
         ("aretrieve_batch", True),
         ("acompletion", False),
         (None, False),
@@ -1949,8 +1971,8 @@ async def test_track_cost_callback_logs_unauthenticated_pass_through_request(cal
     """Regression for LIT-3782: a pass-through request with auth=false reaches the
     cost callback with no key/user/team/end-user. Before the fix the spend-log
     write was skipped and the request never appeared in request/usage logs. It
-    must now be written for pass-through call types while other unauthenticated
-    calls remain skipped.
+    must now be written for pass-through and MCP tool call types while other
+    unauthenticated calls remain skipped.
 
     aretrieve_batch is included because CheckBatchCost's completed-batch cost
     event reaches this same callback with no attributable key/user/team when
@@ -2347,3 +2369,27 @@ async def test_sidecar_ignores_an_undecodable_event():  # test-quality-ok: a dis
         mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
         await run_spend_event(b"garbage\n")
     mock_proxy_logging.db_spend_update_writer.update_database.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_hook_persists_no_raw_model_on_an_unknown_model_rejection():
+    raw_model: Final = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
+    writer: Final = MagicMock(spec=DBSpendUpdateWriter)
+    writer.update_database = AsyncMock()
+    logger: Final = _ProxyDBLogger(spend_writer=lambda: writer)
+
+    await logger.async_post_call_failure_hook(
+        request_data={"model": raw_model, "messages": [{"role": "user", "content": "hi"}]},
+        original_exception=ProxyModelNotFoundError(route="/chat/completions", model_name=raw_model),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+    )
+
+    error_information: Final = writer.update_database.call_args.kwargs["kwargs"]["litellm_params"]["metadata"][
+        "error_information"
+    ]
+    assert "medical records" not in json.dumps(error_information)
+    assert (
+        error_information["error_message"]
+        == "/chat/completions: Invalid model name passed in. Call `/v1/models` to view available models for your key."
+    )
+    assert error_information["error_class"] == "ProxyModelNotFoundError"

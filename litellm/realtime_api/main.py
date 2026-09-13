@@ -33,7 +33,7 @@ from litellm.utils import ProviderConfigManager
 from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..llms.azure.common_utils import get_azure_ad_token
-from ..llms.azure.realtime.handler import AzureOpenAIRealtime
+from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_protocol_for_client
 from ..llms.bedrock.realtime.handler import BedrockRealtime
 from ..llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from ..llms.openai.realtime.handler import OpenAIRealtime
@@ -448,14 +448,14 @@ async def _arealtime(
 
         api_version = api_version or litellm_params.api_version or "2024-10-01-preview"
 
-        realtime_protocol = (
+        configured_realtime_protocol: Final = (
             kwargs.get("realtime_protocol")
             or litellm_params.get("realtime_protocol")
             or os.environ.get("LITELLM_AZURE_REALTIME_PROTOCOL")
         )
-        if realtime_protocol is None and (query_params or {}).get("intent") == "transcription":
-            realtime_protocol = "GA"
-        realtime_protocol = realtime_protocol or "beta"
+        realtime_protocol: Final = azure_realtime_protocol_for_client(
+            configured_realtime_protocol, query_params=query_params, websocket=websocket
+        )
         resolved_azure_ad_token: Final = (
             None if api_key else get_azure_ad_token(GenericLiteLLMParams(**kwargs, azure_ad_token=azure_ad_token))
         )
@@ -621,9 +621,7 @@ def _azure_realtime_health_protocol(
     configured: Final = configured_raw if isinstance(configured_raw, str) else None
     if configured is not None:
         return configured, query_params
-    if query_params is not None:
-        return "GA", query_params
-    return "beta", None
+    return "GA", query_params
 
 
 def _realtime_health_check_auth_headers(
@@ -656,8 +654,8 @@ async def _realtime_health_check(
         api_key: str - api key
         custom_llm_provider: str - custom llm provider
         realtime_protocol: Optional[str] - protocol version ("GA"/"v1" for GA path, "beta" for beta path);
-            None resolves it for Azure from model_params/env, with transcription-only models probing GA
-            plus intent=transcription the way real calls do
+            None resolves it for Azure from model_params/env and otherwise probes GA, the upstream a client
+            without the OpenAI-Beta header is bridged to, with transcription-only models adding intent=transcription
 
     Returns:
         bool - True if connection is successful, False otherwise

@@ -16,7 +16,7 @@ import inspect
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import timedelta
@@ -317,19 +317,37 @@ def _is_redis_health_failure(exc: BaseException) -> bool:
 def _redis_timeout_error_types() -> tuple[type, ...]:
     """Health failures that are timeouts rather than unambiguous connectivity errors.
 
-    ``builtins.TimeoutError`` covers ``asyncio.TimeoutError`` and ``socket.timeout``
-    (aliases since py3.11 / py3.10). ``redis.exceptions.TimeoutError`` does not subclass
-    either, so it is listed explicitly.
+    ``builtins.TimeoutError`` covers ``socket.timeout`` (an alias since py3.10) and, from
+    py3.11, ``asyncio.TimeoutError``; on py3.10 ``asyncio.TimeoutError`` is still its own
+    class, so it is listed explicitly. ``redis.exceptions.TimeoutError`` subclasses neither.
     """
     try:
         from redis.exceptions import TimeoutError as RedisTimeoutError
     except ImportError:
-        return (TimeoutError,)
-    return (RedisTimeoutError, TimeoutError)
+        return (TimeoutError, asyncio.TimeoutError)
+    return (RedisTimeoutError, TimeoutError, asyncio.TimeoutError)
+
+
+_MAX_EXCEPTION_CAUSE_DEPTH: Final = 20
+
+
+def _explicit_causes(exc: BaseException) -> Iterator[BaseException]:
+    current = exc  # rebind-ok: advances one link per iteration of the bounded walk
+    for _ in range(_MAX_EXCEPTION_CAUSE_DEPTH):
+        yield current
+        if current.__cause__ is None:
+            return
+        current = current.__cause__
 
 
 def _is_redis_timeout_failure(exc: BaseException) -> bool:
-    return isinstance(exc, _redis_timeout_error_types())
+    """True when ``exc`` or any exception it was explicitly raised ``from`` is a timeout.
+
+    redis-py's blocking pool reports a pool wait timeout as ``ConnectionError`` chained from
+    ``asyncio.TimeoutError``, which is a busy pool rather than an unreachable Redis.
+    """
+    timeout_types: Final = _redis_timeout_error_types()
+    return any(isinstance(link, timeout_types) for link in _explicit_causes(exc))
 
 
 class _BreakerMetrics:
@@ -1138,6 +1156,46 @@ class RedisCache(BaseCache):
             )
             _record_swallowed_redis_failure(self._circuit_breaker, e)
 
+    @_redis_circuit_breaker_guard
+    async def async_set_cache_pipeline_with_ttls(self, cache_list: Sequence[tuple[str, object, float | None]]) -> None:
+        """One round trip for writes whose TTLs differ; a ``None`` TTL falls back to the default TTL."""
+        if len(cache_list) == 0:
+            return
+        commands: Final = tuple(
+            (self.check_and_fix_namespace(key=cache_key), json.dumps(cache_value), self.get_ttl(ttl=ttl))
+            for cache_key, cache_value, ttl in cache_list
+        )
+        start_time: Final = time.time()
+        try:
+            async with self.init_async_client().pipeline(transaction=False) as pipe:
+                for cache_key, json_cache_value, ttl in commands:
+                    pipe.set(name=cache_key, value=json_cache_value, ex=None if ttl is None else timedelta(seconds=ttl))
+                await pipe.execute()
+            asyncio.create_task(
+                self.service_logger_obj.async_service_success_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=time.time() - start_time,
+                    call_type=f"async_set_cache_pipeline_with_ttls <- {_get_call_stack_info()}",
+                    start_time=start_time,
+                    end_time=time.time(),
+                )
+            )
+        except Exception as e:
+            asyncio.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=time.time() - start_time,
+                    error=e,
+                    call_type=f"async_set_cache_pipeline_with_ttls <- {_get_call_stack_info()}",
+                    start_time=start_time,
+                    end_time=time.time(),
+                )
+            )
+            verbose_logger.error(
+                "LiteLLM Redis Caching: async_set_cache_pipeline_with_ttls() - Got exception from REDIS %s", str(e)
+            )
+            _record_swallowed_redis_failure(self._circuit_breaker, e)
+
     async def _set_cache_sadd_helper(
         self,
         redis_client: async_redis_client,
@@ -1233,6 +1291,24 @@ class RedisCache(BaseCache):
         if len(self.redis_batch_writing_buffer) >= self.redis_flush_size:
             await self.flush_cache_buffer()  # logging done in here
 
+    @staticmethod
+    async def _incrbyfloat_with_ttl(
+        _redis_client: "Redis", key: str, value: float, ttl: int | None, refresh_ttl: bool
+    ) -> float:
+        """INCRBYFLOAT plus its TTL command in one round trip; a third only when an unexpiring key needs an EXPIRE."""
+        if ttl is None:
+            return await _redis_client.incrbyfloat(name=key, amount=value)
+        async with _redis_client.pipeline(transaction=False) as pipe:
+            pipe.incrbyfloat(name=key, amount=value)
+            if refresh_ttl:
+                pipe.expire(key, ttl)
+            else:
+                pipe.ttl(key)
+            result, ttl_or_expire = await pipe.execute()
+        if not refresh_ttl and ttl_or_expire == -1:
+            await _redis_client.expire(key, ttl)
+        return float(result)
+
     @_redis_circuit_breaker_guard
     async def async_increment(
         self,
@@ -1249,14 +1325,9 @@ class RedisCache(BaseCache):
         _used_ttl: Final = self.get_ttl(ttl=ttl)
         key = self.check_and_fix_namespace(key=key)
         try:
-            result: Final = await _redis_client.incrbyfloat(name=key, amount=value)
-            if _used_ttl is not None:
-                if refresh_ttl:
-                    await _redis_client.expire(key, _used_ttl)
-                else:
-                    current_ttl: Final = await _redis_client.ttl(key)
-                    if current_ttl == -1:
-                        await _redis_client.expire(key, _used_ttl)
+            result: Final = await self._incrbyfloat_with_ttl(
+                _redis_client, key=key, value=value, ttl=_used_ttl, refresh_ttl=refresh_ttl
+            )
 
             ## LOGGING ##
             end_time = time.time()

@@ -59,7 +59,8 @@ class TestBuildTransaction:
     def test_successful_auto_routed_turn_builds_every_field(self):
         transaction = _build(
             metadata=_metadata(
-                usage_object={"prompt_tokens": 90, "cache_read_input_tokens": 5, "cache_creation_input_tokens": 7}
+                routing_decision={**ROUTING_DECISION, "savings_baseline_model": "anthropic/claude-opus-5"},
+                usage_object={"prompt_tokens": 90, "cache_read_input_tokens": 5, "cache_creation_input_tokens": 7},
             )
         )
         assert transaction == AutoRouterTurnTransaction(
@@ -77,6 +78,7 @@ class TestBuildTransaction:
             cache_hit=True,
             cache_ttl_seconds=300,
             cache_touched=True,
+            baseline_model="anthropic/claude-opus-5",
         )
 
     @pytest.mark.parametrize(
@@ -108,6 +110,17 @@ class TestBuildTransaction:
     def test_a_decision_that_never_mentions_tier_records_no_tier(self):
         transaction = _build()
         assert transaction is not None and transaction.tier is None
+
+    def test_the_baseline_the_turn_was_priced_against_travels_with_the_turn(self):
+        decision = {**ROUTING_DECISION, "savings_baseline_model": "anthropic/claude-opus-5"}
+        transaction = _build(metadata=_metadata(routing_decision=decision))
+        assert transaction is not None and transaction.baseline_model == "anthropic/claude-opus-5"
+
+    @pytest.mark.parametrize("baseline", [None, "", 3])
+    def test_a_decision_without_a_usable_baseline_records_none(self, baseline: object):
+        decision = {**ROUTING_DECISION, "savings_baseline_model": baseline}
+        transaction = _build(metadata=_metadata(routing_decision=decision))
+        assert transaction is not None and transaction.baseline_model is None
 
     def test_a_priced_classifier_rides_the_turns_spend(self):
         """The classifier row is excluded from the rollup, so its charge lands here,
@@ -215,6 +228,7 @@ def _transaction(
     session_id: str = "s1",
     at: datetime = datetime(2026, 8, 1, 12, 0, 0),
     tier: str | None = "medium",
+    baseline_model: str | None = "anthropic/claude-opus-5",
 ) -> AutoRouterTurnTransaction:
     return AutoRouterTurnTransaction(
         api_key="k1",
@@ -232,6 +246,7 @@ def _transaction(
         cache_ttl_seconds=None,
         cache_touched=False,
         tier=tier,
+        baseline_model=baseline_model,
     )
 
 
@@ -265,6 +280,7 @@ class TestFlush:
             None,
             0,
             "medium",
+            "anthropic/claude-opus-5",
         )
 
     def test_a_connect_error_retries_the_same_statement(self):
