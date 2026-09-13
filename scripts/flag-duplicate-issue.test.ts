@@ -85,6 +85,17 @@ describe("noticeBody", () => {
     const closedTwin = issue(10, "[bug] gemma 4-e4b fails on vertex!", { state: "closed" });
     expect(noticeBody(reporter, closedTwin, "Same stack.")).not.toContain("closes automatically");
     expect(duplicateTarget(reporter, [closedTwin], []).kind).toBe("skip");
+
+    const short = issue(35, "[Bug]: Vertex crash");
+    const shortTwin = issue(10, "Vertex crash");
+    expect(noticeBody(short, shortTwin, "Same stack.")).not.toContain("closes automatically");
+    expect(duplicateTarget(short, [shortTwin], []).kind).toBe("skip");
+  });
+
+  test("never promises a label removal nothing performs", () => {
+    const body = noticeBody(reporter, issue(10, "Vertex Gemma 4 crash"), "Same stack.");
+    expect(body).toContain("a maintainer will take the label off");
+    expect(body).not.toContain("the label comes off");
   });
 });
 

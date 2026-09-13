@@ -3,9 +3,9 @@
 import {
   DEFAULT_GRACE_DAYS,
   FLAG_LABEL,
+  duplicateTarget,
   githubApi,
   listAll,
-  normalizeTitle,
   type Comment,
   type GitHubApi,
   type Issue,
@@ -87,9 +87,9 @@ export function noticeBody(issue: Issue, prior: Issue, evidence: string): string
     ? `**Already reported in #${prior.number}**, which is closed`
     : `**Possible duplicate of #${prior.number}**`;
   const ask = closed
-    ? "If that issue covers this one, follow up there. If this is a new case, say so here and the label comes off."
-    : `If that is right, add a thumbs-up to #${prior.number} and follow along there. If it is not, say so here and the label comes off.`;
-  const autoCloses = !closed && normalizeTitle(issue.title) === normalizeTitle(prior.title);
+    ? "If that issue covers this one, follow up there. If this is a new case, say so here and a maintainer will take the label off."
+    : `If that is right, add a thumbs-up to #${prior.number} and follow along there. If it is not, say so here and a maintainer will take the label off.`;
+  const autoCloses = duplicateTarget(issue, [prior], []).kind === "close";
   const warning = autoCloses
     ? `\n\nYour title is identical to #${prior.number}, so this issue closes automatically in ${DEFAULT_GRACE_DAYS} days unless someone responds here.`
     : "";
