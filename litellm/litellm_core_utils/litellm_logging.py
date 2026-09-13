@@ -4500,6 +4500,7 @@ def _init_custom_logger_compatible_class(
 
                 for callback in _in_memory_loggers:
                     if isinstance(callback, OpenTelemetryV2) and callback.serves_generic_collector:
+                        _maybe_auto_initialize_arize_phoenix(_in_memory_loggers)
                         return callback
                 otel_settings: Final = _get_custom_logger_settings_from_proxy_server(callback_name=logging_integration)
                 otel_logger_v2: Final = build_otel_v2_logger(

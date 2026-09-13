@@ -1858,6 +1858,25 @@ class TestDestinationOwnership:
         (span,) = sinks[_COLLECTOR].get_finished_spans()
         assert span.resource.attributes["service.name"] == "ops-collector"
 
+    def test_the_otel_entry_still_auto_initializes_phoenix_when_it_reuses_a_mapper_only_preset(self, monkeypatch):
+        """``callbacks: [langtrace, otel]`` with Phoenix env vars: riding the Langtrace logger must not skip the
+        Phoenix auto-init that a lone ``otel`` entry performs."""
+        from litellm.integrations.arize.arize_phoenix import ArizePhoenixLogger
+
+        self._capture_exporters(monkeypatch)
+        self._operator_with(monkeypatch, "langfuse_otel")
+        monkeypatch.setenv("PHOENIX_COLLECTOR_HTTP_ENDPOINT", "http://phoenix.invalid/v1/traces")
+        monkeypatch.setattr(litellm, "callbacks", [])
+        loggers: list[CustomLogger] = []  # mutable-ok: stands in for the process-wide _in_memory_loggers list
+        monkeypatch.setattr(litellm_logging, "_in_memory_loggers", loggers)
+
+        langtrace = in_fresh_context(_maybe_construct_otel_v2, "langtrace", loggers)
+        generic = in_fresh_context(_init_custom_logger_compatible_class, "otel", None, None)
+        is_otel_v2_enabled.cache_clear()
+
+        assert isinstance(langtrace, OpenTelemetryV2) and generic is langtrace
+        assert sum(isinstance(cb, ArizePhoenixLogger) for cb in loggers) == 1
+
     @pytest.mark.parametrize("otel_first", [True, False])
     def test_the_otel_callback_holds_the_proxy_slot_whatever_the_order(self, monkeypatch, otel_first):
         from litellm.proxy import proxy_server
