@@ -161,7 +161,13 @@ class TestBuildGeneratedModelList:
         config = _base_config(classifier=HeuristicClassifier(), semantic_matching=NoSemanticMatching())
         autorouter = next(m for m in build_generated_model_list(config) if m["model_name"] == "autorouter")
         router_config = autorouter["litellm_params"]["complexity_router_config"]
-        assert set(router_config.keys()) == {"tiers", "default_model"}
+        assert set(router_config.keys()) == {"tiers", "default_model", "return_raw_model_name"}
+
+    def test_the_generated_router_reports_the_tier_model_it_routed_to(self):
+        # The status line reads the routed model from the response body, which the proxy restamps to the
+        # requested alias unless the deployment opts out; "autorouter" on every line would tell nothing.
+        autorouter = next(m for m in build_generated_model_list(_base_config()) if m["model_name"] == "autorouter")
+        assert autorouter["litellm_params"]["complexity_router_config"]["return_raw_model_name"] is True
 
 
 class TestBuildGeneratedProxyConfig:

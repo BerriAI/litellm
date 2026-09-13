@@ -8,6 +8,7 @@ import pytest
 from pydantic import BaseModel, TypeAdapter
 
 from litellm.models.access_group import LiteLLM_AccessGroupTable
+from litellm.models.autorouter_session import LiteLLM_AutoRouterSession
 from litellm.models.budget import (
     LiteLLM_BudgetTable,
     LiteLLM_BudgetTableFull,
@@ -588,3 +589,35 @@ class TestManagedTables:
         )
         assert table.vector_store_id == "vs1"
         assert table.custom_llm_provider == "openai"
+
+
+class TestAutoRouterSession:
+    @staticmethod
+    def _row(baseline_models: dict) -> LiteLLM_AutoRouterSession:
+        return LiteLLM_AutoRouterSession(
+            api_key="k",
+            session_id="s",
+            router_name="auto",
+            router_type="complexity",
+            first_turn_at=datetime(2026, 9, 1, 12, 0, 0),
+            last_turn_at=datetime(2026, 9, 1, 12, 5, 0),
+            last_model="anthropic/claude-sonnet-5",
+            turns=3,
+            spend=0.14,
+            saved_spend=0.24,
+            classifier_cost=0.0,
+            tier_turns={},
+            baseline_models=baseline_models,
+        )
+
+    def test_the_baseline_label_is_the_one_most_turns_were_priced_against(self):
+        assert self._row({"anthropic/claude-opus-5": 2, "anthropic/claude-sonnet-5": 1}).baseline_model == (
+            "anthropic/claude-opus-5"
+        )
+
+    def test_a_tie_between_baselines_is_broken_deterministically(self):
+        assert self._row({"b-model": 1, "a-model": 1}).baseline_model == "b-model"
+        assert self._row({"a-model": 1, "b-model": 1}).baseline_model == "b-model"
+
+    def test_a_row_whose_turns_recorded_no_baseline_has_no_label(self):
+        assert self._row({}).baseline_model is None

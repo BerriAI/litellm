@@ -4,10 +4,11 @@ from collections.abc import Coroutine, Generator, Iterable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias, cast
 
 import httpx
 from pydantic import BaseModel
+from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
@@ -17,6 +18,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
 from litellm.constants import request_timeout
 from litellm.integrations.anthropic_cache_control_hook import CARRY_UNMATCHED_MESSAGE_POINTS
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     update_responses_input_with_model_file_ids,
@@ -404,6 +406,37 @@ def _bridges_to_chat_completions(
 ) -> bool:
     """Whether the request reaches its provider as a chat completion, not a Responses call."""
     return responses_api_provider_config is None or use_chat_completions_api is True
+
+
+_ResponsesCompatibilityFailure: TypeAlias = Literal["encrypted_task_unsupported"]
+
+
+def _encrypted_task_support_failure(
+    responses_api_provider_config: BaseResponsesAPIConfig | None, use_chat_completions_api: bool
+) -> _ResponsesCompatibilityFailure | None:
+    if (
+        responses_api_provider_config is None
+        or _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api)
+        or not responses_api_provider_config.supports_encrypted_agent_messages()
+    ):
+        return "encrypted_task_unsupported"
+    return None
+
+
+def _raise_responses_compatibility_failure(
+    failure: _ResponsesCompatibilityFailure, model: str, custom_llm_provider: str | None
+) -> NoReturn:
+    match failure:
+        case "encrypted_task_unsupported":
+            raise litellm.exception_type(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                original_exception=ValueError(
+                    "Encrypted task classification requires a compatible native Responses deployment"
+                ),
+            )
+        case _:
+            assert_never(failure)
 
 
 def _deployment_passes_through_responses(model_info: object) -> bool:
@@ -1077,6 +1110,7 @@ def responses(
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aresponses", False) is True
         skip_mcp_handler: Final = kwargs.pop("_skip_mcp_handler", False)
+        require_encrypted_task_support: Final = kwargs.pop("_require_encrypted_task_support", False) is True
         use_chat_completions_api = _pop_use_chat_completions_api_kw(kwargs)
 
         client_headers: Final = kwargs.get("headers")
@@ -1185,6 +1219,17 @@ def responses(
                 model, custom_llm_provider, deployment_model_info
             )
 
+        if (
+            require_encrypted_task_support
+            and (
+                compatibility_failure := _encrypted_task_support_failure(
+                    responses_api_provider_config, use_chat_completions_api
+                )
+            )
+            is not None
+        ):
+            _raise_responses_compatibility_failure(compatibility_failure, model, custom_llm_provider)
+
         local_vars.update(kwargs)
         # Map reasoning_effort (from litellm_params/proxy config) to reasoning when not set
         if reasoning is None and "reasoning_effort" in local_vars:
@@ -1257,7 +1302,7 @@ def responses(
             responses_api_provider_config=responses_api_provider_config,
             response_api_optional_params=response_api_optional_params,
             allowed_openai_params=allowed_openai_params,
-            drop_params=request_drop_params if isinstance(request_drop_params, bool) else None,
+            drop_params=normalize_drop_params(request_drop_params),
         )
 
         litellm_logging_obj.update_from_kwargs(
@@ -2085,7 +2130,7 @@ def compact_responses(
             responses_api_provider_config=responses_api_provider_config,
             response_api_optional_params=response_api_optional_params,
             allowed_openai_params=None,
-            drop_params=request_drop_params if isinstance(request_drop_params, bool) else None,
+            drop_params=normalize_drop_params(request_drop_params),
         )
 
         # Pre Call logging

@@ -390,6 +390,28 @@ describe("DataTable filtering", () => {
     expect(names()).toEqual(["Alice"]);
   });
 
+  it("client global filter searches an opted-in column even when the first row has no value", () => {
+    const nicknameColumns: ColumnDef<Person, unknown>[] = [
+      ...nameEmailColumns,
+      {
+        id: "nickname",
+        accessorFn: (row) => (row.id === "b" ? "Bobby" : undefined),
+        enableGlobalFilter: true,
+        header: "Nickname",
+      },
+    ];
+    render(
+      <DataTable
+        data={CHARLIE_ALICE_BOB}
+        columns={nicknameColumns}
+        filterMode="client"
+        globalFilter="bobby"
+        onGlobalFilterChange={vi.fn()}
+      />,
+    );
+    expect(names()).toEqual(["Bob"]);
+  });
+
   it("server mode never filters locally even when columnFilters is set", () => {
     render(
       <DataTable

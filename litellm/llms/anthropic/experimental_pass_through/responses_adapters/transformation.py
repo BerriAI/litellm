@@ -13,7 +13,8 @@ from typing import Any, Final, cast
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
-    responses_reasoning_item_from_thinking_blocks,
+    encrypted_reasoning_signature,
+    responses_reasoning_items_from_thinking_blocks,
     with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import (
@@ -33,6 +34,7 @@ from litellm.types.llms.anthropic import (
     AnthropicFinishReason,
     AnthropicMessagesRequest,
     AnthropicMessagesToolChoice,
+    AnthropicResponseContentBlockRedactedThinking,
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockThinking,
     AnthropicResponseContentBlockToolUse,
@@ -43,10 +45,12 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicUsage,
 )
 from litellm.types.llms.openai import (
-    ChatCompletionThinkingBlock,
     ResponseAPIUsage,
     ResponsesAPIResponse,
 )
+
+REASONING_SUMMARY_PART_SEPARATOR: Final = "\n\n"
+RESPONSES_INCLUDE_ENCRYPTED_REASONING: Final = "reasoning.encrypted_content"
 
 
 class LiteLLMAnthropicToResponsesAPIAdapter:
@@ -163,49 +167,55 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         return str(getattr(part, "text", None) or "")
 
     @classmethod
-    def _thinking_blocks_from_reasoning_item(
+    def _thinking_block_from_reasoning_item(
         cls,
         summary: Iterable[object],
-    ) -> tuple[dict[str, Any], ...]:  # mutable-ok: API message payload
-        """Anthropic thinking blocks for one Responses reasoning item.
+        encrypted_content: object,
+    ) -> dict[str, Any] | None:  # mutable-ok: API message payload
+        """The one Anthropic block for a Responses reasoning item.
 
-        The signature stays empty: only Anthropic can sign a thinking block, and a stand-in
-        value would be replayed as a real one and rejected by every backend that verifies it.
+        The item's encrypted reasoning rides the block's opaque field (`signature`, or
+        `data` when there is no summary text) so the client echoes it back and the next
+        turn replays the very item OpenAI produced; without it the signature stays empty,
+        since only Anthropic can sign a thinking block.
         """
-        return tuple(
-            AnthropicResponseContentBlockThinking(
-                type="thinking",
-                thinking=text,
-                signature=None,
-            ).model_dump()
-            for part in summary
-            if (text := cls._summary_part_text(part))
+        text: Final = REASONING_SUMMARY_PART_SEPARATOR.join(
+            part_text for part in summary if (part_text := cls._summary_part_text(part))
         )
+        if not isinstance(encrypted_content, str) or not encrypted_content:
+            if not text:
+                return None
+            return AnthropicResponseContentBlockThinking(type="thinking", thinking=text, signature=None).model_dump()
+        signature: Final = encrypted_reasoning_signature(encrypted_content)
+        if not text:
+            return AnthropicResponseContentBlockRedactedThinking(type="redacted_thinking", data=signature).model_dump()
+        return AnthropicResponseContentBlockThinking(type="thinking", thinking=text, signature=signature).model_dump()
 
     @staticmethod
     def _assistant_block_group_key(indexed_block: tuple[int, Mapping[str, object]]) -> str:
         """Group a run of consecutive thinking blocks together; keep every other block alone."""
         index, block = indexed_block
-        return "thinking" if block.get("type") == "thinking" else f"block:{index}"
+        return "thinking" if block.get("type") in ("thinking", "redacted_thinking") else f"block:{index}"
 
     @classmethod
-    def _assistant_group_to_input_item(
+    def _assistant_group_to_input_items(
         cls, group: tuple[Mapping[str, object], ...]
-    ) -> dict[str, Any] | None:  # mutable-ok: API message payload
+    ) -> tuple[dict[str, Any], ...]:  # mutable-ok: API message payload
         first: Final = group[0]
         btype: Final = first.get("type")
-        if btype == "thinking":
-            blocks: Final = cast(tuple[ChatCompletionThinkingBlock, ...], group)  # cast-ok: untrusted client payload
-            reasoning_item: Final = responses_reasoning_item_from_thinking_blocks(blocks)
-            return None if reasoning_item is None else dict(reasoning_item)  # mutable-ok: API message payload
+        if btype in ("thinking", "redacted_thinking"):
+            replayed: Final = responses_reasoning_items_from_thinking_blocks(group)
+            return tuple(dict(item) for item in replayed)  # mutable-ok: API message payload
         if btype == "tool_use":
-            return {  # mutable-ok: API message payload
-                "type": "function_call",
-                "call_id": first.get("id", ""),
-                "name": first.get("name", ""),
-                "arguments": json.dumps(first.get("input", {})),  # mutable-ok: API message payload
-            }
-        return None
+            return (
+                {  # mutable-ok: API message payload
+                    "type": "function_call",
+                    "call_id": first.get("id", ""),
+                    "name": first.get("name", ""),
+                    "arguments": json.dumps(first.get("input", {})),  # mutable-ok: API message payload
+                },
+            )
+        return ()
 
     def translate_messages_to_responses_input(
         self,
@@ -362,7 +372,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                     input_items.extend(
                         item
                         for _, group in groupby(enumerate(blocks), key=self._assistant_block_group_key)
-                        if (item := self._assistant_group_to_input_item(tuple(block for _, block in group))) is not None
+                        for item in self._assistant_group_to_input_items(tuple(block for _, block in group))
                     )
                     asst_parts: list[dict[str, Any]] = [  # mutable-ok: API message payload
                         {"type": "output_text", "text": block.get("text", "")}  # mutable-ok: API message payload
@@ -495,10 +505,16 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     def translate_request(
         self,
         anthropic_request: AnthropicMessagesRequest,
+        include_encrypted_reasoning: bool = True,
     ) -> dict[str, Any]:
         """
         Translate a full Anthropic /v1/messages request dict to
         litellm.responses() / litellm.aresponses() kwargs.
+
+        ``include_encrypted_reasoning`` asks the provider for ``reasoning.encrypted_content``
+        on every call, so a reasoning model's items can be replayed intact next turn even
+        when the client sent no ``thinking`` block; pass False for a provider whose
+        Responses API rejects ``include``.
         """
         model: Final[str] = anthropic_request["model"]
         messages_list: Final = cast(
@@ -528,6 +544,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             "model": model,
             "input": input_items,
         }
+        if include_encrypted_reasoning:
+            responses_kwargs["include"] = [RESPONSES_INCLUDE_ENCRYPTED_REASONING]  # mutable-ok: API request payload
 
         if system and not developer_parts:
             if isinstance(system, str):
@@ -634,7 +652,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
         for item in response.output:
             if isinstance(item, ResponseReasoningItem):
-                content.extend(self._thinking_blocks_from_reasoning_item(item.summary))
+                reasoning_block = self._thinking_block_from_reasoning_item(item.summary, item.encrypted_content)
+                if reasoning_block is not None:
+                    content.append(reasoning_block)
 
             elif isinstance(item, ResponseOutputMessage):
                 for part in item.content:
@@ -684,11 +704,12 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                     ).model_dump()
                                 )
                 elif item_type == "reasoning":
-                    content.extend(
-                        self._thinking_blocks_from_reasoning_item(
-                            cast(Iterable[object], item.get("summary") or ()),  # cast-ok: untyped provider json
-                        )
+                    reasoning_block = self._thinking_block_from_reasoning_item(
+                        cast(Iterable[object], item.get("summary") or ()),  # cast-ok: untyped provider json
+                        item.get("encrypted_content"),
                     )
+                    if reasoning_block is not None:
+                        content.append(reasoning_block)
                 elif item_type == "function_call":
                     try:
                         input_data = json.loads(item.get("arguments", "{}"))

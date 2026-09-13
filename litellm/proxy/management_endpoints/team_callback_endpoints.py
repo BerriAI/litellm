@@ -20,6 +20,7 @@ from litellm.proxy._types import (
     LiteLLM_AuditLogs,
     LiteLLM_TeamTable,
     LitellmTableNames,
+    LitellmUserRoles,
     ProxyErrorTypes,
     ProxyException,
     TeamCallbackDeleteResponse,
@@ -28,7 +29,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.callback_config_validation import callback_config_error
+from litellm.proxy.common_utils.callback_config_validation import (
+    callback_config_error,
+    cross_entry_family_error,
+)
 from litellm.proxy.common_utils.callback_utils import (
     _CALLBACK_VAR_ENCRYPTED_PREFIX,
     decrypt_callback_vars,
@@ -230,6 +234,22 @@ def _callback_error(status_code: int, message: str) -> HTTPException:
     )
 
 
+def _unknown_team_error(team_id: str, user_api_key_dict: UserAPIKeyAuth, status_code: int) -> HTTPException:
+    """Report an unknown team without telling an unauthorized caller that it is unknown.
+
+    These routes are reachable by any authenticated caller so that a team admin can
+    get as far as _verify_team_access. A distinct "does not exist" would therefore let
+    any valid key probe which team ids exist, so a caller who could not have managed
+    the team either way gets the same 403 body _verify_team_access raises.
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return _callback_error(status_code, f"Team id = {team_id} does not exist.")
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You do not have access to this team",
+    )
+
+
 @router.post(
     "/team/{team_id:path}/callback",
     tags=["team management"],
@@ -304,10 +324,7 @@ async def add_team_callbacks(
         # Check if team_id exists already
         _existing_team = await prisma_client.get_data(team_id=team_id, table_name="team", query_type="find_unique")
         if _existing_team is None:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": f"Team id = {team_id} does not exist. Please use a different team id."},
-            )
+            raise _unknown_team_error(team_id, user_api_key_dict, status.HTTP_400_BAD_REQUEST)
 
         # IDOR guard: only proxy admins / org admins / team admins of THIS
         # team may write callback credentials. Without this, any
@@ -325,6 +342,28 @@ async def add_team_callbacks(
         team_callback_settings: list[dict] = team_metadata.get("logging")  # will be dict of type AddTeamCallback
         if team_callback_settings is None or not isinstance(team_callback_settings, list):
             team_callback_settings = []
+
+        # One entry has to own a credential family end to end. The entries are
+        # flattened into one dict before a request reads them, so an entry
+        # naming only a destination would pair with a key written on another
+        # entry and carry it to that destination -- a key a team admin can read
+        # back nowhere. Repeating a value the owning entry already stores is
+        # fine, which is how one integration covers both events. Proxy admins
+        # are exempt: they already hold every credential the proxy has.
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            # Decrypted, because the check compares the incoming values against
+            # the stored ones and the credentials are encrypted at rest.
+            decrypted_logging: Final = decrypt_callback_vars(team_metadata).get("logging")
+            stored_entries: Final = decrypted_logging if isinstance(decrypted_logging, list) else ()
+            stored_entry_vars: Final = [  # mutable-ok: read-only input to the check, never stored
+                entry.get("callback_vars") or {} for entry in stored_entries
+            ]
+            family_error: Final = cross_entry_family_error(data.callback_vars, stored_entry_vars)
+            if family_error is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=family_error,
+                )
 
         ## check if it already exists, for the same callback event
         for callback in team_callback_settings:
@@ -452,7 +491,7 @@ async def delete_team_callback(
             team_id=team_id, table_name="team", query_type="find_unique"
         )
         if _existing_team is None:
-            raise _callback_error(404, f"Team id = {team_id} does not exist.")
+            raise _unknown_team_error(team_id, user_api_key_dict, status.HTTP_404_NOT_FOUND)
 
         # IDOR guard: only proxy admins / org admins / team admins of THIS team may
         # deregister its callbacks, otherwise any authenticated key holder could
@@ -726,10 +765,7 @@ async def get_team_callbacks(
         # Check if team_id exists
         _existing_team = await prisma_client.get_data(team_id=team_id, table_name="team", query_type="find_unique")
         if _existing_team is None:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": f"Team id = {team_id} does not exist."},
-            )
+            raise _unknown_team_error(team_id, user_api_key_dict, status.HTTP_404_NOT_FOUND)
 
         # IDOR guard: callback metadata holds third-party API credentials
         # (Langfuse / Langsmith / GCS). Only proxy admins / org admins /

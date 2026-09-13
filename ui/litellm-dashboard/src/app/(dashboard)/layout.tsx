@@ -10,6 +10,7 @@ import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import { useRouter, useSearchParams } from "next/navigation";
 import { DebugWarningBanner } from "@/components/DebugWarningBanner";
 import { NoRedisWarningBanner } from "@/components/NoRedisWarningBanner";
+import { EnvCredentialLoginWarningBanner } from "@/components/EnvCredentialLoginWarningBanner";
 import { LicenseExpiryBanner } from "@/components/LicenseExpiryBanner";
 import { UserBanner } from "@/components/UserBanner";
 import { uiHref } from "@/utils/uiHref";
@@ -113,6 +114,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         <Navbar accessToken={accessToken} isPublicPage={false} />
         <DebugWarningBanner accessToken={accessToken} />
         <NoRedisWarningBanner accessToken={accessToken} />
+        <EnvCredentialLoginWarningBanner accessToken={accessToken} />
         <LicenseExpiryBanner accessToken={accessToken} />
         <UserBanner accessToken={accessToken} />
         <main className="flex min-h-0 flex-1 overflow-hidden">
@@ -132,6 +134,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         <DashboardHeader />
         <DebugWarningBanner accessToken={accessToken} />
         <NoRedisWarningBanner accessToken={accessToken} />
+        <EnvCredentialLoginWarningBanner accessToken={accessToken} />
         <LicenseExpiryBanner accessToken={accessToken} />
         <UserBanner accessToken={accessToken} />
         <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>

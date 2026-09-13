@@ -299,6 +299,8 @@ def compute_autorouter_savings(
     selected_info: ModelInfo | None = None,
     baseline_info: ModelInfo | None = None,
     cost_breakdown: Mapping[str, object] | None = None,
+    baseline_deployment_id: str | None = None,
+    selected_deployment_id: str | None = None,
 ) -> float:
     """Net dollars the router saved, or cost, by serving this request on ``selected_model``.
 
@@ -334,11 +336,12 @@ def compute_autorouter_savings(
     selected: Final = _resolve_model(selected_model, selected_provider)
     if baseline is None or selected is None:
         return 0.0
-    # Same model is only the same cost when it is also the same deployment. Two
-    # deployments of one model can carry different negotiated rates, and routing from
-    # the dear one to the cheap one is a real saving that short-circuiting on the model
-    # name alone reports as zero.
-    if baseline == selected:
+    same_target: Final = (
+        baseline_deployment_id == selected_deployment_id
+        if baseline_deployment_id and selected_deployment_id
+        else baseline == selected
+    )
+    if same_target:
         return 0.0
     basis: Final = _pricing_basis(cost_breakdown)
     effective_baseline_info: Final = baseline_info if baseline_info is not None else _model_info(baseline)
@@ -517,6 +520,8 @@ def autorouter_savings_for_request(
         selected_info=_effective_model_info(router_instance, model_id, model or ""),
         baseline_info=_effective_model_info(router_instance, baseline_id, baseline_model or ""),
         cost_breakdown=cost_breakdown,
+        baseline_deployment_id=baseline_id,
+        selected_deployment_id=model_id,
     )
     classifier_cost: Final = classifier_cost_from_decision(decision)
     return gross if classifier_cost is None else gross - classifier_cost

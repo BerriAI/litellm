@@ -15,7 +15,8 @@ Streaming: CSW.__anext__ stores args on logging_obj at stream end.
 """
 
 import asyncio
-from typing import Any
+import logging
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -295,6 +296,38 @@ async def test_no_flag_fires_create_task_normally():
 # ---------------------------------------------------------------------------
 # 4. Non-streaming: deferred success log is suppressed when guardrail raises
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("call_type", ["ocr", "aocr", "completion", "acompletion", "embedding", "responses"])
+@pytest.mark.parametrize("exception_raised", [False, True])
+def test_native_pending_logging_is_released_only_for_ocr(call_type: str, exception_raised: bool) -> None:
+    pending: Final = MagicMock()
+    enqueue: Final = MagicMock()
+    logger: Final = MagicMock(
+        call_type=call_type,
+        _native_pending_logging=pending,
+        _enqueue_deferred_logging=enqueue,
+    )
+
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
+        logging_obj=logger,
+        exception_raised=exception_raised,
+    )
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
+        logging_obj=logger,
+        exception_raised=exception_raised,
+    )
+
+    if call_type in ("ocr", "aocr"):
+        pending.release.assert_called_once_with(not exception_raised)
+        assert logger._native_pending_logging is None
+    else:
+        pending.release.assert_not_called()
+        assert logger._native_pending_logging is pending
+    if exception_raised:
+        enqueue.assert_not_called()
+    else:
+        enqueue.assert_called_once_with()
 
 
 def test_flush_deferred_async_logging_fires_on_success():
@@ -1390,7 +1423,7 @@ class TestArmDeferredStreamDispatch:
     async def test_native_stream_closure_enqueues_single_coroutine(self):
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
-        logging_obj, _ = self._dispatch_recording_logging_obj()
+        logging_obj, recorded = self._dispatch_recording_logging_obj()
 
         async def _agen():
             yield b"x"
@@ -1401,19 +1434,88 @@ class TestArmDeferredStreamDispatch:
             user_api_key_dict=MagicMock(),
             logging_obj=logging_obj,
         )
-        closure = logging_obj._on_deferred_stream_complete
-        assert closure is not None
+        assert logging_obj._on_deferred_stream_complete is not None
 
         async def _logging_coroutine():
             return None
 
         coro = _logging_coroutine()
+        logging_obj._deferred_stream_complete_args = (coro,)
         with patch.object(  # test-quality-ok: GLOBAL_LOGGING_WORKER is a process-global singleton with no injection seam
             GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue"
         ) as mock_enqueue:
-            await closure(coro)
+            ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
+            await asyncio.sleep(0)
         mock_enqueue.assert_called_once_with(async_coroutine=coro)
+        assert recorded == {}
         coro.close()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("route_type", ["anthropic_messages", "aresponses"])
+    async def test_raw_generator_stream_storing_csw_arg_shape_dispatches_success(self, route_type):
+        """Bridged /v1/messages returns AnthropicStreamWrapper's plain SSE
+        generator, which shares its inner CustomStreamWrapper's logging_obj and
+        so stores (assembled_response, cache_hit). The closure armed for a raw
+        generator must accept that shape too, or _fire_deferred_stream_logging
+        raises TypeError and the request loses its spend log and callbacks."""
+        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+        logging_obj, recorded = self._dispatch_recording_logging_obj()
+
+        async def _agen():
+            yield b"x"
+
+        self._processor()._arm_deferred_stream_dispatch(
+            response=_agen(),
+            route_type=route_type,
+            user_api_key_dict=MagicMock(),
+            logging_obj=logging_obj,
+        )
+
+        assembled = object()
+        logging_obj._deferred_stream_complete_args = (assembled, True)
+        with patch.object(  # test-quality-ok: GLOBAL_LOGGING_WORKER is a process-global singleton with no injection seam
+            GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue"
+        ) as mock_enqueue:
+            ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
+            await asyncio.sleep(0)
+
+        mock_enqueue.assert_not_called()
+        assert recorded["result"] is assembled
+        assert recorded["cache_hit"] is True
+        assert recorded["prefer_async_handlers"] is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("stored_args", [(object(),), (object(), object(), object())])
+    async def test_raw_generator_stream_with_unknown_arg_shape_logs_and_drops(self, stored_args, caplog):
+        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+        logging_obj, recorded = self._dispatch_recording_logging_obj()
+
+        async def _agen():
+            yield b"x"
+
+        self._processor()._arm_deferred_stream_dispatch(
+            response=_agen(),
+            route_type="anthropic_messages",
+            user_api_key_dict=MagicMock(),
+            logging_obj=logging_obj,
+        )
+
+        logging_obj._deferred_stream_complete_args = stored_args
+        with (
+            patch.object(  # test-quality-ok: GLOBAL_LOGGING_WORKER is a process-global singleton with no injection seam
+                GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue"
+            ) as mock_enqueue,
+            caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
+        ):
+            ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
+            await asyncio.sleep(0)
+
+        mock_enqueue.assert_not_called()
+        assert recorded == {}
+        dropped = [r for r in caplog.records if r.getMessage().startswith("Deferred stream logging dropped")]
+        assert len(dropped) == 1
 
     @pytest.mark.asyncio
     async def test_csw_closure_routes_through_deferred_stream_guardrails(self, monkeypatch):

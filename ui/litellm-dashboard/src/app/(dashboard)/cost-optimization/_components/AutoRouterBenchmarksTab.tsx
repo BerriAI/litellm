@@ -30,7 +30,7 @@ import {
   type BenchmarkView,
   type BucketRow,
 } from "./autoRouterBenchmarks";
-import { formatRangeLabel, usd } from "./costOptimizationUtils";
+import { classificationRatePer1kTurns, formatRangeLabel, usd } from "./costOptimizationUtils";
 import ShadowEvalSection from "./ShadowEvalSection";
 import TierTurnsChart from "./TierTurnsChart";
 import { useAutoRouterBenchmarks } from "./useAutoRouterBenchmarks";
@@ -52,9 +52,17 @@ const Metric: React.FC<{ label: string; value: string; hint?: string }> = ({ lab
   </Card>
 );
 
-const SpendRow: React.FC<{ label: string; value: string; subdued?: boolean }> = ({ label, value, subdued }) => (
+const SpendRow: React.FC<{ label: string; value: string; hint?: string; subdued?: boolean }> = ({
+  label,
+  value,
+  hint,
+  subdued,
+}) => (
   <dl className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 py-2">
-    <dt className="min-w-0 text-sm text-muted-foreground">{label}</dt>
+    <dt className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-sm text-muted-foreground">
+      {label}
+      {hint && <span className="text-xs">{hint}</span>}
+    </dt>
     <dd
       className={`min-w-0 break-all tabular-nums ${subdued ? "text-sm font-normal text-muted-foreground" : "text-base font-semibold text-foreground"}`}
     >
@@ -99,6 +107,11 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
               subdued
               label="Classification cost"
               value={stats.classifier_cost == null ? "Unavailable" : usd(stats.classifier_cost)}
+              hint={
+                stats.classifier_cost == null
+                  ? undefined
+                  : classificationRatePer1kTurns(stats.classifier_cost, stats.turns)
+              }
             />
           </div>
           {stats.classifier_cost == null && (
@@ -277,9 +290,10 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
       <p className="text-xs text-muted-foreground">
         Compares your actual routed spend with the estimated cost of using only the most expensive model configured in
         the auto-router. It accounts for both the cache savings from staying on one model and the added cache costs from
-        switching models. Savings are net of recorded LLM classification cost, which is included in actual spend. The
-        range counts whole sessions that overlap it, so totals can differ slightly from the Overall tab, which buckets
-        savings by UTC day.
+        switching models. Savings are net of recorded LLM classification cost, which is included in actual spend.
+        Classification cost per 1K turns is averaged over all auto-router turns, including those that skip
+        classification. The range counts whole sessions that overlap it, so totals can differ slightly from the Overall
+        tab, which buckets savings by UTC day.
       </p>
 
       <div className="space-y-4">

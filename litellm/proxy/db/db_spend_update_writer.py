@@ -1063,7 +1063,7 @@ class DBSpendUpdateWriter:
 
             await enqueue_spend_logs(prisma_client, (payload,))
             if payload.get("call_type") in RESPONSES_SESSION_CALL_TYPES:
-                request_spend_log_flush()
+                request_spend_log_flush(prisma_client)
         else:
             verbose_proxy_logger.debug("prisma_client is None. Skipping writing spend logs to db.")
 

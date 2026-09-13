@@ -6,12 +6,76 @@ ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir.
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Final
 from unittest.mock import patch
 
 import pytest
+from prometheus_client import CollectorRegistry, multiprocess
 
-from litellm.proxy.prometheus_cleanup import mark_worker_exit, wipe_directory
+from litellm.proxy.prometheus_cleanup import mark_dead_workers, mark_worker_exit, wipe_directory
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers
+
+_WORKER: Final = """
+import sys, time
+from prometheus_client import Gauge
+Gauge("litellm_in_flight", "", multiprocess_mode="livesum").set(float(sys.argv[1]))
+print("ready", flush=True)
+if sys.argv[2] == "stay":
+    time.sleep(120)
+"""
+
+
+def _spawn_worker(directory: Path, in_flight: str, lifetime: str) -> subprocess.Popen[str]:
+    env = {**os.environ, "PROMETHEUS_MULTIPROC_DIR": str(directory)}
+    worker = subprocess.Popen(
+        [sys.executable, "-c", _WORKER, in_flight, lifetime], env=env, stdout=subprocess.PIPE, text=True
+    )
+    assert worker.stdout is not None and worker.stdout.readline() == "ready\n"
+    return worker
+
+
+def _livesum(directory: Path) -> float:
+    registry = CollectorRegistry()
+    multiprocess.MultiProcessCollector(registry, path=str(directory))
+    value = registry.get_sample_value("litellm_in_flight")
+    return 0.0 if value is None else value
+
+
+class TestMarkDeadWorkers:
+    def test_drops_live_gauges_of_exited_workers_and_keeps_running_ones(self, tmp_path: Path) -> None:
+        """A worker that died mid-request leaves its livesum file behind; the replacement worker's startup prune
+        must remove exactly that file so the aggregate stops counting requests nobody is serving."""
+        dead = _spawn_worker(tmp_path, "3", "exit")
+        assert dead.wait(timeout=30) == 0
+        alive = _spawn_worker(tmp_path, "2", "stay")
+        try:
+            assert (tmp_path / f"gauge_livesum_{dead.pid}.db").exists()
+            assert _livesum(tmp_path) == 5.0
+
+            assert mark_dead_workers(str(tmp_path)) == (dead.pid,)
+
+            assert not (tmp_path / f"gauge_livesum_{dead.pid}.db").exists()
+            assert (tmp_path / f"gauge_livesum_{alive.pid}.db").exists()
+            assert _livesum(tmp_path) == 2.0
+            assert mark_dead_workers(str(tmp_path)) == ()
+        finally:
+            alive.kill()
+            alive.wait(timeout=30)
+
+    def test_leaves_counters_of_exited_workers_alone(self, tmp_path: Path) -> None:
+        (tmp_path / "counter_424242.db").touch()
+        (tmp_path / "histogram_424242.db").touch()
+        assert mark_dead_workers(str(tmp_path)) == ()
+        assert sorted(p.name for p in tmp_path.glob("*.db")) == ["counter_424242.db", "histogram_424242.db"]
+
+    def test_keeps_live_gauges_of_workers_it_may_not_signal(self, tmp_path: Path) -> None:
+        """Signal 0 to pid 1 raises PermissionError for an unprivileged proxy; that pid is alive, not dead."""
+        (tmp_path / "gauge_livesum_1.db").touch()
+        assert mark_dead_workers(str(tmp_path)) == ()
+        assert (tmp_path / "gauge_livesum_1.db").exists()
 
 
 class TestWipeDirectory:

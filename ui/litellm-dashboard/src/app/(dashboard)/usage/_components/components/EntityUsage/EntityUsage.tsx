@@ -42,6 +42,7 @@ import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatte
 import EndpointUsage from "../EndpointUsage/EndpointUsage";
 import ModelViewToggle, { ModelViewType } from "../ModelViewToggle";
 import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
+import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
 import TopModelView from "./TopModelView";
 import TeamUserSpendCard from "./TeamUserSpendCard";
 
@@ -654,7 +655,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     {
       key: "keys",
       label: "Key Activity",
-      content: <ActivityMetrics modelMetrics={keyMetrics} hidePromptCachingMetrics={entityType === "agent"} />,
+      content: <KeyActivityPanel keyMetrics={keyMetrics} hidePromptCachingMetrics={entityType === "agent"} />,
     },
     { key: "endpoints", label: "Endpoint Activity", content: <EndpointUsage userSpendData={spendData} /> },
   ];

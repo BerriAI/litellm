@@ -12,6 +12,7 @@ This test file follows LiteLLM's testing patterns and covers:
 import copy
 import json
 from datetime import datetime
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -5785,7 +5786,14 @@ class TestPanwAirsScanIdExposure:
 
         headers = get_logging_caching_headers(data)
         assert headers["x-litellm-guardrail-scan-id"] == "scan-abc-123"
-        assert "x-litellm-guardrail-scan-metadata" not in headers
+        assert json.loads(headers["x-litellm-guardrail-scan-metadata"]) == [
+            {
+                "guardrail": handler.guardrail_name,
+                "stage": "pre_call",
+                "provider": "panw_prisma_airs",
+                "scan_id": "scan-abc-123",
+            }
+        ]
 
     @pytest.mark.asyncio
     async def test_request_and_response_scan_ids_are_both_exposed(self, user_api_key_dict):
@@ -5809,6 +5817,26 @@ class TestPanwAirsScanIdExposure:
 
         headers = get_logging_caching_headers(data)
         assert headers["x-litellm-guardrail-scan-id"] == "scan-abc-123,scan-response-456"
+        assert [(e["stage"], e["scan_id"]) for e in json.loads(headers["x-litellm-guardrail-scan-metadata"])] == [
+            ("pre_call", "scan-abc-123"),
+            ("post_call", "scan-response-456"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_response_scan_is_tagged_post_call(self):
+        from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
+
+        handler: Final = self._handler(self.ALLOW_SCAN_RESULT)
+        request_data: Final[dict[str, object]] = {"litellm_call_id": "test-call-id", "model": "gpt-4", "metadata": {}}
+
+        await handler.apply_guardrail(
+            inputs={"texts": ["Hello world"]}, request_data=request_data, input_type="response"
+        )
+
+        headers: Final = get_logging_caching_headers(request_data)
+        assert headers is not None
+        entries: Final = json.loads(headers["x-litellm-guardrail-scan-metadata"])
+        assert [(e["stage"], e["provider"]) for e in entries] == [("post_call", "panw_prisma_airs")]
 
     @pytest.mark.asyncio
     async def test_repeated_scan_id_is_not_duplicated(self, user_api_key_dict):
@@ -5850,6 +5878,8 @@ class TestPanwAirsScanIdExposure:
 
         assert "guardrail_scan_ids" in _UNTRUSTED_METADATA_CONTROL_FIELDS
         assert "guardrail_scan_ids" in _UNTRUSTED_ROOT_CONTROL_FIELDS
+        assert "guardrail_scan_metadata" in _UNTRUSTED_METADATA_CONTROL_FIELDS
+        assert "guardrail_scan_metadata" in _UNTRUSTED_ROOT_CONTROL_FIELDS
 class TestPanwAirsBlockedErrorDetailPassthrough:
     """Regression tests for the full AIRS scan response on blocks.
 

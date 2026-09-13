@@ -277,6 +277,14 @@ export default function KeyInfoView({
         delete formValues.agents_and_groups;
       }
 
+      if (formValues.skills !== undefined) {
+        formValues.object_permission = {
+          ...formValues.object_permission,
+          skills: formValues.skills || [],
+        };
+        delete formValues.skills;
+      }
+
       formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
       formValues.tpm_limit = mapEmptyStringToNull(formValues.tpm_limit);
       formValues.rpm_limit = mapEmptyStringToNull(formValues.rpm_limit);

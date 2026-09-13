@@ -1,6 +1,6 @@
+import { canDetachKeyProject, KeyProjectField } from "./KeyProjectField";
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
-import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import PolicySelector from "@/components/policies/PolicySelector";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,6 @@ import { FormField } from "@/components/shared/form/FormField";
 import React, { useEffect, useRef, useState } from "react";
 import { hasCapability } from "../../utils/capabilities";
 import { isProxyAdminRole, rolesWithWriteAccess } from "../../utils/roles";
-import AgentSelector from "../agent_management/AgentSelector";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 import { mapInternalToDisplayNames } from "../callback_info_helpers";
@@ -32,9 +31,8 @@ import {
   modelSentinelOptions,
   parseAllowedRoutes,
 } from "./keyEditFieldNormalizers";
-import { KeyBudgetNumberField, KeyTypeSelect, labelWithHint } from "./KeyEditViewControls";
+import { KeyAgentAndSkillFields, KeyBudgetNumberField, KeyTypeSelect, labelWithHint } from "./KeyEditViewControls";
 import {
-  AgentsAndGroups,
   KeyEditFormValues,
   keyEditFormSchema,
   McpServersAndGroups,
@@ -121,17 +119,12 @@ export function KeyEditView({
   const modelBudget = useModelMaxBudgetField(keyData.token, keyData.model_max_budget);
   const routerSettingsRef = useRef<RouterSettingsAccordionRef>(null);
   const keyTypeFieldId = React.useId();
-  const projectFieldId = React.useId();
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
-  const { data: projects } = useProjects();
   const { data: uiSettingsData } = useUISettings();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const hasProject = Boolean(keyData.project_id);
-  const projectDisplay = (() => {
-    if (!keyData.project_id) return null;
-    const project = projects?.find((p) => p.project_id === keyData.project_id);
-    return project?.project_alias ? `${project.project_alias} (${keyData.project_id})` : keyData.project_id;
-  })();
+  const detachProject = hasProject && form.watch("project_id") === null;
+  const canDetachProject = canDetachKeyProject(team, organizations, userID, userRole);
 
   const allowedRoutesValue = form.watch("allowed_routes");
   const selectedModels = (form.watch("models") as string[] | undefined) ?? [];
@@ -298,7 +291,12 @@ export function KeyEditView({
         values.router_settings = routerSettings;
       }
 
-      await onSubmit(withNormalizedEstimates(values));
+      await onSubmit(
+        withNormalizedEstimates({
+          ...values,
+          ...(detachProject && enableProjectsUI && canDetachProject ? { project_id: null } : {}),
+        }),
+      );
     } finally {
       setIsKeySaving(false);
     }
@@ -307,7 +305,7 @@ export function KeyEditView({
   const handleOrganizationChange = (setField: (value: string | null) => void, orgId: string | null) => {
     setField(orgId);
     setSelectedOrganizationId(orgId);
-    form.setValue("team_id", undefined);
+    form.setValue("team_id", null);
   };
 
   const handleTeamChange = (setField: (value: string | null) => void, teamId: string | null) => {
@@ -318,7 +316,7 @@ export function KeyEditView({
       form.setValue("organization_id", selectedTeam.organization_id);
     } else if (!teamId) {
       setSelectedOrganizationId(null);
-      form.setValue("organization_id", undefined);
+      form.setValue("organization_id", null);
     }
   };
 
@@ -762,16 +760,7 @@ export function KeyEditView({
             />
           </div>
 
-          <FormField control={form.control} name="agents_and_groups" label="Agents / Access Groups">
-            {({ value, onChange }) => (
-              <AgentSelector
-                onChange={onChange}
-                value={value as AgentsAndGroups | undefined}
-                accessToken={accessToken || ""}
-                placeholder="Select agents or access groups (optional)"
-              />
-            )}
-          </FormField>
+          <KeyAgentAndSkillFields control={form.control} accessToken={accessToken || ""} />
 
           <FormField
             control={form.control}
@@ -780,14 +769,15 @@ export function KeyEditView({
               "Organization",
               "The organization this key belongs to. Selecting an organization filters the available teams.",
             )}
+            description={hasProject ? "Organization is locked because this key belongs to a project" : undefined}
           >
             {({ value, onChange, id }) => (
               <OrganizationDropdown
                 id={id}
-                value={(value as string | undefined) ?? undefined}
+                value={value}
                 organizations={organizations}
                 loading={isOrganizationsLoading}
-                disabled={userRole !== "Admin"}
+                disabled={userRole !== "Admin" || hasProject}
                 onChange={(orgId) => handleOrganizationChange(onChange, orgId)}
               />
             )}
@@ -797,15 +787,13 @@ export function KeyEditView({
             control={form.control}
             name="team_id"
             label="Team ID"
-            description={
-              enableProjectsUI && hasProject ? "Team is locked because this key belongs to a project" : undefined
-            }
+            description={hasProject ? "Team is locked because this key belongs to a project" : undefined}
           >
             {({ value, onChange, id }) => (
               <Select
                 value={(value as string | null) ?? null}
                 onValueChange={(teamId: string | null) => handleTeamChange(onChange, teamId)}
-                disabled={enableProjectsUI && hasProject}
+                disabled={hasProject}
                 items={Object.fromEntries(
                   (visibleTeams ?? []).map((t) => [t.team_id, `${t.team_alias} (${t.team_id})`]),
                 )}
@@ -825,10 +813,13 @@ export function KeyEditView({
           </FormField>
 
           {enableProjectsUI && hasProject && (
-            <Field>
-              <FieldLabel htmlFor={projectFieldId}>Project</FieldLabel>
-              <Input id={projectFieldId} value={projectDisplay ?? ""} disabled readOnly />
-            </Field>
+            <KeyProjectField
+              projectId={keyData.project_id}
+              canDetach={canDetachProject}
+              pending={detachProject}
+              disabled={isKeySaving}
+              onToggle={() => form.setValue("project_id", detachProject ? keyData.project_id : null)}
+            />
           )}
 
           <Field>

@@ -63,6 +63,54 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
     expect(result.some_future_backend_key).toEqual({ nested: true });
   });
 
+  describe("custom dimensions", () => {
+    const stored = [
+      { name: "internalFrameworks", weight: 0.7, keywords: ["orbitmesh"] },
+      { name: "sqlDdl", weight: 0.3, patterns: ["create table"], scoring_mode: "match_count" },
+    ];
+    const withDimensions = { ...STORED, custom_dimensions: stored };
+
+    it("round-trips stored rows through hydration and save without dropping or reshaping one", () => {
+      const hydrated = hydrateComplexityRouterConfig(withDimensions, null);
+      expect(hydrated.custom_dimensions).toEqual([
+        { id: "stored-0", ...stored[0] },
+        { id: "stored-1", ...stored[1] },
+      ]);
+      const saved = buildUpdatedComplexityRouterConfig(withDimensions, {
+        ...FORM_VALUE,
+        custom_dimensions: hydrated.custom_dimensions,
+      });
+      expect(saved.custom_dimensions).toEqual(stored);
+    });
+
+    it("is a managed key, so removing the last row does not resurrect the stored dimensions", () => {
+      expect(MANAGED_COMPLEXITY_ROUTER_KEYS.has("custom_dimensions")).toBe(true);
+      const saved = buildUpdatedComplexityRouterConfig(withDimensions, { ...FORM_VALUE, custom_dimensions: [] });
+      expect(saved.custom_dimensions).toEqual([]);
+    });
+
+    it("omits the key entirely when the editor never held rows, so an untouched router gains nothing", () => {
+      expect(hydrateComplexityRouterConfig(STORED, null).custom_dimensions).toBeUndefined();
+      expect(buildUpdatedComplexityRouterConfig(STORED, FORM_VALUE)).not.toHaveProperty("custom_dimensions");
+    });
+
+    it("drops rows a custom tier set forbids rather than sending them to a scorer that never runs", () => {
+      const customTierStored = storedCustomConfig({ custom_dimensions: stored });
+      const saved = buildUpdatedComplexityRouterConfig(customTierStored, {
+        tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
+        classifier_type: "llm" as const,
+        custom_tier_set: {
+          tiers: [
+            { id: "a", name: "CASUAL", definition: "small talk", models: ["gpt-4o-mini"] },
+            { id: "b", name: "AUDIT", definition: "security review", models: ["o1"] },
+          ],
+          fallback_tier_id: "a",
+        },
+      });
+      expect(saved).not.toHaveProperty("custom_dimensions");
+    });
+  });
+
   it("persists an edited keyword rule", () => {
     const result = buildUpdatedComplexityRouterConfig(STORED, FORM_VALUE, undefined, {
       ...hydratedState,
@@ -580,6 +628,7 @@ describe("managed keys survive an untouched open-and-save", () => {
     tier_boundaries: { simple_medium: 0.2, medium_complex: 0.4, complex_reasoning: 0.7 },
     token_thresholds: { simple: 20, complex: 500 },
     dimension_weights: { tokenCount: 0.1 },
+    custom_dimensions: [{ name: "domain", weight: 0.9, keywords: ["orbitmesh"] }],
     reasoning_override_min_score: 0.3,
     enable_context_window_escalation: false,
     context_window_escalation_buffer: 0.9,
@@ -598,6 +647,10 @@ describe("managed keys survive an untouched open-and-save", () => {
     "stall_escalation_repeat_threshold",
   ]);
 
+  // The opt-in fifth tier requires the LLM classifier, which this heuristic_first fixture is not,
+  // so it gets its own round trip below.
+  const KEYS_ANOTHER_TIER_LADDER_OWNS = new Set(["enable_non_reasoning_tier"]);
+
   it("carries every managed key a built-in router can hold through hydrate then save", () => {
     const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
     const saved = buildUpdatedComplexityRouterConfig(STORED_ALL_MANAGED, hydrated);
@@ -605,8 +658,53 @@ describe("managed keys survive an untouched open-and-save", () => {
     const dropped = [...MANAGED_COMPLEXITY_ROUTER_KEYS]
       .filter((key) => !KEYS_ANOTHER_CLASSIFIER_TYPE_OWNS.has(key))
       .filter((key) => !KEYS_ANOTHER_CLASSIFICATION_FREQUENCY_OWNS.has(key))
+      .filter((key) => !KEYS_ANOTHER_TIER_LADDER_OWNS.has(key))
       .filter((key) => saved[key] === undefined);
     expect(dropped).toEqual([]);
+  });
+
+  it("carries an enabled non-reasoning tier and its models through their own round trip", () => {
+    // `tiers` is rewritten wholesale on save, so this is the regression that matters: opening an
+    // enabled router and saving an unrelated edit must not delete the tier or its pool.
+    const stored: Record<string, unknown> = {
+      ...STORED_ALL_MANAGED,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "haiku-classifier" },
+      heuristic_first_max_tier: undefined,
+      enable_non_reasoning_tier: true,
+      tiers: { ...(STORED_ALL_MANAGED.tiers as object), NON_REASONING: ["gpt-4o-mini"] },
+    };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(stored, hydrated);
+
+    expect(saved.enable_non_reasoning_tier).toBe(true);
+    expect((saved.tiers as Record<string, string[]>).NON_REASONING).toEqual(["gpt-4o-mini"]);
+  });
+
+  it("keeps a stored non-reasoning tier when the stored config never wrote the flag", () => {
+    // A hand-written config that names the tier: the flag is inferred from the stored pool, so an
+    // edit made for an unrelated reason cannot silently turn the tier off.
+    const stored: Record<string, unknown> = {
+      ...STORED_ALL_MANAGED,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "haiku-classifier" },
+      heuristic_first_max_tier: undefined,
+      tiers: { ...(STORED_ALL_MANAGED.tiers as object), NON_REASONING: ["gpt-4o-mini"] },
+    };
+    const saved = buildUpdatedComplexityRouterConfig(stored, hydrateComplexityRouterConfig(stored, undefined));
+
+    expect(saved.enable_non_reasoning_tier).toBe(true);
+    expect((saved.tiers as Record<string, string[]>).NON_REASONING).toEqual(["gpt-4o-mini"]);
+  });
+
+  it("leaves the tier and its flag out of a saved config that never had it on", () => {
+    const saved = buildUpdatedComplexityRouterConfig(
+      STORED_ALL_MANAGED,
+      hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined),
+    );
+
+    expect(saved).not.toHaveProperty("enable_non_reasoning_tier");
+    expect(saved.tiers).not.toHaveProperty("NON_REASONING");
   });
 
   it("carries the stall-escalation keys through their own round trip", () => {

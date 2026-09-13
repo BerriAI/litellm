@@ -1,7 +1,19 @@
+import base64
+import json
+import struct
+import tracemalloc
+from binascii import crc32
+from datetime import datetime
 from unittest.mock import patch
 
-
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.base_llm.passthrough.transformation import PassthroughStreamCollector
 from litellm.llms.bedrock.passthrough.transformation import BedrockPassthroughConfig
+from litellm.types.utils import ModelResponse
+
+CONVERSE_MODEL = "anthropic.claude-sonnet-4-5-20250929-v1:0"
+CONVERSE_STREAM_ENDPOINT = f"/model/{CONVERSE_MODEL}/converse-stream"
+INVOKE_STREAM_ENDPOINT = f"/model/{CONVERSE_MODEL}/invoke-with-response-stream"
 
 
 def test_bedrock_passthrough_get_complete_url_default_endpoint():
@@ -500,3 +512,186 @@ def test_bedrock_passthrough_model_id_without_arn():
             f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model_id}/converse"
         )
         assert url_str == expected_url
+
+
+def _event_frame(event_type: str, payload: dict) -> bytes:
+    def header(name: str, value: str) -> bytes:
+        name_b, value_b = name.encode(), value.encode()
+        return struct.pack("!B", len(name_b)) + name_b + struct.pack("!B", 7) + struct.pack("!H", len(value_b)) + value_b
+
+    payload_b = json.dumps(payload, separators=(",", ":")).encode()
+    headers_b = (
+        header(":event-type", event_type)
+        + header(":content-type", "application/json")
+        + header(":message-type", "event")
+    )
+    prelude = struct.pack("!II", 12 + len(headers_b) + len(payload_b) + 4, len(headers_b))
+    prelude_crc = crc32(prelude) & 0xFFFFFFFF
+    message = struct.pack("!I", prelude_crc) + headers_b + payload_b
+    return prelude + message + struct.pack("!I", crc32(message, prelude_crc) & 0xFFFFFFFF)
+
+
+def _text_block(index: int, texts: list[str]) -> bytes:
+    return (
+        _event_frame("contentBlockStart", {"contentBlockIndex": index, "start": {}})
+        + b"".join(
+            _event_frame("contentBlockDelta", {"contentBlockIndex": index, "delta": {"text": text}}) for text in texts
+        )
+        + _event_frame("contentBlockStop", {"contentBlockIndex": index})
+    )
+
+
+def _stream_tail(stop_reason: str, output_tokens: int) -> bytes:
+    return _event_frame("messageStop", {"stopReason": stop_reason}) + _event_frame(
+        "metadata",
+        {
+            "metrics": {"latencyMs": 1234},
+            "usage": {"inputTokens": 25, "outputTokens": output_tokens, "totalTokens": 25 + output_tokens},
+        },
+    )
+
+
+def _invoke_chunk(payload: dict) -> bytes:
+    return _event_frame("chunk", {"bytes": base64.b64encode(json.dumps(payload).encode()).decode()})
+
+
+def _stream_logging_obj(endpoint: str) -> Logging:
+    logging_obj = Logging(
+        model=CONVERSE_MODEL,
+        messages=[],
+        stream=True,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id="call-1",
+        function_id="fn-1",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "bedrock"
+    logging_obj.model_call_details["endpoint"] = endpoint
+    return logging_obj
+
+
+def _converse_stream_logging_obj() -> Logging:
+    return _stream_logging_obj(CONVERSE_STREAM_ENDPOINT)
+
+
+def _stream_collector(endpoint: str) -> PassthroughStreamCollector:
+    return BedrockPassthroughConfig().create_stream_collector(
+        model=CONVERSE_MODEL, custom_llm_provider="bedrock", endpoint=endpoint
+    )
+
+
+def _converse_stream_collector() -> PassthroughStreamCollector:
+    return _stream_collector(CONVERSE_STREAM_ENDPOINT)
+
+
+def _feed(collector: PassthroughStreamCollector, stream: bytes, chunk_size: int = 16384) -> None:
+    for offset in range(0, len(stream), chunk_size):
+        collector.add(stream[offset : offset + chunk_size])
+
+
+def test_converse_stream_collector_keeps_usage_without_retaining_the_stream():
+    texts = [f"tok{i} " for i in range(4000)]
+    stream = _event_frame("messageStart", {"role": "assistant"}) + _text_block(0, texts) + _stream_tail("end_turn", 4000)
+    _feed(_converse_stream_collector(), stream)
+
+    tracemalloc.start()
+    try:
+        base = tracemalloc.get_traced_memory()[0]
+        collector = _converse_stream_collector()
+        _feed(collector, stream)
+        retained = tracemalloc.get_traced_memory()[0] - base
+    finally:
+        tracemalloc.stop()
+
+    assert retained < len(stream) // 4
+
+    response = collector.build_logged_response(_converse_stream_logging_obj())
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "".join(texts)
+    assert response.choices[0].finish_reason == "stop"
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (25, 4000)
+
+
+def test_converse_stream_collector_keeps_tool_calls_between_text_runs():
+    stream = (
+        _event_frame("messageStart", {"role": "assistant"})
+        + _text_block(0, ["Let me ", "check."])
+        + _event_frame(
+            "contentBlockStart",
+            {"contentBlockIndex": 1, "start": {"toolUse": {"toolUseId": "tool-1", "name": "get_weather"}}},
+        )
+        + _event_frame("contentBlockDelta", {"contentBlockIndex": 1, "delta": {"toolUse": {"input": '{"city": '}}})
+        + _event_frame("contentBlockDelta", {"contentBlockIndex": 1, "delta": {"toolUse": {"input": '"Paris"}'}}})
+        + _event_frame("contentBlockStop", {"contentBlockIndex": 1})
+        + _text_block(2, ["Done", "."])
+        + _stream_tail("tool_use", 12)
+    )
+    collector = _converse_stream_collector()
+    _feed(collector, stream, chunk_size=7)
+
+    response = collector.build_logged_response(_converse_stream_logging_obj())
+    assert isinstance(response, ModelResponse)
+    message = response.choices[0].message
+    assert message.content == "Let me check.Done."
+    assert [(call.function.name, call.function.arguments) for call in message.tool_calls] == [
+        ("get_weather", '{"city": "Paris"}')
+    ]
+    assert response.choices[0].finish_reason == "tool_calls"
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (25, 12)
+
+
+def test_invoke_stream_collector_keeps_usage_without_retaining_the_stream():
+    texts = [f"tok{i} " for i in range(4000)]
+    stream = (
+        _invoke_chunk(
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg-1",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": CONVERSE_MODEL,
+                    "content": [],
+                    "stop_reason": None,
+                    "usage": {"input_tokens": 25, "output_tokens": 1},
+                },
+            }
+        )
+        + _invoke_chunk({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})
+        + b"".join(
+            _invoke_chunk({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}})
+            for text in texts
+        )
+        + _invoke_chunk({"type": "content_block_stop", "index": 0})
+        + _invoke_chunk(
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 4000}}
+        )
+        + _invoke_chunk({"type": "message_stop"})
+    )
+    _feed(_stream_collector(INVOKE_STREAM_ENDPOINT), stream)
+
+    tracemalloc.start()
+    try:
+        base = tracemalloc.get_traced_memory()[0]
+        collector = _stream_collector(INVOKE_STREAM_ENDPOINT)
+        _feed(collector, stream)
+        retained = tracemalloc.get_traced_memory()[0] - base
+    finally:
+        tracemalloc.stop()
+
+    assert retained < len(stream) // 4
+
+    response = collector.build_logged_response(_stream_logging_obj(INVOKE_STREAM_ENDPOINT))
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "".join(texts)
+    assert response.choices[0].finish_reason == "stop"
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (25, 4000)
+
+
+def test_stream_collector_logs_nothing_for_an_unrecognized_endpoint():
+    collector = BedrockPassthroughConfig().create_stream_collector(
+        model=CONVERSE_MODEL, custom_llm_provider="bedrock", endpoint=f"/model/{CONVERSE_MODEL}/rerank"
+    )
+    collector.add(_event_frame("messageStart", {"role": "assistant"}))
+
+    assert collector.build_logged_response(_converse_stream_logging_obj()) is None

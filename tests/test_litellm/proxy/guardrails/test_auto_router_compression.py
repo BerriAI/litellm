@@ -56,13 +56,13 @@ class TestPolicyFromLitellmParams:
 
 
 class _FakeRouter:
-    """Minimal stand-in for litellm.Router.get_model_list, for policy_for_model."""
+    """Minimal stand-in for litellm.Router.deployments_for_request, for policy_for_model."""
 
     def __init__(self, deployments: list[dict[str, Any]]):
         self._deployments = deployments
 
-    def get_model_list(self, model_name, team_id=None):
-        return [d for d in self._deployments if d.get("model_name") == model_name]
+    def deployments_for_request(self, model, request_kwargs):
+        return [d for d in self._deployments if d.get("model_name") == model]
 
 
 def _marker(compression: dict[str, str], tags: list[str] | None = None) -> dict[str, Any]:
@@ -78,23 +78,23 @@ def _marker(compression: dict[str, str], tags: list[str] | None = None) -> dict[
 
 class TestPolicyForModel:
     def test_no_router_returns_none(self):
-        assert policy_for_model(llm_router=None, model_alias="smart-router", team_id=None, request_tags=()) is None
+        assert policy_for_model(llm_router=None, model_alias="smart-router", request_kwargs={}, request_tags=()) is None
 
     def test_no_marker_deployment_returns_none(self):
         router = _FakeRouter([{"model_name": "smart-router", "litellm_params": {"model": "openai/gpt-4o-mini"}}])
-        assert policy_for_model(llm_router=router, model_alias="smart-router", team_id=None, request_tags=()) is None
+        assert policy_for_model(llm_router=router, model_alias="smart-router", request_kwargs={}, request_tags=()) is None
 
     def test_marker_deployment_without_policy_returns_none(self):
         router = _FakeRouter(
             [{"model_name": "smart-router", "litellm_params": {"model": "auto_router/complexity_router"}}]
         )
-        assert policy_for_model(llm_router=router, model_alias="smart-router", team_id=None, request_tags=()) is None
+        assert policy_for_model(llm_router=router, model_alias="smart-router", request_kwargs={}, request_tags=()) is None
 
     def test_marker_deployment_with_policy_is_found(self):
         router = _FakeRouter(
             [_marker({"auto_router_routing_compression": "headroom-a", "auto_router_model_compression": "none"})]
         )
-        policy = policy_for_model(llm_router=router, model_alias="smart-router", team_id=None, request_tags=())
+        policy = policy_for_model(llm_router=router, model_alias="smart-router", request_kwargs={}, request_tags=())
         assert policy == AutoRouterCompressionPolicy(routing="headroom-a", model=None)
 
     def test_picks_the_marker_whose_tags_the_request_carries(self):
@@ -107,8 +107,8 @@ class TestPolicyForModel:
             ]
         )
 
-        eu = policy_for_model(llm_router=router, model_alias="smart-router", team_id=None, request_tags=("eu",))
-        us = policy_for_model(llm_router=router, model_alias="smart-router", team_id=None, request_tags=("us",))
+        eu = policy_for_model(llm_router=router, model_alias="smart-router", request_kwargs={}, request_tags=("eu",))
+        us = policy_for_model(llm_router=router, model_alias="smart-router", request_kwargs={}, request_tags=("us",))
 
         assert eu == AutoRouterCompressionPolicy(routing="headroom-eu", model=None)
         assert us == AutoRouterCompressionPolicy(routing="headroom-us", model=None)
@@ -116,7 +116,7 @@ class TestPolicyForModel:
     def test_untagged_marker_matches_any_request(self):
         router = _FakeRouter([_marker({"auto_router_routing_compression": "headroom-a"})])
         policy = policy_for_model(
-            llm_router=router, model_alias="smart-router", team_id=None, request_tags=("anything",)
+            llm_router=router, model_alias="smart-router", request_kwargs={}, request_tags=("anything",)
         )
         assert policy == AutoRouterCompressionPolicy(routing="headroom-a", model=None)
 
@@ -128,14 +128,14 @@ class TestPolicyForModel:
                 _marker({"auto_router_routing_compression": "headroom-default"}),
             ]
         )
-        policy = policy_for_model(llm_router=router, model_alias="smart-router", team_id=None, request_tags=("us",))
+        policy = policy_for_model(llm_router=router, model_alias="smart-router", request_kwargs={}, request_tags=("us",))
         assert policy == AutoRouterCompressionPolicy(routing="headroom-default", model=None)
 
     def test_no_untagged_fallback_means_no_policy(self):
         """No matching marker means no policy, not an unrelated slice's compression."""
         router = _FakeRouter([_marker({"auto_router_routing_compression": "headroom-eu"}, tags=["eu"])])
         assert (
-            policy_for_model(llm_router=router, model_alias="smart-router", team_id=None, request_tags=("us",)) is None
+            policy_for_model(llm_router=router, model_alias="smart-router", request_kwargs={}, request_tags=("us",)) is None
         )
 
     def test_tag_scoped_marker_takes_precedence_over_untagged(self):
@@ -147,7 +147,7 @@ class TestPolicyForModel:
                 _marker({"auto_router_routing_compression": "headroom-eu"}, tags=["eu"]),
             ]
         )
-        policy = policy_for_model(llm_router=router, model_alias="smart-router", team_id=None, request_tags=("eu",))
+        policy = policy_for_model(llm_router=router, model_alias="smart-router", request_kwargs={}, request_tags=("eu",))
         assert policy == AutoRouterCompressionPolicy(routing="headroom-eu", model=None)
 
 

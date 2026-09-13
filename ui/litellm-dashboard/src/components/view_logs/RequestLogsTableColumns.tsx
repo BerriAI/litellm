@@ -7,9 +7,10 @@ import { CellTooltip, DateCell, IdCell, MoneyCell, StatusBadge } from "@/compone
 import { getSpendString } from "@/utils/dataUtils";
 
 import { getProviderLogoAndName } from "../provider_info_helpers";
+import { getBatchIdFromRequestId, getBatchRequestCounts, isBatchCallType } from "./batchLogUtils";
 import type { LogEntry } from "./columns";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "./constants";
-import { AgentBadge, AgentIcon, LlmBadge, McpBadge, SparkleIcon, WrenchIcon } from "./TypeBadges";
+import { AgentBadge, AgentIcon, BatchBadge, LlmBadge, McpBadge, SparkleIcon, WrenchIcon } from "./TypeBadges";
 
 export interface RequestLogsTableColumnsDeps {
   onKeyHashClick: (keyHash: string) => void;
@@ -63,6 +64,9 @@ export const getRequestLogsTableColumns = ({
       const sessionAgentCount = log.session_agent_count ?? (isAgent ? sessionCount : 0);
       const sessionMcpCount = log.mcp_tool_call_count ?? (isMcp ? sessionCount : 0);
 
+      if (isBatchCallType(log.call_type)) {
+        return <BatchBadge />;
+      }
       if (sessionCount <= 1) {
         if (isMcp) return <McpBadge />;
         if (isAgent) return <AgentBadge />;
@@ -106,6 +110,17 @@ export const getRequestLogsTableColumns = ({
     cell: ({ row }) => {
       const status = readMetaString(row.original.metadata, "status") ?? "Success";
       const isSuccess = status.toLowerCase() !== "failure";
+      const batchCounts = isSuccess ? getBatchRequestCounts(row.original.metadata) : undefined;
+      if (batchCounts && batchCounts.failed > 0) {
+        const total = batchCounts.successful + batchCounts.failed;
+        return (
+          <StatusBadge
+            tone="warning"
+            label={`${batchCounts.successful}/${total} succeeded`}
+            tooltip={`${batchCounts.failed} of ${total} batch requests failed`}
+          />
+        );
+      }
       return <StatusBadge tone={isSuccess ? "success" : "error"} label={isSuccess ? "Success" : "Failure"} />;
     },
   },
@@ -122,7 +137,19 @@ export const getRequestLogsTableColumns = ({
     accessorKey: "request_id",
     header: "Request ID",
     enableSorting: false,
-    cell: ({ row }) => <IdCell value={row.original.request_id} variant="plain" />,
+    cell: ({ row }) => {
+      const log = row.original;
+      const batchId = isBatchCallType(log.call_type) ? getBatchIdFromRequestId(log.request_id) : undefined;
+      if (batchId) {
+        return (
+          <div className="flex flex-col">
+            <IdCell value={batchId} variant="plain" copyable tooltip={`Batch ${batchId} (row: ${log.request_id})`} />
+            <span className="text-[10px] text-muted-foreground">batch cost</span>
+          </div>
+        );
+      }
+      return <IdCell value={log.request_id} variant="plain" />;
+    },
   },
   {
     id: "spend",

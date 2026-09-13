@@ -5,12 +5,12 @@ from typing import Any, Dict
 
 import orjson
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 from starlette.responses import Response
 
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.image_endpoints import endpoints
 
@@ -167,3 +167,47 @@ def test_image_edit_multipart_n_that_is_not_a_number_is_left_alone(monkeypatch):
 
     assert response.status_code == 200
     assert captured["n"] == "two"
+
+
+@pytest.mark.asyncio
+async def test_a_model_the_router_cannot_serve_answers_an_openai_typed_error(monkeypatch: pytest.MonkeyPatch):
+    """A bare HTTPException carries no type or param, so the tail used to ship the
+    literal string "None" in both fields."""
+
+    async def fake_add_litellm_data_to_request(**kwargs: object) -> object:
+        return kwargs["data"]
+
+    async def fake_pre_call_hook(*, user_api_key_dict: UserAPIKeyAuth, data: dict[str, object], call_type: str) -> dict[str, object]:
+        return data
+
+    async def fake_post_call_failure_hook(**_: object) -> None:
+        return None
+
+    async def failing_route_request(**_: object) -> None:
+        raise HTTPException(
+            status_code=404, detail={"error": "image_generation: Invalid model name passed in model=dall-e-3"}
+        )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.add_litellm_data_to_request", fake_add_litellm_data_to_request)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", {})
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+        SimpleNamespace(pre_call_hook=fake_pre_call_hook, post_call_failure_hook=fake_post_call_failure_hook),
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.version", "test-version")
+    monkeypatch.setattr("litellm.proxy.image_endpoints.endpoints.route_request", failing_route_request)
+
+    body = orjson.dumps({"model": "dall-e-3", "prompt": "a lighthouse at dusk"})
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request = Request({"type": "http", "method": "POST", "path": "/v1/images/generations", "headers": []}, receive)
+
+    with pytest.raises(ProxyException) as raised:
+        await endpoints.image_generation(request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth())
+
+    assert (raised.value.type, raised.value.param, raised.value.code) == ("invalid_request_error", None, "404")

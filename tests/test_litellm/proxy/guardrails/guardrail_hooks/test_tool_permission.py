@@ -3,6 +3,7 @@ Unit tests for Tool Permission Guardrail (OpenAI tool_calls semantics)
 """
 
 import json
+import logging
 import re
 from unittest.mock import patch
 
@@ -519,6 +520,80 @@ class TestToolPermissionGuardrail:
                     call_type="completion",
                 )
         assert excinfo.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_hook_without_tools_logs_skip_at_debug(self, caplog):
+        data = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]}
+
+        with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+            with patch.object(self.guardrail, "should_run_guardrail", return_value=True):
+                result = await self.guardrail.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(),
+                    cache=DualCache(default_in_memory_ttl=1),
+                    data=data,
+                    call_type="completion",
+                )
+
+        assert result is data
+        skip_levels = [r.levelno for r in caplog.records if "No tools or functions in data" in r.getMessage()]
+        assert skip_levels == [logging.DEBUG]
+        assert [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_hook_denied_tool_logs_at_info(self, caplog):
+        data = {"tools": [{"type": "function", "function": {"name": "Read"}}]}
+
+        with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+            with patch.object(self.guardrail, "should_run_guardrail", return_value=True):
+                with pytest.raises(HTTPException):
+                    await self.guardrail.async_pre_call_hook(
+                        user_api_key_dict=UserAPIKeyAuth(),
+                        cache=DualCache(default_in_memory_ttl=1),
+                        data=data,
+                        call_type="completion",
+                    )
+
+        denied_levels = [
+            r.levelno
+            for r in caplog.records
+            if r.getMessage() == "Tool Permission Guardrail: Tool 'Read' denied by rule 'deny_read'"
+        ]
+        assert denied_levels == [logging.INFO]
+        assert [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+    @pytest.mark.asyncio
+    async def test_async_post_call_success_hook_denied_tool_logs_at_info(self, caplog):
+        tool_call = {"function": {"name": "Read", "arguments": "{}"}, "type": "function"}
+        response = ModelResponse(choices=[Choices(message={"tool_calls": [tool_call]})])
+
+        with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+            with patch.object(self.guardrail, "should_run_guardrail", return_value=True):
+                with pytest.raises(GuardrailRaisedException):
+                    await self.guardrail.async_post_call_success_hook(
+                        data={"guardrails": ["test-tool-permission"]},
+                        user_api_key_dict=UserAPIKeyAuth(),
+                        response=response,
+                    )
+
+        denied_levels = [
+            r.levelno
+            for r in caplog.records
+            if r.getMessage() == "Tool Permission Guardrail: Tool 'Read' denied by rule 'deny_read'"
+        ]
+        assert denied_levels == [logging.INFO]
+        assert [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+    def test_parse_tool_call_arguments_malformed_json_logs_warning(self, caplog):
+        tool_call = ChatCompletionMessageToolCall(function={"name": "Bash", "arguments": "{not json"}, id="call_1")
+
+        with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+            parsed, error = self.guardrail._parse_tool_call_arguments(tool_call)
+
+        assert parsed is None
+        assert error == "arguments could not be parsed"
+        warning_messages = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warning_messages) == 1
+        assert warning_messages[0].startswith("Tool Permission Guardrail: Failed to decode arguments for tool Bash")
 
     @pytest.mark.asyncio
     async def test_async_pre_call_hook_blocks_legacy_functions(self):

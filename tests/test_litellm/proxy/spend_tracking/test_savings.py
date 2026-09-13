@@ -1162,6 +1162,104 @@ def test_prompt_caching_prices_at_the_deployment_rate_not_the_public_one():
     assert result.prompt_caching > at_public_rates.prompt_caching
 
 
+@pytest.mark.parametrize(
+    "baseline_id, selected_id, selected_multiplier, billed_input, classifier_cost, expected",
+    [
+        ("baseline", "selected", 0.1, None, 0.0, 0.0135),
+        ("baseline", "selected", 2.0, None, 0.0, -0.015),
+        ("baseline", "selected", 1.0, None, 0.0, 0.0),
+        ("baseline", "selected", 0.1, 0.004, 0.001, 0.01),
+        ("baseline", "baseline", 0.1, 0.004, 0.001, -0.001),
+        (None, "selected", 0.1, None, 0.0, 0.0),
+        ("baseline", None, 0.1, None, 0.0, 0.0),
+        (None, None, 0.1, None, 0.0, 0.0),
+        ("", "selected", 0.1, None, 0.0, 0.0),
+        ("baseline", "", 0.1, None, 0.0, 0.0),
+    ],
+)
+def test_autorouter_savings_distinguishes_priced_deployments(
+    baseline_id: str | None,
+    selected_id: str | None,
+    selected_multiplier: float,
+    billed_input: float | None,
+    classifier_cost: float,
+    expected: float,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": "anthropic/claude-opus-5",
+                    "api_key": "test-key",
+                    "input_cost_per_token": 1e-5 * multiplier,
+                    "output_cost_per_token": 5e-5 * multiplier,
+                },
+                "model_info": {"id": name},
+            }
+            for name, multiplier in (("baseline", 1.0), ("selected", selected_multiplier))
+        ]
+    )
+    result: Final = compute_savings_spend(
+        model="claude-opus-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        gateway_injected_cache=False,
+        model_id=selected_id,
+        llm_router=lambda: router,
+        routing_decision={
+            "savings_baseline_model": "anthropic/claude-opus-5",
+            "savings_baseline_deployment_id": baseline_id,
+            "conversation_continuing": False,
+            "classifier_cost": classifier_cost,
+        },
+        usage_object={"prompt_tokens": 1000, "completion_tokens": 100, "total_tokens": 1100},
+        cost_breakdown=None if billed_input is None else {"input_cost": billed_input, "output_cost": 0.0},
+    )
+    assert result.autorouter == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("selected_model", ["azure/contract-deployment", "contract-deployment"])
+def test_autorouter_savings_recognizes_one_deployment_under_its_base_model(selected_model: str) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "contract",
+                "litellm_params": {
+                    "model": "azure/contract-deployment",
+                    "api_key": "test-key",
+                    "api_base": "https://example.openai.azure.com",
+                    "input_cost_per_token": 0.0001,
+                    "output_cost_per_token": 0.0002,
+                    "cache_read_input_token_cost": 0.00001,
+                },
+                "model_info": {"id": "contract", "base_model": "azure/gpt-5.5"},
+            }
+        ]
+    )
+    result: Final = compute_savings_spend(
+        model=selected_model,
+        custom_llm_provider="azure",
+        compression_saved_tokens=0,
+        gateway_injected_cache=False,
+        model_id="contract",
+        llm_router=lambda: router,
+        routing_decision={
+            "savings_baseline_model": "azure/gpt-5.5",
+            "savings_baseline_deployment_id": "contract",
+            "conversation_continuing": True,
+        },
+        usage_object={
+            "prompt_tokens": 21000,
+            "completion_tokens": 100,
+            "total_tokens": 21100,
+            "prompt_tokens_details": {"text_tokens": 1000, "cached_tokens": 0, "cache_creation_tokens": 20000},
+        },
+        cost_breakdown={"input_cost": 2.1, "output_cost": 0.02},
+    )
+    assert result.autorouter == 0.0
+
+
 def test_a_recorded_baseline_deployment_prices_at_its_configured_rate():
     """A hardest-tier deployment with a negotiated rate is what the traffic would
     really have cost; pricing its model publicly misstates the saving."""

@@ -21,3 +21,6 @@ _mcp_gateway_initialize_instructions: Final[ContextVar[str | None]] = ContextVar
 # Per-request scoped server name; set in MCP HTTP/SSE handlers when the path
 # identifies exactly one upstream server. Never populated from client-supplied headers.
 _mcp_gateway_server_name: Final[ContextVar[str | None]] = ContextVar("_mcp_gateway_server_name", default=None)
+
+# Set server-side by the /mcp/proxy route. Never populated from client-supplied headers.
+_mcp_proxy_mode: Final[ContextVar[bool]] = ContextVar("_mcp_proxy_mode", default=False)

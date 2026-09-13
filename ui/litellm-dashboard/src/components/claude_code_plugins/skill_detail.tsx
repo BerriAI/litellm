@@ -26,7 +26,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
     const src = skill.source;
     if (src.source === "github" && src.repo) return `https://github.com/${src.repo}`;
     if (src.source === "git-subdir" && src.url) return src.path ? `${src.url}/tree/main/${src.path}` : src.url;
-    if (src.source === "url" && src.url) return src.url;
+    if ((src.source === "url" || src.source === "archive") && src.url) return src.url;
     return null;
   })();
 

@@ -4147,3 +4147,143 @@ def test_streaming_final_chunk_carries_provider_metadata():
     assert chunks[-1]["content_filters"] == content_filters
     assert "background" not in chunks[-1]
     assert all("service_tier" not in chunk for chunk in chunks[:-1])
+
+
+def _system_input_item(text: str) -> dict[str, object]:
+    return {"type": "message", "role": "system", "content": [{"type": "input_text", "text": text}]}
+
+
+def test_mid_conversation_system_string_stays_in_input_after_a_user_turn():
+    handler: Final = LiteLLMResponsesTransformationHandler()
+
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Read the file."},
+            {"role": "system", "content": "<total_tokens>14982391 tokens left</total_tokens>"},
+            {"role": "user", "content": "Now summarize it."},
+        ]
+    )
+
+    assert instructions == "You are a helpful assistant."
+    assert input_items == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Read the file."}]},
+        _system_input_item("<total_tokens>14982391 tokens left</total_tokens>"),
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Now summarize it."}]},
+    ]
+
+
+def test_leading_system_strings_still_join_instructions_without_a_following_turn():
+    handler: Final = LiteLLMResponsesTransformationHandler()
+
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [
+            {"role": "system", "content": "Be brief."},
+            {"role": "system", "content": "Answer in French."},
+        ]
+    )
+
+    assert instructions == "Be brief. Answer in French."
+    assert input_items == []
+
+
+def test_mid_conversation_system_reminder_as_string_and_as_text_block_produce_identical_input_items():
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    reminder: Final = "<total_tokens>14982391 tokens left</total_tokens>"
+
+    as_string, string_instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [{"role": "user", "content": "Read the file."}, {"role": "system", "content": reminder}]
+    )
+    as_block, block_instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [
+            {"role": "user", "content": "Read the file."},
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": reminder, "cache_control": {"type": "ephemeral"}}],
+            },
+        ]
+    )
+
+    assert string_instructions is None
+    assert block_instructions is None
+    assert json.dumps(as_string) == json.dumps(as_block)
+    assert as_string[1] == _system_input_item(reminder)
+
+
+def test_claude_code_shaped_history_keeps_a_byte_stable_input_prefix_across_requests():
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    top_level_system: Final = [{"type": "text", "text": "You are Claude Code.", "cache_control": {"type": "ephemeral"}}]
+    first_reminder: Final = "<system-reminder>27k chars of deferred tools</system-reminder>"
+    second_reminder: Final = "<total_tokens>14982391 tokens left</total_tokens>"
+    first_request_messages: Final = [
+        {"role": "system", "content": top_level_system},
+        {"role": "user", "content": "Read inventory.py."},
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": first_reminder, "cache_control": {"type": "ephemeral"}}],
+        },
+    ]
+    second_request_messages: Final = [
+        {"role": "system", "content": top_level_system},
+        {"role": "user", "content": "Read inventory.py."},
+        {"role": "system", "content": first_reminder},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "Read", "arguments": '{"file_path": "inventory.py"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "ITEMS = []"},
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": second_reminder, "cache_control": {"type": "ephemeral"}}],
+        },
+    ]
+
+    first_request: Final = handler.transform_request(
+        model="gpt-5.6-luna",
+        messages=first_request_messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+    second_request: Final = handler.transform_request(
+        model="gpt-5.6-luna",
+        messages=second_request_messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert "instructions" not in first_request
+    assert "instructions" not in second_request
+    assert first_request["input"][0] == _system_input_item("You are Claude Code.")
+    assert json.dumps(second_request["input"][: len(first_request["input"])]) == json.dumps(first_request["input"])
+    assert second_request["input"][len(first_request["input"]) :] == [
+        {"type": "function_call", "call_id": "call_1", "name": "Read", "arguments": '{"file_path": "inventory.py"}'},
+        {"type": "function_call_output", "call_id": "call_1", "output": [{"type": "input_text", "text": "ITEMS = []"}]},
+        _system_input_item(second_reminder),
+    ]
+
+
+def test_system_string_after_a_developer_message_stays_in_input_in_client_order():
+    handler: Final = LiteLLMResponsesTransformationHandler()
+
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [
+            {"role": "developer", "content": "Always answer in French."},
+            {"role": "system", "content": "Be brief."},
+            {"role": "user", "content": "Bonjour"},
+        ]
+    )
+
+    assert instructions is None
+    assert [item["role"] for item in input_items] == ["developer", "system", "user"]
+    assert input_items[1] == _system_input_item("Be brief.")

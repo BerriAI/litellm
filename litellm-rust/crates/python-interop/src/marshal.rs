@@ -14,6 +14,13 @@ where
     pythonize::depythonize(value).map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
+pub fn from_py_preserving_errors<T>(value: &Bound<'_, PyAny>) -> PyResult<T>
+where
+    T: DeserializeOwned,
+{
+    pythonize::depythonize(value).map_err(PyErr::from)
+}
+
 pub fn to_py<T>(py: Python<'_>, value: &T) -> PyResult<Py<PyAny>>
 where
     T: Serialize + ?Sized,
@@ -21,6 +28,15 @@ where
     pythonize::pythonize(py, value)
         .map(Bound::unbind)
         .map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+pub fn to_py_preserving_errors<T>(py: Python<'_>, value: &T) -> PyResult<Py<PyAny>>
+where
+    T: Serialize + ?Sized,
+{
+    pythonize::pythonize(py, value)
+        .map(Bound::unbind)
+        .map_err(PyErr::from)
 }
 
 pub struct Pythonized<T>(pub T);
@@ -87,6 +103,51 @@ mod tests {
                 .expect_err("serializer panic should become a Python exception");
             assert!(error.is_instance_of::<PanicException>(py));
             assert_eq!(error.to_string(), "PanicException: serializer panicked");
+        });
+    }
+
+    #[test]
+    fn depythonize_preserves_python_exception_identity_and_traceback() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = pyo3::types::PyDict::new(py);
+            py.run(
+                pyo3::ffi::c_str!(
+                    r#"
+failure = LookupError('conversion failed')
+cause = ValueError('cause')
+class Broken:
+    def __index__(self):
+        raise failure from cause
+value = Broken()
+"#
+                ),
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+            let value = locals.get_item("value").unwrap().unwrap();
+            let legacy_error = from_py::<i64>(&value).unwrap_err();
+            assert!(legacy_error.is_instance_of::<PyValueError>(py));
+            assert!(
+                !legacy_error
+                    .value(py)
+                    .is(locals.get_item("failure").unwrap().unwrap())
+            );
+            let error = from_py_preserving_errors::<i64>(&value).unwrap_err();
+            assert!(
+                error
+                    .value(py)
+                    .is(locals.get_item("failure").unwrap().unwrap())
+            );
+            assert!(
+                error
+                    .cause(py)
+                    .unwrap()
+                    .value(py)
+                    .is(locals.get_item("cause").unwrap().unwrap())
+            );
+            assert!(error.traceback(py).is_some());
         });
     }
 }

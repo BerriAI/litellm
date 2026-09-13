@@ -1,3 +1,4 @@
+import { DEFAULT_PROXY_ADMIN_USER_ID, UI_TEAM_ID } from "@/utils/sentinels";
 import { uiHref } from "@/utils/uiHref";
 
 const MODEL_GRANT_SENTINELS: ReadonlySet<string> = new Set([
@@ -6,7 +7,8 @@ const MODEL_GRANT_SENTINELS: ReadonlySet<string> = new Set([
   "no-default-models",
 ]);
 
-export function teamDetailHref(teamId: string): string {
+export function teamDetailHref(teamId: string): string | undefined {
+  if (teamId === UI_TEAM_ID) return undefined;
   return `${uiHref("teams")}?team=${encodeURIComponent(teamId)}`;
 }
 
@@ -14,7 +16,8 @@ export function keyDetailHref(keyToken: string): string {
   return `${uiHref("api-keys")}?key=${encodeURIComponent(keyToken)}`;
 }
 
-export function userDetailHref(userId: string): string {
+export function userDetailHref(userId: string): string | undefined {
+  if (userId === DEFAULT_PROXY_ADMIN_USER_ID) return undefined;
   return `${uiHref("users")}?user=${encodeURIComponent(userId)}`;
 }
 

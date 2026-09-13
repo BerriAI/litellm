@@ -15,6 +15,8 @@ use std::time::Duration;
 
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
+use litellm_core::AuthError;
+use litellm_core::auth::error::MissingCredential;
 use litellm_core::error::Error;
 use litellm_core::realtime::transformation::RealtimeProviderConfig;
 use litellm_core::realtime::types::RealtimeEvent;
@@ -31,8 +33,6 @@ use crate::io::tls::connect_upstream;
 
 /// Environment variable holding the OpenAI API key (last-resort fallback).
 const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
-
-const MISSING_KEY_MESSAGE: &str = "Missing OpenAI API Key - a realtime call is being made but no key was passed via params or the OPENAI_API_KEY environment variable";
 
 /// Default **idle** timeout: if neither side sends a frame for this long, the
 /// session is reaped. It resets on any activity, so it does not cap a healthy
@@ -59,7 +59,7 @@ pub(crate) fn resolve_api_key(api_key: Option<&str>) -> Result<String, Error> {
                 .ok()
                 .filter(|key| !key.trim().is_empty())
         })
-        .ok_or_else(|| Error::Auth(MISSING_KEY_MESSAGE.to_string()))
+        .ok_or_else(|| Error::from(AuthError::from(MissingCredential::OpenAiRealtimeApiKey)))
 }
 
 /// Open the upstream WebSocket to OpenAI for `(model, api_key, api_base)`.

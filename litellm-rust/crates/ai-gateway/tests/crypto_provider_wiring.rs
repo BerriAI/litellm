@@ -2,10 +2,10 @@
 //! API has to resolve its own crypto provider, in a test binary where nothing
 //! has installed a process-wide one, and has to leave it uninstalled.
 
-use std::collections::HashMap;
 use std::time::Duration;
 
-use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection;
+use futures_util::{sink, stream};
+use litellm_ai_gateway::io::responses_ws::async_responses_websocket;
 use tokio::net::TcpListener;
 
 async fn dead_tls_server() -> u16 {
@@ -30,10 +30,15 @@ async fn dead_tls_server() -> u16 {
 async fn dialing_wss_returns_an_error_instead_of_panicking() {
     let port = dead_tls_server().await;
 
-    let result = ResponsesWebSocketConnection::connect_url(
-        &format!("wss://127.0.0.1:{port}/"),
-        &HashMap::new(),
+    let result = async_responses_websocket(
+        "gpt-5",
+        Some("test-key"),
+        Some(&format!("wss://127.0.0.1:{port}/")),
+        None,
         Some(Duration::from_secs(10)),
+        |_| {},
+        stream::empty(),
+        sink::drain(),
     )
     .await;
 

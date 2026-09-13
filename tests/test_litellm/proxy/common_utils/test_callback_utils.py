@@ -1,30 +1,33 @@
 import copy
+import json
 import sys
 from types import ModuleType, SimpleNamespace
+from typing import Final
+from unittest.mock import patch
 
 import pytest
 
-
+import litellm
+from litellm.caching.caching import DualCache
+from litellm.constants import MAX_GUARDRAIL_SCAN_METADATA_HEADER_LENGTH
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
+    _serialize_scan_metadata_header,
     add_guardrail_scan_id,
     add_policy_to_applied_policies_header,
     decrypt_callback_vars,
     encrypt_callback_vars,
     get_logging_caching_headers,
-    initialize_callbacks_on_proxy,
     get_remaining_tokens_and_requests_from_request_data,
+    initialize_callbacks_on_proxy,
     normalize_callback_names,
+    process_callback,
     sanitize_openai_provider_metadata,
     strip_callback_config,
 )
-import litellm
-from litellm.caching.caching import DualCache
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
-
-from unittest.mock import patch
-from litellm.proxy.common_utils.callback_utils import process_callback
+from litellm.types.guardrails import GuardrailEventHooks
 
 
 def test_get_remaining_tokens_and_requests_from_request_data():
@@ -189,20 +192,109 @@ def test_get_logging_caching_headers_merges_metadata_and_litellm_metadata():
     assert headers["x-litellm-policy-sources"] == "global-baseline=team_default"
 
 
+def _record(
+    request_data: dict[str, object],
+    scan_id: str | None,
+    guardrail_name: str = "airs",
+    provider: str = "panw_prisma_airs",
+    stage: GuardrailEventHooks = GuardrailEventHooks.pre_call,
+) -> None:
+    add_guardrail_scan_id(
+        request_data=request_data, scan_id=scan_id, guardrail_name=guardrail_name, provider=provider, stage=stage
+    )
+
+
 def test_add_guardrail_scan_id_dedupes_and_becomes_response_header():
     request_data = {"litellm_metadata": {}}
 
-    add_guardrail_scan_id(request_data=request_data, scan_id="scan-1")
-    add_guardrail_scan_id(request_data=request_data, scan_id="scan-1")
-    add_guardrail_scan_id(request_data=request_data, scan_id="scan-2")
-    add_guardrail_scan_id(request_data=request_data, scan_id=None)
+    _record(request_data, "scan-1")
+    _record(request_data, "scan-1")
+    _record(request_data, "scan-2")
+    _record(request_data, None)
 
     assert request_data["litellm_metadata"]["guardrail_scan_ids"] == ("scan-1", "scan-2")
     assert get_logging_caching_headers(request_data)["x-litellm-guardrail-scan-id"] == "scan-1,scan-2"
 
 
-def test_get_logging_caching_headers_omits_scan_id_header_without_scans():
-    assert "x-litellm-guardrail-scan-id" not in get_logging_caching_headers({"litellm_metadata": {}})
+def test_scan_metadata_header_maps_each_id_to_its_guardrail_stage_and_provider():
+    request_data: Final[dict[str, object]] = {"litellm_metadata": {}}
+
+    _record(
+        request_data, "scan-1", guardrail_name="airs", provider="panw_prisma_airs", stage=GuardrailEventHooks.pre_call
+    )
+    _record(
+        request_data, "mod-1", guardrail_name="mod", provider="openai_moderation", stage=GuardrailEventHooks.pre_call
+    )
+    _record(
+        request_data, "scan-2", guardrail_name="airs", provider="panw_prisma_airs", stage=GuardrailEventHooks.post_call
+    )
+    _record(
+        request_data, "scan-2", guardrail_name="airs", provider="panw_prisma_airs", stage=GuardrailEventHooks.post_call
+    )
+    _record(request_data, None, guardrail_name="mod", provider="openai_moderation", stage=GuardrailEventHooks.post_call)
+
+    headers: Final = get_logging_caching_headers(request_data)
+    assert headers is not None
+    assert headers["x-litellm-guardrail-scan-id"] == "scan-1,mod-1,scan-2"
+    assert json.loads(headers["x-litellm-guardrail-scan-metadata"]) == [
+        {"guardrail": "airs", "stage": "pre_call", "provider": "panw_prisma_airs", "scan_id": "scan-1"},
+        {"guardrail": "mod", "stage": "pre_call", "provider": "openai_moderation", "scan_id": "mod-1"},
+        {"guardrail": "airs", "stage": "post_call", "provider": "panw_prisma_airs", "scan_id": "scan-2"},
+    ]
+
+
+def test_scan_metadata_keeps_same_id_reused_across_stages():
+    request_data: Final[dict[str, object]] = {"metadata": {}}
+
+    _record(request_data, "scan-1", stage=GuardrailEventHooks.pre_call)
+    _record(request_data, "scan-1", stage=GuardrailEventHooks.post_call)
+
+    headers: Final = get_logging_caching_headers(request_data)
+    assert headers is not None
+    assert headers["x-litellm-guardrail-scan-id"] == "scan-1"
+    assert [entry["stage"] for entry in json.loads(headers["x-litellm-guardrail-scan-metadata"])] == [
+        "pre_call",
+        "post_call",
+    ]
+
+
+def test_scan_metadata_header_drops_trailing_entries_to_stay_within_length_limit():
+    request_data: Final[dict[str, object]] = {"litellm_metadata": {}}
+    scan_ids: Final = tuple(f"0f9c4b7e-3d2a-4c1b-9e8f-{index:012d}" for index in range(40))
+    for scan_id in scan_ids:
+        _record(request_data, scan_id, stage=GuardrailEventHooks.post_call)
+
+    headers: Final = get_logging_caching_headers(request_data)
+    assert headers is not None
+    assert headers["x-litellm-guardrail-scan-id"] == ",".join(scan_ids)
+    header: Final = headers["x-litellm-guardrail-scan-metadata"]
+    assert len(header) <= MAX_GUARDRAIL_SCAN_METADATA_HEADER_LENGTH
+    kept: Final = json.loads(header)
+    assert 1 < len(kept) < len(scan_ids)
+    assert [entry["scan_id"] for entry in kept] == list(scan_ids[: len(kept)])
+
+
+def test_serialize_scan_metadata_header_keeps_exactly_the_entries_that_fit():
+    entries: Final = ({"scan_id": "a"}, {"scan_id": "b"}, {"scan_id": "c"})
+    two_entries: Final = '[{"scan_id":"a"},{"scan_id":"b"}]'
+
+    assert _serialize_scan_metadata_header(entries, max_length=len(two_entries)) == two_entries
+    assert _serialize_scan_metadata_header(entries, max_length=len(two_entries) - 1) == '[{"scan_id":"a"}]'
+    assert _serialize_scan_metadata_header(entries, max_length=len(two_entries) + 1) == two_entries
+    assert _serialize_scan_metadata_header(entries, max_length=1000) == json.dumps(entries, separators=(",", ":"))
+    assert _serialize_scan_metadata_header(entries, max_length=5) is None
+    assert _serialize_scan_metadata_header((), max_length=1000) is None
+
+
+def test_scan_metadata_is_an_internal_metadata_key():
+    assert sanitize_openai_provider_metadata({"guardrail_scan_metadata": "x", "keep": "y"}) == {"keep": "y"}
+
+
+def test_get_logging_caching_headers_omits_scan_headers_without_scans():
+    headers: Final = get_logging_caching_headers({"litellm_metadata": {}})
+    assert headers is not None
+    assert "x-litellm-guardrail-scan-id" not in headers
+    assert "x-litellm-guardrail-scan-metadata" not in headers
 
 
 def test_initialize_callbacks_on_proxy_instantiates_compression_interception(
