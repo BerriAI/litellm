@@ -26,7 +26,7 @@ function getSkillSourceLink(skill: Plugin): { url: string; label: string } | nul
     const url = src.path ? `${src.url}/tree/main/${src.path}` : src.url;
     return { url, label: url.replace("https://github.com/", "") };
   }
-  if (src?.source === "url" && src.url) {
+  if ((src?.source === "url" || src?.source === "archive") && src.url) {
     return { url: src.url, label: src.url.replace(/^https?:\/\//, "") };
   }
   return null;

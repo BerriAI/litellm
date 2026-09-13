@@ -116,3 +116,27 @@ resource "google_secret_manager_secret_iam_member" "billing_metrics_ca_cert" {
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.runtime.email}"
 }
+
+resource "google_secret_manager_secret_iam_member" "metrics_run_monitoring" {
+  count = local.metrics_enabled ? 1 : 0
+
+  secret_id = google_secret_manager_secret.metrics_run_monitoring[0].id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+resource "google_project_iam_member" "runtime_metric_writer" {
+  count = local.metrics_enabled ? 1 : 0
+
+  project = var.project_id
+  role    = "roles/monitoring.metricWriter"
+  member  = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+resource "google_project_iam_member" "runtime_log_writer" {
+  count = local.metrics_enabled ? 1 : 0
+
+  project = var.project_id
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.runtime.email}"
+}

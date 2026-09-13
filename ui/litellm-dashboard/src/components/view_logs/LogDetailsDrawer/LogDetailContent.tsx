@@ -48,6 +48,8 @@ import {
 } from "./constants";
 import { ToolsSection } from "../ToolsSection";
 import { PrettyMessagesView } from "./PrettyMessagesView";
+import { ClassifierAuditView } from "./ClassifierAuditView";
+import { AUTOROUTER_CLASSIFIER_ORIGIN } from "./ClassifyTag";
 
 export interface LogDetailContentProps {
   logEntry: LogEntry;
@@ -68,6 +70,12 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
   const metadata = logEntry.metadata || {};
   const hasError = metadata.status === "failure";
   const errorInfo = hasError ? metadata.error_information : null;
+  const isClassifier =
+    metadata.internal_call_origin === AUTOROUTER_CLASSIFIER_ORIGIN &&
+    ["completion", "acompletion", "responses", "aresponses"].includes(logEntry.call_type);
+  const rawRequest = formatData(logEntry.proxy_server_request || logEntry.messages);
+  const hasClassifierAudit =
+    isClassifier && (rawRequest?.classifier_input != null || rawRequest?.originating_request_masked != null);
 
   const hasMessages = checkHasMessages(logEntry.messages);
   const hasResponse = checkHasResponse(logEntry.response);
@@ -87,10 +95,6 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
 
   // Vector store data
   const hasVectorStoreData = checkHasVectorStoreData(metadata);
-
-  const getRawRequest = () => {
-    return formatData(logEntry.proxy_server_request || logEntry.messages);
-  };
 
   const getFormattedResponse = () => {
     if (hasError && errorInfo) {
@@ -196,11 +200,15 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
             Loading request &amp; response data...
           </div>
         </div>
-      ) : (
+      ) : null}
+      {!isLoadingDetails && hasClassifierAudit && (
+        <ClassifierAuditView request={rawRequest} response={getFormattedResponse()} />
+      )}
+      {!isLoadingDetails && !hasClassifierAudit && (
         <RequestResponseSection
           hasResponse={hasResponse}
           hasError={hasError}
-          getRawRequest={getRawRequest}
+          getRawRequest={() => rawRequest}
           getFormattedResponse={getFormattedResponse}
           logEntry={logEntry}
         />
@@ -541,22 +549,20 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
             )}
 
             <DescriptionItem label="Retries">
-              {metadata?.attempted_retries !== undefined && metadata?.attempted_retries !== null ? (
-                metadata.attempted_retries > 0 ? (
-                  <>
-                    {metadata.attempted_retries}
-                    {metadata.max_retries !== undefined && metadata.max_retries !== null
-                      ? ` / ${metadata.max_retries}`
-                      : ""}
-                  </>
-                ) : (
-                  <Badge variant="secondary" className="bg-success/15 text-success">
-                    None
-                  </Badge>
-                )
-              ) : (
-                "-"
+              {metadata?.attempted_retries != null && metadata.attempted_retries > 0 && (
+                <>
+                  {metadata.attempted_retries}
+                  {metadata.max_retries !== undefined && metadata.max_retries !== null
+                    ? ` / ${metadata.max_retries}`
+                    : ""}
+                </>
               )}
+              {metadata?.attempted_retries != null && metadata.attempted_retries <= 0 && (
+                <Badge variant="secondary" className="bg-success/15 text-success">
+                  None
+                </Badge>
+              )}
+              {metadata?.attempted_retries == null && "-"}
             </DescriptionItem>
 
             <DescriptionItem label="Start Time">
@@ -602,16 +608,10 @@ function RequestResponseSection({
   const totalTokens = promptTokens + completionTokens;
   const costBreakdown = logEntry.metadata?.cost_breakdown;
   const useCostBreakdown = costBreakdown?.input_cost !== undefined && costBreakdown?.output_cost !== undefined;
-  const inputCost = useCostBreakdown
-    ? costBreakdown!.input_cost ?? 0
-    : totalTokens > 0
-      ? (totalSpend * promptTokens) / totalTokens
-      : 0;
-  const outputCost = useCostBreakdown
-    ? costBreakdown!.output_cost ?? 0
-    : totalTokens > 0
-      ? (totalSpend * completionTokens) / totalTokens
-      : 0;
+  const estimatedInputCost = totalTokens > 0 ? (totalSpend * promptTokens) / totalTokens : 0;
+  const estimatedOutputCost = totalTokens > 0 ? (totalSpend * completionTokens) / totalTokens : 0;
+  const inputCost = useCostBreakdown ? costBreakdown!.input_cost ?? 0 : estimatedInputCost;
+  const outputCost = useCostBreakdown ? costBreakdown!.output_cost ?? 0 : estimatedOutputCost;
 
   return (
     <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">

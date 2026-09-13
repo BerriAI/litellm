@@ -1,7 +1,10 @@
+import asyncio
 import json
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
+from prisma.errors import DataError
 
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.utils import get_error_message_str, handle_exception_on_proxy
@@ -171,3 +174,45 @@ def test_handle_exception_on_proxy_error_path_none_input_wraps_as_500():
         "code": "500",
         "type": ProxyErrorTypes.internal_server_error.value,
     }
+
+
+@pytest.mark.asyncio
+async def test_handle_exception_on_proxy_read_only_transaction_forces_writer_recreate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prisma_client = MagicMock()
+    prisma_client.recreate_read_only_writer = AsyncMock(return_value=True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    exc = DataError(
+        data={
+            "user_facing_error": {
+                "message": 'PostgresError { code: "25006", message: "cannot execute UPDATE in a read-only transaction" }'
+            }
+        }
+    )
+
+    result = handle_exception_on_proxy(exc)
+    await asyncio.sleep(0)
+
+    snapshot = {
+        "code": result.code,
+        "recreate_kwargs": prisma_client.recreate_read_only_writer.await_args.kwargs,
+    }
+    assert snapshot == {
+        "code": "500",
+        "recreate_kwargs": {"reason": "postgres_read_only_transaction"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_handle_exception_on_proxy_leaves_writer_alone_for_other_db_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prisma_client = MagicMock()
+    prisma_client.recreate_read_only_writer = AsyncMock(return_value=True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+
+    handle_exception_on_proxy(DataError(data={"user_facing_error": {"message": "deadlock detected"}}))
+    await asyncio.sleep(0)
+
+    assert prisma_client.recreate_read_only_writer.await_count == 0

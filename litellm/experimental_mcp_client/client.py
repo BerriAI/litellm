@@ -4,12 +4,15 @@ LiteLLM Proxy uses this MCP Client to connnect to other MCP servers.
 
 import asyncio
 import base64
+import hashlib
+import json
 import os
 from collections.abc import Awaitable, Callable, Generator
 from contextlib import AbstractAsyncContextManager
 from datetime import timedelta
 from functools import partial
 from importlib import metadata
+from types import MappingProxyType
 from typing import Any, Final, Protocol, TypeAlias, TypeVar
 
 import httpx
@@ -77,6 +80,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR, MCP_TOOL_LISTING_TIMEOUT
 from litellm.experimental_mcp_client.tools import list_tools_with_pagination
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
+from litellm.proxy._experimental.mcp_server.mcp_debug import capture_upstream_error_response
 from litellm.types.llms.custom_http import VerifyTypes
 from litellm.types.mcp import (
     MCPAuth,
@@ -340,6 +344,22 @@ class MCPClient:
         # handle the basic auth value if provided
         if auth_value:
             self.update_auth_value(auth_value)
+
+    async def discovery_auth_fingerprint(self) -> str:
+        request: Final = httpx.Request("POST", self.server_url or "http://localhost/", headers=self._get_auth_headers())
+        if self._resolved_auth is None:
+            return self._hash_discovery_auth(request)
+        flow: Final = self._resolved_auth.async_auth_flow(request)
+        try:
+            authenticated: Final = await flow.__anext__()
+            return self._hash_discovery_auth(authenticated)
+        finally:
+            await flow.aclose()
+
+    @staticmethod
+    def _hash_discovery_auth(request: httpx.Request) -> str:
+        material: Final = json.dumps((str(request.url), tuple(sorted(request.headers.multi_items()))))
+        return hashlib.sha256(material.encode()).hexdigest()
 
     def _create_transport_context(
         self,
@@ -631,7 +651,9 @@ class MCPClient:
                 auth=effective_auth,
                 verify=ssl_config,
                 follow_redirects=True,
-                event_hooks={"request": [guard]} if guard else {},
+                event_hooks=MappingProxyType(
+                    {"response": [capture_upstream_error_response], "request": [guard] if guard else []}
+                ),  # mutable-ok: httpx types require lists of hooks
             )
 
         return factory
@@ -777,7 +799,7 @@ class MCPClient:
             # Return a default error result instead of raising
             return self.error_tool_result(e)
 
-    async def list_prompts(self) -> list[Prompt]:
+    async def list_prompts(self, *, raise_on_error: bool = False) -> list[Prompt]:
         """List available prompts from the server."""
         verbose_logger.debug("MCP client listing tools from %s", self.server_url or "stdio")
 
@@ -807,6 +829,8 @@ class MCPClient:
             verbose_logger.warning("MCP client list_prompts was cancelled")
             raise
         except Exception as e:
+            if raise_on_error:
+                raise
             error_type: Final = type(e).__name__
             verbose_logger.error(
                 "MCP client list_prompts failed - Error Type: %s, Error: %s, Server: %s, Transport: %s",
@@ -865,7 +889,7 @@ class MCPClient:
                 )
             raise
 
-    async def list_resources(self) -> list[Resource]:
+    async def list_resources(self, *, raise_on_error: bool = False) -> list[Resource]:
         """List available resources from the server."""
         verbose_logger.debug("MCP client listing resources from %s", self.server_url or "stdio")
 
@@ -895,6 +919,8 @@ class MCPClient:
             verbose_logger.warning("MCP client list_resources was cancelled")
             raise
         except Exception as e:
+            if raise_on_error:
+                raise
             error_type: Final = type(e).__name__
             verbose_logger.error(
                 "MCP client list_resources failed - Error Type: %s, Error: %s, Server: %s, Transport: %s",
@@ -912,7 +938,7 @@ class MCPClient:
             # Return empty list instead of raising to allow graceful degradation
             return []
 
-    async def list_resource_templates(self) -> list[ResourceTemplate]:
+    async def list_resource_templates(self, *, raise_on_error: bool = False) -> list[ResourceTemplate]:
         """List available resource templates from the server."""
         verbose_logger.debug("MCP client listing resource templates from %s", self.server_url or "stdio")
 
@@ -945,6 +971,8 @@ class MCPClient:
             verbose_logger.warning("MCP client list_resource_templates was cancelled")
             raise
         except Exception as e:
+            if raise_on_error:
+                raise
             error_type: Final = type(e).__name__
             verbose_logger.error(
                 "MCP client list_resource_templates failed - Error Type: %s, Error: %s, Server: %s, Transport: %s",

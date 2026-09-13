@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Awaitable, Callable
+import json
+import subprocess
+from functools import cache
 from pathlib import Path
 from typing import Final, Protocol, cast
 
@@ -28,12 +29,12 @@ class _GatewayClient(Protocol):
 
 
 def _collect_python(fixture: RouteFixture) -> tuple[FunctionTraceEvent, ...]:
-    import litellm
     from fastapi.testclient import TestClient
 
+    import litellm
+    from litellm.proxy import proxy_server
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.anthropic_endpoints.endpoints import user_api_key_auth
-    from litellm.proxy import proxy_server
 
     provider_model: Final = cast(str, fixture.kwargs["provider_model"])
     model_alias: Final = cast(str, fixture.kwargs["model_alias"])
@@ -76,29 +77,57 @@ def _collect_python(fixture: RouteFixture) -> tuple[FunctionTraceEvent, ...]:
 
 
 def _collect_rust(fixture: RouteFixture) -> tuple[FunctionTraceEvent, ...]:
-    from litellm.rust_bridge import get_native_bridge
-
-    bridge: Final[object | None] = get_native_bridge()
-    trace: Final[object | None] = getattr(bridge, "_trace", None) if bridge is not None else None
-    gateway_messages: Final[object | None] = getattr(trace, "gateway_messages", None)
-    if gateway_messages is None or not callable(gateway_messages):
-        raise RuntimeError("native Rust trace bridge does not expose gateway_messages")
-    invoke_gateway: Final = cast(Callable[[str, str, str, object], Awaitable[object]], gateway_messages)
-
-    async def invoke() -> object:
-        return await invoke_gateway(
-            cast(str, fixture.kwargs["model_alias"]),
-            cast(str, fixture.kwargs["provider_model"]),
-            cast(str, fixture.kwargs["api_base"]),
-            fixture.kwargs["body"],
-        )
-
-    result: Final = asyncio.run(invoke())
+    payload: Final = json.dumps(
+        {
+            "model_alias": fixture.kwargs["model_alias"],
+            "provider_model": fixture.kwargs["provider_model"],
+            "api_base": fixture.kwargs["api_base"],
+            "body": fixture.kwargs["body"],
+        }
+    )
+    completed: Final = subprocess.run(
+        (_gateway_trace_binary(),),
+        input=payload,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"Rust gateway trace failed: {completed.stderr.strip()}")
+    result: Final = json.loads(completed.stdout)
     payload: Final = TraceResponsePayload.model_validate(result)
     response: Final = _GatewayResponsePayload.model_validate(payload.response)
     if response.status != 200:
         raise RuntimeError(f"Rust gateway returned {response.status}: {response.body}")
     return native_trace_events(payload)
+
+
+@cache
+def _gateway_trace_binary() -> Path:
+    repo_root: Final = next(parent for parent in Path(__file__).resolve().parents if (parent / "litellm-rust").is_dir())
+    rust_root: Final = repo_root / "litellm-rust"
+    completed: Final = subprocess.run(
+        (
+            "cargo",
+            "build",
+            "--quiet",
+            "--package",
+            "litellm-ai-gateway",
+            "--features",
+            "trace-parity",
+            "--bin",
+            "trace-parity-gateway",
+            "--target-dir",
+            rust_root / "target",
+        ),
+        cwd=rust_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"Rust gateway trace build failed: {completed.stderr.strip()}")
+    return rust_root / "target" / "debug" / "trace-parity-gateway"
 
 
 def _collect(scenario: TraceScenario, engine: Engine) -> tuple[FunctionTraceEvent, ...] | TraceExecutionFailure:

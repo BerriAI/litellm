@@ -46,8 +46,10 @@ export interface KeyEditFormValues {
   mcp_servers_and_groups?: McpServersAndGroups;
   mcp_tool_permissions?: Record<string, string[]>;
   agents_and_groups?: AgentsAndGroups;
+  skills?: string[];
   organization_id?: string | null;
   team_id?: string | null;
+  project_id?: string | null;
   logging_settings?: unknown[];
   metadata?: string;
   duration?: string | null;
@@ -102,8 +104,10 @@ export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => 
     agents: keyData.object_permission?.agents || [],
     accessGroups: keyData.object_permission?.agent_access_groups || [],
   },
+  skills: keyData.object_permission?.skills || [],
   organization_id: keyData.organization_id,
   team_id: keyData.team_id,
+  project_id: keyData.project_id,
   logging_settings: extractLoggingSettings(keyData.metadata),
   metadata: formatMetadataForDisplay(stripTagsFromMetadata(keyData.metadata)),
   duration: (keyData as { duration?: string }).duration ?? "",
@@ -148,8 +152,10 @@ export const keyEditFormSchema = z.object({
   mcp_servers_and_groups: z.custom<McpServersAndGroups | undefined>(),
   mcp_tool_permissions: z.custom<Record<string, string[]> | undefined>(),
   agents_and_groups: z.custom<AgentsAndGroups | undefined>(),
+  skills: z.custom<string[] | undefined>(),
   organization_id: z.custom<string | null | undefined>(),
   team_id: z.custom<string | null | undefined>(),
+  project_id: z.string().nullable().optional(),
   logging_settings: z.custom<unknown[] | undefined>(),
   metadata: z.custom<string | undefined>(),
   duration: z.custom<string | null | undefined>(),
@@ -196,6 +202,7 @@ export const toSubmittedValues = (
   mcp_servers_and_groups: values.mcp_servers_and_groups,
   mcp_tool_permissions: values.mcp_tool_permissions,
   agents_and_groups: values.agents_and_groups,
+  skills: values.skills,
   organization_id: values.organization_id,
   team_id: values.team_id,
   logging_settings: values.logging_settings,

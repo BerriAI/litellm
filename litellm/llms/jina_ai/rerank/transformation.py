@@ -157,9 +157,6 @@ class JinaAIRerankConfig(BaseRerankConfig):
         billed_units: RerankBilledUnits | None = None,
         model_info: ModelInfo | None = None,
     ) -> tuple[float, float]:
-        """
-        Jina AI reranker is priced at $0.000000018 per token.
-        """
         if (
             model_info is None
             or "input_cost_per_token" not in model_info
