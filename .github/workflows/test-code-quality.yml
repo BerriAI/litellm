@@ -65,6 +65,9 @@ jobs:
       - name: check_licenses
         run: uv run --no-sync python ./tests/code_coverage_tests/check_licenses.py
 
+      - name: check_json_duplicate_keys
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_json_duplicate_keys.py
+
       - name: check_provider_folders_documented
         run: uv run --no-sync python ./tests/code_coverage_tests/check_provider_folders_documented.py
 
