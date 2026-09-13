@@ -52,6 +52,7 @@ class A2AClient:
         base_url: str,
         timeout: float = 60.0,
         extra_headers: dict[str, str] | None = None,
+        agent_card_params: dict[str, Any] | None = None,
     ):
         """
         Initialize the A2A client wrapper.
@@ -60,10 +61,12 @@ class A2AClient:
             base_url: The base URL of the A2A agent (e.g., "http://localhost:10001")
             timeout: Request timeout in seconds (default: 60.0)
             extra_headers: Optional additional headers to include in requests
+            agent_card_params: Optional registered agent_card_params dict
         """
         self.base_url = base_url
         self.timeout = timeout
         self.extra_headers = extra_headers
+        self.agent_card_params = agent_card_params
         self._a2a_client: A2AClientType | None = None
 
     async def _get_client(self) -> "A2AClientType":
@@ -75,6 +78,7 @@ class A2AClient:
                 base_url=self.base_url,
                 timeout=self.timeout,
                 extra_headers=self.extra_headers,
+                agent_card_params=self.agent_card_params,
             )
         return self._a2a_client
 
