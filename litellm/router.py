@@ -3271,8 +3271,16 @@ class Router:
                         kwargs=initial_kwargs,
                         metadata_variable_name="litellm_metadata",
                     )
+                    fallback_trigger: Final[Exception] = (
+                        e.original_exception
+                        if isinstance(
+                            e.original_exception,
+                            (litellm.ContentPolicyViolationError, litellm.ContextWindowExceededError),
+                        )
+                        else e
+                    )
                     fallback_response = await self.async_function_with_fallbacks_common_utils(
-                        e=e,
+                        e=fallback_trigger,
                         disable_fallbacks=False,
                         fallbacks=fallbacks,
                         context_window_fallbacks=context_window_fallbacks,
