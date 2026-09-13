@@ -1,3 +1,4 @@
+import logging
 import os
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -69,15 +70,16 @@ class TestGitHubCopilotAuthenticator:
             "https://api.githubcopilot.com#fragment",
         ),
     )
-    def test_get_api_base_rejects_insecure_configuration(self, authenticator, api_base):
+    def test_get_api_base_rejects_insecure_configuration(self, authenticator, api_base, caplog):
         with (
             patch.dict(os.environ, {"GITHUB_COPILOT_API_BASE": api_base}, clear=True),
-            patch("litellm.llms.github_copilot.authenticator.verbose_logger.warning") as mock_warning,
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
         ):
             assert authenticator.get_api_base() is None
 
-        mock_warning.assert_called_once_with(
+        assert (
             "Ignoring GITHUB_COPILOT_API_BASE because it must be an HTTPS URL without credentials, query, or fragment"
+            in caplog.text
         )
 
     def test_get_api_base_uses_default_when_unconfigured(self, authenticator):
@@ -92,19 +94,20 @@ class TestGitHubCopilotAuthenticator:
         ):
             assert authenticator.get_api_base("https://deployment.example.com") == "https://deployment.example.com"
 
-    def test_get_api_base_falls_back_from_untrusted_deployment_endpoint(self, authenticator):
+    def test_get_api_base_falls_back_from_untrusted_deployment_endpoint(self, authenticator, caplog):
         with (
             patch.dict(
                 os.environ,
                 {"GITHUB_COPILOT_API_BASE": "https://configured.example.com"},
                 clear=True,
             ),
-            patch("litellm.llms.github_copilot.authenticator.verbose_logger.warning") as mock_warning,
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
         ):
             assert authenticator.get_api_base("http://attacker.example.com") == "https://configured.example.com"
 
-        mock_warning.assert_called_once_with(
+        assert (
             "Ignoring deployment api_base because it must be an HTTPS URL without credentials, query, or fragment"
+            in caplog.text
         )
 
     def test_get_github_headers(self, authenticator):
@@ -203,19 +206,19 @@ class TestGitHubCopilotAuthenticator:
         mock_login.assert_called_once()
         write_open().write.assert_called_once_with(mock_token)
 
-    def test_get_access_token_survives_persistence_failure(self, authenticator):
+    def test_get_access_token_survives_persistence_failure(self, authenticator, caplog):
         mock_token = "mock-access-token"
 
         with (
             patch.object(authenticator, "_login", return_value=mock_token) as mock_login,
             patch("builtins.open", side_effect=IOError),
-            patch("litellm.llms.github_copilot.authenticator.verbose_logger.error") as mock_error,
+            caplog.at_level(logging.ERROR, logger="LiteLLM"),
         ):
             token = authenticator.get_access_token()
 
         assert token == mock_token
         mock_login.assert_called_once()
-        mock_error.assert_called_once_with("Error saving access token to file")
+        assert "Error saving access token to file" in caplog.text
 
     def test_get_access_token_failure(self, authenticator):
         """Test that an exception is raised after multiple login failures."""

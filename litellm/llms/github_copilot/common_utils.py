@@ -4,7 +4,6 @@ Constants for Copilot integration
 
 import os
 from typing import Final
-from uuid import uuid4
 
 import httpx
 

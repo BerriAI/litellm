@@ -16,7 +16,6 @@ from .common_utils import (
     get_copilot_auth_headers,
 )
 
-
 # Constants (default values — overridable via environment variables at call time)
 DEFAULT_GITHUB_CLIENT_ID: Final = "Iv1.b507a08c87ecfe98"
 DEFAULT_GITHUB_DEVICE_CODE_URL: Final = "https://github.com/login/device/code"
@@ -97,7 +96,7 @@ class Authenticator:
             return self.get_access_token()
         except GetAccessTokenError as e:
             raise GetAPIKeyError(
-                message=f"Failed to get OAuth access token: {str(e)}",
+                message=f"Failed to get OAuth access token: {e!s}",
                 status_code=401,
             )
 
