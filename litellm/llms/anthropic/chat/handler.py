@@ -907,7 +907,7 @@ class ModelResponseIterator:
                 # Track current content block type for filtering deltas
                 self.current_content_block_type = content_block_start["content_block"]["type"]
                 if content_block_start["content_block"]["type"] == "text":
-                    text = content_block_start["content_block"]["text"]
+                    text = content_block_start["content_block"].get("text") or ""
                 elif (
                     content_block_start["content_block"]["type"] == "tool_use"
                     or content_block_start["content_block"]["type"] == "server_tool_use"
