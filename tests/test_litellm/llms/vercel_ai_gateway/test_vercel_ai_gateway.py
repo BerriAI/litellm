@@ -5,6 +5,7 @@ Mock tests for vercel_ai_gateway provider
 import json
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 import respx
 
@@ -48,16 +49,12 @@ def test_get_llm_provider_vercel_ai_gateway():
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
     # Test with vercel_ai_gateway/provider/model-name format
-    model, provider, api_key, api_base = get_llm_provider(
-        "vercel_ai_gateway/openai/gpt-4o"
-    )
+    model, provider, api_key, api_base = get_llm_provider("vercel_ai_gateway/openai/gpt-4o")
     assert model == "openai/gpt-4o"
     assert provider == "vercel_ai_gateway"
 
     # Test with api_base containing vercel ai gateway endpoint
-    model, provider, api_key, api_base = get_llm_provider(
-        "gpt-4o", api_base="https://ai-gateway.vercel.sh/v1"
-    )
+    model, provider, api_key, api_base = get_llm_provider("gpt-4o", api_base="https://ai-gateway.vercel.sh/v1")
     assert model == "gpt-4o"
     assert provider == "vercel_ai_gateway"
     assert api_base == "https://ai-gateway.vercel.sh/v1"
@@ -71,16 +68,12 @@ def test_vercel_ai_gateway_in_provider_lists():
 
 
 @pytest.mark.asyncio
-async def test_vercel_ai_gateway_completion_call(
-    respx_mock, vercel_ai_gateway_response, monkeypatch
-):
+async def test_vercel_ai_gateway_completion_call(respx_mock, vercel_ai_gateway_response, monkeypatch):
     """Test completion call with vercel_ai_gateway provider using mocked response"""
     monkeypatch.setenv("VERCEL_AI_GATEWAY_API_KEY", "test-api-key")
     litellm.disable_aiohttp_transport = True
 
-    respx_mock.post("https://ai-gateway.vercel.sh/v1/chat/completions").respond(
-        json=vercel_ai_gateway_response
-    )
+    respx_mock.post("https://ai-gateway.vercel.sh/v1/chat/completions").respond(json=vercel_ai_gateway_response)
 
     response = await litellm.acompletion(
         model="vercel_ai_gateway/openai/gpt-3.5-turbo",
@@ -88,10 +81,7 @@ async def test_vercel_ai_gateway_completion_call(
         max_tokens=20,
     )
 
-    assert (
-        response.choices[0].message.content
-        == "Hello! This is a test response from Vercel AI Gateway."
-    )
+    assert response.choices[0].message.content == "Hello! This is a test response from Vercel AI Gateway."
     assert response.model == "vercel_ai_gateway/openai/gpt-3.5-turbo"
     assert response.usage.total_tokens == 25
 
@@ -105,16 +95,12 @@ async def test_vercel_ai_gateway_completion_call(
 
 
 @pytest.mark.asyncio
-async def test_vercel_ai_gateway_with_oidc_token(
-    respx_mock, vercel_ai_gateway_response, monkeypatch
-):
+async def test_vercel_ai_gateway_with_oidc_token(respx_mock, vercel_ai_gateway_response, monkeypatch):
     """Test completion call with vercel_ai_gateway provider using VERCEL_OIDC_TOKEN"""
     monkeypatch.setenv("VERCEL_OIDC_TOKEN", "test-oidc-token")
     litellm.disable_aiohttp_transport = True
 
-    respx_mock.post("https://ai-gateway.vercel.sh/v1/chat/completions").respond(
-        json=vercel_ai_gateway_response
-    )
+    respx_mock.post("https://ai-gateway.vercel.sh/v1/chat/completions").respond(json=vercel_ai_gateway_response)
 
     response = await litellm.acompletion(
         model="vercel_ai_gateway/openai/gpt-3.5-turbo",
@@ -122,10 +108,7 @@ async def test_vercel_ai_gateway_with_oidc_token(
         max_tokens=20,
     )
 
-    assert (
-        response.choices[0].message.content
-        == "Hello! This is a test response from Vercel AI Gateway."
-    )
+    assert response.choices[0].message.content == "Hello! This is a test response from Vercel AI Gateway."
     assert response.model == "vercel_ai_gateway/openai/gpt-3.5-turbo"
     assert response.usage.total_tokens == 25
 
@@ -139,9 +122,7 @@ async def test_vercel_ai_gateway_with_oidc_token(
 def test_vercel_ai_gateway_supported_params():
     """Test that vercel_ai_gateway returns the supported parameters"""
     config = VercelAIGatewayConfig()
-    supported_params = config.get_supported_openai_params(
-        "vercel_ai_gateway/openai/gpt-3.5-turbo"
-    )
+    supported_params = config.get_supported_openai_params("vercel_ai_gateway/openai/gpt-3.5-turbo")
 
     # vercel_ai_gateway should include all base OpenAI params plus extra_body
     expected_base_params = [
@@ -174,23 +155,17 @@ def test_vercel_ai_gateway_supported_params():
     ]
 
     for param in expected_base_params:
-        assert (
-            param in supported_params
-        ), f"Expected parameter '{param}' not found in supported params"
+        assert param in supported_params, f"Expected parameter '{param}' not found in supported params"
 
     assert "extra_body" in supported_params
 
 
-def test_vercel_ai_gateway_sync_completion(
-    respx_mock, vercel_ai_gateway_response, monkeypatch
-):
+def test_vercel_ai_gateway_sync_completion(respx_mock, vercel_ai_gateway_response, monkeypatch):
     """Test synchronous completion call"""
     monkeypatch.setenv("VERCEL_AI_GATEWAY_API_KEY", "test-api-key")
     litellm.disable_aiohttp_transport = True
 
-    respx_mock.post("https://ai-gateway.vercel.sh/v1/chat/completions").respond(
-        json=vercel_ai_gateway_response
-    )
+    respx_mock.post("https://ai-gateway.vercel.sh/v1/chat/completions").respond(json=vercel_ai_gateway_response)
 
     response = completion(
         model="vercel_ai_gateway/openai/gpt-3.5-turbo",
@@ -198,24 +173,17 @@ def test_vercel_ai_gateway_sync_completion(
         max_tokens=20,
     )
 
-    assert (
-        response.choices[0].message.content
-        == "Hello! This is a test response from Vercel AI Gateway."
-    )
+    assert response.choices[0].message.content == "Hello! This is a test response from Vercel AI Gateway."
     assert response.model == "vercel_ai_gateway/openai/gpt-3.5-turbo"
     assert response.usage.total_tokens == 25
 
 
-def test_vercel_ai_gateway_with_provider_options(
-    respx_mock, vercel_ai_gateway_response, monkeypatch
-):
+def test_vercel_ai_gateway_with_provider_options(respx_mock, vercel_ai_gateway_response, monkeypatch):
     """Test vercel_ai_gateway with providerOptions parameter"""
     monkeypatch.setenv("VERCEL_AI_GATEWAY_API_KEY", "test-api-key")
     litellm.disable_aiohttp_transport = True
 
-    respx_mock.post("https://ai-gateway.vercel.sh/v1/chat/completions").respond(
-        json=vercel_ai_gateway_response
-    )
+    respx_mock.post("https://ai-gateway.vercel.sh/v1/chat/completions").respond(json=vercel_ai_gateway_response)
 
     response = completion(
         model="vercel_ai_gateway/openai/gpt-3.5-turbo",
@@ -224,10 +192,7 @@ def test_vercel_ai_gateway_with_provider_options(
         max_tokens=20,
     )
 
-    assert (
-        response.choices[0].message.content
-        == "Hello! This is a test response from Vercel AI Gateway."
-    )
+    assert response.choices[0].message.content == "Hello! This is a test response from Vercel AI Gateway."
     assert response.model == "vercel_ai_gateway/openai/gpt-3.5-turbo"
     assert response.usage.total_tokens == 25
 
@@ -238,44 +203,67 @@ def test_vercel_ai_gateway_with_provider_options(
     assert request_data["providerOptions"]["gateway"]["order"] == ["azure", "openai"]
 
 
-def test_vercel_ai_gateway_models_endpoint():
+def test_vercel_ai_gateway_models_endpoint(respx_mock):
     """Test the get_models functionality"""
     config = VercelAIGatewayConfig()
 
-    with patch("litellm.module_level_client.get") as mock_get:
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "data": [
-                {"id": "openai/gpt-4o"},
-                {"id": "openai/gpt-3.5-turbo"},
-                {"id": "anthropic/claude-3-sonnet"},
-            ]
-        }
-        mock_get.return_value = mock_response
+    route = respx_mock.get("https://ai-gateway.vercel.sh/v1/models").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": "openai/gpt-4o"},
+                    {"id": "openai/gpt-3.5-turbo"},
+                    {"id": "anthropic/claude-3-sonnet"},
+                ]
+            },
+        )
+    )
 
-        models = config.get_models()
+    models = config.get_models()
 
-        assert models == [
-            "openai/gpt-4o",
-            "openai/gpt-3.5-turbo",
-            "anthropic/claude-3-sonnet",
-        ]
-        mock_get.assert_called_once_with(url="https://ai-gateway.vercel.sh/v1/models")
+    assert models == [
+        "vercel_ai_gateway/openai/gpt-4o",
+        "vercel_ai_gateway/openai/gpt-3.5-turbo",
+        "vercel_ai_gateway/anthropic/claude-3-sonnet",
+    ]
+    assert len(route.calls) == 1
 
 
-def test_vercel_ai_gateway_models_endpoint_failure():
+def test_vercel_ai_gateway_models_endpoint_failure(respx_mock):
     """Test the get_models functionality with failure"""
     config = VercelAIGatewayConfig()
+    respx_mock.get("https://ai-gateway.vercel.sh/v1/models").mock(return_value=httpx.Response(404, text="Not found"))
 
-    with patch("litellm.module_level_client.get") as mock_get:
-        mock_response = MagicMock()
-        mock_response.status_code = 404
-        mock_response.text = "Not found"
-        mock_get.return_value = mock_response
+    with pytest.raises(Exception, match="Failed to get models: Not found"):
+        config.get_models()
 
-        with pytest.raises(Exception, match="Failed to get models: Not found"):
-            config.get_models()
+
+def test_vercel_ai_gateway_get_valid_models_uses_live_catalog(respx_mock):
+    """get_valid_models(check_provider_endpoint=True) must hit the live catalog."""
+    route = respx_mock.get("https://ai-gateway.vercel.sh/v1/models").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": "openai/gpt-5"},
+                    {"id": "anthropic/claude-sonnet-4"},
+                ]
+            },
+        )
+    )
+
+    models = litellm.get_valid_models(
+        check_provider_endpoint=True,
+        custom_llm_provider="vercel_ai_gateway",
+        api_base="https://ai-gateway.vercel.sh/v1",
+    )
+
+    assert models == [
+        "vercel_ai_gateway/openai/gpt-5",
+        "vercel_ai_gateway/anthropic/claude-sonnet-4",
+    ]
+    assert len(route.calls) == 1
 
 
 def test_vercel_ai_gateway_glm46_cost_math():
@@ -294,6 +282,4 @@ def test_vercel_ai_gateway_glm46_cost_math():
     )
 
     assert math.isclose(prompt_cost, 1000 * info["input_cost_per_token"], rel_tol=1e-12)
-    assert math.isclose(
-        completion_cost, 500 * info["output_cost_per_token"], rel_tol=1e-12
-    )
+    assert math.isclose(completion_cost, 500 * info["output_cost_per_token"], rel_tol=1e-12)

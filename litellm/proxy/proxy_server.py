@@ -14381,6 +14381,11 @@ async def model_info_v2(
             # if user does not use a config.yaml, https://github.com/BerriAI/litellm/issues/2061
             all_models += [user_model]
 
+        # One row per known provider model, matching /v1/models, so a caller sees the
+        # names it can actually call with pricing. wildcard_only skips expansion: that
+        # view exists to surface the unexpanded `*` rows.
+        all_models = expand_wildcard_deployments_for_model_info(all_models, expand_wildcards=wildcard_only is not True)
+
         if model is not None:
             all_models = [m for m in all_models if _deployment_matches_allowed_model_names(m, frozenset((model,)))]
 

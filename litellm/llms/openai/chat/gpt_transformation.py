@@ -13,6 +13,10 @@ import httpx
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.gateway_catalog_cache import (
+    CATALOG_TIMEOUT_SECONDS,
+    bearer_auth_headers,
+)
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _extract_reasoning_content,
     _handle_invalid_parallel_tool_calls,
@@ -756,18 +760,19 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
         if api_base is None:
             api_base = "https://api.openai.com"
-        if api_key is None:
-            api_key = get_secret_str("OPENAI_API_KEY")
+        api_key = self.get_api_key(api_key)
 
-        # Strip api_base to just the base URL (scheme + host + port)
         parsed_url: Final = httpx.URL(api_base)
-        base_url = f"{parsed_url.scheme}://{parsed_url.host}"
-        if parsed_url.port:
-            base_url += f":{parsed_url.port}"
+        models_url: Final = (
+            f"{api_base.rstrip('/')}/models"
+            if parsed_url.path and parsed_url.path != "/"
+            else f"{api_base.rstrip('/')}/v1/models"
+        )
 
         response: Final = litellm.module_level_client.get(
-            url=f"{base_url}/v1/models",
-            headers={"Authorization": f"Bearer {api_key}"},
+            url=models_url,
+            headers=bearer_auth_headers(api_key),
+            timeout=CATALOG_TIMEOUT_SECONDS,
         )
 
         if response.status_code != 200:

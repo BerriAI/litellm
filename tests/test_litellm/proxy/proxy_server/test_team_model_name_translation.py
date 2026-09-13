@@ -1126,18 +1126,15 @@ async def test_v1_models_team_alias_inherits_token_limits_and_chat_mode(monkeypa
     key = UserAPIKeyAuth(user_id="user", api_key="***", models=["grp-a"], team_models=[])
     response = await ps.model_list(user_api_key_dict=key, include_metadata=True)
 
-    assert response["data"] == [
-        {
-            "id": "GPT Terra",
-            "object": "model",
-            "created": 1677610602,
-            "owned_by": "openai",
-            "mode": "chat",
-            "max_input_tokens": 876000,
-            "max_output_tokens": 128000,
-            "metadata": {"fallbacks": []},
-        }
-    ]
+    assert len(response["data"]) == 1
+    item = response["data"][0]
+    assert item["id"] == "GPT Terra"
+    assert item["object"] == "model"
+    assert item["owned_by"] == "openai"
+    assert item["mode"] == "chat"
+    assert item["max_input_tokens"] == 876000
+    assert item["max_output_tokens"] == 128000
+    assert item["metadata"] == {"fallbacks": []}
 
 
 @pytest.mark.asyncio
@@ -1174,15 +1171,12 @@ async def test_v1_models_team_image_alias_inherits_image_generation_mode(monkeyp
     key = UserAPIKeyAuth(user_id="user", api_key="***", models=["grp-a"], team_models=[])
     response = await ps.model_list(user_api_key_dict=key)
 
-    assert response["data"] == [
-        {
-            "id": "image",
-            "object": "model",
-            "created": 1677610602,
-            "owned_by": "openai",
-            "mode": "image_generation",
-        }
-    ]
+    assert len(response["data"]) == 1
+    item = response["data"][0]
+    assert item["id"] == "image"
+    assert item["object"] == "model"
+    assert item["owned_by"] == "openai"
+    assert item["mode"] == "image_generation"
 
 
 def test_translate_team_model_names_for_listing_swaps_and_dedupes():

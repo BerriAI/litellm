@@ -14,9 +14,7 @@ def test_get_team_models_for_all_models_and_team_only_models():
     model_access_groups = {}
     include_model_access_groups = False
 
-    result = get_team_models(
-        team_models, proxy_model_list, model_access_groups, include_model_access_groups
-    )
+    result = get_team_models(team_models, proxy_model_list, model_access_groups, include_model_access_groups)
     combined_models = team_models + proxy_model_list
     assert set(result) == set(combined_models)
 
@@ -249,9 +247,7 @@ def test_get_key_models_does_not_mutate_input():
         ),
     ],
 )
-def test_get_complete_model_list_order(
-    key_models, team_models, proxy_model_list, model_list, expected
-):
+def test_get_complete_model_list_order(key_models, team_models, proxy_model_list, model_list, expected):
     """
     Test that get_complete_model_list preserves order
     """
@@ -404,9 +400,7 @@ def test_wildcard_credential_hydration_preserves_deployment_params(
         captured_params["api_key"] = litellm_params.api_key
         captured_params["api_version"] = litellm_params.api_version
         captured_params["credential_name"] = litellm_params.litellm_credential_name
-        captured_params["has_unexpected_field"] = hasattr(
-            litellm_params, "unexpected_field"
-        )
+        captured_params["has_unexpected_field"] = hasattr(litellm_params, "unexpected_field")
         return ["gpt-4o"]
 
     monkeypatch.setattr(model_checks, "get_provider_models", fake_get_provider_models)
@@ -451,9 +445,7 @@ def test_wildcard_custom_prefix_does_not_stack_provider_prefix(monkeypatch):
 
     result = get_known_models_from_wildcard(
         wildcard_model="ollama_server1/*",
-        litellm_params=LiteLLM_Params(
-            model="ollama_chat/*", custom_llm_provider="ollama_chat"
-        ),
+        litellm_params=LiteLLM_Params(model="ollama_chat/*", custom_llm_provider="ollama_chat"),
     )
 
     assert result == ["ollama_server1/gemma3:1b", "ollama_server1/llama3:8b"]
@@ -480,9 +472,7 @@ def test_wildcard_custom_prefix_keeps_org_segment_for_non_provider_first_segment
 
     result = get_known_models_from_wildcard(
         wildcard_model="my_hf/*",
-        litellm_params=LiteLLM_Params(
-            model="huggingface/*", custom_llm_provider="huggingface"
-        ),
+        litellm_params=LiteLLM_Params(model="huggingface/*", custom_llm_provider="huggingface"),
     )
 
     assert result == ["my_hf/meta-llama/Llama-3-8B"]
@@ -844,9 +834,7 @@ def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
     assert fake_model not in litellm.models_by_provider["vertex_ai"]
     try:
         litellm.add_known_models(
-            model_cost_map={
-                fake_model: {"litellm_provider": "vertex_ai-language-models", "mode": "chat"}
-            }
+            model_cost_map={fake_model: {"litellm_provider": "vertex_ai-language-models", "mode": "chat"}}
         )
         assert fake_model in litellm.models_by_provider["vertex_ai"]
         assert litellm.models_by_provider is captured_reference
@@ -899,3 +887,132 @@ def test_get_complete_model_list_sentinel_only_grants_nothing():
         infer_model_from_keys=False,
     )
     assert result == []
+
+
+def test_wildcard_expansion_registers_catalog_metadata(monkeypatch):
+    """Wildcard expansion must register gateway catalog metadata into
+    litellm.model_cost under the public prefix, so an expanded model's cost key
+    is exactly the name a client calls it by."""
+    import litellm
+    from litellm.litellm_core_utils import gateway_catalog_cache
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    public_name = "merge/anthropic/claude-opus-4-6"
+    monkeypatch.setattr(
+        model_checks,
+        "get_provider_models",
+        lambda provider, litellm_params=None: ["merge_ai_gateway/anthropic/claude-opus-4-6"],
+    )
+    monkeypatch.setattr(
+        gateway_catalog_cache,
+        "get_catalog",
+        lambda provider, api_key, api_base: {
+            "anthropic/claude-opus-4-6": {
+                "input_cost_per_token": 5e-6,
+                "output_cost_per_token": 25e-6,
+                "max_input_tokens": 200000,
+                "mode": "chat",
+                "litellm_provider": "merge_ai_gateway",
+            }
+        },
+    )
+
+    try:
+        result = get_known_models_from_wildcard(
+            wildcard_model="merge/*",
+            litellm_params=LiteLLM_Params(
+                model="merge_ai_gateway/*",
+                custom_llm_provider="merge_ai_gateway",
+                api_key="sk-merge-test",
+            ),
+        )
+
+        assert result == [public_name]
+        assert litellm.model_cost[public_name]["input_cost_per_token"] == 5e-6
+        assert litellm.model_cost[public_name]["max_input_tokens"] == 200000
+    finally:
+        litellm.model_cost.pop(public_name, None)
+
+
+def test_wildcard_expansion_keeps_upstream_org_segment(monkeypatch):
+    """Regression: catalogs whose ids start with another provider's name
+    ("anthropic/claude-4") must not have that segment swapped for the public
+    prefix, which would produce an uncallable "openrouter/claude-4"."""
+    import litellm
+    from litellm.litellm_core_utils import gateway_catalog_cache
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    public_name = "openrouter/anthropic/claude-sonnet-4"
+    monkeypatch.setattr(
+        model_checks,
+        "get_provider_models",
+        lambda provider, litellm_params=None: ["openrouter/anthropic/claude-sonnet-4"],
+    )
+    monkeypatch.setattr(
+        gateway_catalog_cache,
+        "get_catalog",
+        lambda provider, api_key, api_base: {
+            "anthropic/claude-sonnet-4": {"input_cost_per_token": 3e-6, "mode": "chat"}
+        },
+    )
+
+    try:
+        result = get_known_models_from_wildcard(
+            wildcard_model="openrouter/*",
+            litellm_params=LiteLLM_Params(model="openrouter/*", custom_llm_provider="openrouter", api_key="sk-or-test"),
+        )
+
+        assert result == [public_name]
+        assert litellm.model_cost[public_name]["input_cost_per_token"] == 3e-6
+    finally:
+        litellm.model_cost.pop(public_name, None)
+
+
+def test_wildcard_expansion_skips_catalog_when_fetch_returns_none(monkeypatch):
+    """A provider without catalog metadata must not break expansion."""
+    from litellm.litellm_core_utils import gateway_catalog_cache
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(
+        model_checks,
+        "get_provider_models",
+        lambda provider, litellm_params=None: ["gpt-4o"],
+    )
+    monkeypatch.setattr(gateway_catalog_cache, "get_catalog", lambda provider, api_key, api_base: None)
+
+    result = get_known_models_from_wildcard(
+        wildcard_model="openai/*",
+        litellm_params=LiteLLM_Params(model="openai/*", custom_llm_provider="openai"),
+    )
+
+    assert result == ["openai/gpt-4o"]
+
+
+def test_partial_wildcard_filters_on_unprefixed_model_id(monkeypatch):
+    from litellm.litellm_core_utils import gateway_catalog_cache
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(
+        model_checks,
+        "get_provider_models",
+        lambda provider, litellm_params=None: [
+            "openrouter/anthropic/claude-3-opus",
+            "openrouter/openai/gpt-4o",
+        ],
+    )
+    monkeypatch.setattr(gateway_catalog_cache, "get_catalog", lambda provider, api_key, api_base: None)
+
+    result = get_known_models_from_wildcard(
+        wildcard_model="openrouter/anthropic/*",
+        litellm_params=LiteLLM_Params(model="openrouter/anthropic/*", custom_llm_provider="openrouter"),
+    )
+
+    assert result == ["openrouter/anthropic/claude-3-opus"]
