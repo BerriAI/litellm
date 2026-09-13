@@ -1502,8 +1502,9 @@ class CustomStreamWrapper:
                 LlmProviders.AZURE_AI.value,
             ]:
                 if isinstance(chunk, BaseModel) and hasattr(chunk, "model"):
-                    # for azure, we need to pass the model from the original chunk
-                    self.model = getattr(chunk, "model", self.model)
+                    chunk_model: Final = getattr(chunk, "model", None)
+                    if chunk_model is not None:
+                        self.model = chunk_model
             response_obj = self.handle_openai_chat_completion_chunk(chunk)
             if response_obj is None:
                 return _ProviderChunkEarlyReturn(None)
