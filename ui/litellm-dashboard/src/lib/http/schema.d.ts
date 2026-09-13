@@ -30942,6 +30942,11 @@ export interface components {
              */
             disable_exception_on_block: boolean | null;
             /**
+             * Enable Routing Cache
+             * @description Cache discovery-mode routing resolution per api-key alias for 1 hour. Default on.
+             */
+            enable_routing_cache?: boolean | null;
+            /**
              * End Session After N Fails
              * @description For /v1/realtime sessions: automatically close the session after this many guardrail violations.
              */
@@ -30963,11 +30968,21 @@ export interface components {
              */
             extra_headers?: string[] | null;
             /**
+             * Fail If No Application
+             * @description Fail the call when no application is configured and none is discovered. Default on; set false to let such calls through unguarded instead.
+             */
+            fail_if_no_application?: boolean | null;
+            /**
              * Fail On Error
              * @description Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.
              * @default true
              */
             fail_on_error: boolean | null;
+            /**
+             * File Checkpoint Id
+             * @description File-checkpoint ID for the Ovalix Tracker service (falls back to pre/post).
+             */
+            file_checkpoint_id?: string | null;
             /**
              * Grounding Check
              * @description Enable grounding verification to ensure output is grounded in provided context.

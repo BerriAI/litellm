@@ -11643,6 +11643,18 @@
               "description": "If True, will not raise an exception when the guardrail is blocked. Useful for OpenWebUI where exceptions can end the chat flow.",
               "title": "Disable Exception On Block"
             },
+            "enable_routing_cache": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Cache discovery-mode routing resolution per api-key alias for 1 hour. Default on.",
+              "title": "Enable Routing Cache"
+            },
             "end_session_after_n_fails": {
               "anyOf": [
                 {
@@ -11695,6 +11707,18 @@
               "description": "Header names to forward from the client request to the guardrail (e.g. x-request-id). Only these headers' values are sent; others may be omitted or sent as [present]. Used by generic_guardrail_api (similar to MCP extra_headers).",
               "title": "Extra Headers"
             },
+            "fail_if_no_application": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Fail the call when no application is configured and none is discovered. Default on; set false to let such calls through unguarded instead.",
+              "title": "Fail If No Application"
+            },
             "fail_on_error": {
               "anyOf": [
                 {
@@ -11707,6 +11731,18 @@
               "default": true,
               "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
               "title": "Fail On Error"
+            },
+            "file_checkpoint_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "File-checkpoint ID for the Ovalix Tracker service (falls back to pre/post).",
+              "title": "File Checkpoint Id"
             },
             "grounding_check": {
               "anyOf": [
