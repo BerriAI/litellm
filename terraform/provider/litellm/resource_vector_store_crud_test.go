@@ -19,7 +19,7 @@ func TestVectorStoreReadDoesNotPersistServerLitellmParams(t *testing.T) {
 			"api_base": "https://upstream.example.com",
 		},
 	}
-	body, _ := json.Marshal(resp)
+	body, _ := json.Marshal(map[string]interface{}{"vector_store": resp})
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -51,5 +51,66 @@ func TestVectorStoreReadDoesNotPersistServerLitellmParams(t *testing.T) {
 	}
 	if d.Get("vector_store_name").(string) != "kb" {
 		t.Fatalf("read did not populate non-sensitive fields")
+	}
+}
+
+// /vector_store/new 400s without a vector_store_id, and the attribute is
+// computed, so create has to mint one and key the resource on it rather than on
+// the store's name.
+func TestVectorStoreCreateSendsGeneratedIDAndUsesItAsResourceID(t *testing.T) {
+	var createBody map[string]interface{}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.URL.Path == "/vector_store/new" {
+			json.NewDecoder(r.Body).Decode(&createBody)
+			id, _ := createBody["vector_store_id"].(string)
+			if id == "" {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(`{"detail":"vector_store_id and custom_llm_provider are required"}`))
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status":       "success",
+				"vector_store": VectorStoreResponse{VectorStoreID: id, VectorStoreName: "kb", CustomLLMProvider: "openai"},
+			})
+			return
+		}
+
+		var info VectorStoreInfoRequest
+		json.NewDecoder(r.Body).Decode(&info)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"vector_store": VectorStoreResponse{
+				VectorStoreID:     info.VectorStoreID,
+				VectorStoreName:   "kb",
+				CustomLLMProvider: "openai",
+				CreatedAt:         "2026-01-01T00:00:00Z",
+			},
+		})
+	}))
+	defer srv.Close()
+
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMVectorStore().Schema, map[string]interface{}{
+		"vector_store_name":   "kb",
+		"custom_llm_provider": "openai",
+	})
+
+	if err := resourceLiteLLMVectorStoreCreate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	sentID, _ := createBody["vector_store_id"].(string)
+	if sentID == "" {
+		t.Fatal("create payload omitted vector_store_id, which the proxy rejects")
+	}
+	if d.Id() != sentID {
+		t.Errorf("resource id = %q, want the created store id %q", d.Id(), sentID)
+	}
+	if d.Get("vector_store_id").(string) != sentID {
+		t.Errorf("vector_store_id = %q, want %q", d.Get("vector_store_id").(string), sentID)
+	}
+	if d.Get("created_at").(string) != "2026-01-01T00:00:00Z" {
+		t.Errorf("create did not refresh computed fields from the API: %v", d.Get("created_at"))
 	}
 }
