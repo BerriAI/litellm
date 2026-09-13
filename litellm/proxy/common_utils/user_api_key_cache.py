@@ -336,6 +336,14 @@ def team_membership_reservation_cache_key(user_id: str, team_id: str) -> str:
     return f"team_membership:{user_id}:{team_id}"
 
 
+#: Cached under ``team_membership_reservation_cache_key`` when a member has no ``LiteLLM_TeamMembership``
+#: row, so a session-token member without a per-member budget costs no DB read per request. Lives beside
+#: the key builder because it is part of the same cache protocol: every reader of the key must know that
+#: a plain string here means "no row", distinct from a serialized membership. The two budget readers
+#: already treat a non-model value as "no row", so they need no change to stay correct.
+NO_TEAM_MEMBERSHIP_SENTINEL: Final = "__no_team_membership__"
+
+
 def get_management_object_ttl(cache: DualCache) -> float:
     """
     In-memory TTL for management-object cache writes (keys, teams, users, budgets, ...).

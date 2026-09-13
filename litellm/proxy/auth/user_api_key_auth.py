@@ -56,6 +56,7 @@ from litellm.proxy.auth.auth_checks import (
     get_jwt_key_mapping_object,
     get_object_permission,
     get_project_object,
+    get_team_membership,
     get_team_object,
     get_user_object,
     is_valid_fallback_model,
@@ -82,6 +83,14 @@ from litellm.proxy.auth.network import TrustedProxyConfig, resolve_network_conte
 from litellm.proxy.auth.oauth2_check import Oauth2Handler
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.resolvers import CredentialRef, Principal
+from litellm.proxy.auth.resolvers.grants import (
+    GrantResolver,
+    LookupDegraded,
+    ResolvedGrants,
+    UserLookup,
+    raise_public,
+    user_models,
+)
 from litellm.proxy.auth.resolvers.store import IdentityStore
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.team_grants import team_grants
@@ -1235,6 +1244,52 @@ async def _record_unparsable_body_failure(
         verbose_proxy_logger.exception("Failed to log the request rejected for an unparsable body: %s", e)
 
 
+async def _refresh_session_token_grants(
+    valid_token: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Span | None,
+    proxy_logging_obj: ProxyLogging,
+) -> UserAPIKeyAuth:
+    """Rebuild a ``lite login`` session token's grants from the live user and team rows.
+
+    The blob only proves who logged in and which team they picked. Team models, aliases, the user's own model
+    list, and their role are re-read every request, so a `/team/update` or a demotion shows up without a
+    re-login, and a user removed from the team or deleted outright is refused. When a row cannot be read for
+    a reason unrelated to the caller, the minted grants stand in exactly as they did before this refresh.
+    """
+    outcome: Final = await GrantResolver(
+        prisma_client,
+        user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+        load_user=get_user_object,
+        load_team=get_team_object,
+        load_membership=get_team_membership,
+    ).resolve(UserLookup(user_id=valid_token.user_id), team_id=valid_token.team_id)
+    match outcome:
+        case ResolvedGrants(
+            user_object=LiteLLM_UserTable() as user_object, team_object=team_object, team_membership=team_membership
+        ):
+            return UserAPIKeyAuth.model_validate(
+                MappingProxyType(
+                    {
+                        **valid_token.model_dump(exclude_none=True),
+                        **team_grants(team_object, team_membership, user_object.user_id),
+                        "user_role": _get_user_role(user_object),
+                        "models": () if team_object is not None else user_models(user_object),
+                    }
+                )
+            )
+        case ResolvedGrants():
+            return valid_token
+        case LookupDegraded(error=error):
+            verbose_proxy_logger.debug("Session token grants not refreshed, keeping minted grants: %s", error)
+            return valid_token
+        case _:
+            raise_public(outcome)
+
+
 async def _resolve_object_permission_for_unresolvable_team(
     object_permission_id: str | None,
     prisma_client: PrismaClient | None,
@@ -1778,6 +1833,15 @@ async def _user_api_key_auth_builder(
                 and get_secret_bool("EXPERIMENTAL_UI_LOGIN") is not False
             ):
                 valid_token = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(api_key)
+
+        if valid_token is not None and valid_token.is_session_token and prisma_client is not None:
+            valid_token = await _refresh_session_token_grants(  # rebind-ok: later checks read this name
+                valid_token=valid_token,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
 
         if (
             valid_token is not None
