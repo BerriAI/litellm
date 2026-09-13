@@ -3315,6 +3315,66 @@ def test_convert_response_output_folds_preamble_message_into_tool_calls_choice()
     assert choice.message.tool_calls[0].function.arguments == '{"command": "git status"}'
 
 
+def test_convert_response_output_shifts_later_preamble_annotation_offsets():
+    """When several annotated preamble messages precede the tool call their text is
+    concatenated, so citation offsets from the second message onward must be moved
+    by the length of the text before them or they point at the wrong span."""
+    from openai.types.responses import (
+        ResponseFunctionToolCall,
+        ResponseOutputMessage,
+        ResponseOutputText,
+    )
+    from openai.types.responses.response_output_text import AnnotationURLCitation
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    def message(msg_id: str, text: str, url: str) -> ResponseOutputMessage:
+        return ResponseOutputMessage(
+            id=msg_id,
+            type="message",
+            role="assistant",
+            status="completed",
+            content=[
+                ResponseOutputText(
+                    type="output_text",
+                    text=text,
+                    annotations=[
+                        AnnotationURLCitation(
+                            type="url_citation", url=url, title=url, start_index=0, end_index=len(text)
+                        )
+                    ],
+                )
+            ],
+        )
+
+    first_text = "Checks docs. "
+    second_text = "Then git."
+    items = [
+        message("msg_1", first_text, "https://example.com/first"),
+        message("msg_2", second_text, "https://example.com/second"),
+        ResponseFunctionToolCall(
+            id="fc_1",
+            type="function_call",
+            status="completed",
+            arguments='{"command": "git status"}',
+            call_id="call_bash1",
+            name="bash",
+        ),
+    ]
+
+    choices = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(items)
+
+    assert len(choices) == 1
+    content = choices[0].message.content
+    assert content == first_text + second_text
+    first, second = choices[0].message.annotations
+    assert (first["start_index"], first["end_index"]) == (0, len(first_text))
+    assert (second["start_index"], second["end_index"]) == (len(first_text), len(content))
+    assert content[second["start_index"] : second["end_index"]] == second_text
+
+
 def test_convert_response_output_generic_pydantic_message_item():
     """litellm's completion bridge (used for non-Responses-native providers behind the
     router) emits GenericResponseOutputItem pydantic models rather than openai SDK

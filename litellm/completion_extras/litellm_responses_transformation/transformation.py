@@ -6,6 +6,7 @@ import json
 import os
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import accumulate
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, Union, cast, get_args
 
@@ -116,6 +117,17 @@ class _PreambleMessage:
     reasoning_item: _BuiltReasoningItem | None
 
 
+_ANNOTATION_INDEX_KEYS: Final = frozenset({"start_index", "end_index"})
+
+
+def _shift_annotation_indices(annotation: Mapping[str, object], offset: int) -> ChatCompletionAnnotation:
+    shifted: Final = {
+        key: value + offset if key in _ANNOTATION_INDEX_KEYS and isinstance(value, int) else value
+        for key, value in annotation.items()
+    }
+    return cast(ChatCompletionAnnotation, shifted)
+
+
 def _merge_preamble_into_tool_calls_choice(
     preambles: Sequence[_PreambleMessage],
     tool_calls: Sequence[Mapping[str, object]],
@@ -125,7 +137,12 @@ def _merge_preamble_into_tool_calls_choice(
     from litellm.types.utils import Choices, Message
 
     text: Final = "".join(preamble.text for preamble in preambles)
-    annotations: Final = [annotation for preamble in preambles for annotation in preamble.annotations]
+    offsets: Final = accumulate((len(preamble.text) for preamble in preambles), initial=0)
+    annotations: Final = [
+        _shift_annotation_indices(annotation, offset)
+        for preamble, offset in zip(preambles, offsets)
+        for annotation in preamble.annotations
+    ]
     merged_reasoning_content: Final = reasoning_content or next(
         (preamble.reasoning_content for preamble in preambles if preamble.reasoning_content), None
     )
