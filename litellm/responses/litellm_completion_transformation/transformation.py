@@ -1890,8 +1890,20 @@ class LiteLLMCompletionResponsesConfig:
         namespace_tool: NamespaceTool,
         nested: bool,
     ) -> ChatCompletionToolParam | None:
-        if nested and namespace_tool.get("type") != "function":
+        tool_type: Final = namespace_tool.get("type")
+        if nested and tool_type not in ("function", "custom"):
             return None
+
+        raw_description: Final = str(namespace_tool.get("description") or "")
+        description: Final = (
+            f"{namespace_description}{NAMESPACE_DESCRIPTION_SEPARATOR}{raw_description}"
+            if nested and namespace_description and raw_description
+            else namespace_description
+            if nested and namespace_description
+            else raw_description
+        )
+        if nested and tool_type == "custom":
+            return convert_custom_tool_to_function_tool({**namespace_tool, "description": description})
 
         raw_parameters: Final = namespace_tool.get("parameters")
         parameters: Final = (
@@ -1901,14 +1913,6 @@ class LiteLLMCompletionResponsesConfig:
             parameters if parameters and "type" in parameters else MappingProxyType({**parameters, "type": "object"})
         )
         tool_name: Final = str(namespace_tool.get("name") or "")
-        raw_description: Final = str(namespace_tool.get("description") or "")
-        description: Final = (
-            f"{namespace_description}{NAMESPACE_DESCRIPTION_SEPARATOR}{raw_description}"
-            if nested and namespace_description and raw_description
-            else namespace_description
-            if nested and namespace_description
-            else raw_description
-        )
         chat_tool_name: Final = f"{namespace}__{tool_name}" if nested else tool_name
         function: Final = ChatCompletionToolParamFunctionChunk(
             name=chat_tool_name,

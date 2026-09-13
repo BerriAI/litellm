@@ -17,7 +17,7 @@ BaseAWSLLM._sign_request after the request body is finalized.
 
 import json
 from collections.abc import Mapping
-from typing import Any, Final
+from typing import Any, Final, cast  # noqa: TID251  # map_openai_params returns the filtered params as a bare dict
 
 import httpx
 from typing_extensions import ReadOnly, TypedDict
@@ -32,6 +32,7 @@ from litellm.llms.bedrock_mantle.common_utils import (
     BedrockMantleAuthMixin,
 )
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     ResponseInputParam,
@@ -57,8 +58,6 @@ _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES: Final = frozenset(
 
 _BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS: Final = frozenset({"auto", "default"})
 _BEDROCK_MANTLE_OPENAI_PATH_SUPPORTED_REASONING_SUMMARIES: Final = frozenset({"auto"})
-
-_CODEX_ADDITIONAL_TOOLS_INPUT_ITEM_TYPE: Final = "additional_tools"
 
 _CODEX_AGENT_MESSAGE_INPUT_ITEM_TYPE: Final = "agent_message"
 _CODEX_CONTEXT_COMPACTION_INPUT_ITEM_TYPE: Final = "context_compaction"
@@ -233,62 +232,29 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> dict:
-        remaining_input, hoisted_tools = self._hoist_codex_additional_tools(input)
-        normalized_input: Final = self._normalize_codex_input_items(remaining_input)
-        request_params: Final = (
-            {
-                **response_api_optional_request_params,
-                "tools": [
-                    *(response_api_optional_request_params.get("tools") or []),
-                    *hoisted_tools,
-                ],
-            }
-            if hoisted_tools
-            else response_api_optional_request_params
+        params: Final = cast(  # cast-ok: the base signature leaves the params dict untyped
+            "ResponsesAPIOptionalRequestParams", response_api_optional_request_params
         )
+        hoisted: Final = hoist_additional_tools(input, params.get("tools"))
+        normalized_input: Final = self._normalize_codex_input_items(hoisted.input)
         return super().transform_responses_api_request(
             model=model,
             input=normalized_input,
-            response_api_optional_request_params=request_params,
+            response_api_optional_request_params=self._params_with_hoisted_tools(params, hoisted),
             litellm_params=litellm_params,
             headers=headers,
         )
 
-    @staticmethod
-    def _is_codex_additional_tools_item(item: Any) -> bool:
-        return isinstance(item, dict) and item.get("type") == _CODEX_ADDITIONAL_TOOLS_INPUT_ITEM_TYPE
-
-    @staticmethod
-    def _tools_of_additional_tools_item(item: "dict[str, Any]") -> "list[Any]":
-        tools: Final = item.get("tools")
-        return tools if isinstance(tools, list) else []
-
     @classmethod
-    def _hoist_codex_additional_tools(
-        cls,
-        input: "str | ResponseInputParam",
-    ) -> "tuple[str | ResponseInputParam, list[Any]]":
-        """Codex's "responses lite" wire mode ships tool definitions inside
-        `input` as {"type": "additional_tools", "role": "developer",
-        "tools": [...]} items. api.openai.com accepts that item type; Mantle
-        rejects the whole request with 400 "Invalid 'input': value did not
-        match any expected variant" but accepts the same tools at the top
-        level, so move them there and strip the items from `input`.
-        """
-        if not isinstance(input, list):
-            return input, []
-        additional_tools_items: Final = [item for item in input if cls._is_codex_additional_tools_item(item)]
-        if not additional_tools_items:
-            return input, []
-        remaining_input: Final = [item for item in input if not cls._is_codex_additional_tools_item(item)]
-        hoisted_tools = [tool for item in additional_tools_items for tool in cls._tools_of_additional_tools_item(item)]
-        verbose_logger.debug(
-            "Bedrock Mantle Responses API: hoisting %d tool(s) out of %d 'additional_tools' input item(s) "
-            "into the top-level tools param (Mantle rejects that input item type).",
-            len(hoisted_tools),
-            len(additional_tools_items),
-        )
-        return remaining_input, cls._filter_unsupported_tools(hoisted_tools)
+    def _params_with_hoisted_tools(
+        cls, params: Mapping[str, object], hoisted: HoistedAdditionalTools
+    ) -> dict[str, object]:
+        if not hoisted.hoisted:
+            return dict(params)
+        supported_tools: Final = cls._filter_unsupported_tools(list(hoisted.tools))
+        if supported_tools:
+            return {**params, "tools": supported_tools}
+        return {key: value for key, value in params.items() if key != "tools"}
 
     @staticmethod
     def _agent_message_text(item: "Mapping[str, object]") -> str:

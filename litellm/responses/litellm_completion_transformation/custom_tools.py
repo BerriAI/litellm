@@ -39,15 +39,27 @@ def openai_shaped_tool_call_item_id(item_type: str, tool_id: str) -> str:
     return f"{prefix}_{tool_id}"
 
 
+class _ToolNameFields(BaseModel):
+    type: str = ""
+    name: str = ""
+    tools: tuple[object, ...] = ()
+
+
+def _custom_tool_names_of(tool: object) -> tuple[str, ...]:
+    try:
+        parsed: Final = _ToolNameFields.model_validate(tool)
+    except ValidationError:
+        return ()
+    if parsed.type == "custom":
+        return (parsed.name,) if parsed.name else ()
+    if parsed.type != "namespace":
+        return ()
+    return tuple(name for nested_tool in parsed.tools for name in _custom_tool_names_of(nested_tool))
+
+
 def extract_custom_tool_names(tools: Sequence[object] | None) -> set[str]:
-    """Extract names of tools originally defined as ``type: "custom"``."""
-    if not tools:
-        return set()
-    names: Final[set[str]] = set()
-    for tool in tools:
-        if isinstance(tool, dict) and tool.get("type") == "custom" and "name" in tool:
-            names.add(tool["name"])
-    return names
+    """Extract names of tools defined as ``type: "custom"``, at the top level or inside a ``namespace`` tool."""
+    return {name for tool in tools or () for name in _custom_tool_names_of(tool)}
 
 
 def is_custom_tool_call(tool_name: str, custom_tool_names: set[str]) -> bool:
