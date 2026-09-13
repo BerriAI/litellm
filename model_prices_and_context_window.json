@@ -57602,7 +57602,8 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_sampling_params": false,
-        "supports_vision": true
+        "supports_vision": true,
+        "thinking_always_on": true
     },
     "impossibl/anthropic/claude-fable-5-1": {
         "cache_creation_input_token_cost": 1.25e-05,
@@ -57615,13 +57616,15 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 5e-05,
+        "prompt_cache_min_tokens": 512,
         "supports_adaptive_thinking": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_sampling_params": false,
-        "supports_vision": true
+        "supports_vision": true,
+        "thinking_always_on": true
     },
     "impossibl/anthropic/claude-haiku-4-5": {
         "cache_creation_input_token_cost": 1.25e-06,
@@ -57729,6 +57732,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "prompt_cache_min_tokens": 512,
         "supports_adaptive_thinking": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
