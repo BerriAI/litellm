@@ -4769,12 +4769,24 @@ def get_optional_params(
                 drop_params=bool(drop_params),
             )
     elif provider_config is not None:
-        optional_params = provider_config.map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=bool(drop_params),
-        )
+        drop_params_value: Final = bool(drop_params)
+        from litellm.llms.openai_like.dynamic_config import BaseModelAwareConfig
+
+        if isinstance(provider_config, BaseModelAwareConfig):
+            optional_params = provider_config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=drop_params_value,
+                base_model=base_model,
+            )
+        else:
+            optional_params = provider_config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=drop_params_value,
+            )
     else:  # assume passing in params for openai-like api
         optional_params = litellm.OpenAILikeChatConfig().map_openai_params(
             non_default_params=non_default_params,
