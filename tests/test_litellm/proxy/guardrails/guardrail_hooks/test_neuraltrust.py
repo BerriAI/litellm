@@ -9,10 +9,15 @@ from httpx import Request, Response
 
 from litellm.exceptions import Timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_endpoints import get_provider_specific_params
 from litellm.proxy.guardrails.guardrail_hooks.neuraltrust.neuraltrust import (
     NeuralTrustGuardrail,
 )
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.types.guardrails import LitellmParams
 from litellm.types.utils import Choices, GenericGuardrailAPIInputs, Message, ModelResponse
 
 
@@ -114,6 +119,97 @@ class TestNeuralTrustGuardrail:
             )
         assert result == inputs
         assert "session_id" not in mock_post.call_args.kwargs["json"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("input_type", ["request", "response"])
+    async def test_consumer_id_is_the_key_alias_on_proxy_shaped_request_data(
+        self, input_type: Literal["request", "response"]
+    ) -> None:
+        auth = UserAPIKeyAuth(key_alias="billing-app", user_id="u-1", user_email="dev@example.com", team_alias="team-x")
+        request_data = {
+            "metadata": LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=auth),
+            "litellm_metadata": BaseTranslation.transform_user_api_key_dict_to_metadata(auth),
+        }
+        guardrail = _guardrail()
+        mock_post = AsyncMock(return_value=_response({"status": "allow"}))
+        with patch.object(guardrail.async_handler, "post", mock_post):
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["hello"]},
+                request_data=request_data,
+                input_type=input_type,
+                logging_obj=_logging(),
+            )
+        assert result == {"texts": ["hello"]}
+        assert mock_post.call_args.kwargs["json"]["consumer_id"] == "billing-app"
+
+    @pytest.mark.asyncio
+    async def test_consumer_id_reads_the_seeded_key_alias_without_request_metadata(self) -> None:
+        auth = UserAPIKeyAuth(key_alias="billing-app", user_email="dev@example.com")
+        guardrail = _guardrail()
+        mock_post = AsyncMock(return_value=_response({"status": "allow"}))
+        with patch.object(guardrail.async_handler, "post", mock_post):
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["hello"]},
+                request_data={"litellm_metadata": BaseTranslation.transform_user_api_key_dict_to_metadata(auth)},
+                input_type="request",
+                logging_obj=_logging(),
+            )
+        assert result == {"texts": ["hello"]}
+        assert mock_post.call_args.kwargs["json"]["consumer_id"] == "billing-app"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("request_data", "expected"),
+        [
+            (
+                {"metadata": {"user_api_key_alias": "billing-app", "user_api_key_user_email": "dev@example.com"}},
+                "billing-app",
+            ),
+            (
+                {"litellm_metadata": {"user_api_key_user_email": "dev@example.com", "user_api_key_user_id": "u-1"}},
+                "dev@example.com",
+            ),
+            ({"metadata": {"user_api_key_user_id": 42, "user_api_key_team_alias": "team-x"}}, "team-x"),
+            ({"metadata": {"user_api_key_team_alias": "team-x"}}, "team-x"),
+            (
+                {
+                    "litellm_metadata": {"user_api_key_user_email": "dev@example.com"},
+                    "metadata": {"user_api_key_alias": "billing-app"},
+                },
+                "billing-app",
+            ),
+        ],
+    )
+    async def test_consumer_id_falls_back_through_key_identity(self, request_data: dict, expected: str) -> None:
+        guardrail = _guardrail()
+        mock_post = AsyncMock(return_value=_response({"status": "allow"}))
+        with patch.object(guardrail.async_handler, "post", mock_post):
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["hello"]},
+                request_data=request_data,
+                input_type="request",
+                logging_obj=_logging(),
+            )
+        assert result == {"texts": ["hello"]}
+        assert mock_post.call_args.kwargs["json"]["consumer_id"] == expected
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "request_data", [{}, {"metadata": {"user_api_key_alias": "", "user_api_key_user_id": None}}]
+    )
+    async def test_omits_consumer_id_without_key_identity(self, request_data: dict) -> None:
+        guardrail = _guardrail()
+        inputs: GenericGuardrailAPIInputs = {"texts": ["hello"]}
+        mock_post = AsyncMock(return_value=_response({"status": "allow"}))
+        with patch.object(guardrail.async_handler, "post", mock_post):
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+                logging_obj=_logging(),
+            )
+        assert result == inputs
+        assert "consumer_id" not in mock_post.call_args.kwargs["json"]
 
     @pytest.mark.asyncio
     async def test_omits_collector_key_when_unbound(self) -> None:
@@ -759,6 +855,33 @@ class TestNeuralTrustGuardrail:
         model = NeuralTrustGuardrail.get_config_model()
         assert model is not None
         assert model.ui_friendly_name() == "NeuralTrust"
+
+    @pytest.mark.asyncio
+    async def test_ui_offers_timeout_with_the_connection_fields(self) -> None:
+        fields = (await get_provider_specific_params())["neuraltrust"]
+        assert fields["ui_friendly_name"] == "NeuralTrust"
+        assert set(fields) - {"ui_friendly_name"} == {
+            "api_key",
+            "api_base",
+            "collector_key",
+            "unreachable_fallback",
+            "timeout",
+        }
+        assert fields["timeout"]["type"] == "number"
+        assert fields["timeout"]["default_value"] == 5.0
+        assert fields["unreachable_fallback"]["options"] == ["fail_closed", "fail_open"]
+
+    def test_timeout_default_stays_local_to_neuraltrust(self) -> None:
+        assert LitellmParams(guardrail="lakera_v2", mode="pre_call").timeout is None
+        unset = LitellmParams(guardrail="neuraltrust", mode="pre_call").timeout
+        explicit = LitellmParams(guardrail="neuraltrust", mode="pre_call", timeout=2).timeout
+        assert _guardrail(timeout=unset).timeout == 5.0
+        assert _guardrail(timeout=explicit).timeout == 2.0
+
+    @pytest.mark.parametrize("timeout", [0, -1.5])
+    def test_rejects_non_positive_timeout(self, timeout: float) -> None:
+        with pytest.raises(ValueError, match="positive"):
+            _guardrail(timeout=timeout)
 
     def test_registry_contains_neuraltrust(self) -> None:
         from litellm.proxy.guardrails.guardrail_hooks.neuraltrust import (

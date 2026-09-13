@@ -25,6 +25,10 @@ guardrails:
 
 Bearer `tgk_…` API key. Address the collector with `collector_key`, or omit it when the key is already bound to one.
 
+## Identity
+
+Each evaluate call carries `session_id` from the LiteLLM session and `consumer_id` from the virtual key: the key alias, else the key's user email, user id, or team alias. TrustGuard Activity and per-consumer policies group by that value.
+
 ## Verdicts
 
 | TrustGuard `status` | LiteLLM |

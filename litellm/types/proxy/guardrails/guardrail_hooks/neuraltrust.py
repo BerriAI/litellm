@@ -5,6 +5,7 @@ from pydantic import Field
 from .base import GuardrailConfigModel
 
 DEFAULT_API_BASE: Final = "https://trustguard.neuraltrust.ai"
+DEFAULT_TIMEOUT: Final = 5.0
 
 
 class NeuralTrustGuardrailConfigModel(GuardrailConfigModel):
@@ -36,6 +37,15 @@ class NeuralTrustGuardrailConfigModel(GuardrailConfigModel):
             "HTTP 503 entitlements, 401/403, other 4xx/5xx, unknown verdicts, and "
             "unusable transform payloads always fail closed. "
             "'fail_open' means the request bypasses TrustGuard entirely."
+        ),
+    )
+
+    timeout: float | None = Field(
+        default=DEFAULT_TIMEOUT,
+        gt=0.0,
+        description=(
+            "Seconds to wait for each TrustGuard evaluate call before it counts as a "
+            "transport failure and unreachable_fallback applies. Default 5."
         ),
     )
 

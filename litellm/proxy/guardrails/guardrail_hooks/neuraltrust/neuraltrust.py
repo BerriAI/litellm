@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
 from fastapi import HTTPException
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import Timeout
@@ -24,7 +26,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks, Mode
-from litellm.types.proxy.guardrails.guardrail_hooks.neuraltrust import DEFAULT_API_BASE
+from litellm.types.proxy.guardrails.guardrail_hooks.neuraltrust import DEFAULT_API_BASE, DEFAULT_TIMEOUT
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -32,7 +34,14 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 EVALUATE_PATH: Final = "/v1/evaluate"
-DEFAULT_TIMEOUT: Final = 5.0
+CONSUMER_ID_KEYS: Final = (
+    ("user_api_key_alias", "user_api_key_key_alias"),
+    ("user_api_key_user_email",),
+    ("user_api_key_user_id",),
+    ("user_api_key_team_alias",),
+)
+METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+EMPTY_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 STATUS_BLOCK: Final = "block"
 STATUS_TRANSFORM: Final = "transform"
 STATUS_REPORT: Final = "report"
@@ -44,6 +53,19 @@ TRANSFORM_MISSING: Final = "TrustGuard transform missing payload"
 
 class _TrustGuardUnreachable(Exception):
     """Transport or availability failure; eligible for unreachable_fallback."""
+
+
+def _metadata(block: object) -> Mapping[str, object]:
+    try:
+        return METADATA_ADAPTER.validate_python(block)
+    except ValidationError:
+        return EMPTY_METADATA
+
+
+def _consumer_id(request_data: Mapping[str, object]) -> str | None:
+    blocks: Final = tuple(_metadata(request_data.get(source)) for source in ("litellm_metadata", "metadata"))
+    candidates: Final = (block.get(name) for names in CONSUMER_ID_KEYS for name in names for block in blocks)
+    return next((value for value in candidates if isinstance(value, str) and value), None)
 
 
 def _message_text(message: Mapping[str, object]) -> str:
@@ -195,6 +217,8 @@ class NeuralTrustGuardrail(CustomGuardrail):
         self.collector_key = collector_key or os.environ.get("TRUSTGUARD_COLLECTOR_KEY") or ""
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = unreachable_fallback
         resolved_timeout: Final = DEFAULT_TIMEOUT if timeout is None else float(timeout)
+        if resolved_timeout <= 0:
+            raise ValueError("TrustGuard timeout must be a positive number of seconds.")
         self.timeout = resolved_timeout
         super().__init__(
             guardrail_name=guardrail_name,
@@ -249,6 +273,7 @@ class NeuralTrustGuardrail(CustomGuardrail):
         logging_obj: LiteLLMLoggingObj | None,
     ) -> dict[str, object]:  # mutable-ok: outbound JSON
         session_id: Final = get_session_id_from_request_data(request_data)
+        consumer_id: Final = _consumer_id(request_data)
         return {  # mutable-ok: outbound JSON
             "payload": self._payload(inputs, input_type),
             "direction": "input" if input_type == "request" else "output",
@@ -259,6 +284,7 @@ class NeuralTrustGuardrail(CustomGuardrail):
             },
             **({"collector_key": self.collector_key} if self.collector_key else {}),  # mutable-ok: outbound JSON
             **({"session_id": session_id} if session_id else {}),  # mutable-ok: outbound JSON
+            **({"consumer_id": consumer_id} if consumer_id is not None else {}),  # mutable-ok: outbound JSON
         }
 
     @staticmethod
