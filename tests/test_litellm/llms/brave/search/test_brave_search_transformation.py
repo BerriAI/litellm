@@ -2,6 +2,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.brave.search.transformation import BraveSearchConfig, to_yyyy_mm_dd
 
 
@@ -44,9 +45,6 @@ def test_transform_search_request_country_is_forwarded():
     assert data["_brave_params"]["country"] == "US"
 
 
-# --- transform_search_request: date filtering ---
-
-
 def test_transform_search_request_date_range_maps_to_freshness():
     data = _config().transform_search_request("q", {"start_date": "2022-04-01", "end_date": "2022-07-30"})
     assert data["_brave_params"]["freshness"] == "2022-04-01to2022-07-30"
@@ -65,83 +63,73 @@ def test_transform_search_request_explicit_freshness_not_clobbered_by_absent_dat
     assert data["_brave_params"]["freshness"] == "pw"
 
 
-class TestBraveFreshnessTranslation:
-    def test_both_dates_combined_into_freshness(self):
-        result = _config.transform_search_request(
+def test_both_dates_combined_into_freshness():
+    result = _config().transform_search_request(
+        query="test query",
+        optional_params={
+            "start_date": "2024-01-01",
+            "end_date": "2024-12-31",
+        },
+    )
+    params = result["_brave_params"]
+    assert params["freshness"] == "2024-01-01to2024-12-31"
+
+def test_both_dates_override_native_freshness():
+    result = _config().transform_search_request(
+        query="test query",
+        optional_params={
+            "start_date": "2024-01-01",
+            "end_date": "2024-12-31",
+            "freshness": "pw",
+        },
+    )
+    params = result["_brave_params"]
+    assert params["freshness"] == "2024-01-01to2024-12-31"
+
+def test_one_sided_date_with_drop_params_warns_and_omits_freshness(monkeypatch, caplog):
+    import litellm
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    result =_config().transform_search_request(
+        query="test query",
+        optional_params={"start_date": "2024-01-01"},
+    )
+    params = result["_brave_params"]
+    assert "freshness" not in params
+    assert "one-sided date ranges" in caplog.text
+
+def test_one_sided_date_with_drop_params_preserves_native_freshness(monkeypatch, caplog
+):
+    import litellm
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    result = _config().transform_search_request(
+        query="test query",
+        optional_params={
+            "end_date": "2024-12-31",
+            "freshness": "pm",
+        },
+    )
+    params = result["_brave_params"]
+    assert params["freshness"] == "pm"
+    assert "one-sided date ranges" in caplog.text
+
+def test_one_sided_date_without_drop_params_raises_even_with_native_fallback(monkeypatch):
+    import litellm
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(UnsupportedParamsError):
+        _config().transform_search_request(
             query="test query",
             optional_params={
                 "start_date": "2024-01-01",
-                "end_date": "2024-12-31",
-            },
-        )
-        params = result["_brave_params"]
-        assert params["freshness"] == "2024-01-01to2024-12-31"
-
-    def test_both_dates_override_native_freshness(self):
-        result = _config.transform_search_request(
-            query="test query",
-            optional_params={
-                "start_date": "2024-01-01",
-                "end_date": "2024-12-31",
-                "freshness": "pw",
-            },
-        )
-        params = result["_brave_params"]
-        assert params["freshness"] == "2024-01-01to2024-12-31"
-
-    def test_one_sided_date_with_drop_params_warns_and_omits_freshness(
-        self, monkeypatch, caplog
-    ):
-        import litellm
-
-        monkeypatch.setattr(litellm, "drop_params", True)
-        config = _config()
-        result = config.transform_search_request(
-            query="test query",
-            optional_params={"start_date": "2024-01-01"},
-        )
-        params = result["_brave_params"]
-        assert "freshness" not in params
-        assert "one-sided date ranges" in caplog.text
-
-    def test_one_sided_date_with_drop_params_preserves_native_freshness(
-        self, monkeypatch, caplog
-    ):
-        import litellm
-
-        monkeypatch.setattr(litellm, "drop_params", True)
-        config = _config()
-        result = config.transform_search_request(
-            query="test query",
-            optional_params={
-                "end_date": "2024-12-31",
                 "freshness": "pm",
             },
         )
-        params = result["_brave_params"]
-        assert params["freshness"] == "pm"
-        assert "one-sided date ranges" in caplog.text
-
-    def test_one_sided_date_without_drop_params_raises_even_with_native_fallback(
-        self, monkeypatch
-    ):
-        import litellm
-
-        monkeypatch.setattr(litellm, "drop_params", False)
-        config = _config()
-        with pytest.raises(UnsupportedParamsError):
-            config.transform_search_request(
-                query="test query",
-                optional_params={
-                    "start_date": "2024-01-01",
-                    "freshness": "pm",
-                },
-            )
 
 
 def test_max_results_overrides_native_count():
-    config = _config()
-    result = config.transform_search_request(
+    result = _config().transform_search_request(
         query="test query",
         optional_params={
             "max_results": 5,
