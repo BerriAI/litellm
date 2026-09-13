@@ -2906,7 +2906,7 @@ def test_gemini_function_call_parameter_in_messages():
                         ],
                     },
                 ],
-                "system_instruction": {
+                "systemInstruction": {
                     "parts": [{"text": "Use search for most queries."}]
                 },
                 "tools": [
