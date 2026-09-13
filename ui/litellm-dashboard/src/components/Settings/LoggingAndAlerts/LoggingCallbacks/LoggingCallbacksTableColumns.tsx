@@ -50,6 +50,16 @@ interface CallbackRowActionsProps {
 }
 
 function CallbackRowActions({ callback, onTest, onEdit, onDelete }: CallbackRowActionsProps) {
+  if (callback.read_only) {
+    return (
+      <span
+        className="text-xs text-muted-foreground"
+        title="Active callback that was not added through the dashboard. Edit it where it was configured."
+      >
+        Read only
+      </span>
+    );
+  }
   return (
     <DropdownMenu>
       <DropdownMenuTrigger

@@ -10,13 +10,40 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
 from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+    AgentAccess,
     AgentRequestHandler,
     RestrictedAgentAccess,
     UnrestrictedAgentAccess,
+    accessible_agents,
 )
+
+
+def _registry_with(*agent_names: str) -> AgentRegistry:
+    registry: Final = AgentRegistry()
+    registry.load_agents_from_config(
+        [
+            {
+                "agent_name": name,
+                "agent_card_params": {"name": name, "url": "http://localhost", "version": "1.0.0"},
+            }
+            for name in agent_names
+        ]
+    )
+    return registry
+
+
+def _agent_id(registry: AgentRegistry, agent_name: str) -> str:
+    agent: Final = registry.get_agent_by_name(agent_name)
+    assert agent is not None
+    return agent.agent_id
+
+
+async def _single_context(user_api_key_auth: UserAPIKeyAuth) -> list[UserAPIKeyAuth]:
+    return [user_api_key_auth]
 
 
 @pytest.mark.asyncio
@@ -264,6 +291,78 @@ class TestAgentRequestHandler:
                     user_api_key_auth=mock_user_auth
                 )
                 assert result == UnrestrictedAgentAccess()
+
+    async def test_accessible_agents_hides_ungranted_agents_from_non_admins(self):
+        """LIT-6862: a key with no agent grant on itself or its team must list nothing,
+        while a proxy admin with the same lack of grants still lists every agent."""
+        registry: Final = _registry_with("alpha", "beta")
+        internal_user: Final = UserAPIKeyAuth(
+            api_key="test-key", user_id="alice", team_id="team-no-perms", user_role=LitellmUserRoles.INTERNAL_USER
+        )
+        proxy_admin: Final = UserAPIKeyAuth(
+            api_key="admin-key", user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        async def no_grant_anywhere(user_api_key_auth: UserAPIKeyAuth) -> AgentAccess:
+            return UnrestrictedAgentAccess()
+
+        assert (
+            await accessible_agents(internal_user, registry.get_agent_list(), no_grant_anywhere, _single_context) == ()
+        )
+        assert {
+            agent.agent_name
+            for agent in await accessible_agents(
+                proxy_admin, registry.get_agent_list(), no_grant_anywhere, _single_context
+            )
+        } == {"alpha", "beta"}
+
+    async def test_accessible_agents_lists_only_granted_agents(self):
+        """A grant for one agent lists that agent and hides the ungranted one."""
+        registry: Final = _registry_with("alpha", "beta")
+        granted_user: Final = UserAPIKeyAuth(
+            api_key="test-key", user_id="bob", team_id="team-granted", user_role=LitellmUserRoles.INTERNAL_USER
+        )
+
+        async def alpha_only(user_api_key_auth: UserAPIKeyAuth) -> AgentAccess:
+            return RestrictedAgentAccess(frozenset({_agent_id(registry, "alpha")}))
+
+        listed: Final = await accessible_agents(granted_user, registry.get_agent_list(), alpha_only, _single_context)
+        assert [agent.agent_name for agent in listed] == ["alpha"]
+
+    async def test_accessible_agents_resolves_dashboard_session_through_real_teams_and_user(self):
+        """LIT-6862: a dashboard session carries the shared litellm-dashboard team id, which holds no
+        grants. Listing must union the grants of the user's real teams and of the user row instead
+        of treating the session as ungranted or as unrestricted."""
+        registry: Final = _registry_with("alpha", "beta", "gamma")
+        session: Final = UserAPIKeyAuth(
+            api_key="session-key",
+            user_id="alice",
+            team_id=UI_SESSION_TOKEN_TEAM_ID,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        admitted_user: Final = UserAPIKeyAuth(user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER)
+        grants: Final = {
+            "team-granted": RestrictedAgentAccess(frozenset({_agent_id(registry, "alpha")})),
+            "team-no-perms": UnrestrictedAgentAccess(),
+            UI_SESSION_TOKEN_TEAM_ID: UnrestrictedAgentAccess(),
+        }
+
+        async def effective_contexts(user_api_key_auth: UserAPIKeyAuth) -> list[UserAPIKeyAuth]:
+            assert user_api_key_auth is session
+            return [
+                session.model_copy(update={"team_id": "team-granted"}),
+                session.model_copy(update={"team_id": "team-no-perms"}),
+                admitted_user,
+            ]
+
+        async def resolve_access(user_api_key_auth: UserAPIKeyAuth) -> AgentAccess:
+            if user_api_key_auth is admitted_user:
+                return RestrictedAgentAccess(frozenset({_agent_id(registry, "beta")}))
+            assert user_api_key_auth.team_id is not None
+            return grants[user_api_key_auth.team_id]
+
+        listed: Final = await accessible_agents(session, registry.get_agent_list(), resolve_access, effective_contexts)
+        assert {agent.agent_name for agent in listed} == {"alpha", "beta"}
 
     async def test_get_allowed_agents_for_key_via_access_group_ids(self):
         """

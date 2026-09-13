@@ -47,6 +47,4 @@ def dd_logs() -> DdLogsReader:
 def datadog_creds() -> None:
     """Require Datadog shipping credentials. Hard-fail when absent; never skip."""
     if not (os.getenv("DD_API_KEY") and os.getenv("DD_SITE")):
-        pytest.fail(
-            "Datadog e2e requires DD_API_KEY and DD_SITE; missing credentials is a hard failure, not a skip"
-        )
+        pytest.fail("Datadog e2e requires DD_API_KEY and DD_SITE; missing credentials is a hard failure, not a skip")

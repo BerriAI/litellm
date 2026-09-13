@@ -9,7 +9,7 @@ import React from "react";
 import { emptyKeywordTierRuleIndexes } from "./complexity_router_keywords";
 import { tierOptions } from "./complexity_router_tiers";
 
-export type ComplexityTier = "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
+export type ComplexityTier = "NON_REASONING" | "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
 
 export interface KeywordTierRule {
   id: string;

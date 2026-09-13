@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useInfiniteTeams: () => ({
@@ -65,10 +65,7 @@ const SAVED_BODY = {
   teams: [{ team_id: "team-alpha", max_budget_in_team: 25, user_role: "user" }],
 };
 
-const renderForm = (overrides?: {
-  fetchSettings?: ReturnType<typeof vi.fn>;
-  updateSettings?: ReturnType<typeof vi.fn>;
-}) => {
+const renderForm = (overrides?: { fetchSettings?: Mock; updateSettings?: Mock }) => {
   const fetchSettings = overrides?.fetchSettings ?? vi.fn().mockResolvedValue(SETTINGS);
   const updateSettings = overrides?.updateSettings ?? vi.fn().mockResolvedValue(undefined);
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });

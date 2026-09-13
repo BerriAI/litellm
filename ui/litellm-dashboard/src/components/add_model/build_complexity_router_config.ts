@@ -1,3 +1,4 @@
+import type { ModelGroup } from "../llm_calls/fetch_models";
 import { KeywordTierRule } from "./KeywordTierRules";
 import {
   type CustomTierSet,
@@ -10,6 +11,7 @@ import {
   tierRowByName,
 } from "./tier_rows";
 import { emptyKeywordTierRuleIndexes, serializeKeywordTierRules } from "./complexity_router_keywords";
+import { type CustomDimension, type CustomDimensionRow, serializeCustomDimensions } from "./custom_dimensions";
 import {
   TierModelParams,
   TierModelParamsByTier,
@@ -19,10 +21,12 @@ import {
 import {
   AdaptiveEligible,
   AdaptiveRouterWeights,
+  ClassificationMode,
   ClassifierFallback,
   ClassifierLLMConfig,
   ClassifierType,
   ComplexityTierLabels,
+  DEFAULT_CLASSIFICATION_MODE,
   ComplexityRouterConfigValue,
   ComplexityTiers,
   DimensionWeights,
@@ -35,6 +39,9 @@ import {
   heuristicScoringRoleFor,
   usesLlmClassifier,
 } from "./ComplexityRouterConfig";
+
+export type ClassifierVisionConfig = { enabled?: boolean; max_images?: number };
+export type ClassifierLLMConfigWire = ClassifierLLMConfig & { vision?: ClassifierVisionConfig };
 
 /**
  * Drop an empty system_prompt so the payload carries an override only when there is one. The
@@ -53,12 +60,32 @@ import {
 export const normalizeClassifierLlmConfig = ({
   model,
   timeout_ms,
+  circuit_breaker_enabled,
+  circuit_breaker_cooldown_seconds,
+  reasoning_effort,
   classification_rubric,
   system_prompt,
-}: ClassifierLLMConfig): ClassifierLLMConfig =>
+  vision,
+}: ClassifierLLMConfigWire): ClassifierLLMConfigWire =>
   system_prompt?.trim()
-    ? { model, timeout_ms, system_prompt }
-    : { model, timeout_ms, ...(classification_rubric && { classification_rubric }) };
+    ? {
+        model,
+        timeout_ms,
+        ...(circuit_breaker_enabled !== undefined && { circuit_breaker_enabled }),
+        ...(circuit_breaker_cooldown_seconds !== undefined && { circuit_breaker_cooldown_seconds }),
+        ...(reasoning_effort && { reasoning_effort }),
+        ...(vision && { vision }),
+        system_prompt,
+      }
+    : {
+        model,
+        timeout_ms,
+        ...(circuit_breaker_enabled !== undefined && { circuit_breaker_enabled }),
+        ...(circuit_breaker_cooldown_seconds !== undefined && { circuit_breaker_cooldown_seconds }),
+        ...(reasoning_effort && { reasoning_effort }),
+        ...(classification_rubric && { classification_rubric }),
+        ...(vision && { vision }),
+      };
 
 interface ScorerKnobInputs {
   classifierType: ClassifierType;
@@ -66,6 +93,7 @@ interface ScorerKnobInputs {
   tierBoundaries: TierBoundaries | undefined;
   tokenThresholds: TokenThresholds | undefined;
   dimensionWeights: DimensionWeights | undefined;
+  customDimensions: CustomDimensionRow[] | undefined;
   reasoningOverrideMinScore: number | undefined;
 }
 
@@ -80,31 +108,45 @@ const scorerKnobPayload = ({
   tierBoundaries,
   tokenThresholds,
   dimensionWeights,
+  customDimensions,
   reasoningOverrideMinScore,
-}: ScorerKnobInputs) =>
-  heuristicScoringRoleFor(classifierType, classifierFallback) === "never"
+}: ScorerKnobInputs) => {
+  const role = heuristicScoringRoleFor(classifierType, classifierFallback);
+  return role === "never"
     ? {}
     : {
         ...(tierBoundaries && { tier_boundaries: tierBoundaries }),
         ...(tokenThresholds && { token_thresholds: tokenThresholds }),
         ...(dimensionWeights && { dimension_weights: dimensionWeights }),
+        // Only a scorer that decides accepts these; the backend rejects them on every other
+        // classifier, so a fallback-only router must not carry rows a switch left behind.
+        ...(role === "decides" &&
+          customDimensions !== undefined && { custom_dimensions: serializeCustomDimensions(customDimensions) }),
         ...(reasoningOverrideMinScore !== undefined && { reasoning_override_min_score: reasoningOverrideMinScore }),
       };
+};
 
 export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;
+  enableNonReasoningTier?: boolean;
   customTierSet?: CustomTierSet;
   defaultModel: string | undefined;
   planModeMinTier: string | undefined;
   tierLabels: ComplexityTierLabels | undefined;
   classifierType: ClassifierType;
-  classifierLlmConfig: ClassifierLLMConfig | undefined;
+  classifierLlmConfig: ClassifierLLMConfigWire | undefined;
   classifierContextWindowSize: number | undefined;
   classifierContextBudgetChars: number | undefined;
   classifierContextIncludeAssistantTurns: boolean | undefined;
   classifierFallback: ClassifierFallback | undefined;
+  classificationPrompt: string | undefined;
+  classificationExamples: string | undefined;
   heuristicFirstMaxTier: string | undefined;
+  hybridBoundaryMargin?: number;
+  classificationMode: ClassificationMode | undefined;
   sessionAffinity: boolean;
+  modalityRouting?: boolean;
+  modalityPinOverride?: boolean;
   deploymentAffinity: boolean;
   customTechnicalKeywords: string[];
   keywordTierRules: KeywordTierRule[];
@@ -112,6 +154,9 @@ export interface BuildComplexityRouterConfigParams {
   embeddingModel: string | undefined;
   matchThreshold: number;
   escalationKeywords: string[];
+  stallEscalationEnabled?: boolean;
+  stallEscalationWindow?: number;
+  stallEscalationRepeatThreshold?: number;
   adaptive: boolean;
   adaptiveWeights: AdaptiveRouterWeights;
   tierDistancePenalty: number;
@@ -120,8 +165,12 @@ export interface BuildComplexityRouterConfigParams {
   tierBoundaries?: TierBoundaries;
   tokenThresholds?: TokenThresholds;
   dimensionWeights?: DimensionWeights;
+  customDimensions?: CustomDimensionRow[];
   reasoningOverrideMinScore?: number;
   tierModelParams?: TierModelParamsByTier;
+  enableContextWindowEscalation?: boolean;
+  contextWindowEscalationBuffer?: number;
+  sessionAffinityTtlSeconds?: number;
 }
 
 /**
@@ -142,6 +191,7 @@ export interface TierDefinitionPayload {
 
 export interface ComplexityRouterConfigPayload {
   tiers: ComplexityTiers | Record<string, string[]>;
+  enable_non_reasoning_tier?: boolean;
   tier_definitions?: TierDefinitionPayload[];
   fallback_tier?: string;
   default_model?: string;
@@ -154,15 +204,25 @@ export interface ComplexityRouterConfigPayload {
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
+  classification_prompt?: string;
+  classification_examples?: string;
   heuristic_first_max_tier?: string;
+  hybrid_boundary_margin?: number;
+  classification_mode: ClassificationMode;
   session_affinity: boolean;
+  session_affinity_ttl_seconds?: number;
   deployment_affinity: boolean;
+  modality_routing: boolean;
+  modality_pin_override: boolean;
   custom_technical_keywords?: string[];
   keyword_tier_rules?: { keywords: string[]; tier: KeywordTierRule["tier"] }[];
   semantic_keyword_matching?: boolean;
   embedding_model?: string;
   match_threshold?: number;
   escalation_keywords?: string[];
+  stall_escalation_enabled?: boolean;
+  stall_escalation_window?: number;
+  stall_escalation_repeat_threshold?: number;
   adaptive?: boolean;
   adaptive_weights?: AdaptiveRouterWeights;
   tier_distance_penalty?: number;
@@ -171,7 +231,10 @@ export interface ComplexityRouterConfigPayload {
   tier_boundaries?: TierBoundaries;
   token_thresholds?: TokenThresholds;
   dimension_weights?: DimensionWeights;
+  custom_dimensions?: CustomDimension[];
   reasoning_override_min_score?: number;
+  enable_context_window_escalation?: boolean;
+  context_window_escalation_buffer?: number;
   tier_model_configs?: Record<string, { model_name: string; litellm_params: TierModelParams }[]>;
 }
 
@@ -252,6 +315,20 @@ export const getClassifierModelError = (
     : "Please select a classifier model, or switch back to Heuristic";
 };
 
+export const getClassifierReasoningEffortError = (
+  config: Pick<ComplexityRouterConfigValue, "custom_tier_set" | "classifier_type" | "classifier_llm_config">,
+  modelInfo: readonly ModelGroup[],
+): string | null => {
+  if (!usesLlmClassifier(effectiveClassifierType(config))) return null;
+  const classifierConfig = config.classifier_llm_config;
+  if (!classifierConfig?.model || !classifierConfig.reasoning_effort) return null;
+  const supported = modelInfo.find(
+    (model) => model.model_group === classifierConfig.model,
+  )?.supported_reasoning_efforts;
+  if (!Array.isArray(supported) || supported.includes(classifierConfig.reasoning_effort)) return null;
+  return `${classifierConfig.reasoning_effort} reasoning effort is not supported by every deployment in ${classifierConfig.model}. Choose Default or a supported value.`;
+};
+
 export const getSemanticConfigError = ({
   semanticMatchingEnabled,
   embeddingModel,
@@ -265,10 +342,16 @@ export const getSemanticConfigError = ({
   return null;
 };
 
+interface CustomTierWireFieldInputs {
+  classifierLlmConfig: ClassifierLLMConfigWire | undefined;
+  planModeMinTierId: string | undefined;
+  classificationPrompt: string | undefined;
+  classificationExamples: string | undefined;
+}
+
 export const customTierWireFields = (
   customTierSet: CustomTierSet,
-  classifierLlmConfig: ClassifierLLMConfig | undefined,
-  planModeMinTierId: string | undefined,
+  { classifierLlmConfig, planModeMinTierId, classificationPrompt, classificationExamples }: CustomTierWireFieldInputs,
 ): Partial<ComplexityRouterConfigPayload> => {
   const rows = customTierSet.tiers;
   const fallback = tierRowById(rows, customTierSet.fallback_tier_id);
@@ -278,14 +361,47 @@ export const customTierWireFields = (
     tier_definitions: tierDefinitionsFromRows(rows),
     ...(fallback && { fallback_tier: activeTierName(fallback) }),
     classifier_type: "llm",
-    // Rebuilt from the two fields an edited tier set allows. The backend rejects system_prompt and
+    // Rebuilt from the fields an edited tier set allows. The backend rejects system_prompt and
     // classification_rubric beside tier_definitions, and both live inside this object rather than at
-    // the top level the omit list covers.
+    // the top level the omit list covers. The opening instructions ride classification_prompt below.
     ...(classifierLlmConfig && {
-      classifier_llm_config: { model: classifierLlmConfig.model, timeout_ms: classifierLlmConfig.timeout_ms },
+      classifier_llm_config: {
+        model: classifierLlmConfig.model,
+        timeout_ms: classifierLlmConfig.timeout_ms,
+        ...(classifierLlmConfig.circuit_breaker_enabled !== undefined && {
+          circuit_breaker_enabled: classifierLlmConfig.circuit_breaker_enabled,
+        }),
+        ...(classifierLlmConfig.circuit_breaker_cooldown_seconds !== undefined && {
+          circuit_breaker_cooldown_seconds: classifierLlmConfig.circuit_breaker_cooldown_seconds,
+        }),
+        ...(classifierLlmConfig.reasoning_effort && { reasoning_effort: classifierLlmConfig.reasoning_effort }),
+        ...(classifierLlmConfig.vision && { vision: classifierLlmConfig.vision }),
+      },
     }),
     session_affinity: false,
+    ...(classificationPrompt?.trim() && { classification_prompt: classificationPrompt.trim() }),
+    ...(classificationExamples?.trim() && { classification_examples: classificationExamples.trim() }),
     ...(floor && { plan_mode_min_tier: activeTierName(floor) }),
+  };
+};
+
+/** The built-in tier pools and the opt-in flag, read back from a stored config. `tiers` is
+ * rewritten wholesale on save, so a stored tier this misses is deleted by any unrelated edit. */
+export const hydrateBuiltInTiers = (
+  storedTiers: Partial<Record<keyof ComplexityTiers, unknown>> | undefined,
+  storedFlag: boolean | undefined,
+): { tiers: ComplexityTiers; enable_non_reasoning_tier: boolean } => {
+  const nonReasoning: string[] = normalizeTierModels(storedTiers?.NON_REASONING);
+  const enable_non_reasoning_tier: boolean = storedFlag === true || nonReasoning.length > 0;
+  return {
+    enable_non_reasoning_tier,
+    tiers: {
+      SIMPLE: normalizeTierModels(storedTiers?.SIMPLE),
+      MEDIUM: normalizeTierModels(storedTiers?.MEDIUM),
+      COMPLEX: normalizeTierModels(storedTiers?.COMPLEX),
+      REASONING: normalizeTierModels(storedTiers?.REASONING),
+      ...(enable_non_reasoning_tier && { NON_REASONING: nonReasoning }),
+    },
   };
 };
 
@@ -338,6 +454,7 @@ const classifierWireFields = (
     classifierLlmConfig,
     classifierFallback,
     heuristicFirstMaxTier,
+    hybridBoundaryMargin,
     classifierContextWindowSize,
     classifierContextBudgetChars,
     classifierContextIncludeAssistantTurns,
@@ -346,6 +463,7 @@ const classifierWireFields = (
     | "classifierLlmConfig"
     | "classifierFallback"
     | "heuristicFirstMaxTier"
+    | "hybridBoundaryMargin"
     | "classifierContextWindowSize"
     | "classifierContextBudgetChars"
     | "classifierContextIncludeAssistantTurns"
@@ -357,6 +475,8 @@ const classifierWireFields = (
     classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
   ...(effectiveType === "heuristic_first" &&
     heuristicFirstMaxTier?.trim() && { heuristic_first_max_tier: heuristicFirstMaxTier }),
+  ...(effectiveType === "hybrid" &&
+    hybridBoundaryMargin !== undefined && { hybrid_boundary_margin: hybridBoundaryMargin }),
   ...(usesLlmClassifier(effectiveType) &&
     classifierContextWindowSize !== undefined && {
       classifier_context_window_size: classifierContextWindowSize,
@@ -373,6 +493,7 @@ const classifierWireFields = (
 
 export const buildComplexityRouterConfig = ({
   tiers,
+  enableNonReasoningTier,
   customTierSet,
   defaultModel,
   planModeMinTier,
@@ -383,8 +504,14 @@ export const buildComplexityRouterConfig = ({
   classifierContextBudgetChars,
   classifierContextIncludeAssistantTurns,
   classifierFallback,
+  classificationPrompt,
+  classificationExamples,
   heuristicFirstMaxTier,
+  hybridBoundaryMargin,
+  classificationMode,
   sessionAffinity,
+  modalityRouting,
+  modalityPinOverride,
   deploymentAffinity,
   customTechnicalKeywords,
   keywordTierRules,
@@ -392,6 +519,9 @@ export const buildComplexityRouterConfig = ({
   embeddingModel,
   matchThreshold,
   escalationKeywords,
+  stallEscalationEnabled,
+  stallEscalationWindow,
+  stallEscalationRepeatThreshold,
   adaptive,
   adaptiveWeights,
   tierDistancePenalty,
@@ -400,8 +530,12 @@ export const buildComplexityRouterConfig = ({
   tierBoundaries,
   tokenThresholds,
   dimensionWeights,
+  customDimensions,
   reasoningOverrideMinScore,
   tierModelParams,
+  enableContextWindowEscalation,
+  contextWindowEscalationBuffer,
+  sessionAffinityTtlSeconds,
 }: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => {
   const serializedTierModelConfigs = customTierSet
     ? serializeTierModelConfigs(
@@ -418,6 +552,7 @@ export const buildComplexityRouterConfig = ({
     tierBoundaries,
     tokenThresholds,
     dimensionWeights,
+    customDimensions,
     reasoningOverrideMinScore,
   };
   const scorerKnobs = scorerKnobPayload(scorerInputs);
@@ -425,6 +560,7 @@ export const buildComplexityRouterConfig = ({
     classifierLlmConfig,
     classifierFallback,
     heuristicFirstMaxTier,
+    hybridBoundaryMargin,
     classifierContextWindowSize,
     classifierContextBudgetChars,
     classifierContextIncludeAssistantTurns,
@@ -435,17 +571,39 @@ export const buildComplexityRouterConfig = ({
 
   const payload: ComplexityRouterConfigPayload = {
     tiers,
+    // The backend rejects the flag beside a custom tier set.
+    ...(!customTierSet && enableNonReasoningTier && { enable_non_reasoning_tier: true }),
     ...(serializedTierModelConfigs && { tier_model_configs: serializedTierModelConfigs }),
     ...(defaultModel?.trim() && { default_model: defaultModel }),
     ...(planModeMinTier?.trim() && { plan_mode_min_tier: planModeMinTier }),
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType,
     ...classifierWireFields(effectiveType, classifierInputs),
+    // A built-in router's opening instructions. Suppressed beside a legacy whole-prompt override,
+    // which the backend rejects as a second override of the same prompt.
+    ...(!customTierSet &&
+      usesLlmClassifier(effectiveType) &&
+      !classifierLlmConfig?.system_prompt?.trim() && {
+        ...(classificationPrompt?.trim() && { classification_prompt: classificationPrompt.trim() }),
+        ...(classificationExamples?.trim() && { classification_examples: classificationExamples.trim() }),
+      }),
+    classification_mode: classificationMode ?? DEFAULT_CLASSIFICATION_MODE,
     session_affinity: sessionAffinity,
     deployment_affinity: deploymentAffinity,
+    modality_routing: modalityRouting ?? false,
+    modality_pin_override: modalityPinOverride ?? false,
     ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
     ...(cleanedKeywordTierRules.length > 0 && { keyword_tier_rules: cleanedKeywordTierRules }),
     escalation_keywords: cleanedEscalationKeywords,
+    // Only written when on: the backend rejects it alongside session_affinity, user_turn mode and
+    // a custom tier set, so an off router must not carry the key into any of those saves.
+    ...(stallEscalationEnabled && {
+      stall_escalation_enabled: true,
+      ...(stallEscalationWindow !== undefined && { stall_escalation_window: stallEscalationWindow }),
+      ...(stallEscalationRepeatThreshold !== undefined && {
+        stall_escalation_repeat_threshold: stallEscalationRepeatThreshold,
+      }),
+    }),
     ...(semanticMatchingEnabled && {
       semantic_keyword_matching: true,
       embedding_model: embeddingModel,
@@ -458,14 +616,26 @@ export const buildComplexityRouterConfig = ({
       adaptive_eligible: adaptiveEligible,
     }),
     ...(returnRawModelName && { return_raw_model_name: true }),
+    ...(enableContextWindowEscalation !== undefined && {
+      enable_context_window_escalation: enableContextWindowEscalation,
+    }),
+    ...(contextWindowEscalationBuffer !== undefined && {
+      context_window_escalation_buffer: contextWindowEscalationBuffer,
+    }),
+    ...(sessionAffinityTtlSeconds !== undefined && {
+      session_affinity_ttl_seconds: sessionAffinityTtlSeconds,
+    }),
     ...scorerKnobs,
   };
   if (!customTierSet) return payload;
   const kept = Object.fromEntries(
     Object.entries(payload).filter(([key]) => !CUSTOM_TIER_STRIPPED_KEYS.includes(key)),
   ) as ComplexityRouterConfigPayload;
-  return {
-    ...kept,
-    ...customTierWireFields(customTierSet, classifierLlmConfig, planModeMinTier),
+  const customTierInputs: CustomTierWireFieldInputs = {
+    classifierLlmConfig,
+    planModeMinTierId: planModeMinTier,
+    classificationPrompt,
+    classificationExamples,
   };
+  return { ...kept, ...customTierWireFields(customTierSet, customTierInputs) };
 };

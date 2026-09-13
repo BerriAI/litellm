@@ -2,9 +2,10 @@
 
 import os
 import time
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol
 
 from fastapi import HTTPException
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -25,6 +26,33 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 GRAYSWAN_BLOCK_ERROR_MSG: Final = "Blocked by Gray Swan Guardrail"
+
+
+class _GraySwanMonitorResponse(TypedDict):
+    """Body returned by Gray Swan's `/cygnal/monitor` endpoint."""
+
+    violation: ReadOnly[NotRequired[float | None]]
+    violated_rules: ReadOnly[NotRequired[list[object]]]
+    violated_rule_descriptions: ReadOnly[NotRequired[list[object]]]
+    mutation: ReadOnly[NotRequired[bool | None]]
+    ipi: ReadOnly[NotRequired[bool | None]]
+
+
+class _GraySwanMonitorHTTPResponse(Protocol):
+    def raise_for_status(self) -> object: ...
+
+    def json(self) -> _GraySwanMonitorResponse: ...
+
+
+class _GraySwanMonitorHTTPClient(Protocol):
+    async def post(
+        self,
+        *,
+        url: str,
+        headers: dict[str, str],
+        json: dict[str, object],
+        timeout: float,
+    ) -> _GraySwanMonitorHTTPResponse: ...
 
 
 class GraySwanGuardrailMissingSecrets(Exception):
@@ -77,7 +105,9 @@ class GraySwanGuardrail(CustomGuardrail):
         guardrail_timeout: float | None = 30.0,
         **kwargs: Any,
     ) -> None:
-        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.async_handler: _GraySwanMonitorHTTPClient = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
 
         api_key_value: Final = api_key or os.getenv("GRAYSWAN_API_KEY")
         if not api_key_value:
@@ -266,7 +296,7 @@ class GraySwanGuardrail(CustomGuardrail):
     # Legacy Test Interface (for backward compatibility)
     # ------------------------------------------------------------------
 
-    async def run_grayswan_guardrail(self, payload: dict) -> dict[str, Any]:
+    async def run_grayswan_guardrail(self, payload: dict[str, object]) -> _GraySwanMonitorResponse:
         """
         Run the GraySwan guardrail on a payload.
 
@@ -285,7 +315,7 @@ class GraySwanGuardrail(CustomGuardrail):
 
     def _process_grayswan_response(
         self,
-        response_json: dict,
+        response_json: _GraySwanMonitorResponse,
         data: dict | None = None,
         hook_type: GuardrailEventHooks | None = None,
     ) -> None:
@@ -385,7 +415,7 @@ class GraySwanGuardrail(CustomGuardrail):
     # Core GraySwan API interaction
     # ------------------------------------------------------------------
 
-    async def _call_grayswan_api(self, payload: dict) -> dict[str, Any]:
+    async def _call_grayswan_api(self, payload: dict[str, object]) -> _GraySwanMonitorResponse:
         """Call the GraySwan monitoring API."""
         headers: Final = self._prepare_headers()
 
@@ -406,7 +436,7 @@ class GraySwanGuardrail(CustomGuardrail):
 
     def _process_response_internal(
         self,
-        response_json: dict[str, Any],
+        response_json: _GraySwanMonitorResponse,
         request_data: dict,
         inputs: GenericGuardrailAPIInputs,
         is_output: bool,
@@ -534,8 +564,8 @@ class GraySwanGuardrail(CustomGuardrail):
         dynamic_body: dict,
         request_data: dict,
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> dict[str, Any] | None:
-        payload: Final[dict[str, Any]] = {"messages": messages}
+    ) -> dict[str, object] | None:
+        payload: Final[dict[str, object]] = {"messages": messages}
 
         categories: Final = dynamic_body.get("categories") or self.categories
         if categories:
@@ -563,13 +593,13 @@ class GraySwanGuardrail(CustomGuardrail):
                 {**existing_headers, **inbound_headers} if isinstance(existing_headers, dict) else inbound_headers
             )
         if cleaned_litellm_metadata:
-            sanitized: Final = safe_json_loads(safe_dumps(cleaned_litellm_metadata), default={})
+            sanitized: Final[object] = safe_json_loads(safe_dumps(cleaned_litellm_metadata), default={})
             if isinstance(sanitized, dict) and sanitized:
                 payload["litellm_metadata"] = sanitized
 
         return payload
 
-    def _format_violation_message(self, detection_info: Any, is_output: bool = False) -> str:
+    def _format_violation_message(self, detection_info: object, is_output: bool = False) -> str:
         """
         Format detection info into a user-friendly violation message.
 

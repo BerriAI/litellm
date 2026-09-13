@@ -6,18 +6,11 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useEffect, useState } from "react";
 
 interface SidebarProviderProps {
-  setPage: (page: string) => void;
-  defaultSelectedKey: string;
   sidebarCollapsed: boolean;
   onToggleCollapsed?: () => void;
 }
 
-const SidebarProvider = ({
-  setPage,
-  defaultSelectedKey,
-  sidebarCollapsed,
-  onToggleCollapsed,
-}: SidebarProviderProps) => {
+const SidebarProvider = ({ sidebarCollapsed, onToggleCollapsed }: SidebarProviderProps) => {
   const { accessToken } = useAuthorized();
   const [enabledPagesInternalUsers, setEnabledPagesInternalUsers] = useState<string[] | null>(null);
   const [enableProjectsUI, setEnableProjectsUI] = useState<boolean>(false);
@@ -70,8 +63,6 @@ const SidebarProvider = ({
 
   return (
     <Sidebar
-      setPage={setPage}
-      defaultSelectedKey={defaultSelectedKey}
       collapsed={sidebarCollapsed}
       onToggleCollapsed={onToggleCollapsed}
       enabledPagesInternalUsers={enabledPagesInternalUsers}

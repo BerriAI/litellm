@@ -1,3 +1,4 @@
+from importlib import import_module
 from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
@@ -13,15 +14,12 @@ def mock_gcs_dependencies():
     mock_async_client = AsyncMock()
 
     with (
-        patch(
-            "litellm.caching.gcs_cache._get_httpx_client", return_value=mock_sync_client
+        patch.object(import_module("litellm.caching.gcs_cache"), "_get_httpx_client", return_value=mock_sync_client
         ),
-        patch(
-            "litellm.caching.gcs_cache.get_async_httpx_client",
+        patch.object(import_module("litellm.caching.gcs_cache"), "get_async_httpx_client",
             return_value=mock_async_client,
         ),
-        patch(
-            "litellm.caching.gcs_cache.GCSBucketBase.sync_construct_request_headers",
+        patch.object(import_module("litellm.caching.gcs_cache").GCSBucketBase, "sync_construct_request_headers",
             return_value={},
         ),
     ):

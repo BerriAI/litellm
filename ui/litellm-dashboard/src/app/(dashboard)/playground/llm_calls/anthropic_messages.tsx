@@ -7,6 +7,13 @@ import { getProxyBaseUrl } from "@/components/networking";
 import { toast } from "@/lib/toast";
 import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
 
+const toTokenUsage = (usage: Anthropic.Usage): TokenUsage => ({
+  completionTokens: usage.output_tokens,
+  promptTokens: usage.input_tokens,
+  totalTokens: usage.input_tokens + usage.output_tokens,
+  ...extractPromptCacheTokens(usage),
+});
+
 export async function makeAnthropicMessagesRequest(
   messages: MessageType[],
   updateTextUI: (role: string, delta: string, model?: string) => void,
@@ -26,6 +33,7 @@ export async function makeAnthropicMessagesRequest(
   mcpServers?: MCPServer[],
   mcpServerToolRestrictions?: Record<string, string[]>,
   mcpToolsets?: MCPToolset[],
+  streamingEnabled: boolean = true,
 ) {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -58,7 +66,7 @@ export async function makeAnthropicMessagesRequest(
     const requestBody: any = {
       model: selectedModel,
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
-      stream: true,
+      stream: streamingEnabled,
       max_tokens: 1024,
       // @ts-ignore - litellm specific parameter
       litellm_trace_id: traceId,
@@ -74,6 +82,20 @@ export async function makeAnthropicMessagesRequest(
     if (vector_store_ids) requestBody.vector_store_ids = vector_store_ids;
     if (guardrails) requestBody.guardrails = guardrails;
     if (policies) requestBody.policies = policies;
+
+    if (!streamingEnabled) {
+      const message: Anthropic.Message = await client.messages.create({ ...requestBody, stream: false }, { signal });
+      for (const block of message.content) {
+        if (block.type === "text") {
+          updateTextUI("assistant", block.text, selectedModel);
+        } else if (block.type === "thinking" && onReasoningContent) {
+          onReasoningContent(block.thinking);
+        }
+      }
+      onUsageData?.(toTokenUsage(message.usage));
+      return;
+    }
+
     // Use the streaming helper method for cleaner async iteration
     // @ts-ignore - The SDK types might not include all litellm-specific parameters
     const stream = client.messages.stream(requestBody, { signal });
@@ -105,14 +127,7 @@ export async function makeAnthropicMessagesRequest(
 
       // Process usage data from message_delta events
       if (messageStreamEvent.type === "message_delta" && (messageStreamEvent as any).usage && onUsageData) {
-        const usage = (messageStreamEvent as any).usage;
-        const usageData: TokenUsage = {
-          completionTokens: usage.output_tokens,
-          promptTokens: usage.input_tokens,
-          totalTokens: usage.input_tokens + usage.output_tokens,
-          ...extractPromptCacheTokens(usage),
-        };
-        onUsageData(usageData);
+        onUsageData(toTokenUsage((messageStreamEvent as any).usage));
       }
     }
   } catch (error) {

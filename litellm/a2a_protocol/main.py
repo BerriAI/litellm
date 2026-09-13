@@ -86,7 +86,7 @@ A2ACardResolver: Final = LiteLLMA2ACardResolver
 
 
 def _set_usage_on_logging_obj(
-    kwargs: dict[str, Any],
+    kwargs: Mapping[str, object],
     prompt_tokens: int,
     completion_tokens: int,
 ) -> None:
@@ -99,7 +99,7 @@ def _set_usage_on_logging_obj(
         completion_tokens: Number of output tokens
     """
     litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
-    if litellm_logging_obj is not None:
+    if isinstance(litellm_logging_obj, Logging):
         usage: Final = litellm.Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -109,7 +109,7 @@ def _set_usage_on_logging_obj(
 
 
 def _set_agent_id_on_logging_obj(
-    kwargs: dict[str, Any],
+    kwargs: Mapping[str, object],
     agent_id: str | None,
 ) -> None:
     """
@@ -123,7 +123,7 @@ def _set_agent_id_on_logging_obj(
         return
 
     litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
-    if litellm_logging_obj is not None:
+    if isinstance(litellm_logging_obj, Logging):
         # Set agent_id directly on model_call_details (same pattern as custom_llm_provider)
         litellm_logging_obj.model_call_details["agent_id"] = agent_id
 
@@ -132,7 +132,7 @@ _A2A_COST_PARAM_KEYS: Final = ("cost_per_query", "input_cost_per_token", "output
 
 
 def _set_litellm_params_on_logging_obj(
-    kwargs: dict[str, Any],
+    kwargs: Mapping[str, object],
     litellm_params: Mapping[str, object],
 ) -> None:
     """
@@ -144,18 +144,22 @@ def _set_litellm_params_on_logging_obj(
     context, so merge the pricing keys in rather than replacing the dict.
     """
     logging_obj: Final = kwargs.get("litellm_logging_obj")
-    if logging_obj is None:
+    if not isinstance(logging_obj, Logging):
         return
 
-    cost_params = {key: litellm_params[key] for key in _A2A_COST_PARAM_KEYS if litellm_params.get(key) is not None}
+    cost_params: Final = {
+        key: litellm_params[key] for key in _A2A_COST_PARAM_KEYS if litellm_params.get(key) is not None
+    }
     if not cost_params:
         return
 
-    existing: Final = logging_obj.model_call_details.get("litellm_params") or {}
-    logging_obj.model_call_details["litellm_params"] = {**existing, **cost_params}
+    logging_obj.model_call_details["litellm_params"] = {
+        **(logging_obj.model_call_details.get("litellm_params") or {}),
+        **cost_params,
+    }
 
 
-def _get_a2a_model_info(a2a_client: "A2AClientType", kwargs: dict[str, Any]) -> str:
+def _get_a2a_model_info(a2a_client: "A2AClientType", kwargs: Mapping[str, object]) -> str:
     """
     Extract agent info and set model/custom_llm_provider for cost tracking.
 
@@ -175,7 +179,7 @@ def _get_a2a_model_info(a2a_client: "A2AClientType", kwargs: dict[str, Any]) -> 
 
     # Set on litellm_logging_obj if available (for standard logging payload)
     litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
-    if litellm_logging_obj is not None:
+    if isinstance(litellm_logging_obj, Logging):
         litellm_logging_obj.model = model
         litellm_logging_obj.custom_llm_provider = custom_llm_provider
         litellm_logging_obj.model_call_details["model"] = model
@@ -498,7 +502,7 @@ async def asend_message(
     response: Final = LiteLLMSendMessageResponse.from_a2a_response(a2a_response, request_id=str(request.id))
 
     # Calculate token usage from request and response
-    response_dict: Final[dict[str, object]] = a2a_response.model_dump(mode="json", exclude_none=True)
+    response_dict: Final[dict[str, object]] = a2a_response.root.model_dump(mode="json", exclude_none=True)
     (
         prompt_tokens,
         completion_tokens,

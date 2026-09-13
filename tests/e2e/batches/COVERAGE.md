@@ -19,11 +19,13 @@ failures are hard test failures (see `tests/e2e/CLAUDE.md`).
 | OpenAI    | yes | yes | yes | yes | yes (lifecycle + terminal output) | OpenAI Files |
 | Azure     | yes | yes | yes | yes | yes (byte-verbatim) | Azure Files |
 | Vertex AI | yes | yes | yes | yes | yes (provider-transformed) | GCS (`gcs_bucket_name` / `GCS_BUCKET_NAME` on model) |
-| Bedrock   | yes (unified only) | yes | no (limited upstream) | no | yes (provider-transformed) | S3 (`s3_bucket_name` + `aws_*` + `AWS_BATCH_ROLE_ARN` on model) |
+| Bedrock   | yes (unified only) | yes | yes | yes (unfiltered managed list) | yes (provider-transformed) | S3 (`s3_bucket_name` + `aws_*` + `AWS_BATCH_ROLE_ARN` on model) |
 
-Bedrock cancel is unreliable upstream and list is unsupported, so both are gated off
-(`can_cancel=False`, `can_list=False`) when that provider is enabled in the matrix;
-flipping those gates is tracked in LIT-4774 and deliberately not part of this suite.
+Bedrock cancel maps to `StopModelInvocationJob` and comes back `cancelling`; the
+lifecycle asserts it the same way it does for OpenAI (`_CANCEL_ASSERTED_PROVIDERS`).
+Bedrock has no provider-side list, so list is the proxy's DB-backed managed view: the
+unified lifecycle lists with the plain `GET /v1/batches` and the batch must appear
+there. Both were gated off until LIT-5730, after LIT-4774 landed cancel support. A batch that completes inside the 2 s pre-cancel window skips the cancel assertion (a documented vacuous pass for the cancel cell, same as OpenAI); the list assertion runs either way.
 Bedrock file upload requires a model on the request (`encoded` / `unified` scenarios only);
 `model_param` and `provider_fallback` are omitted because `POST /bedrock/v1/files` has no
 model-less passthrough path.
@@ -118,6 +120,36 @@ create traverse gateway -> gateway -> OpenAI (LIT-5347, PR #36240). The pin:
 nested managed ids round-trip retrieve. This self-chaining only needs the proxy to
 reach its own `PROXY_BASE_URL`, which holds both locally and on the e2e stage.
 
+## Cleanup
+
+Batch teardown cancels active batches before deleting their input files and keys.
+Raw file IDs from both `model_param` and `provider_fallback` uploads use the upload
+provider when deleted. Model-encoded and managed file IDs route themselves
+
+File deletion and batch cancellation check their responses and retry transient
+failures up to three times. Teardown attempts every registered cleanup before
+reporting failures as test errors. Already deleted files and batches that are
+terminal are safe to clean up again. Managed batch cancellation polls for up to eleven minutes
+before input deletion: the ten-minute provider window plus a propagation margin.
+Accepted cancellation may still report validating or in_progress while the provider
+updates its state. Raw and model-encoded batches are polled until cancelling or
+terminal before input deletion. OpenAI and Azure lifecycle cleanup also deletes
+output and error files returned by terminal batches. Bedrock deletion uses a signed S3 DELETE
+restricted to the configured storage buckets and managed file prefixes. The low-RPM
+test submits with its restricted key and cleans up with the test administrator key
+
+Managed deletion forwards the deployment's trusted bucket configuration and returns
+the requested managed file ID even when stored output metadata carries a provider ID
+
+Azure input uploads request `expires_after` anchored to `created_at` with
+`seconds=1209600`, and the lifecycle tests check the returned expiry. This is a
+fallback for interrupted runs: immediate deletion remains the normal cleanup.
+Azure's minimum supported native expiry is 14 days, so a three-day expiry cannot
+be requested through its Files API
+
+The Azure entry in `files_settings` must use `api_version: 2025-04-01-preview`
+for raw uploads to honor expiry, matching the batch deployment's API version
+
 ## Terminal state + cost write-back (cross-run marker baton)
 
 The 24h completion window rules out submit-and-wait inside one run, so
@@ -148,6 +180,6 @@ never landed.
 Unified (managed) batch cost is owned by the hourly `CheckBatchCost` poller, and a
 terminal DB status short-circuits retrieve for those ids, so the terminal-state cell
 uses the encoded path; poller timing does not fit an e2e gate and belongs in a
-DI-stubbed proxy integration test under `tests/test_litellm/proxy/`. Bedrock
-cancel/list stay gated pending LIT-4774. Gemini (non-Vertex) file content raises
-`NotImplementedError` upstream and is not a coverage cell.
+DI-stubbed proxy integration test under `tests/test_litellm/proxy/`. Gemini
+(non-Vertex) file content raises `NotImplementedError` upstream and is not a
+coverage cell.

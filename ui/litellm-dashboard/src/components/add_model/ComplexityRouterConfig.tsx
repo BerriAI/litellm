@@ -1,9 +1,14 @@
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ChevronRight, Info, Plus, Trash2, X } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
+
+import { AffinityControls } from "./AffinityControls";
+import NonReasoningTierToggle from "./NonReasoningTierToggle";
+import TierConfigIntro from "./TierConfigIntro";
+import TierRowSelect from "./TierRowSelect";
+import { ModalityRoutingControls } from "./ModalityRoutingControls";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
@@ -17,6 +22,7 @@ import {
   MAX_TIER_COUNT,
   MAX_TIER_DEFINITION_CHARS,
   MAX_TIER_NAME_CHARS,
+  ALL_BUILT_IN_TIERS,
   MIN_TIER_COUNT,
   TIER_ORDER,
   activeTierName,
@@ -29,13 +35,17 @@ import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
+import ContextWindowEscalationConfig from "./ContextWindowEscalationConfig";
+import ResponseFormatControls from "./ResponseFormatControls";
+import StallEscalationConfig from "./StallEscalationConfig";
 import { Restricted, restrictedBy } from "./TierRestrictions";
 import { type TierSetAction, applyTierSetAction, setFallbackTier } from "./tier_set_actions";
 import {
-  REASONING_EFFORT_OPTIONS,
   ReasoningEffort,
   TierModelParamsByTier,
+  classifierEffortOptionsForModels,
   setTierModelReasoningEffort,
+  tierEffortOptionsForModels,
   tierRowLabel,
 } from "./complexity_router_tiers";
 import TierModelEffortRows from "./TierModelEffortRows";
@@ -43,6 +53,9 @@ import EscalationKeywords from "./EscalationKeywords";
 import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
 import { type DimensionWeights, type TierBoundaries, type TokenThresholds } from "./heuristic_scoring_knobs";
+import { type CustomDimensionRow } from "./custom_dimensions";
+import CompressionControls from "./CompressionControls";
+import { type AutoRouterCompressionState, DEFAULT_AUTO_ROUTER_COMPRESSION } from "./buildAutoRouterCompression";
 
 export type { DimensionWeights, TierBoundaries, TokenThresholds };
 export type { CustomTierSet, TierRow } from "./tier_rows";
@@ -53,13 +66,26 @@ export const DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE = 3;
 export const DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS = 8000;
 export const MIN_QUOTED_CONTEXT_TURN_CHARS = 120;
 export const DEFAULT_SESSION_AFFINITY = false;
+export const DEFAULT_SESSION_AFFINITY_TTL_SECONDS = 3600;
 export const DEFAULT_DEPLOYMENT_AFFINITY = true;
 
+export type ClassificationMode = "every_request" | "user_turn";
+
+export const DEFAULT_CLASSIFICATION_MODE: ClassificationMode = "every_request";
+
+/**
+ * One operator-facing choice over the two wire fields that share the router's tier-pin machinery:
+ * session affinity pins every turn, user_turn pins every turn except a new human ask.
+ */
+export type ClassificationFrequency = ClassificationMode | "session";
+
+/** NON_REASONING is optional: a router that never enabled it stores no such key. */
 export type ComplexityTiers = {
   SIMPLE: string[];
   MEDIUM: string[];
   COMPLEX: string[];
   REASONING: string[];
+  NON_REASONING?: string[];
 };
 
 export type ClassificationRubric = "legacy" | "agentic" | "chat" | "business";
@@ -110,11 +136,14 @@ export const CLASSIFICATION_RUBRIC_KEYS = Object.keys(CLASSIFICATION_RUBRIC_DESC
 export interface ClassifierLLMConfig {
   model: string;
   timeout_ms: number;
+  circuit_breaker_enabled?: boolean;
+  circuit_breaker_cooldown_seconds?: number;
+  reasoning_effort?: ReasoningEffort;
   classification_rubric?: ClassificationRubric;
   system_prompt?: string;
 }
 
-export type ClassifierType = "heuristic" | "llm" | "heuristic_first";
+export type ClassifierType = "heuristic" | "heuristic_v2" | "llm" | "heuristic_first" | "hybrid";
 
 /**
  * Whether this router can call classifier_llm_config.model. Mirrors the backend's
@@ -122,7 +151,7 @@ export type ClassifierType = "heuristic" | "llm" | "heuristic_first";
  * control and payload key, so a new chaining type cannot strip knobs the operator set.
  */
 export const usesLlmClassifier = (classifierType: ClassifierType): boolean =>
-  classifierType === "llm" || classifierType === "heuristic_first";
+  classifierType === "llm" || classifierType === "heuristic_first" || classifierType === "hybrid";
 
 export type ClassifierFallback = "heuristic" | "default_model";
 
@@ -147,7 +176,9 @@ export const heuristicScoringRoleFor = (
   classifierType: ClassifierType,
   classifierFallback: ClassifierFallback | undefined,
 ): HeuristicScoringRole => {
-  if (classifierType === "heuristic" || classifierType === "heuristic_first") return "decides";
+  if (classifierType === "heuristic_v2") return "never";
+  if (classifierType === "heuristic" || classifierType === "heuristic_first" || classifierType === "hybrid")
+    return "decides";
   return (classifierFallback ?? DEFAULT_CLASSIFIER_FALLBACK) === "heuristic" ? "fallback_only" : "never";
 };
 
@@ -170,37 +201,20 @@ const defaultModelPlaceholderFor = (derivedDefaultModel: string | undefined, isC
 };
 
 const builtInTierInfo = (rowId: string): { label: string; description: string; examples: string } | undefined => {
-  const builtIn = TIER_ORDER.find((tier) => tier === rowId);
+  const builtIn = ALL_BUILT_IN_TIERS.find((tier) => tier === rowId);
   return builtIn ? TIER_DESCRIPTIONS[builtIn] : undefined;
 };
-
-const TierConfigIntro: React.FC<{ value: ComplexityRouterConfigValue }> = ({ value }) => (
-  <>
-    <span className="block mb-6 text-muted-foreground">
-      {heuristicScoringRole(value) === "never"
-        ? "The complexity router classifies each request with your classifier model and routes it to that tier. Configure which model(s) handle each tier."
-        : "The complexity router automatically classifies requests by complexity using rule-based scoring (no API calls, <1ms latency). Configure which model(s) handle each tier."}
-    </span>
-
-    <span className="block mb-4 text-xs text-muted-foreground">
-      {restrictedBy(value, "displayNames")?.reason ??
-        "Rename a tier to use your own vocabulary in the dashboard and your spend logs. Renaming doesn't change how requests are classified, and callers never see these names."}
-      {!value.custom_tier_set &&
-        usesLlmClassifier(value.classifier_type) &&
-        " Your classifier model reads these names, so clearer ones can sharpen its choices."}
-    </span>
-  </>
-);
 
 const TierSetToolbar: React.FC<{
   editing: boolean;
   isCustomSet: boolean;
   rowCount: number;
   rowsError: string | null;
+  keywordRulesError: string | null | undefined;
   onEditingChange: ((editing: boolean) => void) | undefined;
   onAdd: () => void;
   onRestore: () => void;
-}> = ({ editing, isCustomSet, rowCount, rowsError, onEditingChange, onAdd, onRestore }) => (
+}> = ({ editing, isCustomSet, rowCount, rowsError, keywordRulesError, onEditingChange, onAdd, onRestore }) => (
   <>
     <div className="mt-4 flex flex-wrap items-center gap-2">
       {editing ? (
@@ -232,6 +246,11 @@ const TierSetToolbar: React.FC<{
       <span className="block mt-1 text-xs text-muted-foreground">
         Add or remove tiers to define your own set. Every custom tier needs a definition the LLM classifier routes on,
         and an edited set requires the LLM classification method
+      </span>
+    )}
+    {editing && keywordRulesError && (
+      <span className="block mt-1 text-xs text-destructive">
+        {keywordRulesError}. Edit the rules under Advanced: Keyword/Semantic Matching, or bring the tier back
       </span>
     )}
   </>
@@ -335,33 +354,14 @@ const TierRowEditFields: React.FC<{
   </>
 );
 
-const TierRowSelect: React.FC<{
-  label: string;
-  options: { value: string; label: string }[];
-  value: string | null;
-  onValueChange: (rowId: string) => void;
-  placeholder?: string;
-}> = ({ label, options, value, onValueChange, placeholder }) => (
-  <Select items={options} value={value} onValueChange={(rowId: string | null) => rowId && onValueChange(rowId)}>
-    <SelectTrigger aria-label={label} className="w-full">
-      <SelectValue placeholder={placeholder} />
-    </SelectTrigger>
-    <SelectContent>
-      {options.map((option) => (
-        <SelectItem key={option.value} value={option.value}>
-          {option.label}
-        </SelectItem>
-      ))}
-    </SelectContent>
-  </Select>
-);
-
 export type AdaptiveEligible = "all" | "classified_tier";
 
 export type ComplexityTierLabels = Partial<Record<keyof ComplexityTiers, string>>;
 
 export interface ComplexityRouterConfigValue {
   tiers: ComplexityTiers;
+  /** Opt into the NON_REASONING tier below SIMPLE; off keeps the four-tier ladder. */
+  enable_non_reasoning_tier?: boolean;
   custom_tier_set?: CustomTierSet;
   tier_labels?: ComplexityTierLabels;
   /** An explicit pin. Unset means the default tracks the tiers - see resolveComplexityDefaultModel. */
@@ -373,17 +373,42 @@ export interface ComplexityRouterConfigValue {
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
+  /** Classification instructions only; the router appends derived tier bullets after them. */
+  classification_prompt?: string;
+  /** Calibration examples only; the router places them after the derived tier bullets. */
+  classification_examples?: string;
   /** Highest tier the scorer may decide alone under heuristic_first. Required by that type, rejected by the others. */
   heuristic_first_max_tier?: string;
+  /** How near a tier boundary a score may land before hybrid defers to the classifier. Required by that type, rejected by the others. */
+  hybrid_boundary_margin?: number;
+  classification_mode?: ClassificationMode;
   session_affinity?: boolean;
+  session_affinity_ttl_seconds?: number;
+  modality_routing?: boolean;
+  modality_pin_override?: boolean;
   deployment_affinity?: boolean;
   /** Plan-mode floor as a tier ROW ID, unset meaning off. The wire carries the row's name. */
   plan_mode_min_tier?: string;
+  /**
+   * Mid-task stall escalation. Undefined means off, which keeps all three keys out of the payload:
+   * the backend rejects them alongside session pinning, user-turn classification and a custom tier
+   * set, so an off router must stay silent about them rather than send an explicit false.
+   */
+  stall_escalation_enabled?: boolean;
+  stall_escalation_window?: number;
+  stall_escalation_repeat_threshold?: number;
   adaptive?: boolean;
   adaptive_weights?: AdaptiveRouterWeights;
   tier_distance_penalty?: number;
   adaptive_eligible?: AdaptiveEligible;
   return_raw_model_name?: boolean;
+  /**
+   * Context-window escalation gate. Undefined means untouched, which keeps both keys out of the
+   * payload so the router tracks the backend defaults (enabled, 0.95 buffer); an explicit false
+   * is a real opt-out and must survive the edit round-trip.
+   */
+  enable_context_window_escalation?: boolean;
+  context_window_escalation_buffer?: number;
   /**
    * Heuristic scorer knobs. Undefined means the operator never touched them, which keeps the key out of the
    * payload so the router tracks the backend defaults rather than freezing today's numbers.
@@ -391,6 +416,11 @@ export interface ComplexityRouterConfigValue {
   tier_boundaries?: TierBoundaries;
   token_thresholds?: TokenThresholds;
   dimension_weights?: DimensionWeights;
+  /**
+   * Operator-added scoring dimensions, each carrying its own inline weight. Undefined means the router has
+   * none and keeps the key out of the payload; an empty array is a real "the last row was removed" state.
+   */
+  custom_dimensions?: CustomDimensionRow[];
   /**
    * Score floor the reasoning-marker override must clear. Undefined keeps the key out of the payload, so the
    * floor tracks tier_boundaries.simple_medium; an explicit 0 is a real floor that promotes on the markers alone.
@@ -403,6 +433,21 @@ export interface ComplexityRouterConfigValue {
    */
   tier_model_params?: TierModelParamsByTier;
 }
+
+/** Session affinity wins where a hand-authored config sets both, matching the backend's own `or`. */
+export const classificationFrequency = (value: ComplexityRouterConfigValue): ClassificationFrequency => {
+  if (!value.custom_tier_set && (value.session_affinity ?? DEFAULT_SESSION_AFFINITY)) return "session";
+  return value.classification_mode === "user_turn" ? "user_turn" : "every_request";
+};
+
+export const withClassificationFrequency = (
+  value: ComplexityRouterConfigValue,
+  frequency: ClassificationFrequency,
+): ComplexityRouterConfigValue => ({
+  ...value,
+  classification_mode: frequency === "user_turn" ? "user_turn" : "every_request",
+  session_affinity: frequency === "session",
+});
 
 interface ComplexityRouterConfigProps {
   modelInfo: ModelGroup[];
@@ -417,6 +462,8 @@ interface ComplexityRouterConfigProps {
   // rules or semantic matching, so it renders this component without them.
   keywordTierRules?: KeywordTierRule[];
   onKeywordTierRulesChange?: (rules: KeywordTierRule[]) => void;
+  /** getKeywordTierRulesError's verdict, owned by the caller: importing it here would be an import cycle. */
+  keywordRulesError?: string | null;
   semanticMatchingEnabled?: boolean;
   onSemanticMatchingEnabledChange?: (enabled: boolean) => void;
   embeddingModel?: string;
@@ -425,6 +472,10 @@ interface ComplexityRouterConfigProps {
   onMatchThresholdChange?: (threshold: number) => void;
   escalationKeywords?: string[];
   onEscalationKeywordsChange?: (keywords: string[]) => void;
+  // Optional: not part of complexity_router_config, since it applies to every
+  // pre-routing strategy, not just the complexity router.
+  autoRouterCompression?: AutoRouterCompressionState;
+  onAutoRouterCompressionChange?: (state: AutoRouterCompressionState) => void;
   showValidationErrors?: boolean;
 }
 
@@ -432,6 +483,11 @@ export const TIER_DESCRIPTIONS: Record<
   keyof ComplexityTiers,
   { label: string; description: string; examples: string }
 > = {
+  NON_REASONING: {
+    label: "Non-reasoning",
+    description: "Operational relay work: passing information along with no judgment about it",
+    examples: '"Reformat this tool output", "Acknowledge the write succeeded"',
+  },
   SIMPLE: {
     label: "Simple",
     description: "Basic questions, greetings, simple factual queries",
@@ -461,44 +517,14 @@ export const effectiveTierLabel = (tier: keyof ComplexityTiers, tierLabels: Comp
 
 export const DEFAULT_HEURISTIC_FIRST_MAX_TIER = "SIMPLE";
 
+/** What the Hybrid radio starts at. Required by that type, so the form always has a value to send. */
+export const DEFAULT_HYBRID_BOUNDARY_MARGIN = 0.03;
+
 /**
  * Tiers the heuristic_first threshold may name. The top tier is excluded because it would short
  * circuit every request and leave the classifier unreachable, which the backend rejects.
  */
-export const HEURISTIC_FIRST_MAX_TIER_KEYS = TIER_KEYS.slice(0, -1);
-
-const AffinityControls: React.FC<{
-  value: ComplexityRouterConfigValue;
-  onChange: (value: ComplexityRouterConfigValue) => void;
-}> = ({ value, onChange }) => (
-  <>
-    <div className="flex items-center gap-2 mb-2">
-      <Switch
-        checked={value.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY}
-        onCheckedChange={(deploymentAffinity) => onChange({ ...value, deployment_affinity: deploymentAffinity })}
-        aria-label="Pin a session to one deployment per model group"
-      />
-      <strong className="font-semibold">Pin a session to one deployment per model group</strong>
-    </div>
-    <span className="block text-xs mb-3 text-muted-foreground">
-      Keeps a session on the same deployment within a group, so provider prompt caches stay warm. Turn off to
-      load-balance every turn.
-    </span>
-    <div className="flex items-center gap-2 mb-2">
-      <Switch
-        checked={value.custom_tier_set ? false : value.session_affinity ?? DEFAULT_SESSION_AFFINITY}
-        disabled={Boolean(value.custom_tier_set)}
-        onCheckedChange={(sessionAffinity) => onChange({ ...value, session_affinity: sessionAffinity })}
-        aria-label="Pin a session to its first model"
-      />
-      <strong className="font-semibold">Pin a session to its first model</strong>
-    </div>
-    <span className="block text-xs text-muted-foreground">
-      {restrictedBy(value, "sessionAffinity")?.reason ??
-        "Keeps a session on its first turn's model instead of re-classifying each turn. Also pins the deployment."}
-    </span>
-  </>
-);
+export const HEURISTIC_FIRST_MAX_TIER_KEYS = TIER_ORDER.slice(0, -1);
 
 const PlanModeOverrideControls: React.FC<{
   value: ComplexityRouterConfigValue;
@@ -538,25 +564,6 @@ const PlanModeOverrideControls: React.FC<{
   </>
 );
 
-const ResponseFormatControls: React.FC<{
-  value: ComplexityRouterConfigValue;
-  onChange: (value: ComplexityRouterConfigValue) => void;
-}> = ({ value, onChange }) => (
-  <>
-    <div className="flex items-center gap-2 mb-2">
-      <Switch
-        checked={value.return_raw_model_name ?? false}
-        onCheckedChange={(returnRawModelName) => onChange({ ...value, return_raw_model_name: returnRawModelName })}
-        aria-label="Return raw model name"
-      />
-      <strong className="font-semibold">Return raw model name</strong>
-    </div>
-    <span className="block text-xs text-muted-foreground">
-      Return the resolved underlying model name in responses instead of the autorouter alias.
-    </span>
-  </>
-);
-
 const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   modelInfo,
   value,
@@ -567,6 +574,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   onCustomTechnicalKeywordsChange,
   keywordTierRules = [],
   onKeywordTierRulesChange,
+  keywordRulesError,
   semanticMatchingEnabled = false,
   onSemanticMatchingEnabledChange,
   embeddingModel,
@@ -575,6 +583,8 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   onMatchThresholdChange = () => {},
   escalationKeywords = [],
   onEscalationKeywordsChange,
+  autoRouterCompression = DEFAULT_AUTO_ROUTER_COMPRESSION,
+  onAutoRouterCompressionChange,
   showValidationErrors = false,
 }) => {
   const customTierSet = value.custom_tier_set;
@@ -602,14 +612,8 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   const removeTierRow = (id: string) => dispatch({ kind: "remove", id });
   const exitToBuiltInTiers = () => dispatch({ kind: "restore" });
 
-  // An absent list means the proxy does not send the field yet, so every level is offered as before.
-  // An empty list is the group's own answer that its deployments share no level, and is left empty.
-  const effortOptionsByModel: Record<string, string[]> = Object.fromEntries(
-    modelInfo.map((model) => [
-      model.model_group,
-      model.supported_reasoning_efforts ?? (model.supports_reasoning ? [...REASONING_EFFORT_OPTIONS] : []),
-    ]),
-  );
+  const tierEffortOptionsByModel = tierEffortOptionsForModels(modelInfo);
+  const classifierEffortOptionsByModel = classifierEffortOptionsForModels(modelInfo);
 
   // Embedding models can't serve a chat-completion role, so they're excluded here.
   const modelOptions = modelInfo
@@ -628,7 +632,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
 
   // Clearing the select drops the key entirely rather than storing "", so an emptied pin reads as
   // "track the tiers" everywhere downstream instead of as a blank model name.
-  const handleDefaultModelChange = (model: string | undefined) => {
+  const handleDefaultModelChange = (model: string | null | undefined) => {
     onChange({ ...value, default_model: model || undefined });
   };
 
@@ -652,6 +656,10 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
 
       <Card>
         <CardContent>
+          {!customTierSet && (
+            <NonReasoningTierToggle value={value} onChange={onChange} available={value.classifier_type === "llm"} />
+          )}
+
           {tierRows.map((row, index) => {
             const tierInfo = builtInTierInfo(row.id);
             const label = tierRowLabel(row, value.tier_labels);
@@ -716,7 +724,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   <TierModelEffortRows
                     tierLabel={label}
                     models={row.models}
-                    effortOptionsByModel={effortOptionsByModel}
+                    effortOptionsByModel={tierEffortOptionsByModel}
                     paramsByModel={row.params}
                     onEffortChange={(model, effort) => handleTierModelEffortChange(row.id, model, effort)}
                   />
@@ -737,6 +745,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             isCustomSet={Boolean(customTierSet)}
             rowCount={tierRows.length}
             rowsError={tierRowsError}
+            keywordRulesError={keywordRulesError}
             onEditingChange={onEditingTiersChange}
             onAdd={addCustomTier}
             onRestore={exitToBuiltInTiers}
@@ -787,6 +796,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                 value={value}
                 onChange={onChange}
                 modelOptions={modelOptions}
+                effortOptionsByModel={classifierEffortOptionsByModel}
                 customTechnicalKeywords={customTechnicalKeywords}
                 onCustomTechnicalKeywordsChange={onCustomTechnicalKeywordsChange}
                 showValidationErrors={showValidationErrors}
@@ -809,10 +819,29 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             children: <AffinityControls value={value} onChange={onChange} />,
           },
           {
+            key: "modality",
+            label: <strong className="text-foreground font-semibold">Advanced: Modality Routing</strong>,
+            children: <ModalityRoutingControls value={value} onChange={onChange} />,
+          },
+          {
             key: "plan-mode",
             label: <strong className="text-foreground font-semibold">Advanced: Plan-Mode Override</strong>,
             children: (
               <PlanModeOverrideControls value={value} onChange={onChange} planModeTierOptions={planModeTierOptions} />
+            ),
+          },
+          {
+            key: "context-window",
+            label: <strong className="text-foreground font-semibold">Advanced: Context Window Escalation</strong>,
+            children: <ContextWindowEscalationConfig value={value} onChange={onChange} />,
+          },
+          {
+            key: "stall-escalation",
+            label: <strong className="text-foreground font-semibold">Advanced: Stalled Task Escalation</strong>,
+            children: (
+              <Restricted by={restrictedBy(value, "stallEscalation")}>
+                <StallEscalationConfig value={value} onChange={onChange} />
+              </Restricted>
             ),
           },
           {
@@ -829,6 +858,17 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                     <Restricted by={restrictedBy(value, "escalation")}>
                       <EscalationKeywords keywords={escalationKeywords} onChange={onEscalationKeywordsChange} />
                     </Restricted>
+                  ),
+                },
+              ]
+            : []),
+          ...(onAutoRouterCompressionChange
+            ? [
+                {
+                  key: "compression",
+                  label: <strong className="text-foreground font-semibold">Advanced: Compression</strong>,
+                  children: (
+                    <CompressionControls value={autoRouterCompression} onChange={onAutoRouterCompressionChange} />
                   ),
                 },
               ]

@@ -22,12 +22,14 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
 from litellm.proxy._types import KeyManagementSystem
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.secret_managers.main import KeyManagementSettings
 
@@ -45,6 +47,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         aws_web_identity_token: str | None = None,
         aws_sts_endpoint: str | None = None,
         replica_regions: list[str] | None = None,
+        kms_key_id: str | None = None,
         **kwargs,
     ):
         BaseSecretManager.__init__(self, **kwargs)
@@ -59,6 +62,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         self.aws_web_identity_token = aws_web_identity_token
         self.aws_sts_endpoint = aws_sts_endpoint
         self.replica_regions: list[str] = replica_regions or []
+        self.kms_key_id = kms_key_id
 
     @classmethod
     def validate_environment(cls):
@@ -104,7 +108,8 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
                 # Remove None values
                 aws_kwargs = {k: v for k, v in aws_kwargs.items() if v is not None}
 
-            litellm.secret_manager_client = cls(**aws_kwargs)
+            kms_key_id: Final = key_management_settings.kms_key_id if key_management_settings is not None else None
+            litellm.secret_manager_client = cls(kms_key_id=kms_key_id, **aws_kwargs)
             litellm._key_management_system = KeyManagementSystem.AWS_SECRET_MANAGER
 
         except Exception as e:
@@ -264,7 +269,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         """
         from litellm._uuid import uuid
 
-        data: Final[dict[str, Any]] = {
+        data: Final[dict[str, object]] = {
             "Name": secret_name,
             "SecretString": secret_value,
             "ClientRequestToken": str(uuid.uuid4()),
@@ -272,6 +277,9 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
 
         if description:
             data["Description"] = description
+
+        if self.kms_key_id:
+            data["KmsKeyId"] = self.kms_key_id
 
         # ✅ Normalize tags to AWS format
         if tags:
@@ -413,7 +421,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         """
         from litellm._uuid import uuid
 
-        data: Final[dict[str, Any]] = {
+        data: Final[dict[str, object]] = {
             "SecretId": secret_name,
             "SecretString": secret_value,
             "ClientRequestToken": str(uuid.uuid4()),
@@ -556,13 +564,15 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
 
         boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(optional_params)
 
-        # Get endpoint
-        _, endpoint_url = self.get_runtime_endpoint(
-            api_base=None,
-            aws_bedrock_runtime_endpoint=boto3_credentials_info.aws_bedrock_runtime_endpoint,
-            aws_region_name=boto3_credentials_info.aws_region_name,
+        region_name: Final = boto3_credentials_info.aws_region_name
+        explicit_runtime_endpoint: Final = boto3_credentials_info.aws_bedrock_runtime_endpoint or get_secret_str(
+            "AWS_BEDROCK_RUNTIME_ENDPOINT"
         )
-        endpoint_url = endpoint_url.replace("bedrock-runtime", "secretsmanager")
+        endpoint_url: Final = (
+            explicit_runtime_endpoint.replace("bedrock-runtime", "secretsmanager")
+            if explicit_runtime_endpoint
+            else f"https://secretsmanager.{region_name}.{get_aws_dns_suffix(region_name)}"
+        )
 
         # Use provided request_data if available, otherwise build default data
         if request_data:

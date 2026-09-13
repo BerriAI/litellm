@@ -28,6 +28,8 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     build_upstream_oauth2_token_request,
     resolve_upstream_resource,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
+from litellm.proxy._experimental.mcp_server.outbound_credentials.token_cache_codec import OAuthTokenCacheCodec
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -233,8 +235,17 @@ class MCPPerUserTokenCache:
     def _cache_key(self, user_id: str, server_id: str) -> str:
         return f"{MCP_PER_USER_TOKEN_REDIS_KEY_PREFIX}:{user_id}:{server_id}"
 
+    def _codec(self) -> OAuthTokenCacheCodec:
+        return OAuthTokenCacheCodec(
+            encrypt_value_helper,
+            lambda blob: decrypt_value_helper(blob, key="mcp_per_user_token", exception_type="debug"),
+        )
+
     async def get(self, user_id: str, server_id: str) -> str | None:
-        """Return the plaintext access_token, or None on miss/error."""
+        token: Final = await self.get_token(user_id, server_id)
+        return token.access_token if token is not None else None
+
+    async def get_token(self, user_id: str, server_id: str) -> OAuthToken | None:
         try:
             from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
 
@@ -242,12 +253,7 @@ class MCPPerUserTokenCache:
             encrypted: Final = await user_api_key_cache.async_get_cache(key)
             if encrypted is None:
                 return None
-            plaintext: Final = decrypt_value_helper(
-                encrypted,
-                key="mcp_per_user_token",
-                exception_type="debug",
-            )
-            return plaintext or None
+            return self._codec().decode(encrypted)
         except Exception as exc:
             verbose_logger.debug(
                 "MCPPerUserTokenCache.get failed for user=%s server=%s: %s",
@@ -263,13 +269,16 @@ class MCPPerUserTokenCache:
         server_id: str,
         access_token: str,
         ttl: int,
+        identity_binding_proof: str | None = None,
     ) -> None:
         """Store NaCl-encrypted access_token in Redis with the given TTL."""
         try:
             from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
 
             key: Final = self._cache_key(user_id, server_id)
-            encrypted: Final = encrypt_value_helper(access_token)
+            encrypted: Final = self._codec().encode(
+                OAuthToken(access_token=access_token, identity_binding_proof=identity_binding_proof)
+            )
             await user_api_key_cache.async_set_cache(key, encrypted, ttl=ttl)
             verbose_logger.debug(
                 "MCPPerUserTokenCache.set: cached token for user=%s server=%s ttl=%ds",

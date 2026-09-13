@@ -7,7 +7,7 @@ import { $api, fetchClient } from "@/lib/http/api";
 import type { components } from "@/lib/http/schema";
 
 export type ShadowEvalJob = components["schemas"]["ShadowEvalJobResponse"];
-export type ShadowEvalJobKey = components["schemas"]["ShadowEvalJobKeyResponse"];
+export type ShadowEvalJobTarget = components["schemas"]["ShadowEvalJobTargetResponse"];
 export type ShadowEvalSlice = components["schemas"]["ShadowEvalSlice"];
 export type StartShadowEvalRequest = components["schemas"]["StartShadowEvalRequest"];
 

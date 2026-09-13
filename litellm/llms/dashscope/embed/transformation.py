@@ -62,6 +62,17 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
             # for drop_params=False before this method is called.
         return optional_params
 
+    def _resolve_api_key(self, api_key: str | None) -> str:
+        resolved_api_key: Final = api_key if api_key is not None else get_secret_str("DASHSCOPE_API_KEY")
+        if resolved_api_key is None:
+            raise ValueError(
+                "DashScope API key is required. Set 'DASHSCOPE_API_KEY' env var or pass api_key explicitly."
+            )
+        return resolved_api_key
+
+    def _resolve_embedding_api_base(self, api_base: str | None) -> str:
+        return api_base or get_secret_str("DASHSCOPE_API_BASE") or DEFAULT_API_BASE
+
     def validate_environment(
         self,
         headers: dict,
@@ -72,17 +83,11 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        if api_key is None:
-            api_key = get_secret_str("DASHSCOPE_API_KEY")
-        if api_key is None:
-            raise ValueError(
-                "DashScope API key is required. Set 'DASHSCOPE_API_KEY' env var or pass api_key explicitly."
-            )
-        default_headers: Final = {
+        return {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {self._resolve_api_key(api_key)}",
+            **headers,
         }
-        return {**default_headers, **headers}
 
     def get_complete_url(
         self,
@@ -93,8 +98,7 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        base = api_base or get_secret_str("DASHSCOPE_API_BASE") or DEFAULT_API_BASE
-        base = base.rstrip("/")
+        base: Final = self._resolve_embedding_api_base(api_base).rstrip("/")
         if base.endswith("/embeddings"):
             return base
         return f"{base}/embeddings"

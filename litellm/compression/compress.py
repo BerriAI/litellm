@@ -66,7 +66,7 @@ def _build_retrieval_tools(keys: list[str], call_type: str) -> list[dict]:
     return cast(list[dict], anthropic_tools)
 
 
-def _content_to_text(content: Any) -> str:
+def _content_to_text(content: object) -> str:
     """
     Convert OpenAI/Anthropic message content blocks to plain text.
 
@@ -78,7 +78,7 @@ def _content_to_text(content: Any) -> str:
     Implemented iteratively (stack-based) to avoid unbounded recursion.
     """
     parts: Final[list[str]] = []
-    stack: Final[list[Any]] = [content]
+    stack: Final[list[object]] = [content]
     while stack:
         item = stack.pop()
         if isinstance(item, str):
@@ -111,7 +111,7 @@ def _normalize_messages_for_compression(
             f"Unsupported call_type={call_type!r} for compression. Expected one of: {sorted(_SUPPORTED_CALL_TYPES)}."
         )
 
-    original_messages: Final[list[dict[str, Any]]] = [dict(m) for m in messages]
+    original_messages: Final[list[dict[str, object]]] = [dict(m) for m in messages]
 
     normalized_messages: Final[list[dict]] = []
     for msg in original_messages:
@@ -132,7 +132,7 @@ def _extract_last_user_message(messages: list[dict]) -> str:
     return ""
 
 
-def _extract_tool_use_ids(content: Any) -> list[str]:
+def _extract_tool_use_ids(content: object) -> list[str]:
     if not isinstance(content, list):
         return []
     tool_use_ids: Final[list[str]] = []
@@ -147,7 +147,7 @@ def _extract_tool_use_ids(content: Any) -> list[str]:
     return tool_use_ids
 
 
-def _extract_tool_result_ids(content: Any) -> set[str]:
+def _extract_tool_result_ids(content: object) -> set[str]:
     if not isinstance(content, list):
         return set()
     tool_result_ids: Final[set[str]] = set()
@@ -337,7 +337,7 @@ def compress(
     compression_trigger: int = 200_000,
     compression_target: int | None = None,
     embedding_model: str | None = None,
-    embedding_model_params: dict[str, Any] | None = None,
+    embedding_model_params: Mapping[str, object] | None = None,
     compression_cache: DualCache | None = None,
 ) -> CompressedResult:
     """
