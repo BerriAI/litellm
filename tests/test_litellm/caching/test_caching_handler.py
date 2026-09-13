@@ -721,8 +721,6 @@ def test_embedding_cache_merge_preserves_input_index(cache_pattern):
     )
 
     size = len(cache_pattern)
-    # Each input's embedding is [float(position)], whatever it came from, so the
-    # assertions below catch mis-placement as well as a mislabelled index.
     cached_result = [
         {"embedding": [float(i)], "index": i, "object": "embedding"} if hit else None
         for i, hit in enumerate(cache_pattern)
@@ -741,8 +739,6 @@ def test_embedding_cache_merge_preserves_input_index(cache_pattern):
         model="text-embedding-ada-002",
     )
 
-    # What the upstream provider returns for the cache misses: indexed 0..k-1
-    # against the shortened batch it actually received.
     missed_positions = [i for i, hit in enumerate(cache_pattern) if not hit]
     api_response = EmbeddingResponse(
         model="text-embedding-ada-002",
