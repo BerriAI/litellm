@@ -2464,12 +2464,6 @@ async def prepare_key_update_data(
             # sentinel for Json? columns, so store the JSON literal null
             non_default_values["budget_limits"] = json.dumps(None)
 
-    if "object_permission" in non_default_values:
-        non_default_values = await _handle_update_object_permission(
-            data_json=non_default_values,
-            existing_key_row=existing_key_row,
-        )
-
     _metadata: Final = existing_key_row.metadata or {}
 
     # validate model_max_budget
@@ -2490,13 +2484,12 @@ async def prepare_key_update_data(
 async def _handle_update_object_permission(
     data_json: dict,
     existing_key_row: LiteLLM_VerificationToken,
+    prisma_client: PrismaClient,
 ) -> dict:
-    """
-    Handle the update of object permission.
-    """
-    from litellm.proxy.proxy_server import prisma_client
+    """Persist the requested object permission row and swap it for its id, only after the key policy allowed the write."""
+    if "object_permission" not in data_json:
+        return data_json
 
-    # Use the common helper to handle the object permission update
     object_permission_id: Final = await handle_update_object_permission_common(
         data_json=data_json,
         existing_object_permission_id=existing_key_row.object_permission_id,
@@ -2758,7 +2751,12 @@ async def _process_single_key_update(
             detail={"error": "Database not connected"},
         )
 
-    _data: Final = {**non_default_values, "token": update_key_request.key}
+    update_values: Final = await _handle_update_object_permission(
+        data_json=non_default_values,
+        existing_key_row=existing_key_row,
+        prisma_client=prisma_client,
+    )
+    _data: Final = {**update_values, "token": update_key_request.key}
     response: Final[Mapping[str, object] | None] = cast(  # cast-ok: every update_data branch returns a str-keyed dict
         "Mapping[str, object] | None",
         await prisma_client.update_data(token=update_key_request.key, data=_data),
@@ -3289,18 +3287,23 @@ async def update_key_fn(
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
+        update_values: Final = await _handle_update_object_permission(
+            data_json=non_default_values,
+            existing_key_row=existing_key_row,
+            prisma_client=prisma_client,
+        )
         changed_by: Final = user_api_key_dict.user_id or litellm_proxy_admin_name
         response: Final = (
             await _update_key_row_with_soft_budget(
                 prisma_client=prisma_client,
                 key=key,
                 data=data,
-                non_default_values=non_default_values,
+                non_default_values=update_values,
                 existing_key_row=existing_key_row,
                 changed_by=changed_by,
             )
             if "soft_budget" in data.model_fields_set
-            else await prisma_client.update_data(token=key, data=MappingProxyType({**non_default_values, "token": key}))
+            else await prisma_client.update_data(token=key, data=MappingProxyType({**update_values, "token": key}))
         )
 
         # Delete - key from cache, since it's been updated!
@@ -5324,7 +5327,12 @@ async def _execute_virtual_key_regeneration(
             request=data if data is not None else RegenerateKeyRequest(),
         ),
     )
-    update_data.update(non_default_values)
+    update_values: Final = await _handle_update_object_permission(
+        data_json=non_default_values,
+        existing_key_row=key_in_db,
+        prisma_client=prisma_client,
+    )
+    update_data.update(update_values)
     jsonified_update_data: Final[Mapping[str, object]] = prisma_client.jsonify_object(data=update_data)
 
     # Snapshot before the token update: the FK cascade rewrites mapping rows to the new hash,
