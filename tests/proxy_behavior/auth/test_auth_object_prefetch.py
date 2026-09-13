@@ -22,8 +22,20 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
+class AsyncDbMock(MagicMock):
+    def __getattr__(self, name: str) -> MagicMock:
+        if name.startswith("_"):
+            return super().__getattr__(name)
+        table_mock = MagicMock()
+        table_mock.find_unique = AsyncMock(return_value=None)
+        table_mock.find_first = AsyncMock(return_value=None)
+        table_mock.find_many = AsyncMock(return_value=[])
+        return table_mock
+
+
 def _dead_db() -> MagicMock:
     prisma = MagicMock(name="prisma_client")
+    prisma.db = AsyncDbMock()
     prisma.db.query_first = AsyncMock(return_value=None)
     return prisma
 
