@@ -883,6 +883,14 @@ class RouterModelGroupAliasItem(TypedDict):
     hidden: bool  # if 'True', don't return on `.get_model_list`
 
 
+class RetryAttemptRecord(TypedDict):
+    model_group: ReadOnly[str | None]
+    deployment_id: ReadOnly[str | None]
+    exception_type: ReadOnly[str]
+    exception_string: ReadOnly[str]
+    attempted_retries: ReadOnly[int | None]
+
+
 VALID_LITELLM_ENVIRONMENTS = [
     "development",
     "staging",

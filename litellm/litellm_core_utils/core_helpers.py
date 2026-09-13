@@ -303,6 +303,19 @@ def get_metadata_variable_name_from_kwargs(
     return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
 
 
+def max_retries_per_request_hit(kwargs: Mapping[str, object], num_retries_per_request: int | None) -> bool:
+    """
+    Whether the Router retry about to run (``attempted_retries`` >= 1 in the metadata bucket) is past the cap
+    """
+    if num_retries_per_request is None:
+        return False
+    metadata: Final = kwargs.get(get_metadata_variable_name_from_kwargs(kwargs))
+    if not isinstance(metadata, Mapping):
+        return False
+    attempted_retries: Final = metadata.get("attempted_retries")
+    return type(attempted_retries) is int and 0 < attempted_retries and num_retries_per_request <= attempted_retries
+
+
 def get_or_create_metadata_bucket(
     request_data: dict,
 ) -> tuple[Literal["metadata", "litellm_metadata"], dict]:

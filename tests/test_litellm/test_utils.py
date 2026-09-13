@@ -4061,6 +4061,53 @@ class TestMetadataNoneHandling:
         assert metadata == {}
 
 
+_RETRY_CAP_CASES: Final = (
+    pytest.param(5, {"attempted_retries": 5}, True, id="cap-above-four-reached"),
+    pytest.param(5, {"attempted_retries": 4}, False, id="cap-above-four-not-reached"),
+    pytest.param(0, {"attempted_retries": 0}, False, id="first-attempt-passes-cap-of-zero"),
+    pytest.param(0, {"attempted_retries": 1}, True, id="cap-of-zero-refuses-first-retry"),
+    pytest.param(5, {"previous_models": ("a", "b", "c", "d", "e")}, False, id="breadcrumb-count-is-not-the-cap"),
+    pytest.param(5, None, False, id="metadata-none"),
+)
+
+
+def _capped_completion_kwargs(metadata_key: str, metadata: object) -> dict[str, object]:
+    return {
+        "model": "openai/gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "api_key": "sk-fake",
+        "mock_response": "ok",
+        metadata_key: metadata,
+    }
+
+
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("cap, metadata, refused", _RETRY_CAP_CASES)
+def test_num_retries_per_request_reads_attempted_retries_sync(monkeypatch, metadata_key, cap, metadata, refused):
+    """num_retries_per_request is enforced from the Router's attempted_retries counter in whichever
+    metadata bucket the call carries, so callers on litellm_metadata and caps above four both work"""
+    monkeypatch.setattr(litellm, "num_retries_per_request", cap)
+    kwargs: Final = _capped_completion_kwargs(metadata_key, metadata)
+    if refused:
+        with pytest.raises(Exception, match="Max retries per request hit!"):
+            litellm.completion(**kwargs)
+    else:
+        assert litellm.completion(**kwargs).choices[0].message.content == "ok"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("cap, metadata, refused", _RETRY_CAP_CASES)
+async def test_num_retries_per_request_reads_attempted_retries_async(monkeypatch, metadata_key, cap, metadata, refused):
+    monkeypatch.setattr(litellm, "num_retries_per_request", cap)
+    kwargs: Final = _capped_completion_kwargs(metadata_key, metadata)
+    if refused:
+        with pytest.raises(Exception, match="Max retries per request hit!"):
+            await litellm.acompletion(**kwargs)
+    else:
+        assert (await litellm.acompletion(**kwargs)).choices[0].message.content == "ok"
+
+
 class TestValidateAndFixThinkingParam:
     """Tests for validate_and_fix_thinking_param."""
 
