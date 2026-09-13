@@ -11,11 +11,11 @@ import logging
 
 import pytest
 
-
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.fallback_generalizations import (
     get_fallback_generalization_rules,
+    match_backfill_generalizations,
     match_capability_generalizations,
     match_routing_generalization,
     set_fallback_generalizations,
@@ -114,6 +114,42 @@ def test_capability_union_is_last_wins_in_file_order(restore_generalizations):
         "supports_vision": True,
         "max_input_tokens": 1000,
     }
+
+
+def test_backfill_requires_per_rule_opt_in(restore_generalizations):
+    restore_generalizations(
+        [
+            {"name": "base", "pattern": r"^acme-", "model_info": {"supports_reasoning": True}},
+            {
+                "name": "opt-in",
+                "pattern": r"^acme-",
+                "backfill_exact_entries": True,
+                "model_info": {"supports_vision": True},
+            },
+        ]
+    )
+    assert match_backfill_generalizations("acme-1") == {"supports_vision": True}
+    assert match_capability_generalizations("acme-1") == {
+        "supports_reasoning": True,
+        "supports_vision": True,
+    }
+
+    restore_generalizations(
+        [{"name": "base", "pattern": r"^acme-", "model_info": {"supports_reasoning": True}}]
+    )
+    assert match_backfill_generalizations("acme-1") is None
+
+    restore_generalizations(
+        [
+            {
+                "name": "route",
+                "pattern": r"^acme-",
+                "backfill_exact_entries": True,
+                "model_info": {"litellm_provider": "openai"},
+            }
+        ]
+    )
+    assert match_backfill_generalizations("acme-1") is None
 
 
 def test_routing_rules_are_excluded_from_capability_results(restore_generalizations):
@@ -297,6 +333,58 @@ def test_exact_entry_takes_precedence_over_rule(restore_generalizations):
     info = litellm.get_model_info("gpt-4o")
     assert info["litellm_provider"] == "openai"
     assert info["input_cost_per_token"] != 999.0
+
+
+def test_exact_entries_backfill_only_missing_fields(restore_generalizations, monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            "acme-full": {
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "max_tokens": 7,
+                "supports_reasoning": False,
+            },
+            "acme-bare": {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 4e-6,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            },
+        },
+    )
+    restore_generalizations(
+        [
+            {
+                "name": "acme-backfill",
+                "pattern": r"^acme-",
+                "backfill_exact_entries": True,
+                "model_info": {"supports_reasoning": True, "max_tokens": 5},
+            }
+        ]
+    )
+    litellm.get_model_info.cache_clear()
+
+    full = litellm.get_model_info("acme-full", custom_llm_provider="openai")
+    assert full["supports_reasoning"] is False
+    assert full["max_tokens"] == 7
+
+    bare = litellm.get_model_info("acme-bare", custom_llm_provider="openai")
+    assert bare["supports_reasoning"] is True
+    assert bare["max_tokens"] == 5
+    assert bare["input_cost_per_token"] == 3e-6
+    assert bare["key"] == "acme-bare"
+
+    restore_generalizations(
+        [{"name": "acme-backfill", "pattern": r"^acme-", "model_info": {"supports_reasoning": True, "max_tokens": 5}}]
+    )
+    litellm.get_model_info.cache_clear()
+    unflagged = litellm.get_model_info("acme-bare", custom_llm_provider="openai")
+    assert unflagged.get("supports_reasoning") is None
 
 
 # --------------------------------------------------------------------------- #
@@ -605,6 +693,10 @@ def test_shipped_wandb_rule_loses_to_mapped_non_reasoning_entries(shipped_cost_m
         assert litellm.supports_reasoning(model=model, custom_llm_provider="wandb") is False, model
 
 
+def test_shipped_wandb_rule_does_not_backfill_mapped_entries(shipped_cost_map):
+    assert match_backfill_generalizations("wandb/meta-llama/Llama-3.1-8B-Instruct") is None
+
+
 def test_shipped_wandb_rule_is_anchored_to_the_wandb_namespace(shipped_cost_map):
     """``^wandb/`` is anchored, so it cannot leak onto another provider's ids."""
     assert match_capability_generalizations("wandb/some-new-model") == {"supports_reasoning": True}
@@ -722,3 +814,33 @@ def test_shipped_openai_reasoning_rule_skips_non_reasoning_gpt_ids(shipped_cost_
 def test_shipped_openai_reasoning_rule_loses_to_mapped_entries(shipped_cost_map):
     assert "gpt-5-search-api" in litellm.model_cost
     assert litellm.supports_reasoning(model="gpt-5-search-api", custom_llm_provider="openai") is False
+
+
+@pytest.mark.parametrize(
+    "model,provider",
+    [
+        ("azure/us/o1-2024-12-17", "azure"),
+        ("github_copilot/gpt-5", "github_copilot"),
+    ],
+)
+def test_shipped_openai_reasoning_rule_backfills_mapped_entries(shipped_cost_map, model, provider):
+    assert model in litellm.model_cost
+    raw_entry = litellm.model_cost[model]
+    assert "supports_reasoning" not in raw_entry
+    model_without_provider = model.removeprefix(f"{provider}/")
+    assert litellm.supports_reasoning(model=model_without_provider, custom_llm_provider=provider) is True
+    info = litellm.get_model_info(model=model_without_provider, custom_llm_provider=provider)
+    assert info["input_cost_per_token"] == raw_entry.get("input_cost_per_token", 0)
+
+
+def test_shipped_claude_thinking_rules_backfill_without_family_limits(shipped_cost_map):
+    model = "perplexity/anthropic/claude-sonnet-4-6"
+    assert model in litellm.model_cost
+    raw_entry = litellm.model_cost[model]
+    assert "supports_adaptive_thinking" not in raw_entry
+    assert "max_input_tokens" not in raw_entry
+
+    info = litellm.get_model_info(model="anthropic/claude-sonnet-4-6", custom_llm_provider="perplexity")
+    assert info["supports_adaptive_thinking"] is True
+    assert info["supports_legacy_thinking"] is True
+    assert info.get("max_input_tokens") is None
