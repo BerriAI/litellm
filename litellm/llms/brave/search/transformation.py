@@ -175,6 +175,8 @@ class BraveSearchConfig(BaseSearchConfig):
         - max_results → count
         - search_domain_filter → q (append domain filters)
         - country → country
+        - start_date + end_date → freshness (combined as "YYYY-MM-DDtoYYYY-MM-DD";
+        only sent when both are provided — Brave's custom range requires both)
         - max_tokens_per_page → (not applicable, ignored)
 
         All other Brave Search API-specific parameters are passed through as-is.
@@ -190,36 +192,48 @@ class BraveSearchConfig(BaseSearchConfig):
             # Brave Search API only supports single string queries
             query = " ".join(query)
 
+        remaining = dict(optional_params)
+
         request_data: Final[BraveSearchRequest] = {
             "q": query,
         }
 
         # Only include "include_fetch_metadata" if it is not explicitly set to False
         # This parameter results (more often than not) in a timestamp which we can use for last_updated
-        if "include_fetch_metadata" in optional_params and optional_params["include_fetch_metadata"] is False:
+        if remaining.pop("include_fetch_metadata", None) is False:
             request_data["include_fetch_metadata"] = False
         else:
             request_data["include_fetch_metadata"] = True
 
         # Transform unified spec parameters to Brave Search API format
-        if "max_results" in optional_params:
+        if "max_results" in remaining:
             # Brave Search API supports 1-20 results per /web/search request
-            num_results: Final = min(optional_params["max_results"], 20)
+            num_results: Final = min(remaining.pop("max_results"), 20)
             request_data["count"] = num_results
 
         if "search_domain_filter" in optional_params:
             # Convert to multiple "site:domain" clauses, joined by OR
-            domains: Final = optional_params["search_domain_filter"]
+            domains: Final = remaining.pop("search_domain_filter")
             if isinstance(domains, list) and len(domains) > 0:
                 request_data["q"] = self._append_domain_filters(request_data["q"], domains)
+
+        start_date = remaining.pop("start_date", None)
+        end_date = remaining.pop("end_date", None)
+        if start_date and end_date:
+            request_data["freshness"] = f"{start_date}to{end_date}"
+
+        if "country" in remaining:
+            request_data["country"] = remaining.pop("country")
+
+        # Not applicable therefore popped and ignored
+        if "max_tokens_per_page" in remaining:
+            remaining.pop("max_tokens_per_page")
 
         # Convert to dict before dynamic key assignments
         result_data: Final = dict(request_data)
 
-        # Pass through all other parameters as-is
-        for param, value in optional_params.items():
-            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
-                result_data[param] = value
+        # Pass through anything the function did not explicitly consume
+        result_data.update(remaining)
 
         # Store params in special key for URL building (Brave Search API uses GET not POST)
         # Return a wrapper dict that stores params for get_complete_url to use

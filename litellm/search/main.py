@@ -29,6 +29,8 @@ def _build_search_optional_params(
     search_domain_filter: list[str] | None = None,
     max_tokens_per_page: int | None = None,
     country: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> dict[str, Any]:
     """
     Helper function to build optional_params dict from Perplexity Search API parameters.
@@ -38,6 +40,8 @@ def _build_search_optional_params(
         search_domain_filter: List of domains to filter (max 20)
         max_tokens_per_page: Max tokens per page
         country: Country code filter
+        start_date: Start date for results (YYYY-MM-DD)
+        end_date: End date for results (YYYY-MM-DD)
 
     Returns:
         Dict with non-None optional parameters
@@ -52,6 +56,10 @@ def _build_search_optional_params(
         optional_params["max_tokens_per_page"] = max_tokens_per_page
     if country is not None:
         optional_params["country"] = country
+    if start_date is not None:
+        optional_params["start_date"] = start_date
+    if end_date is not None:
+        optional_params["end_date"] = end_date
 
     return optional_params
 
@@ -64,6 +72,8 @@ async def asearch(
     search_domain_filter: list[str] | None = None,
     max_tokens_per_page: int | None = None,
     country: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
@@ -80,6 +90,8 @@ async def asearch(
         search_domain_filter: Optional list of domains to filter (max 20)
         max_tokens_per_page: Optional max tokens per page, default 1024
         country: Optional country code filter (e.g., 'US', 'GB', 'DE')
+        start_date: Optional start date for results (YYYY-MM-DD)
+        end_date: Optional end date for results (YYYY-MM-DD)
         api_key: Optional API key
         api_base: Optional API base URL
         timeout: Optional timeout
@@ -128,6 +140,8 @@ async def asearch(
             search_domain_filter=search_domain_filter,
             max_tokens_per_page=max_tokens_per_page,
             country=country,
+            start_date=start_date,
+            end_date=end_date,
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -167,6 +181,8 @@ def search(
     search_domain_filter: list[str] | None = None,
     max_tokens_per_page: int | None = None,
     country: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
@@ -183,6 +199,8 @@ def search(
         search_domain_filter: Optional list of domains to filter (max 20)
         max_tokens_per_page: Optional max tokens per page, default 1024
         country: Optional country code filter (e.g., 'US', 'GB', 'DE')
+        start_date: Optional start date for results (YYYY-MM-DD)
+        end_date: Optional end date for results (YYYY-MM-DD)
         api_key: Optional API key
         api_base: Optional API base URL
         timeout: Optional timeout
@@ -255,6 +273,8 @@ def search(
             search_domain_filter=search_domain_filter,
             max_tokens_per_page=max_tokens_per_page,
             country=country,
+            start_date=start_date,
+            end_date=end_date,
         )
 
         # Filter out internal LiteLLM parameters from kwargs
