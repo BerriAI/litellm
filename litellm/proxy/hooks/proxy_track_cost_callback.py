@@ -64,6 +64,7 @@ _UNATTRIBUTED_TRACKABLE_CALL_TYPES: Final[frozenset[str]] = frozenset(
         CallTypes.pass_through.value,
         CallTypes.llm_passthrough_route.value,
         CallTypes.allm_passthrough_route.value,
+        CallTypes.call_mcp_tool.value,
         # CheckBatchCost's synthetic logging_obj for a completed managed batch carries
         # whatever LiteLLM_ManagedObjectTable stored at create time, and all of it is
         # None for a batch created before those columns were persisted, or by the master
