@@ -4,7 +4,7 @@ import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -249,6 +249,37 @@ def agent_launch_args(command: str, base_url: str) -> list[str]:
     """
     builder: Final = _PROXY_ARGS.get(os.path.basename(command))
     return builder(base_url) if builder else []
+
+
+def _codex_arg_groups(user_args: Sequence[str]) -> Iterator[tuple[bool, tuple[str, ...]]]:
+    tokens: Final = iter(user_args)
+    for token in tokens:
+        if token == "--":
+            yield False, (token, *tokens)
+            return
+        if token in ("-c", "--config"):
+            if (value := next(tokens, None)) is None:
+                yield False, (token,)
+                return
+            if value.startswith("-"):
+                yield False, (token, value, *tokens)
+                return
+            yield True, (token, value)
+        else:
+            yield token.startswith(("-c", "--config=")), (token,)
+
+
+def _codex_launch_args(user_args: Sequence[str], extra_args: Sequence[str]) -> tuple[str, ...]:
+    # Codex discards root -c values when a subcommand has its own. Replay the
+    # defaults and earlier user overrides at the last config option's scope.
+    groups: Final = tuple(_codex_arg_groups(user_args))
+    last_config: Final = max((index for index, (is_config, _) in enumerate(groups) if is_config), default=0)
+    return (
+        *(arg for _, args in groups[:last_config] for arg in args),
+        *extra_args,
+        *(arg for is_config, args in groups[:last_config] if is_config for arg in args),
+        *(arg for _, args in groups[last_config:] for arg in args),
+    )
 
 
 class ListedModel(BaseModel):
@@ -551,9 +582,14 @@ def run_agent(
         }
     )
     extra_args: Final = (*agent_launch_args(command[0], base_url), *prepared_args)
+    launch_args: Final = (
+        _codex_launch_args(command[1:], extra_args)
+        if os.path.basename(command[0]) == "codex"
+        else (*extra_args, *command[1:])
+    )
     if reattach_terminal is not None:
         reattach_terminal()
-    launcher(binary, [command[0], *extra_args, *command[1:]], env)
+    launcher(binary, [command[0], *launch_args], env)
 
 
 def _is_interactive() -> bool:
