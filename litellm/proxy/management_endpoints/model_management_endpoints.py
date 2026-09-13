@@ -845,7 +845,9 @@ async def patch_model(
         llm_router,
         premium_user,
         prisma_client,
+        proxy_logging_obj,
         store_model_in_db,
+        user_api_key_cache,
     )
 
     try:
@@ -969,6 +971,19 @@ async def patch_model(
         # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
         live_before_reload: Final = live_model_ids_snapshot()
         reload_outcome: Final = await clear_cache()
+        source_team_id: Final = db_model.model_info.team_id if db_model.model_info else None
+        if (
+            source_team_id is not None
+            and patch_data.model_info is not None
+            and patch_data.model_info.team_id not in (None, source_team_id)
+        ):
+            await _remove_unbacked_team_models(
+                model_params=db_model,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                llm_router=llm_router,
+            )
 
         ## CREATE AUDIT LOG ##
         asyncio.create_task(
@@ -1523,11 +1538,12 @@ async def _remove_unbacked_team_models(
     llm_router: Router | None = None,
 ) -> None:
     """
-    Strip a deleted team model's public name(s) from team.models and refresh the cache.
+    Strip a team model's public name(s) from team.models once the row no longer backs them, and refresh the cache.
 
-    Must be called after the deployment row is deleted: a public name is removed only
-    when no remaining team deployment still backs it, so a load-balanced replica isn't
-    revoked while siblings serve it, and concurrent deletes can't leave a ghost.
+    Runs after the row is deleted, or after a move to another team has been reloaded into the
+    router: a public name is removed only when no remaining team deployment still backs it, so
+    a load-balanced replica isn't revoked while siblings serve it, concurrent deletes can't
+    leave a ghost, and a moved row's former team does not keep a grant nothing of its own serves.
 
     Legacy team models (created before team_public_model_name existed) store a
     ``{public_name: "model_name_{team_id}_{uuid}"}`` entry in the team's model_aliases,
@@ -1539,7 +1555,9 @@ async def _remove_unbacked_team_models(
 
     A public name that still resolves to a live router deployment (e.g. a gateway-level
     model group shared with the team) is kept in team.models, so deleting a per-team
-    duplicate does not revoke the team's access to the shared deployment.
+    duplicate does not revoke the team's access to the shared deployment. Team rows are
+    indexed under their internal ``model_name_{team_id}_{uuid}`` key, so a row that was just
+    moved does not keep its public name alive for the team it left.
     """
     team_id: Final = model_params.model_info.team_id
     if team_id is None:
