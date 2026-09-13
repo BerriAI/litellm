@@ -438,15 +438,15 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
                       </Tooltip>
                       <div className="mt-4 space-y-3">
                         <div>
-                          <p className="text-sm text-gray-600">Success Requests</p>
+                          <p className="text-sm text-muted-foreground">Success Requests</p>
                           <p className="text-lg font-semibold">{formatAbbreviatedNumber(tag.successful_requests)}</p>
                         </div>
                         <div>
-                          <p className="text-sm text-gray-600">Total Tokens</p>
+                          <p className="text-sm text-muted-foreground">Total Tokens</p>
                           <p className="text-lg font-semibold">{formatAbbreviatedNumber(tag.total_tokens)}</p>
                         </div>
                         <div>
-                          <p className="text-sm text-gray-600">Total Cost</p>
+                          <p className="text-sm text-muted-foreground">Total Cost</p>
                           <p className="text-lg font-semibold">${formatAbbreviatedNumber(tag.total_spend, 4)}</p>
                         </div>
                       </div>
@@ -461,15 +461,15 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
                     <h4 className="text-lg font-medium text-foreground">No Data</h4>
                     <div className="mt-4 space-y-3">
                       <div>
-                        <p className="text-sm text-gray-600">Success Requests</p>
+                        <p className="text-sm text-muted-foreground">Success Requests</p>
                         <p className="text-lg font-semibold">-</p>
                       </div>
                       <div>
-                        <p className="text-sm text-gray-600">Total Tokens</p>
+                        <p className="text-sm text-muted-foreground">Total Tokens</p>
                         <p className="text-lg font-semibold">-</p>
                       </div>
                       <div>
-                        <p className="text-sm text-gray-600">Total Cost</p>
+                        <p className="text-sm text-muted-foreground">Total Cost</p>
                         <p className="text-lg font-semibold">-</p>
                       </div>
                     </div>

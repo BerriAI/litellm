@@ -12,7 +12,7 @@ import asyncio
 import re
 import time
 from collections.abc import Mapping
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import quote
 
 import httpx
@@ -26,6 +26,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin, encode_url_path_segment
+from litellm.llms.azure_ai.common_utils import get_azure_ai_auth_headers
 from litellm.llms.base_llm.ocr.transformation import (
     OCR_REQUEST_FORMAT_PARAM,
     BaseOCRConfig,
@@ -39,6 +40,9 @@ from litellm.llms.base_llm.ocr.transformation import (
     parse_ocr_request_format,
 )
 from litellm.secret_managers.main import get_secret_str
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV_VAR: Final = "AZURE_DOCUMENT_INTELLIGENCE_API_KEY"
 
@@ -87,6 +91,18 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
 
     def get_api_key_env_var(self) -> str | None:
         return AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV_VAR
+
+    def resolve_connection_params(
+        self,
+        *,
+        api_key: str | None,
+        api_base: str | None,
+        dynamic_api_key: str | None,
+        dynamic_api_base: str | None,
+    ) -> tuple[str | None, str | None]:
+        explicit_api_key: Final = None if api_key is None else dynamic_api_key or api_key
+        explicit_api_base: Final = None if api_base is None else dynamic_api_base or api_base
+        return explicit_api_key, explicit_api_base
 
     def get_supported_ocr_params(self, model: str) -> list:
         """
@@ -236,16 +252,12 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         """
         Validate environment and return headers for Azure Document Intelligence.
 
-        Authentication uses Ocp-Apim-Subscription-Key header.
+        Authentication uses the Ocp-Apim-Subscription-Key header, or an Entra ID / OAuth bearer
+        token when no subscription key is set.
         """
         # Get API key from environment if not provided
         if api_key is None:
             api_key = get_secret_str(AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV_VAR)
-
-        if api_key is None:
-            raise ValueError(
-                "Missing Azure Document Intelligence API Key - Set AZURE_DOCUMENT_INTELLIGENCE_API_KEY environment variable or pass api_key parameter"
-            )
 
         # Validate API base/endpoint is provided
         if api_base is None:
@@ -257,7 +269,12 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             )
 
         headers = {
-            "Ocp-Apim-Subscription-Key": api_key,
+            **get_azure_ai_auth_headers(
+                api_key=api_key,
+                litellm_params=litellm_params,
+                api_key_header="Ocp-Apim-Subscription-Key",
+                api_key_env_var=AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV_VAR,
+            ),
             "Content-Type": "application/json",
             **headers,
         }
@@ -613,7 +630,11 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         except SSRFError as ssrf_err:
             raise ValueError(f"Azure Document Intelligence: rejected polling URL ({ssrf_err})")
 
-        poll_headers = {"Ocp-Apim-Subscription-Key": raw_response.request.headers.get("Ocp-Apim-Subscription-Key", "")}
+        poll_headers: Final = {
+            header: raw_response.request.headers[header]
+            for header in ("Ocp-Apim-Subscription-Key", "Authorization")
+            if header in raw_response.request.headers
+        }
         return operation_url, poll_headers
 
     @staticmethod
@@ -674,7 +695,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         self,
         model: str,
         raw_response: httpx.Response,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         **kwargs,
     ) -> OCRResponse:
         """
@@ -749,7 +770,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         self,
         model: str,
         raw_response: httpx.Response,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         **kwargs,
     ) -> OCRResponse:
         """

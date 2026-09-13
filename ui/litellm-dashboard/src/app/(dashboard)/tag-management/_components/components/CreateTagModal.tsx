@@ -4,7 +4,7 @@ import { ChevronRight, CircleHelp } from "lucide-react";
 import React from "react";
 import { z } from "zod/v4";
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { MultiSelect } from "@/components/shared/MultiSelect";
@@ -143,7 +143,11 @@ const CreateTagModal: React.FC<CreateTagModalProps> = ({ visible, onCancel, onSu
                     )}
                   >
                     {({ id, value, onChange }) => (
-                      <BudgetDurationDropdown id={id} value={value ?? null} onChange={onChange} />
+                      <BudgetDurationDropdown
+                        id={id}
+                        value={value ?? null}
+                        onChange={(next) => onChange(next ?? undefined)}
+                      />
                     )}
                   </FormField>
                 </FieldGroup>
@@ -155,7 +159,7 @@ const CreateTagModal: React.FC<CreateTagModalProps> = ({ visible, onCancel, onSu
                       href="https://github.com/BerriAI/litellm/issues/new"
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-blue-600 underline hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                      className="text-info underline hover:text-info/80"
                     >
                       create a GitHub issue
                     </a>

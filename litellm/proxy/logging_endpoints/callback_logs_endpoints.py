@@ -88,8 +88,10 @@ class CallbackLogsReplayer:
         )
 
         metadata: Final[dict[str, Any]] = payload.get("metadata") or {}
+        user_api_key_hash: Final = metadata.get("user_api_key_hash")
         litellm_metadata: Final[dict[str, Any]] = {
-            "user_api_key": metadata.get("user_api_key_hash"),
+            "user_api_key": user_api_key_hash,
+            "user_api_key_hash": user_api_key_hash,
             "user_api_key_alias": metadata.get("user_api_key_alias"),
             "user_api_key_user_id": metadata.get("user_api_key_user_id"),
             "user_api_key_team_id": metadata.get("user_api_key_team_id"),

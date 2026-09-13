@@ -7,10 +7,23 @@ Tests that invoke_agent_a2a properly integrates with add_litellm_data_to_request
 import json
 import socket
 import sys
-from contextlib import ExitStack
+from collections.abc import Awaitable, Callable, Mapping
+from contextlib import AbstractContextManager, ExitStack
+from dataclasses import dataclass
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+from litellm.proxy._types import UserAPIKeyAuth
+
+AddLiteLLMData = Callable[..., Awaitable[dict[str, object]]]
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedAgentCall:
+    request_id: object
+    agent_extra_headers: dict[str, str] | None
 
 
 @pytest.mark.asyncio
@@ -364,7 +377,7 @@ def _make_agent_mock(url: str = "http://backend-agent:10001") -> MagicMock:
 
 
 def _make_request_mock(
-    method: str, params: dict, request_id: object = "req-1"
+    method: str, params: Mapping[str, object], request_id: object = "req-1"
 ) -> MagicMock:
     req = MagicMock()
     req.headers = {}
@@ -379,7 +392,9 @@ def _make_request_mock(
     return req
 
 
-def _base_patches(agent: MagicMock):
+def _base_patches(
+    agent: MagicMock, add_litellm_data: AddLiteLLMData | None = None
+) -> list[AbstractContextManager[object]]:
     return [
         patch(
             "litellm.proxy.agent_endpoints.a2a_endpoints._get_agent",
@@ -391,7 +406,7 @@ def _base_patches(agent: MagicMock):
         ),
         patch(
             "litellm.proxy.common_request_processing.add_litellm_data_to_request",
-            new=AsyncMock(side_effect=_add_proxy_data),
+            new=AsyncMock(side_effect=add_litellm_data or _add_proxy_data),
         ),
         patch("litellm.proxy.proxy_server.general_settings", {}),
         patch("litellm.proxy.proxy_server.proxy_config", MagicMock()),
@@ -399,84 +414,67 @@ def _base_patches(agent: MagicMock):
     ]
 
 
-async def _add_proxy_data(data, **kwargs):
-    data["proxy_server_request"] = {
-        "url": "http://localhost:4000",
-        "method": "POST",
-        "headers": {},
-        "body": {},
+async def _add_proxy_data(data: dict[str, object], **kwargs: object) -> dict[str, object]:
+    return {
+        **data,
+        "proxy_server_request": {"url": "http://localhost:4000", "method": "POST", "headers": {}, "body": {}},
+        "metadata": data.get("metadata", {}),
     }
-    data.setdefault("metadata", {})
-    return data
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["message/send", "message/stream"])
-async def test_message_methods_preserve_numeric_zero_request_id(method: str):
+_HELLO_MESSAGE_PARAMS = {
+    "message": {
+        "role": "user",
+        "parts": [{"kind": "text", "text": "Hello"}],
+        "messageId": "msg-123",
+    }
+}
+
+
+async def _invoke_message_method(
+    method: str,
+    mock_request: MagicMock,
+    user_api_key_dict: UserAPIKeyAuth,
+    add_litellm_data: AddLiteLLMData | None = None,
+) -> CapturedAgentCall:
     from fastapi.responses import JSONResponse
-    from litellm.proxy._types import UserAPIKeyAuth
 
     class MessageSendParams:
-        def __init__(self, **kwargs):
+        def __init__(self, **kwargs: object) -> None:
             self.__dict__.update(kwargs)
 
     class SendMessageRequest:
-        def __init__(self, **kwargs):
+        def __init__(self, **kwargs: object) -> None:
             self.__dict__.update(kwargs)
 
-    agent = _make_agent_mock()
-    params = {
-        "message": {
-            "role": "user",
-            "parts": [{"kind": "text", "text": "Hello"}],
-            "messageId": "msg-123",
-        }
-    }
-    mock_request = _make_request_mock(method, params, request_id=0)
-    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
-    captured = {}
-
-    async def capture_asend_message(request, **kwargs):
-        captured["request_id"] = request.id
-        response = MagicMock()
+    async def fake_asend_message(request: SendMessageRequest, **kwargs: object) -> MagicMock:
+        response: Final = MagicMock()
         response.model_dump.return_value = {
             "jsonrpc": "2.0",
-            "id": request.id,
+            "id": request.__dict__["id"],
             "result": {"status": "success"},
         }
         return response
 
-    async def capture_stream_message(**kwargs):
-        captured["request_id"] = kwargs["request_id"]
-        return JSONResponse({"jsonrpc": "2.0", "id": kwargs["request_id"]})
+    async def fake_stream_message(request_id: object, **kwargs: object) -> JSONResponse:
+        return JSONResponse({"jsonrpc": "2.0", "id": request_id})
 
-    mock_a2a_types = MagicMock()
+    mock_a2a_types: Final = MagicMock()
     mock_a2a_types.MessageSendParams = MessageSendParams
     mock_a2a_types.SendMessageRequest = SendMessageRequest
+    is_send: Final = method == "message/send"
+    downstream: Final = AsyncMock(side_effect=fake_asend_message if is_send else fake_stream_message)
 
     with ExitStack() as stack:
-        for p in _base_patches(agent):
+        for p in _base_patches(_make_agent_mock(), add_litellm_data):
             stack.enter_context(p)
         stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
-        if method == "message/send":
-            stack.enter_context(
-                patch.dict(
-                    sys.modules,
-                    {"a2a": MagicMock(), "a2a.types": mock_a2a_types},
-                )
-            )
-            stack.enter_context(
-                patch(
-                    "litellm.a2a_protocol.asend_message",
-                    new=AsyncMock(side_effect=capture_asend_message),
-                )
-            )
+        if is_send:
+            stack.enter_context(patch.dict(sys.modules, {"a2a": MagicMock(), "a2a.types": mock_a2a_types}))
+            stack.enter_context(patch("litellm.a2a_protocol.asend_message", new=downstream))
         else:
             stack.enter_context(
-                patch(
-                    "litellm.proxy.agent_endpoints.a2a_endpoints._handle_stream_message",
-                    new=AsyncMock(side_effect=capture_stream_message),
-                )
+                patch("litellm.proxy.agent_endpoints.a2a_endpoints._handle_stream_message", new=downstream)
             )
 
         from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
@@ -488,7 +486,82 @@ async def test_message_methods_preserve_numeric_zero_request_id(method: str):
             user_api_key_dict=user_api_key_dict,
         )
 
-    assert captured["request_id"] == 0
+    kwargs: Final = downstream.call_args.kwargs
+    request_id: Final = kwargs["request"].__dict__["id"] if is_send else kwargs["request_id"]
+    return CapturedAgentCall(request_id=request_id, agent_extra_headers=kwargs.get("agent_extra_headers"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["message/send", "message/stream"])
+async def test_message_methods_preserve_numeric_zero_request_id(method: str):
+    mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS, request_id=0)
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    captured = await _invoke_message_method(method, mock_request, user_api_key_dict)
+
+    assert captured.request_id == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["message/send", "message/stream"])
+async def test_message_methods_forward_caller_identity_headers(method: str):
+    mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS)
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="user-abc", team_id="team-xyz")
+
+    captured = await _invoke_message_method(method, mock_request, user_api_key_dict)
+
+    forwarded_headers = captured.agent_extra_headers or {}
+    assert forwarded_headers.get("X-LiteLLM-User-Id") == "user-abc"
+    assert forwarded_headers.get("X-LiteLLM-Team-Id") == "team-xyz"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["message/send", "message/stream"])
+async def test_message_methods_caller_identity_headers_cannot_be_spoofed(method: str):
+    mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS)
+    mock_request.headers = {
+        "x-a2a-test-agent-x-litellm-user-id": "attacker-user",
+        "x-a2a-test-agent-x-litellm-team-id": "attacker-team",
+    }
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="real-user", team_id="real-team")
+
+    captured = await _invoke_message_method(method, mock_request, user_api_key_dict)
+
+    forwarded_headers = captured.agent_extra_headers or {}
+    assert (
+        forwarded_headers.get("X-LiteLLM-User-Id") == "real-user"
+    ), "authenticated user id must not be overridden by forwarded client headers"
+    assert (
+        forwarded_headers.get("X-LiteLLM-Team-Id") == "real-team"
+    ), "authenticated team id must not be overridden by forwarded client headers"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["message/send", "message/stream"])
+async def test_message_methods_forward_key_bound_identity_not_pre_call_rewrite(method: str):
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS)
+    mock_request.headers = {"X-OpenWebUI-User-Id": "header-mapped-user"}
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="key-user", team_id="key-team")
+    general_settings: Final = {
+        "user_header_mappings": [{"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"}]
+    }
+
+    async def apply_user_header_mapping(data: dict[str, object], **kwargs: object) -> dict[str, object]:
+        LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+            general_settings, user_api_key_dict, dict(mock_request.headers)
+        )
+        return await _add_proxy_data(data, **kwargs)
+
+    captured = await _invoke_message_method(
+        method, mock_request, user_api_key_dict, add_litellm_data=apply_user_header_mapping
+    )
+
+    assert user_api_key_dict.user_id == "header-mapped-user", "precondition: pre-call rewrite ran"
+    forwarded_headers = captured.agent_extra_headers or {}
+    assert forwarded_headers.get("X-LiteLLM-User-Id") == "key-user"
+    assert forwarded_headers.get("X-LiteLLM-Team-Id") == "key-team"
 
 
 @pytest.mark.asyncio
@@ -919,6 +992,62 @@ async def test_task_method_failure_hook_uses_enriched_request_data():
 
 
 @pytest.mark.asyncio
+async def test_agentcore_invalid_context_id_returns_jsonrpc_invalid_params_400():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    agent = _make_agent_mock()
+    agent.litellm_params = {
+        "custom_llm_provider": "bedrock",
+        "model": "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/demo",
+        "api_key": "test-jwt-token",
+    }
+    mock_request = _make_request_mock(
+        "message/send",
+        {
+            "message": {
+                "role": "user",
+                "parts": [{"kind": "text", "text": "Hello"}],
+                "messageId": "msg-1",
+                "contextId": "too-short",
+            }
+        },
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type: data
+    )
+    mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(  # test-quality-ok: same proxy_logging_obj injection the sibling failure-hook test uses; no HTTP call is made because the request is rejected before signing
+                "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging
+            )
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    body = json.loads(response.body.decode())
+    assert response.status_code == 400
+    assert body["id"] == "req-1"
+    assert body["error"]["code"] == -32602
+    assert "Invalid AgentCore runtime session id" in body["error"]["message"]
+    assert "Internal error" not in body["error"]["message"]
+    mock_proxy_logging.post_call_failure_hook.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_get_extended_agent_card_rewrites_url():
     from litellm.proxy._types import UserAPIKeyAuth
 
@@ -1317,13 +1446,371 @@ async def test_handle_stream_message_rejects_invalid_params_with_32602():
         request_id="req-1",
         params={"message": 12345},
     )
+    assert response.media_type == "text/event-stream"
     chunks = [chunk async for chunk in response.body_iterator]
     body = "".join(
         chunk.decode() if isinstance(chunk, bytes) else chunk for chunk in chunks
     )
-    payload = json.loads(body.strip())
+    assert body.startswith("data: ")
+    assert body.endswith("\n\n")
+    payload = json.loads(body.removeprefix("data: ").strip())
     assert payload["error"]["code"] == -32602
     assert payload["id"] == "req-1"
+
+
+@pytest.mark.asyncio
+async def test_handle_stream_message_frames_events_as_sse():
+    """message/stream must return text/event-stream with each JSON-RPC object
+    framed as ``data: <json>\\n\\n``. Regression for #35027: NDJSON framing
+    breaks the official a2a-sdk client, which requires SSE."""
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _handle_stream_message
+
+    events = [
+        {
+            "jsonrpc": "2.0",
+            "id": "req-1",
+            "result": {"kind": "task", "id": "t-1", "status": {"state": "working"}},
+        },
+        {
+            "jsonrpc": "2.0",
+            "id": "req-1",
+            "result": {"kind": "message", "parts": [{"kind": "text", "text": "pong"}]},
+        },
+    ]
+
+    async def fake_stream(**kwargs):
+        for event in events:
+            yield event
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        stack.enter_context(
+            patch(
+                "litellm.a2a_protocol.asend_message_streaming",
+                new=fake_stream,
+            )
+        )
+
+        response = await _handle_stream_message(
+            api_base="http://upstream.local",
+            request_id="req-1",
+            params={
+                "message": {
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "hi"}],
+                    "messageId": "msg-1",
+                }
+            },
+        )
+
+        assert response.media_type == "text/event-stream"
+        chunks = [
+            chunk.decode() if isinstance(chunk, bytes) else chunk
+            async for chunk in response.body_iterator
+        ]
+
+    assert len(chunks) == len(events)
+    for chunk, event in zip(chunks, events):
+        assert chunk.startswith("data: ")
+        assert chunk.endswith("\n\n")
+        assert json.loads(chunk.removeprefix("data: ").strip()) == event
+
+
+@pytest.mark.asyncio
+async def test_handle_stream_message_sdk_unavailable_frames_error_as_sse():
+    """When the a2a package is unavailable the -32603 error must still be
+    emitted as a single SSE event so the a2a-sdk client can parse it."""
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _handle_stream_message
+
+    with patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", False):
+        response = await _handle_stream_message(
+            api_base="http://upstream.local",
+            request_id="req-1",
+            params={"message": {"role": "user", "parts": []}},
+        )
+
+    assert response.media_type == "text/event-stream"
+    chunks = [
+        chunk.decode() if isinstance(chunk, bytes) else chunk
+        async for chunk in response.body_iterator
+    ]
+    assert len(chunks) == 1
+    assert chunks[0].startswith("data: ")
+    assert chunks[0].endswith("\n\n")
+    payload = json.loads(chunks[0].removeprefix("data: ").strip())
+    assert payload["error"]["code"] == -32603
+    assert payload["id"] == "req-1"
+
+
+@pytest.mark.asyncio
+async def test_handle_stream_message_proxy_hook_path_frames_events_as_sse():
+    """When proxy hooks are wired the events are routed through
+    async_streaming_data_generator; that path must also frame each JSON-RPC
+    object as ``data: <json>\\n\\n`` (regression for #35027)."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _handle_stream_message
+    from litellm.proxy.utils import ProxyLogging
+
+    events = [
+        {"jsonrpc": "2.0", "id": "req-1", "result": {"kind": "task", "id": "t-1"}},
+        {
+            "jsonrpc": "2.0",
+            "id": "req-1",
+            "result": {"kind": "message", "parts": [{"kind": "text", "text": "pong"}]},
+        },
+    ]
+
+    async def fake_stream(**kwargs):
+        for event in events:
+            yield event
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        stack.enter_context(
+            patch("litellm.a2a_protocol.asend_message_streaming", new=fake_stream)
+        )
+
+        response = await _handle_stream_message(
+            api_base="http://upstream.local",
+            request_id="req-1",
+            params={
+                "message": {
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "hi"}],
+                    "messageId": "msg-1",
+                }
+            },
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            request_data={"model": "a2a/test"},
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        assert response.media_type == "text/event-stream"
+        chunks = [
+            chunk.decode() if isinstance(chunk, bytes) else chunk
+            async for chunk in response.body_iterator
+        ]
+
+    assert len(chunks) == len(events)
+    for chunk, event in zip(chunks, events):
+        assert chunk.startswith("data: ")
+        assert chunk.endswith("\n\n")
+        assert json.loads(chunk.removeprefix("data: ").strip()) == event
+
+
+@pytest.mark.asyncio
+async def test_handle_stream_message_frames_preserialized_jsonrpc_error_once():
+    """A stream chunk that is already a serialized JSON-RPC object (what a
+    guardrail may yield when it terminates an A2A stream mid-flight) must be
+    framed as one SSE event carrying that object, not JSON-encoded a second time
+    into a bare string."""
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _handle_stream_message
+
+    error_event = {
+        "jsonrpc": "2.0",
+        "id": "req-1",
+        "error": {"code": -32603, "message": "blocked by guardrail", "data": {}},
+    }
+
+    async def fake_stream(**kwargs):
+        yield json.dumps(error_event) + "\n"
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        stack.enter_context(
+            patch("litellm.a2a_protocol.asend_message_streaming", new=fake_stream)
+        )
+
+        response = await _handle_stream_message(
+            api_base="http://upstream.local",
+            request_id="req-1",
+            params={
+                "message": {
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "hi"}],
+                    "messageId": "msg-1",
+                }
+            },
+        )
+
+        chunks = [
+            chunk.decode() if isinstance(chunk, bytes) else chunk
+            async for chunk in response.body_iterator
+        ]
+
+    assert len(chunks) == 1
+    payload = json.loads(chunks[0].removeprefix("data: ").strip())
+    assert payload == error_event
+
+
+@pytest.mark.asyncio
+async def test_handle_stream_message_proxy_hook_path_frames_errors_as_sse():
+    """A failure while the hooked generator is streaming must reach the client as
+    a ``data:``-framed JSON-RPC error, not as a bare NDJSON line."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _handle_stream_message
+    from litellm.proxy.utils import ProxyLogging
+
+    async def fake_stream(**kwargs):
+        yield {"jsonrpc": "2.0", "id": "req-1", "result": {"kind": "task", "id": "t-1"}}
+        raise ValueError("upstream died")
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        stack.enter_context(
+            patch("litellm.a2a_protocol.asend_message_streaming", new=fake_stream)
+        )
+
+        response = await _handle_stream_message(
+            api_base="http://upstream.local",
+            request_id="req-1",
+            params={
+                "message": {
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "hi"}],
+                    "messageId": "msg-1",
+                }
+            },
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            request_data={"model": "a2a/test"},
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+
+        chunks = [
+            chunk.decode() if isinstance(chunk, bytes) else chunk
+            async for chunk in response.body_iterator
+        ]
+
+    assert len(chunks) == 2
+    assert chunks[-1].startswith("data: ")
+    error_payload = json.loads(chunks[-1].removeprefix("data: ").strip())
+    assert error_payload["id"] == "req-1"
+    assert error_payload["error"]["code"] == -32603
+    assert "upstream died" in error_payload["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_handle_stream_message_frames_upstream_call_failure_as_sse_error():
+    """A failure raised before any event is streamed (with proxy hooks wired) is
+    still delivered as a ``data:``-framed JSON-RPC error."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _handle_stream_message
+    from litellm.proxy.utils import ProxyLogging
+
+    def fake_stream(**kwargs):
+        raise ValueError("could not reach agent")
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        stack.enter_context(
+            patch("litellm.a2a_protocol.asend_message_streaming", new=fake_stream)
+        )
+
+        response = await _handle_stream_message(
+            api_base="http://upstream.local",
+            request_id="req-1",
+            params={
+                "message": {
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "hi"}],
+                    "messageId": "msg-1",
+                }
+            },
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            request_data={"model": "a2a/test"},
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+
+        chunks = [
+            chunk.decode() if isinstance(chunk, bytes) else chunk
+            async for chunk in response.body_iterator
+        ]
+
+    assert len(chunks) == 1
+    error_payload = json.loads(chunks[0].removeprefix("data: ").strip())
+    assert error_payload["id"] == "req-1"
+    assert error_payload["error"]["code"] == -32603
+    assert "could not reach agent" in error_payload["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_handle_stream_message_forwards_unparseable_chunk_as_sse_event():
+    """A chunk that is not JSON at all still leaves as one well-formed SSE event
+    instead of raising and killing the stream."""
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _handle_stream_message
+
+    async def fake_stream(**kwargs):
+        yield "not json at all"
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        stack.enter_context(
+            patch("litellm.a2a_protocol.asend_message_streaming", new=fake_stream)
+        )
+
+        response = await _handle_stream_message(
+            api_base="http://upstream.local",
+            request_id="req-1",
+            params={
+                "message": {
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "hi"}],
+                    "messageId": "msg-1",
+                }
+            },
+        )
+
+        chunks = [
+            chunk.decode() if isinstance(chunk, bytes) else chunk
+            async for chunk in response.body_iterator
+        ]
+
+    assert chunks == ['data: "not json at all"\n\n']
+
+
+@pytest.mark.asyncio
+async def test_handle_stream_message_frames_mid_stream_failure_as_sse_error():
+    """An upstream failure after the response started is reported as a
+    ``data:``-framed JSON-RPC error object, so an SSE client sees the failure."""
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _handle_stream_message
+
+    async def fake_stream(**kwargs):
+        yield {"jsonrpc": "2.0", "id": "req-1", "result": {"kind": "task", "id": "t-1"}}
+        raise RuntimeError("upstream died")
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        stack.enter_context(
+            patch("litellm.a2a_protocol.asend_message_streaming", new=fake_stream)
+        )
+
+        response = await _handle_stream_message(
+            api_base="http://upstream.local",
+            request_id="req-1",
+            params={
+                "message": {
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "hi"}],
+                    "messageId": "msg-1",
+                }
+            },
+        )
+
+        chunks = [
+            chunk.decode() if isinstance(chunk, bytes) else chunk
+            async for chunk in response.body_iterator
+        ]
+
+    assert len(chunks) == 2
+    error_payload = json.loads(chunks[-1].removeprefix("data: ").strip())
+    assert error_payload["id"] == "req-1"
+    assert error_payload["error"]["code"] == -32603
+    assert "upstream died" in error_payload["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -2026,6 +2513,86 @@ async def test_forward_jsonrpc_sse_is_untouched_while_keepalives_are_unconfigure
         response = await _resubscribe_response()
         assert "x-accel-buffering" not in response.headers
         chunks = [chunk async for chunk in response.body_iterator]
+
+    assert not any(chunk.startswith(":") for chunk in chunks)
+    assert json.loads(chunks[-1].removeprefix("data: "))["result"]["kind"] == "task"
+
+
+async def _stream_message_response():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _handle_stream_message
+
+    return await _handle_stream_message(
+        api_base="http://upstream.local",
+        request_id="req-1",
+        params={
+            "message": {
+                "role": "user",
+                "parts": [{"kind": "text", "text": "hi"}],
+                "messageId": "msg-1",
+            }
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_stream_message_pings_while_the_upstream_agent_is_still_silent(
+    monkeypatch,
+):
+    """message/stream is SSE like tasks/resubscribe, so a slow first event must be
+    held open by the same keepalives rather than sitting idle for the whole
+    time-to-first-token."""
+    import asyncio
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", 0.05)
+
+    async def fake_stream(**kwargs):
+        await asyncio.sleep(0.3)
+        yield {"jsonrpc": "2.0", "id": "req-1", "result": {"kind": "task", "id": "t-1"}}
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        stack.enter_context(
+            patch("litellm.a2a_protocol.asend_message_streaming", new=fake_stream)
+        )
+
+        response = await _stream_message_response()
+        assert response.headers["x-accel-buffering"] == "no"
+        chunks = [
+            chunk.decode() if isinstance(chunk, bytes) else chunk
+            async for chunk in response.body_iterator
+        ]
+
+    assert chunks[0] == ": ping\n\n"
+    assert chunks.count(": ping\n\n") >= 3
+    assert json.loads(chunks[-1].removeprefix("data: "))["result"]["kind"] == "task"
+
+
+@pytest.mark.asyncio
+async def test_handle_stream_message_is_untouched_while_keepalives_are_unconfigured(
+    monkeypatch,
+):
+    """Off until an operator sets an interval, so the default stream is unchanged."""
+    import litellm
+
+    monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", None)
+
+    async def fake_stream(**kwargs):
+        yield {"jsonrpc": "2.0", "id": "req-1", "result": {"kind": "task", "id": "t-1"}}
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        stack.enter_context(
+            patch("litellm.a2a_protocol.asend_message_streaming", new=fake_stream)
+        )
+
+        response = await _stream_message_response()
+        assert "x-accel-buffering" not in response.headers
+        chunks = [
+            chunk.decode() if isinstance(chunk, bytes) else chunk
+            async for chunk in response.body_iterator
+        ]
 
     assert not any(chunk.startswith(":") for chunk in chunks)
     assert json.loads(chunks[-1].removeprefix("data: "))["result"]["kind"] == "task"

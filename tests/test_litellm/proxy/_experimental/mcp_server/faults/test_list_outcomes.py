@@ -2,6 +2,11 @@
 to exactly one category, wire values never carry upstream prose, and single-upstream HTTP statuses
 stay truthful to who failed."""
 
+import sys
+
+if sys.version_info < (3, 11):  # BaseExceptionGroup is a builtin only from 3.11
+    from exceptiongroup import BaseExceptionGroup
+
 import httpx
 import pytest
 from mcp import McpError

@@ -5,8 +5,10 @@ Tests for backend domain models.
 from datetime import datetime
 
 import pytest
+from pydantic import BaseModel, TypeAdapter
 
 from litellm.models.access_group import LiteLLM_AccessGroupTable
+from litellm.models.autorouter_session import LiteLLM_AutoRouterSession
 from litellm.models.budget import (
     LiteLLM_BudgetTable,
     LiteLLM_BudgetTableFull,
@@ -39,6 +41,7 @@ from litellm.models.verification_token import (
     LiteLLM_DeletedVerificationToken,
     LiteLLM_VerificationToken,
 )
+from pydantic import ValidationError
 
 
 class TestBudget:
@@ -128,6 +131,33 @@ class TestModel:
         )
         assert model.litellm_params == {"model": "gpt-4"}
         assert model.model_info == {"team_id": "t1"}
+
+    def test_response_type_adapter_accepts_pydantic_row(self):
+        class PrismaModelRow(BaseModel):
+            model_id: str
+            model_name: str
+            litellm_params: dict[str, str]
+            model_info: dict[str, str] | None = None
+            blocked: bool = False
+
+        row = PrismaModelRow(
+            model_id="m1",
+            model_name="gpt-4",
+            litellm_params={"model": "gpt-4"},
+            model_info={"team_id": "t1"},
+            blocked=True,
+        )
+
+        model = TypeAdapter(LiteLLM_ProxyModelTable | None).validate_python(
+            row,
+            from_attributes=True,
+        )
+
+        assert model is not None
+        assert model.model_id == "m1"
+        assert model.litellm_params == {"model": "gpt-4"}
+        assert model.model_info == {"team_id": "t1"}
+        assert model.blocked is True
 
     def test_team_helpers_none_when_no_model_info(self):
         model = LiteLLM_ProxyModelTable(
@@ -421,7 +451,7 @@ class TestBudgetTableFull:
         assert budget.max_budget == 10.0
 
     def test_full_requires_created_at(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             LiteLLM_BudgetTableFull(budget_id="b1")
 
 
@@ -480,7 +510,7 @@ class TestMCPServerTable:
         assert server.env == {}
 
     def test_mcp_server_requires_transport(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             LiteLLM_MCPServerTable(server_id="s1")
 
 
@@ -538,7 +568,7 @@ class TestManagedTables:
         assert table.flat_model_file_ids == ["file-abc"]
 
     def test_managed_object_table_requires_purpose(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             LiteLLM_ManagedObjectTable(
                 unified_object_id="o1", model_object_id="m1", file_object={}
             )
@@ -559,3 +589,35 @@ class TestManagedTables:
         )
         assert table.vector_store_id == "vs1"
         assert table.custom_llm_provider == "openai"
+
+
+class TestAutoRouterSession:
+    @staticmethod
+    def _row(baseline_models: dict) -> LiteLLM_AutoRouterSession:
+        return LiteLLM_AutoRouterSession(
+            api_key="k",
+            session_id="s",
+            router_name="auto",
+            router_type="complexity",
+            first_turn_at=datetime(2026, 9, 1, 12, 0, 0),
+            last_turn_at=datetime(2026, 9, 1, 12, 5, 0),
+            last_model="anthropic/claude-sonnet-5",
+            turns=3,
+            spend=0.14,
+            saved_spend=0.24,
+            classifier_cost=0.0,
+            tier_turns={},
+            baseline_models=baseline_models,
+        )
+
+    def test_the_baseline_label_is_the_one_most_turns_were_priced_against(self):
+        assert self._row({"anthropic/claude-opus-5": 2, "anthropic/claude-sonnet-5": 1}).baseline_model == (
+            "anthropic/claude-opus-5"
+        )
+
+    def test_a_tie_between_baselines_is_broken_deterministically(self):
+        assert self._row({"b-model": 1, "a-model": 1}).baseline_model == "b-model"
+        assert self._row({"a-model": 1, "b-model": 1}).baseline_model == "b-model"
+
+    def test_a_row_whose_turns_recorded_no_baseline_has_no_label(self):
+        assert self._row({}).baseline_model is None

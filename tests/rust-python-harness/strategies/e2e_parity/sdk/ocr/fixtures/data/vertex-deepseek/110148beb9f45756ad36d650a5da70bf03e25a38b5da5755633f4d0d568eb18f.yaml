@@ -1,0 +1,56 @@
+interactions:
+- request:
+    body: '{"model":"deepseek-ai/invalid-ocr-model-for-parity","messages":[{"role":"user","content":[{"type":"image_url","image_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAUAAAABQCAIAAADnUzvSAAABfUlEQVR4nO3dwY2DMBRAQbza/ltmK+BAhNd+YaYAcEBPPnwC4zzPA2j6Wb0A4HMChjABQ5iAIUzAECZgCBMwhAkYwgQMYQKGMAFD2O9TBxpjHDM99cz2U+vcbT1XdnvW/er3zl7nWHTfZ99fOzCECRjCBAxhAoYwAUOYgCFMwBD22Bx41bz06viz5427rWc3s+efd897Lrrvs++vHRjCBAxhAoYwAUOYgCFMwBAmYAibPgfmne7Ow2ef91vZgSFMwBAmYAgTMIQJGMIEDGEChjBzYNjof8V32YEhTMAQJmAIEzCECRjCBAxhAoYwc2BebSx6X/dTx7cDQ5iAIUzAECZgCBMwhAkYwgQMYebAvML40u8z24EhTMAQJmAIEzCECRjCBAxhAoawsdt7bq/sts7d1nNl1Zxz1XUek6/nbt9DtgNDmIAhTMAQJmAIEzCECRjCBAxhj82Bgf9nB4YwAUOYgCFMwBAmYAgTMIQJGMIEDGEChjABQ5iA4ej6A6GiUaF+b+RaAAAAAElFTkSuQmCC"}]}]}'
+    headers:
+      Accept:
+      - '*/*'
+      Content-Type:
+      - application/json
+      User-Agent:
+      - litellm/1.101.0
+    method: POST
+    uri: http://parity-provider.invalid/v1/projects/useful-shell-447307-d4/locations/global/endpoints/openapi/chat/completions
+  response:
+    body:
+      string: "[{\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"Publisher
+        model `projects/257139895354/locations/global/publishers/deepseek-ai/models/invalid-ocr-model-for-parity`
+        was not found or your project does not have access to it. Ensure you are using
+        a valid model name and that the model is available in the specified region.
+        For more information, see: https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations.\",\n
+        \   \"status\": \"NOT_FOUND\"\n  }\n}\n]"
+    headers:
+      Alt-Svc:
+      - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+      Content-Type:
+      - application/json; charset=UTF-8
+      Date:
+      - Wed, 02 Sep 2026 22:38:11 GMT
+      Server:
+      - scaffolding on HTTPServer2
+      Vary:
+      - Origin
+      - X-Origin
+      - Referer
+      X-Content-Type-Options:
+      - nosniff
+      X-Frame-Options:
+      - SAMEORIGIN
+      X-XSS-Protection:
+      - '0'
+    status:
+      code: 404
+      message: ''
+recorded_at: '2026-09-02T22:38:11.581063+00:00'
+ttl_seconds: 0
+version: 1
+x-litellm:
+  case:
+    litellm_input:
+      document:
+        image_url: data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAUAAAABQCAIAAADnUzvSAAABfUlEQVR4nO3dwY2DMBRAQbza/ltmK+BAhNd+YaYAcEBPPnwC4zzPA2j6Wb0A4HMChjABQ5iAIUzAECZgCBMwhAkYwgQMYQKGMAFD2O9TBxpjHDM99cz2U+vcbT1XdnvW/er3zl7nWHTfZ99fOzCECRjCBAxhAoYwAUOYgCFMwBD22Bx41bz06viz5427rWc3s+efd897Lrrvs++vHRjCBAxhAoYwAUOYgCFMwBAmYAibPgfmne7Ow2ef91vZgSFMwBAmYAgTMIQJGMIEDGEChjBzYNjof8V32YEhTMAQJmAIEzCECRjCBAxhAoYwc2BebSx6X/dTx7cDQ5iAIUzAECZgCBMwhAkYwgQMYebAvML40u8z24EhTMAQJmAIEzCECRjCBAxhAoawsdt7bq/sts7d1nNl1Zxz1XUek6/nbt9DtgNDmIAhTMAQJmAIEzCECRjCBAxhj82Bgf9nB4YwAUOYgCFMwBAmYAgTMIQJGMIEDGEChjABQ5iA4ej6A6GiUaF+b+RaAAAAAElFTkSuQmCC
+        type: image_url
+      model: vertex_ai/deepseek-ai/invalid-ocr-model-for-parity
+      vertex_location: global
+      vertex_project: useful-shell-447307-d4
+  request_source: recorded
+  schema_version: 1

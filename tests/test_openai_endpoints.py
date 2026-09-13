@@ -550,7 +550,7 @@ async def test_proxy_all_models():
     async with aiohttp.ClientSession() as session:
         # call chat/completions with a model that the key was not created for + the model is not on the config.yaml
         await chat_completion(
-            session=session, key=LITELLM_MASTER_KEY, model="groq/llama-3.1-8b-instant"
+            session=session, key=LITELLM_MASTER_KEY, model="groq/openai/gpt-oss-120b"
         )
 
         await chat_completion(

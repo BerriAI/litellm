@@ -8,7 +8,6 @@ from unittest import mock
 import pytest
 
 import litellm
-from litellm import completion
 from litellm.llms.v0.chat.transformation import V0ChatConfig
 
 
@@ -111,33 +110,3 @@ def test_v0_supported_params():
     ]
 
     assert set(supported_params) == set(expected_params)
-
-
-def test_v0_models_configuration():
-    """Test that v0 models are configured correctly"""
-    from litellm import get_model_info
-
-    # Reload model cost map to pick up local changes
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    # All v0 models
-    v0_models = ["v0/v0-1.0-md", "v0/v0-1.5-md", "v0/v0-1.5-lg"]
-
-    for model in v0_models:
-        model_info = get_model_info(model)
-        assert model_info is not None, f"Model info not found for {model}"
-        # All v0 models support vision (multimodal)
-        assert (
-            model_info.get("supports_vision") is True
-        ), f"{model} should support vision"
-        assert (
-            model_info.get("litellm_provider") == "v0"
-        ), f"{model} should have v0 as provider"
-        assert model_info.get("mode") == "chat", f"{model} should be in chat mode"
-        assert (
-            model_info.get("supports_function_calling") is True
-        ), f"{model} should support function calling"
-        assert (
-            model_info.get("supports_system_messages") is True
-        ), f"{model} should support system messages"

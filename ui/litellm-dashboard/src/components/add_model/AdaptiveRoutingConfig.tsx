@@ -56,7 +56,7 @@ const AdaptiveRoutingConfig: React.FC<AdaptiveRoutingConfigProps> = ({ value, on
         When disabled, each request always uses the model assigned to its classified tier.
       </span>
 
-      <Card className="bg-gray-50 mt-4">
+      <Card className="bg-muted mt-4">
         <CardContent>
           <strong className="mb-2 block font-semibold">How Adaptive Routing Works</strong>
           <span className="text-[13px] text-muted-foreground">

@@ -109,3 +109,15 @@ const sessionRolesWithBroadTeamList: string[] = ["Admin", "Admin Viewer", "Org A
 
 export const teamListScopeUserId = (userRole: string | null, userId: string | null): string | null =>
   sessionRolesWithBroadTeamList.includes(userRole ?? "") ? null : userId;
+
+// Mirrors the backend's `user_api_key_has_admin_view`, which the daily-activity endpoints gate on:
+// proxy admins read every user's spend, and everyone else is forced to their own user_id. Org admin
+// is deliberately absent, so this is `all_admin_roles` minus org admin rather than a reuse of it.
+// Both spellings are listed because that constant carries both and either may reach a call site.
+const rolesWithProxyWideSpendView: string[] = ["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer"];
+
+export const hasProxyWideSpendView = (userRole: string | null): boolean =>
+  rolesWithProxyWideSpendView.includes(userRole ?? "");
+
+export const spendScopeUserId = (userRole: string | null, userId: string | null): string | null =>
+  hasProxyWideSpendView(userRole) ? null : userId;

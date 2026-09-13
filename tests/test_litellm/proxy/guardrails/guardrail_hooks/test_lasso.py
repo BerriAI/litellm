@@ -1,12 +1,10 @@
 import os
-import sys
 import pytest
 import uuid
 from unittest.mock import patch, MagicMock
 from httpx import Response, Request
 from fastapi import HTTPException
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm import DualCache
@@ -19,13 +17,13 @@ from litellm.proxy.guardrails.guardrail_hooks.lasso.lasso import (
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
 
-def test_lasso_guard_config():
+def test_lasso_guard_config(monkeypatch):
     """Test Lasso guard configuration with init_guardrails_v2."""
     litellm.set_verbose = True
     litellm.guardrail_name_config_map = {}
 
     # Set environment variable for testing
-    os.environ["LASSO_API_KEY"] = "test-key"
+    monkeypatch.setenv("LASSO_API_KEY", "test-key")
 
     init_guardrails_v2(
         all_guardrails=[

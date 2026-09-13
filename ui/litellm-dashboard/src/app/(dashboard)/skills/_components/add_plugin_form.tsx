@@ -3,7 +3,7 @@ import { CircleHelp } from "lucide-react";
 import { z } from "zod/v4";
 import { toast } from "@/lib/toast";
 import { registerClaudeCodePlugin } from "@/components/networking";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
@@ -26,6 +26,7 @@ import {
   parseKeywords,
   parseSkillSource,
   isValidSubPath,
+  isValidSha256,
   SkillSourcePreview,
 } from "@/components/claude_code_plugins/helpers";
 import { PluginAuthor, PluginSource, SkillRegisterRequest } from "@/components/claude_code_plugins/types";
@@ -39,13 +40,14 @@ interface AddPluginFormProps {
 }
 
 const addPluginShape = {
-  skillUrl: z.string().min(1, "Please enter a repository URL"),
+  skillUrl: z.string().min(1, "Please enter a repository or zip archive URL"),
   subPath: z
     .string()
     .refine(
       (value) => !value || isValidSubPath(value),
       "Subfolder must be a relative path like plugins/my-skill (letters, numbers, dots, hyphens, underscores)",
     ),
+  sha256: z.string().refine(isValidSha256, "SHA-256 must be a 64-character hex digest"),
   name: z
     .string()
     .min(1, "Please enter skill name")
@@ -53,7 +55,7 @@ const addPluginShape = {
   domain: z.string(),
   namespace: z.string(),
   description: z.string(),
-  category: z.string(),
+  category: z.string().nullable(),
   keywords: z.string(),
   version: z.string(),
   authorName: z.string(),
@@ -69,11 +71,12 @@ type AddPluginFormValues = z.infer<typeof addPluginSchema>;
 const EMPTY_VALUES: AddPluginFormValues = {
   skillUrl: "",
   subPath: "",
+  sha256: "",
   name: "",
   domain: "",
   namespace: "",
   description: "",
-  category: "",
+  category: null,
   keywords: "",
   version: "",
   authorName: "",
@@ -89,11 +92,19 @@ const buildAuthor = (values: AddPluginFormValues): PluginAuthor | undefined => {
   return email ? { name, email } : { name };
 };
 
+const archiveUrlOf = (preview: SkillSourcePreview | null): string | undefined =>
+  preview?.parsed.source === "archive" ? preview.parsed.url : undefined;
+
+const withArchiveDigest = (source: PluginSource, sha256: string): PluginSource => {
+  const digest = sha256.trim();
+  return source.source === "archive" && digest ? { ...source, sha256: digest.toLowerCase() } : source;
+};
+
 const buildRegisterRequest = (values: AddPluginFormValues, source: PluginSource): SkillRegisterRequest => {
   const author = buildAuthor(values);
   return {
     name: values.name.trim(),
-    source,
+    source: withArchiveDigest(source, values.sha256),
     ...(values.version ? { version: values.version.trim() } : {}),
     ...(values.description ? { description: values.description.trim() } : {}),
     ...(author ? { author } : {}),
@@ -115,6 +126,16 @@ const PREDEFINED_CATEGORIES = [
   "Documentation",
 ];
 
+const SUB_PATH_LOCK_REASON = {
+  "git-subdir": "The URL already points to a subfolder, so this field is disabled",
+  archive: "A zip archive is installed as a whole, so this field is disabled",
+} as const;
+
+type SubPathLock = keyof typeof SUB_PATH_LOCK_REASON;
+
+const subPathLockFor = (source: PluginSource["source"] | undefined): SubPathLock | null =>
+  source === "git-subdir" || source === "archive" ? source : null;
+
 const labelWithHint = (label: string, hint: string): React.ReactNode => (
   <>
     {label}
@@ -129,15 +150,18 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
   const form = useZodForm(addPluginSchema, { defaultValues: EMPTY_VALUES });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [urlPreview, setUrlPreview] = useState<SkillSourcePreview | null>(null);
-  const [urlEncodesSubdir, setUrlEncodesSubdir] = useState(false);
+  const [subPathLock, setSubPathLock] = useState<SubPathLock | null>(null);
 
   const recomputePreview = (skillUrl: string, subPath: string) => {
-    const encodesSubdir = parseSkillSource(skillUrl)?.parsed.source === "git-subdir";
-    setUrlEncodesSubdir(encodesSubdir);
-    if (encodesSubdir && form.getValues("subPath")) {
+    const lock = subPathLockFor(parseSkillSource(skillUrl)?.parsed.source);
+    setSubPathLock(lock);
+    if (lock && form.getValues("subPath")) {
       form.setValue("subPath", "");
     }
-    const preview = parseSkillSource(skillUrl, encodesSubdir ? undefined : subPath);
+    const preview = parseSkillSource(skillUrl, lock ? undefined : subPath);
+    if (archiveUrlOf(preview) !== archiveUrlOf(urlPreview) && form.getValues("sha256")) {
+      form.setValue("sha256", "");
+    }
     setUrlPreview(preview);
     if (preview && !form.getValues("name")) {
       form.setValue("name", preview.suggestedName);
@@ -151,7 +175,7 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
     }
 
     if (!urlPreview) {
-      toast.error("Please enter a valid repository URL");
+      toast.error("Please enter a valid repository or zip archive URL");
       return;
     }
 
@@ -176,7 +200,7 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
       toast.success("Skill registered successfully");
       form.reset(EMPTY_VALUES);
       setUrlPreview(null);
-      setUrlEncodesSubdir(false);
+      setSubPathLock(null);
       onSuccess();
       onClose();
     } catch (error) {
@@ -190,7 +214,7 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
   const handleCancel = () => {
     form.reset(EMPTY_VALUES);
     setUrlPreview(null);
-    setUrlEncodesSubdir(false);
+    setSubPathLock(null);
     onClose();
   };
 
@@ -207,15 +231,15 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
                 control={form.control}
                 name="skillUrl"
                 label={labelWithHint(
-                  "Repository URL",
-                  "Paste an HTTPS git repository URL from GitHub, GitLab, Bitbucket, or a self-hosted host. E.g. github.com/org/repo, gitlab.com/org/repo, or github.com/org/repo/tree/main/my-skill",
+                  "Source URL",
+                  "Paste an HTTPS git repository URL from GitHub, GitLab, Bitbucket, or a self-hosted host (e.g. github.com/org/repo or github.com/org/repo/tree/main/my-skill), or an HTTPS link to a .zip archive of the skill hosted on S3 or any static file server.",
                 )}
               >
                 {({ ref, onChange, ...field }) => (
                   <Input
                     {...field}
                     ref={ref}
-                    placeholder="https://github.com/org/repo or https://gitlab.com/org/repo"
+                    placeholder="https://github.com/org/repo or https://bucket.s3.amazonaws.com/my-skill.zip"
                     className="rounded-lg"
                     onChange={(event) => {
                       onChange(event);
@@ -232,9 +256,7 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
                   "Subfolder path (Optional)",
                   "Path within the repository where the skill lives (e.g., plugins/my-skill). Leave empty if the skill is at the repo root.",
                 )}
-                description={
-                  urlEncodesSubdir ? "The URL already points to a subfolder, so this field is disabled" : undefined
-                }
+                description={subPathLock ? SUB_PATH_LOCK_REASON[subPathLock] : undefined}
               >
                 {({ ref, onChange, ...field }) => (
                   <Input
@@ -246,13 +268,28 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
                       onChange(event);
                       recomputePreview(form.getValues("skillUrl"), event.target.value);
                     }}
-                    disabled={urlEncodesSubdir}
+                    disabled={subPathLock !== null}
                   />
                 )}
               </FormField>
 
+              {urlPreview?.parsed.source === "archive" && (
+                <FormField
+                  control={form.control}
+                  name="sha256"
+                  label={labelWithHint(
+                    "Archive SHA-256 (Optional)",
+                    "Hex digest of the zip file. Claude Code refuses to install the archive if its checksum does not match.",
+                  )}
+                >
+                  {({ ref, ...field }) => (
+                    <Input {...field} ref={ref} placeholder="64 hex characters" className="rounded-lg font-mono" />
+                  )}
+                </FormField>
+              )}
+
               {urlPreview && (
-                <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-300">
+                <div className="rounded-lg border border-info/20 bg-info/10 px-3 py-2 text-sm text-info">
                   Detected: {urlPreview.label}
                 </div>
               )}
@@ -309,18 +346,14 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
                 label={labelWithHint("Category (Optional)", "Select a category or enter a custom one")}
               >
                 {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-                  <Combobox
-                    items={PREDEFINED_CATEGORIES}
-                    value={value === "" ? null : value}
-                    onValueChange={(category: string | null) => onChange(category ?? "")}
-                  >
+                  <Combobox items={PREDEFINED_CATEGORIES} value={value} onValueChange={onChange}>
                     <ComboboxInput
                       id={id}
                       aria-invalid={ariaInvalid}
                       aria-describedby={ariaDescribedBy}
                       placeholder="Select or type a category"
                       className="w-full rounded-lg"
-                      showClear={value !== ""}
+                      showClear={value != null && value !== ""}
                     />
                     <ComboboxContent>
                       <ComboboxEmpty>No matching categories</ComboboxEmpty>

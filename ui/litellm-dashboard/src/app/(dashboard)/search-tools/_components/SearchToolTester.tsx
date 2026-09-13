@@ -156,7 +156,7 @@ export const SearchToolTester: React.FC<SearchToolTesterProps> = ({ searchToolNa
                           {latestResults.latency !== undefined && (
                             <>
                               <span className="text-muted-foreground">•</span>
-                              <div className="text-sm font-semibold text-emerald-600">{latestResults.latency}ms</div>
+                              <div className="text-sm font-semibold text-success">{latestResults.latency}ms</div>
                             </>
                           )}
                         </div>
@@ -197,7 +197,7 @@ export const SearchToolTester: React.FC<SearchToolTesterProps> = ({ searchToolNa
                                 </Button>
                               </div>
 
-                              <div className="mb-3 truncate text-sm font-medium text-emerald-700">{result.url}</div>
+                              <div className="mb-3 truncate text-sm font-medium text-success">{result.url}</div>
 
                               <div className="text-sm leading-relaxed text-foreground">
                                 {isResultExpanded
@@ -258,7 +258,7 @@ export const SearchToolTester: React.FC<SearchToolTesterProps> = ({ searchToolNa
                           {entry.latency !== undefined && (
                             <>
                               <span>•</span>
-                              <span className="font-medium text-emerald-600">{entry.latency}ms</span>
+                              <span className="font-medium text-success">{entry.latency}ms</span>
                             </>
                           )}
                           <span>•</span>

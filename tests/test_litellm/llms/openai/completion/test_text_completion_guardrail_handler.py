@@ -2,14 +2,11 @@
 Unit tests for OpenAI Text Completion Guardrail Translation Handler
 """
 
-import os
-import sys
 from typing import List, Optional, Tuple
 from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms import get_guardrail_translation_mapping

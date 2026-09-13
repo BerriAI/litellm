@@ -1,12 +1,7 @@
-import os
 import re
-import sys
 
 from typing import get_type_hints
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 from litellm.types.utils import StandardLoggingPayload
 

@@ -6,6 +6,7 @@ but litellm_params["litellm_metadata"] is None.
 """
 
 import threading
+from typing import Final
 from types import SimpleNamespace
 
 import pytest
@@ -16,6 +17,7 @@ from litellm.litellm_core_utils.redact_messages import (
     _redact_responses_api_output,
     perform_redaction,
     redact_streaming_responses_for_custom_logger,
+    redacted_standard_logging_payload,
     should_redact_message_logging,
 )
 from litellm.responses.main import mock_responses_api_response
@@ -350,7 +352,7 @@ class TestPerformRedaction:
         redacted = perform_redaction({}, result)
 
         message = redacted["choices"][0]["message"]
-        assert message["content"] == "redacted-by-litellm"
+        assert message["content"] is None
         tool_call = message["tool_calls"][0]
         assert tool_call["function"]["arguments"] == "redacted-by-litellm"
         assert tool_call["function"]["name"] == "get_weather"
@@ -491,6 +493,76 @@ class TestPerformRedaction:
         assert redacted["output"][0]["arguments"] == "redacted-by-litellm"
         assert redacted["output"][0]["name"] == "get_weather"
 
+    def test_redacts_every_tool_call_in_multi_element_list(self):
+        result = litellm.ModelResponse(
+            id="resp-multi",
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": '{"city": "a"}'},
+                            },
+                            {
+                                "id": "call_2",
+                                "type": "function",
+                                "function": {"name": "get_time", "arguments": '{"tz": "b"}'},
+                            },
+                        ],
+                    )
+                )
+            ],
+            model="gpt-4o",
+        )
+
+        redacted = perform_redaction({}, result)
+
+        tool_calls = redacted.choices[0].message.tool_calls
+        assert tool_calls[0].function.arguments == "redacted-by-litellm"
+        assert tool_calls[1].function.arguments == "redacted-by-litellm"
+
+    def test_preserves_none_content_on_tool_call_only_message(self):
+        result = litellm.ModelResponse(
+            id="resp-none",
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": '{"city": "a"}'},
+                            }
+                        ],
+                    )
+                )
+            ],
+            model="gpt-4o",
+        )
+
+        redacted = perform_redaction({}, result)
+
+        assert redacted.choices[0].message.content is None
+
+    def test_redacts_responses_api_function_call_arguments_object(self):
+        output_item = SimpleNamespace(
+            type="function_call",
+            name="get_weather",
+            arguments='{"city": "sensitive-city"}',
+            call_id="call_1",
+        )
+
+        _redact_responses_api_output([output_item])
+
+        assert output_item.arguments == "redacted-by-litellm"
+        assert output_item.name == "get_weather"
+
     def test_redacts_response_output_objects_with_top_level_text(self):
         output_items = [
             SimpleNamespace(text="top-level output"),
@@ -501,6 +573,29 @@ class TestPerformRedaction:
 
         assert output_items[0].text == "redacted-by-litellm"
         assert output_items[1] == "non-dict output item"
+
+    def test_preserves_none_text_in_responses_output(self):
+        from litellm.litellm_core_utils.redact_messages import _redact_responses_api_output_dict
+
+        none_item = SimpleNamespace(type="output_text", text=None, content=[SimpleNamespace(text=None)])
+        real_item = SimpleNamespace(type="output_text", text="real answer", content=[SimpleNamespace(text="real part")])
+
+        _redact_responses_api_output([none_item, real_item])
+
+        assert none_item.text is None
+        assert none_item.content[0].text is None
+        assert real_item.text == "redacted-by-litellm"
+        assert real_item.content[0].text == "redacted-by-litellm"
+
+        none_dict = {"type": "output_text", "text": None, "content": [{"text": None}]}
+        real_dict = {"type": "output_text", "text": "real answer", "content": [{"text": "real part"}]}
+
+        _redact_responses_api_output_dict([none_dict, real_dict], "redacted-by-litellm")
+
+        assert none_dict["text"] is None
+        assert none_dict["content"][0]["text"] is None
+        assert real_dict["text"] == "redacted-by-litellm"
+        assert real_dict["content"][0]["text"] == "redacted-by-litellm"
 
     def test_skips_non_dict_response_output_items(self):
         result = {
@@ -765,3 +860,104 @@ class TestRedactStreamingResponsesForCustomLogger:
 
         assert result_details is model_call_details
         assert response_obj.choices[0].message.content == "secret content"
+
+
+@pytest.mark.parametrize("callback_only", [False, True])
+def test_classifier_audit_redaction_removes_both_fields_and_source_carrier(callback_only: bool) -> None:
+    audit: Final = {"classifier_input": {"system": "private rubric"}, "originating_request_masked": {"input": "private source"}}
+    standard_payload: Final = {
+        **audit,
+        "messages": [{"role": "user", "content": "private prompt"}],
+        "response": {"choices": [{"message": {"content": "private answer"}}]},
+        "model": "classifier",
+    }
+    details: Final = {
+        "standard_logging_object": standard_payload,
+        "litellm_params": {"proxy_server_request": {"body": {}, "originating_request_masked": audit["originating_request_masked"]}},
+    }
+    logger: Final = CustomLogger()
+    logger.turn_off_message_logging = True
+    if callback_only:
+        redacted: Final = logger.redact_standard_logging_payload_from_model_call_details(details)
+        assert "classifier_input" not in redacted["standard_logging_object"]
+        assert "originating_request_masked" not in redacted["standard_logging_object"]
+        assert "originating_request_masked" not in redacted["litellm_params"]["proxy_server_request"]
+        assert details["standard_logging_object"]["classifier_input"] == audit["classifier_input"]
+        assert details["litellm_params"]["proxy_server_request"]["originating_request_masked"] == audit["originating_request_masked"]
+    else:
+        perform_redaction(details, result=None)
+        assert "classifier_input" not in details["standard_logging_object"]
+        assert "originating_request_masked" not in details["standard_logging_object"]
+        assert "originating_request_masked" not in details["litellm_params"]["proxy_server_request"]
+
+    assert standard_payload["classifier_input"] == audit["classifier_input"]
+    assert standard_payload["originating_request_masked"] == audit["originating_request_masked"]
+    assert standard_payload["messages"][0]["content"] == "private prompt"
+    assert standard_payload["response"]["choices"][0]["message"]["content"] == "private answer"
+
+
+@pytest.mark.parametrize("excluded", [False, True])
+def test_classifier_callback_redaction_preserves_exclusions(monkeypatch: pytest.MonkeyPatch, excluded: bool) -> None:
+    monkeypatch.setattr(litellm, "standard_logging_payload_excluded_fields", ["messages", "response"] if excluded else [])
+    payload: Final = {
+        "classifier_input": {"system": "private rubric"},
+        "originating_request_masked": {"input": "private source"},
+        "messages": [{"role": "user", "content": "private prompt"}],
+        "response": {"choices": [{"message": {"content": "private answer"}}]},
+        "model": "classifier",
+    }
+    logger: Final = CustomLogger()
+    logger.turn_off_message_logging = True
+    redacted: Final = logger.redact_standard_logging_payload_from_model_call_details({"standard_logging_object": payload})
+    stored: Final = redacted["standard_logging_object"]
+    assert "classifier_input" not in stored
+    assert "originating_request_masked" not in stored
+    assert stored["model"] == "classifier"
+    assert ("messages" not in stored) is excluded
+    assert ("response" not in stored) is excluded
+    if not excluded:
+        assert stored["messages"][0]["content"] == "redacted-by-litellm"
+        assert stored["response"]["choices"][0]["message"]["content"] == "redacted-by-litellm"
+
+    failure_payload: Final = redacted_standard_logging_payload(payload)
+    assert "classifier_input" not in failure_payload
+    assert "originating_request_masked" not in failure_payload
+    assert failure_payload["messages"][0]["content"] == "redacted-by-litellm"
+    assert failure_payload["response"]["choices"][0]["message"]["content"] == "redacted-by-litellm"
+    assert payload["classifier_input"] == {"system": "private rubric"}
+    assert payload["response"]["choices"][0]["message"]["content"] == "private answer"
+
+
+class _SelfRedactingLogger(CustomLogger):
+    def redacts_messages_itself(self) -> bool:
+        return True
+
+
+@pytest.mark.parametrize("logger", [CustomLogger(), _SelfRedactingLogger()], ids=["default", "redacts_itself"])
+def test_field_exclusion_alone_leaves_messages_and_responses_intact(monkeypatch: pytest.MonkeyPatch, logger: CustomLogger) -> None:
+    monkeypatch.setattr(litellm, "standard_logging_payload_excluded_fields", ["model"])
+    payload: Final = {
+        "messages": [{"role": "user", "content": "private prompt"}],
+        "response": {"choices": [{"message": {"content": "private answer"}}]},
+        "model": "classifier",
+    }
+    stored: Final = logger.redact_standard_logging_payload_from_model_call_details({"standard_logging_object": payload})[
+        "standard_logging_object"
+    ]
+    assert stored == {"messages": payload["messages"], "response": payload["response"]}
+
+
+def test_a_callback_that_redacts_itself_keeps_its_messages_but_not_the_classifier_audit() -> None:
+    payload: Final = {
+        "classifier_input": {"system": "private rubric"},
+        "messages": [{"role": "user", "content": "private prompt"}],
+        "response": {"choices": [{"message": {"content": "private answer"}}]},
+    }
+    logger: Final = _SelfRedactingLogger()
+    logger.turn_off_message_logging = True
+    stored: Final = logger.redact_standard_logging_payload_from_model_call_details({"standard_logging_object": payload})[
+        "standard_logging_object"
+    ]
+    assert "classifier_input" not in stored
+    assert stored["messages"] == payload["messages"]
+    assert stored["response"] == payload["response"]

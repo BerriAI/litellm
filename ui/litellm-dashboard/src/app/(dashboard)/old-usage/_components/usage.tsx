@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 
 import ViewUserSpend from "@/components/view_user_spend";
-import { ProxySettings } from "@/components/user_dashboard";
+import { ProxySettings } from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,7 +17,7 @@ import {
   ComboboxValue,
   useComboboxAnchor,
 } from "@/components/ui/combobox";
-import { Meter, MeterIndicator, MeterTrack } from "@/components/ui/meter";
+import { Meter, MeterIndicator, MeterTrack } from "@/components/shared/Meter";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";

@@ -26,6 +26,10 @@ external = [
 # caught a real mismatch, confirming Any is correct here, not a shortcut.
 "litellm/litellm_core_utils/litellm_logging.py" = ["ANN401"]
 "litellm/utils.py" = ["ANN401"]
+# `**kwargs` forwards verbatim to CustomGuardrail.__init__, whose param list is wide and
+# grows over time; typing it concretely (`object`) broke that forwarding call outright —
+# basedpyright turned every named param into a reportArgumentType error. Any is correct here.
+"litellm/proxy/guardrails/guardrail_hooks/alice/alice.py" = ["ANN401"]
 
 [lint.mccabe]
 max-complexity = 15

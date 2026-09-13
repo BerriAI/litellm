@@ -32,6 +32,8 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails._content_utils import (
     apply_redacted_messages_back,
     build_inspection_messages,
+    is_non_conversational_call_type,
+    is_string_batch_input,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
@@ -99,8 +101,15 @@ class CatoNetworksGuardrail(CustomGuardrail):
             GuardrailEventHooks.post_call,
         ]
 
-    def __init__(self, api_key: str | None = None, api_base: str | None = None, **kwargs):
+    def __init__(
+        self,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        inspect_embeddings: bool | None = None,
+        **kwargs,
+    ):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
+        self.inspect_embeddings: Final = inspect_embeddings is True
         ssl_verify: Final = kwargs.pop("ssl_verify", None)
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
@@ -154,6 +163,10 @@ class CatoNetworksGuardrail(CustomGuardrail):
         call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         verbose_proxy_logger.debug("Inside Cato Pre-Call Hook")
+        # /embeddings carries documents being indexed, not a conversation to inspect.
+        if is_non_conversational_call_type(call_type) and not self.inspect_embeddings:
+            verbose_proxy_logger.debug("Cato: skipping non-conversational call type %s", call_type)
+            return data
         return await self.call_cato_guardrail(
             data,
             hook="pre_call",
@@ -168,6 +181,9 @@ class CatoNetworksGuardrail(CustomGuardrail):
         call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         verbose_proxy_logger.debug("Inside Cato Moderation Hook")
+        if is_non_conversational_call_type(call_type) and not self.inspect_embeddings:
+            verbose_proxy_logger.debug("Cato: skipping non-conversational call type %s", call_type)
+            return data
         return await self.call_cato_guardrail(
             data,
             hook="moderation",
@@ -299,7 +315,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
             return data
         if action_type == "monitor_action":
             verbose_proxy_logger.info("Cato: monitor action")
-        elif action_type == "block_action":
+        elif action_type == "block_action" and required_action is not None:
             self._handle_block_action(res.get("analysis_result", {}), required_action)
         elif action_type == "anonymize_action":
             return self._anonymize_request(res, data)
@@ -310,7 +326,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
     def _handle_block_action(
         self,
         analysis_result: _CatoAnalysisResult,
-        required_action: Any,
+        required_action: _CatoRequiredAction,
     ) -> None:
         detection_message: Final = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
@@ -327,6 +343,16 @@ class CatoNetworksGuardrail(CustomGuardrail):
             return data
         redacted_messages: Final = redacted_chat.get("all_redacted_messages") or []
         original_messages: Final = data.get("messages")
+        sources: Final = self._extra_inspection_sources(data)
+        if is_string_batch_input(data) and len(redacted_messages) != sum(len(messages) for _, messages in sources):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Cato: anonymize action returned a redacted batch of a different "
+                    "size than the inspected input, so the request cannot be rewritten "
+                    "without forwarding unredacted text."
+                ),
+            )
         offset = 0
         if original_messages:
             data["messages"] = [
@@ -338,26 +364,40 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 for idx, original in enumerate(original_messages)
             ]
             offset = len(original_messages)
-        for field, messages in self._extra_inspection_sources(data):
+        for field, messages in sources:
             redacted_slice = redacted_messages[offset : offset + len(messages)]
             offset += len(messages)
-            if redacted_slice:
-                self._apply_extra_redaction(data, field, redacted_slice)
+            if not self._apply_extra_redaction(data, field, redacted_slice):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Cato: anonymize action returned a redacted batch of a different "
+                        "size than the inspected input, so the request cannot be rewritten "
+                        "without forwarding unredacted text."
+                    ),
+                )
         return data
 
     @classmethod
-    def _apply_extra_redaction(cls, data: dict, field: str, redacted: list) -> None:
+    def _apply_extra_redaction(cls, data: dict, field: str, redacted: list) -> bool:
         if field == "input":
             input_only: Final = {"input": data["input"]}
-            apply_redacted_messages_back(input_only, redacted)
+            if not redacted:
+                return not is_string_batch_input(input_only)
+            if not apply_redacted_messages_back(input_only, redacted):
+                return False
             data["input"] = input_only["input"]
-        elif field == "instructions":
+            return True
+        if not redacted:
+            return True
+        if field == "instructions":
             if redacted[0].get("content") is not None:
                 data["instructions"] = redacted[0]["content"]
         elif field == "prompt":
             cls._apply_prompt_redaction(data, redacted)
         elif field == "schema_strings":
             cls._apply_schema_string_redaction(data, redacted)
+        return True
 
     @classmethod
     def _apply_schema_string_redaction(cls, data: dict, redacted: list) -> None:
@@ -410,7 +450,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         res: Final[_CatoAnalyzeResponse] = response.json()
         required_action: Final = res.get("required_action")
         action_type: Final = required_action and required_action.get("action_type", None)
-        if action_type and action_type == "block_action":
+        if action_type == "block_action" and required_action is not None:
             self._handle_block_action_on_output(res.get("analysis_result", {}), required_action)
         redacted_chat: Final = res.get("redacted_chat", None)
 
@@ -425,7 +465,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
     def _handle_block_action_on_output(
         self,
         analysis_result: _CatoAnalysisResult,
-        required_action: Any,
+        required_action: _CatoRequiredAction,
     ) -> None:
         detection_message: Final = required_action.get("detection_message", None)
         verbose_proxy_logger.info(

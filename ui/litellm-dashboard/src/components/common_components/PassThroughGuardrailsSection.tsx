@@ -4,7 +4,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 
 import GuardrailSelector from "../guardrails/GuardrailSelector";
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
-import { Field, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -75,7 +75,7 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
               href="https://docs.litellm.ai/docs/proxy/pass_through_guardrails#field-level-targeting"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-blue-600 underline hover:text-blue-800"
+              className="text-info underline hover:text-info/80"
             >
               (Learn More)
             </a>

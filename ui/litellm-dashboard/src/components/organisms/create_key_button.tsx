@@ -11,15 +11,23 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
-import { Field, FieldLabel } from "@/components/shared/form/field";
-import { Input as AntdInput, Radio, Select, Switch, Tag, Tooltip, Typography } from "antd";
+import { Field, FieldLabel } from "@/components/ui/field";
+import { Badge } from "@/components/ui/badge";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
+import { SimpleTooltip } from "@/components/ui/tooltip";
+import { MultiSelect, type MultiSelectOption } from "@/components/shared/MultiSelect";
+import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
+import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
+import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
 import { ChevronDown, Info } from "lucide-react";
-import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
-import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { type Control, useForm, useWatch, type UseFormSetValue } from "react-hook-form";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
+import SkillSelector from "../skills/SkillSelector";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 import SchemaFormFields from "../common_components/check_openapi_schema";
@@ -35,13 +43,17 @@ import {
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 import PremiumLoggingSettings from "../common_components/PremiumLoggingSettings";
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
-import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
+import RouterSettingsAccordion, {
+  RouterSettingsAccordionRef,
+  RouterSettingsAccordionValue,
+} from "../common_components/RouterSettingsAccordion";
 import TeamDropdown from "../common_components/team_dropdown";
 import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import ProjectDropdown from "../common_components/ProjectDropdown";
 import { CreateUserButton } from "../CreateUserButton";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
+import { ModelMaxBudget, ModelMaxBudgetEditor } from "../key_team_helpers/ModelMaxBudgetEditor";
 import { TagRateLimitEditor, TagRateLimitEntry } from "../key_team_helpers/TagRateLimitEditor";
 import {
   excludeProxyWideSentinel,
@@ -50,7 +62,6 @@ import {
 } from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
-import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import { toast } from "@/lib/toast";
 import {
@@ -72,7 +83,13 @@ import { buildKeyCreatePayload, type KeyCreateInput } from "./createKeyPayload";
 import { simplifyKeyGenerateError } from "./utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
-const { Option } = Select;
+const KEY_TYPE_OPTIONS = [
+  { value: "llm_api", label: "AI APIs", hint: "Can call only AI API routes (chat/completions, embeddings, etc.)" },
+  { value: "management", label: "Management", hint: "Can call only management routes (user/team/key management)" },
+  { value: "default", label: "Full Access", hint: "Can call all routes (AI APIs, Management, and read-only)" },
+];
+
+const KEY_OWNER_LABEL_CLASS = "flex items-center gap-2 text-sm font-normal text-foreground";
 
 const SECTION_HEADER_CLASS = "group/section flex w-full items-center justify-between px-4 py-3 text-left";
 const SECTION_CHEVRON_CLASS =
@@ -102,14 +119,18 @@ interface McpToolPermissionsFieldProps {
 }
 
 const McpToolPermissionsField: React.FC<McpToolPermissionsFieldProps> = ({ accessToken, control, setValue }) => {
-  const selection = useWatch({ control, name: "allowed_mcp_servers_and_groups" }) as { servers?: string[] } | undefined;
+  const selection = useWatch({ control, name: "allowed_mcp_servers_and_groups" }) as
+    | { servers?: string[]; accessGroups?: string[]; toolsets?: string[] }
+    | undefined;
   const toolPermissions = useWatch({ control, name: "mcp_tool_permissions" }) as Record<string, string[]> | undefined;
 
   return (
     <div className="mt-6">
       <MCPToolPermissions
         accessToken={accessToken}
-        selectedServers={(selection?.servers || []).filter((s: string) => s !== NO_MCP_SERVERS_SENTINEL)}
+        selectedServers={selection?.servers || []}
+        selectedAccessGroups={selection?.accessGroups || []}
+        selectedToolsets={selection?.toolsets || []}
         toolPermissions={toolPermissions || {}}
         onChange={(toolPerms) => setValue("mcp_tool_permissions", toolPerms)}
       />
@@ -141,12 +162,6 @@ interface User {
   user_id: string;
   user_email: string;
   role?: string;
-}
-
-interface UserOption {
-  label: string;
-  value: string;
-  user: User;
 }
 
 export const fetchTeamModels = async (
@@ -244,7 +259,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
   const [possibleUIRoles, setPossibleUIRoles] = useState<Record<string, Record<string, string>>>({});
-  const [userOptions, setUserOptions] = useState<UserOption[]>([]);
+  const [userOptions, setUserOptions] = useState<SearchSelectOption[]>([]);
   const [userSearchLoading, setUserSearchLoading] = useState<boolean>(false);
   const latestUserSearchRef = useRef(0);
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
@@ -253,7 +268,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(false);
   const [rotationInterval, setRotationInterval] = useState<string>("30d");
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
+  const routerSettingsRef = useRef<RouterSettingsAccordionRef>(null);
   const [budgetLimits, setBudgetLimits] = useState<BudgetWindowEntry[]>([]);
+  const [modelMaxBudget, setModelMaxBudget] = useState<ModelMaxBudget>({});
   const [tagRateLimits, setTagRateLimits] = useState<TagRateLimitEntry[]>([]);
   const [budgetFallbacks, setBudgetFallbacks] = useState<Record<string, string[]>>({});
   const [budgetFallbacksKey, setBudgetFallbacksKey] = useState<number>(0);
@@ -321,7 +338,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     const fetchPrompts = async () => {
       try {
         const response = await getPromptsList(accessToken);
-        setPromptsList(response.prompts.map((prompt) => prompt.prompt_id));
+        setPromptsList(Array.from(new Set(response.prompts.map((prompt) => prompt.prompt_id))));
       } catch (error) {
         console.error("Failed to fetch prompts:", error);
       }
@@ -421,8 +438,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
         autoRotationEnabled,
         rotationInterval,
         modelAliases,
-        routerSettings,
+        routerSettings: routerSettingsRef.current?.getValue() ?? routerSettings,
         budgetLimits,
+        modelMaxBudget,
         tagRateLimits,
         budgetFallbacks,
       };
@@ -469,7 +487,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     }
   };
 
-  const handleSubmit = form.handleSubmit(() => handleCreate(projectMountedValues(registry, form.getValues)));
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) =>
+    void form.handleSubmit(() => handleCreate(projectMountedValues(registry, form.getValues)))(event);
 
   // Fetch available models when team or auth changes.
   // Note: Model prefill from URL params is handled by the useEffect below, which
@@ -558,10 +577,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       if (!isLatestSearch()) return;
 
       const data: User[] = response;
-      const options: UserOption[] = data.map((user) => ({
+      const options: SearchSelectOption[] = data.map((user) => ({
         label: `${user.user_email} (${user.user_id})`,
         value: user.user_id,
-        user,
       }));
 
       setUserOptions(options);
@@ -573,47 +591,54 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     }
   };
 
-  const handleUserSearch = useDebouncedCallback((text: string) => fetchUsers(text), { wait: DEBOUNCE_WAIT_MS });
-
-  const handleUserSelect = (_value: string, option: UserOption): void => {
-    const selectedUser = option.user;
-    form.setValue("user_id", selectedUser.user_id);
-  };
-
-  const changeOrganization = (write: FieldWrite) => (orgId: string) => {
+  const changeOrganization = (write: FieldWrite) => (orgId: string | null) => {
     write(orgId);
-    setSelectedOrganizationId(orgId || null);
+    setSelectedOrganizationId(orgId);
     // Clear team and project when org changes
     setSelectedCreateKeyTeam(null);
     setSelectedProjectId(null);
-    form.setValue("team_id", undefined);
-    form.setValue("project_id", undefined);
+    form.setValue("team_id", null);
+    form.setValue("project_id", null);
   };
 
   const selectTeam = (team: Team | null) => {
     setSelectedCreateKeyTeam(team);
     setSelectedProjectId(null);
-    form.setValue("project_id", undefined);
+    form.setValue("project_id", null);
     // Auto-populate org from team for non-admin users
     if (team?.organization_id) {
       setSelectedOrganizationId(team.organization_id);
       form.setValue("organization_id", team.organization_id);
     } else if (!team) {
       setSelectedOrganizationId(null);
-      form.setValue("organization_id", undefined);
+      form.setValue("organization_id", null);
     }
   };
 
-  const changeProject = (write: FieldWrite) => (projectId: string) => {
+  const changeProject = (write: FieldWrite) => (projectId: string | null) => {
     write(projectId);
     if (!projectId) {
       setSelectedProjectId(null);
       setSelectedCreateKeyTeam(null);
-      form.setValue("team_id", undefined);
+      form.setValue("team_id", null);
       return;
     }
     setSelectedProjectId(projectId);
   };
+
+  const modelOptions: MultiSelectOption[] = [
+    ...(selectedProjectId === null && selectedCreateKeyTeam
+      ? [{ value: "all-team-models", label: "All Team Models" }]
+      : []),
+    ...(selectedProjectId === null && !selectedCreateKeyTeam
+      ? [{ value: "all-proxy-models", label: "All Proxy Models" }]
+      : []),
+    ...modelsToPick.map((model) => ({
+      value: model,
+      label: getModelDisplayName(model),
+      disabled: hasAllModelsSentinel(selectedModels),
+    })),
+  ];
 
   const changeKeyType = (write: FieldWrite) => (value: string) => {
     write(value);
@@ -645,19 +670,35 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   <FieldLabel>
                     <span>
                       Owned By{" "}
-                      <Tooltip title="Select who will own this Virtual Key">
+                      <SimpleTooltip content="Select who will own this Virtual Key">
                         <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                      </Tooltip>
+                      </SimpleTooltip>
                     </span>
                   </FieldLabel>
-                  <Radio.Group onChange={(e) => setKeyOwner(e.target.value)} value={keyOwner}>
-                    <Radio value="you">You</Radio>
-                    <Radio value="service_account">Service Account</Radio>
-                    {userRole === "Admin" && <Radio value="another_user">Another User</Radio>}
-                    <Radio value="agent">
-                      Agent <Tag color="purple">New</Tag>
-                    </Radio>
-                  </Radio.Group>
+                  <RadioGroup
+                    className="flex flex-wrap items-center gap-4"
+                    value={keyOwner}
+                    onValueChange={(value: unknown) => setKeyOwner(String(value))}
+                  >
+                    <label className={KEY_OWNER_LABEL_CLASS}>
+                      <RadioGroupItem value="you" />
+                      You
+                    </label>
+                    <label className={KEY_OWNER_LABEL_CLASS}>
+                      <RadioGroupItem value="service_account" />
+                      Service Account
+                    </label>
+                    {userRole === "Admin" && (
+                      <label className={KEY_OWNER_LABEL_CLASS}>
+                        <RadioGroupItem value="another_user" />
+                        Another User
+                      </label>
+                    )}
+                    <label className={KEY_OWNER_LABEL_CLASS}>
+                      <RadioGroupItem value="agent" />
+                      Agent <Badge>New</Badge>
+                    </label>
+                  </RadioGroup>
                 </Field>
 
                 {keyOwner === "another_user" && (
@@ -665,9 +706,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     label={
                       <span>
                         User ID{" "}
-                        <Tooltip title="The user who will own this key and be responsible for its usage">
+                        <SimpleTooltip content="The user who will own this key and be responsible for its usage">
                           <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                        </Tooltip>
+                        </SimpleTooltip>
                       </span>
                     }
                     name="user_id"
@@ -679,25 +720,21 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     )}
                   >
                     {(control) => (
-                      <div
-                        id={control.id}
-                        aria-required={control["aria-required"]}
-                        aria-invalid={control["aria-invalid"]}
-                        aria-describedby={control["aria-describedby"]}
-                        onChange={control.onChange}
-                      >
-                        <div style={{ display: "flex", marginBottom: "8px" }}>
-                          <Select
-                            showSearch
-                            placeholder="Type email to search for users"
-                            filterOption={false}
-                            onSearch={handleUserSearch}
-                            onSelect={(value, option) => handleUserSelect(value, option as UserOption)}
+                      <div>
+                        <div className="mb-2 flex">
+                          <PaginatedSearchSelect
                             options={userOptions}
-                            loading={userSearchLoading}
-                            allowClear
-                            style={{ width: "100%" }}
-                            notFoundContent={userSearchLoading ? "Searching..." : "No users found"}
+                            value={typeof control.value === "string" ? control.value : undefined}
+                            onValueChange={control.onChange}
+                            onSearchChange={fetchUsers}
+                            isLoading={userSearchLoading}
+                            placeholder="Type email to search for users"
+                            emptyText="No users found"
+                            loadingText="Searching..."
+                            inputId={control.id}
+                            aria-required={control["aria-required"] === "true" ? true : undefined}
+                            aria-invalid={control["aria-invalid"] === "true" ? true : undefined}
+                            aria-describedby={control["aria-describedby"]}
                           />
                           <Button variant="outline" className="ml-2" onClick={() => setIsCreateUserModalVisible(true)}>
                             Create User
@@ -709,21 +746,18 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   </MountedFormField>
                 )}
                 {keyOwner === "agent" && (
-                  <div className="mt-4 p-4 bg-purple-50 border border-purple-200 rounded-md">
+                  <div className="mt-4 p-4 bg-purple-50 border border-purple-200 rounded-md dark:bg-purple-950 dark:border-purple-800">
                     <div className="mb-3">
-                      <span className="text-sm font-medium text-foreground">
+                      <label htmlFor="create-key-agent" className="text-sm font-medium text-foreground">
                         Select Agent <span className="text-destructive">*</span>
-                      </span>
+                      </label>
                     </div>
-                    <Select
-                      showSearch
+                    <SearchSelect
+                      inputId="create-key-agent"
                       placeholder="Select an agent"
-                      style={{ width: "100%" }}
+                      emptyText="No agents found"
                       value={selectedAgentId}
-                      onChange={(value) => setSelectedAgentId(value)}
-                      filterOption={(input, option) =>
-                        (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
-                      }
+                      onValueChange={setSelectedAgentId}
                       options={agentsList.map((a) => ({
                         label: a.agent_name || a.agent_id,
                         value: a.agent_id,
@@ -738,9 +772,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   label={
                     <span>
                       Organization{" "}
-                      <Tooltip title="The organization this key belongs to. Selecting an organization filters the available teams.">
+                      <SimpleTooltip content="The organization this key belongs to. Selecting an organization filters the available teams.">
                         <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                      </Tooltip>
+                      </SimpleTooltip>
                     </span>
                   }
                   name="organization_id"
@@ -749,7 +783,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   {(control) => (
                     <OrganizationDropdown
                       id={control.id}
-                      value={control.value as string | undefined}
+                      value={typeof control.value === "string" ? control.value : null}
                       organizations={organizations}
                       loading={isOrganizationsLoading}
                       disabled={userRole !== "Admin"}
@@ -761,9 +795,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   label={
                     <span>
                       Team{" "}
-                      <Tooltip title="The team this key belongs to, which determines available models and budget limits">
+                      <SimpleTooltip content="The team this key belongs to, which determines available models and budget limits">
                         <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                      </Tooltip>
+                      </SimpleTooltip>
                     </span>
                   }
                   name="team_id"
@@ -775,7 +809,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   {(control) => (
                     <TeamDropdown
                       id={control.id}
-                      value={control.value as string | undefined}
+                      value={typeof control.value === "string" ? control.value : null}
                       onChange={control.onChange}
                       disabled={selectedProjectId !== null}
                       organizationId={selectedOrganizationId}
@@ -788,9 +822,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     label={
                       <span>
                         Project{" "}
-                        <Tooltip title="Assign this key to a project. Selecting a project will lock the team to the project's team.">
+                        <SimpleTooltip content="Assign this key to a project. Selecting a project will lock the team to the project's team.">
                           <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                        </Tooltip>
+                        </SimpleTooltip>
                       </span>
                     }
                     name="project_id"
@@ -799,7 +833,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     {(control) => (
                       <ProjectDropdown
                         id={control.id}
-                        value={control.value as string | undefined}
+                        value={typeof control.value === "string" ? control.value : null}
                         projects={projects}
                         teamId={selectedCreateKeyTeam?.team_id}
                         loading={isProjectsLoading || !teams}
@@ -812,8 +846,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
               {/* Show message when team selection is required */}
               {isFormDisabled && (
-                <div className="mb-8 p-4 bg-blue-50 border border-blue-200 rounded-md">
-                  <p className="text-blue-800 text-sm">
+                <div className="mb-8 p-4 bg-info/10 border border-info/20 rounded-md">
+                  <p className="text-info text-sm">
                     Please select a team to continue configuring your Virtual Key. If you do not see any teams, please
                     contact your Proxy Admin to either provide you with access to models or to add you to a team.
                   </p>
@@ -828,15 +862,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     label={
                       <span>
                         {keyOwner === "you" || keyOwner === "another_user" ? "Key Name" : "Service Account ID"}{" "}
-                        <Tooltip
-                          title={
+                        <SimpleTooltip
+                          content={
                             keyOwner === "you" || keyOwner === "another_user"
                               ? "A descriptive name to identify this key"
                               : "Unique identifier for this service account"
                           }
                         >
                           <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                        </Tooltip>
+                        </SimpleTooltip>
                       </span>
                     }
                     name="key_alias"
@@ -854,9 +888,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     label={
                       <span>
                         Models{" "}
-                        <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team. Leave empty to allow access to all models.">
+                        <SimpleTooltip content="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team. Leave empty to allow access to all models.">
                           <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                        </Tooltip>
+                        </SimpleTooltip>
                       </span>
                     }
                     name="models"
@@ -868,14 +902,13 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     className="mt-4"
                   >
                     {(control) => (
-                      <Select
-                        {...control}
-                        value={control.value as string[] | undefined}
-                        mode="multiple"
+                      <MultiSelect
+                        id={control.id}
+                        options={modelOptions}
+                        value={(control.value as string[] | undefined) ?? []}
                         placeholder="Select models"
-                        style={{ width: "100%" }}
                         disabled={keyType === "management" || keyType === "read_only"}
-                        onChange={(values: string[]) => {
+                        onValueChange={(values) => {
                           control.onChange(values);
                           if (values.includes("all-team-models")) {
                             form.setValue("models", ["all-team-models"]);
@@ -883,23 +916,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                             form.setValue("models", ["all-proxy-models"]);
                           }
                         }}
-                      >
-                        {!selectedProjectId && selectedCreateKeyTeam && (
-                          <Option key="all-team-models" value="all-team-models">
-                            All Team Models
-                          </Option>
-                        )}
-                        {!selectedProjectId && !selectedCreateKeyTeam && (
-                          <Option key="all-proxy-models" value="all-proxy-models">
-                            All Proxy Models
-                          </Option>
-                        )}
-                        {modelsToPick.map((model: string) => (
-                          <Option key={model} value={model} disabled={hasAllModelsSentinel(selectedModels)}>
-                            {getModelDisplayName(model)}
-                          </Option>
-                        ))}
-                      </Select>
+                      />
                     )}
                   </MountedFormField>
 
@@ -907,9 +924,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     label={
                       <span>
                         Key Type{" "}
-                        <Tooltip title="Select the type of key to determine what routes and operations this key can access">
+                        <SimpleTooltip content="Select the type of key to determine what routes and operations this key can access">
                           <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                        </Tooltip>
+                        </SimpleTooltip>
                       </span>
                     }
                     name="key_type"
@@ -917,37 +934,30 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   >
                     {(control) => (
                       <Select
-                        {...control}
+                        items={KEY_TYPE_OPTIONS}
                         value={control.value as string | undefined}
-                        placeholder="Select key type"
-                        style={{ width: "100%" }}
-                        optionLabelProp="label"
-                        onChange={changeKeyType(control.onChange)}
+                        onValueChange={(value: string | null) =>
+                          value != null && changeKeyType(control.onChange)(value)
+                        }
                       >
-                        <Option value="llm_api" label="AI APIs">
-                          <div style={{ padding: "4px 0" }}>
-                            <Typography.Text strong>AI APIs</Typography.Text>
-                            <Typography.Paragraph type="secondary" style={{ fontSize: 11, margin: "2px 0 0" }}>
-                              Can call only AI API routes (chat/completions, embeddings, etc.)
-                            </Typography.Paragraph>
-                          </div>
-                        </Option>
-                        <Option value="management" label="Management">
-                          <div style={{ padding: "4px 0" }}>
-                            <Typography.Text strong>Management</Typography.Text>
-                            <Typography.Paragraph type="secondary" style={{ fontSize: 11, margin: "2px 0 0" }}>
-                              Can call only management routes (user/team/key management)
-                            </Typography.Paragraph>
-                          </div>
-                        </Option>
-                        <Option value="default" label="Full Access">
-                          <div style={{ padding: "4px 0" }}>
-                            <Typography.Text strong>Full Access</Typography.Text>
-                            <Typography.Paragraph type="secondary" style={{ fontSize: 11, margin: "2px 0 0" }}>
-                              Can call all routes (AI APIs, Management, and read-only)
-                            </Typography.Paragraph>
-                          </div>
-                        </Option>
+                        <SelectTrigger
+                          id={control.id}
+                          className="w-full"
+                          aria-invalid={control["aria-invalid"]}
+                          aria-describedby={control["aria-describedby"]}
+                        >
+                          <SelectValue placeholder="Select key type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {KEY_TYPE_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              <div className="py-1">
+                                <div className="font-medium">{option.label}</div>
+                                <div className="mt-0.5 text-[11px] text-muted-foreground">{option.hint}</div>
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
                       </Select>
                     )}
                   </MountedFormField>
@@ -970,9 +980,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         label={
                           <span>
                             Max Budget (USD){" "}
-                            <Tooltip title="Maximum amount in USD this key can spend. When reached, the key will be blocked from making further requests">
+                            <SimpleTooltip content="Maximum amount in USD this key can spend. When reached, the key will be blocked from making further requests">
                               <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                            </Tooltip>
+                            </SimpleTooltip>
                           </span>
                         }
                         name="max_budget"
@@ -997,9 +1007,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         label={
                           <span>
                             Reset Budget{" "}
-                            <Tooltip title="How often the budget should reset. For example, setting 'daily' will reset the budget every 24 hours">
+                            <SimpleTooltip content="How often the budget should reset. For example, setting 'daily' will reset the budget every 24 hours">
                               <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                            </Tooltip>
+                            </SimpleTooltip>
                           </span>
                         }
                         name="budget_duration"
@@ -1011,7 +1021,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                             value={control.value as string | null | undefined}
                             showNeverResets
                             placeholder="Not set"
-                            onChange={control.onChange}
+                            onChange={(next) => control.onChange(next ?? undefined)}
                           />
                         )}
                       </MountedFormField>
@@ -1019,9 +1029,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         <FieldLabel>
                           <span>
                             Budget Windows{" "}
-                            <Tooltip title="Set multiple independent budget windows (e.g., hourly $10 AND monthly $200). Each window tracks spend separately and resets on its own schedule.">
+                            <SimpleTooltip content="Set multiple independent budget windows (e.g., hourly $10 AND monthly $200). Each window tracks spend separately and resets on its own schedule.">
                               <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                            </Tooltip>
+                            </SimpleTooltip>
                           </span>
                         </FieldLabel>
                         <BudgetWindowsEditor value={budgetLimits} onChange={setBudgetLimits} />
@@ -1029,10 +1039,26 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                       <Field className="mt-4">
                         <FieldLabel>
                           <span>
-                            Budget Fallbacks{" "}
-                            <Tooltip title="When a model exceeds its per-model budget (model_max_budget), requests automatically reroute to fallback models instead of failing. Configure per-model budgets in Advanced Settings.">
+                            Per-Model Budgets{" "}
+                            <SimpleTooltip content="Cap spend on individual models, each with its own reset window. Enforced across every request this key makes; usage is reported on the key's info page.">
                               <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                            </Tooltip>
+                            </SimpleTooltip>
+                          </span>
+                        </FieldLabel>
+                        <ModelMaxBudgetEditor
+                          value={modelMaxBudget}
+                          onChange={setModelMaxBudget}
+                          availableModels={modelsToPick}
+                          premiumUser={premiumUser === true}
+                        />
+                      </Field>
+                      <Field className="mt-4">
+                        <FieldLabel>
+                          <span>
+                            Budget Fallbacks{" "}
+                            <SimpleTooltip content="When a model exceeds its per-model budget (model_max_budget), requests automatically reroute to fallback models instead of failing. Configure per-model budgets in Advanced Settings.">
+                              <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                            </SimpleTooltip>
                           </span>
                         </FieldLabel>
                         <BudgetFallbacksEditor
@@ -1047,9 +1073,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         label={
                           <span>
                             Tokens per minute Limit (TPM){" "}
-                            <Tooltip title="Maximum number of tokens this key can process per minute. Helps control usage and costs">
+                            <SimpleTooltip content="Maximum number of tokens this key can process per minute. Helps control usage and costs">
                               <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                            </Tooltip>
+                            </SimpleTooltip>
                           </span>
                         }
                         name="tpm_limit"
@@ -1088,9 +1114,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         label={
                           <span>
                             Requests per minute Limit (RPM){" "}
-                            <Tooltip title="Maximum number of API requests this key can make per minute. Helps prevent abuse and manage load">
+                            <SimpleTooltip content="Maximum number of API requests this key can make per minute. Helps prevent abuse and manage load">
                               <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                            </Tooltip>
+                            </SimpleTooltip>
                           </span>
                         }
                         name="rpm_limit"
@@ -1128,9 +1154,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         <FieldLabel>
                           <span>
                             Per-Tag Rate Limits{" "}
-                            <Tooltip title="Scope rate limits to a request tag so each tag (e.g. a cell or group) gets its own RPM counter. Requests without a matching tag fall back to the key-level limit.">
+                            <SimpleTooltip content="Scope rate limits to a request tag so each tag (e.g. a cell or group) gets its own RPM counter. Requests without a matching tag fall back to the key-level limit.">
                               <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                            </Tooltip>
+                            </SimpleTooltip>
                           </span>
                         </FieldLabel>
                         <TagRateLimitEditor value={tagRateLimits} onChange={setTagRateLimits} />
@@ -1140,9 +1166,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         label={
                           <span>
                             Throttle on budget exceeded{" "}
-                            <Tooltip title="When this key exceeds its max budget, throttle its TPM/RPM to the globally configured percentage instead of blocking access entirely. Requires budget_exceeded_throttle_percentage in litellm_settings and a TPM/RPM limit on the key.">
+                            <SimpleTooltip content="When this key exceeds its max budget, throttle its TPM/RPM to the globally configured percentage instead of blocking access entirely. Requires budget_exceeded_throttle_percentage in litellm_settings and a TPM/RPM limit on the key.">
                               <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                            </Tooltip>
+                            </SimpleTooltip>
                           </span>
                         }
                         name="throttle_on_budget_exceeded"
@@ -1150,10 +1176,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         {(control) => (
                           <Switch
                             id={control.id}
-                            checked={control.value as boolean | undefined}
-                            onChange={control.onChange}
-                            checkedChildren="Yes"
-                            unCheckedChildren="No"
+                            checked={control.value === true}
+                            onCheckedChange={control.onChange}
+                            aria-describedby={control["aria-describedby"]}
                           />
                         )}
                       </MountedFormField>
@@ -1162,9 +1187,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         label={
                           <span>
                             Enable Prompt Caching{" "}
-                            <Tooltip title="Automatically add prompt caching breakpoints (cache_control markers) to requests made with this key, cutting input cost on repeated prompts. Applies to Anthropic and Bedrock Claude models; requests that already set their own cache_control markers are left untouched.">
+                            <SimpleTooltip content="Automatically add prompt caching breakpoints (cache_control markers) to requests made with this key, cutting input cost on repeated prompts. Applies to Anthropic and Bedrock Claude models; requests that already set their own cache_control markers are left untouched.">
                               <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                            </Tooltip>
+                            </SimpleTooltip>
                           </span>
                         }
                         name="enable_prompt_caching"
@@ -1172,10 +1197,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         {(control) => (
                           <Switch
                             id={control.id}
-                            checked={control.value as boolean | undefined}
-                            onChange={control.onChange}
-                            checkedChildren="Yes"
-                            unCheckedChildren="No"
+                            checked={control.value === true}
+                            onCheckedChange={control.onChange}
+                            aria-describedby={control["aria-describedby"]}
                           />
                         )}
                       </MountedFormField>
@@ -1183,7 +1207,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         label={
                           <span>
                             Guardrails{" "}
-                            <Tooltip title="Apply safety guardrails to this key to filter content or enforce policies">
+                            <SimpleTooltip content="Apply safety guardrails to this key to filter content or enforce policies">
                               <a
                                 href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
                                 target="_blank"
@@ -1192,7 +1216,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                               >
                                 <Info className="ml-1 inline size-3.5 align-text-bottom" />
                               </a>
-                            </Tooltip>
+                            </SimpleTooltip>
                           </span>
                         }
                         name="guardrails"
@@ -1204,11 +1228,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         }
                       >
                         {(control) => (
-                          <Select
-                            {...control}
-                            value={control.value as string[] | undefined}
-                            mode="tags"
-                            style={{ width: "100%" }}
+                          <TagsInput
+                            id={control.id}
+                            value={(control.value as string[] | undefined) ?? []}
+                            onValueChange={control.onChange}
                             disabled={!canEditGuardrails}
                             placeholder={
                               !canEditGuardrails
@@ -1223,7 +1246,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         label={
                           <span>
                             Disable Global Guardrails{" "}
-                            <Tooltip title="When enabled, this key will bypass any guardrails configured to run on every request (global guardrails)">
+                            <SimpleTooltip content="When enabled, this key will bypass any guardrails configured to run on every request (global guardrails)">
                               <a
                                 href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
                                 target="_blank"
@@ -1232,7 +1255,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                               >
                                 <Info className="ml-1 inline size-3.5 align-text-bottom" />
                               </a>
-                            </Tooltip>
+                            </SimpleTooltip>
                           </span>
                         }
                         name="disable_global_guardrails"
@@ -1246,11 +1269,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         {(control) => (
                           <Switch
                             id={control.id}
-                            checked={control.value as boolean | undefined}
-                            onChange={control.onChange}
+                            checked={control.value === true}
+                            onCheckedChange={control.onChange}
                             disabled={!canEditGuardrails}
-                            checkedChildren="Yes"
-                            unCheckedChildren="No"
+                            aria-describedby={control["aria-describedby"]}
                           />
                         )}
                       </MountedFormField>
@@ -1259,7 +1281,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           label={
                             <span>
                               Policies{" "}
-                              <Tooltip title="Apply policies to this key to control guardrails and other settings">
+                              <SimpleTooltip content="Apply policies to this key to control guardrails and other settings">
                                 <a
                                   href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies"
                                   target="_blank"
@@ -1268,7 +1290,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                                 >
                                   <Info className="ml-1 inline size-3.5 align-text-bottom" />
                                 </a>
-                              </Tooltip>
+                              </SimpleTooltip>
                             </span>
                           }
                           name="policies"
@@ -1280,11 +1302,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           }
                         >
                           {(control) => (
-                            <Select
-                              {...control}
-                              value={control.value as string[] | undefined}
-                              mode="tags"
-                              style={{ width: "100%" }}
+                            <TagsInput
+                              id={control.id}
+                              value={(control.value as string[] | undefined) ?? []}
+                              onValueChange={control.onChange}
                               disabled={!premiumUser}
                               placeholder={
                                 !premiumUser
@@ -1301,7 +1322,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           label={
                             <span>
                               Prompts{" "}
-                              <Tooltip title="Allow this key to use specific prompt templates">
+                              <SimpleTooltip content="Allow this key to use specific prompt templates">
                                 <a
                                   href="https://docs.litellm.ai/docs/proxy/prompt_management"
                                   target="_blank"
@@ -1310,7 +1331,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                                 >
                                   <Info className="ml-1 inline size-3.5 align-text-bottom" />
                                 </a>
-                              </Tooltip>
+                              </SimpleTooltip>
                             </span>
                           }
                           name="prompts"
@@ -1322,11 +1343,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           }
                         >
                           {(control) => (
-                            <Select
-                              {...control}
-                              value={control.value as string[] | undefined}
-                              mode="tags"
-                              style={{ width: "100%" }}
+                            <TagsInput
+                              id={control.id}
+                              value={(control.value as string[] | undefined) ?? []}
+                              onValueChange={control.onChange}
                               disabled={!premiumUser}
                               placeholder={
                                 !premiumUser
@@ -1342,9 +1362,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         label={
                           <span>
                             Access Groups{" "}
-                            <Tooltip title="Assign access groups to this key. Access groups control which models, MCP servers, and agents this key can use">
+                            <SimpleTooltip content="Assign access groups to this key. Access groups control which models, MCP servers, and agents this key can use">
                               <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                            </Tooltip>
+                            </SimpleTooltip>
                           </span>
                         }
                         name="access_group_ids"
@@ -1363,7 +1383,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         label={
                           <span>
                             Allowed Pass Through Routes{" "}
-                            <Tooltip title="Allow this key to use specific pass through routes">
+                            <SimpleTooltip content="Allow this key to use specific pass through routes">
                               <a
                                 href="https://docs.litellm.ai/docs/proxy/pass_through"
                                 target="_blank"
@@ -1372,7 +1392,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                               >
                                 <Info className="ml-1 inline size-3.5 align-text-bottom" />
                               </a>
-                            </Tooltip>
+                            </SimpleTooltip>
                           </span>
                         }
                         name="allowed_passthrough_routes"
@@ -1402,9 +1422,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         label={
                           <span>
                             Allowed Vector Stores{" "}
-                            <Tooltip title="Select which vector stores this key can access. If none selected, the key will have access to all available vector stores">
+                            <SimpleTooltip content="Select which vector stores this key can access. If none selected, the key will have access to all available vector stores">
                               <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                            </Tooltip>
+                            </SimpleTooltip>
                           </span>
                         }
                         name="allowed_vector_store_ids"
@@ -1424,18 +1444,18 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         label={
                           <span>
                             Metadata{" "}
-                            <Tooltip title="JSON object with additional information about this key. Used for tracking or custom logic">
+                            <SimpleTooltip content="JSON object with additional information about this key. Used for tracking or custom logic">
                               <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                            </Tooltip>
+                            </SimpleTooltip>
                           </span>
                         }
                         name="metadata"
                         className="mt-4"
                       >
                         {(control) => (
-                          <AntdInput.TextArea
+                          <Textarea
                             {...control}
-                            value={control.value as string | undefined}
+                            value={(control.value as string | undefined) ?? ""}
                             rows={4}
                             placeholder="Enter metadata as JSON"
                           />
@@ -1445,9 +1465,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         label={
                           <span>
                             Tags{" "}
-                            <Tooltip title="Tags for tracking spend and/or doing tag-based routing. Used for analytics and filtering">
+                            <SimpleTooltip content="Tags for tracking spend and/or doing tag-based routing. Used for analytics and filtering">
                               <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                            </Tooltip>
+                            </SimpleTooltip>
                           </span>
                         }
                         name="tags"
@@ -1455,11 +1475,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         help={`Tags for tracking spend and/or doing tag-based routing.`}
                       >
                         {(control) => (
-                          <Select
-                            {...control}
-                            value={control.value as string[] | undefined}
-                            mode="tags"
-                            style={{ width: "100%" }}
+                          <TagsInput
+                            id={control.id}
+                            value={(control.value as string[] | undefined) ?? []}
+                            onValueChange={control.onChange}
                             placeholder="Select or enter tags"
                             tokenSeparators={[","]}
                             options={tagOptions}
@@ -1476,9 +1495,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                             label={
                               <span>
                                 Allowed MCP Servers{" "}
-                                <Tooltip title="Select which MCP servers or access groups this key can access">
+                                <SimpleTooltip content="Select which MCP servers or access groups this key can access">
                                   <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                                </Tooltip>
+                                </SimpleTooltip>
                               </span>
                             }
                             name="allowed_mcp_servers_and_groups"
@@ -1519,9 +1538,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                             label={
                               <span>
                                 Allowed Agents{" "}
-                                <Tooltip title="Select which agents or access groups this key can access">
+                                <SimpleTooltip content="Select which agents or access groups this key can access">
                                   <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                                </Tooltip>
+                                </SimpleTooltip>
                               </span>
                             }
                             name="allowed_agents_and_groups"
@@ -1533,6 +1552,36 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                                 value={control.value as AgentSelectorValue | undefined}
                                 accessToken={accessToken}
                                 placeholder="Select agents or access groups (optional)"
+                              />
+                            )}
+                          </MountedFormField>
+                        </CollapsibleContent>
+                      </Collapsible>
+
+                      <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
+                        <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
+                          <b>Skill Settings</b>
+                          <ChevronDown className={SECTION_CHEVRON_CLASS} />
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="px-4 pb-3">
+                          <MountedFormField
+                            label={
+                              <span>
+                                Allowed Skills{" "}
+                                <SimpleTooltip content="Enabled skills are visible to every key. Grant disabled (private) Claude Code plugins to this key here">
+                                  <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                                </SimpleTooltip>
+                              </span>
+                            }
+                            name="allowed_skills"
+                            help="Select private skills this key can access in the Claude Code marketplace"
+                          >
+                            {(control) => (
+                              <SkillSelector
+                                onChange={control.onChange}
+                                value={control.value as string[] | undefined}
+                                accessToken={accessToken}
+                                placeholder="Select skills (optional)"
                               />
                             )}
                           </MountedFormField>
@@ -1558,8 +1607,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           </CollapsibleContent>
                         </Collapsible>
                       ) : (
-                        <Tooltip
-                          title={
+                        <SimpleTooltip
+                          className="w-full"
+                          content={
                             <span>
                               Key-level logging settings is an enterprise feature, get in touch -
                               <a href="https://www.litellm.ai/enterprise" target="_blank">
@@ -1567,7 +1617,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                               </a>
                             </span>
                           }
-                          placement="top"
+                          side="top"
                         >
                           <div style={{ position: "relative" }}>
                             <div style={{ opacity: 0.5 }}>
@@ -1591,7 +1641,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                             </div>
                             <div style={{ position: "absolute", inset: 0, cursor: "not-allowed" }} />
                           </div>
-                        </Tooltip>
+                        </SimpleTooltip>
                       )}
 
                       <Collapsible
@@ -1606,6 +1656,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           <div className="mt-4 w-full">
                             <RouterSettingsAccordion
                               key={routerSettingsKey}
+                              ref={routerSettingsRef}
                               accessToken={accessToken || ""}
                               value={routerSettings || undefined}
                               onChange={setRouterSettings}
@@ -1668,8 +1719,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
                           <div className="flex items-center gap-2">
                             <b>Advanced Settings</b>
-                            <Tooltip
-                              title={
+                            <SimpleTooltip
+                              content={
                                 <span>
                                   Learn more about advanced settings in our{" "}
                                   <a
@@ -1680,7 +1731,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                                     }
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="text-blue-400 hover:text-blue-300"
+                                    className="text-info hover:text-info/80"
                                   >
                                     documentation
                                   </a>
@@ -1688,7 +1739,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                               }
                             >
                               <Info className="size-4 text-muted-foreground hover:text-foreground cursor-help" />
-                            </Tooltip>
+                            </SimpleTooltip>
                           </div>
                           <ChevronDown className={SECTION_CHEVRON_CLASS} />
                         </CollapsibleTrigger>

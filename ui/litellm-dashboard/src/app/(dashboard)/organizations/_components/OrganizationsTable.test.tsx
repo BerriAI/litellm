@@ -165,6 +165,20 @@ describe("OrganizationsTable", () => {
     expect(screen.getByText("RPM: Unlimited")).toBeInTheDocument();
   });
 
+  it("renders a tpm/rpm limit of 0 as 0, never as Unlimited", () => {
+    render(
+      <OrganizationsTable
+        {...baseProps}
+        organizations={[makeOrganization({ litellm_budget_table: { max_budget: null, tpm_limit: 0, rpm_limit: 0 } })]}
+      />,
+    );
+
+    expect(screen.getByText("TPM: 0")).toBeInTheDocument();
+    expect(screen.getByText("RPM: 0")).toBeInTheDocument();
+    expect(screen.queryByText("TPM: Unlimited")).not.toBeInTheDocument();
+    expect(screen.queryByText("RPM: Unlimited")).not.toBeInTheDocument();
+  });
+
   it("renders loading skeletons instead of rows while loading", () => {
     render(
       <OrganizationsTable
@@ -176,6 +190,23 @@ describe("OrganizationsTable", () => {
 
     expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
     expect(screen.queryByText("ShouldNotShow")).not.toBeInTheDocument();
+  });
+
+  it("pages long lists client-side with the shared size selector and footer", async () => {
+    const user = userEvent.setup();
+    const organizations = Array.from({ length: 30 }, (_, index) =>
+      makeOrganization({ organization_id: `org-${index}`, organization_alias: `Org ${index}` }),
+    );
+    render(<OrganizationsTable {...baseProps} organizations={organizations} />);
+
+    expect(screen.getAllByRole("row")).toHaveLength(26);
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-25 of 30");
+
+    await user.click(screen.getByTestId("pagination-page-size"));
+    await user.click(await screen.findByRole("option", { name: "50" }));
+
+    expect(screen.getAllByRole("row")).toHaveLength(31);
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-30 of 30");
   });
 
   it("uses a search-aware empty state", () => {

@@ -13,7 +13,7 @@ import { getVectorStoreProviderLogoAndName } from "@/components/vector_store_pro
 import { Logo } from "@/components/molecules/logo/Logo";
 import VectorStoreTester from "./VectorStoreTester";
 import { toast } from "@/lib/toast";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -280,7 +280,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                                   }}
                                 </SelectValue>
                               </SelectTrigger>
-                              <SelectContent alignItemWithTrigger={false}>
+                              <SelectContent>
                                 {Object.entries(Providers)
                                   .filter(([providerEnum]) => providerEnum === "Bedrock")
                                   .map(([providerEnum, providerDisplayName]) => (

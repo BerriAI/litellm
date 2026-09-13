@@ -14,7 +14,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useState } from "react"
 import { useForm } from "react-hook-form";
 import { toast } from "@/lib/toast";
 import { Logo } from "@/components/molecules/logo/Logo";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -33,6 +33,7 @@ import {
 import ContentFilterManager, { formatContentFilterDataForAPI } from "./content_filter/ContentFilterManager";
 import CustomCodeModal, { EditGuardrailData } from "./custom_code/CustomCodeModal";
 import {
+  formatGuardrailMode,
   getGuardrailLogoAndName,
   guardrail_provider_map,
   skipSystemMessageToChoice,
@@ -480,16 +481,18 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
     return <div className="p-4">Loading...</div>;
   }
 
+  const backButton = (
+    <Button variant="ghost" onClick={onClose} className="mb-4">
+      <ArrowLeft className="w-4 h-4" />
+      Back to Guardrails
+    </Button>
+  );
+
   if (!guardrailData) {
-    return <div className="p-4">Guardrail not found</div>;
+    return <div className="p-4">{backButton}Guardrail not found</div>;
   }
 
-  // Format date helper function
-  const formatDate = (dateString?: string) => {
-    if (!dateString) return "-";
-    const date = new Date(dateString);
-    return date.toLocaleString();
-  };
+  const formatDate = (dateString?: string) => (dateString ? new Date(dateString).toLocaleString() : "-");
 
   // Format the provider display name and logo
   const { logo, displayName } = getGuardrailLogoAndName(guardrailData.litellm_params?.guardrail || "");
@@ -509,10 +512,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
   return (
     <div className="p-4">
       <div>
-        <Button variant="ghost" onClick={onClose} className="mb-4">
-          <ArrowLeft className="w-4 h-4" />
-          Back to Guardrails
-        </Button>
+        {backButton}
         <h1 className="text-2xl font-semibold">{guardrailData.guardrail_name || "Unnamed Guardrail"}</h1>
         <div className="flex items-center cursor-pointer">
           <p className="text-muted-foreground font-mono">{guardrailData.guardrail_id}</p>
@@ -521,9 +521,9 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
             variant="ghost"
             size="icon-xs"
             onClick={() => copyToClipboard(guardrailData.guardrail_id, "guardrail-id")}
-            className={`left-2 z-10 transition-all duration-200 ${
+            className={`left-2 z-raised transition-all duration-200 ${
               copiedStates["guardrail-id"]
-                ? "text-green-600 bg-green-50 border-green-200 dark:text-green-400 dark:bg-green-950/40 dark:border-green-900"
+                ? "text-success bg-success/10 border-success/20"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted"
             }`}
           >
@@ -559,7 +559,9 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
               <Card className="block p-6">
                 <p>Mode</p>
                 <div className="mt-2">
-                  <h3 className="text-lg font-medium">{guardrailData.litellm_params?.mode || "-"}</h3>
+                  <h3 className="text-lg font-medium">
+                    {formatGuardrailMode(guardrailData.litellm_params?.mode) || "-"}
+                  </h3>
                   <Badge variant={guardrailData.litellm_params?.default_on ? "secondary" : "outline"}>
                     {guardrailData.litellm_params?.default_on ? "Default On" : "Default Off"}
                   </Badge>
@@ -603,7 +605,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                           <p className="flex-1">
                             <span
                               className={`inline-flex items-center gap-1.5 ${
-                                value === "MASK" ? "text-blue-600" : "text-red-600"
+                                value === "MASK" ? "text-info" : "text-destructive"
                               }`}
                             >
                               {value === "MASK" ? <EyeOff className="size-3.5" /> : <Ban className="size-3.5" />}
@@ -628,7 +630,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
               <Card className="block mt-6 p-6">
                 <div className="flex justify-between items-center mb-4">
                   <div className="flex items-center gap-2">
-                    <Code className="text-blue-500" />
+                    <Code className="text-info" />
                     <p className="font-medium text-lg">Custom Code</p>
                   </div>
                   {isAdmin && !isConfigGuardrail && (
@@ -856,7 +858,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                     </div>
                     <div>
                       <p className="font-medium">Mode</p>
-                      <div>{guardrailData.litellm_params?.mode || "-"}</div>
+                      <div>{formatGuardrailMode(guardrailData.litellm_params?.mode) || "-"}</div>
                     </div>
                     <div>
                       <p className="font-medium">Default On</p>

@@ -1,9 +1,10 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { Card, Flex, Input, Space, Typography } from "antd";
 import { Button } from "@/components/ui/button";
-import { Plus, RefreshCw, Search } from "lucide-react";
+import { Card, CardContent } from "@/components/ui/card";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
+import { Plus, RefreshCw, Search, X } from "lucide-react";
 import { useRoutingGroups, useSaveRoutingGroups } from "@/app/(dashboard)/hooks/routingGroups/useRoutingGroups";
 import { useRouterFields } from "@/app/(dashboard)/hooks/router/useRouterFields";
 import { useModelHub } from "@/app/(dashboard)/hooks/models/useModels";
@@ -14,8 +15,6 @@ import RoutingGroupModal from "./RoutingGroupModal";
 import { toast } from "@/lib/toast";
 import type { RoutingGroup } from "./types";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-
-const { Text } = Typography;
 
 const RoutingGroups: React.FC = () => {
   const { data, isLoading, refetch, isFetching } = useRoutingGroups();
@@ -102,44 +101,55 @@ const RoutingGroups: React.FC = () => {
   };
 
   return (
-    <Space direction="vertical" size={16} className="w-full">
-      <Card bodyStyle={{ padding: 16 }}>
-        <Flex justify="space-between" align="center" gap={12} className="mb-4">
-          <Input
-            allowClear
-            prefix={<Search className="size-4 text-gray-400" />}
-            placeholder="Search groups..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="max-w-sm"
-          />
-          <Flex align="center" gap={12}>
-            <Button
-              variant="outline"
-              onClick={() => refetch()}
-              disabled={isFetching && !isLoading}
-              aria-busy={isFetching && !isLoading}
-            >
-              <RefreshCw />
-              Refresh
-            </Button>
-            <Button onClick={openCreate}>
-              <Plus />
-              Create Group
-            </Button>
-            <Text type="secondary" className="text-sm whitespace-nowrap">
-              Showing {filteredGroups.length} {filteredGroups.length === 1 ? "result" : "results"}
-            </Text>
-          </Flex>
-        </Flex>
+    <div className="flex w-full flex-col gap-4">
+      <Card size="sm">
+        <CardContent>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <InputGroup className="max-w-sm">
+              <InputGroupAddon>
+                <Search className="size-4 text-muted-foreground" />
+              </InputGroupAddon>
+              <InputGroupInput
+                placeholder="Search groups..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+              {searchQuery && (
+                <InputGroupAddon align="inline-end">
+                  <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => setSearchQuery("")}>
+                    <X />
+                  </InputGroupButton>
+                </InputGroupAddon>
+              )}
+            </InputGroup>
+            <div className="flex items-center gap-3">
+              <Button
+                variant="outline"
+                onClick={() => refetch()}
+                disabled={isFetching && !isLoading}
+                aria-busy={isFetching && !isLoading}
+              >
+                <RefreshCw />
+                Refresh
+              </Button>
+              <Button onClick={openCreate}>
+                <Plus />
+                Create Group
+              </Button>
+              <span className="text-sm whitespace-nowrap text-muted-foreground">
+                Showing {filteredGroups.length} {filteredGroups.length === 1 ? "result" : "results"}
+              </span>
+            </div>
+          </div>
 
-        <RoutingGroupsTable
-          groups={filteredGroups}
-          isLoading={isLoading}
-          onEdit={openEdit}
-          onDelete={(g) => setDeletingGroup(g)}
-          proxyBaseUrl={proxySettings.LITELLM_UI_API_DOC_BASE_URL?.trim() || proxySettings.PROXY_BASE_URL || ""}
-        />
+          <RoutingGroupsTable
+            groups={filteredGroups}
+            isLoading={isLoading}
+            onEdit={openEdit}
+            onDelete={(g) => setDeletingGroup(g)}
+            proxyBaseUrl={proxySettings.LITELLM_UI_API_DOC_BASE_URL?.trim() || proxySettings.PROXY_BASE_URL || ""}
+          />
+        </CardContent>
       </Card>
 
       <RoutingGroupModal
@@ -160,10 +170,10 @@ const RoutingGroups: React.FC = () => {
           <DialogHeader>
             <DialogTitle>Delete routing group?</DialogTitle>
           </DialogHeader>
-          <Text>
-            Models in <Text strong>{deletingGroup?.group_name}</Text> will fall back to the proxy&apos;s top-level
-            routing strategy. This cannot be undone.
-          </Text>
+          <p className="text-sm text-foreground">
+            Models in <span className="font-medium">{deletingGroup?.group_name}</span> will fall back to the
+            proxy&apos;s top-level routing strategy. This cannot be undone.
+          </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeletingGroup(null)}>
               Cancel
@@ -179,7 +189,7 @@ const RoutingGroups: React.FC = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </Space>
+    </div>
   );
 };
 

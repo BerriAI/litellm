@@ -4,10 +4,7 @@ Test A2A model routing in proxy.
 Maps to: litellm/proxy/agent_endpoints/a2a_routing.py
 """
 
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from unittest.mock import AsyncMock, Mock, patch
 

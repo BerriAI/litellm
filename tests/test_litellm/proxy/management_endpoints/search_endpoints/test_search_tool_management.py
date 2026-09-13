@@ -1,6 +1,4 @@
 import contextlib
-import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,9 +6,6 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
@@ -997,3 +992,159 @@ async def test_list_search_tools_reports_a_missing_real_team_as_404():
 
     assert response.status_code == 404
     assert "search_tools" not in response.json()
+
+
+# ---------------------------------------------------------------------------
+# Router sync on management writes (LIT-3379)
+#
+# The proxy resolves prisma_client / proxy_config / llm_router from
+# litellm.proxy.proxy_server module globals at call time and reaches its DB layer through a
+# module-level registry singleton, so there is no constructor or parameter to inject through.
+# Patching those globals is the only seam that exercises the endpoint end to end.
+# ---------------------------------------------------------------------------
+
+
+def _search_tool_row(name: str, provider: str = "tavily") -> dict:
+    return {
+        "search_tool_id": f"{name}-id",
+        "search_tool_name": name,
+        "litellm_params": {"search_provider": provider, "api_key": "sk-test"},
+        "search_tool_info": {"description": name},
+    }
+
+
+def _fake_registry(db_rows: list) -> MagicMock:
+    """A registry singleton whose writes land in db_rows, so the refresh reads back real state."""
+
+    async def _add(search_tool, **_):
+        row = _search_tool_row(
+            search_tool["search_tool_name"],
+            provider=search_tool.get("litellm_params", {}).get("search_provider", "tavily"),
+        )
+        db_rows.append(row)
+        return row
+
+    async def _update(search_tool_id, search_tool, **_):
+        row = _search_tool_row(
+            search_tool["search_tool_name"],
+            provider=search_tool.get("litellm_params", {}).get("search_provider", "tavily"),
+        )
+        db_rows[:] = [row if existing["search_tool_id"] == search_tool_id else existing for existing in db_rows]
+        return row
+
+    async def _delete(search_tool_id, **_):
+        db_rows[:] = [existing for existing in db_rows if existing["search_tool_id"] != search_tool_id]
+        return {"message": "deleted", "search_tool_name": search_tool_id}
+
+    async def _get_by_id(search_tool_id, **_):
+        return next((row for row in db_rows if row["search_tool_id"] == search_tool_id), None)
+
+    registry = MagicMock()
+    registry.add_search_tool_to_db = AsyncMock(side_effect=_add)
+    registry.update_search_tool_in_db = AsyncMock(side_effect=_update)
+    registry.delete_search_tool_from_db = AsyncMock(side_effect=_delete)
+    registry.get_search_tool_by_id_from_db = AsyncMock(side_effect=_get_by_id)
+    return registry
+
+
+@contextlib.contextmanager
+def _live_router_and_db(db_rows: list):
+    """Drive the endpoints against a real ProxyConfig so the router refresh actually runs."""
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config.update_config_state({})
+    fake_router = MagicMock()
+    fake_router.search_tools = list(db_rows)
+
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(patch("litellm.proxy.proxy_server.prisma_client", MagicMock()))  # test-quality-ok: proxy globals are the only seam; see the module note above
+        stack.enter_context(patch("litellm.proxy.proxy_server.proxy_config", proxy_config))  # test-quality-ok: proxy globals are the only seam; see the module note above
+        stack.enter_context(patch("litellm.proxy.proxy_server.llm_router", fake_router))  # test-quality-ok: proxy globals are the only seam; see the module note above
+        stack.enter_context(
+            patch(  # test-quality-ok: proxy globals are the only seam; see the module note above
+                "litellm.proxy.search_endpoints.search_tool_management.SEARCH_TOOL_REGISTRY",
+                _fake_registry(db_rows),
+            )
+        )
+        stack.enter_context(
+            patch(  # test-quality-ok: proxy globals are the only seam; see the module note above
+                "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
+                AsyncMock(side_effect=lambda **_: list(db_rows)),
+            )
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+        )
+        try:
+            yield fake_router
+        finally:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_create_search_tool_reaches_the_router_before_the_response():
+    """A UI-created tool must be usable immediately, not only after the next config reload tick."""
+    with _live_router_and_db([]) as fake_router:
+        response = TestClient(app).post(
+            "/search_tools",
+            json={
+                "search_tool": {
+                    "search_tool_name": "tavily-search",
+                    "litellm_params": {"search_provider": "tavily"},
+                }
+            },
+        )
+
+    assert response.status_code == 200
+    assert [tool["search_tool_name"] for tool in fake_router.search_tools] == ["tavily-search"]
+
+
+@pytest.mark.asyncio
+async def test_update_search_tool_reaches_the_router_before_the_response():
+    with _live_router_and_db([_search_tool_row("tavily-search", provider="tavily")]) as fake_router:
+        response = TestClient(app).put(
+            "/search_tools/tavily-search-id",
+            json={
+                "search_tool": {
+                    "search_tool_name": "tavily-search",
+                    "litellm_params": {"search_provider": "exa_ai"},
+                }
+            },
+        )
+
+    assert response.status_code == 200
+    assert fake_router.search_tools[0]["litellm_params"]["search_provider"] == "exa_ai"
+
+
+@pytest.mark.asyncio
+async def test_delete_search_tool_removes_it_from_the_router():
+    """Deleting the last tool must clear the router; the old empty-list guard left it live."""
+    with _live_router_and_db([_search_tool_row("tavily-search")]) as fake_router:
+        response = TestClient(app).delete("/search_tools/tavily-search-id")
+
+    assert response.status_code == 200
+    assert fake_router.search_tools == []
+
+
+@pytest.mark.asyncio
+async def test_create_search_tool_survives_a_failing_router_refresh():
+    """The row is already committed, so a refresh failure must not turn into a 500."""
+    with _live_router_and_db([]):
+        with patch(  # test-quality-ok: forcing the refresh to fail needs the refresh itself replaced
+            "litellm.proxy.proxy_server.ProxyConfig.reload_search_tools_from_db",
+            AsyncMock(side_effect=RuntimeError("registry boom")),
+        ):
+            response = TestClient(app).post(
+                "/search_tools",
+                json={
+                    "search_tool": {
+                        "search_tool_name": "tavily-search",
+                        "litellm_params": {"search_provider": "tavily"},
+                    }
+                },
+            )
+
+    assert response.status_code == 200
+    assert response.json()["search_tool_name"] == "tavily-search"

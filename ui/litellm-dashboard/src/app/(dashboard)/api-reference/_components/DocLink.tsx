@@ -16,8 +16,8 @@ const DocLink = ({ href, className }: DocLinkProps) => {
       rel="noopener noreferrer"
       title="Open documentation in a new tab"
       className={cn(
-        "inline-flex items-center gap-2 rounded-xl border border-zinc-200 bg-white/80 px-3.5 py-2 text-sm font-medium text-zinc-700 shadow-xs",
-        "hover:bg-white focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-blue-500 active:translate-y-[0.5px]",
+        "inline-flex items-center gap-2 rounded-xl border border-border bg-card/80 px-3.5 py-2 text-sm font-medium text-foreground shadow-xs",
+        "hover:bg-card focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring active:translate-y-[0.5px]",
         className,
       )}
     >

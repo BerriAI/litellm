@@ -7,13 +7,10 @@ looking up deployments — matching the behavior of the auth path in
 auth_checks.py:model_in_access_group().
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.proxy.proxy_server import _filter_models_by_team_id
 

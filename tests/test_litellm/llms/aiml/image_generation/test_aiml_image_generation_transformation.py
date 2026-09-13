@@ -1,9 +1,7 @@
 import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
@@ -113,7 +111,7 @@ def test_flux_style_request_still_remaps_to_legacy_fields():
 
 
 def test_openai_style_unsupported_param_raises_without_drop_params():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='Supported parameters are'):
         AimlImageGenerationConfig().map_openai_params(
             non_default_params={"image_size": {"width": 1024, "height": 1024}},
             optional_params={},

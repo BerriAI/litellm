@@ -11,15 +11,12 @@ The principle (see Admin Viewer role doc): anything Proxy Admin can read,
 Admin Viewer can read. No writes, no cost-incurring actions.
 """
 
-import os
-import sys
 import types
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../../"))
 
 import litellm.proxy.proxy_server as ps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth

@@ -77,6 +77,24 @@ Strict mode exits non-zero on `@pytest.mark.covers(...)` ids that are not checke
 the registry. Add `--fail-on-collection-errors` when the job should also fail on pytest
 collection errors.
 
+## Provider x feature matrix: customer-run Bedrock combinations
+
+The provider and feature combinations customers actually run get explicit cells, expanded
+here as incidents surface new ones. The current Bedrock set, seeded from a customer's
+production shape (regional `us.anthropic.*` inference-profile ids over both chat routes,
+provider response headers for AWS-side correlation, and the Test Connection probe for a
+responses-mode Bedrock Mantle deployment):
+
+| Cell | Feature | Covering test |
+|------|---------|---------------|
+| `llm.chat_completions.bedrock_converse.basic.nonstream.works` | regional `us.` id, Converse | `llm_translation/test_chat_completions_regression_e2e.py` |
+| `llm.chat_completions.bedrock_converse.basic.stream.works` | regional `us.` id, Converse stream | `llm_translation/test_chat_completions_regression_e2e.py` |
+| `llm.chat_completions.bedrock_invoke.basic.nonstream.works` | regional `us.` id, Invoke | `llm_translation/test_bedrock_provider_matrix_e2e.py` |
+| `llm.chat_completions.bedrock_invoke.basic.stream.works` | regional `us.` id, Invoke stream | `llm_translation/test_bedrock_provider_matrix_e2e.py` |
+| `llm.chat_completions.bedrock_converse.response_headers.nonstream.works` | `llm_provider-*` headers | `llm_translation/test_bedrock_provider_matrix_e2e.py` |
+| `llm.chat_completions.bedrock_converse.response_headers.stream.works` | `llm_provider-*` headers, stream | `llm_translation/test_bedrock_provider_matrix_e2e.py` |
+| `mgmt.model.test_connection.happy_path` | Test Connection, Bedrock Mantle | `management/test_model_test_connection_e2e.py` |
+
 ## Status: this is a draft for review
 
 The cells were enumerated from the codebase and the tiers are a first proposal. Known

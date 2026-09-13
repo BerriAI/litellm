@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Controller, FormProvider, useForm, useFormContext } from "react-hook-form";
 
-import { Field, FieldError, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -14,10 +14,12 @@ import {
 } from "@/components/ui/combobox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import EmailSettings from "./email_settings";
+import MSTeamsSettings from "./MSTeamsSettings";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { toast } from "@/lib/toast";
 
@@ -58,7 +60,7 @@ interface DynamicParamsFieldsProps {
 }
 
 const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callbackConfigs, selectedCallback }) => {
-  const { register, formState } = useFormContext<CallbackFormValues>();
+  const { register, control, formState } = useFormContext<CallbackFormValues>();
   const fieldIdPrefix = React.useId();
 
   if (!params || params.length === 0) {
@@ -66,44 +68,70 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
   }
 
   return (
-    <div className="space-y-4 mt-6 p-4 bg-gray-50 rounded-lg border">
+    <div className="space-y-4 mt-6 p-4 bg-muted rounded-lg border">
       {params.map((param) => {
         const callbackConfig = callbackConfigs.find((config) => config.id === selectedCallback);
         const paramConfig = callbackConfig?.dynamic_params?.[param] || {};
         const paramType = paramConfig.type || "text";
         const fieldLabel = paramConfig.ui_name || param.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
         const isRequired = paramConfig.required || false;
+        const selectOptions: string[] = Array.isArray(paramConfig.options) ? paramConfig.options : [];
+        const isSelect = paramType === "select" && selectOptions.length > 0;
         const fieldId = `${fieldIdPrefix}-${param}`;
-        const registration = register(
-          param,
-          isRequired ? { required: `Please enter the ${fieldLabel.toLowerCase()}` } : undefined,
-        );
+        const validationRules = isRequired ? { required: `Please enter the ${fieldLabel.toLowerCase()}` } : undefined;
+        const registration = isSelect ? undefined : register(param, validationRules);
 
         return (
           <Field key={param} className="mb-4">
             <FieldLabel htmlFor={fieldId}>
-              <span className="text-sm font-medium text-gray-700">{fieldLabel} </span>
+              <span className="text-sm font-medium text-foreground">{fieldLabel} </span>
             </FieldLabel>
-            {paramType === "password" ? (
-              <Input
-                id={fieldId}
-                type="password"
-                placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
-                {...registration}
+            {isSelect && (
+              <Controller
+                control={control}
+                name={param}
+                rules={validationRules}
+                render={({ field }) => (
+                  <Select
+                    items={selectOptions.map((option) => ({ label: option, value: option }))}
+                    value={field.value || null}
+                    onValueChange={(selected: string | null) => field.onChange(selected ?? "")}
+                  >
+                    <SelectTrigger id={fieldId} className="w-full" onBlur={field.onBlur}>
+                      <SelectValue placeholder={`Select ${fieldLabel.toLowerCase()}`} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {selectOptions.map((option) => (
+                        <SelectItem key={option} value={option}>
+                          {option}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               />
-            ) : paramType === "number" ? (
-              <Input
-                id={fieldId}
-                type="number"
-                placeholder={`Enter ${fieldLabel.toLowerCase()}`}
-                min={0}
-                max={1}
-                step={0.1}
-                {...registration}
-              />
-            ) : (
-              <Input id={fieldId} placeholder={`Enter your ${fieldLabel.toLowerCase()}`} {...registration} />
             )}
+            {!isSelect &&
+              (paramType === "password" ? (
+                <Input
+                  id={fieldId}
+                  type="password"
+                  placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
+                  {...registration}
+                />
+              ) : paramType === "number" ? (
+                <Input
+                  id={fieldId}
+                  type="number"
+                  placeholder={`Enter ${fieldLabel.toLowerCase()}`}
+                  min={0}
+                  max={1}
+                  step={0.1}
+                  {...registration}
+                />
+              ) : (
+                <Input id={fieldId} placeholder={`Enter your ${fieldLabel.toLowerCase()}`} {...registration} />
+              ))}
             <FieldError errors={[formState.errors[param]]} />
           </Field>
         );
@@ -179,7 +207,7 @@ export const CallbackSelector: React.FC<CallbackSelectorProps> = ({
                           className="w-6 h-6 rounded-sm object-contain"
                         />
                       </div>
-                      <span className="font-medium text-gray-900">{callbackConfig.displayName}</span>
+                      <span className="font-medium text-foreground">{callbackConfig.displayName}</span>
                     </div>
                   </ComboboxItem>
                 )}
@@ -270,15 +298,22 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
 
   useEffect(() => {
     if (showEditCallback && selectedEditCallback) {
+      const params = getDynamicParamsForCallback(
+        selectedEditCallback.name,
+        callbackConfigs,
+        selectedEditCallback.variables,
+      );
+      const fieldNameFor = (variable: string) =>
+        params.find((param) => param.toUpperCase() === variable.toUpperCase()) ?? variable;
       const normalized = Object.fromEntries(
-        Object.entries(selectedEditCallback.variables || {}).map(([k, v]) => [k, v ?? ""]),
+        Object.entries(selectedEditCallback.variables || {}).map(([k, v]) => [fieldNameFor(k), v ?? ""]),
       );
       editForm.reset({
         ...normalized,
         callback: selectedEditCallback.name,
       });
     }
-  }, [showEditCallback, selectedEditCallback, editForm]);
+  }, [showEditCallback, selectedEditCallback, editForm, callbackConfigs]);
 
   const handleSwitchChange = (alertName: string) => {
     if (activeAlerts.includes(alertName)) {
@@ -292,6 +327,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     llm_too_slow: "LLM Responses Too Slow",
     llm_requests_hanging: "LLM Requests Hanging",
     budget_alerts: "Budget Alerts (API Keys, Users)",
+    user_spend_thresholds: "User Spend Thresholds (Daily/Monthly)",
+    user_spend_anomalies: "User Spend Anomaly Detection",
     db_exceptions: "Database Exceptions (Read/Write)",
     daily_reports: "Weekly/Monthly Spend Reports",
     outage_alerts: "Outage Alerts",
@@ -490,6 +527,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
             <TabsTrigger value="alerting-types">Alerting Types</TabsTrigger>
             <TabsTrigger value="alerting-settings">Alerting Settings</TabsTrigger>
             <TabsTrigger value="email-alerts">Email Alerts</TabsTrigger>
+            <TabsTrigger value="ms-teams-alerts">MS Teams Alerts</TabsTrigger>
           </TabsList>
           <TabsContent value="logging-callbacks" keepMounted>
             <LoggingCallbacksTable
@@ -520,7 +558,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
           <TabsContent value="alerting-types" keepMounted>
             <Card className="p-6">
               <p className="my-2">
-                Alerts are only supported for Slack Webhook URLs. Get your webhook urls from{" "}
+                Alerts are sent to any Slack-compatible incoming webhook URL (Slack, Rocket.Chat, Mattermost, etc.). Get
+                Slack webhook urls from{" "}
                 <a href="https://api.slack.com/messaging/webhooks" target="_blank" style={{ color: "blue" }}>
                   here
                 </a>
@@ -530,7 +569,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                   <TableRow>
                     <TableHead></TableHead>
                     <TableHead></TableHead>
-                    <TableHead>Slack Webhook URL</TableHead>
+                    <TableHead>Webhook URL (Slack-compatible)</TableHead>
                   </TableRow>
                 </TableHeader>
 
@@ -607,6 +646,9 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
           <TabsContent value="email-alerts" keepMounted>
             <EmailSettings accessToken={accessToken} premiumUser={premiumUser} alerts={alerts} />
           </TabsContent>
+          <TabsContent value="ms-teams-alerts" keepMounted>
+            <MSTeamsSettings accessToken={accessToken} userID={userID} userRole={userRole} alerts={alerts} />
+          </TabsContent>
         </Tabs>
       </div>
 
@@ -639,7 +681,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                 selectedCallback={selectedCallback}
               />
 
-              <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-gray-200">
+              <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-border">
                 <Button type="button" variant="outline" onClick={cancelAddCallback} disabled={isAddingCallback}>
                   Cancel
                 </Button>
@@ -680,7 +722,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                 </>
               )}
 
-              <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-gray-200">
+              <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-border">
                 <Button type="button" variant="outline" onClick={closeEditCallbackModal} disabled={isUpdatingCallback}>
                   Cancel
                 </Button>

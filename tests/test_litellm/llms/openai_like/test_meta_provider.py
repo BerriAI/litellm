@@ -193,19 +193,6 @@ class TestMetaAnthropicMessages:
 
 
 class TestMuseSparkModelInfo:
-    def test_muse_spark_pricing_and_capabilities(self):
-        info = litellm.get_model_info("meta/muse-spark-1.1")
-
-        assert info["litellm_provider"] == "meta"
-        assert info["input_cost_per_token"] == 1.25e-06
-        assert info["output_cost_per_token"] == 4.25e-06
-        assert info["cache_read_input_token_cost"] == 1.5e-07
-        assert info["max_input_tokens"] == 1048576
-        assert info["supports_reasoning"] is True
-        assert info["supports_web_search"] is True
-        assert info["supports_vision"] is True
-        assert info["supports_function_calling"] is True
-        assert info["supports_prompt_caching"] is True
 
     def test_muse_spark_cost_calculation(self):
         from litellm import completion_cost

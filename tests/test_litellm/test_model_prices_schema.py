@@ -4,13 +4,19 @@ import importlib.util
 import json
 import re
 from pathlib import Path
+from types import MappingProxyType
+from typing import Final
 
 import jsonschema
 import pytest
 
+from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
+from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
+
 REPO_ROOT = Path(__file__).parents[2]
 GENERATOR_PATH = REPO_ROOT / "ci_cd" / "generate_model_prices_schema.py"
 PRICES_PATH = REPO_ROOT / "model_prices_and_context_window.json"
+BACKUP_PRICES_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
 SCHEMA_PATH = REPO_ROOT / "model_prices_and_context_window.schema.json"
 
 
@@ -118,6 +124,31 @@ def test_schema_accepts_cache_creation_cost_inside_a_pricing_tier(committed_sche
     assert validator.is_valid({"some-model": entry})
 
 
+def find_duplicate_keys(path: Path) -> list[str]:
+    duplicates: list[str] = []
+
+    def record_duplicates(pairs):
+        seen: set[str] = set()
+        for key, _ in pairs:
+            if key in seen:
+                duplicates.append(key)
+            seen.add(key)
+        return dict(pairs)
+
+    json.loads(path.read_text(), object_pairs_hook=record_duplicates)
+    return duplicates
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_price_map_has_no_duplicate_keys(path: Path):
+    assert find_duplicate_keys(path) == [], (
+        f"{path.name} defines the same key twice; JSON parsers keep only the last "
+        "occurrence, so the earlier entry's fields are silently dropped. This is what "
+        "a clean text merge of two branches that both added a model looks like: "
+        "deduplicate the keys into one entry"
+    )
+
+
 DATED_VARIANT = re.compile(r"^(.*?)-(\d{4}-\d{2}-\d{2})$")
 SERVICE_TIER_SUFFIXES = ("_flex", "_priority")
 
@@ -147,3 +178,91 @@ def test_dated_variants_carry_base_alias_service_tier_pricing(prices: dict):
         "sync the tier keys so service-tier requests against pinned snapshots are not "
         "billed at standard rates:\n" + "\n".join(drifted)
     )
+
+
+OPENAI_REASONING_FAMILY_MARKERS = ("codex", "deep-research", "chat-latest")
+
+
+def is_openai_o_series(name: str) -> bool:
+    return len(name) > 1 and name[0] == "o" and name[1].isdigit()
+
+
+def is_openai_reasoning_family(name: str) -> bool:
+    base = name.split("/")[-1].removeprefix("ft:")
+    if "search-api" in base:
+        return False
+    return (
+        is_openai_o_series(base)
+        or is_gpt_reasoning_series_name(base)
+        or any(marker in base for marker in OPENAI_REASONING_FAMILY_MARKERS)
+    )
+
+
+def test_openai_reasoning_family_entries_carry_supports_reasoning(prices: dict):
+    unflagged = [
+        name
+        for name, entry in prices.items()
+        if isinstance(entry, dict)
+        and entry.get("litellm_provider") == "openai"
+        and is_openai_reasoning_family(name)
+        and entry.get("supports_reasoning") is not True
+    ]
+    assert unflagged == [], (
+        "OpenAI o-series, gpt-5+, codex, deep-research, and chat-latest models are reasoning "
+        "models, and the Responses API drops the `reasoning` param for any mapped OpenAI model "
+        "whose entry lacks supports_reasoning; flag these entries:\n" + "\n".join(unflagged)
+    )
+
+
+def test_chat_latest_declares_the_one_effort_openai_accepts(prices: dict):
+    """OpenAI rejects every reasoning.effort on chat-latest except medium, and a reasoning entry
+    with no declared levels resolves to None, which lets /model_group/info and the dashboard offer
+    levels the upstream will 400 on."""
+    assert resolve_supported_reasoning_efforts(prices["chat-latest"], deployment_is_mapped=True) == ("medium",)
+
+
+BEDROCK_OPENAI_GPT_MARKERS: Final = ("openai.gpt-5.4", "openai.gpt-5.5", "openai.gpt-5.6", "openai.gpt-6-astra")
+BEDROCK_PROVIDERS: Final = frozenset(("bedrock", "bedrock_converse", "bedrock_mantle"))
+BEDROCK_ROW_PREFIXES: Final = ("bedrock_mantle/", "us.", "global.")
+GPT_5_4_BEDROCK_LADDER: Final = ("none", "low", "medium", "high", "xhigh")
+GPT_5_6_BEDROCK_LADDER: Final = ("none", "low", "medium", "high", "xhigh", "max")
+GPT_6_ASTRA_BEDROCK_LADDER: Final = ("low", "medium", "high", "xhigh", "max")
+BEDROCK_OPENAI_GPT_LADDERS: Final = MappingProxyType(
+    {
+        "bedrock_mantle/openai.gpt-5.4": GPT_5_4_BEDROCK_LADDER,
+        "bedrock_mantle/openai.gpt-5.5": GPT_5_4_BEDROCK_LADDER,
+        **{
+            f"{prefix}openai.gpt-5.6-{variant}": GPT_5_6_BEDROCK_LADDER
+            for prefix in BEDROCK_ROW_PREFIXES
+            for variant in ("luna", "sol", "terra")
+        },
+        **{f"{prefix}openai.gpt-6-astra": GPT_6_ASTRA_BEDROCK_LADDER for prefix in BEDROCK_ROW_PREFIXES},
+    }
+)
+
+
+@pytest.mark.parametrize(
+    ("name", "ladder"), tuple(BEDROCK_OPENAI_GPT_LADDERS.items()), ids=tuple(BEDROCK_OPENAI_GPT_LADDERS)
+)
+def test_bedrock_openai_gpt_rows_advertise_the_ladder_bedrock_accepts(prices: dict, name: str, ladder: tuple[str, ...]):
+    """Each ladder is the set of levels Bedrock answered 200 to for that row through the proxy on
+    2026-09-11 (PR #40740): the Mantle rows go out over its Responses endpoint and the Converse rows
+    over inference profiles. Bedrock differs from the direct OpenAI rows in two places, gpt-5.6 and
+    gpt-6-astra take max there, and gpt-6-astra refuses none; minimal is refused on every row.
+    xhigh and max are opt-in for the resolver, so a row missing either flag silently drops that
+    level from every group it belongs to."""
+    assert resolve_supported_reasoning_efforts(prices[name], deployment_is_mapped=True) == ladder
+
+
+def test_every_bedrock_openai_gpt_row_advertises_xhigh(prices: dict):
+    """The GovCloud and gpt-5.6-cyber rows cannot be called from our account, so they carry the
+    family's xhigh flag rather than a measured ladder."""
+    missing: Final = [
+        name
+        for name, entry in prices.items()
+        if isinstance(entry, dict)
+        and entry.get("litellm_provider") in BEDROCK_PROVIDERS
+        and any(marker in name for marker in BEDROCK_OPENAI_GPT_MARKERS)
+        and "xhigh" not in (resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) or ())
+    ]
+    assert missing == []

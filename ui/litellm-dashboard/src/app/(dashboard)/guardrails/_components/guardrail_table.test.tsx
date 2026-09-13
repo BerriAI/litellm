@@ -46,6 +46,18 @@ describe("GuardrailTable", () => {
     expect(screen.getByText("m")).toBeInTheDocument();
   });
 
+  it("renders a tag-based mode object instead of crashing the table", () => {
+    const guardrail = makeGuardrail({
+      litellm_params: {
+        guardrail: "bedrock",
+        mode: { tags: { "Service-Type: internal-service": "post_call" }, default: ["pre_call", "post_call"] },
+        default_on: true,
+      },
+    });
+    render(<GuardrailTable guardrailsList={[guardrail]} {...baseProps} />);
+    expect(screen.getByText("pre_call, post_call (tag-based)")).toBeInTheDocument();
+  });
+
   it("deletes a DB guardrail through the actions menu", async () => {
     const user = userEvent.setup();
     const onDeleteClick = vi.fn();

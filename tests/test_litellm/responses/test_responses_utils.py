@@ -1,11 +1,9 @@
+from importlib import import_module
 import base64
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -442,6 +440,56 @@ class TestResponseAPILoggingUtils:
         assert result.completion_tokens_details.text_tokens == 20
         assert result.completion_tokens_details.audio_tokens is None
 
+    def test_transform_realtime_usage_partitions_reasoning_out_of_text_tokens(self):
+        """Realtime nests reasoning_tokens inside text_tokens; the stored text share excludes them."""
+        usage = {
+            "input_tokens": 237,
+            "output_tokens": 70,
+            "total_tokens": 307,
+            "input_token_details": {"text_tokens": 43, "audio_tokens": 0, "image_tokens": 194, "cached_tokens": 0},
+            "output_token_details": {"text_tokens": 70, "audio_tokens": 0, "reasoning_tokens": 52},
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+
+        assert result.completion_tokens == 70
+        assert result.completion_tokens_details is not None
+        assert result.completion_tokens_details.text_tokens == 18
+        assert result.completion_tokens_details.reasoning_tokens == 52
+        assert result.completion_tokens_details.audio_tokens == 0
+
+    def test_transform_realtime_usage_partitions_reasoning_beside_audio_output(self):
+        """Audio output stays as reported; only the text share sheds the nested reasoning tokens."""
+        usage = {
+            "input_tokens": 100,
+            "output_tokens": 70,
+            "total_tokens": 170,
+            "input_token_details": {"text_tokens": 100, "audio_tokens": 0, "cached_tokens": 0},
+            "output_token_details": {"text_tokens": 39, "audio_tokens": 31, "reasoning_tokens": 23},
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+
+        assert result.completion_tokens_details is not None
+        assert result.completion_tokens_details.text_tokens == 16
+        assert result.completion_tokens_details.audio_tokens == 31
+        assert result.completion_tokens_details.reasoning_tokens == 23
+
+    def test_transform_response_api_usage_keeps_partitioned_text_tokens(self):
+        """A provider already reporting text_tokens beside reasoning_tokens is stored as sent."""
+        usage = {
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "total_tokens": 30,
+            "output_tokens_details": {"text_tokens": 12, "reasoning_tokens": 5},
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+
+        assert result.completion_tokens_details is not None
+        assert result.completion_tokens_details.text_tokens == 12
+        assert result.completion_tokens_details.reasoning_tokens == 5
+
     def test_transform_response_api_usage_carries_extra_provider_fields(self):
         """Non-standard usage fields (e.g. xAI tool details) must survive chat normalization."""
         details = {"web_search_calls": 2, "x_search_calls": 0}
@@ -583,12 +631,12 @@ def test_responses_extra_body_forwarded_to_completion_transformation_handler():
     so it was silently dropped.
     """
     with (
-        patch(
-            "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
+        patch.object(
+            import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config",
             return_value=None,
         ),
-        patch(
-            "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler",
+        patch.object(
+            import_module("litellm.responses.main").litellm_completion_transformation_handler, "response_api_handler",
         ) as mock_handler,
     ):
         mock_handler.return_value = MagicMock()
@@ -614,12 +662,12 @@ def test_responses_maps_reasoning_effort_from_litellm_params_to_reasoning():
     that cannot set extra_body.
     """
     with (
-        patch(
-            "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
+        patch.object(
+            import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config",
             return_value=None,
         ),
-        patch(
-            "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler",
+        patch.object(
+            import_module("litellm.responses.main").litellm_completion_transformation_handler, "response_api_handler",
         ) as mock_handler,
     ):
         mock_handler.return_value = MagicMock()
@@ -638,3 +686,109 @@ def test_responses_maps_reasoning_effort_from_litellm_params_to_reasoning():
             "effort": "high",
             "summary": "detailed",
         }
+
+
+class TestMergePromptManagementInputReshape:
+    """Chat-shaped text parts produced by prompt management hooks become input_text parts (#37509)."""
+
+    EXPLICIT = {"mode": "explicit"}
+
+    def _run_cache_hook(self, client_input, points, model="openai/gpt-5.6"):
+        from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+
+        _, merged, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=model,
+            messages=client_input,
+            non_default_params={"cache_control_injection_points": points},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        return merged
+
+    def test_string_system_item_becomes_input_text_with_marker(self):
+        original_input = [{"role": "system", "content": "You are terse."}, {"role": "user", "content": "hi"}]
+        merged = self._run_cache_hook(list(original_input), [{"location": "message", "role": "system"}])
+
+        result = ResponsesAPIRequestUtils.merge_prompt_management_input(
+            original_input=original_input, client_input=list(original_input), merged_input=merged
+        )
+
+        assert result[0]["content"] == [
+            {"type": "input_text", "text": "You are terse.", "prompt_cache_breakpoint": self.EXPLICIT}
+        ]
+        assert result[1] == {"role": "user", "content": "hi"}
+
+    def test_reshape_returns_copies_and_leaves_hook_output_untouched(self):
+        user_part = {"type": "text", "text": "follow-up"}
+        user_message = {"role": "user", "content": [user_part]}
+        merged = [user_message]
+
+        result = ResponsesAPIRequestUtils.merge_prompt_management_input(
+            original_input="ignored", client_input=[], merged_input=merged
+        )
+
+        assert result == [{"role": "user", "content": [{"type": "input_text", "text": "follow-up"}]}]
+        assert user_part == {"type": "text", "text": "follow-up"}
+        assert user_message == {"role": "user", "content": [user_part]}
+        assert result[0] is not user_message
+
+    def test_reshape_keeps_non_message_items_when_hook_returns_client_objects(self):
+        user_message = {"role": "user", "content": [{"type": "text", "text": "question"}]}
+        reference = {"type": "item_reference", "id": "msg_123"}
+        original_input = [reference, user_message]
+
+        result = ResponsesAPIRequestUtils.merge_prompt_management_input(
+            original_input=original_input, client_input=[user_message], merged_input=[user_message]
+        )
+
+        assert result == [reference, {"role": "user", "content": [{"type": "input_text", "text": "question"}]}]
+        assert result[0] is reference
+        assert user_message["content"] == [{"type": "text", "text": "question"}]
+
+    def test_assistant_text_parts_are_left_alone(self):
+        merged = [
+            {"role": "assistant", "content": [{"type": "text", "text": "earlier answer"}]},
+            {"role": "user", "content": [{"type": "text", "text": "follow-up"}]},
+        ]
+
+        result = ResponsesAPIRequestUtils.merge_prompt_management_input(
+            original_input="ignored", client_input=[], merged_input=merged
+        )
+
+        assert result[0]["content"] == [{"type": "text", "text": "earlier answer"}]
+        assert result[1]["content"] == [{"type": "input_text", "text": "follow-up"}]
+
+    def test_parts_already_in_responses_shape_are_unchanged(self):
+        merged = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "a", "prompt_cache_breakpoint": self.EXPLICIT},
+                    {"type": "input_image", "image_url": "https://example.com/a.png"},
+                ],
+            }
+        ]
+
+        result = ResponsesAPIRequestUtils.merge_prompt_management_input(
+            original_input="ignored", client_input=[], merged_input=merged
+        )
+
+        assert result == merged
+
+
+class TestResponsesInputToChatMessages:
+    def test_none_input_returns_empty_list(self):
+        assert ResponsesAPIRequestUtils.responses_input_to_chat_messages(None) == []
+
+    def test_str_input_becomes_user_message(self):
+        assert ResponsesAPIRequestUtils.responses_input_to_chat_messages("hi") == [
+            {"role": "user", "content": "hi"}
+        ]
+
+    def test_list_input_keeps_only_role_items(self):
+        reasoning_item = {"type": "reasoning", "id": "rs_1", "summary": []}
+        user_message = {"role": "user", "content": "hi"}
+        assert ResponsesAPIRequestUtils.responses_input_to_chat_messages(
+            [reasoning_item, user_message, "stray"]
+        ) == [user_message]

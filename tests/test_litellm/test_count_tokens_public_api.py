@@ -4,10 +4,8 @@ Tests for litellm.acount_tokens() public API.
 
 import asyncio
 import os
-import sys
 from unittest.mock import AsyncMock, patch
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.types.utils import TokenCountResponse
@@ -144,20 +142,16 @@ def test_acount_tokens_api_error_falls_back():
         assert result.total_tokens > 0
 
 
-def test_acount_tokens_no_api_key_falls_back():
+def test_acount_tokens_no_api_key_falls_back(monkeypatch):
     """Test that missing API key falls back to local counting."""
-    env_backup = os.environ.pop("OPENAI_API_KEY", None)
-    try:
-        result = asyncio.run(
-            litellm.acount_tokens(
-                model="openai/gpt-4o",
-                messages=[{"role": "user", "content": "Hello"}],
-            )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    result = asyncio.run(
+        litellm.acount_tokens(
+            model="openai/gpt-4o",
+            messages=[{"role": "user", "content": "Hello"}],
         )
+    )
 
-        # Should fall back to local tokenizer since no API key
-        assert result.total_tokens > 0
-        assert result.tokenizer_type == "local_tokenizer"
-    finally:
-        if env_backup:
-            os.environ["OPENAI_API_KEY"] = env_backup
+    # Should fall back to local tokenizer since no API key
+    assert result.total_tokens > 0
+    assert result.tokenizer_type == "local_tokenizer"

@@ -213,18 +213,21 @@ whenever the password contains a URL-reserved character (@, /, ?, %, +,
 
 When `database.writer.useIAMAuth: true`, the chart injects
 IAM_TOKEN_DB_AUTH=true and omits DATABASE_PASSWORD — the entrypoint mints
-the URL from DATABASE_HOST/PORT/USER/NAME plus a short-lived IAM token
-instead of a static password.
+the URL from DATABASE_HOST/PORT/USER/NAME plus a short-lived AWS RDS IAM
+token instead of a static password. `database.writer.useAzureEntraAuth: true`
+does the same with AZURE_POSTGRESQL_AUTH=true and a Microsoft Entra ID token,
+for Azure Database for PostgreSQL. The two are mutually exclusive.
 
 The read replica is opt-in via `database.reader.host`. The chart emits
 DATABASE_HOST_READ_REPLICA / DATABASE_PORT_READ_REPLICA /
 DATABASE_NAME_READ_REPLICA (+ DATABASE_SCHEMA_READ_REPLICA) for both auth
 modes, plus DATABASE_USER_READ_REPLICA / DATABASE_PASSWORD_READ_REPLICA for
-password auth. When `database.reader.useIAMAuth: true` it omits
+password auth. When `database.reader.useIAMAuth: true` (or
+`database.reader.useAzureEntraAuth: true`) it omits
 DATABASE_PASSWORD_READ_REPLICA and the entrypoint mints the reader URL the
-same way. Reader IAM only takes effect when the writer also uses IAM auth
-(the proxy gates URL minting on IAM_TOKEN_DB_AUTH, which only the writer
-sets).
+same way. Reader token auth only takes effect when the writer uses the same
+token source, since the proxy gates URL minting on the single global
+IAM_TOKEN_DB_AUTH / AZURE_POSTGRESQL_AUTH toggle that only the writer sets.
 */}}
 {{- define "litellm.serverEnv" -}}
 {{- $root := .root -}}
@@ -254,8 +257,22 @@ sets).
 - name: DATABASE_SCHEMA
   value: {{ .schema | quote }}
 {{- end }}
+{{- if .sslMode }}
+- name: DATABASE_SSLMODE
+  value: {{ .sslMode | quote }}
+{{- end }}
+{{- if .sslRootCert }}
+- name: DATABASE_SSLROOTCERT
+  value: {{ .sslRootCert | quote }}
+{{- end }}
+{{- if and .useIAMAuth .useAzureEntraAuth }}
+{{- fail "database.writer.useIAMAuth and database.writer.useAzureEntraAuth are mutually exclusive: the database password can only come from one token source" }}
+{{- end }}
 {{- if .useIAMAuth }}
 - name: IAM_TOKEN_DB_AUTH
+  value: "true"
+{{- else if .useAzureEntraAuth }}
+- name: AZURE_POSTGRESQL_AUTH
   value: "true"
 {{- else }}
 - name: DATABASE_PASSWORD
@@ -270,6 +287,9 @@ sets).
 {{- if and .useIAMAuth (not $root.Values.database.writer.useIAMAuth) }}
 {{- fail "database.reader.useIAMAuth requires database.writer.useIAMAuth: true (the proxy gates IAM URL minting on IAM_TOKEN_DB_AUTH, which is only set by the writer)" }}
 {{- end }}
+{{- if and .useAzureEntraAuth (not $root.Values.database.writer.useAzureEntraAuth) }}
+{{- fail "database.reader.useAzureEntraAuth requires database.writer.useAzureEntraAuth: true (the proxy gates Entra URL minting on AZURE_POSTGRESQL_AUTH, which is only set by the writer)" }}
+{{- end }}
 - name: DATABASE_HOST_READ_REPLICA
   value: {{ .host | quote }}
 - name: DATABASE_PORT_READ_REPLICA
@@ -280,7 +300,7 @@ sets).
 - name: DATABASE_SCHEMA_READ_REPLICA
   value: {{ .schema | quote }}
 {{- end }}
-{{- if .useIAMAuth }}
+{{- if or .useIAMAuth .useAzureEntraAuth }}
 {{- if .passwordSecret.name }}
 - name: DATABASE_USER_READ_REPLICA
   valueFrom:
@@ -345,6 +365,20 @@ harmless no-op for the Job and authoritative for the app pods.
 {{- end }}
 {{- with $component.extraEnv }}
 {{ toYaml . }}
+{{- end }}
+{{- end -}}
+
+{{/*
+In-container PgBouncer env for the gateway container. Under IAM or Entra auth the pooler mints and renews the database token itself.
+*/}}
+{{- define "litellm.connectionPoolEnv" -}}
+{{- with .Values.database.connectionPool -}}
+- name: LITELLM_PGBOUNCER_ENABLED
+  value: "true"
+- name: LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS
+  value: {{ required "database.connectionPool.maxDbConnections is required when the pool is enabled" .maxDbConnections | quote }}
+- name: LITELLM_PGBOUNCER_MAX_CLIENT_CONN
+  value: {{ required "database.connectionPool.maxClientConn is required when the pool is enabled" .maxClientConn | quote }}
 {{- end }}
 {{- end -}}
 
@@ -414,5 +448,51 @@ envFrom:
   - secretRef:
       name: {{ . }}
 {{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
+ingress-nginx's admission webhook rejects a dot in an Exact or Prefix path
+(strict-validate-path-type) and serves ImplementationSpecific as a plain
+prefix location, so a dotted path takes that type there.
+*/}}
+{{- define "litellm.ingress.pathType" -}}
+{{- if and (eq .controller "nginx") (contains "." .path) -}}
+ImplementationSpecific
+{{- else -}}
+{{- .pathType -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "litellm.gateway.prometheusMultiprocDir" -}}/tmp/litellm_prometheus_multiproc{{- end -}}
+
+{{/*
+Directory of the collector's unix socket, shared by the gateway and
+collector containers through an emptyDir. Empty when the sidecar is off
+or gateway.collector.address is a tcp://127.0.0.1:<port> address.
+*/}}
+{{- define "litellm.gateway.collectorSocketDir" -}}
+{{- if and .Values.gateway.collector.enabled (hasPrefix "unix://" .Values.gateway.collector.address) -}}
+{{- dir (trimPrefix "unix://" .Values.gateway.collector.address) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+LITELLM_COLLECTOR_* env shared by the producer (gateway container) and the
+consumer (collector container), so both agree on the transport and the
+shutdown drain window.
+*/}}
+{{- define "litellm.gateway.collectorEnv" -}}
+{{- with .Values.gateway.collector }}
+- name: LITELLM_COLLECTOR_ENABLED
+  value: "true"
+- name: LITELLM_COLLECTOR_ADDRESS
+  value: {{ .address | quote }}
+- name: LITELLM_COLLECTOR_BUFFER_SIZE
+  value: {{ .bufferSize | quote }}
+- name: LITELLM_COLLECTOR_ON_UNAVAILABLE
+  value: {{ .onUnavailable | quote }}
+- name: LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS
+  value: {{ .drainTimeoutSeconds | quote }}
 {{- end }}
 {{- end -}}

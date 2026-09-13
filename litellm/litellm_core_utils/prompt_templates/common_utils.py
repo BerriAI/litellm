@@ -6,11 +6,12 @@ import io
 import json
 import mimetypes
 import re
-from collections.abc import Iterable, Mapping, Sequence
-from itertools import groupby
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from itertools import groupby, islice
 from os import PathLike
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
 
 from openai.types.chat.chat_completion_custom_tool_param import (
     CustomFormatGrammar,
@@ -28,8 +29,12 @@ from litellm.types.llms.openai import (
     ChatCompletionAssistantMessage,
     ChatCompletionFileObject,
     ChatCompletionImageObject,
+    ChatCompletionReasoningItem,
+    ChatCompletionReasoningSummaryTextBlock,
+    ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
     ChatCompletionTextObject,
+    ChatCompletionThinkingBlock,
     ChatCompletionToolParam,
     ChatCompletionUserMessage,
 )
@@ -198,6 +203,80 @@ def get_str_from_messages(messages: list[AllMessageValues]) -> str:
 def is_non_content_values_set(message: AllMessageValues) -> bool:
     ignore_keys: Final = ["content", "role", "name"]
     return any(message.get(key, None) is not None for key in message if key not in ignore_keys)
+
+
+_IMAGE_CONTENT_PART_TYPES: Final = frozenset({"image_url", "input_image", "image"})
+_IMAGE_SCAN_MAX_DEPTH: Final = 4
+
+
+def _content_parts_contain_image(parts: Sequence[object]) -> bool:
+    """Depth-bounded frontier walk over nested content lists, iterative because the repo bans
+    recursion; an Anthropic tool_result nests its image parts exactly one level down."""
+    frontier = parts  # rebind-ok: depth-bounded frontier walk
+    for _ in range(_IMAGE_SCAN_MAX_DEPTH):
+        if any(isinstance(part, Mapping) and part.get("type") in _IMAGE_CONTENT_PART_TYPES for part in frontier):
+            return True
+        frontier = tuple(  # rebind-ok: depth-bounded frontier walk
+            nested
+            for part in frontier
+            if isinstance(part, Mapping)
+            for content in (part.get("content"),)
+            if isinstance(content, list)
+            for nested in content
+        )
+        if not frontier:
+            return False
+    return False
+
+
+def anthropic_image_source_to_openai_url(image_source: Mapping[str, object]) -> str | None:
+    """Data or remote URL for an Anthropic ``source`` block, in the form chat completions expects."""
+    source_type: Final = image_source.get("type")
+    if source_type == "base64":
+        media_type: Final = image_source.get("media_type") or "image/jpeg"
+        image_data: Final = image_source.get("data") or ""
+        return f"data:{media_type};base64,{image_data}" if image_data else None
+    if source_type == "url":
+        url: Final = image_source.get("url")
+        return url if isinstance(url, str) else ""
+    return None
+
+
+def _image_part_url(part: Mapping[str, object]) -> str | None:
+    """The image URL carried by one content part, whichever of the three dialects wrote it."""
+    part_type: Final = part.get("type")
+    if part_type == "image_url":
+        image_url: Final = part.get("image_url")
+        if isinstance(image_url, str):
+            return image_url
+        return image_url.get("url") if isinstance(image_url, Mapping) else None
+    if part_type == "input_image":
+        responses_url: Final = part.get("image_url")
+        return responses_url if isinstance(responses_url, str) else None
+    if part_type == "image":
+        source: Final = part.get("source")
+        return anthropic_image_source_to_openai_url(source) if isinstance(source, Mapping) else None
+    return None
+
+
+def as_openai_image_part(part: Mapping[str, object]) -> ChatCompletionImageObject | None:
+    """One image content part rewritten into chat-completions dialect, or None when it is not one.
+
+    Rebuilt rather than forwarded so no caller-controlled key beyond the URL rides along.
+    """
+    url: Final = _image_part_url(part)
+    return {"type": "image_url", "image_url": {"url": url}} if url else None
+
+
+def request_contains_image_content(messages: Sequence[Mapping[str, object]]) -> bool:
+    """Whether any message carries an image content part, across the dialects that reach
+    pre-routing hooks untranslated: chat-completions ``image_url``, Responses ``input_image``,
+    and Anthropic Messages ``image``, including images nested inside ``tool_result`` blocks."""
+    return any(
+        isinstance(content, list) and _content_parts_contain_image(content)
+        for message in messages
+        for content in (message.get("content"),)
+    )
 
 
 def _audio_or_image_in_message_content(message: AllMessageValues) -> bool:
@@ -466,6 +545,8 @@ def update_messages_with_model_file_ids(
     from litellm.proxy.openai_files_endpoints.common_utils import (
         _is_base64_encoded_unified_file_id,
         convert_b64_uid_to_unified_uid,
+        get_original_file_id,
+        is_model_embedded_id,
     )
 
     for message in messages:
@@ -504,6 +585,8 @@ def update_messages_with_model_file_ids(
                                 unified_file_id = convert_b64_uid_to_unified_uid(file_id)
                                 if "llm_output_file_id," in unified_file_id:
                                     provider_file_id = unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
+                            if not provider_file_id and is_model_embedded_id(file_id):
+                                provider_file_id = get_original_file_id(file_id)
                             file_object_file_field["file_id"] = provider_file_id or file_id
                         if format:
                             file_object_file_field["format"] = format
@@ -511,10 +594,10 @@ def update_messages_with_model_file_ids(
 
 
 def update_responses_input_with_model_file_ids(
-    input: Any,
+    input: object,
     model_id: str | None = None,
     model_file_id_mapping: dict[str, dict[str, str]] | None = None,
-) -> str | list[dict[str, Any]]:
+) -> object:
     """
     Updates responses API input with provider-specific file IDs.
     File IDs are always inside the content array, not as direct input_file items.
@@ -531,6 +614,8 @@ def update_responses_input_with_model_file_ids(
     from litellm.proxy.openai_files_endpoints.common_utils import (
         _is_base64_encoded_unified_file_id,
         convert_b64_uid_to_unified_uid,
+        get_original_file_id,
+        is_model_embedded_id,
     )
 
     if isinstance(input, str):
@@ -574,6 +659,10 @@ def update_responses_input_with_model_file_ids(
                                 updated_content_item = content_item.copy()
                                 updated_content_item["file_id"] = provider_file_id
                                 updated_content.append(updated_content_item)
+                            elif is_model_embedded_id(file_id):
+                                updated_content_item = content_item.copy()
+                                updated_content_item["file_id"] = get_original_file_id(file_id)
+                                updated_content.append(updated_content_item)
                             else:
                                 # Not a managed file, keep as-is
                                 updated_content.append(content_item)
@@ -589,8 +678,8 @@ def update_responses_input_with_model_file_ids(
 
 
 def _decode_vector_store_ids_in_tools(
-    tools: list[dict[str, Any]] | None,
-) -> list[dict[str, Any]] | None:
+    tools: list[dict[str, object]] | None,
+) -> list[dict[str, object]] | None:
     """
     Decodes unified (LiteLLM-managed) vector_store_ids in file_search tools to
     provider-native IDs.  Non-unified IDs are passed through unchanged.
@@ -642,10 +731,10 @@ def _decode_vector_store_ids_in_tools(
 
 
 def update_responses_tools_with_model_file_ids(
-    tools: list[dict[str, Any]] | None,
+    tools: list[dict[str, object]] | None,
     model_id: str | None = None,
     model_file_id_mapping: dict[str, dict[str, str]] | None = None,
-) -> list[dict[str, Any]] | None:
+) -> list[dict[str, object]] | None:
     """
     Updates responses API tools with provider-specific file IDs.
 
@@ -838,7 +927,7 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
 # ---------------------------------------------------------------------------
 
 
-def _estimate_json_bytes(obj: Any) -> int:
+def _estimate_json_bytes(obj: object) -> int:
     """Estimate the JSON-serialised byte size of ``obj`` without materialising
     JSON. Walks iteratively (no recursion stack risk).
 
@@ -1073,6 +1162,286 @@ def sanitize_input_schema_for_anthropic(input_schema: dict) -> "AnthropicInputSc
     allowed_keys: Final = set(AnthropicInputSchema.__annotations__.keys())
     filtered: Final = {key: value for key, value in normalized.items() if key in allowed_keys}
     return AnthropicInputSchema(**filtered)
+
+
+_TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("allOf", "anyOf", "oneOf")
+_OPENAI_REJECTED_TOP_LEVEL_SCHEMA_KEYS: Final = ("enum", "const", "not")
+_LOCAL_SCHEMA_REF_PREFIXES: Final = (("#/$defs/", "$defs"), ("#/definitions/", "definitions"))
+_MAX_SCHEMA_FLATTEN_DEPTH: Final = 32
+_EMPTY_SCHEMA: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _schema_properties(schema: Mapping[str, object]) -> Mapping[str, object]:
+    properties: Final = schema.get("properties")
+    return properties if isinstance(properties, dict) else _EMPTY_SCHEMA
+
+
+def _schema_branches(schema: Mapping[str, object], combinator: str) -> tuple[object, ...]:
+    branches: Final = schema.get(combinator)
+    return tuple(branches) if isinstance(branches, list) else ()
+
+
+def _schema_required_names(schema: Mapping[str, object]) -> frozenset[str]:
+    required: Final = schema.get("required")
+    if not isinstance(required, list):
+        return frozenset()
+    return frozenset(name for name in required if isinstance(name, str))
+
+
+def _combinator_required_names(combinator: str, branches: tuple[Mapping[str, object], ...]) -> frozenset[str]:
+    branch_names: Final = tuple(_schema_required_names(branch) for branch in branches)
+    if not branch_names:
+        return frozenset()
+    if combinator == "allOf":
+        return branch_names[0].union(*branch_names[1:])
+    return branch_names[0].intersection(*branch_names[1:])
+
+
+def _resolve_local_schema_ref(root: Mapping[str, object], ref: str) -> Mapping[str, object] | None:
+    matched: Final = next(
+        ((prefix, container) for prefix, container in _LOCAL_SCHEMA_REF_PREFIXES if ref.startswith(prefix)),
+        None,
+    )
+    if matched is None:
+        return None
+    prefix, container = matched
+    definitions: Final = root.get(container)
+    if not isinstance(definitions, dict):
+        return None
+    target: Final = definitions.get(ref[len(prefix) :])
+    return target if isinstance(target, dict) else None
+
+
+def _mergeable_branch(
+    root: Mapping[str, object],
+    branch: object,
+    seen_refs: frozenset[str],
+    depth: int,
+    expanded_refs: dict[str, Mapping[str, object] | None],  # mutable-ok: per-call memo bounding repeated $ref work
+) -> Mapping[str, object] | None:
+    if not isinstance(branch, dict) or depth > _MAX_SCHEMA_FLATTEN_DEPTH:
+        return None
+    ref: Final = branch.get("$ref")
+    if not isinstance(ref, str):
+        flattened: Final = _flatten_schema_against_root(branch, root, seen_refs, depth, expanded_refs)
+        if any(combinator in flattened for combinator in _TOP_LEVEL_SCHEMA_COMBINATORS):
+            return None
+        return flattened
+    if ref in expanded_refs:
+        return expanded_refs[ref]
+    if ref in seen_refs:
+        return None
+    target: Final = _resolve_local_schema_ref(root, ref)
+    expanded: Final = (
+        None
+        if target is None
+        else _mergeable_branch(root, target, seen_refs | frozenset((ref,)), depth + 1, expanded_refs)
+    )
+    expanded_refs[ref] = expanded
+    return expanded
+
+
+def _is_object_schema(schema: Mapping[str, object]) -> bool:
+    return schema.get("type") == "object" or ("type" not in schema and "properties" in schema)
+
+
+def _flatten_schema_against_root(
+    schema: Mapping[str, object],
+    root: Mapping[str, object],
+    seen_refs: frozenset[str],
+    depth: int,
+    expanded_refs: dict[str, Mapping[str, object] | None],  # mutable-ok: per-call memo bounding repeated $ref work
+) -> Mapping[str, object]:
+    raw_branch_groups: Final = tuple(
+        (
+            combinator,
+            tuple(
+                _mergeable_branch(root, branch, seen_refs, depth + 1, expanded_refs)
+                for branch in _schema_branches(schema, combinator)
+            ),
+        )
+        for combinator in _TOP_LEVEL_SCHEMA_COMBINATORS
+        if isinstance(schema.get(combinator), list)
+    )
+    dropped: Final = (
+        *(combinator for combinator, _ in raw_branch_groups),
+        *(key for key in _OPENAI_REJECTED_TOP_LEVEL_SCHEMA_KEYS if key in schema),
+    )
+    if not dropped:
+        return schema
+
+    if any(branch is None for _, group in raw_branch_groups for branch in group):
+        return schema
+    branch_groups: Final = tuple(
+        (combinator, tuple(branch for branch in group if branch is not None)) for combinator, group in raw_branch_groups
+    )
+    branches: Final = tuple(branch for _, group in branch_groups for branch in group)
+    is_object_schema: Final = _is_object_schema(schema) or (
+        "type" not in schema and branches != () and all(_is_object_schema(branch) for branch in branches)
+    )
+    if not is_object_schema:
+        return schema
+
+    merged_properties: Final = {  # mutable-ok: tool parameters are JSON dicts
+        name: value for source in (*reversed(branches), schema) for name, value in _schema_properties(source).items()
+    }
+    required_names: Final = _schema_required_names(schema).union(
+        *(_combinator_required_names(combinator, group) for combinator, group in branch_groups)
+    )
+    kept: Final = MappingProxyType({key: value for key, value in schema.items() if key not in dropped})
+    required_update: Final = MappingProxyType({"required": sorted(required_names)}) if required_names else _EMPTY_SCHEMA
+    return {  # mutable-ok: tool parameters are JSON dicts
+        **kept,
+        "type": "object",
+        "properties": merged_properties,
+        **required_update,
+    }
+
+
+def flatten_top_level_schema_combinators(schema: Mapping[str, object]) -> Mapping[str, object]:
+    """Merge top-level ``allOf``/``anyOf``/``oneOf`` branches into an object tool schema.
+
+    OpenAI's function-calling validator rejects tool ``parameters`` carrying
+    'oneOf'/'anyOf'/'allOf'/'enum'/'const'/'not' at the top level (nested uses
+    are accepted), while lenient backends such as the ChatGPT backend Codex
+    talks to natively accept them, so an MCP tool declaring a top-level union
+    400s through LiteLLM. Branch properties merge without clobbering (the
+    top-level schema wins, then earlier branches); ``required`` becomes the
+    top-level list plus the intersection of the branch lists for anyOf/oneOf
+    or their union for allOf. Branches that are local ``$ref``s
+    (``#/$defs/...`` or ``#/definitions/...``) are resolved first, each ref
+    at most once per call, and branches that are themselves combinators are
+    flattened recursively up to a fixed depth; a branch that cannot be fully
+    merged (a boolean schema, an external or cyclic ``$ref``, a non-object
+    union, or nesting past the depth cap) leaves the whole schema untouched so
+    OpenAI's own validation still applies. Non-object schemas pass through
+    unchanged and the input is never mutated.
+    """
+    return _flatten_schema_against_root(schema, schema, frozenset(), 0, {})  # mutable-ok: fresh per-call $ref memo
+
+
+_SUBSCHEMA_KEYWORDS: Final = frozenset(
+    {
+        "additionalItems",
+        "additionalProperties",
+        "contains",
+        "else",
+        "if",
+        "items",
+        "not",
+        "propertyNames",
+        "then",
+        "unevaluatedItems",
+        "unevaluatedProperties",
+    }
+)
+_SUBSCHEMA_LIST_KEYWORDS: Final = frozenset({"allOf", "anyOf", "items", "oneOf", "prefixItems"})
+_SUBSCHEMA_MAP_KEYWORDS: Final = frozenset(
+    {"$defs", "definitions", "dependentSchemas", "patternProperties", "properties"}
+)
+
+_MAX_SCHEMA_NESTING: Final = 1024
+
+
+def drop_non_python_regex_patterns(schema: Mapping[str, object]) -> Mapping[str, object]:
+    """Drop every regex in a schema position that Python's ``re`` cannot compile.
+
+    OpenAI validates tool ``parameters`` against the 2020-12 metaschema with
+    ``jsonschema``'s format checker, which hands each ``pattern`` value and each
+    ``patternProperties`` key to ``re.compile``, so a regex written for an
+    ECMA-262 engine (Unicode property escapes such as ``\\p{Cc}``, as in Claude
+    Code's ``Artifact`` tool) is refused with "'...' is not a 'regex'" by every
+    model family on both the chat and Responses wires. Only schema positions are
+    walked (properties, items, combinators, ``$defs`` and the other applicators),
+    so a ``pattern`` key inside ``default``, ``examples``, ``const`` or vendor
+    extensions is data and stays. Outside strict mode the keyword is only a
+    hint, so dropping it costs the model a constraint and the caller nothing.
+    Compilable regexes and everything else pass through, the input is never
+    mutated, and the same object comes back when nothing was dropped. The walk
+    is level-order rather than recursive, rebuilt deepest level first, and stops
+    at more schema levels than a JSON parser admits, so a cyclic schema built in
+    code cannot spin it.
+    """
+    rebuilt: dict[int, Mapping[str, object]] = {}  # mutable-ok: per-call memo of rewritten nodes, deepest level first
+    for level in reversed(tuple(islice(_schema_levels(schema), _MAX_SCHEMA_NESTING))):
+        rebuilt.update(
+            (id(node), rewritten)
+            for node in level
+            if (rewritten := _node_without_non_python_regex(node, rebuilt)) is not node
+        )
+    return rebuilt.get(id(schema), schema)
+
+
+def _schema_levels(schema: Mapping[str, object]) -> Iterator[tuple[Mapping[str, object], ...]]:
+    frontier: tuple[Mapping[str, object], ...] = (schema,)  # rebind-ok: level-order cursor, one level a round
+    while frontier:
+        yield frontier
+        frontier = tuple(child for node in frontier for child in _subschemas(node))
+
+
+def _subschemas(node: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
+    for key, value in node.items():
+        if key in _SUBSCHEMA_MAP_KEYWORDS and isinstance(value, dict):
+            yield from (sub for sub in value.values() if isinstance(sub, dict))
+        elif key in _SUBSCHEMA_LIST_KEYWORDS and isinstance(value, list):
+            yield from (sub for sub in value if isinstance(sub, dict))
+        elif key in _SUBSCHEMA_KEYWORDS and isinstance(value, dict):
+            yield value
+
+
+def _node_without_non_python_regex(
+    node: Mapping[str, object], rebuilt: Mapping[int, Mapping[str, object]]
+) -> Mapping[str, object]:
+    kept: Final = {  # mutable-ok: tool parameters are JSON dicts
+        key: _keyword_value_rebuilt(key, value, rebuilt)
+        for key, value in node.items()
+        if key != "pattern" or not isinstance(value, str) or _is_python_regex(value)
+    }
+    return node if len(kept) == len(node) and all(kept[key] is node[key] for key in kept) else kept
+
+
+def _keyword_value_rebuilt(key: str, value: object, rebuilt: Mapping[int, Mapping[str, object]]) -> object:
+    if key in _SUBSCHEMA_MAP_KEYWORDS and isinstance(value, dict):
+        kept: Final = {  # mutable-ok: tool parameters are JSON dicts
+            name: rebuilt.get(id(sub), sub)
+            for name, sub in value.items()
+            if key != "patternProperties" or not isinstance(name, str) or _is_python_regex(name)
+        }
+        return value if len(kept) == len(value) and all(kept[name] is value[name] for name in kept) else kept
+    if key in _SUBSCHEMA_LIST_KEYWORDS and isinstance(value, list):
+        items: Final = [rebuilt.get(id(sub), sub) for sub in value]  # mutable-ok: tool parameters are JSON lists
+        return value if all(new is old for new, old in zip(items, value, strict=True)) else items
+    if key in _SUBSCHEMA_KEYWORDS and isinstance(value, dict):
+        return rebuilt.get(id(value), value)
+    return value
+
+
+def _is_python_regex(pattern: str) -> bool:
+    try:
+        re.compile(pattern)
+    except (re.error, RecursionError):
+        return False
+    return True
+
+
+def flatten_combinators_and_drop_non_python_regex_patterns(schema: Mapping[str, object]) -> Mapping[str, object]:
+    return flatten_top_level_schema_combinators(drop_non_python_regex_patterns(schema))
+
+
+def tool_with_sanitized_parameters(
+    tool: Mapping[str, object],
+    sanitize: Callable[[Mapping[str, object]], Mapping[str, object]],
+) -> Mapping[str, object]:
+    function: Final = tool.get("function")
+    if not isinstance(function, dict):
+        return tool
+    parameters: Final = function.get("parameters")
+    if not isinstance(parameters, dict):
+        return tool
+    sanitized: Final = sanitize(parameters)
+    if sanitized is parameters:
+        return tool
+    return {**tool, "function": {**function, "parameters": sanitized}}  # mutable-ok: request tools are JSON dicts
 
 
 def _get_image_mime_type_from_url(url: str) -> str | None:
@@ -1325,6 +1694,32 @@ def check_is_function_call(logging_obj: "LoggingClass") -> bool:
     return False
 
 
+_MarkedT: Final = TypeVar("_MarkedT", bound=Mapping[str, object])
+
+
+def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
+    if marker is None:
+        return target
+    marked: Final = {**target, "prompt_cache_breakpoint": marker}  # mutable-ok: API message payload
+    return cast(_MarkedT, marked)  # cast-ok: same block shape as the input plus the marker key
+
+
+LITELLM_INTERNAL_MESSAGE_FIELDS: Final = frozenset({"thinking_blocks", "reasoning_content", "provider_specific_fields"})
+
+
+def strip_litellm_internal_message_fields(message: AllMessageValues) -> AllMessageValues:
+    """Drop the fields litellm attaches to assistant messages (e.g. when translating Anthropic thinking
+    blocks) that OpenAI-compatible endpoints with strict schemas reject as extra inputs."""
+    if LITELLM_INTERNAL_MESSAGE_FIELDS.isdisjoint(message):
+        return message
+    return cast(  # cast-ok: same TypedDict minus internal keys
+        AllMessageValues,
+        {  # mutable-ok: provider transforms mutate message dicts in place downstream
+            key: value for key, value in message.items() if key not in LITELLM_INTERNAL_MESSAGE_FIELDS
+        },
+    )
+
+
 def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
     """
     Filters a value from a dictionary
@@ -1539,6 +1934,142 @@ def _extract_reasoning_content(message: dict) -> tuple[str | None, str | None]:
     return None, message_content
 
 
+def _readable_thinking_text(block: Mapping[str, object]) -> str:
+    """The text a chat model can read back, empty for redacted blocks and malformed ones."""
+    if block.get("type") != "thinking":
+        return ""
+    return str(block.get("thinking") or "")
+
+
+def reasoning_content_from_thinking_blocks(
+    thinking_blocks: Iterable[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
+) -> str:
+    """Flatten Anthropic thinking blocks into the `reasoning_content` string chat models expect.
+
+    Redacted blocks carry no readable text, so they contribute nothing.
+    """
+    return "\n".join(text for block in thinking_blocks if (text := _readable_thinking_text(block)))
+
+
+ENCRYPTED_REASONING_SIGNATURE_PREFIX: Final = "litellm_encrypted_reasoning:"
+
+
+def encrypted_reasoning_signature(encrypted_content: str) -> str:
+    """The opaque value a Responses API reasoning item's `encrypted_content` travels in.
+
+    Anthropic clients echo a thinking block's `signature` and a redacted block's `data`
+    back verbatim, so either field can carry the encrypted reasoning across turns; the
+    prefix tells the two apart from a signature Anthropic minted.
+    """
+    return f"{ENCRYPTED_REASONING_SIGNATURE_PREFIX}{encrypted_content}"
+
+
+def _carries_encrypted_reasoning(signature: object) -> bool:
+    return isinstance(signature, str) and signature.startswith(ENCRYPTED_REASONING_SIGNATURE_PREFIX)
+
+
+def encrypted_content_from_signature(signature: object) -> str | None:
+    if not isinstance(signature, str) or not _carries_encrypted_reasoning(signature):
+        return None
+    return signature.removeprefix(ENCRYPTED_REASONING_SIGNATURE_PREFIX) or None
+
+
+def _encrypted_reasoning_field(block: Mapping[str, object]) -> object:
+    match block.get("type"):
+        case "thinking":
+            return block.get("signature")
+        case "redacted_thinking":
+            return block.get("data")
+        case _:
+            return None
+
+
+def encrypted_content_of_block(block: Mapping[str, object]) -> str | None:
+    return encrypted_content_from_signature(_encrypted_reasoning_field(block))
+
+
+def is_encrypted_reasoning_block(block: object) -> bool:
+    """A thinking or redacted_thinking block carrying Responses API encrypted reasoning.
+
+    Only the Responses API that minted the content can read it back, so an Anthropic
+    backend has to drop such a block rather than fail signature verification on it.
+    """
+    if not isinstance(block, Mapping):
+        return False
+    mapping: Final = cast(Mapping[str, object], block)  # cast-ok: narrowed by isinstance
+    return _carries_encrypted_reasoning(_encrypted_reasoning_field(mapping))
+
+
+def strip_encrypted_reasoning_from_messages(messages: object) -> None:
+    """Drop the bridge-tagged reasoning blocks a routed deployment cannot decrypt from
+    Anthropic-shaped history.
+
+    The whole block goes, the way #40280 drops undecryptable Responses ``input`` items: a
+    provider that did not mint the block rejects it signed (a foreign signature) and unsigned
+    (a missing signature) alike, so keeping its text as an unsigned thinking block only moves
+    the 400 from the router to the provider.
+
+    Mutates the content lists in place: the router's fallback snapshot shares these
+    message objects, so a rebound list would replay the stripped blocks on the fallback hop.
+    """
+    if not isinstance(messages, list):
+        return
+    for content in _anthropic_content_lists(cast(list[object], messages)):  # cast-ok: untyped client json
+        _strip_encrypted_reasoning_from_blocks(content)
+
+
+def _anthropic_content_lists(messages: Sequence[object]) -> Iterator[object]:
+    return (
+        cast(list[object], content)  # cast-ok: narrowed by isinstance
+        for message in messages
+        if isinstance(message, Mapping)
+        for content in (cast(Mapping[str, object], message).get("content"),)  # cast-ok: narrowed by isinstance
+        if isinstance(content, list)
+    )
+
+
+def _strip_encrypted_reasoning_from_blocks(content: object) -> None:
+    blocks: Final = cast(list[object], content)  # cast-ok: narrowed by the caller's isinstance
+    kept: Final = tuple(block for block in blocks if not is_encrypted_reasoning_block(block))
+    blocks[:] = kept  # rebind-ok: shared with fallback snapshot
+
+
+def _reasoning_replay_group_key(indexed_block: tuple[int, Mapping[str, object]]) -> str:
+    index, block = indexed_block
+    return f"encrypted:{index}" if is_encrypted_reasoning_block(block) else "summary"
+
+
+def _reasoning_item_from_block_group(group: tuple[Mapping[str, object], ...]) -> ChatCompletionReasoningItem | None:
+    summary: Final[list[ChatCompletionReasoningSummaryTextBlock]] = [  # mutable-ok: API message payload
+        ChatCompletionReasoningSummaryTextBlock(type="summary_text", text=text)
+        for block in group
+        if (text := _readable_thinking_text(block))
+    ]
+    encrypted_content: Final = encrypted_content_of_block(group[0])
+    if encrypted_content is not None:
+        return ChatCompletionReasoningItem(type="reasoning", summary=summary, encrypted_content=encrypted_content)
+    if not summary:
+        return None
+    return ChatCompletionReasoningItem(type="reasoning", summary=summary)
+
+
+def responses_reasoning_items_from_thinking_blocks(
+    thinking_blocks: Iterable[Mapping[str, object]],
+) -> tuple[ChatCompletionReasoningItem, ...]:
+    """Build Responses API `reasoning` input items from Anthropic thinking blocks.
+
+    A block carrying encrypted reasoning replays the item it came from byte for byte;
+    a run of plain thinking blocks collapses into one summary-only item. No item carries
+    an `id`: the Responses API 404s on any id it did not mint itself and rejects an empty
+    one, while an item without an id is always accepted.
+    """
+    return tuple(
+        item
+        for _, group in groupby(enumerate(thinking_blocks), key=_reasoning_replay_group_key)
+        if (item := _reasoning_item_from_block_group(tuple(block for _, block in group))) is not None
+    )
+
+
 def _parse_content_for_reasoning(
     message_text: str | None,
 ) -> tuple[str | None, str | None]:
@@ -1685,7 +2216,47 @@ def hoist_images_from_tool_messages(
     ]
 
 
-def _attempt_json_repair(s: str) -> Any | None:
+def _is_tool_reference_part(part: object) -> bool:
+    return isinstance(part, dict) and part.get("type") == "tool_reference"
+
+
+def _tool_message_carries_tool_reference(message: AllMessageValues) -> bool:
+    if message.get("role") != "tool":
+        return False
+    content = message.get("content")
+    return isinstance(content, list) and any(_is_tool_reference_part(part) for part in content)
+
+
+def _drop_tool_reference_parts(message: AllMessageValues) -> AllMessageValues:
+    if not _tool_message_carries_tool_reference(message):
+        return message
+    content = cast(list, message.get("content"))  # cast-ok: shape checked by _tool_message_carries_tool_reference
+    remaining_parts = [  # mutable-ok: tool message content must stay a json list
+        part for part in content if not _is_tool_reference_part(part)
+    ]
+    new_content = remaining_parts if remaining_parts else ""
+    rewritten = {**message, "content": new_content}  # mutable-ok: chat messages are plain json dicts
+    return cast(AllMessageValues, rewritten)  # cast-ok: dict spread keeps keys like cache_control
+
+
+def drop_tool_reference_parts_from_tool_messages(
+    messages: list[AllMessageValues],  # mutable-ok: message pipelines type messages as mutable lists
+) -> list[AllMessageValues]:  # mutable-ok: message pipelines type messages as mutable lists
+    """
+    Remove tool_reference content parts from role:"tool" messages.
+
+    The OpenAI chat spec only accepts text in tool messages, so a tool_reference
+    part carried through the Anthropic adapter makes strict providers reject the
+    request. The reference names an already-declared tool rather than carrying
+    content, so it is dropped; a reference-only result keeps its tool message with
+    empty text so the preceding tool_call stays answered.
+    """
+    if not any(_tool_message_carries_tool_reference(message) for message in messages):
+        return messages
+    return [_drop_tool_reference_parts(message) for message in messages]  # mutable-ok: pipelines mutate message lists
+
+
+def _attempt_json_repair(s: str) -> object | None:
     """
     Attempt to repair truncated JSON produced by LLM tool calls.
 
@@ -1801,7 +2372,7 @@ def parse_tool_call_arguments(
         raise ValueError(error_message) from original_error
 
 
-def split_concatenated_json_objects(raw: str) -> list[dict[str, Any]]:
+def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
     """
     Split a string that contains one or more concatenated JSON objects into
     a list of parsed dicts.
@@ -1837,7 +2408,7 @@ def split_concatenated_json_objects(raw: str) -> list[dict[str, Any]]:
         return []
 
     decoder: Final = json.JSONDecoder()
-    results: Final[list[dict[str, Any]]] = []
+    results: Final[list[dict[str, object]]] = []
     idx = 0
     length: Final = len(raw)
 

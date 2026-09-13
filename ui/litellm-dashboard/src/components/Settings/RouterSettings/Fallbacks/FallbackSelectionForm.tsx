@@ -81,8 +81,8 @@ export function FallbackSelectionForm({
 
   if (groups.length === 0) {
     return (
-      <div className="text-center py-12 bg-gray-50 rounded-lg border border-dashed border-gray-300">
-        <p className="text-gray-500 mb-4">No fallback groups configured</p>
+      <div className="text-center py-12 bg-muted rounded-lg border border-dashed border-border">
+        <p className="text-muted-foreground mb-4">No fallback groups configured</p>
         <Button onClick={handleAddGroup}>
           <Plus className="w-4 h-4" />
           Create First Group

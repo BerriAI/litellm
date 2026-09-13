@@ -16,12 +16,11 @@ from litellm.proxy._types import (
     user_api_key_has_admin_view,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.management_v1.common import (
-    MANAGEMENT_V1_PREFIX,
+from litellm.proxy.list_api.common import (
     PROBLEM_TYPE_BASE,
     ManagementProblem,
 )
-from litellm.proxy.management_endpoints.management_v1.list_framework import (
+from litellm.proxy.list_api.list_framework import (
     FilterSpec,
     ListSpec,
     Predicate,
@@ -34,6 +33,7 @@ from litellm.proxy.management_endpoints.management_v1.list_framework import (
     order_by_sql,
     where_sql,
 )
+from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.proxy.utils import PrismaClient
 from litellm.types.proxy.management_endpoints.management_v1 import (
     ListResponse,

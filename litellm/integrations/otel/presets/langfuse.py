@@ -10,17 +10,32 @@ from litellm.integrations.otel.model.config import (
     ExporterSpec,
     OpenTelemetryV2Config,
 )
-from litellm.integrations.otel.presets.utils import ensure_mappers
+from litellm.integrations.otel.presets.utils import (
+    credential_gated_exporters,
+    ensure_mappers,
+)
 from litellm.types.utils import StandardCallbackDynamicParams
 
 
 def langfuse_preset(
     *,
     config_overrides: OpenTelemetryV2Config | None = None,
+    allow_missing_credentials: bool = False,
 ) -> OpenTelemetryV2Config:
-    cfg: Final = _V1Langfuse.get_langfuse_otel_config()
-    kind: Final = cfg.exporter if isinstance(cfg.exporter, str) else "otlp_http"
     base: Final = config_overrides or OpenTelemetryV2Config()
+    mappers: Final = ensure_mappers(base.mapper_names, "langfuse")
+    try:
+        cfg: Final = _V1Langfuse.get_langfuse_otel_config()
+    except Exception:
+        if not allow_missing_credentials:
+            raise
+        return base.model_copy(
+            update={  # mutable-ok: pydantic model_copy takes a plain update mapping
+                "exporters": credential_gated_exporters(base.exporters, ExporterOwner.LANGFUSE_OTEL),
+                "mapper_names": mappers,
+            }
+        )
+    kind: Final = cfg.exporter if isinstance(cfg.exporter, str) else "otlp_http"
     return base.model_copy(
         update={
             "exporters": [
@@ -32,7 +47,7 @@ def langfuse_preset(
                     owner=ExporterOwner.LANGFUSE_OTEL,
                 ),
             ],
-            "mapper_names": ensure_mappers(base.mapper_names, "langfuse"),
+            "mapper_names": mappers,
         }
     )
 

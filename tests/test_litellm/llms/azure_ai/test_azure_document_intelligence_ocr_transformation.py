@@ -1,4 +1,5 @@
 from unittest.mock import MagicMock
+from typing import Final
 
 import httpx
 import pytest
@@ -344,3 +345,62 @@ def test_get_complete_url_combines_pages_and_features():
 
     assert "&pages=1,2,3" in url
     assert "&features=keyValuePairs,languages" in url
+
+
+def test_validate_environment_uses_subscription_key(monkeypatch):
+    monkeypatch.delenv("AZURE_DOCUMENT_INTELLIGENCE_API_KEY", raising=False)
+
+    headers = AzureDocumentIntelligenceOCRConfig().validate_environment(
+        headers={},
+        model="prebuilt-layout",
+        api_key="my-key",
+        api_base="https://example.cognitiveservices.azure.com",
+    )
+
+    assert headers["Ocp-Apim-Subscription-Key"] == "my-key"
+
+
+def test_validate_environment_falls_back_to_entra_token(monkeypatch):
+    monkeypatch.delenv("AZURE_DOCUMENT_INTELLIGENCE_API_KEY", raising=False)
+
+    headers = AzureDocumentIntelligenceOCRConfig().validate_environment(
+        headers={},
+        model="prebuilt-layout",
+        api_base="https://example.cognitiveservices.azure.com",
+        litellm_params={"azure_ad_token": "entra-token"},
+    )
+
+    assert headers["Authorization"] == "Bearer entra-token"
+    assert "Ocp-Apim-Subscription-Key" not in headers
+
+
+@pytest.mark.parametrize(
+    ("request_headers", "expected_poll_headers"),
+    (
+        (
+            {"Ocp-Apim-Subscription-Key": "subscription-key"},
+            {"Ocp-Apim-Subscription-Key": "subscription-key"},
+        ),
+        (
+            {"Authorization": "Bearer entra-token"},
+            {"Authorization": "Bearer entra-token"},
+        ),
+    ),
+)
+def test_get_polling_target_preserves_request_authentication(
+    request_headers: dict[str, str], expected_poll_headers: dict[str, str]
+) -> None:
+    response: Final = httpx.Response(
+        status_code=202,
+        headers={"Operation-Location": "https://example.cognitiveservices.azure.com/operations/123"},
+        request=httpx.Request(
+            "POST",
+            "https://example.cognitiveservices.azure.com/documentintelligence/documentModels/prebuilt-layout:analyze",
+            headers=request_headers,
+        ),
+    )
+
+    operation_url, poll_headers = AzureDocumentIntelligenceOCRConfig()._get_polling_target(response)
+
+    assert operation_url == "https://example.cognitiveservices.azure.com/operations/123"
+    assert poll_headers == expected_poll_headers

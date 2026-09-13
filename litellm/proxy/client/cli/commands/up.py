@@ -14,17 +14,21 @@ from typing import IO, Final
 import click
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.cli_keyring import SecretVault
 from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
+from litellm.litellm_core_utils.private_json import ensure_private_dir
 
 from .agents import AgentRunError, resolve_api_key, verify_proxy_key
-from .auth import load_token, login
+from .auth import CliContextObj, context_secret_vault, get_stored_api_key, load_token, login
 from .claude_settings import (
     BACKUP_PATH,
     CLAUDE_SETTINGS_PATH,
     ClaudeSettingsError,
+    StaticToken,
+    install_statusline_script,
     load_json_or_empty,
     merge_claude_settings,
-    resolve_api_key_helper,
+    write_claude_settings,
 )
 
 
@@ -66,7 +70,7 @@ def secure_create(path: Path) -> Iterator[IO[str]]:
 
 def write_backup(record: BackupRecord, backup_path: Path | None = None) -> None:
     path: Final = backup_path if backup_path is not None else BACKUP_PATH
-    path.parent.mkdir(exist_ok=True)
+    ensure_private_dir(path.parent)
     with secure_create(path) as f:
         json.dump({"existed": record.existed, "content": record.content}, f, indent=2)
 
@@ -95,31 +99,47 @@ def restore_claude_settings(settings_path: Path | None = None, backup_path: Path
         return None
     if record.existed and record.content is not None:
         resolved_settings_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(resolved_settings_path, "w") as f:
-            json.dump(record.content, f, indent=2)
+        write_claude_settings(resolved_settings_path, record.content)
     elif resolved_settings_path.exists():
         resolved_settings_path.unlink()
     resolved_backup_path.unlink()
     return record
 
 
-def _ensure_fresh_login(ctx: click.Context) -> None:
-    base_url: Final = ctx.obj["base_url"].rstrip("/")
-    token_data = load_token()
-    if token_data and token_data.get("base_url") == base_url and is_cli_token_fresh(token_data):
+def _usable_login(api_key: str | None, vault: SecretVault) -> bool:
+    if api_key is None:
+        return False
+    token_data: Final = load_token(vault=vault)
+    return token_data is not None and is_cli_token_fresh(token_data)
+
+
+def _key_resolved_on_the_way_in(ctx_obj: CliContextObj, base_url: str, vault: SecretVault) -> str | None:
+    if ctx_obj.get("api_key_from_token_file"):
+        return ctx_obj.get("api_key")
+    return get_stored_api_key(expected_base_url=base_url, vault=vault)
+
+
+def _stored_login_is_pkce(vault: SecretVault) -> bool:
+    token_data: Final = load_token(vault=vault)
+    return token_data is not None and token_data.get("refresh_token") is not None
+
+
+def ensure_fresh_login(ctx: click.Context) -> None:
+    ctx_obj: Final[CliContextObj] = ctx.obj
+    base_url: Final = ctx_obj["base_url"].rstrip("/")
+    vault: Final = context_secret_vault(ctx)
+    if _usable_login(_key_resolved_on_the_way_in(ctx_obj, base_url, vault), vault):
         return
 
+    pkce: Final = _stored_login_is_pkce(vault)
+    login_command: Final = "lite login --pkce" if pkce else "lite login"
     if not sys.stdin.isatty():
-        raise UpError(
-            "No fresh LiteLLM login found for this proxy. Run `lite login` first (apiKeyHelper "
-            "reads this token on every Claude Code request)."
-        )
+        raise UpError(f"No fresh LiteLLM login found for this proxy. Run `{login_command}` first.")
 
     click.echo("No fresh LiteLLM login found for this proxy; starting login...")
-    ctx.invoke(login)
-    token_data = load_token()
-    if not token_data or token_data.get("base_url") != base_url or not is_cli_token_fresh(token_data):
-        raise UpError("Login did not produce a usable token; cannot start `lite up`.")
+    ctx.invoke(login, config_claude=False, pkce=pkce)
+    if not _usable_login(get_stored_api_key(expected_base_url=base_url, vault=vault), vault):
+        raise UpError("Login did not produce a usable token.")
 
 
 def _restore_and_report() -> None:
@@ -139,7 +159,9 @@ def up(ctx: click.Context) -> None:
     """Route every Claude Code session through your LiteLLM proxy until stopped.
 
     Patches ~/.claude/settings.json so Claude Code picks up the proxy on its own
-    next startup, from any terminal -- no need to launch it through `lite`.
+    next startup, from any terminal -- no need to launch it through `lite`. The
+    key written is the one this command resolved (your fresh `lite login`, or an
+    explicit --api-key), copied in as a static token for as long as `up` runs.
     Press Ctrl-C to stop and restore your original settings. Assumes the proxy
     is already running (this does not start one for you). Cursor is not
     supported: it has no equivalent file-based config to patch.
@@ -147,7 +169,7 @@ def up(ctx: click.Context) -> None:
     base_url: Final = ctx.obj["base_url"]
 
     try:
-        _ensure_fresh_login(ctx)
+        ensure_fresh_login(ctx)
         api_key: Final = resolve_api_key(ctx)
         verify_proxy_key(base_url, api_key)
 
@@ -157,7 +179,7 @@ def up(ctx: click.Context) -> None:
                 "running (or crashed without cleanup). Run `lite down` first."
             )
 
-        api_key_helper: Final = resolve_api_key_helper(base_url)
+        status_line: Final = install_statusline_script()
         original_existed: Final = CLAUDE_SETTINGS_PATH.exists()
         original_settings: Final = load_json_or_empty(CLAUDE_SETTINGS_PATH)
         write_backup(
@@ -168,9 +190,10 @@ def up(ctx: click.Context) -> None:
         )
 
         CLAUDE_SETTINGS_PATH.parent.mkdir(exist_ok=True)
-        merged: Final = merge_claude_settings(original_settings, base_url, api_key_helper)
-        with open(CLAUDE_SETTINGS_PATH, "w") as f:
-            json.dump(merged, f, indent=2)
+        merged: Final = merge_claude_settings(
+            original_settings, base_url, StaticToken(api_key), status_line=status_line
+        )
+        write_claude_settings(CLAUDE_SETTINGS_PATH, merged)
     except (AgentRunError, ClaudeSettingsError) as e:
         raise click.ClickException(str(e))
 
@@ -225,7 +248,6 @@ __all__ = [
     "load_json_or_empty",
     "merge_claude_settings",
     "read_backup",
-    "resolve_api_key_helper",
     "restore_claude_settings",
     "up",
     "write_backup",

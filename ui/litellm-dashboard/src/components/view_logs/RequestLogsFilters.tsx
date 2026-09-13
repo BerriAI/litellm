@@ -31,7 +31,15 @@ const STATUS_FILTER_ITEMS = [
   { value: "success", label: "Success" },
   { value: "failure", label: "Failure" },
 ] as const;
+
+const CACHE_FILTER_ITEMS = [
+  { value: ALL_VALUE, label: "All Requests" },
+  { value: "hit", label: "Cache Hit" },
+  { value: "miss", label: "Cache Miss" },
+] as const;
 const PAGE_SIZE = 50;
+
+const SEARCH_INPUT_REASONS: ReadonlySet<string> = new Set(["input-change", "input-clear", "clear-press"]);
 
 const asString = (value: unknown): string => (typeof value === "string" ? value : "");
 const emptyToUndefined = (value: string): string | undefined => (value === "" ? undefined : value);
@@ -60,7 +68,7 @@ function TeamFilterField({
       <SearchSelect
         options={options}
         value={value}
-        onValueChange={(next) => onChange(emptyToUndefined(next))}
+        onValueChange={(next) => onChange(next ?? undefined)}
         placeholder="Search or select a team"
         emptyText="No teams found"
       />
@@ -100,7 +108,7 @@ function KeyAliasFilterField({
       <PaginatedSearchSelect
         options={options}
         value={value}
-        onValueChange={(next) => onChange(emptyToUndefined(next))}
+        onValueChange={(next) => onChange(next ?? undefined)}
         onSearchChange={setSearch}
         onLoadMore={() => void fetchNextPage()}
         hasNextPage={hasNextPage}
@@ -138,7 +146,7 @@ function ModelFilterField({ value, onChange }: { value: string; onChange: (value
       <PaginatedSearchSelect
         options={options}
         value={value}
-        onValueChange={(next) => onChange(emptyToUndefined(next))}
+        onValueChange={(next) => onChange(next ?? undefined)}
         onSearchChange={setSearch}
         onLoadMore={() => void fetchNextPage()}
         hasNextPage={hasNextPage}
@@ -183,7 +191,7 @@ function UserIdFilterField({
       <PaginatedSearchSelect
         options={options}
         value={value}
-        onValueChange={(next) => onChange(emptyToUndefined(next))}
+        onValueChange={(next) => onChange(next ?? undefined)}
         onSearchChange={setSearch}
         onLoadMore={() => void fetchNextPage()}
         hasNextPage={hasNextPage}
@@ -228,7 +236,7 @@ function EndUserFilterField({
       <PaginatedSearchSelect
         options={options}
         value={value}
-        onValueChange={(next) => onChange(emptyToUndefined(next))}
+        onValueChange={(next) => onChange(next ?? undefined)}
         onSearchChange={setSearch}
         onLoadMore={() => void fetchNextPage()}
         hasNextPage={hasNextPage}
@@ -248,7 +256,10 @@ function ErrorCodeFilterField({ value, onChange }: { value: string; onChange: (v
     const trimmed = query.trim();
     const lowered = trimmed.toLowerCase();
     const matches = ERROR_CODE_OPTIONS.filter((option) => option.label.toLowerCase().includes(lowered));
-    if (trimmed === "" || ERROR_CODE_OPTIONS.some((option) => option.value === trimmed)) return matches;
+    const isKnownCode = ERROR_CODE_OPTIONS.some(
+      (option) => option.value === trimmed || option.label.toLowerCase() === lowered,
+    );
+    if (trimmed === "" || isKnownCode) return matches;
     return [...matches, { label: `Use custom code: ${trimmed}`, value: trimmed }];
   }, [query]);
 
@@ -269,12 +280,20 @@ function ErrorCodeFilterField({ value, onChange }: { value: string; onChange: (v
         items={items}
         value={selected}
         onValueChange={(item: SearchSelectOption | null) => onChange(emptyToUndefined(item?.value ?? ""))}
-        onInputValueChange={setQuery}
+        onInputValueChange={(next, eventDetails) => setQuery(SEARCH_INPUT_REASONS.has(eventDetails.reason) ? next : "")}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setQuery("");
+        }}
         isItemEqualToValue={(a: SearchSelectOption, b: SearchSelectOption) => a.value === b.value}
         itemToStringLabel={(item: SearchSelectOption) => item.label}
         filter={null}
       >
-        <ComboboxInput placeholder="Select or type an error code" showClear={value !== ""} className="w-full" />
+        <ComboboxInput
+          onFocus={(event) => event.currentTarget.select()}
+          placeholder="Select or type an error code"
+          showClear={value !== ""}
+          className="w-full"
+        />
         <ComboboxContent>
           <ComboboxEmpty>No error codes found</ComboboxEmpty>
           <ComboboxList data-testid="error-code-filter-list">
@@ -320,6 +339,27 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
           </SelectTrigger>
           <SelectContent>
             {STATUS_FILTER_ITEMS.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </DataTableFilterField>
+
+      <DataTableFilterField label="Cache">
+        <Select
+          items={CACHE_FILTER_ITEMS}
+          value={valueOf(LOG_FILTER_IDS.CACHE_STATUS) === "" ? ALL_VALUE : valueOf(LOG_FILTER_IDS.CACHE_STATUS)}
+          onValueChange={(next) =>
+            set(LOG_FILTER_IDS.CACHE_STATUS, next === null || next === ALL_VALUE ? undefined : next)
+          }
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder="All Requests" />
+          </SelectTrigger>
+          <SelectContent>
+            {CACHE_FILTER_ITEMS.map((item) => (
               <SelectItem key={item.value} value={item.value}>
                 {item.label}
               </SelectItem>

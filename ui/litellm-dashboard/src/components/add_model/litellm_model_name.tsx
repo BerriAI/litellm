@@ -2,15 +2,15 @@ import React from "react";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { useFormContext, useWatch } from "react-hook-form";
 import { Input } from "@/components/ui/input";
-import { antdRequired } from "../common_components/antdFormRules";
+import { requiredRule } from "../common_components/formRules";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { MountedFormField, type MountedFormValues } from "../common_components/MountedFormField";
 import { Providers } from "../provider_info_helpers";
 
 interface LiteLLMModelNameFieldProps {
-  selectedProvider: Providers;
+  selectedProvider: string | null;
   providerModels: string[];
-  getPlaceholder: (provider: Providers) => string;
+  getPlaceholder: (provider: string) => string;
 }
 
 const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
@@ -108,7 +108,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
         required
         rules={{
           validate: {
-            required: antdRequired(
+            required: requiredRule(
               `Please enter ${selectedProvider === Providers.Azure ? "a deployment name" : "at least one model"}.`,
             ),
           },
@@ -123,7 +123,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
               id={control.id}
               value={(control.value as string | undefined) ?? ""}
               onBlur={control.onBlur}
-              placeholder={getPlaceholder(selectedProvider)}
+              placeholder={selectedProvider === null ? "Select a provider first" : getPlaceholder(selectedProvider)}
               onChange={(event) => {
                 control.onChange(event);
                 if (selectedProvider === Providers.Azure) {
@@ -147,7 +147,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
                   value: "custom",
                 },
                 {
-                  label: `All ${selectedProvider} Models (Wildcard)`,
+                  label: `All ${selectedProvider ?? "provider"} Models (Wildcard)`,
                   value: "all-wildcard",
                 },
                 ...providerModels.map((model) => ({
@@ -163,7 +163,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
               value={(control.value as string | undefined) ?? ""}
               onChange={control.onChange}
               onBlur={control.onBlur}
-              placeholder={getPlaceholder(selectedProvider)}
+              placeholder={selectedProvider === null ? "Select a provider first" : getPlaceholder(selectedProvider)}
             />
           )
         }
@@ -173,7 +173,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
         <MountedFormField
           name="custom_model_name"
           required
-          rules={{ validate: { required: antdRequired("Please enter a custom model name.") } }}
+          rules={{ validate: { required: requiredRule("Please enter a custom model name.") } }}
           className="mt-2"
         >
           {(control) => (

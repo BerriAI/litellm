@@ -1,17 +1,22 @@
-"""On-disk fixture bundle format for record/replay e2e runs (LIT-5729).
+"""On-disk fixture bundle format for record/replay e2e runs (LIT-5729/LIT-5745).
 
 A bundle is a directory: one ``manifest.json`` (record timestamp + harness
 version + format version) plus one subdirectory per test, holding one JSON file
-per transport interaction in call order. Bundles older than
+per provider-bound interaction in call order. Bundles older than
 ``MAX_BUNDLE_AGE`` hard-fail replay at collection time (see conftest), so a
 green replay run can never certify against fixtures that have drifted more than
-a week from the live proxy.
+a week from the live providers. Bump ``BUNDLE_FORMAT_VERSION`` whenever a change
+moves recorded keys or changes the stored shape: a bundle recorded under the old
+rules then fails naming both versions instead of quietly missing on every call.
 
-This module owns the format only. The transports that produce and consume it
-live in fixture_transport.py and the canonical match keys they compute live in
-fixture_canonical.py (LIT-5741); streaming chunk fidelity and provider-scoping
-are follow-ups (LIT-5742/5745). Every interaction file stores the full redacted
-request because replay matches on its canonicalized content.
+This module owns the format only. The provider-edge server that produces and
+consumes it lives in provider_edge.py (LIT-5745) and the canonical match keys it
+computes live in fixture_canonical.py (LIT-5741). Every interaction file stores
+the full redacted request because replay matches on its canonicalized content,
+and a response in one of two shapes, told apart by their ``kind`` tag: an
+ordinary ``RecordedHttpResponse`` holding one base64 body, or, for a response the
+provider streamed, a ``RecordedStreamedResponse`` holding its transfer chunks in
+order so replay reproduces the same split points (LIT-5742).
 """
 
 from __future__ import annotations
@@ -25,26 +30,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Final, Literal
 
-from pydantic import BaseModel, Field, JsonValue, TypeAdapter
+from pydantic import BaseModel, Field, JsonValue
 
-from e2e_http import (
-    BinaryStream,
-    NetworkError,
-    ProbeResult,
-    RateLimitedError,
-    Result,
-    StreamingResponse,
-    Success,
-    UnauthorizedError,
-    UnknownApiError,
-    ValidationError,
-)
-
-BUNDLE_FORMAT_VERSION: Final = 1
+BUNDLE_FORMAT_VERSION: Final = 4
 MAX_BUNDLE_AGE: Final = timedelta(days=7)
 MANIFEST_FILENAME: Final = "manifest.json"
-
-_JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
 class Manifest(BaseModel):
@@ -54,13 +44,21 @@ class Manifest(BaseModel):
 
 
 class RecordedRequest(BaseModel):
-    """The request as the transport saw it, auth header values and credential
-    body/form fields redacted.
+    """The provider-bound request as the edge saw it, headers empty (SDK
+    telemetry headers vary run to run and auth material never touches disk).
 
     Replay matches on the canonical content key fixture_canonical.py computes
-    over ``method`` (the transport verb, not the HTTP verb), ``path``, and the
-    canonicalized headers, params, body, form, and file identity. File uploads
-    store a content digest instead of the bytes."""
+    over ``method``, ``path`` (the edge path including the provider mount,
+    query string excluded), and the canonicalized headers, params, body, form,
+    and file identity. Non-JSON bodies store a canonicalized content digest
+    instead of the bytes.
+
+    ``file_name`` is a JSON list of the uploaded parts' ``[field, filename,
+    content-type]`` triples rather than a flat label, so a separator inside a
+    filename cannot impersonate a field boundary. ``file_bytes`` is recorded for
+    a reader's benefit and stays out of the key: the canonicalizer absorbs
+    timestamp and id drift inside an uploaded file, and that drift moves the
+    byte count."""
 
     method: str
     path: str
@@ -73,85 +71,43 @@ class RecordedRequest(BaseModel):
     file_bytes: int | None = None
 
 
-class RecordedResult(BaseModel):
-    """A ``Result[R]`` flattened for disk. ``data`` holds the success payload as
-    raw JSON; replay re-validates it against the ``response_type`` the caller
-    passes, exactly like a live response body."""
+class RecordedHttpResponse(BaseModel):
+    """The provider's raw HTTP response: status, headers minus hop-by-hop and
+    volatile entries (see provider_edge.py), and the body as base64 so binary
+    payloads survive JSON."""
 
-    shape: Literal["result"] = "result"
-    kind: Literal["success", "network", "unauthorized", "rate_limited", "validation", "unknown"]
-    status_code: int | None = None
-    data: JsonValue | None = None
-    message: str | None = None
-    body: str | None = None
-    retry_after_seconds: int | None = None
+    kind: Literal["http"] = "http"
+    status_code: int
+    headers: dict[str, str]
+    body_b64: str
 
 
-class RecordedStreaming(BaseModel):
-    shape: Literal["streaming"] = "streaming"
-    payload: StreamingResponse
+class RecordedStreamedResponse(BaseModel):
+    """A response the provider streamed, kept chunk by chunk instead of buffered.
+
+    ``chunks_b64`` holds one entry per upstream transfer chunk, in order, so replay
+    reproduces the split points the provider chose rather than one coalesced body.
+    ``truncated`` is None for a stream that reached its terminator and otherwise
+    says why it did not, prefixed by which side ended it (``upstream:`` for a
+    provider that hung up mid-stream, ``downstream:`` for a proxy that stopped
+    reading). Replay behaves the same for any truncation, delivering the recorded
+    chunks and then closing; the reason is there for whoever reads the bundle."""
+
+    kind: Literal["streamed"] = "streamed"
+    status_code: int
+    headers: dict[str, str]
+    chunks_b64: list[str]
+    truncated: str | None = None
 
 
-class RecordedBinary(BaseModel):
-    shape: Literal["binary"] = "binary"
-    payload: BinaryStream
-
-
-class RecordedProbe(BaseModel):
-    shape: Literal["probe"] = "probe"
-    payload: ProbeResult
-
-
-type RecordedResponse = RecordedResult | RecordedStreaming | RecordedBinary | RecordedProbe
+type RecordedResponse = Annotated[
+    RecordedHttpResponse | RecordedStreamedResponse, Field(discriminator="kind")
+]
 
 
 class Interaction(BaseModel):
     request: RecordedRequest
-    response: Annotated[
-        RecordedResult | RecordedStreaming | RecordedBinary | RecordedProbe,
-        Field(discriminator="shape"),
-    ]
-
-
-def to_json_value(model: BaseModel) -> JsonValue:
-    return _JSON.validate_json(model.model_dump_json(by_alias=True))
-
-
-def from_result[R: BaseModel](result: Result[R]) -> RecordedResult:
-    match result:
-        case Success(status_code=status_code, data=data):
-            return RecordedResult(kind="success", status_code=status_code, data=to_json_value(data))
-        case NetworkError(message=message):
-            return RecordedResult(kind="network", message=message)
-        case UnauthorizedError():
-            return RecordedResult(kind="unauthorized")
-        case RateLimitedError(retry_after_seconds=retry_after_seconds, body=body):
-            return RecordedResult(kind="rate_limited", retry_after_seconds=retry_after_seconds, body=body)
-        case ValidationError(message=message):
-            return RecordedResult(kind="validation", message=message)
-        case UnknownApiError(status_code=status_code, body=body):
-            return RecordedResult(kind="unknown", status_code=status_code, body=body)
-
-
-def to_result[R: BaseModel](recorded: RecordedResult, response_type: type[R]) -> Result[R]:
-    match recorded.kind:
-        case "success":
-            return Success(
-                status_code=recorded.status_code or 200,
-                data=response_type.model_validate(recorded.data),
-            )
-        case "network":
-            return NetworkError(message=recorded.message or "")
-        case "unauthorized":
-            return UnauthorizedError()
-        case "rate_limited":
-            return RateLimitedError(
-                retry_after_seconds=recorded.retry_after_seconds, body=recorded.body or ""
-            )
-        case "validation":
-            return ValidationError(message=recorded.message or "")
-        case "unknown":
-            return UnknownApiError(status_code=recorded.status_code or 0, body=recorded.body or "")
+    response: RecordedResponse
 
 
 def slugify(raw: str, *, limit: int = 60) -> str:
@@ -270,14 +226,27 @@ def _read_manifest(root: Path) -> Manifest | UnreadableBundle:
         return UnreadableBundle(reason=f"{MANIFEST_FILENAME} is invalid: {exc}")
 
 
-def check_freshness(root: Path, *, now: datetime) -> BundleFreshness:
+def _supported_manifest(root: Path) -> Manifest | UnreadableBundle:
+    """The manifest, refused when it was written under a different format version.
+    A bundle is atomic (record wipes and rewrites the whole directory and never
+    merges), so a foreign version is a hard reject rather than a partial read."""
     manifest = _read_manifest(root)
     if isinstance(manifest, UnreadableBundle):
         return manifest
     if manifest.format_version != BUNDLE_FORMAT_VERSION:
         return UnreadableBundle(
-            reason=f"format_version {manifest.format_version} != supported {BUNDLE_FORMAT_VERSION}"
+            reason=(
+                f"format_version {manifest.format_version} != supported {BUNDLE_FORMAT_VERSION}; "
+                "re-record with E2E_FIXTURE_MODE=record"
+            )
         )
+    return manifest
+
+
+def check_freshness(root: Path, *, now: datetime) -> BundleFreshness:
+    manifest = _supported_manifest(root)
+    if isinstance(manifest, UnreadableBundle):
+        return manifest
     recorded_at = (
         manifest.recorded_at
         if manifest.recorded_at.tzinfo is not None
@@ -301,7 +270,7 @@ class LoadedBundle:
 
 
 def load_bundle(root: Path) -> LoadedBundle | UnreadableBundle:
-    manifest = _read_manifest(root)
+    manifest = _supported_manifest(root)
     if isinstance(manifest, UnreadableBundle):
         return manifest
     interactions = {

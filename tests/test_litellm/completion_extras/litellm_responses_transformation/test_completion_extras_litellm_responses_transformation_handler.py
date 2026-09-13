@@ -1,17 +1,16 @@
-import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
+import litellm
 from litellm.completion_extras.litellm_responses_transformation.handler import (
     ResponsesToCompletionBridgeHandler,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse
 
 
@@ -265,3 +264,74 @@ def test_completion_streams_completed_model_response():
     assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "pong", (
         f"completed response did not stream its content: {chunks}"
     )
+
+
+_PROVIDER_NATIVE_MODEL_CASES = [
+    ("perplexity", "perplexity/kimi-k3", "perplexity/kimi-k3"),
+    ("perplexity", "openai/gpt-5.2", "openai/gpt-5.2"),
+    ("openai", "gpt-5.4", "gpt-5.4"),
+]
+
+
+def _upstream_model_for(handed_model: str, custom_llm_provider: str) -> str:
+    upstream_model, _, _, _ = litellm.get_llm_provider(
+        model=handed_model,
+        litellm_params=GenericLiteLLMParams(custom_llm_provider=custom_llm_provider),
+    )
+    return upstream_model
+
+
+@pytest.mark.parametrize(
+    "custom_llm_provider, bridge_model, expected_upstream_model",
+    _PROVIDER_NATIVE_MODEL_CASES,
+)
+def test_completion_keeps_provider_native_model_id_through_responses(
+    custom_llm_provider, bridge_model, expected_upstream_model
+):
+    """responses() resolves the provider itself, so the bridge must not hand it an already-stripped model."""
+    cached = ModelResponse(id="chatcmpl-cached", model=bridge_model)
+    bridge = ResponsesToCompletionBridgeHandler()
+    kwargs = _bridge_kwargs(stream=False)
+    kwargs["model"] = bridge_model
+    kwargs["custom_llm_provider"] = custom_llm_provider
+
+    with (
+        patch.object(
+            bridge.transformation_handler,
+            "transform_request",
+            return_value={"model": bridge_model, "input": "hi"},
+        ),
+        patch("litellm.responses", return_value=cached) as responses_call,
+    ):
+        bridge.completion(**kwargs)
+
+    handed_model = responses_call.call_args.kwargs["model"]
+    assert _upstream_model_for(handed_model, custom_llm_provider) == expected_upstream_model
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "custom_llm_provider, bridge_model, expected_upstream_model",
+    _PROVIDER_NATIVE_MODEL_CASES,
+)
+async def test_acompletion_keeps_provider_native_model_id_through_responses(
+    custom_llm_provider, bridge_model, expected_upstream_model
+):
+    cached = ModelResponse(id="chatcmpl-cached-async", model=bridge_model)
+    bridge = ResponsesToCompletionBridgeHandler()
+    kwargs = _bridge_kwargs(stream=False)
+    kwargs["model"] = bridge_model
+    kwargs["custom_llm_provider"] = custom_llm_provider
+
+    with (
+        patch.object(
+            bridge.transformation_handler,
+            "transform_request",
+            return_value={"model": bridge_model, "input": "hi"},
+        ),
+        patch("litellm.aresponses", new=AsyncMock(return_value=cached)) as responses_call,
+    ):
+        await bridge.acompletion(**kwargs)
+
+    handed_model = responses_call.call_args.kwargs["model"]
+    assert _upstream_model_for(handed_model, custom_llm_provider) == expected_upstream_model

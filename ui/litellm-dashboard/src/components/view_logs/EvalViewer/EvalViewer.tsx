@@ -111,7 +111,7 @@ function EvalEntryCard({ entry }: { entry: EvalInformation }) {
 
       <CardContent>
         {entry.eval_error && (
-          <span className="text-amber-600" style={{ display: "block", marginBottom: 8, fontSize: 12 }}>
+          <span className="text-warning" style={{ display: "block", marginBottom: 8, fontSize: 12 }}>
             Judge error: {entry.eval_error}
           </span>
         )}

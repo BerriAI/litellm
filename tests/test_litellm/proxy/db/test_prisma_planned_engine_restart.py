@@ -40,9 +40,6 @@ import pytest
 from prisma import Prisma as GeneratedPrisma
 from prisma.engine.errors import EngineConnectionError
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy.db.prisma_client import PrismaWrapper
 from litellm.proxy.utils import PrismaClient
@@ -913,7 +910,7 @@ async def test_health_check_alerts_for_non_connection_errors_during_a_replacemen
         await _yield_to_loop()
         assert wrapper._reconnection_lock.locked() is True
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='malformed SELECT'):
             await client.health_check()
 
         gate.set()

@@ -1,5 +1,3 @@
-import os
-import sys
 import traceback
 from litellm._uuid import uuid
 
@@ -9,14 +7,10 @@ from fastapi.routing import APIRoute
 
 load_dotenv()
 import io
-import os
 import time
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import asyncio
 import datetime
 import json
@@ -149,7 +143,6 @@ def test_spend_logs_payload(model_id: Optional[str]):
             "completion_start_time": datetime.datetime(2024, 6, 7, 12, 43, 30, 954146),
             "max_tokens": 10,
             "extra_body": {},
-            "custom_llm_provider": "azure",
             "input": [
                 {"role": "system", "content": "you are a helpful assistant.\n"},
                 {"role": "user", "content": "bom dia"},

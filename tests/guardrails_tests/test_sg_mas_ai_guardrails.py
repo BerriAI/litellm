@@ -10,11 +10,9 @@ for Singapore financial institutions:
   5. sg_mas_model_security             — Adversarial attacks on financial AI
 """
 
-import sys
 import os
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
     ContentFilterGuardrail,
@@ -55,7 +53,7 @@ def _make_guardrail(yaml_filename: str, category_name: str) -> ContentFilterGuar
 
 async def _expect_block(guardrail: ContentFilterGuardrail, sentence: str, reason: str):
     request_data = {"messages": [{"role": "user", "content": sentence}]}
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Content blocked: sg_mas_') as exc_info:
         await guardrail.apply_guardrail(
             inputs={"texts": [sentence]},
             request_data=request_data,

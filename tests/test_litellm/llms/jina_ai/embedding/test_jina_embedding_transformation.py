@@ -1,10 +1,7 @@
-import os
-import sys
 from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
 

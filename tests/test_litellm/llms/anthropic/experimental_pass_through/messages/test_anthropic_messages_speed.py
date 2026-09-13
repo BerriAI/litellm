@@ -28,6 +28,7 @@ def test_messages_drop_params_strips_speed_for_unsupported_models():
             messages=[{"role": "user", "content": "Hello"}],
             optional_params=dict(optional_params),
             litellm_params={},
+            api_key="fake-anthropic-key",
         )
         result = config.transform_anthropic_messages_request(
             model="claude-sonnet-4-6",
@@ -60,6 +61,7 @@ def test_messages_drop_params_keeps_speed_for_supporting_models():
             messages=[{"role": "user", "content": "Hello"}],
             optional_params=dict(optional_params),
             litellm_params={},
+            api_key="fake-anthropic-key",
         )
         result = config.transform_anthropic_messages_request(
             model="claude-opus-4-6",

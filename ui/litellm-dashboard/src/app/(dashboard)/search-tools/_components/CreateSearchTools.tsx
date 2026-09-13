@@ -8,7 +8,7 @@ import { Logo } from "@/components/molecules/logo/Logo";
 import { toast } from "@/lib/toast";
 import { createSearchTool, fetchAvailableSearchProviders } from "@/components/networking";
 import { PasswordInput } from "@/components/shared/PasswordInput";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,6 +27,7 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 import SearchConnectionTest from "./SearchConnectionTest";
 import { buildSearchToolPayload } from "./searchToolPayload";
 import { AvailableSearchProvider, SearchTool } from "./types";
+import bingLogo from "../../../../../public/assets/logos/bing.png";
 import dataforseoLogo from "../../../../../public/assets/logos/dataforseo.png";
 import exaAiLogo from "../../../../../public/assets/logos/exa_ai.png";
 import googlePseLogo from "../../../../../public/assets/logos/google_pse.png";
@@ -44,6 +45,7 @@ const searchProviderLogoMap: Record<string, string> = {
   google_pse: googlePseLogo.src,
   dataforseo: dataforseoLogo.src,
   nimble: nimbleLogo.src,
+  bing_grounding: bingLogo.src,
 };
 
 interface SearchProviderLabelProps {
@@ -63,7 +65,10 @@ const createSearchToolShape = {
     .string()
     .min(1, "Please enter a search tool name")
     .regex(/^[a-zA-Z0-9_-]+$/, "Name can only contain letters, numbers, hyphens, and underscores"),
-  search_provider: z.string().min(1, "Please select a search provider"),
+  search_provider: z
+    .string()
+    .nullable()
+    .pipe(z.string({ error: "Please select a search provider" }).min(1, "Please select a search provider")),
   api_key: z.string().optional(),
   description: z.string().optional(),
 };
@@ -72,7 +77,7 @@ const createSearchToolSchema = z.object(createSearchToolShape);
 
 type CreateSearchToolFormValues = z.infer<typeof createSearchToolSchema>;
 
-const EMPTY_VALUES: CreateSearchToolFormValues = { search_tool_name: "", search_provider: "" };
+const EMPTY_VALUES: z.input<typeof createSearchToolSchema> = { search_tool_name: "", search_provider: null };
 
 const labelWithHint = (label: string, hint: string): React.ReactNode => (
   <>
@@ -214,8 +219,8 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
                     <Combobox
                       items={providerNames}
                       itemToStringLabel={providerLabel}
-                      value={value === "" ? null : value}
-                      onValueChange={(provider: string | null) => onChange(provider ?? "")}
+                      value={value}
+                      onValueChange={onChange}
                     >
                       <ComboboxInput
                         id={id}
@@ -224,7 +229,7 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
                         placeholder="Select a search provider"
                         className="h-10 w-full rounded-lg"
                         disabled={isLoadingProviders}
-                        showClear={value !== ""}
+                        showClear={value != null && value !== ""}
                       />
                       <ComboboxContent>
                         <ComboboxEmpty>No matching search providers</ComboboxEmpty>
@@ -281,7 +286,7 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
                   <TooltipTrigger
                     render={
                       <a
-                        className="text-sm text-blue-600 hover:underline dark:text-blue-400"
+                        className="text-sm text-info hover:underline"
                         href="https://github.com/BerriAI/litellm/issues"
                         target="_blank"
                         rel="noopener noreferrer"
@@ -324,7 +329,7 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
               <SearchConnectionTest
                 key={connectionTestId}
                 litellmParams={{
-                  search_provider: watchedProvider,
+                  search_provider: watchedProvider ?? undefined,
                   api_key: watchedApiKey,
                   api_base: undefined,
                 }}
@@ -343,7 +348,6 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
               >
                 Close
               </Button>
-              , ]
             </DialogFooter>
           </DialogContent>
         </Dialog>

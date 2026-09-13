@@ -3,23 +3,14 @@
 Test to verify the Google GenAI generate_content adapter functionality
 """
 import json
-import os
-import sys
 import unittest
 
 import pytest
 
 from litellm.google_genai.main import agenerate_content
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
-import json
-import os
-import sys
 
-import pytest
 
 import litellm
 

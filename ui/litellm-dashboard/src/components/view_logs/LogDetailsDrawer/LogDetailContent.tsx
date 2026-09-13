@@ -13,6 +13,13 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { PROMPT_CACHE_CREATION_TOOLTIP, PROMPT_CACHE_READ_TOOLTIP } from "@/utils/promptCacheUsage";
 import GuardrailViewer from "../GuardrailViewer/GuardrailViewer";
 import EvalViewer from "../EvalViewer/EvalViewer";
+import {
+  getBatchIdFromRequestId,
+  getBatchModels,
+  getBatchRequestCounts,
+  getReasoningTokens,
+  isBatchCallType,
+} from "../batchLogUtils";
 import { CostBreakdownViewer } from "../CostBreakdownViewer";
 import { ConfigInfoMessage } from "../ConfigInfoMessage";
 import { VectorStoreViewer } from "../VectorStoreViewer";
@@ -41,6 +48,8 @@ import {
 } from "./constants";
 import { ToolsSection } from "../ToolsSection";
 import { PrettyMessagesView } from "./PrettyMessagesView";
+import { ClassifierAuditView } from "./ClassifierAuditView";
+import { AUTOROUTER_CLASSIFIER_ORIGIN } from "./ClassifyTag";
 
 export interface LogDetailContentProps {
   logEntry: LogEntry;
@@ -61,6 +70,12 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
   const metadata = logEntry.metadata || {};
   const hasError = metadata.status === "failure";
   const errorInfo = hasError ? metadata.error_information : null;
+  const isClassifier =
+    metadata.internal_call_origin === AUTOROUTER_CLASSIFIER_ORIGIN &&
+    ["completion", "acompletion", "responses", "aresponses"].includes(logEntry.call_type);
+  const rawRequest = formatData(logEntry.proxy_server_request || logEntry.messages);
+  const hasClassifierAudit =
+    isClassifier && (rawRequest?.classifier_input != null || rawRequest?.originating_request_masked != null);
 
   const hasMessages = checkHasMessages(logEntry.messages);
   const hasResponse = checkHasResponse(logEntry.response);
@@ -80,10 +95,6 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
 
   // Vector store data
   const hasVectorStoreData = checkHasVectorStoreData(metadata);
-
-  const getRawRequest = () => {
-    return formatData(logEntry.proxy_server_request || logEntry.messages);
-  };
 
   const getFormattedResponse = () => {
     if (hasError && errorInfo) {
@@ -121,7 +132,7 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
       )}
 
       {/* Request Details */}
-      <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
+      <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
         <Card size="sm" style={{ marginBottom: 0 }}>
           <CardHeader>
             <CardTitle>Request Details</CardTitle>
@@ -149,6 +160,9 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
           </CardContent>
         </Card>
       </div>
+
+      {/* Batch Results */}
+      {isBatchCallType(logEntry.call_type) && <BatchResultsSection logEntry={logEntry} metadata={metadata} />}
 
       {/* Routing */}
       <RoutingDecisionCard decision={metadata?.routing_decision as RoutingDecision | undefined} />
@@ -180,15 +194,21 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
 
       {/* Request/Response JSON */}
       {isLoadingDetails ? (
-        <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6 p-8 text-center">
+        <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6 p-8 text-center">
           <UiLoadingSpinner className="inline-block size-5" />
-          <div style={{ marginTop: 8, color: "#999" }}>Loading request &amp; response data...</div>
+          <div style={{ marginTop: 8, color: "var(--color-muted-foreground)" }}>
+            Loading request &amp; response data...
+          </div>
         </div>
-      ) : (
+      ) : null}
+      {!isLoadingDetails && hasClassifierAudit && (
+        <ClassifierAuditView request={rawRequest} response={getFormattedResponse()} />
+      )}
+      {!isLoadingDetails && !hasClassifierAudit && (
         <RequestResponseSection
           hasResponse={hasResponse}
           hasError={hasError}
-          getRawRequest={getRawRequest}
+          getRawRequest={() => rawRequest}
           getFormattedResponse={getFormattedResponse}
           logEntry={logEntry}
         />
@@ -298,7 +318,7 @@ function ErrorDescription({ errorInfo }: { errorInfo: any }) {
 
 function TagsSection({ tags }: { tags: Record<string, any> }) {
   return (
-    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden p-4 mb-6">
+    <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden p-4 mb-6">
       <span className="font-semibold" style={{ display: "block", marginBottom: 8, fontSize: 16 }}>
         Tags
       </span>
@@ -345,6 +365,8 @@ function getUncachedInputTextTokens(metadata: Record<string, any>): number | und
 const RESPONSE_CACHE_TOOLTIP =
   "Whether this request was served from LiteLLM's response cache (e.g. Redis / in-memory), skipping the LLM provider call entirely. This is separate from provider prompt caching; a Miss here does not mean prompt caching failed.";
 const RESPONSE_CACHE_DOCS_URL = "https://docs.litellm.ai/docs/proxy/caching";
+const CACHE_KEY_TOOLTIP =
+  "The key LiteLLM computed for this request in the response cache. Requests with the same cache key share a cached response; a different key means the request content did not match any cached entry.";
 const PROMPT_CACHE_DOCS_URL = "https://docs.litellm.ai/docs/completion/prompt_caching";
 
 function MetricLabel({ label, tooltip, docsUrl }: { label: string; tooltip: string; docsUrl: string }) {
@@ -370,6 +392,53 @@ function MetricLabel({ label, tooltip, docsUrl }: { label: string; tooltip: stri
   );
 }
 
+/**
+ * Aggregate per-request outcomes for a batch cost row: batch id, success/failure counts
+ * from the parsed output and error files, and the models the batch actually ran on.
+ */
+function BatchResultsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: Record<string, unknown> }) {
+  const counts = getBatchRequestCounts(metadata);
+  const batchId = getBatchIdFromRequestId(logEntry.request_id);
+  const batchModels = getBatchModels(metadata);
+  if (!counts && !batchId && !batchModels) return null;
+
+  return (
+    <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
+      <Card size="sm" style={{ marginBottom: 0 }}>
+        <CardHeader>
+          <CardTitle>Batch Results</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <DescriptionList>
+            {batchId && (
+              <DescriptionItem label="Batch ID">
+                <TruncatedValue value={batchId} />
+              </DescriptionItem>
+            )}
+            {counts && (
+              <>
+                <DescriptionItem label="Successful Requests">
+                  {formatNumberWithCommas(counts.successful)}
+                </DescriptionItem>
+                <DescriptionItem label="Failed Requests">
+                  {counts.failed > 0 ? (
+                    <Badge variant="secondary" className="bg-destructive/15 text-destructive">
+                      {formatNumberWithCommas(counts.failed)}
+                    </Badge>
+                  ) : (
+                    formatNumberWithCommas(counts.failed)
+                  )}
+                </DescriptionItem>
+              </>
+            )}
+            {batchModels && <DescriptionItem label="Models">{batchModels.join(", ")}</DescriptionItem>}
+          </DescriptionList>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: Record<string, any> }) {
   const completionStartTime = logEntry.completionStartTime;
   const ttftMs =
@@ -378,17 +447,19 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
       : null;
 
   const responseCacheValue = String(logEntry.cache_hit ?? "").toLowerCase();
+  const responseCacheKey = logEntry.cache_key && logEntry.cache_key !== "Cache OFF" ? logEntry.cache_key : undefined;
   const isResponseCacheHit = responseCacheValue === "true";
-  const showResponseCache = isResponseCacheHit || responseCacheValue === "false";
+  const showResponseCache = isResponseCacheHit || responseCacheValue === "false" || responseCacheKey != null;
   const promptCacheReadTokens = Number(metadata?.additional_usage_values?.cache_read_input_tokens) || 0;
   const promptCacheCreationTokens = Number(metadata?.additional_usage_values?.cache_creation_input_tokens) || 0;
 
   const uncachedInputTokens = getUncachedInputTextTokens(metadata);
   const showAnthropicMessagesInputOutput =
     logEntry.call_type === "anthropic_messages" && uncachedInputTokens !== undefined;
+  const reasoningTokens = getReasoningTokens(metadata);
 
   return (
-    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
+    <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
       <Card size="sm" style={{ marginBottom: 0 }}>
         <CardHeader>
           <CardTitle>Metrics</CardTitle>
@@ -411,6 +482,9 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
                 />
               </DescriptionItem>
             )}
+            {reasoningTokens !== undefined && reasoningTokens > 0 && (
+              <DescriptionItem label="Reasoning Tokens">{formatNumberWithCommas(reasoningTokens)}</DescriptionItem>
+            )}
             <DescriptionItem label="Cost">${formatNumberWithCommas(logEntry.spend || 0, 8)}</DescriptionItem>
             <DescriptionItem label="Duration">
               {logEntry.request_duration_ms != null ? (logEntry.request_duration_ms / 1000).toFixed(3) : "-"} s
@@ -429,9 +503,16 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
                   />
                 }
               >
-                <Badge variant="secondary" className={isResponseCacheHit ? "bg-green-100 text-green-700" : undefined}>
+                <Badge variant="secondary" className={isResponseCacheHit ? "bg-success/15 text-success" : undefined}>
                   {isResponseCacheHit ? "Hit" : "Miss"}
                 </Badge>
+              </DescriptionItem>
+            )}
+            {responseCacheKey && (
+              <DescriptionItem
+                label={<MetricLabel label="Cache Key" tooltip={CACHE_KEY_TOOLTIP} docsUrl={RESPONSE_CACHE_DOCS_URL} />}
+              >
+                <TruncatedValue value={responseCacheKey} />
               </DescriptionItem>
             )}
             {promptCacheReadTokens > 0 && (
@@ -468,22 +549,20 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
             )}
 
             <DescriptionItem label="Retries">
-              {metadata?.attempted_retries !== undefined && metadata?.attempted_retries !== null ? (
-                metadata.attempted_retries > 0 ? (
-                  <>
-                    {metadata.attempted_retries}
-                    {metadata.max_retries !== undefined && metadata.max_retries !== null
-                      ? ` / ${metadata.max_retries}`
-                      : ""}
-                  </>
-                ) : (
-                  <Badge variant="secondary" className="bg-green-100 text-green-700">
-                    None
-                  </Badge>
-                )
-              ) : (
-                "-"
+              {metadata?.attempted_retries != null && metadata.attempted_retries > 0 && (
+                <>
+                  {metadata.attempted_retries}
+                  {metadata.max_retries !== undefined && metadata.max_retries !== null
+                    ? ` / ${metadata.max_retries}`
+                    : ""}
+                </>
               )}
+              {metadata?.attempted_retries != null && metadata.attempted_retries <= 0 && (
+                <Badge variant="secondary" className="bg-success/15 text-success">
+                  None
+                </Badge>
+              )}
+              {metadata?.attempted_retries == null && "-"}
             </DescriptionItem>
 
             <DescriptionItem label="Start Time">
@@ -529,29 +608,23 @@ function RequestResponseSection({
   const totalTokens = promptTokens + completionTokens;
   const costBreakdown = logEntry.metadata?.cost_breakdown;
   const useCostBreakdown = costBreakdown?.input_cost !== undefined && costBreakdown?.output_cost !== undefined;
-  const inputCost = useCostBreakdown
-    ? costBreakdown!.input_cost ?? 0
-    : totalTokens > 0
-      ? (totalSpend * promptTokens) / totalTokens
-      : 0;
-  const outputCost = useCostBreakdown
-    ? costBreakdown!.output_cost ?? 0
-    : totalTokens > 0
-      ? (totalSpend * completionTokens) / totalTokens
-      : 0;
+  const estimatedInputCost = totalTokens > 0 ? (totalSpend * promptTokens) / totalTokens : 0;
+  const estimatedOutputCost = totalTokens > 0 ? (totalSpend * completionTokens) / totalTokens : 0;
+  const inputCost = useCostBreakdown ? costBreakdown!.input_cost ?? 0 : estimatedInputCost;
+  const outputCost = useCostBreakdown ? costBreakdown!.output_cost ?? 0 : estimatedOutputCost;
 
   return (
-    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
+    <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
       <Collapsible open={open} onOpenChange={setOpen}>
         <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as "pretty" | "json")}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
             <CollapsibleTrigger className="flex flex-1 items-center gap-3 px-4 py-3 text-left">
               {open ? (
-                <ChevronDown className="size-3.5 shrink-0 text-gray-500" />
+                <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
               ) : (
-                <ChevronRight className="size-3.5 shrink-0 text-gray-500" />
+                <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
               )}
-              <h3 className="text-lg font-medium text-gray-900" style={{ margin: 0 }}>
+              <h3 className="text-lg font-medium text-foreground" style={{ margin: 0 }}>
                 Request & Response
               </h3>
             </CollapsibleTrigger>
@@ -600,7 +673,14 @@ function RequestResponseSection({
                       {hasResponse || hasError ? (
                         <JsonViewer data={getFormattedResponse()} mode="formatted" />
                       ) : (
-                        <div style={{ textAlign: "center", padding: 20, color: "#999", fontStyle: "italic" }}>
+                        <div
+                          style={{
+                            textAlign: "center",
+                            padding: 20,
+                            color: "var(--color-muted-foreground)",
+                            fontStyle: "italic",
+                          }}
+                        >
                           Response data not available
                         </div>
                       )}
@@ -616,11 +696,24 @@ function RequestResponseSection({
   );
 }
 
+const GUARDRAIL_JUMP_LINK_STYLE = {
+  passed: { className: "border border-success/20 bg-success/10 text-success", glyph: "\u2713" },
+  flagged: { className: "border border-warning/20 bg-warning/10 text-warning", glyph: "\u26A0" },
+  failed: { className: "border border-destructive/20 bg-destructive/10 text-destructive", glyph: "\u2717" },
+} as const;
+
+const isPassedStatus = (status: unknown) => status === "pass" || status === "passed" || status === "success";
+const isFlaggedStatus = (status: unknown) => status === "flagged" || status === "guardrail_flagged";
+
+const guardrailJumpLinkOutcome = (statuses: unknown[]): keyof typeof GUARDRAIL_JUMP_LINK_STYLE => {
+  if (statuses.every(isPassedStatus)) return "passed";
+  if (statuses.every((s) => isPassedStatus(s) || isFlaggedStatus(s))) return "flagged";
+  return "failed";
+};
+
 export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[] }) {
-  const allPassed = guardrailEntries.every((e) => {
-    const status = e?.guardrail_status || e?.status;
-    return status === "pass" || status === "passed" || status === "success";
-  });
+  const outcome = guardrailJumpLinkOutcome(guardrailEntries.map((e) => e?.guardrail_status || e?.status));
+  const { className, glyph } = GUARDRAIL_JUMP_LINK_STYLE[outcome];
 
   const handleClick = () => {
     const el = document.getElementById("guardrail-section");
@@ -631,6 +724,7 @@ export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[
     <div style={{ textAlign: "left", marginBottom: 12 }}>
       <div
         onClick={handleClick}
+        className={className}
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -640,13 +734,10 @@ export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[
           cursor: "pointer",
           fontSize: 13,
           fontWeight: 500,
-          backgroundColor: allPassed ? "#f0fdf4" : "#fef2f2",
-          color: allPassed ? "#15803d" : "#b91c1c",
-          border: `1px solid ${allPassed ? "#bbf7d0" : "#fecaca"}`,
         }}
       >
-        {allPassed ? "\u2713" : "\u2717"} {guardrailEntries.length} guardrail{guardrailEntries.length !== 1 ? "s" : ""}{" "}
-        evaluated
+        {glyph} {guardrailEntries.length} guardrail
+        {guardrailEntries.length !== 1 ? "s" : ""} evaluated
         <span style={{ fontSize: 11, opacity: 0.7 }}>{"\u2193"}</span>
       </div>
     </div>
@@ -657,15 +748,15 @@ function MetadataSection({ metadata }: { metadata: Record<string, any> }) {
   const [open, setOpen] = useState(true);
 
   return (
-    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
+    <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
       <Collapsible open={open} onOpenChange={setOpen}>
         <CollapsibleTrigger className="flex w-full items-center gap-3 px-4 py-3 text-left">
           {open ? (
-            <ChevronDown className="size-3.5 shrink-0 text-gray-500" />
+            <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
           ) : (
-            <ChevronRight className="size-3.5 shrink-0 text-gray-500" />
+            <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
           )}
-          <h3 className="text-lg font-medium text-gray-900">Metadata</h3>
+          <h3 className="text-lg font-medium text-foreground">Metadata</h3>
         </CollapsibleTrigger>
         <CollapsibleContent>
           <div>

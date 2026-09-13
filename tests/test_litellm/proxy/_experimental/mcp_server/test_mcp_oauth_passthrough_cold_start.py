@@ -1,10 +1,8 @@
 """Unit tests for MCP OAuth passthrough cold-start route behavior."""
 
-import sys
 
 import pytest
 
-sys.path.insert(0, "../../../../../")
 
 from litellm.proxy._types import MCPTransport
 from litellm.types.mcp import MCPAuth

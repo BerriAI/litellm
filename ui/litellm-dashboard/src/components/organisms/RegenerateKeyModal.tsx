@@ -10,7 +10,7 @@ import { z } from "zod/v4";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { toast } from "@/lib/toast";
 import { regenerateKeyCall } from "../networking";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -107,7 +107,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
       // formatted preview, otherwise downstream expiry parsing breaks.
       const updatedKeyData: Partial<KeyResponse> = {
         ...response,
-        token: response.token || response.key_id || selectedToken.token,
+        token: response.token_id || response.token || selectedToken.token,
         key_name: response.key,
         max_budget: formValues.max_budget,
         tpm_limit: formValues.tpm_limit,
@@ -230,9 +230,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
                           Current expiry: {selectedToken?.expires ? formatExpiresUtc(selectedToken.expires) : "Never"}
                           {keyIsExpired && " (expired)"}
                         </span>
-                        {newExpiryTime && (
-                          <span className="text-green-600 dark:text-green-400">New expiry: {newExpiryTime}</span>
-                        )}
+                        {newExpiryTime && <span className="text-success">New expiry: {newExpiryTime}</span>}
                       </span>
                     }
                   >
