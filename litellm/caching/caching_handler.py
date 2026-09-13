@@ -347,8 +347,6 @@ class LLMCachingHandler:
             if new_kwargs.get("stream") is True and "cache_key" not in new_kwargs:
                 new_kwargs["cache_key"] = litellm.cache.get_cache_key(**new_kwargs)
             self.request_kwargs = _drop_logging_obj_from_kwargs(new_kwargs)
-            new_kwargs.setdefault("call_type", call_type)
-            new_kwargs.setdefault("original_function", original_function)
             print_verbose("Checking Sync Cache")
             cached_result = litellm.cache.get_cache(**new_kwargs)
             if cached_result is not None:
@@ -753,10 +751,7 @@ class LLMCachingHandler:
             elif not isinstance(new_kwargs["input"], list):
                 raise ValueError("input must be a string or a list")
             tasks: Final = []
-            aembedding_kwargs = new_kwargs.copy()
-            aembedding_kwargs.pop("cache_key", None)
-            aembedding_kwargs.setdefault("call_type", call_type)
-            aembedding_kwargs.setdefault("original_function", self.original_function)
+            aembedding_kwargs: Final = {k: v for k, v in new_kwargs.items() if k != "cache_key"}
             for idx, i in enumerate(new_kwargs["input"]):
                 preset_cache_key = litellm.cache.get_cache_key(**{**new_kwargs, "input": i})
                 tasks.append(
@@ -773,11 +768,8 @@ class LLMCachingHandler:
                 if all(result is None for result in cached_result):
                     cached_result = None
         else:
-            request_kwargs: Final = new_kwargs.copy()
+            request_kwargs: Final = {k: v for k, v in new_kwargs.items() if k != "cache_key"}
             request_cache_key: Final = _request_cache_key(request_kwargs)
-            request_kwargs.pop("cache_key", None)
-            request_kwargs.setdefault("call_type", call_type)
-            request_kwargs.setdefault("original_function", self.original_function)
             if litellm.cache._supports_async() is True:
                 ## check if dual cache is supported ##
                 self.preset_cache_key = request_cache_key or litellm.cache.get_cache_key(**request_kwargs)
@@ -1031,13 +1023,12 @@ class LLMCachingHandler:
         )
         parent_otel_span: Final = _get_parent_otel_span_from_kwargs(new_kwargs)
         new_kwargs["parent_otel_span"] = parent_otel_span
-        new_kwargs.setdefault("original_function", original_function)
 
-        call_type: str | None = None
-        if isinstance(result, litellm.EmbeddingResponse):
-            call_type = CallTypes.aembedding.value
-        elif isinstance(result, litellm.ModelResponse):
-            call_type = new_kwargs.get("call_type") or CallTypes.acompletion.value
+        call_type: Final = (
+            CallTypes.aembedding.value
+            if isinstance(result, litellm.EmbeddingResponse)
+            else new_kwargs.get("call_type")
+        )
 
         # [OPTIONAL] ADD TO CACHE
         if self._should_store_result_in_cache(
@@ -1054,13 +1045,9 @@ class LLMCachingHandler:
                     isinstance(result, EmbeddingResponse)
                     and not isinstance(cache.cache, S3Cache)  # s3 doesn't support bulk writing. Exclude.
                 ):
-                    embedding_pipeline_kwargs = {
-                        **new_kwargs,
-                        "call_type": call_type or CallTypes.aembedding.value,
-                    }
                     create_cache_write_task(
                         lambda: cache.async_add_cache_pipeline(
-                            result, dynamic_cache_object=self.dual_cache, **embedding_pipeline_kwargs
+                            result, dynamic_cache_object=self.dual_cache, **new_kwargs
                         )
                     )
                 else:
@@ -1095,15 +1082,11 @@ class LLMCachingHandler:
         if litellm.cache is None:
             return
 
-        call_type: str | None = None
-        if isinstance(result, litellm.EmbeddingResponse):
-            call_type = CallTypes.embedding.value
-        elif isinstance(result, litellm.ModelResponse):
-            call_type = new_kwargs.get("call_type") or CallTypes.completion.value
-
-        new_kwargs.setdefault("original_function", self.original_function)
-        if call_type is not None:
-            new_kwargs.setdefault("call_type", call_type)
+        call_type: Final = (
+            CallTypes.embedding.value
+            if isinstance(result, litellm.EmbeddingResponse)
+            else new_kwargs.get("call_type")
+        )
 
         if self._should_store_result_in_cache(
             original_function=self.original_function, kwargs=new_kwargs, call_type=call_type
@@ -1124,15 +1107,15 @@ class LLMCachingHandler:
         Returns:
             bool: True if the result should be stored in the cache, False otherwise.
         """
-        kwargs = kwargs or {}
+        kwargs_dict: Final = kwargs or {}
         if litellm.cache is None:
             return False
-        if kwargs.get("cache", {}).get("no-store", False) is True:
+        if kwargs_dict.get("cache", {}).get("no-store", False) is True:
             return False
         return self._is_call_type_supported_by_cache(
             original_function=original_function,
             call_type=call_type,
-            kwargs=kwargs,
+            kwargs=kwargs_dict,
         )
 
     def wrap_streaming_result_for_cache(
@@ -1178,30 +1161,22 @@ class LLMCachingHandler:
         if litellm.cache.supported_call_types is None:
             return True
 
-        candidates: set[str] = set()
-
-        if call_type is not None:
-            val = getattr(call_type, "value", str(call_type))
-            candidates.add(str(val))
-            candidates.add(str(val).lstrip("_"))
-
-        for fn in (original_function, getattr(self, "original_function", None)):
-            if fn is not None:
-                fn_name = getattr(fn, "__name__", str(fn))
-                candidates.add(fn_name)
-                candidates.add(fn_name.lstrip("_"))
-
-        if kwargs:
-            kw_call_type = kwargs.get("call_type") or kwargs.get("route_type")
-            if kw_call_type:
-                kw_val = getattr(kw_call_type, "value", str(kw_call_type))
-                candidates.add(str(kw_val))
-                candidates.add(str(kw_val).lstrip("_"))
-            kw_fn = kwargs.get("original_function")
-            if kw_fn is not None:
-                kw_fn_name = getattr(kw_fn, "__name__", str(kw_fn))
-                candidates.add(kw_fn_name)
-                candidates.add(kw_fn_name.lstrip("_"))
+        kwargs_dict: Final = kwargs or {}
+        raw_candidates: Final = (
+            call_type,
+            original_function,
+            getattr(self, "original_function", None),
+            kwargs_dict.get("call_type"),
+            kwargs_dict.get("route_type"),
+            kwargs_dict.get("original_function"),
+        )
+        candidates: Final = frozenset(
+            variant
+            for item in raw_candidates
+            if item is not None
+            for name in (getattr(item, "value", None) or getattr(item, "__name__", None) or str(item),)
+            for variant in (name, name.lstrip("_"))
+        )
 
         if not candidates:
             return False

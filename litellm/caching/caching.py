@@ -887,16 +887,18 @@ class Cache:
         If cache is default_off then this is only true when user has opted in to use cache
         """
         if self.supported_call_types is not None:
-            candidates: set[str] = set()
-            call_type = kwargs.get("call_type") or kwargs.get("route_type")
-            if call_type:
-                candidates.add(str(call_type))
-                candidates.add(str(call_type).lstrip("_"))
-            original_function = kwargs.get("original_function")
-            if original_function is not None:
-                fn_name = getattr(original_function, "__name__", str(original_function))
-                candidates.add(fn_name)
-                candidates.add(fn_name.lstrip("_"))
+            raw_candidates: Final = (
+                kwargs.get("call_type"),
+                kwargs.get("route_type"),
+                kwargs.get("original_function"),
+            )
+            candidates: Final = frozenset(
+                variant
+                for item in raw_candidates
+                if item is not None
+                for name in (getattr(item, "value", None) or getattr(item, "__name__", None) or str(item),)
+                for variant in (name, name.lstrip("_"))
+            )
             if candidates and not (candidates & set(self.supported_call_types)):
                 return False
 

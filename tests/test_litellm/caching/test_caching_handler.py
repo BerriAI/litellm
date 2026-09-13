@@ -697,7 +697,6 @@ async def test_cache_hit_records_the_looked_up_key_as_the_preset_cache_key(monke
 
 @pytest.mark.asyncio
 async def test_supported_call_types_router_prefix_and_filtering(monkeypatch):
-    """Test that router functions with leading underscores match supported_call_types, and excluded call types are not cached (#41003)."""
     import litellm
     from litellm.caching.caching import Cache
     from litellm.types.utils import CallTypes
@@ -708,7 +707,6 @@ async def test_supported_call_types_router_prefix_and_filtering(monkeypatch):
     async def _acompletion(**kwargs):
         return None
 
-    # 1. When supported_call_types has completions only (embedding excluded)
     cache_no_embed = Cache(type="local", supported_call_types=["completion", "acompletion"])
     monkeypatch.setattr(litellm, "cache", cache_no_embed)
 
@@ -717,29 +715,36 @@ async def test_supported_call_types_router_prefix_and_filtering(monkeypatch):
     assert handler._is_call_type_supported_by_cache(original_function=_aembedding, call_type="aembedding") is False
     assert handler._is_call_type_supported_by_cache(call_type="aembedding") is False
     assert handler._is_call_type_supported_by_cache(original_function=_aembedding) is False
+    assert handler._is_call_type_supported_by_cache(kwargs={"route_type": "aembedding"}) is False
+    assert handler._is_call_type_supported_by_cache(kwargs={"call_type": "aembedding"}) is False
+    assert handler._is_call_type_supported_by_cache(kwargs={"original_function": _aembedding}) is False
+    assert handler._is_call_type_supported_by_cache() is False
     assert handler._should_store_result_in_cache(original_function=_aembedding, call_type="aembedding") is False
     assert cache_no_embed.should_use_cache(call_type="aembedding") is False
+    assert cache_no_embed.should_use_cache(route_type="aembedding") is False
     assert cache_no_embed.should_use_cache(original_function=_aembedding) is False
 
-    # completions should still be supported
     assert handler._is_call_type_supported_by_cache(original_function=_acompletion, call_type="acompletion") is True
     assert cache_no_embed.should_use_cache(call_type="acompletion") is True
     assert cache_no_embed.should_use_cache(original_function=_acompletion) is True
 
-    # 2. When supported_call_types has embeddings included, router's _aembedding should match
     cache_with_embed = Cache(type="local", supported_call_types=["embedding", "aembedding"])
     monkeypatch.setattr(litellm, "cache", cache_with_embed)
 
     assert handler._is_call_type_supported_by_cache(original_function=_aembedding, call_type="aembedding") is True
     assert handler._is_call_type_supported_by_cache(original_function=_aembedding) is True
+    assert handler._is_call_type_supported_by_cache(kwargs={"route_type": "_aembedding"}) is True
     assert handler._should_store_result_in_cache(original_function=_aembedding, call_type="aembedding") is True
     assert cache_with_embed.should_use_cache(call_type="aembedding") is True
     assert cache_with_embed.should_use_cache(original_function=_aembedding) is True
 
+    cache_all = Cache(type="local", supported_call_types=None)
+    monkeypatch.setattr(litellm, "cache", cache_all)
+    assert handler._is_call_type_supported_by_cache(original_function=_aembedding, call_type="aembedding") is True
+
 
 @pytest.mark.asyncio
 async def test_async_get_and_set_cache_respects_supported_call_types(monkeypatch):
-    """Test that _async_get_cache and async_set_cache respect supported_call_types (#41003)."""
     import litellm
     from litellm.caching.caching import Cache
     from litellm.types.utils import CallTypes
@@ -747,7 +752,6 @@ async def test_async_get_and_set_cache_respects_supported_call_types(monkeypatch
     async def _aembedding(**kwargs):
         return None
 
-    # Exclude embeddings from supported_call_types
     cache = Cache(type="local", supported_call_types=["completion", "acompletion"])
     monkeypatch.setattr(litellm, "cache", cache)
 
@@ -756,7 +760,6 @@ async def test_async_get_and_set_cache_respects_supported_call_types(monkeypatch
     logging_obj = _build_logging_obj(CallTypes.aembedding.value, stream=False)
     logging_obj.async_success_handler = AsyncMock()
 
-    # Get cache should immediately return None because call_type is not supported
     res = await handler._async_get_cache(
         model="text-embedding-3-small",
         original_function=_aembedding,
@@ -768,7 +771,6 @@ async def test_async_get_and_set_cache_respects_supported_call_types(monkeypatch
     )
     assert res is None
 
-    # Set cache should not write anything to cache
     mock_embedding_response = litellm.EmbeddingResponse(
         data=[{"embedding": [0.1, 0.2], "index": 0, "object": "embedding"}],
         model="text-embedding-3-small",
@@ -780,10 +782,46 @@ async def test_async_get_and_set_cache_respects_supported_call_types(monkeypatch
         kwargs=kwargs,
     )
 
-    # Allow any background cache write tasks to run if any were scheduled
     await asyncio.sleep(0.05)
 
-    # Verify cache remains empty
     key = cache.get_cache_key(**kwargs)
     assert cache.get_cache(key) is None
+
+
+@pytest.mark.asyncio
+async def test_cache_keys_consistent_with_optional_params(monkeypatch):
+    import litellm
+    from litellm.caching.caching import Cache
+    from litellm.types.utils import CallTypes
+
+    async def _acompletion(**kwargs):
+        return None
+
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", True)
+    cache = Cache(type="local", supported_call_types=["completion", "acompletion"])
+    monkeypatch.setattr(litellm, "cache", cache)
+
+    kwargs = {"model": "gpt-4o", "messages": [{"role": "user", "content": "ping"}], "caching": True}
+    handler = LLMCachingHandler(original_function=_acompletion, request_kwargs=kwargs, start_time=datetime.now())
+    logging_obj = _build_logging_obj(CallTypes.acompletion.value, stream=False)
+    logging_obj.async_success_handler = AsyncMock()
+
+    mock_response = litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "pong"}}])
+    await handler.async_set_cache(
+        result=mock_response,
+        original_function=_acompletion,
+        kwargs=kwargs,
+    )
+    await asyncio.sleep(0.05)
+
+    hit = await handler._async_get_cache(
+        model="gpt-4o",
+        original_function=_acompletion,
+        logging_obj=logging_obj,
+        start_time=datetime.now(),
+        call_type=CallTypes.acompletion.value,
+        kwargs=kwargs,
+        args=(),
+    )
+    assert hit is not None and hit.cached_result is not None
 
