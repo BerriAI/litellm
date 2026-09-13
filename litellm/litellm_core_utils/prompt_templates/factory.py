@@ -3712,6 +3712,8 @@ def _append_bedrock_tool_result_media_block(
         tool_result_content_blocks.append(BedrockToolResultContentBlock(image=processed_block["image"]))
     elif "document" in processed_block:
         tool_result_content_blocks.append(BedrockToolResultContentBlock(document=processed_block["document"]))
+    elif "video" in processed_block:
+        tool_result_content_blocks.append(BedrockToolResultContentBlock(video=processed_block["video"]))
     else:
         verbose_logger.warning(
             "Bedrock Converse: unrecognized BedrockContentBlock keys %s for %s tool-result block %s; dropping.",
@@ -3736,6 +3738,23 @@ def _append_bedrock_tool_result_image_url_block(
         format=format,
     )
     _append_bedrock_tool_result_media_block(tool_result_content_blocks, processed_block, content, "image_url")
+
+
+def _append_bedrock_tool_result_video_url_block(
+    tool_result_content_blocks: list[BedrockToolResultContentBlock],
+    content: dict,
+) -> None:
+    format: str | None = None
+    if isinstance(content["video_url"], dict):
+        video_url = content["video_url"]["url"]
+        format = content["video_url"].get("format")
+    else:
+        video_url = content["video_url"]
+    processed_block: Final = BedrockImageProcessor.process_image_sync(
+        image_url=video_url,
+        format=format,
+    )
+    _append_bedrock_tool_result_media_block(tool_result_content_blocks, processed_block, content, "video_url")
 
 
 def _append_bedrock_tool_result_file_block(
@@ -3769,6 +3788,8 @@ def _parse_bedrock_tool_result_content_list(
             tool_result_content_blocks.append(BedrockToolResultContentBlock(text=content["text"]))
         elif content["type"] == "image_url":
             _append_bedrock_tool_result_image_url_block(tool_result_content_blocks, content)
+        elif content["type"] == "video_url":
+            _append_bedrock_tool_result_video_url_block(tool_result_content_blocks, content)
         elif content["type"] == "file":
             _append_bedrock_tool_result_file_block(tool_result_content_blocks, content)
     return tool_result_content_blocks
@@ -4371,6 +4392,17 @@ class BedrockConverseMessagesProcessor:
                                     image_url=image_url, format=format
                                 )
                                 _parts.append(_part)
+                            elif element["type"] == "video_url":
+                                video_format: str | None = None
+                                if isinstance(element["video_url"], dict):
+                                    video_url = element["video_url"]["url"]
+                                    video_format = element["video_url"].get("format")
+                                else:
+                                    video_url = element["video_url"]
+                                _part = await BedrockImageProcessor.process_image_async(
+                                    image_url=video_url, format=video_format
+                                )
+                                _parts.append(_part)
                             elif element["type"] == "file":
                                 _part = await BedrockConverseMessagesProcessor._async_process_file_message(
                                     message=cast(ChatCompletionFileObject, element)
@@ -4742,6 +4774,18 @@ def _bedrock_converse_messages_pt(
                             _part = BedrockImageProcessor.process_image_sync(
                                 image_url=image_url,
                                 format=format,
+                            )
+                            _parts.append(_part)
+                        elif element["type"] == "video_url":
+                            video_format: str | None = None
+                            if isinstance(element["video_url"], dict):
+                                video_url = element["video_url"]["url"]
+                                video_format = element["video_url"].get("format")
+                            else:
+                                video_url = element["video_url"]
+                            _part = BedrockImageProcessor.process_image_sync(
+                                image_url=video_url,
+                                format=video_format,
                             )
                             _parts.append(_part)
                         elif element["type"] == "file":
