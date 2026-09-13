@@ -4872,7 +4872,7 @@ class ProxyConfig:
             # _encrypt_env_variables_for_db is idempotent — a caller that
             # already encrypted the values (or re-submitted ciphertext read
             # back from the DB) will not get a stacked second layer.
-            if "environment_variables" in config_to_save and config_to_save["environment_variables"]:
+            if config_to_save.get("environment_variables"):
                 config_to_save["environment_variables"] = self._encrypt_env_variables_for_db(
                     environment_variables=config_to_save["environment_variables"]
                 )
@@ -6495,9 +6495,68 @@ class ProxyConfig:
             return get_secret(decrypted_value)
         return decrypted_value
 
-    def _add_deployment(self, db_models: list) -> int:
+    def _add_config_models(self, config_models: list | None = None) -> int:
+        if config_models is None:
+            config_state = self.get_config_state()
+            if isinstance(config_state, dict):
+                config_models = config_state.get("model_list", None)
+            if not config_models and user_config_file_path and os.path.exists(user_config_file_path):
+                try:
+                    with open(user_config_file_path, "r") as f:
+                        yaml_cfg = yaml.safe_load(f)
+                        if isinstance(yaml_cfg, dict):
+                            config_models = yaml_cfg.get("model_list", None)
+                except Exception:
+                    pass
+
+        if not config_models:
+            return 0
+
+        added_count = 0
+        for model in config_models:
+            try:
+                raw_litellm_params = {  # mutable-ok: resolved copy for router upsert
+                    k: (get_secret(v) if isinstance(v, str) and v.startswith("os.environ/") else v)
+                    for k, v in copy.deepcopy(
+                        model.get("litellm_params") or {}  # mutable-ok: config fallback
+                    ).items()  # mutable-ok: safe fallback
+                }
+
+                model_info_dict = copy.deepcopy(model.get("model_info") or {})  # mutable-ok: config fallback
+                model_id = model_info_dict.get("id", None)
+                if model_id is None:
+                    model_id = llm_router.generate_model_id(
+                        model_group=model["model_name"],
+                        litellm_params=raw_litellm_params,
+                    )
+                else:
+                    model_id = str(model_id)
+                model_info_dict["id"] = model_id
+                model_info_dict["db_model"] = False
+
+                _model_info = RouterModelInfo(**model_info_dict)
+                _litellm_params = LiteLLM_Params.model_validate(raw_litellm_params)
+
+                added = llm_router.upsert_deployment(
+                    deployment=Deployment(
+                        model_name=model["model_name"],
+                        litellm_params=_litellm_params,
+                        model_info=_model_info,
+                    )
+                )
+                if added is not None:
+                    added_count += 1
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    "Error adding config model to llm_router: %s. model_name=%s",
+                    e,
+                    model.get("model_name"),
+                )
+        return added_count
+
+    def _add_deployment(self, db_models: list, config_models: list | None = None) -> int:
         """
-        Iterate through db models
+        Iterate through db models and config models
 
         for any not in router - add them.
 
@@ -6535,6 +6594,10 @@ class ProxyConfig:
 
             if added is not None:
                 added_models += 1
+
+        ## ADD CONFIG MODEL LOGIC
+        added_models += self._add_config_models(config_models=config_models)
+
         return added_models
 
     def decrypt_model_list_from_db(self, new_models: list) -> list:
@@ -11200,11 +11263,11 @@ async def completion(
         if _data.get("stream", None) is not None and _data["stream"] is True:
             _text_response: Final = litellm.ModelResponse()
             # Set text attribute dynamically for text completion format
-            setattr(_text_response.choices[0], "text", e.message)
+            _text_response.choices[0].text = e.message
             _text_response.model = e.model
             _usage = _blocked_response_usage(e.original_response)
             # Set usage attribute dynamically (ModelResponse accepts usage in __init__ but it's not in type definition)
-            setattr(_text_response, "usage", _usage)
+            _text_response.usage = _usage
             _iterator = litellm.utils.ModelResponseIterator(model_response=_text_response, convert_to_delta=True)
             _streaming_response = litellm.TextCompletionStreamWrapper(
                 completion_stream=_iterator,
@@ -16270,17 +16333,15 @@ async def _generate_onboarding_ui_session_token(user_obj: _UserTableRow) -> str:
 
     response: Final = await generate_key_helper_fn(
         request_type="key",
-        **{
-            "user_role": user_obj.user_role,
-            "duration": LITELLM_UI_SESSION_DURATION,
-            "key_max_budget": litellm.max_ui_session_budget,
-            "models": [],
-            "aliases": {},
-            "config": {},
-            "spend": 0,
-            "user_id": user_obj.user_id,
-            "team_id": UI_TEAM_ID,
-        },
+        user_role=user_obj.user_role,
+        duration=LITELLM_UI_SESSION_DURATION,
+        key_max_budget=litellm.max_ui_session_budget,
+        models=[],
+        aliases={},
+        config={},
+        spend=0,
+        user_id=user_obj.user_id,
+        team_id=UI_TEAM_ID,
     )
     key: Final = response["token"]
 
