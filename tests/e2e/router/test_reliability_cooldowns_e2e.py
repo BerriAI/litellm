@@ -6,13 +6,14 @@ way (a 500, a 429, a 401, or a timeout) holding all of the group's shuffle weigh
 with an `allowed_fails_policy` of zero for that error class and a short
 `cooldown_time`, plus a healthy backup at weight 0. The first call, retries off,
 surfaces the failure to the customer as-is and benches the deployment. The proxy
-records the bench off the request path, and a sibling replica that checked Redis
-for that deployment just before the bench landed keeps sending it traffic until
-it looks again, which it does at most every 10s
-(litellm.default_redis_batch_cache_expiry). So for REPLICA_PROPAGATION_SECONDS
-after the trip every answer has to be either the deployment's own failure or a
-200 from the backup, which the proxy names in x-litellm-model-id, and at least
-one replica has to have served from the backup by then. From then until shortly
+records the bench off the request path, and a sibling replica only sees it on
+its next read of the cooldown keys from Redis, which the cooldown cache does at
+most every 1s (DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS). So for
+REPLICA_PROPAGATION_SECONDS after the trip, a window kept far wider than that
+so this cell asserts the trip and the recovery rather than how fast siblings
+catch up, every answer has to be either the deployment's own failure or a 200
+from the backup, which the proxy names in x-litellm-model-id, and at least one
+replica has to have served from the backup by then. From then until shortly
 before the cooldown can lapse, every call has to land on the backup whichever
 replica takes it. Then the test polls until the weighted shuffle opens on the
 failing deployment again and the same failure comes back (or, for the 429 pair,

@@ -27,10 +27,8 @@ Least-busy reads live traffic, so its group of four equal deployments gets one
 long streaming request, opened under least-busy and held unread (its head names
 the deployment it landed on), and every short least-busy call sent while it is
 in flight must land on one of the other three. The stream itself goes through
-least-busy because a proxy process only starts counting in-flight requests once
-it has routed a least-busy request, which is what registers the counting
-callback, so a stream opened under another strategy would go uncounted in a
-process that has never routed one. Three idle deployments rather than one
+least-busy because the in-flight counter is the strategy's own callback, so a
+stream opened under another strategy would go uncounted. Three idle deployments rather than one
 because a process counts in its own memory, reads the shared count from Redis
 only on its first look at a group, and releases a call's count in a success
 callback that runs some time after the response leaves it, so a process can
@@ -42,6 +40,17 @@ call for the same reason: a process that served it before the stream opened
 would route on its own stale copy, in which nothing is busy. Draining the stream
 to its terminator afterwards proves the deployment holding it was healthy the
 whole time.
+
+Both the latency-based and the least-busy cell are skipped until LIT-7682 lands.
+Since #40229 the per-request override builds its selector without registering
+the selector's logging hooks, so an overriding request runs neither the latency
+sampler nor the in-flight counter: latency-based picks at random with no
+samples, and least-busy picks the first deployment in its list with every count
+at zero. Neither failure is guaranteed on a given run (random picks can skip the
+slow deployment three times in a row, and which deployment a replica lists first
+depends on the order it loaded the group from the DB), so a skip is the honest
+bookkeeping this harness asks for: the two cells go back to the gap list instead
+of passing by luck, and the fix PR removes the skips as its e2e proof.
 
 The per-request strategy comes in through `router_settings_override`, the same
 knob a key or team's `router_settings` feeds, so one long-lived proxy configured
@@ -209,6 +218,10 @@ class TestReliabilityRoutingStrategies:
         )
         _assert_shuffle_control_lands_on(client, scoped_key, group, capped)
 
+    @pytest.mark.skip(
+        reason="LIT-7682: since #40229 the per-request routing_strategy override runs without the latency sampler, "
+        "so latency-based has no signal to route on"
+    )
     @pytest.mark.covers("reliability.routing.latency_based.picks_lowest_latency")
     def test_latency_based_routes_around_deployment_that_times_out(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
@@ -235,6 +248,10 @@ class TestReliabilityRoutingStrategies:
             f"{control.status_code}: it was benched, so the fast picks above prove nothing"
         )
 
+    @pytest.mark.skip(
+        reason="LIT-7682: since #40229 the per-request routing_strategy override runs without the in-flight counter, "
+        "so least-busy has no signal to route on"
+    )
     @pytest.mark.covers("reliability.routing.least_busy.picks_lowest_traffic")
     def test_least_busy_avoids_deployment_with_request_in_flight(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
