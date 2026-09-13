@@ -45,6 +45,7 @@ from litellm.proxy.spend_tracking.spend_log_error_logger import (
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _sanitize_error_information_for_spend_logs,
     get_request_model_access_groups,
+    resolve_authoritative_response_cost,
     should_store_prompts_and_responses_in_spend_logs,
 )
 from litellm.proxy.utils import ProxyUpdateSpend
@@ -321,8 +322,9 @@ class _ProxyDBLogger(CustomLogger):
             key_alias: Final = cast(str | None, metadata.get("user_api_key_alias", None))
             end_user_max_budget: Final = metadata.get("user_api_end_user_max_budget", None)
             sl_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
-            response_cost: Final = (
-                sl_object.get("response_cost", None) if sl_object is not None else kwargs.get("response_cost", None)
+            response_cost: Final = resolve_authoritative_response_cost(
+                kwargs=kwargs,
+                standard_logging_payload=sl_object,
             )
             tags: Final = _get_request_tags_for_cost_tracking(
                 sl_object=sl_object,

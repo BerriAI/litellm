@@ -274,9 +274,9 @@ class DBSpendUpdateWriter:
                 response_obj=completion_response,
                 start_time=start_time,
                 end_time=end_time,
+                response_cost=response_cost,
             )
-            resolved_spend: Final = response_cost or payload["spend"]
-            payload["spend"] = resolved_spend
+            resolved_spend: Final = payload["spend"]
             if isinstance(payload["startTime"], datetime):
                 payload["startTime"] = payload["startTime"].isoformat()
             if isinstance(payload["endTime"], datetime):
