@@ -17,6 +17,8 @@ from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -121,7 +123,7 @@ class MinimaxChatConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],  # mutable-ok: matches parent
         optional_params: dict,  # mutable-ok: matches parent  # pyright: ignore[reportMissingTypeArgument,reportUnknownParameterType]  # matches OpenAIGPTConfig.transform_response
         litellm_params: dict,  # mutable-ok: matches parent  # pyright: ignore[reportMissingTypeArgument,reportUnknownParameterType]  # matches OpenAIGPTConfig.transform_response
-        encoding,  # pyright: ignore[reportAny,reportMissingParameterType]  # matches OpenAIGPTConfig.transform_response
+        encoding: "tiktoken.Encoding | None",  # matches OpenAIGPTConfig.transform_response
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
