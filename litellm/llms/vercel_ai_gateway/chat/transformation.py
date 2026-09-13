@@ -13,6 +13,7 @@ import httpx
 
 import litellm
 from litellm.litellm_core_utils.gateway_catalog_cache import (
+    CATALOG_TIMEOUT_SECONDS,
     as_mapping,
     as_sequence,
     float_field,
@@ -116,8 +117,10 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
         resolved_base, _ = self._get_openai_compatible_provider_info(api_base, api_key)
         if resolved_base is None:
             resolved_base = "https://ai-gateway.vercel.sh/v1"
-
-        response: Final = litellm.module_level_client.get(url=f"{resolved_base}/models")
+        response: Final = litellm.module_level_client.get(
+            url=f"{resolved_base}/models",
+            timeout=CATALOG_TIMEOUT_SECONDS,
+        )
         if response.status_code != 200:
             raise Exception(f"Failed to get models: {response.text}")
 

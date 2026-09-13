@@ -13,6 +13,7 @@ import httpx
 
 import litellm
 from litellm.litellm_core_utils.gateway_catalog_cache import (
+    CATALOG_TIMEOUT_SECONDS,
     EMPTY_MAPPING,
     as_mapping,
     as_sequence,
@@ -109,6 +110,7 @@ class MergeAIGatewayConfig(OpenAIGPTConfig):
             url=f"{root}/models",
             params=page_query_params(cursor, PAGE_LIMIT),
             headers=bearer_auth_headers(api_key),
+            timeout=CATALOG_TIMEOUT_SECONDS,
         )
         if response.status_code != 200:
             raise Exception(f"Failed to get models: {response.text}")

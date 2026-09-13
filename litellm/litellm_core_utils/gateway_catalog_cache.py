@@ -21,6 +21,7 @@ from litellm._logging import verbose_logger
 from litellm.types.utils import ModelInfoBase
 
 CATALOG_TTL_SECONDS: Final = 300
+CATALOG_TIMEOUT_SECONDS: Final = 15.0
 CatalogEntries: TypeAlias = Mapping[str, ModelInfoBase]
 
 EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
@@ -91,10 +92,14 @@ def bearer_auth_headers(api_key: str | None) -> dict[str, str]:  # mutable-ok: H
     return header
 
 
-def page_query_params(cursor: str | None, limit: int) -> dict[str, object]:  # mutable-ok: HTTPHandler.get needs a dict
+def page_query_params(
+    cursor: str | None, limit: int
+) -> dict[str, int | str]:  # mutable-ok: HTTPHandler.get needs a dict
     """One catalog page's query, carrying ``cursor`` only when there is one."""
-    extra: Final = {"cursor": cursor} if cursor is not None else {}  # mutable-ok: HTTPHandler.get needs a dict
-    params: Final = {"limit": limit, **extra}  # mutable-ok: HTTPHandler.get needs a dict
+    extra: Final[dict[str, int | str]] = (
+        {"cursor": cursor} if cursor is not None else {}
+    )  # mutable-ok: HTTPHandler.get needs a dict
+    params: Final[dict[str, int | str]] = {"limit": limit, **extra}  # mutable-ok: HTTPHandler.get needs a dict
     return params
 
 

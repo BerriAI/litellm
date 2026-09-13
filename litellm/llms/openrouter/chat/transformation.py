@@ -14,6 +14,7 @@ import httpx
 
 import litellm
 from litellm.litellm_core_utils.gateway_catalog_cache import (
+    CATALOG_TIMEOUT_SECONDS,
     as_mapping,
     as_sequence,
     bearer_auth_headers,
@@ -88,10 +89,10 @@ class OpenrouterConfig(OpenAIGPTConfig):
         """
         resolved_key: Final = self.get_api_key(api_key)
         base: Final = (api_base or "https://openrouter.ai/api/v1").rstrip("/")
-
         response: Final = litellm.module_level_client.get(
             url=f"{base}/models",
             headers=bearer_auth_headers(resolved_key),
+            timeout=CATALOG_TIMEOUT_SECONDS,
         )
         if response.status_code != 200:
             raise Exception(f"Failed to get models: {response.text}")
