@@ -34,6 +34,39 @@ export const modelSentinelOptions = (
   return teamLoaded ? [{ value: "all-team-models", label: "All Team Models" }] : [];
 };
 
+export type MovedMetadataTags = {
+  metadata: string;
+  tags: string[];
+  movedTags: string[];
+};
+
+const parseJsonObject = (text: string): Record<string, unknown> | null => {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+export const moveTagsOutOfMetadataJson = (
+  metadataJson: string | undefined,
+  currentTags: readonly string[] | undefined,
+): MovedMetadataTags | null => {
+  const parsed = metadataJson === undefined ? null : parseJsonObject(metadataJson);
+  if (parsed === null) return null;
+  const { tags: metadataTags, ...rest } = parsed;
+  if (!Array.isArray(metadataTags)) return null;
+  const existing = currentTags ?? [];
+  const movedTags = metadataTags.filter(
+    (tag: unknown, index: number): tag is string =>
+      typeof tag === "string" && !existing.includes(tag) && metadataTags.indexOf(tag) === index,
+  );
+  return { metadata: JSON.stringify(rest, null, 2), tags: [...existing, ...movedTags], movedTags };
+};
+
 export const currentValuePlaceholder = (
   premiumUser: boolean,
   current: unknown,
