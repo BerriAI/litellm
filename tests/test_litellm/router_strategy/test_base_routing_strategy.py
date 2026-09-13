@@ -216,3 +216,22 @@ class TestRouterStrategyInstanceIsolation:
         finally:
             await h1.cleanup()
             await h2.cleanup()
+
+    @pytest.mark.asyncio
+    async def test_handlers_accept_explicit_routing_args(self) -> None:
+        """Verify handlers accept and respect explicitly provided routing_args dict."""
+        mock_cache = MagicMock(spec=DualCache)
+        h_cost = LowestCostLoggingHandler(router_cache=mock_cache, routing_args={"custom": True})
+        assert h_cost.routing_args == {"custom": True}
+
+        h_lat = LowestLatencyLoggingHandler(router_cache=mock_cache, routing_args={"ttl": 120})
+        assert h_lat.routing_args.ttl == 120
+
+        h_tpm = LowestTPMLoggingHandler(router_cache=mock_cache, routing_args={"ttl": 180})
+        assert h_tpm.routing_args.ttl == 180
+
+        h_tpm_v2 = LowestTPMLoggingHandler_v2(router_cache=mock_cache, routing_args={"ttl": 240})
+        try:
+            assert h_tpm_v2.routing_args.ttl == 240
+        finally:
+            await h_tpm_v2.cleanup()
