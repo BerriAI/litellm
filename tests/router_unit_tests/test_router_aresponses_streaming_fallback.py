@@ -372,7 +372,7 @@ async def test_aresponses_fallback_on_in_stream_error_event():
     raised = mock_fallback.await_args.kwargs["e"]
     assert isinstance(raised, MidStreamFallbackError)
     assert raised.status_code == 429
-    assert isinstance(raised.original_exception, litellm.APIError)
+    assert isinstance(raised.original_exception, litellm.RateLimitError)
     assert raised.original_exception.status_code == 429
     assert mock_fallback.await_args.kwargs["kwargs"]["input"] == "original question"
 
