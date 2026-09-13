@@ -22,6 +22,7 @@ from litellm.llms.opencode.common_utils import (
     cost_map_max_output_tokens,
     resolve_opencode_api_base,
     resolve_opencode_api_key,
+    with_opencode_session_header,
 )
 from litellm.types.router import GenericLiteLLMParams
 
@@ -182,7 +183,7 @@ class OpenCodeMessagesConfig(AnthropicMessagesConfig):
             api_key=key,
             api_base=base_url,
         )
-        return resolved_headers, resolved_base_url
+        return with_opencode_session_header(self.surface, resolved_headers, litellm_params), resolved_base_url
 
     def get_error_class(
         self,

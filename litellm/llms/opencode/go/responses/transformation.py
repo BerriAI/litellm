@@ -14,6 +14,7 @@ from typing import (
 
 import litellm
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.opencode.common_utils import with_opencode_session_header
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
@@ -68,7 +69,7 @@ class OpenCodeGoResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         headers["Content-Type"] = "application/json"  # rebind-ok: caller expects auth header injected
         headers["Authorization"] = f"Bearer {api_key}"  # rebind-ok: caller expects auth header injected
-        return headers
+        return with_opencode_session_header("go", headers, litellm_params.model_dump())
 
     def get_complete_url(
         self,

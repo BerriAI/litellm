@@ -494,6 +494,41 @@ class TestMockedMessagesCompletion:
         # Bearer should NOT be present for go messages arm
         assert "Authorization" not in request.headers
 
+    def test_go_messages_model_sends_session_header(self, respx_mock, monkeypatch):
+        """Go rejects /v1/messages without x-opencode-session."""
+        respx_mock.post("https://opencode.ai/zen/go/v1/messages").mock(
+            return_value=Response(200, json=_anthropic_response("go messages"))
+        )
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.completion(
+            model="opencode_go/minimax-m3",
+            api_key="sk-go-123",
+            litellm_session_id="sess-123",
+            **self._make_completion_kwargs(),
+        )
+
+        assert respx_mock.calls[0].request.headers["x-opencode-session"] == "sess-123"
+
+    def test_go_messages_passthrough_sends_session_header(self, respx_mock, monkeypatch):
+        """The standalone /v1/messages route needs the header on Go too."""
+        respx_mock.post("https://opencode.ai/zen/go/v1/messages").mock(
+            return_value=Response(200, json=_anthropic_response("go messages"))
+        )
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        asyncio.run(
+            litellm.anthropic_messages(
+                model="opencode_go/minimax-m3",
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=16,
+                api_key="sk-go-123",
+                litellm_session_id="sess-123",
+            )
+        )
+
+        assert respx_mock.calls[0].request.headers["x-opencode-session"] == "sess-123"
+
     def test_global_api_key_not_sent_on_messages_dispatch(self, respx_mock, monkeypatch):
         """Messages arm uses the OpenCode key, not a process-wide litellm.api_key.
 

@@ -315,6 +315,22 @@ class TestGoMockedCompletion:
         assert "/v1/responses" in str(request.url)
         assert request.headers["Authorization"] == "Bearer sk-fake"
 
+    def test_responses_bridge_sends_session_header(self, respx_mock, monkeypatch):
+        """Go rejects /v1/responses without x-opencode-session."""
+        respx_mock.post(GO_RESPONSE_ENDPOINT).mock(
+            return_value=Response(200, json=_make_responses_response("gpt-5.6-luna", "ok"))
+        )
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.completion(
+            model="opencode_go/gpt-5.6-luna",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="sk-fake",
+            litellm_session_id="sess-123",
+        )
+
+        assert respx_mock.calls[0].request.headers["x-opencode-session"] == "sess-123"
+
     def test_bearer_auth_from_module_key(self, respx_mock, monkeypatch):
         """Module-level opencode_go_api_key provides the Bearer token."""
         respx_mock.post(GO_RESPONSE_ENDPOINT).mock(
