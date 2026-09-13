@@ -8,7 +8,13 @@ mod chat_completions;
 mod messages;
 mod ocr;
 
+#[cfg(feature = "bench")]
+#[allow(dead_code)]
+mod benchmarks;
+
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    #[cfg(feature = "bench")]
+    benchmarks::register_namespace(module)?;
     ocr::register(module)?;
     audio_transcription::register(module)?;
     messages::register(module)?;

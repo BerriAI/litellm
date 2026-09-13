@@ -99,6 +99,8 @@ jobs:
 
       - run: cargo clippy -p litellm-ai-gateway --all-targets --all-features --locked -- -D warnings
 
+      - run: cargo clippy -p litellm-python-bridge --all-targets --features bench,trace-parity --locked -- -D warnings
+
   rust-test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -135,6 +137,9 @@ jobs:
         working-directory: litellm-rust
 
       - run: cargo test -p litellm-ai-gateway --features server --locked
+        working-directory: litellm-rust
+
+      - run: cargo test -p litellm-python-bridge --features bench,trace-parity --locked
         working-directory: litellm-rust
 
       - run: uv build --wheel --out-dir dist
