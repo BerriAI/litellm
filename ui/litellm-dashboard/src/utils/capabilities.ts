@@ -10,6 +10,7 @@ const CAPABILITY_ROLES = {
   viewPrompts: all_admin_roles,
   viewOrganizationUsage: all_admin_roles,
   viewAgentUsage: all_admin_roles,
+  viewProjectUsage: all_admin_roles,
   viewGlobalSpend: proxyAdminOnlyRoles,
   viewWorkflowRuns: proxyAdminOnlyRoles,
   viewMemory: proxyAdminOnlyRoles,

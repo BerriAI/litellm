@@ -119,6 +119,7 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
         gte = re.search(r'"startTime" >= \(\$(\d+)', cond)
         lte = re.search(r'"startTime" <= \(\$(\d+)', cond)
         alias = re.search(r"user_api_key_alias' LIKE \$(\d+)", cond)
+        project = re.search(r"user_api_key_project_id' = \$(\d+)", cond)
         code = re.search(r"error_code' = \$(\d+)", cond)
         msg = re.search(r"error_message' LIKE \$(\d+)", cond)
         sess = re.fullmatch(r"session_id LIKE \$(\d+)", cond)
@@ -153,6 +154,13 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
                 {
                     "path": ["user_api_key_alias"],
                     "string_contains": str(params[int(alias.group(1)) - 1]).strip("%"),
+                }
+            )
+        elif project:
+            metadata_conds.append(
+                {
+                    "path": ["user_api_key_project_id"],
+                    "equals": params[int(project.group(1)) - 1],
                 }
             )
         elif code:
@@ -4873,6 +4881,71 @@ async def test_ui_view_spend_logs_with_error_message(client):
             assert (
                 "Rate limit exceeded" in metadata["error_information"]["error_message"]
             )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_with_project_id(client, monkeypatch):
+    """Test filtering spend logs by project_id"""
+    mock_spend_logs = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-3.5-turbo",
+            "metadata": '{"user_api_key_project_id": "project-1"}',
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "sk-test-key",
+            "user": "test_user_2",
+            "team_id": "team1",
+            "spend": 0.10,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+            "metadata": '{"user_api_key_project_id": "project-2"}',
+        },
+    ]
+
+    def filter_by_project_id(where):
+        if "metadata" in where:
+            mf = where["metadata"]
+            if mf.get("path") == ["user_api_key_project_id"]:
+                project_id = mf.get("equals")
+                return [log for log in mock_spend_logs if json.loads(log["metadata"])["user_api_key_project_id"] == project_id]
+        return mock_spend_logs
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    monkeypatch.setattr(ps, "prisma_client", make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_project_id))
+
+    try:
+        start_date, end_date = _default_date_range()
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "project_id": "project-1",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["id"] == "log1"
+        assert data["data"][0]["metadata"]["user_api_key_project_id"] == "project-1"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 

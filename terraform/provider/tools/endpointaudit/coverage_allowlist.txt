@@ -19,6 +19,7 @@ GET /guardrails/usage/overview
 GET /key/spend/report
 GET /organization/daily/activity
 GET /organization/spend/report
+GET /project/daily/activity
 GET /tag/daily/activity
 GET /tag/dau
 GET /tag/distinct

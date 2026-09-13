@@ -79,6 +79,7 @@ describe("useLogFilterLogic", () => {
     const cases: ReadonlyArray<{ id: string; value: string; param: string }> = [
       { id: LOG_FILTER_IDS.KEY_HASH, value: "sk-hash-1", param: "api_key" },
       { id: LOG_FILTER_IDS.TEAM_ID, value: "team-1", param: "team_id" },
+      { id: LOG_FILTER_IDS.PROJECT_ID, value: "project-1", param: "project_id" },
       { id: LOG_FILTER_IDS.REQUEST_ID, value: "req-1", param: "request_id" },
       { id: LOG_FILTER_IDS.SESSION_ID, value: "sess-1", param: "session_id" },
       { id: LOG_FILTER_IDS.END_USER, value: "end-user-1", param: "end_user" },

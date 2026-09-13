@@ -23,6 +23,7 @@ from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
     update_project,
     delete_project,
     project_info,
+    get_project_daily_activity,
 )
 from litellm.proxy.proxy_server import (
     LitellmUserRoles,
@@ -1383,3 +1384,190 @@ async def test_new_project_flag_on_access_group_model_returns_400(monkeypatch):
 
     assert "prod-models" in str(exc_info.value)
     assert "expand to multiple models at request time" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_get_project_daily_activity_requires_project_ids(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_project_daily_activity(
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+            project_ids=None,
+            start_date="2026-09-01",
+            end_date="2026-09-04",
+        )
+    assert exc_info.value.status_code == 400
+    assert "project_ids" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_get_project_daily_activity_admin_groups_by_day_and_project(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    project_alpha = MagicMock(project_id="project-alpha", project_alias="Alpha", team_id="team-1")
+    project_beta = MagicMock(project_id="project-beta", project_alias="Beta", team_id="team-1")
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_projecttable.find_many = AsyncMock(return_value=[project_alpha, project_beta])
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[
+            {
+                "spend_date": "2026-09-01",
+                "project_id": "project-alpha",
+                "spend": 0.5,
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+                "api_requests": 3,
+                "successful_requests": 2,
+                "failed_requests": 1,
+            },
+            {
+                "spend_date": "2026-09-02",
+                "project_id": "project-beta",
+                "spend": 0.25,
+                "prompt_tokens": 4,
+                "completion_tokens": 2,
+                "total_tokens": 6,
+                "api_requests": 1,
+                "successful_requests": 1,
+                "failed_requests": 0,
+            },
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma)
+
+    admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+    response = await get_project_daily_activity(
+        user_api_key_dict=admin,
+        project_ids="project-alpha,project-beta",
+        start_date="2026-09-01",
+        end_date="2026-09-02",
+    )
+
+    sql, *params = mock_prisma.db.query_raw.call_args.args
+    assert params == ["2026-09-01", "2026-09-02", "project-alpha", "project-beta"]
+    assert 'FROM "LiteLLM_SpendLogs" sl' in sql
+    assert "sl.metadata->>'user_api_key_project_id' IN ($3, $4)" in sql
+    assert "GROUP BY spend_date, project_id" in sql
+
+    assert response.start_date == "2026-09-01"
+    assert response.end_date == "2026-09-02"
+    assert [(r.date, r.project_id, r.project_alias, r.spend, r.api_requests) for r in response.results] == [
+        ("2026-09-01", "project-alpha", "Alpha", 0.5, 3),
+        ("2026-09-02", "project-beta", "Beta", 0.25, 1),
+    ]
+    assert (response.results[0].successful_requests, response.results[0].failed_requests) == (2, 1)
+
+
+@pytest.mark.asyncio
+async def test_get_project_daily_activity_team_admin_can_view_own_project(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    project = MagicMock(project_id="project-alpha", project_alias="Alpha", team_id="team-1")
+    team = MagicMock(admins=["alice"])
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_projecttable.find_many = AsyncMock(return_value=[project])
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma)
+
+    caller = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice")
+    response = await get_project_daily_activity(
+        user_api_key_dict=caller,
+        project_ids="project-alpha",
+        start_date="2026-09-01",
+        end_date="2026-09-02",
+    )
+    assert response.results == ()
+    mock_prisma.db.query_raw.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_get_project_daily_activity_non_team_admin_forbidden(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    project = MagicMock(project_id="project-alpha", project_alias="Alpha", team_id="team-1")
+    team = MagicMock(admins=["someone-else"])
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_projecttable.find_many = AsyncMock(return_value=[project])
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma)
+
+    caller = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="bob")
+    with pytest.raises(HTTPException) as exc_info:
+        await get_project_daily_activity(
+            user_api_key_dict=caller,
+            project_ids="project-alpha",
+            start_date="2026-09-01",
+            end_date="2026-09-02",
+        )
+    assert exc_info.value.status_code == 403
+    mock_prisma.db.query_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_project_daily_activity_unknown_project_404(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_projecttable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma)
+
+    admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+    with pytest.raises(HTTPException) as exc_info:
+        await get_project_daily_activity(
+            user_api_key_dict=admin,
+            project_ids="does-not-exist,also-missing",
+            start_date="2026-09-01",
+            end_date="2026-09-02",
+        )
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == {"error": "Project(s) not found: also-missing, does-not-exist"}
+    mock_prisma.db.query_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "project_ids,start_date,end_date,expected_error",
+    [
+        (None, "2026-09-01", "2026-09-04", "project_ids"),
+        ("", "2026-09-01", "2026-09-04", "project_ids"),
+        ("project-alpha", None, "2026-09-04", "start_date and end_date"),
+        ("project-alpha", "2026-09-04", "2026-09-01", "on or after"),
+        ("project-alpha", "2020-01-01", "2026-12-31", "at most 400 days"),
+        ("project-alpha", "nope", "2026-09-04", "valid YYYY-MM-DD"),
+    ],
+)
+async def test_get_project_daily_activity_rejects_bad_input(
+    monkeypatch, project_ids, start_date, end_date, expected_error
+):
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma)
+
+    admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+    with pytest.raises(HTTPException) as exc_info:
+        await get_project_daily_activity(
+            user_api_key_dict=admin, project_ids=project_ids, start_date=start_date, end_date=end_date
+        )
+    assert exc_info.value.status_code == 400
+    assert expected_error in str(exc_info.value.detail)
+    mock_prisma.db.query_raw.assert_not_called()

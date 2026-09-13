@@ -24,6 +24,7 @@ const ADMIN_ONLY_CAPABILITIES: Capability[] = [
   "viewPrompts",
   "viewOrganizationUsage",
   "viewAgentUsage",
+  "viewProjectUsage",
 ];
 
 const PROXY_ADMIN_ONLY_PAGE_CAPABILITIES: Capability[] = [

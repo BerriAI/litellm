@@ -1623,6 +1623,30 @@ export const agentDailyActivityCall = async (
   });
 };
 
+export type ProjectDailySpendResponse = components["schemas"]["ProjectDailySpendResponse"];
+export type ProjectDailySpendRow = components["schemas"]["ProjectDailySpendRow"];
+
+export const projectDailyActivityCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  projectIds: string[],
+): Promise<ProjectDailySpendResponse> => {
+  try {
+    return await apiClient.get<ProjectDailySpendResponse>(`/project/daily/activity`, {
+      accessToken,
+      query: {
+        project_ids: projectIds.join(","),
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+      },
+    });
+  } catch (error) {
+    console.error("Failed to fetch project daily activity:", error);
+    throw error;
+  }
+};
+
 export const getOnboardingCredentials = async (inviteUUID: string) => {
   /**
    * Get all models on proxy
@@ -2075,6 +2099,7 @@ export const userFilterUICall = async (accessToken: string, params: URLSearchPar
 interface UiSpendLogsParams {
   api_key?: string;
   team_id?: string;
+  project_id?: string;
   request_id?: string;
   session_id?: string;
   user_id?: string;

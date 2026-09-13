@@ -20,9 +20,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
+import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { hasCapability } from "@/utils/capabilities";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { all_admin_roles, internalUserRoles } from "@/utils/roles";
@@ -60,6 +62,7 @@ import {
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import ModelViewToggle, { ModelViewType } from "./ModelViewToggle";
+import ProjectUsage from "./ProjectUsage/ProjectUsage";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
 import { TOP_MODEL_LIMITS } from "./EntityUsage/TopModelView";
 import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
@@ -103,12 +106,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   // filter reads as loading rather than as a range with no customers.
   const { data: customers } = useCustomers();
   const { data: agentsResponse } = useAgents();
+  const { data: projectsResponse } = useProjects();
   const { data: currentUser } = useCurrentUser();
   const isAdmin = all_admin_roles.includes(userRole || "");
   const canViewTagUsage = isAdmin || internalUserRoles.includes(userRole || "");
   const isOrgAdmin = useIsOrgAdmin();
   const canViewOrganizationUsage = hasCapability(userRole, "viewOrganizationUsage", isOrgAdmin);
   const canViewAgentUsage = hasCapability(userRole, "viewAgentUsage");
+  const { data: uiSettingsData } = useUISettings();
+  const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
+  const canViewProjectUsage = hasCapability(userRole, "viewProjectUsage") && enableProjectsUI;
 
   // For admins: null means global view (all users), a string means filter by that user
   // For non-admins: always set to their own user ID
@@ -118,12 +125,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
   const [isAiChatOpen, setIsAiChatOpen] = useState(false);
   const [selectedUsageView, setUsageView] = useState<UsageOption>("global");
-  // Org-admin membership is read from the server, so unlike the other usage
-  // views this one can be revoked while the page is open. Derive the view in
-  // render rather than storing it, so the fallback lands on the same paint and
-  // the selector never holds a value it no longer offers.
-  const usageView: UsageOption =
-    selectedUsageView === "organization" && !canViewOrganizationUsage ? "global" : selectedUsageView;
+  const hasOrganizationAccessIfSelected = selectedUsageView !== "organization" || canViewOrganizationUsage;
+  const hasProjectAccessIfSelected = selectedUsageView !== "project" || canViewProjectUsage;
+  const stillHasAccessToSelectedView = hasOrganizationAccessIfSelected && hasProjectAccessIfSelected;
+  const usageView: UsageOption = stillHasAccessToSelectedView ? selectedUsageView : "global";
 
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
@@ -234,10 +239,12 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const aggregatedFailed = selectForRange(aggregatedFailure, currentAggregatedRangeKey) === true;
 
   // Paginated fallback — only enabled when aggregated endpoint fails
+  const hasRequestWindow = !!accessToken && !!startTime && !!endTime;
+  const hasPaginatedFallbackRequestWindow = aggregatedFailed && hasRequestWindow;
   const paginatedResult = usePaginatedDailyActivity({
     fetchFn: userDailyActivityCall,
     args: [accessToken, startTime, endTime, effectiveUserId],
-    enabled: aggregatedFailed && !!accessToken && !!startTime && !!endTime,
+    enabled: hasPaginatedFallbackRequestWindow,
   });
 
   // Derive userSpendData from whichever source is active
@@ -483,6 +490,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               userRole={userRole}
               canViewTagUsage={canViewTagUsage}
               isOrgAdmin={isOrgAdmin}
+              enableProjectsUI={enableProjectsUI}
             />
             <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
           </div>
@@ -933,6 +941,20 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               }
               premiumUser={premiumUser}
               dateValue={dateValue}
+            />
+          )}
+
+          {usageView === "project" && canViewProjectUsage && (
+            <ProjectUsage
+              accessToken={accessToken}
+              projectList={
+                projectsResponse?.map((project) => ({
+                  label: project.project_alias || project.project_id,
+                  value: project.project_id,
+                })) || null
+              }
+              dateValue={dateValue}
+              premiumUser={premiumUser}
             />
           )}
 

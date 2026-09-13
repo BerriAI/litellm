@@ -2382,6 +2382,10 @@ async def ui_view_spend_logs(
         default=None,
         description="Filter spend logs by team_id",
     ),
+    project_id: str | None = fastapi.Query(
+        default=None,
+        description="Filter spend logs by project_id",
+    ),
     min_spend: float | None = fastapi.Query(
         default=None,
         description="Filter logs with spend greater than or equal to this value",
@@ -2801,6 +2805,10 @@ async def ui_view_spend_logs(
         if error_message is not None:
             sql_conditions.append(f"metadata->'error_information'->>'error_message' LIKE ${p}")
             sql_params.append(f"%{error_message}%")
+            p += 1
+        if project_id is not None:
+            sql_conditions.append(f"metadata->>'user_api_key_project_id' = ${p}")
+            sql_params.append(project_id)
             p += 1
 
         if (

@@ -11515,6 +11515,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/project/daily/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Project Daily Activity
+         * @description Daily spend per project, attributed per request from spend logs.
+         *
+         *     Scans LiteLLM_SpendLogs directly and groups by day and the project_id
+         *     stored in each request's metadata: there is no daily-aggregated project
+         *     spend table, unlike /team/daily/activity.
+         *
+         *     Proxy admins may query any project. Team admins may query projects
+         *     belonging to teams they administer.
+         *
+         *     Example:
+         *     ```bash
+         *     curl --location 'http://0.0.0.0:4000/project/daily/activity?project_ids=project-123&start_date=2026-09-01&end_date=2026-09-04' \
+         *     --header 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["get_project_daily_activity_project_daily_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/project/delete": {
         parameters: {
             query?: never;
@@ -34387,6 +34420,59 @@ export interface components {
              */
             version_status: string;
         };
+        /** ProjectDailySpendResponse */
+        ProjectDailySpendResponse: {
+            /** End Date */
+            end_date: string;
+            /** Results */
+            results: components["schemas"]["ProjectDailySpendRow"][];
+            /** Start Date */
+            start_date: string;
+        };
+        /** ProjectDailySpendRow */
+        ProjectDailySpendRow: {
+            /**
+             * Api Requests
+             * @default 0
+             */
+            api_requests: number;
+            /**
+             * Completion Tokens
+             * @default 0
+             */
+            completion_tokens: number;
+            /** Date */
+            date: string;
+            /**
+             * Failed Requests
+             * @default 0
+             */
+            failed_requests: number;
+            /** Project Alias */
+            project_alias?: string | null;
+            /** Project Id */
+            project_id: string;
+            /**
+             * Prompt Tokens
+             * @default 0
+             */
+            prompt_tokens: number;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /**
+             * Successful Requests
+             * @default 0
+             */
+            successful_requests: number;
+            /**
+             * Total Tokens
+             * @default 0
+             */
+            total_tokens: number;
+        };
         /** Prompt */
         Prompt: {
             litellm_params: components["schemas"]["PromptLiteLLMParams"];
@@ -55227,6 +55313,39 @@ export interface operations {
             };
         };
     };
+    get_project_daily_activity_project_daily_activity_get: {
+        parameters: {
+            query?: {
+                project_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectDailySpendResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     delete_project_project_delete_delete: {
         parameters: {
             query?: never;
@@ -57831,6 +57950,8 @@ export interface operations {
                 session_id?: string | null;
                 /** @description Filter spend logs by team_id */
                 team_id?: string | null;
+                /** @description Filter spend logs by project_id */
+                project_id?: string | null;
                 /** @description Filter logs with spend greater than or equal to this value */
                 min_spend?: number | null;
                 /** @description Filter logs with spend less than or equal to this value */
@@ -57949,6 +58070,8 @@ export interface operations {
                 session_id?: string | null;
                 /** @description Filter spend logs by team_id */
                 team_id?: string | null;
+                /** @description Filter spend logs by project_id */
+                project_id?: string | null;
                 /** @description Filter logs with spend greater than or equal to this value */
                 min_spend?: number | null;
                 /** @description Filter logs with spend less than or equal to this value */

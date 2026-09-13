@@ -10,16 +10,15 @@ import {
   type ProviderSpendRow,
 } from "./entityUsageAggregations";
 import { buildCostBreakdownTiles, buildSummaryTiles, hasFlatCost, type SummaryTile } from "./entityUsageSummary";
+import { SummaryTileCard } from "./SummaryTileCard";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { hasCapability, type Capability } from "@/utils/capabilities";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
-import { ChevronDown, ChevronRight, Info } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
 import PaginationStatusAlerts from "@/components/shared/PaginationStatusAlerts";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import React, { type ReactNode, useMemo, useState } from "react";
 import TeamMultiSelect from "@/components/common_components/team_multi_select";
 import UserDropdown from "@/components/common_components/UserDropdown";
@@ -36,7 +35,7 @@ import {
   userDailyActivityCall,
 } from "@/components/networking";
 import { Logo } from "@/components/molecules/logo/Logo";
-import { usePaginatedDailyActivity } from "../../hooks/usePaginatedDailyActivity";
+import { usePaginatedDailyActivity, type FetchPageFn } from "../../hooks/usePaginatedDailyActivity";
 import { EntityMetricWithMetadata } from "@/components/UsagePage/types";
 import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
 import EndpointUsage from "../EndpointUsage/EndpointUsage";
@@ -45,6 +44,15 @@ import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView
 import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
 import TopModelView from "./TopModelView";
 import TeamUserSpendCard from "./TeamUserSpendCard";
+
+/** The entity metadata shape actually probed by getEntityLabel: whichever of these
+ * fields the backend populated for a given entity type (team, user, ...). */
+interface EntityBreakdownMetadata {
+  team_alias?: string;
+  user_email?: string;
+  user_alias?: string;
+  [key: string]: unknown;
+}
 
 interface EntityMetrics {
   metrics: {
@@ -58,7 +66,7 @@ interface EntityMetrics {
     failed_requests: number;
     api_requests: number;
   };
-  metadata: Record<string, any>;
+  metadata: EntityBreakdownMetadata;
 }
 
 interface EntitySpendData {
@@ -90,7 +98,7 @@ interface EntityUsageProps {
   isOrgAdmin?: boolean;
 }
 
-const ENTITY_FETCH_FNS: Record<EntityType, (...args: any[]) => Promise<any>> = {
+const ENTITY_FETCH_FNS: Record<EntityType, FetchPageFn> = {
   tag: tagDailyActivityCall,
   team: teamDailyActivityCall,
   organization: organizationDailyActivityCall,
@@ -101,7 +109,7 @@ const ENTITY_FETCH_FNS: Record<EntityType, (...args: any[]) => Promise<any>> = {
 
 // Single-shot endpoints returning the whole range in one response; entity types
 // without one fall back to page-draining the paginated endpoint.
-const ENTITY_AGGREGATED_FETCH_FNS: Partial<Record<EntityType, (...args: any[]) => Promise<any>>> = {
+const ENTITY_AGGREGATED_FETCH_FNS: Partial<Record<EntityType, FetchPageFn>> = {
   team: teamDailyActivityAggregatedCall,
 };
 
@@ -143,18 +151,19 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const hasRequestWindow = !!accessToken && !!startTime && !!endTime;
   const enabled = hasRequestWindow && canViewEntity;
 
+  const entityPaginatedActivityOptions = {
+    fetchFn,
+    args: [accessToken, startTime, endTime, entityFilterArg],
+    enabled,
+    aggregatedFetchFn,
+  };
   const {
     data: spendDataRaw,
     isFetchingMore,
     progress,
     cancelled,
     cancel,
-  } = usePaginatedDailyActivity({
-    fetchFn,
-    args: [accessToken, startTime, endTime, entityFilterArg],
-    enabled,
-    aggregatedFetchFn,
-  });
+  } = usePaginatedDailyActivity(entityPaginatedActivityOptions);
 
   const spendData = spendDataRaw as unknown as EntitySpendData;
 
@@ -183,7 +192,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     }
   };
 
-  const getEntityLabel = (entity: string, metadata?: Record<string, any>): string => {
+  const getEntityLabel = (entity: string, metadata?: EntityBreakdownMetadata): string => {
     if (entityList) {
       const entityItem = entityList.find((item) => item.value === entity);
       if (entityItem) {
@@ -228,7 +237,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
               cache_creation_input_tokens: 0,
             },
             metadata: {
-              alias: getEntityLabel(entity, data.metadata as any),
+              alias: getEntityLabel(entity, data.metadata as EntityBreakdownMetadata),
               id: entity,
             },
           };
@@ -359,29 +368,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     [],
   );
 
-  const chev = "size-3 text-muted-foreground";
-  const expandIcon = showCostBreakdown ? <ChevronDown className={chev} /> : <ChevronRight className={chev} />;
-
-  const renderSummaryTile = ({ title, value, className, tooltip, expandable }: SummaryTile) => (
-    <ShadcnCard
-      key={title}
-      className={expandable ? "cursor-pointer hover:bg-accent transition-colors" : undefined}
-      onClick={expandable ? () => setShowCostBreakdown(!showCostBreakdown) : undefined}
-    >
-      <CardContent>
-        <div className="flex items-center gap-2">
-          <h3 className="text-lg font-medium text-foreground">{title}</h3>
-          {tooltip ? (
-            <Tooltip>
-              <TooltipTrigger render={<Info className="size-4 text-muted-foreground hover:text-foreground" />} />
-              <TooltipContent>{tooltip}</TooltipContent>
-            </Tooltip>
-          ) : null}
-          {expandable ? expandIcon : null}
-        </div>
-        <p className={`text-2xl font-bold mt-2 ${className ?? ""}`}>{value}</p>
-      </CardContent>
-    </ShadcnCard>
+  const renderSummaryTile = (tile: SummaryTile) => (
+    <SummaryTileCard
+      key={tile.title}
+      tile={tile}
+      expanded={showCostBreakdown}
+      onToggleExpand={() => setShowCostBreakdown(!showCostBreakdown)}
+    />
   );
 
   const breakdownTiles = showFlatCost && showCostBreakdown ? buildCostBreakdownTiles(spendData.metadata) : [];

@@ -11,11 +11,13 @@ Endpoints for /project operations
 #### PROJECT MANAGEMENT ####
 
 import json
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, Final
+from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Final, NamedTuple, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -34,6 +36,10 @@ from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
+from litellm.types.proxy.management_endpoints.project_endpoints import (
+    ProjectDailySpendResponse,
+    ProjectDailySpendRow,
+)
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -1086,3 +1092,198 @@ async def list_projects(
             )
         )
         raise handle_exception_on_proxy(e)
+
+
+def _project_daily_activity_error(*, status_code: int, message: str) -> HTTPException:
+    """Mirrors _daily_activity_error() from team_endpoints.py."""
+    return HTTPException(status_code=status_code, detail={"error": message})  # mutable-ok: FastAPI JSON detail
+
+
+_MAX_PROJECT_DAILY_ACTIVITY_RANGE_DAYS: Final = 400
+
+
+def _project_daily_activity_date_range_error(start_date: str | None, end_date: str | None) -> str | None:
+    """Mirrors _aggregated_date_range_error() from team_endpoints.py.
+
+    There is no daily-aggregated project spend table, so this endpoint scans
+    LiteLLM_SpendLogs directly and needs the same guard against an unbounded range.
+    """
+    if start_date is None or end_date is None:
+        return "Please provide start_date and end_date"
+    try:
+        parsed_start = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        parsed_end = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return "start_date and end_date must be valid YYYY-MM-DD dates"
+    if parsed_end < parsed_start:
+        return "end_date must be on or after start_date"
+    if (parsed_end - parsed_start).days > _MAX_PROJECT_DAILY_ACTIVITY_RANGE_DAYS:
+        return f"Date range must be at most {_MAX_PROJECT_DAILY_ACTIVITY_RANGE_DAYS} days"
+    return None
+
+
+def _project_daily_spend_sql(*, project_count: int) -> str:
+    project_placeholders: Final = ", ".join(f"${i}" for i in range(3, 3 + project_count))
+    return f"""
+        SELECT
+            (DATE_TRUNC('day', sl."startTime" AT TIME ZONE 'UTC'))::date::text AS spend_date,
+            sl.metadata->>'user_api_key_project_id' AS project_id,
+            SUM(sl.spend)::float AS spend,
+            SUM(sl.prompt_tokens)::bigint AS prompt_tokens,
+            SUM(sl.completion_tokens)::bigint AS completion_tokens,
+            SUM(sl.total_tokens)::bigint AS total_tokens,
+            COUNT(*)::bigint AS api_requests,
+            COUNT(*) FILTER (WHERE sl.status IS DISTINCT FROM 'failure')::bigint AS successful_requests,
+            COUNT(*) FILTER (WHERE sl.status = 'failure')::bigint AS failed_requests
+        FROM "LiteLLM_SpendLogs" sl
+        WHERE sl."startTime" >= $1::timestamp
+            AND sl."startTime" < $2::timestamp + INTERVAL '1 day'
+            AND sl.metadata->>'user_api_key_project_id' IN ({project_placeholders})
+        GROUP BY spend_date, project_id
+        ORDER BY spend_date, project_id
+    """
+
+
+class _ProjectDailySpendDbRow(TypedDict):
+    spend_date: ReadOnly[str]
+    project_id: ReadOnly[str | None]
+    spend: ReadOnly[float]
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
+    total_tokens: ReadOnly[int]
+    api_requests: ReadOnly[int]
+    successful_requests: ReadOnly[int]
+    failed_requests: ReadOnly[int]
+
+
+class _ProjectDailyActivityScope(NamedTuple):
+    project_ids: tuple[str, ...]
+    project_alias_by_id: Mapping[str, str | None]
+
+
+async def _resolve_project_daily_activity_scope(
+    *,
+    project_ids: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+) -> _ProjectDailyActivityScope:
+    """
+    Resolve which of the requested projects the caller may view.
+
+    Proxy admins may query any project. Everyone else must be an admin of the
+    project's team, the same permission /project/update enforces.
+    """
+    requested: Final = tuple(pid.strip() for pid in project_ids.split(",") if pid.strip())
+    if not requested:
+        return _ProjectDailyActivityScope(project_ids=(), project_alias_by_id={})
+
+    projects: Final = await _project_table(prisma_client).find_many(where={"project_id": {"in": list(requested)}})
+    found_by_id: Final = {p.project_id: p for p in projects}
+    missing: Final = [pid for pid in requested if pid not in found_by_id]
+    if missing:
+        raise _project_daily_activity_error(
+            status_code=404, message=f"Project(s) not found: {', '.join(sorted(missing))}"
+        )
+
+    if not user_api_key_has_admin_view(user_api_key_dict):
+        for project_id in requested:
+            has_permission = await _check_user_permission_for_project(
+                user_api_key_dict=user_api_key_dict,
+                team_id=found_by_id[project_id].team_id,
+                prisma_client=prisma_client,
+            )
+            if not has_permission:
+                raise _project_daily_activity_error(
+                    status_code=403,
+                    message=f"Not authorized to view daily activity for project_id={project_id}",
+                )
+
+    return _ProjectDailyActivityScope(
+        project_ids=requested,
+        project_alias_by_id={pid: found_by_id[pid].project_alias for pid in requested},
+    )
+
+
+@router.get(
+    "/project/daily/activity",
+    tags=["project management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=ProjectDailySpendResponse,
+)
+async def get_project_daily_activity(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    project_ids: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> ProjectDailySpendResponse:
+    """
+    Daily spend per project, attributed per request from spend logs.
+
+    Scans LiteLLM_SpendLogs directly and groups by day and the project_id
+    stored in each request's metadata: there is no daily-aggregated project
+    spend table, unlike /team/daily/activity.
+
+    Proxy admins may query any project. Team admins may query projects
+    belonging to teams they administer.
+
+    Example:
+    ```bash
+    curl --location 'http://0.0.0.0:4000/project/daily/activity?project_ids=project-123&start_date=2026-09-01&end_date=2026-09-04' \\
+    --header 'Authorization: Bearer sk-1234'
+    ```
+    """
+    from litellm.proxy.proxy_server import premium_user, prisma_client
+
+    if not premium_user:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Project management is an enterprise feature. " + CommonProxyErrors.not_premium_user.value
+            },
+        )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    range_error: Final = _project_daily_activity_date_range_error(start_date, end_date)
+    if range_error is not None or start_date is None or end_date is None:
+        raise _project_daily_activity_error(
+            status_code=400, message=range_error or "Please provide start_date and end_date"
+        )
+
+    if not project_ids:
+        raise _project_daily_activity_error(status_code=400, message="Please provide project_ids")
+
+    scope: Final = await _resolve_project_daily_activity_scope(
+        project_ids=project_ids,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
+    if not scope.project_ids:
+        return ProjectDailySpendResponse(start_date=start_date, end_date=end_date, results=())
+
+    rows: Final[Sequence[_ProjectDailySpendDbRow]] = await prisma_client.db.query_raw(
+        _project_daily_spend_sql(project_count=len(scope.project_ids)),
+        start_date,
+        end_date,
+        *scope.project_ids,
+    )
+    results: Final = tuple(
+        ProjectDailySpendRow(
+            date=row["spend_date"],
+            project_id=row["project_id"] or "",
+            project_alias=scope.project_alias_by_id.get(row["project_id"] or ""),
+            spend=row["spend"],
+            prompt_tokens=row["prompt_tokens"],
+            completion_tokens=row["completion_tokens"],
+            total_tokens=row["total_tokens"],
+            api_requests=row["api_requests"],
+            successful_requests=row["successful_requests"],
+            failed_requests=row["failed_requests"],
+        )
+        for row in rows
+    )
+    return ProjectDailySpendResponse(start_date=start_date, end_date=end_date, results=results)

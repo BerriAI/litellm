@@ -60,23 +60,29 @@ describe("UsageViewSelect", () => {
     expect(offers(container, "Tag Usage")).toBe(false);
   });
 
-  it.each(["Organization Usage", "Agent Usage (A2A)"])("should show %s to an admin", async (optionName) => {
-    const user = userEvent.setup();
-    const { container } = render(<UsageViewSelect value="global" onChange={mockOnChange} userRole="Admin" />);
+  it.each(["Organization Usage", "Agent Usage (A2A)", "Project Usage"])(
+    "should show %s to an admin",
+    async (optionName) => {
+      const user = userEvent.setup();
+      const { container } = render(<UsageViewSelect value="global" onChange={mockOnChange} userRole="Admin" />);
 
-    await openMenu(user);
-    expect(offers(container, optionName)).toBe(true);
-  });
+      await openMenu(user);
+      expect(offers(container, optionName)).toBe(true);
+    },
+  );
 
-  it.each(["Organization Usage", "Agent Usage (A2A)"])("should hide %s from an internal user", async (optionName) => {
-    const user = userEvent.setup();
-    const { container } = render(
-      <UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" canViewTagUsage={true} />,
-    );
+  it.each(["Organization Usage", "Agent Usage (A2A)", "Project Usage"])(
+    "should hide %s from an internal user",
+    async (optionName) => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" canViewTagUsage={true} />,
+      );
 
-    await openMenu(user);
-    expect(offers(container, optionName)).toBe(false);
-  });
+      await openMenu(user);
+      expect(offers(container, optionName)).toBe(false);
+    },
+  );
 
   // An org admin's session role is "Internal User" — org-admin-ness lives in the
   // membership table — so the two rows above cannot tell them apart from a plain
@@ -86,6 +92,7 @@ describe("UsageViewSelect", () => {
   it.each([
     ["Organization Usage", true],
     ["Agent Usage (A2A)", false],
+    ["Project Usage", false],
   ] as const)("should offer %s to an org admin: %s", async (optionName, expected) => {
     const user = userEvent.setup();
     const { container } = render(
@@ -94,6 +101,16 @@ describe("UsageViewSelect", () => {
 
     await openMenu(user);
     expect(offers(container, optionName)).toBe(expected);
+  });
+
+  it("should hide Project Usage from an admin when enableProjectsUI is false", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <UsageViewSelect value="global" onChange={mockOnChange} userRole="Admin" enableProjectsUI={false} />,
+    );
+
+    await openMenu(user);
+    expect(offers(container, "Project Usage")).toBe(false);
   });
 
   it.each(["Team Usage", "Tag Usage"])("should keep %s available to an internal user", async (optionName) => {
