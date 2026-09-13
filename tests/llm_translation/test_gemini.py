@@ -1635,6 +1635,15 @@ def test_anthropic_thinking_param_to_gemini_3_force_low_feature_flag():
         )
         assert result_pro["thinkingLevel"] == "low"
         assert result_pro["includeThoughts"] is True
+
+        # gemini-3.7-flash dropped MINIMAL support, so the forced-low mapping must
+        # not send "minimal" to it (issue #37314).
+        result_37 = VertexGeminiConfig._map_thinking_param(
+            thinking_param=thinking_param,
+            model="gemini-3.7-flash",
+        )
+        assert result_37["thinkingLevel"] == "low"
+        assert result_37["includeThoughts"] is True
     finally:
         litellm.enable_gemini_default_thinking_level_low = original_force_low_flag
 
@@ -1790,6 +1799,64 @@ def test_gemini_31_flash_lite_reasoning_effort_minimal():
     assert (
         "thinkingBudget" not in thinking_config
     ), "gemini-3.1-flash-lite-preview should use thinkingLevel, not thinkingBudget"
+
+
+def test_gemini_37_flash_reasoning_effort_no_minimal():
+    """
+    gemini-3.7-flash dropped THINKING_LEVEL_MINIMAL support on Vertex; only LOW, MEDIUM,
+    and HIGH are accepted. reasoning_effort values that previously mapped to "minimal"
+    (minimal, none, disable) must resolve to "low" instead so they return 200.
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/37314
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    # Values that used to map to "minimal" must now floor at "low" on 3.7.
+    for reasoning_effort in ("minimal", "none", "disable"):
+        result = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+            reasoning_effort=reasoning_effort,
+            model="gemini-3.7-flash",
+        )
+        assert (
+            result["thinkingLevel"] == "low"
+        ), f"gemini-3.7-flash {reasoning_effort} should map to 'low', got '{result['thinkingLevel']}'"
+        assert result["includeThoughts"] is (reasoning_effort != "none" and reasoning_effort != "disable")
+
+    # Explicit low/medium/high are unaffected.
+    for reasoning_effort, expected_level in (
+        ("low", "low"),
+        ("medium", "medium"),
+        ("high", "high"),
+    ):
+        result = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+            reasoning_effort=reasoning_effort,
+            model="gemini-3.7-flash",
+        )
+        assert (
+            result["thinkingLevel"] == expected_level
+        ), f"gemini-3.7-flash {reasoning_effort} should map to '{expected_level}', got '{result['thinkingLevel']}'"
+
+
+def test_gemini_36_flash_reasoning_effort_minimal_still_supported():
+    """
+    gemini-3.6-flash still accepts THINKING_LEVEL_MINIMAL, so the fix for 3.7 must not
+    regress the earlier 3.x-flash models.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    for model in ("gemini-3.6-flash", "gemini-3.5-flash"):
+        result = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+            reasoning_effort="minimal",
+            model=model,
+        )
+        assert (
+            result["thinkingLevel"] == "minimal"
+        ), f"{model} should keep thinkingLevel='minimal', got '{result['thinkingLevel']}'"
+        assert result["includeThoughts"] is True
 
 
 def test_gemini_image_size_limit_exceeded(monkeypatch):
