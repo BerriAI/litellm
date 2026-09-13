@@ -8,11 +8,19 @@ encrypted_content for multi-turn stateless workflows.
 Docs: https://openrouter.ai/docs/api/reference/responses/overview
 """
 
-from typing import Final
+from typing import Any, Final
+
+import httpx
 
 import litellm
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import (
+    ResponseCompletedEvent,
+    ResponseInputParam,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamingResponse,
+)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
@@ -75,3 +83,92 @@ class OpenRouterResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def supports_native_websocket(self) -> bool:
         """OpenRouter does not support native WebSocket for Responses API"""
         return False
+
+    def transform_responses_api_request(
+        self,
+        model: str,
+        input: str | ResponseInputParam,
+        response_api_optional_request_params: dict,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> dict:
+        """
+        Same as the chat completions path: always ask OpenRouter to include
+        cost data in the response's `usage` object, so `transform_response_api_response`
+        below has something to extract. Without this, OpenRouter omits `usage.cost`
+        and every Responses API request gets logged with $0 spend.
+        """
+        request: Final = super().transform_responses_api_request(
+            model=model,
+            input=input,
+            response_api_optional_request_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        if "usage" not in request:
+            request["usage"] = {"include": True}
+
+        return request
+
+    def transform_response_api_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: Any,
+    ) -> ResponsesAPIResponse:
+        """
+        Extracts cost information from the response body, mirroring
+        `OpenrouterConfig.transform_response` on the chat completions path.
+
+        OpenRouter returns cost information in the `usage` object when
+        `usage.include=true` is set on the request (see `transform_responses_api_request`).
+        """
+        response: Final = super().transform_response_api_response(
+            model=model,
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+        )
+
+        try:
+            response_json: Final = raw_response.json()
+            if "usage" in response_json and response_json["usage"]:
+                response_cost: Final = response_json["usage"].get("cost")
+                if response_cost is not None:
+                    # Store cost in hidden params for the cost calculator to use
+                    if not hasattr(response, "_hidden_params"):
+                        response._hidden_params = {}
+                    if "additional_headers" not in response._hidden_params:
+                        response._hidden_params["additional_headers"] = {}
+                    response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
+                        response_cost
+                    )
+        except Exception:
+            # If we can't extract cost, continue without it - don't fail the response
+            pass
+
+        return response
+
+    def transform_streaming_response(
+        self,
+        model: str,
+        parsed_chunk: dict,
+        logging_obj: Any,
+    ) -> ResponsesAPIStreamingResponse:
+        response_event: Final = super().transform_streaming_response(
+            model=model,
+            parsed_chunk=parsed_chunk,
+            logging_obj=logging_obj,
+        )
+        if not isinstance(response_event, ResponseCompletedEvent):
+            return response_event
+
+        usage: Final = response_event.response.usage
+        if usage is None or usage.cost is None:
+            return response_event
+
+        response_event.response._hidden_params["additional_headers"] = {
+            **response_event.response._hidden_params.get("additional_headers", {}),
+            "llm_provider-x-litellm-response-cost": float(usage.cost),
+        }
+        return response_event
