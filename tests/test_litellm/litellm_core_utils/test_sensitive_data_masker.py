@@ -344,6 +344,31 @@ def test_the_second_positional_argument_is_still_the_override_set():
     assert masker.is_sensitive_key("session_token") is False
     assert masker.is_sensitive_key("auth_token") is True
 
+
+def test_plural_secret_and_password_keys_are_masked():
+    """Segment-exact matching missed regular plurals ("secret" != "secrets"), the same class of
+    bug already fixed once for "credential"/"credentials". These plurals are safe to add: unlike
+    "keys"/"tokens", nothing in the codebase uses them for a non-sensitive field."""
+    masker = SensitiveDataMasker()
+
+    assert masker.is_sensitive_key("client_secrets") is True
+    assert masker.is_sensitive_key("secrets") is True
+    assert masker.is_sensitive_key("db_passwords") is True
+    assert masker.is_sensitive_key("passwords") is True
+    assert masker.is_sensitive_key("ssl_certificates") is True
+
+
+def test_keys_and_tokens_plurals_stay_unmasked_to_avoid_false_positives():
+    """"keys" and "tokens" are deliberately NOT added as sensitive patterns: real non-sensitive
+    fields use those plurals ("allow_all_keys" is a bool, "max_tokens"/"total_tokens" are usage
+    counts), so masking them would corrupt those fields instead of protecting a secret."""
+    masker = SensitiveDataMasker()
+
+    assert masker.is_sensitive_key("allow_all_keys") is False
+    assert masker.is_sensitive_key("missing_keys") is False
+    assert masker.is_sensitive_key("max_tokens") is False
+    assert masker.is_sensitive_key("total_tokens") is False
+
 def test_redact_credentials_in_payload_leaves_no_fragment_of_the_secret():
     """A payload rendered straight to stdout cannot afford the partial reveal
     mask_credentials_in_payload leaves, so every credential-named value is replaced
