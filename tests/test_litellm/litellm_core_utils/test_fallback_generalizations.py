@@ -142,6 +142,18 @@ def test_backfill_requires_per_rule_opt_in(restore_generalizations):
     restore_generalizations(
         [
             {
+                "name": "mixed",
+                "pattern": r"^acme-",
+                "backfill_exact_entries": True,
+                "model_info": {"litellm_provider": "openai", "supports_vision": True},
+            }
+        ]
+    )
+    assert match_backfill_generalizations("acme-1") == {"supports_vision": True}
+
+    restore_generalizations(
+        [
+            {
                 "name": "route",
                 "pattern": r"^acme-",
                 "backfill_exact_entries": True,
@@ -355,6 +367,12 @@ def test_exact_entries_backfill_only_missing_fields(restore_generalizations, mon
                 "litellm_provider": "openai",
                 "mode": "chat",
             },
+            "acme-image": {
+                "input_cost_per_token": 5e-6,
+                "output_cost_per_token": 6e-6,
+                "litellm_provider": "openai",
+                "mode": "image_generation",
+            },
         },
     )
     restore_generalizations(
@@ -378,6 +396,9 @@ def test_exact_entries_backfill_only_missing_fields(restore_generalizations, mon
     assert bare["max_tokens"] == 5
     assert bare["input_cost_per_token"] == 3e-6
     assert bare["key"] == "acme-bare"
+
+    image = litellm.get_model_info("acme-image", custom_llm_provider="openai")
+    assert image.get("supports_reasoning") is None
 
     restore_generalizations(
         [{"name": "acme-backfill", "pattern": r"^acme-", "model_info": {"supports_reasoning": True, "max_tokens": 5}}]
@@ -501,6 +522,18 @@ def test_shipped_version_boundaries(shipped_cost_map, model, provider, adaptive,
     assert not info.get("input_cost_per_token")
     assert info.get("supports_adaptive_thinking") is adaptive, model
     assert info.get("supports_mid_conversation_system") is mid_conversation, model
+
+
+def test_shipped_claude_version_regex_excludes_undelimited_41(shipped_cost_map):
+    unmatched = match_capability_generalizations("github_copilot/claude-opus-41")
+    assert unmatched is None or "supports_adaptive_thinking" not in unmatched
+    assert unmatched is None or "supports_mid_conversation_system" not in unmatched
+
+    for model in ("claude-opus-5", "claude-sonnet-4-8"):
+        matched = match_capability_generalizations(model)
+        assert matched is not None
+        assert matched["supports_adaptive_thinking"] is True
+        assert matched["supports_mid_conversation_system"] is True
 
 
 def test_shipped_rules_cover_new_families_like_fable_at_5_plus(shipped_cost_map):
@@ -831,6 +864,17 @@ def test_shipped_openai_reasoning_rule_backfills_mapped_entries(shipped_cost_map
     assert litellm.supports_reasoning(model=model_without_provider, custom_llm_provider=provider) is True
     info = litellm.get_model_info(model=model_without_provider, custom_llm_provider=provider)
     assert info["input_cost_per_token"] == raw_entry.get("input_cost_per_token", 0)
+
+
+def test_shipped_openai_reasoning_rule_skips_non_text_modes(shipped_cost_map):
+    model = "gemini/deep-research-pro-preview-12-2025"
+    assert model in litellm.model_cost
+    raw_entry = litellm.model_cost[model]
+    assert "supports_reasoning" not in raw_entry
+    assert raw_entry["mode"] == "image_generation"
+
+    info = litellm.get_model_info("deep-research-pro-preview-12-2025", custom_llm_provider="gemini")
+    assert info.get("supports_reasoning") is None
 
 
 def test_shipped_claude_thinking_rules_backfill_without_family_limits(shipped_cost_map):
