@@ -17,7 +17,6 @@ from pydantic import BaseModel, ValidationError
 from typing_extensions import TypeIs
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.constants import (
     EMPTY_MAPPING,
     LITELLM_MAX_STREAMING_DURATION_SECONDS,
@@ -33,7 +32,6 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
-from litellm.responses.sse_output_recovery import MAX_CONTENT_INDEX
 from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 from litellm.types.llms.openai import (
@@ -441,6 +439,8 @@ class BaseResponsesAPIStreamingIterator:
                                 ]
                                 _response_obj.output = _backfill  # mutable-ok: patching response obj from provider before it's stored; no immutable path here
                             except Exception:  # noqa: BLE001  # best-effort backfill; any failure must not crash the stream
+                                from litellm._logging import verbose_logger
+
                                 verbose_logger.warning(
                                     "streaming_iterator: failed to backfill %s output",
                                     _chunk_type,
@@ -727,6 +727,8 @@ class BaseResponsesAPIStreamingIterator:
                 and _text_output_index not in self._streamed_output_items
             ):
                 _content_index: Final = getattr(chunk, "content_index", 0) or 0
+                from litellm.responses.sse_output_recovery import MAX_CONTENT_INDEX
+
                 if 0 <= _content_index <= MAX_CONTENT_INDEX:
                     _item_id: Final = getattr(chunk, "item_id", None) or f"msg_{_text_output_index}"
                     _existing: Final = self._streamed_text_only_items.get(_text_output_index)
@@ -757,11 +759,13 @@ class BaseResponsesAPIStreamingIterator:
                     )
                     self._streamed_text_only_items[_text_output_index] = (
                         BaseLiteLLMOpenAIResponseObject(  # mutable-ok: incremental index-keyed fallback accumulation; no immutable equivalent
-                            type="message",
-                            id=getattr(_existing, "id", _item_id),
-                            role="assistant",
-                            status="completed",
-                            content=_content,
+                            **{
+                                "type": "message",
+                                "id": getattr(_existing, "id", _item_id),
+                                "role": "assistant",
+                                "status": "completed",
+                                "content": _content,
+                            }
                         )
                     )
 
@@ -1580,6 +1584,8 @@ def build_synthetic_response_events(
 # ---------------------------------------------------------------------------
 # WebSocket mode streaming (bidirectional forwarding)
 # ---------------------------------------------------------------------------
+
+from litellm._logging import verbose_logger
 
 # Conservative per-frame output-token floor used when a response.create
 # frame omits max_output_tokens, so a project OTPM quota can't be bypassed
