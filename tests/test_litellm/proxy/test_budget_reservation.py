@@ -2772,6 +2772,40 @@ async def test_release_budget_reservation_on_cancel_swallows_release_errors():
 
 
 @pytest.mark.asyncio
+async def test_release_budget_reservation_on_cancel_invalidates_counter_when_reconcile_fails(
+    spend_counter_state,
+):
+    """
+    Regression for #30460 Path 1: if reconcile itself fails on the cancel path
+    (e.g. a Redis timeout), the pre-charge must not be left stuck in the
+    counter with nothing left to correct it. This mirrors what
+    release_or_invalidate_budget_reservation already does on the non-cancel
+    release path: fall back to invalidate_budget_reservation_counters so the
+    next read reseeds from the DB instead of enforcing the stale reservation
+    forever.
+    """
+    counter_cache, _key_cache = spend_counter_state
+    counter_key = "spend:key:key-cancel-redis-down"
+    counter_cache.in_memory_cache.set_cache(key=counter_key, value=3.0)
+
+    reservation = {
+        "reserved_cost": 3.0,
+        "input_cost": 0.5,
+        "finalized": False,
+        "entries": [{"counter_key": counter_key, "reserved_cost": 3.0, "applied_adjustment": 0.0}],
+    }
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+        new=AsyncMock(side_effect=RuntimeError("redis down")),
+    ):
+        await release_budget_reservation_on_cancel(reservation)
+
+    assert counter_cache.in_memory_cache.get_cache(key=counter_key) is None
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
 async def test_streaming_cancel_in_slow_path_before_yield_refunds(spend_counter_state):
     counter_cache, key_cache = spend_counter_state
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
