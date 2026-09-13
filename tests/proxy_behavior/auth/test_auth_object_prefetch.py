@@ -58,7 +58,7 @@ async def test_join_binds_the_membership_to_the_requested_team(prisma):
             data={"user_id": user_id, "team_id": team_b, "litellm_budget_table": {"connect": {"budget_id": f"b-{run}"}}}
         )
 
-        cache = UserApiKeyCache(in_memory_cache=InMemoryCache(), redis_cache=None)
+        cache = UserApiKeyCache(in_memory_cache=InMemoryCache(clock=lambda: 0.0), redis_cache=None)
         refs = AuthObjectRefs(user_id=user_id, team_id=team_a, membership_user_id=user_id, organization_id=org_id)
         await prefetch_auth_objects(refs=refs, user_api_key_cache=cache, prisma_client=prisma)
 
