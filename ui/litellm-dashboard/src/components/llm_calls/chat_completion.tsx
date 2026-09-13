@@ -5,6 +5,7 @@ import { VectorStoreSearchResponse } from "../chat_ui/types";
 import { getProxyBaseUrl } from "@/components/networking";
 import { MCPServer, MCPToolset, type MCPEvent } from "@/components/mcp_tools/types";
 import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
+import { parseUsageCost } from "./usage_cost";
 
 const completionAsSingleChunk = (completion: ChatCompletion): ChatCompletionChunk =>
   ({
@@ -243,9 +244,9 @@ export async function makeOpenAIChatCompletionRequest(
           usageData.reasoningTokens = chunkWithUsage.usage.completion_tokens_details.reasoning_tokens;
         }
 
-        // Extract cost from usage object if available
-        if (chunkWithUsage.usage.cost !== undefined && chunkWithUsage.usage.cost !== null) {
-          usageData.cost = parseFloat(chunkWithUsage.usage.cost);
+        const parsedCost = parseUsageCost(chunkWithUsage.usage.cost);
+        if (parsedCost !== undefined) {
+          usageData.cost = parsedCost;
         }
 
         onUsageData(usageData);

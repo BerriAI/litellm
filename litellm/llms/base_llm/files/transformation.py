@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Union
 
 import httpx
@@ -160,6 +160,15 @@ class BaseFilesConfig(BaseConfig):
     ) -> tuple[str, dict]:
         """Transform file list request into provider-specific format."""
 
+    def transform_list_files_next_request(
+        self,
+        raw_response: httpx.Response,
+        optional_params: Mapping[str, object],
+        litellm_params: dict,  # mutable-ok: carries provider stashes from the request transform to the response one
+    ) -> tuple[str, dict[str, str]] | None:
+        """Request for the page after `raw_response`, or None once the listing is complete."""
+        return None
+
     @abstractmethod
     def transform_list_files_response(
         self,
@@ -258,7 +267,7 @@ class BaseFileEndpoints(ABC):
         litellm_parent_otel_span: Span | None,
         llm_router: Router,
         **data: dict,
-    ) -> OpenAIFileObject:
+    ) -> FileDeleted:
         pass
 
     @abstractmethod

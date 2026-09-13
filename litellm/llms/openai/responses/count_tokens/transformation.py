@@ -117,16 +117,16 @@ class OpenAICountTokensConfig:
     def transform_request_to_count_tokens(
         self,
         model: str,
-        input: str | list[Any],
+        input: str | Sequence[object],
         tools: list[dict[str, Any]] | None = None,
         instructions: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Transform request to OpenAI Responses API token counting format.
 
         The Responses API uses `input` (not `messages`) and `instructions` (not `system`).
         """
-        request: Final[dict[str, Any]] = {
+        request: Final[dict[str, object]] = {
             "model": model,
             "input": input,
         }
@@ -145,7 +145,7 @@ class OpenAICountTokensConfig:
             "Authorization": f"Bearer {api_key}",
         }
 
-    def validate_request(self, model: str, input: str | list[Any]) -> None:
+    def validate_request(self, model: str, input: str | Sequence[object]) -> None:
         if not model:
             raise ValueError("model parameter is required")
 
@@ -155,18 +155,18 @@ class OpenAICountTokensConfig:
     @staticmethod
     def _transform_tools_for_responses_api(
         tools: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, object]]:
         """
         Transform OpenAI chat tools format to Responses API tools format.
 
         Chat format:  {"type": "function", "function": {"name": "...", "parameters": {...}}}
         Responses format: {"type": "function", "name": "...", "parameters": {...}}
         """
-        transformed: Final = []
+        transformed: Final[list[dict[str, object]]] = []
         for tool in tools:
             if tool.get("type") == "function" and "function" in tool:
                 func = tool["function"]
-                item: dict[str, Any] = {
+                item: dict[str, object] = {
                     "type": "function",
                     "name": func.get("name", ""),
                     "description": func.get("description", ""),
@@ -191,7 +191,7 @@ class OpenAICountTokensConfig:
             (input_items, instructions) tuple where instructions is extracted
             from system/developer messages.
         """
-        input_items: Final[list[dict[str, Any]]] = []
+        input_items: Final[list[dict[str, object]]] = []
         instructions_parts: Final[list[str]] = []
 
         for msg in messages:

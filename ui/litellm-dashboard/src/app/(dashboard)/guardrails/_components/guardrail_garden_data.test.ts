@@ -29,6 +29,7 @@ const EXPECTED_PARTNER_LOGO_FILES: Record<string, string> = {
   straiker: "straiker.svg",
   alice: "alice.svg",
   llm_shield_proxy: "llm_shield_proxy.svg",
+  conduct: "conduct.png",
 };
 
 describe("guardrail_garden_data logos", () => {

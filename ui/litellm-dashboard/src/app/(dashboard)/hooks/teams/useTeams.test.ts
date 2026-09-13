@@ -671,7 +671,7 @@ describe("useDeletedTeams", () => {
   it("should return deleted teams data when query is successful", async () => {
     (global.fetch as any).mockResolvedValue({
       ok: true,
-      json: async () => ({ teams: mockDeletedTeams }),
+      json: async () => ({ teams: mockDeletedTeams, total: 2, page: 1, page_size: 10, total_pages: 1 }),
     });
 
     const { result } = renderHook(() => useDeletedTeams(1, 10, {}), { wrapper });
@@ -684,8 +684,24 @@ describe("useDeletedTeams", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(result.current.data).toEqual(mockDeletedTeams);
+    expect(result.current.data).toEqual({ teams: mockDeletedTeams, total: 2 });
     expect(result.current.error).toBeNull();
+  });
+
+  it("should keep the server total so the table can paginate beyond the current page", async () => {
+    (global.fetch as any).mockResolvedValue({
+      ok: true,
+      json: async () => ({ teams: mockDeletedTeams, total: 137, page: 1, page_size: 2, total_pages: 69 }),
+    });
+
+    const { result } = renderHook(() => useDeletedTeams(1, 2, {}), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(result.current.data?.total).toBe(137);
+    expect((global.fetch as any).mock.calls[0][0]).toContain("page_size=2");
   });
 
   it("should handle error when API call fails", async () => {
@@ -744,7 +760,7 @@ describe("useDeletedTeams", () => {
 
     rerender({ page: 2 });
 
-    expect(result.current.data).toEqual(mockDeletedTeams);
+    expect(result.current.data?.teams).toEqual(mockDeletedTeams);
   });
 
   it("should pass options to API call", async () => {
@@ -785,7 +801,7 @@ describe("useDeletedTeams", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(result.current.data).toEqual(mockDeletedTeams);
+    expect(result.current.data).toEqual({ teams: mockDeletedTeams, total: 2 });
     expect(result.current.error).toBeNull();
   });
 });

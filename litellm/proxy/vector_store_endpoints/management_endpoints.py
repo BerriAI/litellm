@@ -30,7 +30,10 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
-from litellm.proxy.vector_store_endpoints.utils import can_user_access_vector_store
+from litellm.proxy.vector_store_endpoints.utils import (
+    can_user_access_vector_store,
+    filter_listable_vector_stores,
+)
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import ManagedVectorStoresRepository
 from litellm.types.vector_stores import (
@@ -53,13 +56,13 @@ def _row_to_vector_store(row: "_VectorStoreRow") -> LiteLLM_ManagedVectorStore:
     return LiteLLM_ManagedVectorStore(**row.model_dump())
 
 
-_LITELLM_PARAMS_MASKER: Final = SensitiveDataMasker()
+_LITELLM_PARAMS_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=frozenset(("connection",)))
 
 
 _REDACT_LITELLM_PARAMS_MAX_DEPTH: Final = 10
 
 
-def _redact_sensitive_litellm_params(litellm_params: Any, _depth: int = 0) -> Any:
+def _redact_sensitive_litellm_params(litellm_params: object, _depth: int = 0) -> Any:
     """
     Replace credential-bearing values in ``litellm_params`` with
     ``REDACTED_BY_LITELM`` while preserving non-secret keys (``api_base``,
@@ -91,7 +94,7 @@ def _redact_sensitive_litellm_params(litellm_params: Any, _depth: int = 0) -> An
         return json.dumps(_redact_sensitive_litellm_params(parsed, _depth + 1))
     if not isinstance(litellm_params, dict):
         return litellm_params
-    out: Final[dict[str, Any]] = {}
+    out: Final[dict[str, object]] = {}
     for k, v in litellm_params.items():
         if _LITELLM_PARAMS_MASKER.is_sensitive_key(k):
             out[k] = REDACTED_BY_LITELM_STRING
@@ -390,11 +393,10 @@ async def list_vector_stores(
 
         # Filter vector stores based on access control
         accessible_vector_stores: Final = []
-        for vs in vector_store_map.values():
-            if await _check_vector_store_access(vs, user_api_key_dict):
-                redacted = LiteLLM_ManagedVectorStore(**vs)
-                redacted["litellm_params"] = _redact_sensitive_litellm_params(vs.get("litellm_params"))
-                accessible_vector_stores.append(redacted)
+        for vs in await filter_listable_vector_stores(vector_store_map.values(), user_api_key_dict):
+            redacted = LiteLLM_ManagedVectorStore(**vs)
+            redacted["litellm_params"] = _redact_sensitive_litellm_params(vs.get("litellm_params"))
+            accessible_vector_stores.append(redacted)
 
         total_count: Final = len(accessible_vector_stores)
         total_pages: Final = (total_count + page_size - 1) // page_size

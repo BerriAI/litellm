@@ -34,8 +34,8 @@ class LiteLLMResponsesInteractionsConfig:
         model: str,
         input: InteractionInput | None,
         optional_params: InteractionsAPIOptionalRequestParams,
-        **kwargs,
-    ) -> dict[str, Any]:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Transform an Interactions API request to a Responses API request.
 
@@ -45,7 +45,7 @@ class LiteLLMResponsesInteractionsConfig:
         - tools -> tools (similar format)
         - generation_config -> temperature, top_p, etc.
         """
-        responses_request: Final[dict[str, Any]] = {
+        responses_request: Final[dict[str, object]] = {
             "model": model,
         }
 
@@ -201,15 +201,15 @@ class LiteLLMResponsesInteractionsConfig:
         - Extract usage
         """
         # Extract text from outputs and build both `outputs` (legacy) and `steps` (new schema).
-        outputs: Final[list[dict[str, Any]]] = []
-        steps: Final[list[dict[str, Any]]] = []
+        outputs: Final[list[dict[str, object]]] = []
+        steps: Final[list[dict[str, object]]] = []
         if hasattr(responses_response, "output") and responses_response.output:
             for output_item in responses_response.output:
                 # Use getattr with None default to safely access content
                 content = getattr(output_item, "content", None)
                 if content is not None:
                     content_items = content if isinstance(content, list) else [content]
-                    model_output_contents: list[dict[str, Any]] = []
+                    model_output_contents: list[dict[str, object]] = []
                     for content_item in content_items:
                         # Check if content_item has text attribute
                         text = getattr(content_item, "text", None)
@@ -264,7 +264,7 @@ class LiteLLMResponsesInteractionsConfig:
         # Add usage if available
         # Map Responses API usage (input_tokens, output_tokens) to Interactions API spec format
         # (total_input_tokens, total_output_tokens)
-        usage: Final = getattr(responses_response, "usage", None)
+        usage: Final[object] = getattr(responses_response, "usage", None)
         if usage:
             interactions_response_dict["usage"] = {
                 "total_input_tokens": getattr(usage, "input_tokens", 0),

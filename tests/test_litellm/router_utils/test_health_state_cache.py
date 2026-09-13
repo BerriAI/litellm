@@ -7,6 +7,7 @@ import time
 import pytest
 
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.router_utils.health_state_cache import DeploymentHealthCache
 
 
@@ -145,8 +146,11 @@ class _SharedRedisFake:
     def __init__(self):
         self.store = {}
         self.fail_get = False
+        self.breaker_open = False
 
     def get_cache(self, key, parent_otel_span=None, **kwargs):
+        if self.breaker_open:
+            raise RedisCircuitBreakerOpenError("Redis circuit breaker is open - skipping get_cache")
         if self.fail_get:
             return None  # RedisCache.get_cache swallows connection errors and returns None
         return self.store.get(key)
@@ -192,3 +196,26 @@ def test_failed_redis_read_falls_back_to_local_copy():
         {"prod-bad": {"is_healthy": False, "timestamp": time.time(), "reason": "check_failed"}}
     )
     assert set(redis_fake.store[DeploymentHealthCache.CACHE_KEY]) == {"prod-bad", "internal-bad"}
+
+
+def test_open_circuit_breaker_read_still_merges_into_local_copy(caplog):
+    """A read refused by the open breaker is a miss, so the merge and local write still happen quietly."""
+    redis_fake = _SharedRedisFake()
+    pod_a = DeploymentHealthCache(cache=DualCache(redis_cache=redis_fake), staleness_threshold=60.0)
+    pod_b = DeploymentHealthCache(cache=DualCache(redis_cache=redis_fake), staleness_threshold=60.0)
+    pod_a.set_deployment_health_states(
+        {"prod-bad": {"is_healthy": False, "timestamp": time.time(), "reason": "check_failed"}}
+    )
+    pod_b.set_deployment_health_states(
+        {"internal-bad": {"is_healthy": False, "timestamp": time.time(), "reason": "timeout"}}
+    )
+    pod_a.set_deployment_health_states(
+        {"prod-bad": {"is_healthy": False, "timestamp": time.time(), "reason": "check_failed"}}
+    )
+    redis_fake.breaker_open = True
+    with caplog.at_level("ERROR"):
+        pod_a.set_deployment_health_states(
+            {"prod-new-bad": {"is_healthy": False, "timestamp": time.time(), "reason": "check_failed"}}
+        )
+    assert caplog.records == []
+    assert pod_a.get_unhealthy_deployment_ids() == {"prod-bad", "internal-bad", "prod-new-bad"}

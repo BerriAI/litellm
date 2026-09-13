@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 from httpx import Headers
@@ -13,7 +15,7 @@ class FireworksAIException(BaseLLMException):
     pass
 
 
-def get_fireworks_session_id(litellm_params: dict) -> str | None:
+def get_fireworks_session_id(litellm_params: Mapping[str, object]) -> str | None:
     """
     Session id to send as `x-session-affinity`, or None when the caller gave none.
 
@@ -23,17 +25,37 @@ def get_fireworks_session_id(litellm_params: dict) -> str | None:
     """
     params: Final = litellm_params
     metadata: Final = params.get("metadata")
-    if isinstance(metadata, dict) and metadata.get(SESSION_ID_GENERATED_METADATA_KEY):
+    if isinstance(metadata, Mapping) and metadata.get(SESSION_ID_GENERATED_METADATA_KEY):
         return None
     for key in ("litellm_session_id", "session_id"):
         value = params.get(key)
         if value:
             return str(value)
-    if isinstance(metadata, dict):
+    if isinstance(metadata, Mapping):
         value = metadata.get("session_id")
         if value:
             return str(value)
     return None
+
+
+def with_fireworks_session_affinity(
+    headers: Mapping[str, str], litellm_params: Mapping[str, object]
+) -> Mapping[str, str]:
+    if any(key.lower() == "x-session-affinity" for key in headers):
+        return headers
+    session_id: Final = get_fireworks_session_id(litellm_params)
+    if not session_id:
+        return headers
+    return MappingProxyType({**headers, "x-session-affinity": session_id})
+
+
+def resolve_fireworks_api_key(api_key: str | None) -> str | None:
+    return api_key or (
+        get_secret_str("FIREWORKS_API_KEY")
+        or get_secret_str("FIREWORKS_AI_API_KEY")
+        or get_secret_str("FIREWORKSAI_API_KEY")
+        or get_secret_str("FIREWORKS_AI_TOKEN")
+    )
 
 
 AZURE_FOUNDRY_FIREWORKS_MODEL_ID_PREFIX: Final = "FW-"
@@ -63,13 +85,7 @@ class FireworksAIMixin:
         )
 
     def _get_api_key(self, api_key: str | None) -> str | None:
-        dynamic_api_key: Final = api_key or (
-            get_secret_str("FIREWORKS_API_KEY")
-            or get_secret_str("FIREWORKS_AI_API_KEY")
-            or get_secret_str("FIREWORKSAI_API_KEY")
-            or get_secret_str("FIREWORKS_AI_TOKEN")
-        )
-        return dynamic_api_key
+        return resolve_fireworks_api_key(api_key)
 
     def validate_environment(
         self,
@@ -92,9 +108,5 @@ class FireworksAIMixin:
         return self._add_session_affinity_header({**auth_headers, **content_type_header}, litellm_params)
 
     def _add_session_affinity_header(self, headers: dict, litellm_params: dict) -> dict:
-        if any(key.lower() == "x-session-affinity" for key in headers):
-            return headers
-        session_id: Final = get_fireworks_session_id(litellm_params)
-        if not session_id:
-            return headers
-        return {**headers, "x-session-affinity": session_id}
+        pinned: Final = with_fireworks_session_affinity(headers, litellm_params)
+        return dict(pinned)  # mutable-ok: the HTTP handler updates the returned headers in place

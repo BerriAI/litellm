@@ -22,7 +22,8 @@ export function ModelSelector({ value, onChange, models, loading, disabled }: Mo
 
   const selectValue = isAddingCustom ? "__custom__" : value || undefined;
 
-  const handleSelectChange = (selected: string) => {
+  const handleSelectChange = (selected: string | null) => {
+    if (selected === null) return;
     if (selected === "__custom__") {
       setIsAddingCustom(true);
       if (value && !options.includes(value)) {

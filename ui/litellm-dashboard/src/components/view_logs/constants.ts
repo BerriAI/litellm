@@ -12,14 +12,14 @@ export const ERROR_CODE_OPTIONS: { label: string; value: string }[] = [
   { label: "529 - Overloaded", value: "529" },
 ];
 
-/** Page sizes the logs tables offer; the first entry is the default. */
-export const LOGS_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
-
 /** Call types that represent MCP tool invocations (shared across columns, index, drawer). */
 export const MCP_CALL_TYPES = ["call_mcp_tool", "list_mcp_tools"];
 
 /** Call types that represent agent/A2A requests (e.g. asend_message). */
 export const AGENT_CALL_TYPES = ["asend_message"];
+
+/** Call types that represent Batch API operations (creation and retrieval, sync and async). */
+export const BATCH_CALL_TYPES = ["acreate_batch", "create_batch", "aretrieve_batch", "retrieve_batch"];
 
 export const QUICK_SELECT_OPTIONS: { label: string; value: number; unit: string }[] = [
   { label: "Last Minute", value: 1, unit: "minutes" },

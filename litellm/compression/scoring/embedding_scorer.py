@@ -5,6 +5,7 @@ Computes cosine similarity between the query embedding and each message embeddin
 """
 
 import math
+from collections.abc import Mapping
 from typing import Any, Final
 
 from litellm.caching.dual_cache import DualCache
@@ -49,7 +50,7 @@ def embedding_score_messages(
     messages: list[dict],
     model: str,
     cache: DualCache | None = None,
-    embedding_model_params: dict[str, Any] | None = None,
+    embedding_model_params: Mapping[str, object] | None = None,
 ) -> list[float]:
     """
     Score each message's semantic similarity to the query using embeddings.

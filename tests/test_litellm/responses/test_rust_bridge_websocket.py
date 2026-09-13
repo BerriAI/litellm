@@ -4,7 +4,6 @@ import pytest
 
 from litellm.llms.custom_httpx.llm_http_handler import _rust_responses_websocket_enabled
 from litellm.rust_bridge import configuration, responses_websocket
-from litellm.types.router import GenericLiteLLMParams
 
 
 class _FakeNativeConnection:
@@ -48,22 +47,12 @@ def reset_responses_websocket():
     configuration.reset_rust_configuration()
 
 
-def test_rust_websocket_bridge_is_disabled_without_flag() -> None:
-    assert not _rust_responses_websocket_enabled("openai", GenericLiteLLMParams())
-    assert not _rust_responses_websocket_enabled("anthropic", GenericLiteLLMParams(rust=True))
-    assert _rust_responses_websocket_enabled("openai", GenericLiteLLMParams(rust=True))
-
-
-def test_explicit_false_overrides_process_enable() -> None:
-    configuration.use_litellm_rust(True)
-
-    assert not _rust_responses_websocket_enabled("openai", GenericLiteLLMParams(rust=False))
-
-
-def test_process_enable_applies_without_request_override() -> None:
-    configuration.use_litellm_rust(True)
-
-    assert _rust_responses_websocket_enabled("openai", GenericLiteLLMParams())
+def test_rust_websocket_bridge_uses_process_enablement() -> None:
+    configuration.rust(False)
+    assert not _rust_responses_websocket_enabled("openai")
+    configuration.rust(True)
+    assert _rust_responses_websocket_enabled("openai")
+    assert not _rust_responses_websocket_enabled("anthropic")
 
 
 @pytest.mark.asyncio

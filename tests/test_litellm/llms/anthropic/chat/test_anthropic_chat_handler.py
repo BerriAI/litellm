@@ -9,7 +9,8 @@ import pytest
 import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator, make_call
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm._uuid import uuid
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
@@ -83,6 +84,54 @@ def test_anthropic_completion_does_not_send_deployment_default_limits():
     request_body = json.loads(captured_requests[0].content)
     assert "default_api_key_rpm_limit" not in request_body
     assert "default_api_key_tpm_limit" not in request_body
+
+
+async def test_anthropic_async_completion_inlines_http_images_off_the_event_loop(async_only_image_fetch):
+    http_image_url = f"http://img.example/{uuid.uuid4()}.png"
+    https_image_url = f"https://img.example/{uuid.uuid4()}.png"
+    captured = {}
+
+    def handle(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "Green"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    response = await litellm.acompletion(
+        model="anthropic/claude-sonnet-4-6",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What colour is this?"},
+                    {"type": "image_url", "image_url": {"url": http_image_url}},
+                    {"type": "image_url", "image_url": {"url": https_image_url}},
+                ],
+            }
+        ],
+        api_key="test-key",
+        client=client,
+    )
+
+    assert response.choices[0].message.content == "Green"
+    assert async_only_image_fetch.fetched == [http_image_url]
+    sources = [part["source"] for part in captured["body"]["messages"][0]["content"] if part["type"] == "image"]
+    assert sources == [
+        {"type": "base64", "media_type": "image/png", "data": async_only_image_fetch.base64_png},
+        {"type": "url", "url": https_image_url},
+    ]
 
 
 def test_redacted_thinking_content_block_delta():
@@ -1333,6 +1382,52 @@ def test_current_content_block_type_tracking():
     assert iterator.current_content_block_type is None
 
 
+def test_web_search_calls_are_cumulative_through_incomplete_search():
+    iterator = ModelResponseIterator(None, sync_stream=True)
+    first_start = iterator.chunk_parser(
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_A",
+                "name": "web_search",
+                "input": {"query": "a"},
+            },
+        }
+    )
+    first_result = iterator.chunk_parser(
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_A",
+                "content": [],
+            },
+        }
+    )
+    second_start = iterator.chunk_parser(
+        {
+            "type": "content_block_start",
+            "index": 2,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_B",
+                "name": "web_search",
+                "input": {"query": "b"},
+            },
+        }
+    )
+
+    assert list(first_start.choices[0].delta.provider_specific_fields["web_search_calls"]) == ["srvtoolu_A"]
+    assert first_result.choices[0].delta.provider_specific_fields["web_search_calls"]["srvtoolu_A"].status == "completed"
+    calls = second_start.choices[0].delta.provider_specific_fields["web_search_calls"]
+    assert list(calls) == ["srvtoolu_A", "srvtoolu_B"]
+    assert calls["srvtoolu_A"].status == "completed"
+    assert calls["srvtoolu_B"].status == "in_progress"
+
+
 def test_web_search_tool_result_captured_in_provider_specific_fields():
     """
     Test that web_search_tool_result content is captured in provider_specific_fields.
@@ -2256,7 +2351,7 @@ class TestRustChatCompletionsHook:
     def _reset_bridge(self, monkeypatch):
         from litellm.rust_bridge import chat_completions as bridge
 
-        monkeypatch.delenv("LITELLM_RUST", raising=False)
+        monkeypatch.setenv("LITELLM_RUST", "1")
         bridge.set_rust_chat_completions(
             chat_completions=None, achat_completions=None, decline=None
         )
@@ -2282,7 +2377,7 @@ class TestRustChatCompletionsHook:
             "logging_obj": MagicMock(),
             "optional_params": {"max_tokens": 16},
             "timeout": 30.0,
-            "litellm_params": {"rust": True},
+            "litellm_params": {},
             "acompletion": False,
             "headers": {},
             "client": None,
@@ -2366,7 +2461,8 @@ class TestRustChatCompletionsHook:
         )
         assert seen["call"][0]["optional_params"]["max_tokens"] == 7
 
-    def test_without_the_opt_in_the_core_is_never_consulted(self):
+    def test_without_the_opt_in_the_core_is_never_consulted(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_RUST", "0")
         from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
@@ -2587,6 +2683,7 @@ class TestRustChatCompletionsHook:
 
     def test_pre_call_logging_still_fires_when_rust_is_not_involved(self, monkeypatch):
         """The suppression must not swallow the log on the ordinary path."""
+        monkeypatch.setenv("LITELLM_RUST", "0")
         from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 

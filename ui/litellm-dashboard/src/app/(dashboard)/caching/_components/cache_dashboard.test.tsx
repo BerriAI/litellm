@@ -236,6 +236,35 @@ describe("CacheDashboard cache analytics charts", () => {
     expect(screen.queryByText(/Failed requests by error code/)).not.toBeInTheDocument();
   });
 
+  it("explains the Unknown bucket only when a group has no recorded endpoint", async () => {
+    const { rerender } = renderDashboard();
+    await screen.findByText(REQUESTS_CHART_TITLE);
+    expect(screen.queryByText(/recorded no endpoint/)).not.toBeInTheDocument();
+
+    useCacheActivity.mockReturnValue({
+      data: {
+        ...cacheActivity,
+        groups: [
+          ...cacheActivity.groups,
+          {
+            call_type: "Unknown",
+            api_requests: 0,
+            cache_hits: 0,
+            failed_requests: 121000,
+            cached_completion_tokens: 0,
+            generated_completion_tokens: 0,
+          },
+        ],
+      },
+      refetch: vi.fn(),
+    });
+    rerender(<CacheDashboard accessToken="sk-test" token="tok" userRole="Admin" userID="u1" premiumUser={false} />);
+
+    expect(
+      within(cardTitled(REQUESTS_CHART_TITLE)).getByText(/Unknown groups spend logs that recorded no endpoint/),
+    ).toHaveTextContent("not necessarily LLM API requests");
+  });
+
   it("formats y-axis ticks with compact notation", async () => {
     renderDashboard();
     const { requestsCard, tokensCard } = await findChartCards();

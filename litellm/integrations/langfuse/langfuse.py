@@ -2,6 +2,7 @@
 #    On success, logs events to Langfuse
 import inspect
 import os
+import re
 import traceback
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
@@ -61,6 +62,44 @@ _REDACTED_PROXY_HEADERS: Final[frozenset[str]] = frozenset({"authorization", "co
 def _object_mapping(value: object) -> Mapping[str, object] | None:
     """Return ``value`` as an opaque mapping when it is a dict."""
     return value if isinstance(value, dict) else None
+
+
+def _widened_items(mapping: Mapping[str, object]) -> Iterable[tuple[object, object]]:
+    """Header pairs with the key type widened back to what a caller-supplied dict can actually hold."""
+    return mapping.items()
+
+
+def _is_session_header_trace(trace_id: object, session_id: object, proxy_server_request: object) -> bool:
+    if not isinstance(trace_id, str) or not isinstance(session_id, str):
+        return False
+    request: Final = _object_mapping(proxy_server_request)
+    raw_headers: Final = _object_mapping(request.get("headers")) if request is not None else None
+    if raw_headers is None:
+        return False
+    headers: Final = MappingProxyType(
+        {key.lower(): value for key, value in _widened_items(raw_headers) if isinstance(key, str)}
+    )
+    if headers.get("x-litellm-trace-id"):
+        return False
+    if headers.get("langfuse_trace_id") is not None:
+        return False
+    if trace_id != session_id and headers.get("langfuse_session_id") != session_id:
+        return False
+    if headers.get("x-litellm-session-id") == trace_id:
+        return True
+    if re.fullmatch(r"[a-zA-Z0-9_\-]{8,}", trace_id) is None:
+        return False
+    user_agent: Final = headers.get("user-agent")
+    codex: Final = isinstance(user_agent, str) and re.match(r"^codex[-_ /]", user_agent, re.IGNORECASE) is not None
+    return any(
+        value == trace_id
+        and (
+            key == "x-session-id"
+            or re.fullmatch(r"x-.+-session-id", key) is not None
+            or (codex and key in ("session-id", "session_id", "thread-id", "conversation_id"))
+        )
+        for key, value in headers.items()
+    )
 
 
 class _UsageObject(Protocol):
@@ -609,6 +648,18 @@ class LangFuseLogger:
             # This allows continuing an existing trace while still returning the correct trace_id
             if existing_trace_id is not None:
                 trace_id = existing_trace_id
+            resolved_trace_id: Final = (
+                litellm_call_id or trace_id
+                if existing_trace_id is None
+                and _is_session_header_trace(trace_id, session_id, litellm_params.get("proxy_server_request"))
+                else trace_id
+            )
+            if resolved_trace_id != trace_id:
+                verbose_logger.debug(
+                    "Langfuse: trace_id %s came from a session header; using call id %s so each call gets its own trace",
+                    trace_id,
+                    resolved_trace_id,
+                )
             requested_trace_keys: Final = _as_steering_key_sequence(clean_metadata.pop("update_trace_keys", ()))
             update_trace_keys: Final = (
                 requested_trace_keys if _as_steering_flag(litellm.langfuse_enable_update_trace_keys) else ()
@@ -663,7 +714,7 @@ class LangFuseLogger:
                     trace_params["output"] = masked_output if not mask_output else "redacted-by-litellm"
             else:  # don't overwrite an existing trace
                 trace_params = {
-                    "id": trace_id,
+                    "id": resolved_trace_id,
                     "name": trace_name,
                     "session_id": session_id,
                     "input": masked_input if not mask_input else "redacted-by-litellm",
@@ -845,13 +896,13 @@ class LangFuseLogger:
             # Verify langfuse accepted our trace_id; if it differs, log a warning but still return our intended value
             # to match expected test behavior
             if hasattr(generation_client, "trace_id") and generation_client.trace_id:
-                if generation_client.trace_id != trace_id:
+                if generation_client.trace_id != resolved_trace_id:
                     verbose_logger.warning(
                         "Langfuse trace_id mismatch: set %s, but langfuse returned %s. Using our intended trace_id for consistency.",
-                        trace_id,
+                        resolved_trace_id,
                         generation_client.trace_id,
                     )
-            return trace_id, generation_id
+            return resolved_trace_id, generation_id
         except Exception:
             verbose_logger.error("Langfuse Layer Error - %s", traceback.format_exc())
             return None, None

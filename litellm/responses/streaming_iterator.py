@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, overload, runti
 
 import httpx
 from openai._streaming import SSEDecoder
+from pydantic import BaseModel, ValidationError
 from typing_extensions import TypeIs
 
 import litellm
@@ -438,18 +439,7 @@ class BaseResponsesAPIStreamingIterator:
         if self._persist_completed_response_before_logging:
             self._persist_completed_response_to_cache(is_async=is_async)
 
-        # Create a copy for logging to avoid modifying the response object that will be returned to the user
-        # The logging handlers may transform usage from Responses API format (input_tokens/output_tokens)
-        # to chat completion format (prompt_tokens/completion_tokens) for internal logging
-        # Use model_dump + model_validate instead of deepcopy to avoid pickle errors with
-        # Pydantic ValidatorIterator when response contains tool_choice with allowed_tools (fixes #17192)
-        logging_response = self.completed_response
-        if self.completed_response is not None and hasattr(self.completed_response, "model_dump"):
-            try:
-                logging_response = type(self.completed_response).model_validate(self.completed_response.model_dump())
-            except Exception:
-                # Fallback to original if serialization fails
-                pass
+        logging_response: Final[object] = _logging_copy(self.completed_response)
         self._restore_provider_response_headers(logging_response)
 
         end_time: Final = datetime.now()
@@ -488,18 +478,17 @@ class BaseResponsesAPIStreamingIterator:
     def _restore_provider_response_headers(self, logging_response: object) -> None:
         """Re-apply the provider's response headers to the copy handed to logging callbacks.
 
-        ``model_validate(model_dump())`` above drops pydantic private attributes, so the
+        ``model_validate(model_dump())`` in ``_logging_copy`` drops pydantic private attributes, so the
         ``_hidden_params`` the provider transform set on the nested response are lost. Returns early
-        when that copy fell back to the original event, so logging-only state never lands on the
-        object the caller is iterating.
+        when the event was not a pydantic model and logging got the original, so logging-only state
+        never lands on the object the caller is iterating.
         """
         if logging_response is self.completed_response:
             return
         target: Final[object] = getattr(logging_response, "response", None)
-        existing_hidden: Final[object] = getattr(target, "_hidden_params", None)
-        if not isinstance(existing_hidden, Mapping):
+        if not isinstance(target, ResponsesAPIResponse):
             return
-        existing: Final[Mapping[str, object]] = existing_hidden
+        existing: Final[Mapping[str, object]] = target._hidden_params
         source_hidden: Final[object] = getattr(
             getattr(self.completed_response, "response", None), "_hidden_params", None
         )
@@ -510,15 +499,11 @@ class BaseResponsesAPIStreamingIterator:
         raw_headers: Final[Mapping[str, object]] = raw if isinstance(raw, Mapping) else EMPTY_MAPPING
         # rebuild by value and let existing keys win: sharing the source dicts would alias what the proxy
         # splats into the client's HTTP headers, and copying non-header keys would carry response_cost
-        setattr(  # noqa: B010  # target is typed object here, so a plain attribute store does not type check
-            target,
-            "_hidden_params",
-            {  # mutable-ok: the cost calculator writes optional_params into _hidden_params
-                "additional_headers": {**headers},  # mutable-ok: fresh copy, logging callbacks may mutate it
-                "headers": {**raw_headers},  # mutable-ok: fresh copy, logging callbacks may mutate it
-                **existing,
-            },
-        )
+        target._hidden_params = {  # mutable-ok: the cost calculator writes optional_params into _hidden_params
+            "additional_headers": {**headers},  # mutable-ok: fresh copy, logging callbacks may mutate it
+            "headers": {**raw_headers},  # mutable-ok: fresh copy, logging callbacks may mutate it
+            **existing,
+        }
 
     def _handle_logging_completed_response(self):
         """Base implementation - should be overridden by subclasses"""
@@ -549,7 +534,7 @@ class BaseResponsesAPIStreamingIterator:
     def _record_failed_response_usage(self, response_obj: ResponsesAPIResponse | None) -> None:
         if response_obj is None or self.logging_obj is None:
             return
-        usage_obj: Final[ResponseAPIUsage | None] = getattr(response_obj, "usage", None)
+        usage_obj: Final[ResponseAPIUsage | None] = _usage_as_model(getattr(response_obj, "usage", None))
         if usage_obj is None:
             return
         try:
@@ -1298,14 +1283,46 @@ def _add_text_like_part_events(
         )
 
 
+def _logging_copy(event: object) -> object:
+    """Hand logging callbacks a copy, so their usage rewrite (Responses shape to chat shape) never
+    reaches the event the caller is iterating. The round trip through ``model_dump`` sidesteps the
+    deepcopy pickle errors of #17192; when a provider payload fails validation (LIT-7391), shallow
+    copies of the event and its nested response still keep the caller's ``usage`` attribute separate."""
+    if not isinstance(event, BaseModel):
+        return event
+    try:
+        return type(event).model_validate(event.model_dump())
+    except Exception:
+        return _detached_shallow_copy(event)
+
+
+def _detached_shallow_copy(event: BaseModel) -> BaseModel:
+    nested: Final[object] = getattr(event, "response", None)
+    if isinstance(nested, BaseModel):
+        return event.model_copy(update={"response": nested.model_copy()})
+    return event.model_copy()
+
+
+def _usage_as_model(usage: object) -> ResponseAPIUsage | None:
+    if isinstance(usage, ResponseAPIUsage):
+        return usage
+    if not isinstance(usage, dict):
+        return None
+    try:
+        return ResponseAPIUsage.model_validate(usage)
+    except ValidationError:
+        return None
+
+
 def _stamp_responses_usage_cost(
     response_obj: ResponsesAPIResponse | None, logging_obj: LiteLLMLoggingObj | None
 ) -> None:
     if response_obj is None or logging_obj is None:
         return
-    usage_obj: Final[ResponseAPIUsage | None] = getattr(response_obj, "usage", None)
+    usage_obj: Final[ResponseAPIUsage | None] = _usage_as_model(getattr(response_obj, "usage", None))
     if usage_obj is None:
         return
+    response_obj.usage = usage_obj  # rebind-ok: the stamped cost has to ride on the response the client receives
     if isinstance(getattr(usage_obj, "cost", None), (int, float)):
         return
     try:

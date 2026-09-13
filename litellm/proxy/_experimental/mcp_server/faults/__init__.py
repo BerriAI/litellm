@@ -22,6 +22,7 @@ from litellm.proxy._experimental.mcp_server.faults.types import (
     GatewayRejected,
     UpstreamOAuthFault,
     UpstreamProtocolFault,
+    UpstreamRegistrationRefused,
     UpstreamReportedFault,
 )
 
@@ -31,6 +32,7 @@ __all__ = [
     "GatewayRejected",
     "UpstreamOAuthFault",
     "UpstreamProtocolFault",
+    "UpstreamRegistrationRefused",
     "UpstreamReportedFault",
     "classify_upstream_dcr_rejection",
     "classify_upstream_token_rejection",

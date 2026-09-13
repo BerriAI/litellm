@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from io import BufferedReader, BytesIO
 from typing import Any, Final, cast, get_type_hints
 
@@ -61,7 +62,7 @@ class ImageEditRequestUtils:
 
     @staticmethod
     def get_requested_image_edit_optional_param(
-        params: dict[str, Any],
+        params: Mapping[str, object],
     ) -> ImageEditOptionalRequestParams:
         """
         Filter parameters to only include those defined in ImageEditOptionalRequestParams.

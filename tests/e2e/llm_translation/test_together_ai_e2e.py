@@ -23,7 +23,7 @@ from datetime import date
 from typing import Final
 
 import pytest
-from e2e_config import unique_marker
+from e2e_config import STREAM_MIN_LEAD_SECONDS, provider_paces_stream, unique_marker
 from e2e_http import StreamingResponse, require_successful_call, unwrap
 from lifecycle import ResourceManager
 from models import (
@@ -81,7 +81,7 @@ PERSON_RESPONSE_FORMAT: dict[str, object] = {
 }
 WEATHER_PROMPT = "What is the weather in Paris? Use the tool."
 WEATHER_REPORT = "Paris: 22 degrees Celsius, clear skies, wind from the northwest at 9 km/h"
-COUNTING_PROMPT = "Count from 1 to 20, one number per line."
+COUNTING_PROMPT = "Count from 1 to 200, one number per line."
 
 WEATHER_TOOL = ChatTool(
     function=ChatToolFunction(
@@ -753,7 +753,7 @@ class TestTogetherMessages:
             key,
             AnthropicMessagesBody(
                 model=model,
-                max_tokens=512,
+                max_tokens=2048,
                 stream=True,
                 messages=[ChatMessage(role="user", content=COUNTING_PROMPT)],
             ),
@@ -763,11 +763,24 @@ class TestTogetherMessages:
         assert not result.stream_error, f"stream errored: {result.stream_error}"
         events = [_MessagesStreamEvent.model_validate_json(event) for event in result.stream_events]
         types = [event.type for event in events]
-        text_deltas = [
+        delta_positions = [
+            index for index, event in enumerate(events) if event.type == "content_block_delta"
+        ]
+        assert delta_positions, f"stream carried no content deltas: {types}"
+        text = "".join(
             event.delta.text
             for event in events
-            if event.type == "content_block_delta" and event.delta is not None and event.delta.text
-        ]
-        assert len(text_deltas) >= 2, f"stream was not incremental: {types}"
-        assert "20" in "".join(text_deltas), f"streamed text lost the answer: {text_deltas}"
+            if event.type == "content_block_delta" and event.delta is not None
+        )
+        assert "200" in text, f"streamed text lost the answer: {text[:300]!r}"
         assert "message_stop" in types, f"stream never reached message_stop: {types}"
+
+        stop_position: Final = types.index("message_stop")
+        first_delta_at: Final = result.stream_event_arrivals[delta_positions[0]]
+        stop_at: Final = result.stream_event_arrivals[stop_position]
+        if provider_paces_stream():
+            assert stop_at - first_delta_at >= STREAM_MIN_LEAD_SECONDS, (
+                f"first content delta reached the client {first_delta_at:.2f}s after the request "
+                f"and message_stop {stop_at:.2f}s after it; a relayed stream shows the first delta "
+                f"at least {STREAM_MIN_LEAD_SECONDS}s before the end, so the response was buffered"
+            )

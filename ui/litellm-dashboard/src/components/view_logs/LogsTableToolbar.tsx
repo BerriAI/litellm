@@ -92,7 +92,10 @@ export function LogsTableToolbar({
             <Button
               variant="ghost"
               className="w-full justify-start font-normal"
-              onClick={() => onIsCustomDateChange(!isCustomDate)}
+              onClick={() => {
+                onIsCustomDateChange(!isCustomDate);
+                onResetToFirstPage();
+              }}
             >
               Custom Range
             </Button>

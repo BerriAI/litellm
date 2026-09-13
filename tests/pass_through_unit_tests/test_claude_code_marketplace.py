@@ -216,7 +216,7 @@ async def test_get_marketplace(mock_prisma_client):
     )
 
     # Now get the marketplace
-    response = await get_marketplace()
+    response = await get_marketplace(request=MagicMock())
 
     # Response is a JSONResponse, get the body
     body = json.loads(response.body.decode())
