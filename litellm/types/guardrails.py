@@ -127,6 +127,7 @@ class SupportedGuardrailIntegrations(Enum):
     AKTO = "akto"
     MCP_JWT_SIGNER = "mcp_jwt_signer"
     LLM_AS_A_JUDGE = "llm_as_a_judge"
+    LLAMA_GUARD = "llama_guard"
     DEEPKEEP = "deepkeep"
     QOSTODIAN_NEXUS = "qostodian_nexus"
     RUBRIK = "rubrik"
