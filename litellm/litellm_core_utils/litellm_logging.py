@@ -7113,17 +7113,18 @@ class StandardLoggingPayloadSetup:
             request_headers: Final = cast(  # cast-ok: request headers are untyped framework data
                 dict[str, str | None], headers
             )
-            if "user-agent" in request_headers:
-                user_agent: Final = request_headers["user-agent"]
-                if user_agent is not None:
-                    if user_agent_tags is None:
-                        user_agent_tags = []
-                    user_agent_part: str | None = None
-                    if "/" in user_agent:
-                        user_agent_part = user_agent.split("/")[0]
-                    if user_agent_part is not None:
-                        user_agent_tags.append("User-Agent: " + user_agent_part)
-                    user_agent_tags.append("User-Agent: " + user_agent)
+            user_agent: Final[str | None] = next(
+                (v for k, v in request_headers.items() if k.lower() == "user-agent" and isinstance(v, str)),
+                None,
+            )
+            if user_agent is not None:
+                user_agent_tags = []
+                user_agent_part: str | None = None
+                if "/" in user_agent:
+                    user_agent_part = user_agent.split("/")[0]
+                if user_agent_part is not None:
+                    user_agent_tags.append("User-Agent: " + user_agent_part)
+                user_agent_tags.append("User-Agent: " + user_agent)
         return user_agent_tags
 
     @staticmethod
