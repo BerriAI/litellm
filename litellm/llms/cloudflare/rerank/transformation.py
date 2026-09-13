@@ -1,6 +1,5 @@
 import json
 from collections.abc import Mapping, Sequence
-from typing import Union
 
 import httpx
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -28,7 +27,7 @@ class CloudflareRerankRequest(TypedDict):
 
 class CohereRerankParams(TypedDict):
     query: ReadOnly[str]
-    documents: ReadOnly[Sequence[Union[str, Mapping[str, object]]]]
+    documents: ReadOnly[Sequence[str | Mapping[str, object]]]
     top_n: NotRequired[ReadOnly[int]]
     return_documents: NotRequired[ReadOnly[bool]]
 
@@ -164,12 +163,7 @@ class CloudflareRerankConfig(BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: Sequence[
-            Union[
-                str,
-                Mapping[str, object],
-            ]
-        ],
+        documents: Sequence[str | Mapping[str, object]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
         rank_fields: Sequence[str] | None = None,
@@ -280,6 +274,6 @@ class CloudflareRerankConfig(BaseRerankConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: Union[Mapping[str, object], httpx.Headers],
+        headers: Mapping[str, object] | httpx.Headers,
     ) -> BaseLLMException:
         return CloudflareError(status_code=status_code, message=error_message)
