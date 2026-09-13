@@ -60,6 +60,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParamFunctionChunk,
     ChatCompletionUserMessage,
     GenericChatCompletionMessage,
+    IncompleteDetails,
     InputTokensDetails,
     OpenAIChatCompletionTextObject,
     OpenAIMcpServerTool,
@@ -2290,6 +2291,18 @@ class LiteLLMCompletionResponsesConfig:
             return "completed"
 
     @staticmethod
+    def _map_chat_completion_finish_reason_to_incomplete_details(
+        finish_reason: str | None,
+    ) -> IncompleteDetails | None:
+        if finish_reason == "length":
+            return IncompleteDetails(reason="max_output_tokens")
+        if finish_reason == "content_filter":
+            return IncompleteDetails(reason="content_filter")
+        if finish_reason == "refusal":
+            return IncompleteDetails(reason=None)
+        return None
+
+    @staticmethod
     def _tool_call_id_from_responses_item(item_id: str | None, call_id: str | None) -> str:
         """Bedrock Mantle returns a non-unique, index-based ``call_id`` (``call_0``,
         ``call_1``, ... that resets every response) alongside a unique ``id``
@@ -2411,7 +2424,9 @@ class LiteLLMCompletionResponsesConfig:
             model=chat_completion_response.model,
             object="response",
             error=getattr(chat_completion_response, "error", None),
-            incomplete_details=getattr(chat_completion_response, "incomplete_details", None),
+            incomplete_details=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_incomplete_details(
+                finish_reason
+            ),
             instructions=getattr(chat_completion_response, "instructions", None),
             metadata=getattr(chat_completion_response, "metadata", {}),
             output=LiteLLMCompletionResponsesConfig._transform_chat_completion_choices_to_responses_output(

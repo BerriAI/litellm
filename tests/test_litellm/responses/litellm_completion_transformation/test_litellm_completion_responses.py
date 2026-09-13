@@ -659,6 +659,82 @@ class TestLiteLLMCompletionResponsesConfig:
 
         assert responses_api_response.status == "incomplete"
 
+    @pytest.mark.parametrize(
+        ("finish_reason", "expected_status", "expected_reason"),
+        [
+            ("length", "incomplete", "max_output_tokens"),
+            ("content_filter", "incomplete", "content_filter"),
+            ("stop", "completed", None),
+        ],
+    )
+    def test_transform_chat_completion_response_populates_incomplete_details(
+        self, finish_reason, expected_status, expected_reason
+    ):
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason=finish_reason,
+                    index=0,
+                    message=Message(
+                        content="Truncated mid senten",
+                        role="assistant",
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="this is a test",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+
+        assert responses_api_response.status == expected_status
+        if expected_reason is None:
+            assert responses_api_response.incomplete_details is None
+        else:
+            assert responses_api_response.incomplete_details is not None
+            assert responses_api_response.incomplete_details.reason == expected_reason
+
+    def test_transform_chat_completion_response_refusal_reports_content_filter_reason(self):
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="refusal",
+                    index=0,
+                    message=Message(
+                        content="",
+                        role="assistant",
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="this is a test",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+
+        assert responses_api_response.status == "incomplete"
+        assert responses_api_response.incomplete_details is not None
+        assert responses_api_response.incomplete_details.reason == "content_filter"
+
+    def test_incomplete_details_helper_maps_unnormalized_refusal_to_null_reason(self):
+        details = LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_incomplete_details(
+            "refusal"
+        )
+        assert details is not None
+        assert details.reason is None
+
     def test_tool_call_only_response_emits_no_null_text_message_item(self):
         """A tool-calls-only turn (message content None, e.g. from Anthropic)
         must not emit a message output item whose output_text has text null.
