@@ -84,15 +84,20 @@ class TestOpenCodeConfig:
         url = cfg.get_complete_url(None, None, "gpt-5.1", {}, {})
         assert url == "https://opencode.ai/zen/go/v1/chat/completions"
 
-    def test_get_complete_url_api_base_override(self):
+    @pytest.mark.parametrize(
+        "api_base",
+        [
+            "http://localhost:4000",
+            "http://localhost:4000/",
+            "http://localhost:4000/v1",
+            "http://localhost:4000/v1/",
+            "http://localhost:4000/v1/chat/completions",
+        ],
+    )
+    def test_get_complete_url_api_base_with_or_without_v1(self, api_base):
         cfg = OpenCodeConfig(surface="zen")
-        url = cfg.get_complete_url("http://localhost:4000", None, "gpt-5.1", {}, {})
-        assert url == "http://localhost:4000/chat/completions"
-
-    def test_get_complete_url_api_base_trailing_slash(self):
-        cfg = OpenCodeConfig(surface="zen")
-        url = cfg.get_complete_url("http://localhost:4000/", None, "gpt-5.1", {}, {})
-        assert url == "http://localhost:4000/chat/completions"
+        url = cfg.get_complete_url(api_base, None, "gpt-5.1", {}, {})
+        assert url == "http://localhost:4000/v1/chat/completions"
 
     def test_error_class(self):
         cfg = OpenCodeConfig(surface="zen")
@@ -416,7 +421,7 @@ class TestMockedCompletion:
 
     def test_api_base_override(self, respx_mock, monkeypatch):
         """Explicit api_base overrides the default gateway URL."""
-        respx_mock.post("http://localhost:4000/chat/completions").mock(
+        respx_mock.post("http://localhost:4000/v1/chat/completions").mock(
             return_value=Response(200, json=_make_response("grok-4.5", "local"))
         )
 
@@ -431,6 +436,43 @@ class TestMockedCompletion:
         assert result is not None
         assert result.choices[0].message.content == "local"
         assert len(respx_mock.calls) > 0
+
+    def test_api_base_without_v1_serves_chat_and_messages(self, respx_mock, monkeypatch):
+        """One OPENCODE_ZEN_API_BASE value without /v1 reaches both the chat and the messages endpoint."""
+        chat_endpoint = respx_mock.post("https://gateway.example.com/zen/v1/chat/completions").mock(
+            return_value=Response(200, json=_make_response("grok-4.5", "chat ok"))
+        )
+        messages_endpoint = respx_mock.post("https://gateway.example.com/zen/v1/messages").mock(
+            return_value=Response(
+                200,
+                json={
+                    "id": "msg_123",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-4",
+                    "content": [{"type": "text", "text": "messages ok"}],
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                },
+            )
+        )
+
+        monkeypatch.setenv("OPENCODE_ZEN_API_BASE", "https://gateway.example.com/zen")
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.completion(
+            model="opencode_zen/grok-4.5",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="sk-fake",
+        )
+        litellm.completion(
+            model="opencode_zen/claude-sonnet-4",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="sk-fake",
+            max_tokens=16,
+        )
+
+        assert chat_endpoint.call_count == 1
+        assert messages_endpoint.call_count == 1
 
     def test_bearer_auth_from_surface_key(self, respx_mock, monkeypatch):
         """Surface-specific env var provides the Bearer token."""

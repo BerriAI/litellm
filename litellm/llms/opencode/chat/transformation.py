@@ -76,8 +76,12 @@ class OpenCodeConfig(OpenAIGPTConfig):
         stream: bool | None = None,
     ) -> str:
         """Return {api_base}/v1/chat/completions."""
-        base: Final = resolve_opencode_api_base(self.surface, api_base) or self._base_url()
-        return f"{base.rstrip('/')}/chat/completions"
+        base: Final = (resolve_opencode_api_base(self.surface, api_base) or self._base_url()).rstrip("/")
+        if base.endswith("/v1/chat/completions"):
+            return base
+        if base.endswith("/v1"):
+            return f"{base}/chat/completions"
+        return f"{base}/v1/chat/completions"
 
     def get_error_class(
         self,
