@@ -657,11 +657,6 @@ class TestEncodeUiSessionJwt:
             assert _user_id_from_session_cookie(request) == "cornell-user"
 
 
-# ---------------------------------------------------------------------------
-# Failed-login accounting (LIT-5285)
-# ---------------------------------------------------------------------------
-
-
 def _throttle(
     max_attempts: int = 3,
     window_seconds: int = 900,
