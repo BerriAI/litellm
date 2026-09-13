@@ -1267,13 +1267,18 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         handler = OpenAIChatCompletionsHandler()
         chunks = self._two_choice_stream_chunks()
 
-        with pytest.raises(UndeliverableStreamRewrite):
+        with pytest.raises(UndeliverableStreamRewrite, match="the stream carries 2 choices") as raised:
             await handler.process_output_streaming_response(
                 responses_so_far=chunks,
                 guardrail_to_apply=self._world_masking_guardrail(),
                 litellm_logging_obj=None,
                 deliver_ended_stream_rewrites=True,
             )
+
+        assert raised.value.guardrail_name == "test-mask"
+        assert raised.value.reason == (
+            "the stream carries 2 choices and the rebuilt response's text rewrite cannot be attributed to one of them"
+        )
 
     @staticmethod
     def _two_choice_tool_call_stream_chunks() -> list:
@@ -1310,11 +1315,50 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         return [
             chunk(0, fragment("", name="lookup_fruit", call_id="call_1")),
             chunk(1, fragment("", name="lookup_fruit", call_id="call_2")),
-            chunk(0, fragment('{"fruit": "persimmon"}')),
-            chunk(1, fragment('{"fruit": "durian"}')),
+            chunk(0, fragment('{"fruit": "pers')),
+            chunk(1, fragment('{"fruit": "dur')),
+            chunk(0, fragment('immon"}')),
+            chunk(1, fragment('ian"}')),
             chunk(0, None, finish_reason="tool_calls"),
             chunk(1, None, finish_reason="tool_calls"),
         ]
+
+    @staticmethod
+    def _recording_guardrail() -> CustomGuardrail:
+        class Recorder(CustomGuardrail):
+            def __init__(self) -> None:
+                super().__init__(guardrail_name="recorder")
+                self.seen_inputs: list[GenericGuardrailAPIInputs] = []
+
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type: Literal["request", "response"],
+                logging_obj: Optional[Any] = None,
+            ) -> GenericGuardrailAPIInputs:
+                self.seen_inputs.append(inputs)
+                return inputs
+
+        return Recorder()
+
+    @pytest.mark.asyncio
+    async def test_ended_multi_choice_stream_scans_each_choices_tool_call_arguments_apart(self):
+        handler = OpenAIChatCompletionsHandler()
+        chunks = self._two_choice_tool_call_stream_chunks()
+        guardrail = self._recording_guardrail()
+
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert [
+            (tool_call["id"], tool_call["function"]["arguments"])
+            for tool_call in guardrail.seen_inputs[-1]["tool_calls"]
+        ] == [("call_1", '{"fruit": "persimmon"}'), ("call_2", '{"fruit": "durian"}')]
 
     @pytest.mark.asyncio
     async def test_deliver_ended_stream_tool_call_rewrite_on_multi_choice_stream_fails_closed(self):
@@ -1323,13 +1367,18 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         handler = OpenAIChatCompletionsHandler()
         chunks = self._two_choice_tool_call_stream_chunks()
 
-        with pytest.raises(UndeliverableStreamRewrite):
+        with pytest.raises(UndeliverableStreamRewrite, match="the stream carries 2 choices") as raised:
             await handler.process_output_streaming_response(
                 responses_so_far=chunks,
                 guardrail_to_apply=MockGuardrail(guardrail_name="test"),
                 litellm_logging_obj=None,
                 deliver_ended_stream_rewrites=True,
             )
+
+        assert raised.value.guardrail_name == "test"
+        assert raised.value.reason == (
+            "the stream carries 2 choices and tool-call rewrites are only written back on single-choice streams"
+        )
 
     @pytest.mark.asyncio
     async def test_deliver_ended_stream_clean_multi_choice_stream_released_untouched(self):

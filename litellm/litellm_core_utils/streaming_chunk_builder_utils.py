@@ -138,7 +138,11 @@ class _ToolCallDelta(TypedDict, total=False):
 
 
 class _ToolCallChoice(TypedDict, total=False):
+    index: ReadOnly[int]
     delta: ReadOnly[_ToolCallDelta]
+
+
+_ToolCallKey: TypeAlias = tuple[int, int]
 
 
 class _ToolCallChunk(TypedDict):
@@ -416,40 +420,41 @@ class ChunkProcessor:
     @staticmethod
     def _iter_tool_call_fragments(
         tool_call_chunks: Sequence["_ToolCallChunk"],
-    ) -> Iterator[tuple[int, str, str]]:
+    ) -> Iterator[tuple[_ToolCallKey, str, str]]:
         for chunk in tool_call_chunks:
             for choice in chunk["choices"]:
                 delta = choice.get("delta")
                 if not delta:
                     continue
-                for tool_call in delta.get("tool_calls", ()):
+                choice_index = choice.get("index", 0)
+                for tool_call in delta.get("tool_calls") or ():
                     if not tool_call:
                         continue
                     if isinstance(tool_call, dict):
-                        index = tool_call.get("index", 0)
+                        key = (choice_index, tool_call.get("index", 0))
                         function = tool_call.get("function")
                         if isinstance(function, dict):
                             if fragment_arguments := function.get("arguments"):
-                                yield index, "arguments", fragment_arguments
+                                yield key, "arguments", fragment_arguments
                         elif function_arguments := getattr(function, "arguments", None):
-                            yield index, "arguments", function_arguments
+                            yield key, "arguments", function_arguments
                         custom = tool_call.get("custom")
                         if isinstance(custom, dict) and (custom_input := custom.get("input")):
-                            yield index, "custom_input", custom_input
+                            yield key, "custom_input", custom_input
                     else:
-                        index = getattr(tool_call, "index", 0)
+                        key = (choice_index, getattr(tool_call, "index", 0))
                         function = getattr(tool_call, "function", None)
                         if object_arguments := getattr(function, "arguments", None):
-                            yield index, "arguments", object_arguments
+                            yield key, "arguments", object_arguments
                         custom = getattr(tool_call, "custom", None)
                         if object_custom_input := getattr(custom, "input", None):
-                            yield index, "custom_input", object_custom_input
+                            yield key, "custom_input", object_custom_input
 
     @staticmethod
-    def _join_fragments_by_index_and_field(
-        fragment_records: Iterator[tuple[int, str, str]],
-    ) -> Mapping[tuple[int, str], str]:
-        def group_key(record: tuple[int, str, str]) -> tuple[int, str]:
+    def _join_fragments_by_key_and_field(
+        fragment_records: Iterator[tuple[_ToolCallKey, str, str]],
+    ) -> Mapping[tuple[_ToolCallKey, str], str]:
+        def group_key(record: tuple[_ToolCallKey, str, str]) -> tuple[_ToolCallKey, str]:
             return record[0], record[1]
 
         return MappingProxyType(
@@ -467,13 +472,14 @@ class ChunkProcessor:
         tool_calls_list: list[
             ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall
         ] = []  # mutable-ok: see return type
-        tool_call_map: Final[dict[int, dict[str, Any]]] = {}  # Map to store tool calls by index
+        tool_call_map: Final[dict[_ToolCallKey, dict[str, Any]]] = {}  # Map to store tool calls by choice and index
 
         for chunk in tool_call_chunks:
             choices = chunk["choices"]
             for choice in choices:
                 delta = choice.get("delta", {})
-                tool_calls = delta.get("tool_calls", [])
+                tool_calls = delta.get("tool_calls") or ()
+                choice_index = choice.get("index", 0)
 
                 for tool_call in tool_calls:
                     # Handle both dict and object formats
@@ -495,9 +501,9 @@ class ChunkProcessor:
 
                     # Get index (handle both dict and object)
                     if isinstance(tool_call, dict):
-                        index = tool_call.get("index", 0)
+                        index = (choice_index, tool_call.get("index", 0))
                     else:
-                        index = getattr(tool_call, "index", 0)
+                        index = (choice_index, getattr(tool_call, "index", 0))
 
                     if index not in tool_call_map:
                         tool_call_map[index] = {
@@ -572,7 +578,7 @@ class ChunkProcessor:
                         if isinstance(provider_fields, dict):
                             merged_provider_fields.update(provider_fields)
 
-        joined_fragments: Final = self._join_fragments_by_index_and_field(
+        joined_fragments: Final = self._join_fragments_by_key_and_field(
             self._iter_tool_call_fragments(tool_call_chunks)
         )
 

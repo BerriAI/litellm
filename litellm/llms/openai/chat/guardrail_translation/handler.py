@@ -1041,13 +1041,13 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             choice.index for response in responses_so_far for choice in response.choices
         )
         if len(stream_choice_indices) != 1:
-            # stream_chunk_builder collapses every choice into one index-0
-            # choice, so a rewrite of the rebuilt response cannot be attributed
-            # back to a single choice on an n>1 stream: report it undeliverable
-            # rather than deliver the rewrite on the wrong choice
             from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
-            raise UndeliverableStreamRewrite(guardrail_name)
+            raise UndeliverableStreamRewrite(
+                guardrail_name,
+                f"the stream carries {len(stream_choice_indices)} choices and the rebuilt response's text rewrite "
+                "cannot be attributed to one of them",
+            )
         target_choice_index: Final = next(iter(stream_choice_indices))
         await self._apply_guardrail_responses_to_output_streaming(
             responses=responses_so_far,
@@ -1105,10 +1105,22 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             choice.index for response in responses_so_far for choice in response.choices
         )
         fragments_by_tool_call: Final = self._function_tool_call_fragments(responses_so_far)
-        if len(stream_choice_indices) != 1 or len(fragments_by_tool_call) != len(post_guardrail_tool_calls):
+        if len(stream_choice_indices) != 1:
             from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
-            raise UndeliverableStreamRewrite(guardrail_name)
+            raise UndeliverableStreamRewrite(
+                guardrail_name,
+                f"the stream carries {len(stream_choice_indices)} choices and tool-call rewrites are only written "
+                "back on single-choice streams",
+            )
+        if len(fragments_by_tool_call) != len(post_guardrail_tool_calls):
+            from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+            raise UndeliverableStreamRewrite(
+                guardrail_name,
+                f"the guardrail returned {len(post_guardrail_tool_calls)} tool calls for a stream that carried "
+                f"{len(fragments_by_tool_call)}",
+            )
         for before, (name, arguments), fragments in zip(
             pre_guardrail_tool_calls, post_guardrail_tool_calls, fragments_by_tool_call
         ):
