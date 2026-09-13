@@ -730,3 +730,116 @@ if __name__ == "__main__":
     test_prometheus_label_value_sanitization_none()
     test_prometheus_label_value_sanitization_non_string_types()
     print("\n✅ All prometheus label tests passed!")
+
+
+def test_call_type_in_request_lifecycle_metrics():
+    call_type_label = UserAPIKeyLabelNames.CALL_TYPE.value
+
+    metrics_with_call_type = [
+        "litellm_spend_metric",
+        "litellm_requests_metric",
+        "litellm_input_tokens_metric",
+        "litellm_output_tokens_metric",
+        "litellm_total_tokens_metric",
+        "litellm_llm_api_latency_metric",
+        "litellm_llm_api_time_to_first_token_metric",
+        "litellm_request_total_latency_metric",
+        "litellm_request_queue_time_seconds",
+        "litellm_overhead_latency_metric",
+        "litellm_overhead_with_guardrails_latency_metric",
+        "litellm_proxy_total_requests_metric",
+        "litellm_proxy_failed_requests_metric",
+        "litellm_deployment_latency_per_output_token",
+        "litellm_deployment_failure_responses",
+        "litellm_deployment_total_requests",
+        "litellm_deployment_success_responses",
+    ]
+
+    for metric_name in metrics_with_call_type:
+        labels = PrometheusMetricLabels.get_labels(metric_name)
+        assert call_type_label in labels, f"Metric {metric_name} should contain call_type"
+
+
+def test_call_type_absent_from_quota_and_deployment_gauges():
+    """Headroom belongs to a deployment; splitting it by call type would emit duplicate series for one limit."""
+    call_type_label = UserAPIKeyLabelNames.CALL_TYPE.value
+
+    for metric_name in [
+        "litellm_remaining_requests_metric",
+        "litellm_remaining_tokens_metric",
+        "litellm_deployment_tpm_limit",
+        "litellm_deployment_rpm_limit",
+        "litellm_deployment_state",
+        "litellm_deployment_cooled_down",
+    ]:
+        labels = PrometheusMetricLabels.get_labels(metric_name)
+        assert call_type_label not in labels, f"Metric {metric_name} should not carry call_type"
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("acompletion", "completion"),
+        ("completion", "completion"),
+        ("aembedding", "embedding"),
+        ("aimage_generation", "image_generation"),
+        ("a_add_message", "add_message"),
+        ("aanthropic_messages", "anthropic_messages"),
+        ("add_message", "add_message"),
+        ("anthropic_messages", "anthropic_messages"),
+        ("something_new", "something_new"),
+        (None, None),
+        ("", None),
+    ],
+)
+def test_normalize_call_type(raw, expected):
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    assert PrometheusLogger._normalize_call_type(raw) == expected
+
+
+def test_async_call_type_aliases_cover_every_async_member():
+    from litellm.integrations.prometheus import _ASYNC_CALL_TYPE_ALIASES
+    from litellm.types.utils import CallTypes
+
+    names = {member.name: member.value for member in CallTypes}
+    for name, value in names.items():
+        for prefix in ("a_", "a"):
+            twin = name[len(prefix) :] if name.startswith(prefix) else None
+            if twin and twin in names and twin != name:
+                assert _ASYNC_CALL_TYPE_ALIASES.get(value) == names[twin]
+                break
+
+
+def test_call_type_reaches_rendered_metrics_output():
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    _clear_prometheus_registry()
+    logger = PrometheusLogger()
+
+    standard_logging_payload = {
+        "model_group": "gpt-4o-group",
+        "call_type": "acompletion",
+        "api_base": "https://example.invalid",
+        "model_id": "deployment-1",
+        "request_tags": [],
+        "metadata": {
+            "user_api_key_hash": "test-key",
+            "user_api_key_alias": None,
+            "user_api_key_team_id": None,
+            "user_api_key_team_alias": None,
+        },
+    }
+
+    logger.set_llm_deployment_failure_metrics(
+        {
+            "model": "gpt-4o",
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": standard_logging_payload,
+            "exception": Exception("boom"),
+        }
+    )
+
+    samples = _collected_samples("litellm_deployment_failure_responses_total")
+    assert samples, "expected litellm_deployment_failure_responses to be emitted"
+    assert samples[0].labels.get("call_type") == "completion"
