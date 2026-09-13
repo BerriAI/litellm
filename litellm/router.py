@@ -1561,7 +1561,9 @@ class Router:
         public_model_name: Final = deployment.model_info.team_public_model_name
         if team_id is None or public_model_name is None:
             return False
-        return len(self.team_model_to_deployment_indices.get((team_id, public_model_name)) or ()) > 1
+        sibling_indices: Final = self.team_model_to_deployment_indices.get((team_id, public_model_name)) or ()
+        routable_siblings: Final = self._filter_blocked_deployments([self.model_list[idx] for idx in sibling_indices])
+        return len(routable_siblings) > 1
 
     _OVERRIDABLE_ROUTING_STRATEGIES: frozenset[str] = frozenset({"simple-shuffle", *_DEFAULT_SELECTOR_ATTR_BY_STRATEGY})
 
