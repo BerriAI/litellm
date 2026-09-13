@@ -484,6 +484,41 @@ def test_combine_cached_embedding_response_short_upstream_raises_index_error():
         )
 
 
+def test_combine_cached_embedding_response_dict_items():
+    caching_handler = LLMCachingHandler(
+        original_function=lambda: None, request_kwargs={}, start_time=datetime.now()
+    )
+    start_time = datetime.now()
+    end_time = start_time + timedelta(seconds=1)
+
+    cached_response = EmbeddingResponse(
+        data=[
+            {"embedding": [0.1], "index": 0, "object": "embedding"},
+            None,
+        ]
+    )
+    caching_handler_response = CachingHandlerResponse(
+        final_embedding_cached_response=cached_response
+    )
+    api_response = EmbeddingResponse(
+        data=[{"embedding": [0.2], "index": 0, "object": "embedding"}]
+    )
+
+    result = caching_handler._combine_cached_embedding_response_with_api_result(
+        _caching_handler_response=caching_handler_response,
+        embedding_response=api_response,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    assert len(result.data) == 2
+    assert result.data[0]["index"] == 0
+    assert result.data[1]["index"] == 1
+    assert result.data[0]["embedding"] == [0.1]
+    assert result.data[1]["embedding"] == [0.2]
+
+
+
 @pytest.mark.asyncio
 async def test_embedding_cache_model_field_consistency():
     """
