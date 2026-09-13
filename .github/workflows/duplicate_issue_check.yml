@@ -1,0 +1,135 @@
+name: Duplicate issue check (Codex)
+
+on:
+  issues:
+    types: [opened]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number to check manually."
+        required: true
+  pull_request:
+    paths:
+      - .github/workflows/duplicate_issue_check.yml
+      - .github/prompts/duplicate-issue-check.md
+      - .github/prompts/duplicate-issue-check.schema.json
+      - scripts/flag-duplicate-issue.ts
+      - scripts/flag-duplicate-issue.test.ts
+      - scripts/auto-close-duplicates.ts
+
+permissions: {}
+
+jobs:
+  flag-tests:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.0"
+
+      - name: Test the flag step
+        run: bun test scripts/flag-duplicate-issue.test.ts
+
+  classify:
+    if: github.event_name != 'pull_request' && github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      verdict: ${{ steps.codex.outputs.final-message }}
+    steps:
+      - name: Checkout prompt
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          sparse-checkout: .github/prompts
+          persist-credentials: false
+
+      # Read through the API so issue text never reaches a shell or an action input
+      - name: Fetch the issue under review
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
+        run: |
+          set -euo pipefail
+          gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+            --json number,title,body,createdAt > issue.json
+
+      - name: Require the LiteLLM endpoint
+        env:
+          LITELLM_API_BASE: ${{ vars.LITELLM_API_BASE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LITELLM_API_BASE}" ]; then
+            echo "Set the LITELLM_API_BASE repo variable (e.g. https://llm.example.com) so Codex routes through LiteLLM." >&2
+            echo "Without it the LiteLLM virtual key would be sent to api.openai.com and rejected." >&2
+            exit 1
+          fi
+
+      - name: Run Codex
+        id: codex
+        uses: openai/codex-action@10cb888d2ed3b99867f7e7ccff174a861a75aeb6 # v1.9
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          openai-api-key: ${{ secrets.LITELLM_API_KEY }}
+          responses-api-endpoint: ${{ vars.LITELLM_API_BASE }}/v1/responses
+          prompt-file: .github/prompts/duplicate-issue-check.md
+          output-schema-file: .github/prompts/duplicate-issue-check.schema.json
+          sandbox: read-only
+          # read-only denies network, and the whole method is searching the tracker with gh
+          codex-args: '["-c", "sandbox_permissions=[\"network-full-access\"]"]'
+          model: ${{ vars.DUPLICATE_CHECK_MODEL || 'gpt-5.6' }}
+          # Issue authors have no write access and the action refuses them by default; the
+          # prompt is fixed, the sandbox read-only, and the only token is read-only on a public repo
+          allow-users: "*"
+
+      - name: Summary
+        env:
+          VERDICT: ${{ steps.codex.outputs.final-message }}
+        run: |
+          {
+            echo '### Duplicate check'
+            echo '```json'
+            echo "${VERDICT}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  flag:
+    needs: classify
+    if: needs.classify.outputs.verdict != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout scripts
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          sparse-checkout: scripts
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.0"
+
+      - name: Comment and label
+        run: bun run scripts/flag-duplicate-issue.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERDICT: ${{ needs.classify.outputs.verdict }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
+          DRY_RUN: ${{ vars.DUPLICATE_CHECK_ENABLED != 'true' }}

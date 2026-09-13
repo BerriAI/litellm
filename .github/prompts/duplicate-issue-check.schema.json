@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["duplicate_of", "confidence", "evidence", "considered"],
+  "properties": {
+    "duplicate_of": {
+      "type": ["integer", "null"],
+      "description": "Issue number of the earlier report this duplicates, or null."
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "evidence": {
+      "type": "string",
+      "description": "One sentence naming the shared root cause and symptom, or why nothing matched."
+    },
+    "considered": {
+      "type": "array",
+      "items": { "type": "integer" }
+    }
+  }
+}
