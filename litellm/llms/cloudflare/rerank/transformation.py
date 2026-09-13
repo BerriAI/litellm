@@ -107,7 +107,7 @@ class CloudflareRerankConfig(BaseRerankConfig):
             )
         return RerankResponseResult(index=index, relevance_score=float(score))
 
-    def validate_environment(
+    def validate_environment(  # pyright: ignore[reportIncompatibleMethodOverride]  # base annotates the return as dict; the read-only Mapping is intentional
         self,
         headers: Mapping[str, object],
         model: str,
@@ -141,7 +141,7 @@ class CloudflareRerankConfig(BaseRerankConfig):
             return f"{cleaned}/{encoded_model}"
         return f"{cleaned}/ai/run/{encoded_model}"
 
-    def get_supported_cohere_rerank_params(
+    def get_supported_cohere_rerank_params(  # pyright: ignore[reportIncompatibleMethodOverride]  # base annotates the return as list; a read-only tuple is intentional
         self,
         model: str,
     ) -> Sequence[str]:
@@ -152,7 +152,7 @@ class CloudflareRerankConfig(BaseRerankConfig):
             "return_documents",
         )
 
-    def map_cohere_rerank_params(
+    def map_cohere_rerank_params(  # pyright: ignore[reportIncompatibleMethodOverride]  # base annotates the return as dict; the read-only Mapping is intentional
         self,
         non_default_params: Mapping[str, object],
         model: str,
@@ -191,7 +191,7 @@ class CloudflareRerankConfig(BaseRerankConfig):
             return_documents=return_documents,
         )
 
-    def transform_rerank_request(
+    def transform_rerank_request(  # pyright: ignore[reportIncompatibleMethodOverride]  # base annotates the return as dict; the read-only Mapping is intentional
         self,
         model: str,
         optional_rerank_params: Mapping[str, object],
@@ -206,11 +206,10 @@ class CloudflareRerankConfig(BaseRerankConfig):
             raise ValueError("documents is required for Cloudflare rerank")
 
         contexts = tuple(self._document_to_context(document) for document in documents)
-        request = CloudflareRerankRequest(query=query, contexts=contexts)
         top_n = optional_rerank_params.get("top_n")
         if top_n is None:
-            return request
-        return CloudflareRerankRequest(**request, top_k=top_n)
+            return CloudflareRerankRequest(query=query, contexts=contexts)
+        return CloudflareRerankRequest(query=query, contexts=contexts, top_k=top_n)
 
     def transform_rerank_response(
         self,
