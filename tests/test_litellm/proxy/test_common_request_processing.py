@@ -127,16 +127,12 @@ class TestProxyBaseLLMRequestProcessing:
         assert json.loads(result.body) == guardrailed_body
 
     @pytest.mark.asyncio
-    async def test_handle_non_streaming_allm_passthrough_route_forwards_upstream_headers(
-        self, monkeypatch
-    ):
+    async def test_handle_non_streaming_allm_passthrough_route_forwards_upstream_headers(self, monkeypatch):
         """The guardrail JSON path must forward upstream response headers (e.g.
         x-amzn-requestid) alongside the x-litellm-* headers, matching the
         non-guardrail passthrough path, while dropping length headers that no
         longer match the rewritten body."""
-        processing_obj = ProxyBaseLLMRequestProcessing(
-            data={"custom_llm_provider": "bedrock"}
-        )
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"custom_llm_provider": "bedrock"})
         monkeypatch.setattr(
             processing_obj,
             "_has_post_call_guardrails_for_passthrough",
@@ -176,14 +172,10 @@ class TestProxyBaseLLMRequestProcessing:
         assert result.headers["content-length"] == str(len(result.body))
 
     @pytest.mark.asyncio
-    async def test_handle_event_stream_allm_passthrough_route_forwards_upstream_headers(
-        self, monkeypatch
-    ):
+    async def test_handle_event_stream_allm_passthrough_route_forwards_upstream_headers(self, monkeypatch):
         """The guardrail event-stream branch must also forward upstream response
         headers alongside the x-litellm-* headers."""
-        processing_obj = ProxyBaseLLMRequestProcessing(
-            data={"custom_llm_provider": "bedrock"}
-        )
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"custom_llm_provider": "bedrock"})
         monkeypatch.setattr(
             processing_obj,
             "_has_post_call_guardrails_for_passthrough",
@@ -225,15 +217,11 @@ class TestProxyBaseLLMRequestProcessing:
         assert result.headers["x-litellm-call-id"] == "test-call-id"
 
     @pytest.mark.asyncio
-    async def test_handle_non_streaming_allm_passthrough_route_applies_response_headers_hook(
-        self, monkeypatch
-    ):
+    async def test_handle_non_streaming_allm_passthrough_route_applies_response_headers_hook(self, monkeypatch):
         """Guardrailed non-streaming passthrough responses must include headers
         injected by post_call_response_headers_hook, matching the headers a
         non-guardrailed passthrough response would carry."""
-        processing_obj = ProxyBaseLLMRequestProcessing(
-            data={"custom_llm_provider": "bedrock"}
-        )
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"custom_llm_provider": "bedrock"})
         monkeypatch.setattr(
             processing_obj,
             "_has_post_call_guardrails_for_passthrough",
@@ -252,9 +240,7 @@ class TestProxyBaseLLMRequestProcessing:
             return kwargs["response"]
 
         proxy_logging_obj.post_call_success_hook = fake_post_call_success_hook
-        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(
-            return_value={"x-litellm-custom": "from-hook"}
-        )
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={"x-litellm-custom": "from-hook"})
 
         result = await processing_obj._handle_non_streaming_allm_passthrough_route(
             response=upstream,
@@ -3299,6 +3285,63 @@ class TestHandleLLMApiExceptionDictDetail:
             return raised
         raise AssertionError("ProxyException was not raised")
 
+    async def test_failure_logging_receives_route_call_type(self):
+        from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+        processor = ProxyBaseLLMRequestProcessing(data={"call_type": "acompletion"})
+        processor._failure_call_type = "aresponses"
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        with pytest.raises(ProxyException):
+            await processor._handle_llm_api_exception(
+                e=Exception("provider failed"),
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+        request_data = proxy_logging_obj.post_call_failure_hook.call_args.kwargs["request_data"]
+        assert request_data["call_type"] == "aresponses"
+
+    async def test_direct_pre_call_failure_logging_receives_route_call_type(self):
+        from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "test-model"})
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=Exception("pre-call"))
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+        proxy_config = MagicMock(spec=ProxyConfig)
+
+        with patch(
+            "litellm.proxy.common_request_processing.add_litellm_data_to_request",
+            new=AsyncMock(return_value={"model": "test-model"}),
+        ):
+            with pytest.raises(Exception, match="pre-call") as exc_info:
+                await processor.common_processing_pre_call_logic(
+                    request=mock_request,
+                    general_settings={},
+                    user_api_key_dict=user_api_key_dict,
+                    proxy_logging_obj=proxy_logging_obj,
+                    proxy_config=proxy_config,
+                    route_type="aresponses",
+                )
+
+        with pytest.raises(ProxyException):
+            await processor._handle_llm_api_exception(
+                e=exc_info.value,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+        request_data = proxy_logging_obj.post_call_failure_hook.call_args.kwargs["request_data"]
+        assert request_data["call_type"] == "aresponses"
+
     async def test_dict_detail_bedrock_shape_preserved(self):
         exc = HTTPException(
             status_code=400,
@@ -3443,9 +3486,7 @@ class TestStreamCloseOnDisconnect:
             finally:
                 closed.set()
 
-        response = _UpstreamClosingStreamingResponse(
-            body(), media_type="text/event-stream"
-        )
+        response = _UpstreamClosingStreamingResponse(body(), media_type="text/event-stream")
 
         async def receive():
             await asyncio.Event().wait()
@@ -3476,9 +3517,7 @@ class TestStreamCloseOnDisconnect:
             finally:
                 closed.set()
 
-        response = _UpstreamClosingStreamingResponse(
-            body(), media_type="text/event-stream"
-        )
+        response = _UpstreamClosingStreamingResponse(body(), media_type="text/event-stream")
 
         async def receive():
             await disconnected.wait()
@@ -3549,9 +3588,7 @@ class TestStreamCloseOnDisconnect:
             finally:
                 inner_closed.set()
 
-        response = await create_response(
-            generator=wrapped(), media_type="text/event-stream", headers={}
-        )
+        response = await create_response(generator=wrapped(), media_type="text/event-stream", headers={})
 
         async def receive():
             await asyncio.Event().wait()
@@ -3783,9 +3820,7 @@ class TestStreamCloseOnDisconnect:
 
         with pytest.raises(_ClientDisconnectedBeforeFirstChunk):
             await asyncio.wait_for(
-                _buffer_first_chunk_honoring_disconnect(
-                    AcloseRaises(), request=self._request_that_disconnects()
-                ),
+                _buffer_first_chunk_honoring_disconnect(AcloseRaises(), request=self._request_that_disconnects()),
                 timeout=5,
             )
 
@@ -3801,9 +3836,7 @@ class TestStreamCloseOnDisconnect:
 
         with pytest.raises(_ClientDisconnectedBeforeFirstChunk):
             await asyncio.wait_for(
-                _buffer_first_chunk_honoring_disconnect(
-                    blocking_gen(), request=self._request_that_disconnects()
-                ),
+                _buffer_first_chunk_honoring_disconnect(blocking_gen(), request=self._request_that_disconnects()),
                 timeout=5,
             )
         assert closed.is_set()
@@ -3819,9 +3852,7 @@ class TestHandleLLMApiExceptionRetryAfter:
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
         proxy_logging_obj = MagicMock()
         proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
-        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(
-            return_value=callback_headers or {}
-        )
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value=callback_headers or {})
 
         try:
             await processor._handle_llm_api_exception(
@@ -3873,9 +3904,7 @@ class TestHandleLLMApiExceptionRetryAfter:
             enable_pre_call_checks=False,
             cooldown_list=[],
         )
-        proxy_exc = await self._invoke(
-            exc, callback_headers={"retry-after": "", "x-custom": "1"}
-        )
+        proxy_exc = await self._invoke(exc, callback_headers={"retry-after": "", "x-custom": "1"})
         assert proxy_exc.headers["retry-after"] == "43"
         assert proxy_exc.headers["x-custom"] == "1"
 
@@ -4071,9 +4100,7 @@ class TestDisconnectGatherCleanup:
         return Request(scope={"type": "http", "headers": []}, receive=receive)
 
     @pytest.mark.asyncio
-    async def test_base_process_llm_request_raises_499_on_client_disconnect(
-        self, monkeypatch
-    ):
+    async def test_base_process_llm_request_raises_499_on_client_disconnect(self, monkeypatch):
         """With cancel_on_disconnect enabled, base_process_llm_request returns 499."""
         import asyncio
 
@@ -4102,9 +4129,7 @@ class TestDisconnectGatherCleanup:
             "common_processing_pre_call_logic",
             AsyncMock(return_value=({"model": "gemini-2.0-flash"}, mock_logging_obj)),
         )
-        monkeypatch.setattr(
-            processing_obj, "_has_post_call_guardrails", MagicMock(return_value=False)
-        )
+        monkeypatch.setattr(processing_obj, "_has_post_call_guardrails", MagicMock(return_value=False))
 
         with pytest.raises(HTTPException) as exc_info:
             await processing_obj.base_process_llm_request(
@@ -4122,9 +4147,7 @@ class TestDisconnectGatherCleanup:
         assert "disconnected" in exc_info.value.detail.lower()
 
     @pytest.mark.asyncio
-    async def test_base_process_llm_request_reraises_cancelled_error_without_client_disconnect(
-        self, monkeypatch
-    ):
+    async def test_base_process_llm_request_reraises_cancelled_error_without_client_disconnect(self, monkeypatch):
         import asyncio
 
         import litellm.proxy.common_request_processing as cpr
@@ -4149,9 +4172,7 @@ class TestDisconnectGatherCleanup:
             "common_processing_pre_call_logic",
             AsyncMock(return_value=({"model": "gemini-2.0-flash"}, mock_logging_obj)),
         )
-        monkeypatch.setattr(
-            processing_obj, "_has_post_call_guardrails", MagicMock(return_value=False)
-        )
+        monkeypatch.setattr(processing_obj, "_has_post_call_guardrails", MagicMock(return_value=False))
         monkeypatch.setattr(
             cpr,
             "route_request",
@@ -4212,9 +4233,7 @@ class TestDisconnectGatherCleanup:
             "common_processing_pre_call_logic",
             AsyncMock(return_value=({"model": "gemini-2.0-flash"}, mock_logging_obj)),
         )
-        monkeypatch.setattr(
-            processing_obj, "_has_post_call_guardrails", MagicMock(return_value=False)
-        )
+        monkeypatch.setattr(processing_obj, "_has_post_call_guardrails", MagicMock(return_value=False))
 
         with pytest.raises(HTTPException):
             await processing_obj.base_process_llm_request(
@@ -4265,9 +4284,7 @@ class TestDisconnectGatherCleanup:
         assert task.done()
 
     @pytest.mark.asyncio
-    async def test_base_process_llm_request_preserves_llm_error_after_gather(
-        self, monkeypatch
-    ):
+    async def test_base_process_llm_request_preserves_llm_error_after_gather(self, monkeypatch):
         import litellm.proxy.common_request_processing as cpr
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
@@ -4296,9 +4313,7 @@ class TestDisconnectGatherCleanup:
             "common_processing_pre_call_logic",
             AsyncMock(return_value=({"model": "gemini-2.0-flash"}, mock_logging_obj)),
         )
-        monkeypatch.setattr(
-            processing_obj, "_has_post_call_guardrails", MagicMock(return_value=False)
-        )
+        monkeypatch.setattr(processing_obj, "_has_post_call_guardrails", MagicMock(return_value=False))
 
         mock_request = MagicMock(spec=Request)
         mock_request.is_disconnected = AsyncMock(return_value=False)
@@ -4335,19 +4350,13 @@ class TestStreamingClientDisconnectLogging:
             "litellm_params": {"metadata": {}},
         }
 
-        recorded = await _record_streaming_client_disconnect_if_needed(
-            mock_request, request_data
-        )
+        recorded = await _record_streaming_client_disconnect_if_needed(mock_request, request_data)
 
         assert recorded is True
         assert request_data["metadata"]["client_disconnected"] is True
+        assert request_data["metadata"]["error_information"]["error_code"] == "499"
         assert (
-            request_data["metadata"]["error_information"]["error_code"] == "499"
-        )
-        assert (
-            mock_logging_obj.model_call_details["litellm_params"]["metadata"][
-                "error_information"
-            ]["error_code"]
+            mock_logging_obj.model_call_details["litellm_params"]["metadata"]["error_information"]["error_code"]
             == "499"
         )
 
@@ -4361,9 +4370,7 @@ class TestStreamingClientDisconnectLogging:
         mock_request.is_disconnected = AsyncMock(return_value=False)
         request_data = {"metadata": {}}
 
-        recorded = await _record_streaming_client_disconnect_if_needed(
-            mock_request, request_data
-        )
+        recorded = await _record_streaming_client_disconnect_if_needed(mock_request, request_data)
 
         assert recorded is False
         assert "client_disconnected" not in request_data["metadata"]
@@ -4388,22 +4395,12 @@ class TestStreamingClientDisconnectLogging:
             "litellm_params": {"metadata": {}},
         }
 
-        recorded = await _record_streaming_client_disconnect_if_needed(
-            mock_request, request_data
-        )
+        recorded = await _record_streaming_client_disconnect_if_needed(mock_request, request_data)
 
         assert recorded is True
         assert request_data["metadata"]["client_disconnected"] is True
-        assert (
-            mock_logging_obj.model_call_details["litellm_params"]["metadata"][
-                "client_disconnected"
-            ]
-            is True
-        )
-        assert (
-            mock_logging_obj.model_call_details["metadata"]["client_disconnected"]
-            is True
-        )
+        assert mock_logging_obj.model_call_details["litellm_params"]["metadata"]["client_disconnected"] is True
+        assert mock_logging_obj.model_call_details["metadata"]["client_disconnected"] is True
 
     @pytest.mark.asyncio
     async def test_record_streaming_client_disconnect_handles_none_request_data_metadata(self):
@@ -4419,15 +4416,11 @@ class TestStreamingClientDisconnectLogging:
             "litellm_params": {"metadata": None},
         }
 
-        recorded = await _record_streaming_client_disconnect_if_needed(
-            mock_request, request_data
-        )
+        recorded = await _record_streaming_client_disconnect_if_needed(mock_request, request_data)
 
         assert recorded is True
         assert request_data["metadata"]["client_disconnected"] is True
-        assert (
-            request_data["litellm_params"]["metadata"]["client_disconnected"] is True
-        )
+        assert request_data["litellm_params"]["metadata"]["client_disconnected"] is True
 
     @pytest.mark.asyncio
     async def test_apply_client_disconnect_metadata_none_returns_early(self):
@@ -4438,9 +4431,7 @@ class TestStreamingClientDisconnectLogging:
         _apply_client_disconnect_metadata(None)
 
     @pytest.mark.asyncio
-    async def test_finalize_streaming_generator_cleanup_fires_deferred_logging(
-        self, monkeypatch
-    ):
+    async def test_finalize_streaming_generator_cleanup_fires_deferred_logging(self, monkeypatch):
         from litellm.proxy.common_request_processing import (
             ProxyBaseLLMRequestProcessing,
         )
@@ -4472,9 +4463,7 @@ class TestStreamingClientDisconnectLogging:
         assert request_data["metadata"]["error_information"]["error_code"] == "499"
 
     @pytest.mark.asyncio
-    async def test_finalize_streaming_generator_cleanup_skips_disconnect_after_completion(
-        self, monkeypatch
-    ):
+    async def test_finalize_streaming_generator_cleanup_skips_disconnect_after_completion(self, monkeypatch):
         from litellm.proxy.common_request_processing import (
             ProxyBaseLLMRequestProcessing,
         )
@@ -4504,9 +4493,7 @@ class TestStreamingClientDisconnectLogging:
         assert "client_disconnected" not in request_data["metadata"]
 
     @pytest.mark.asyncio
-    async def test_async_streaming_data_generator_records_499_on_early_aclose(
-        self, monkeypatch
-    ):
+    async def test_async_streaming_data_generator_records_499_on_early_aclose(self, monkeypatch):
         from litellm.proxy.common_request_processing import (
             ProxyBaseLLMRequestProcessing,
         )
@@ -4521,9 +4508,7 @@ class TestStreamingClientDisconnectLogging:
             yield {"choices": [{"delta": {"content": " there"}}]}
 
         mock_proxy_logging = MagicMock(spec=ProxyLogging)
-        mock_proxy_logging.async_post_call_streaming_iterator_hook = (
-            mock_streaming_iterator
-        )
+        mock_proxy_logging.async_post_call_streaming_iterator_hook = mock_streaming_iterator
         ProxyLogging._callback_capabilities_cache.clear()
 
         mock_request = MagicMock(spec=Request)
@@ -4534,9 +4519,7 @@ class TestStreamingClientDisconnectLogging:
             "model": "gemini-2.0-flash",
             "metadata": {},
             "litellm_params": {"metadata": {}},
-            "litellm_logging_obj": MagicMock(
-                model_call_details={"metadata": {}, "litellm_params": {}}
-            ),
+            "litellm_logging_obj": MagicMock(model_call_details={"metadata": {}, "litellm_params": {}}),
         }
 
         gen = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
@@ -4555,6 +4538,8 @@ class TestStreamingClientDisconnectLogging:
         assert request_data["metadata"]["error_information"]["error_code"] == "499"
 
         ProxyLogging._callback_capabilities_cache.clear()
+
+
 class TestCancelOnDisconnect:
     """
     Coverage for the opt-in `general_settings.cancel_on_disconnect` flag:
@@ -4581,23 +4566,17 @@ class TestCancelOnDisconnect:
         llm_call = asyncio.get_running_loop().create_future()
         disconnect_event = asyncio.Event()
 
-        await _cancel_llm_call_on_client_disconnect(
-            request, llm_call, disconnect_event
-        )
+        await _cancel_llm_call_on_client_disconnect(request, llm_call, disconnect_event)
 
         assert llm_call.cancelled()
         assert disconnect_event.is_set()
 
     async def test_monitor_is_noop_while_client_stays_connected(self):
-        request = self._request(
-            [{"type": "http.request", "body": b"", "more_body": False}]
-        )
+        request = self._request([{"type": "http.request", "body": b"", "more_body": False}])
         llm_call = asyncio.get_running_loop().create_future()
         disconnect_event = asyncio.Event()
 
-        monitor = asyncio.create_task(
-            _cancel_llm_call_on_client_disconnect(request, llm_call, disconnect_event)
-        )
+        monitor = asyncio.create_task(_cancel_llm_call_on_client_disconnect(request, llm_call, disconnect_event))
         await asyncio.sleep(0.01)
 
         assert not monitor.done()
@@ -4616,9 +4595,7 @@ class TestCancelOnDisconnect:
         llm_call = asyncio.get_running_loop().create_future()
         disconnect_event = asyncio.Event()
 
-        await _cancel_llm_call_on_client_disconnect(
-            request, llm_call, disconnect_event
-        )
+        await _cancel_llm_call_on_client_disconnect(request, llm_call, disconnect_event)
 
         assert not llm_call.cancelled()
         assert not disconnect_event.is_set()
@@ -4633,9 +4610,7 @@ class TestCancelOnDisconnect:
         with pytest.raises(asyncio.CancelledError):
             await _await_llm_call_cancelling_on_disconnect(request, llm_call)
 
-    async def _drive_base_process_llm_request(
-        self, monkeypatch, general_settings: dict, llm_call, request: Request
-    ):
+    async def _drive_base_process_llm_request(self, monkeypatch, general_settings: dict, llm_call, request: Request):
         from litellm.proxy._types import UserAPIKeyAuth
 
         logging_obj = MagicMock()
@@ -4644,9 +4619,7 @@ class TestCancelOnDisconnect:
         logging_obj._on_deferred_stream_complete = None
         logging_obj.cost_breakdown = None
 
-        processor = ProxyBaseLLMRequestProcessing(
-            data={"model": "fake-model", "litellm_logging_obj": logging_obj}
-        )
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "fake-model", "litellm_logging_obj": logging_obj})
 
         proxy_logging_obj = MagicMock(spec=ProxyLogging)
         proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
@@ -4654,9 +4627,7 @@ class TestCancelOnDisconnect:
         proxy_logging_obj.post_call_success_hook = AsyncMock(
             side_effect=lambda data, user_api_key_dict, response: response
         )
-        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(
-            return_value=None
-        )
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value=None)
 
         async def fake_route_request(**kwargs):
             return llm_call()
@@ -4735,9 +4706,7 @@ class TestCancelOnDisconnect:
 
         with pytest.raises(ProxyException) as exc_info:
             await processor._handle_llm_api_exception(
-                e=HTTPException(
-                    status_code=499, detail="Client disconnected the request"
-                ),
+                e=HTTPException(status_code=499, detail="Client disconnected the request"),
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
                 proxy_logging_obj=proxy_logging_obj,
             )
@@ -4803,7 +4772,9 @@ class TestAllmPassthroughRoutePostCallGuardrails:
         proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
         monkeypatch.setattr(proxy_logging_obj, "post_call_success_hook", capture_hook)
 
-        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails_for_passthrough", return_value=True):
+        with patch.object(
+            ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails_for_passthrough", return_value=True
+        ):
             processing_obj = ProxyBaseLLMRequestProcessing(data={})
             result = await processing_obj._handle_non_streaming_allm_passthrough_route(
                 response=httpx_response,
@@ -4853,7 +4824,9 @@ class TestAllmPassthroughRoutePostCallGuardrails:
         proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
         monkeypatch.setattr(proxy_logging_obj, "post_call_success_hook", non_dict_hook)
 
-        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails_for_passthrough", return_value=True):
+        with patch.object(
+            ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails_for_passthrough", return_value=True
+        ):
             processing_obj = ProxyBaseLLMRequestProcessing(data={})
             result = await processing_obj._handle_non_streaming_allm_passthrough_route(
                 response=httpx_response,
@@ -4891,7 +4864,9 @@ class TestAllmPassthroughRoutePostCallGuardrails:
         hook_spy = AsyncMock()
         monkeypatch.setattr(proxy_logging_obj, "post_call_success_hook", hook_spy)
 
-        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails_for_passthrough", return_value=True):
+        with patch.object(
+            ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails_for_passthrough", return_value=True
+        ):
             processing_obj = ProxyBaseLLMRequestProcessing(data={})
             result = await processing_obj._handle_non_streaming_allm_passthrough_route(
                 response=httpx_response,
@@ -4932,7 +4907,9 @@ class TestAllmPassthroughRoutePostCallGuardrails:
         hook_spy = AsyncMock()
         monkeypatch.setattr(proxy_logging_obj, "post_call_success_hook", hook_spy)
 
-        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails_for_passthrough", return_value=False):
+        with patch.object(
+            ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails_for_passthrough", return_value=False
+        ):
             processing_obj = ProxyBaseLLMRequestProcessing(data={})
             result = await processing_obj._handle_non_streaming_allm_passthrough_route(
                 response=httpx_response,
@@ -5044,7 +5021,9 @@ class TestEventStreamAllmPassthroughRoute:
             "content-length": "99",
         }
 
-        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails_for_passthrough", return_value=True):
+        with patch.object(
+            ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails_for_passthrough", return_value=True
+        ):
             processing_obj = ProxyBaseLLMRequestProcessing(data={})
             result = await processing_obj._handle_non_streaming_allm_passthrough_route(
                 response=mock_response,
@@ -5075,9 +5054,7 @@ class TestAllmPassthroughStreamingProviderGate:
     de-anonymized.
     """
 
-    def _build_processing_obj(
-        self, custom_llm_provider: str, endpoint: str = ""
-    ) -> ProxyBaseLLMRequestProcessing:
+    def _build_processing_obj(self, custom_llm_provider: str, endpoint: str = "") -> ProxyBaseLLMRequestProcessing:
         logging_obj = MagicMock()
         logging_obj.litellm_call_id = "call-123"
         logging_obj.cost_breakdown = None
@@ -5164,14 +5141,17 @@ class TestAllmPassthroughStreamingProviderGate:
         processing_obj = self._build_processing_obj("anthropic")
         chunks = [b"chunk-1", b"chunk-2"]
 
-        with patch.object(
-            ProxyBaseLLMRequestProcessing,
-            "_has_post_call_guardrails",
-            return_value=False,
-        ), patch.object(
-            ProxyBaseLLMRequestProcessing,
-            "_has_post_call_guardrails_for_passthrough",
-            return_value=True,
+        with (
+            patch.object(
+                ProxyBaseLLMRequestProcessing,
+                "_has_post_call_guardrails",
+                return_value=False,
+            ),
+            patch.object(
+                ProxyBaseLLMRequestProcessing,
+                "_has_post_call_guardrails_for_passthrough",
+                return_value=True,
+            ),
         ):
             result = await self._run(processing_obj, monkeypatch, chunks)
 
@@ -5180,27 +5160,27 @@ class TestAllmPassthroughStreamingProviderGate:
         assert streamed == chunks
 
     @pytest.mark.asyncio
-    async def test_bedrock_converse_stream_is_buffered_through_handler(
-        self, monkeypatch
-    ):
-        processing_obj = self._build_processing_obj(
-            "bedrock", "model/us.amazon.nova-lite-v1:0/converse-stream"
-        )
+    async def test_bedrock_converse_stream_is_buffered_through_handler(self, monkeypatch):
+        processing_obj = self._build_processing_obj("bedrock", "model/us.amazon.nova-lite-v1:0/converse-stream")
         chunks = [b"raw-1", b"raw-2"]
 
-        with patch.object(
-            ProxyBaseLLMRequestProcessing,
-            "_has_post_call_guardrails",
-            return_value=False,
-        ), patch.object(
-            ProxyBaseLLMRequestProcessing,
-            "_has_post_call_guardrails_for_passthrough",
-            return_value=True,
-        ), patch(
-            "litellm.llms.bedrock.passthrough.guardrail_translation.handler."
-            "BedrockPassthroughGuardrailHandler.de_anonymize_event_stream",
-            new=AsyncMock(return_value=b"modified-body"),
-        ) as mock_handler:
+        with (
+            patch.object(
+                ProxyBaseLLMRequestProcessing,
+                "_has_post_call_guardrails",
+                return_value=False,
+            ),
+            patch.object(
+                ProxyBaseLLMRequestProcessing,
+                "_has_post_call_guardrails_for_passthrough",
+                return_value=True,
+            ),
+            patch(
+                "litellm.llms.bedrock.passthrough.guardrail_translation.handler."
+                "BedrockPassthroughGuardrailHandler.de_anonymize_event_stream",
+                new=AsyncMock(return_value=b"modified-body"),
+            ) as mock_handler,
+        ):
             result = await self._run(processing_obj, monkeypatch, chunks)
 
         assert isinstance(result, Response)
@@ -5216,19 +5196,23 @@ class TestAllmPassthroughStreamingProviderGate:
         )
         chunks = [b"raw-1", b"raw-2"]
 
-        with patch.object(
-            ProxyBaseLLMRequestProcessing,
-            "_has_post_call_guardrails",
-            return_value=False,
-        ), patch.object(
-            ProxyBaseLLMRequestProcessing,
-            "_has_post_call_guardrails_for_passthrough",
-            return_value=True,
-        ), patch(
-            "litellm.llms.bedrock.passthrough.guardrail_translation.handler."
-            "BedrockPassthroughGuardrailHandler.de_anonymize_event_stream",
-            new=AsyncMock(return_value=b"modified-body"),
-        ) as mock_handler:
+        with (
+            patch.object(
+                ProxyBaseLLMRequestProcessing,
+                "_has_post_call_guardrails",
+                return_value=False,
+            ),
+            patch.object(
+                ProxyBaseLLMRequestProcessing,
+                "_has_post_call_guardrails_for_passthrough",
+                return_value=True,
+            ),
+            patch(
+                "litellm.llms.bedrock.passthrough.guardrail_translation.handler."
+                "BedrockPassthroughGuardrailHandler.de_anonymize_event_stream",
+                new=AsyncMock(return_value=b"modified-body"),
+            ) as mock_handler,
+        ):
             result = await self._run(processing_obj, monkeypatch, chunks)
 
         assert isinstance(result, StreamingResponse)
@@ -5833,7 +5817,6 @@ class TestCostHeadersForCallsPricedAtZero:
 
 
 class TestPreCallWithFallbacksOnLocalRateLimit:
-
     @pytest.mark.asyncio
     async def test_fallback_triggered_on_local_rate_limit(self):
         from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
@@ -5985,9 +5968,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
 
         user_api_key_dict = MagicMock()
-        user_api_key_dict.router_settings = {
-            "fallbacks": [{"gpt-4": ["claude-3-haiku"]}]
-        }
+        user_api_key_dict.router_settings = {"fallbacks": [{"gpt-4": ["claude-3-haiku"]}]}
 
         with patch.object(
             processor,
@@ -6018,9 +5999,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
-        processor = ProxyBaseLLMRequestProcessing(
-            data={"model": "gpt-4", "disable_fallbacks": True}
-        )
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4", "disable_fallbacks": True})
 
         async def mock_pre_call_logic(**kwargs):
             raise ProxyRateLimitError(
@@ -6146,9 +6125,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
         # Real per-key per-model TPM limiter + a key carrying the customer's
         # `model_tpm_limit` metadata (only the primary is capped).
-        limiter = _PROXY_MaxParallelRequestsHandler(
-            internal_usage_cache=InternalUsageCache(DualCache())
-        )
+        limiter = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
         user_api_key_dict = UserAPIKeyAuth(
             api_key="sk-lit3890",
             metadata={"model_tpm_limit": {primary_model: 100}},
@@ -6156,10 +6133,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
         # Pre-seed the primary's per-model token counter at the cap so the very
         # next request trips it. The counter key uses the *hashed* api_key.
-        counter_key = (
-            f"{user_api_key_dict.api_key}::{primary_model}"
-            f"::{precise_minute}::request_count"
-        )
+        counter_key = f"{user_api_key_dict.api_key}::{primary_model}::{precise_minute}::request_count"
         await limiter.internal_usage_cache.async_set_cache(
             key=counter_key,
             value={"current_requests": 0, "current_tpm": 100, "current_rpm": 0},
@@ -6190,9 +6164,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         mock_router = MagicMock()
         mock_router.fallbacks = [{primary_model: [fallback_model]}]
 
-        with patch(
-            "litellm.proxy.hooks.parallel_request_limiter.datetime", _FrozenClock
-        ):
+        with patch("litellm.proxy.hooks.parallel_request_limiter.datetime", _FrozenClock):
             with patch.object(
                 processor,
                 "common_processing_pre_call_logic",
@@ -6222,9 +6194,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
         # Sanity-check the premise: the limiter genuinely raises a
         # ProxyRateLimitError for the capped primary under the frozen clock.
-        with patch(
-            "litellm.proxy.hooks.parallel_request_limiter.datetime", _FrozenClock
-        ):
+        with patch("litellm.proxy.hooks.parallel_request_limiter.datetime", _FrozenClock):
             with pytest.raises(ProxyRateLimitError):
                 await limiter.async_pre_call_hook(
                     user_api_key_dict=user_api_key_dict,
