@@ -54,8 +54,7 @@ class BaseLLMModelInfo(ABC):
         """
         Maps the model name a user sends to the key `litellm.model_cost` stores it under, when the two differ.
         `get_model_info` tries this key once the exact `model` and `provider/model` keys miss. The default None means
-        the provider's user-facing names already match the cost map, so there is nothing extra to try. Fireworks
-        overrides it: `deepseek-r1` -> `fireworks_ai/accounts/fireworks/models/deepseek-r1`.
+        the provider's user-facing names already match the cost map, so there is nothing extra to try.
         """
         return None
 
