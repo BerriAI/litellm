@@ -259,3 +259,73 @@ async def test_native_fields_forwarded_on_async_stream():
     body = mock_post.call_args.kwargs["json"]
     assert body["safetySettings"] == safety_settings
     assert "safetySettings" not in body.get("generationConfig", {})
+
+
+def _generate_content_logging_obj(call_id: str):
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    return Logging(
+        model="gemini-2.0-flash",
+        messages=[],
+        stream=False,
+        call_type="generate_content",
+        start_time=datetime.now(),
+        litellm_call_id=call_id,
+        function_id=call_id,
+    )
+
+
+@pytest.mark.parametrize("configured_location", ["global", "us-east5"])
+def test_vertex_location_recorded_for_cost_calculation(configured_location):
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/40692
+
+    The Vertex location decides the regional pricing uplift. The completion and
+    anthropic_messages paths record it on the logging object so the cost
+    calculator can price against the configured region. generate_content did
+    not, so a model configured `vertex_location: global` was priced as
+    us-central1 and cost 10% more than the same model over /v1/chat/completions.
+    """
+    from litellm.google_genai.main import GenerateContentHelper
+
+    logging_obj = _generate_content_logging_obj("vertex-location-test")
+
+    GenerateContentHelper.setup_generate_content_call(
+        model="vertex_ai/gemini-2.0-flash",
+        contents=[{"role": "user", "parts": [{"text": "say ok"}]}],
+        custom_llm_provider="vertex_ai",
+        litellm_logging_obj=logging_obj,
+        litellm_call_id="vertex-location-test",
+        vertex_project="test-project",
+        vertex_location=configured_location,
+    )
+
+    recorded = logging_obj.model_call_details["litellm_params"]
+    assert recorded.get("vertex_location") == configured_location, (
+        "the configured vertex_location must reach the cost calculator; "
+        f"got {recorded.get('vertex_location')!r}"
+    )
+
+
+def test_vertex_location_absent_when_not_configured():
+    """
+    Nothing configured means nothing recorded, so the cost calculator keeps its
+    own fallback rather than being handed an empty value here.
+    """
+    from litellm.google_genai.main import GenerateContentHelper
+
+    logging_obj = _generate_content_logging_obj("vertex-location-unset")
+
+    GenerateContentHelper.setup_generate_content_call(
+        model="gemini/gemini-2.0-flash",
+        contents=[{"role": "user", "parts": [{"text": "say ok"}]}],
+        custom_llm_provider="gemini",
+        litellm_logging_obj=logging_obj,
+        litellm_call_id="vertex-location-unset",
+        api_key="test-key",
+    )
+
+    recorded = logging_obj.model_call_details["litellm_params"]
+    assert "vertex_location" not in recorded
