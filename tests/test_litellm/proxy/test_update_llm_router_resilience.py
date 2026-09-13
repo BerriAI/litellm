@@ -386,8 +386,8 @@ class TestAddConfigModels:
 
         with (
             patch.object(proxy_config, "get_config_state", return_value={}),
-            patch("litellm.proxy.proxy_server.user_config_file_path", str(config_file_path)),
-            patch("litellm.proxy.proxy_server.llm_router", mock_router),
+            patch("litellm.proxy.proxy_server.user_config_file_path", str(config_file_path)),  # test-quality-ok: proxy router test mock
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),  # test-quality-ok: proxy router test mock
         ):
             result = proxy_config._add_config_models(config_models=None)
 
@@ -401,13 +401,13 @@ class TestAddConfigModels:
         # No config_state models and no readable config file -> config_models stays empty
         with (
             patch.object(proxy_config, "get_config_state", return_value={}),
-            patch("litellm.proxy.proxy_server.user_config_file_path", str(tmp_path / "missing.yaml")),
-            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_config_file_path", str(tmp_path / "missing.yaml")),  # test-quality-ok: proxy router test mock
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),  # test-quality-ok: proxy router test mock
         ):
             assert proxy_config._add_config_models(config_models=None) == 0
 
         # Models are present but llm_router hasn't been initialized yet
-        with patch("litellm.proxy.proxy_server.llm_router", None):
+        with patch("litellm.proxy.proxy_server.llm_router", None):  # test-quality-ok: proxy router test mock
             assert (
                 proxy_config._add_config_models(
                     config_models=[{"model_name": "m", "litellm_params": {"model": "gpt-4o-mini"}}]
@@ -421,7 +421,7 @@ class TestAddConfigModels:
         mock_router = MagicMock()
         mock_router.upsert_deployment.return_value = True
 
-        with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router):  # test-quality-ok: proxy router test mock
             result = proxy_config._add_config_models(
                 config_models=[
                     {
