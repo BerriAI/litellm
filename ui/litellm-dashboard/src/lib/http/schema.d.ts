@@ -28542,6 +28542,61 @@ export interface components {
              */
             tier: string;
         };
+        /** LLMV2Calibration */
+        LLMV2Calibration: {
+            capable: components["schemas"]["LLMV2ProbabilityCalibration"];
+            efficient: components["schemas"]["LLMV2ProbabilityCalibration"];
+            /**
+             * Prompt Version
+             * @constant
+             */
+            prompt_version: "llm-v2-1";
+            /** Version */
+            version: string;
+        };
+        /** LLMV2Config */
+        LLMV2Config: {
+            calibration?: components["schemas"]["LLMV2Calibration"] | null;
+            /** Capable Profile */
+            capable_profile: string;
+            /**
+             * Capable Tier
+             * @default REASONING
+             */
+            capable_tier: string;
+            /** Efficient Profile */
+            efficient_profile: string;
+            /**
+             * Efficient Tier
+             * @default SIMPLE
+             */
+            efficient_tier: string;
+            /** Harness */
+            harness: string;
+            /**
+             * Max Output Tokens
+             * @default 1024
+             */
+            max_output_tokens: number;
+            /**
+             * Max Quality Gap
+             * @description Maximum estimated success loss allowed for efficient.
+             */
+            max_quality_gap: number;
+            /**
+             * Response Format
+             * @default json_schema
+             * @enum {string}
+             */
+            response_format: "json_schema" | "json_object";
+        };
+        /** LLMV2ProbabilityCalibration */
+        LLMV2ProbabilityCalibration: {
+            /** Intercept */
+            intercept: number;
+            /** Slope */
+            slope: number;
+        };
         /** LakeraCategoryThresholds */
         LakeraCategoryThresholds: {
             /** Jailbreak */
@@ -35171,7 +35226,7 @@ export interface components {
              * @default heuristic
              * @enum {string}
              */
-            classifier_type: "heuristic" | "heuristic_v2" | "llm" | "custom" | "heuristic_first" | "hybrid";
+            classifier_type: "heuristic" | "heuristic_v2" | "llm" | "llm_v2" | "custom" | "heuristic_first" | "hybrid";
             /**
              * Code Keywords
              * @description Keywords indicating code-related content
@@ -35265,6 +35320,8 @@ export interface components {
              * @description Rules that force a specific tier when their keywords match the prompt
              */
             keyword_tier_rules?: components["schemas"]["KeywordTierRule"][] | null;
+            /** @description Experimental joint task-demand and solver-capability forecasting for classifier_type llm_v2. */
+            llm_v2_config?: components["schemas"]["LLMV2Config"] | null;
             /**
              * Match Threshold
              * @description Minimum cosine similarity for a semantic keyword match
@@ -36520,7 +36577,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "llm_v2_classifier" | "llm_v2_fallback" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */

@@ -433,6 +433,18 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     });
   };
 
+  if (classifierType === "llm_v2") {
+    return (
+      <div className="rounded-md border p-4 text-sm">
+        <strong>LLM V2 classifier (experimental)</strong>
+        <p className="mt-2 text-muted-foreground">
+          Combines task demands and model capability in one forecast. Its solver profiles and quality allowance are
+          configured through the API. Saving this router preserves those settings
+        </p>
+      </div>
+    );
+  }
+
   return (
     <>
       <ClassifierTypeRadios value={value} classifierType={classifierType} onTypeChange={handleClassifierTypeChange} />

@@ -529,3 +529,11 @@ Technical code keywords are detected case-insensitively and include:
 | Best For | Cost optimization | Intent routing |
 
 Use `complexity_router` when you want to optimize costs by routing simple queries to cheaper models. Use `auto_router` when you need semantic intent matching (e.g., routing "customer support" queries to a specialized model).
+
+## Experimental LLM V2 classifier
+
+LLM V2 combines task demands, available verification, and model capability in one judge call. It forecasts whole-task success for an efficient and a capable solver. The router compares their probabilities against an explicitly configured quality allowance and selects the capable solver when classification fails
+
+This classifier is intended for evaluation. Its probabilities are raw forecasts unless matching per-model calibration is supplied, and an estimated quality allowance is not a measured quality guarantee. It requires two model groups, profiles for both solvers, and a description of their harness and budget. Adaptive selection is disabled for this mode so it cannot override the forecast. Existing user-turn classification can reuse a decision until the user changes the task
+
+V2 reads all human task messages and follow-ups, without the complexity classifier's prior-turn truncation or assistant summaries. Long task histories can therefore increase judge cost or exceed its context window, which falls back to the capable solver. Profiles must describe every deployment behind their model group and calibration must match the prompt, solver settings, and harness being evaluated
