@@ -72,6 +72,7 @@ def safe_dumps(
             return result
         else:
             # Fall back to string conversion for non-serializable objects.
+            seen.remove(id(obj))
             try:
                 return _transform(key, strip_null_bytes(str(obj)))
             except Exception:
