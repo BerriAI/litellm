@@ -20,6 +20,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.rerank import (
     RerankBilledUnits,
     RerankResponse,
+    RerankResponseDocument,
     RerankResponseMeta,
     RerankResponseResult,
 )
@@ -172,6 +173,17 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         except Exception as e:
             raise ValueError(f"Failed to parse response: {e}")
 
+        # Determine whether to return documents (defaults to True)
+        return_documents = True
+        if "return_documents" in optional_params and optional_params["return_documents"] is not None:
+            return_documents = bool(optional_params["return_documents"])
+        elif "return_documents" in request_data and request_data["return_documents"] is not None:
+            return_documents = bool(request_data["return_documents"])
+        elif "ignoreRecordDetailsInResponse" in request_data:
+            return_documents = not bool(request_data["ignoreRecordDetailsInResponse"])
+        elif "return_documents" in litellm_params and litellm_params["return_documents"] is not None:
+            return_documents = bool(litellm_params["return_documents"])
+
         # Extract records from response
         records: Final = raw_response_json.get("records", [])
 
@@ -179,23 +191,16 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         results: Final = []
         for record in records:
             # Handle both cases: with full details and with only IDs
-            if "score" in record:
-                # Full response with score and details
-                results.append(
-                    {
-                        "index": int(record["id"]),
-                        "relevance_score": record.get("score", 0.0),
-                    }
-                )
-            else:
-                # Response with only IDs (when ignoreRecordDetailsInResponse=true)
-                # We can't provide a relevance score, so we'll use a default
-                results.append(
-                    {
-                        "index": int(record["id"]),
-                        "relevance_score": 1.0,  # Default score when details are ignored
-                    }
-                )
+            score_val = record.get("score", 0.0) if "score" in record else 1.0
+            doc_text = record.get("content")
+            result_item = {
+                "index": int(record["id"]),
+                "relevance_score": score_val,
+            }
+            if return_documents and doc_text is not None:
+                result_item["document"] = RerankResponseDocument(text=doc_text)
+
+            results.append(result_item)
 
         # Sort by relevance score (descending)
         results.sort(key=lambda x: x["relevance_score"], reverse=True)
@@ -204,9 +209,10 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         # Convert results to proper RerankResponseResult objects
         rerank_results: Final = []
         for result in results:
-            rerank_results.append(
-                RerankResponseResult(index=result["index"], relevance_score=result["relevance_score"])
-            )
+            rerank_result = RerankResponseResult(index=result["index"], relevance_score=result["relevance_score"])
+            if "document" in result:
+                rerank_result["document"] = result["document"]
+            rerank_results.append(rerank_result)
 
         # Create meta object
         meta: Final = RerankResponseMeta(billed_units=RerankBilledUnits(search_units=len(records)))
