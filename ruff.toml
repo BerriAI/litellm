@@ -5,9 +5,10 @@ lint.ignore = ["F405", "E402", "F403"]
 lint.extend-select = [
     "T20", "PGH004", "RUF008", "RUF009", "RUF100",
     "B033", "FURB136", "FURB168", "FURB188", "I001", "PERF402", "PIE790", "PIE800", "PLC0208",
-    "PLR0402", "PLR1711", "PLR1730", "PLR2044", "PYI030", "PYI041", "PYI064", "RET501", "RUF010",
-    "RUF022", "RUF023", "RUF051", "SIM114", "SIM118", "TC005", "UP006", "UP007", "UP008", "UP012",
-    "UP018", "UP024", "UP032", "UP034", "UP035", "UP037", "UP045",
+    "PLR0402", "PLR1711", "PLR1730", "PLR2044", "PLW0133", "PYI030", "PYI041", "PYI064", "RET501",
+    "RUF010", "RUF022", "RUF023", "RUF051", "S113", "SIM114", "SIM118", "TC005", "UP006", "UP007",
+    "UP008",
+    "UP012", "UP018", "UP024", "UP032", "UP034", "UP035", "UP037", "UP045",
 ]
 # RUF100 (unused-noqa) only knows the rules enabled in THIS config, so it would strip
 # `# noqa` directives that protect rules enforced elsewhere. List those codes as external

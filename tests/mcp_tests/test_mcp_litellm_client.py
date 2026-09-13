@@ -1,19 +1,13 @@
 # Create server parameters for stdio connection
 import os
-import sys
 import pytest
 import asyncio
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-import os
 from litellm import experimental_mcp_client
 import litellm
-import pytest
 import json
 
 

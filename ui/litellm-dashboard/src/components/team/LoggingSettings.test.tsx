@@ -1,7 +1,18 @@
+import { readFileSync } from "fs";
+import { resolve } from "path";
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import userEvent from "@testing-library/user-event";
 import { renderWithProviders, screen, fireEvent } from "../../../tests/test-utils";
 import LoggingSettings from "./LoggingSettings";
+
+const SOURCE_PATH = resolve(process.cwd(), "src/components/team/LoggingSettings.tsx");
+
+const HARDCODED_PALETTE =
+  /\b(?:text|bg|border|hover:bg|hover:text|hover:border|dark:bg|dark:text|dark:border|ring|divide|fill|stroke)-(?:gray|slate|zinc|neutral|stone|red|blue|green|yellow|amber|orange|indigo|purple|pink|rose|teal|cyan|sky|violet|fuchsia|lime|emerald)-\d+(?:\/\d+)?\b/g;
+
+const SEMANTIC_TOKEN =
+  /\b(?:text|bg|border|hover:bg|hover:text|ring|divide|fill|stroke)-(?:foreground|muted-foreground|muted|background|card|popover|primary|secondary|destructive|border|input|accent|ring)(?:-foreground)?(?:\/\d+)?\b/g;
 
 describe("LoggingSettings", () => {
   beforeEach(() => {
@@ -109,6 +120,29 @@ describe("LoggingSettings", () => {
     expect(updatedConfig[0].callback_vars.langsmith_sampling_rate).toBe("0.3"); // Preserves initial value
   });
 
+  it("masks a sensitive parameter until the reveal toggle is used", async () => {
+    const user = userEvent.setup({ delay: null });
+    const initialValue = [
+      {
+        callback_name: "langsmith",
+        callback_type: "success",
+        callback_vars: { langsmith_api_key: "sk-secret-value" },
+      },
+    ];
+
+    renderWithProviders(<LoggingSettings value={initialValue} onChange={vi.fn()} />);
+
+    const apiKeyInput = screen.getByPlaceholderText("os.environ/LANGSMITH_API_KEY");
+    expect(apiKeyInput).toHaveAttribute("type", "password");
+
+    await user.click(screen.getByRole("button", { name: "Show password" }));
+    expect(apiKeyInput).toHaveAttribute("type", "text");
+    expect(apiKeyInput).toHaveValue("sk-secret-value");
+
+    await user.click(screen.getByRole("button", { name: "Hide password" }));
+    expect(apiKeyInput).toHaveAttribute("type", "password");
+  });
+
   it("shows the bundled logo in the integration card header", () => {
     const initialValue = [
       {
@@ -135,8 +169,51 @@ describe("LoggingSettings", () => {
     renderWithProviders(<LoggingSettings value={initialValue} onChange={vi.fn()} />);
 
     expect(screen.getByText("Custom Callback API Configuration")).toBeInTheDocument();
-    expect(screen.queryByAltText("Custom Callback API logo")).toBeNull();
+    expect(screen.queryByAltText("Custom Callback API logo")).not.toBeInTheDocument();
     expect(screen.getByText("C")).toBeInTheDocument();
+  });
+
+  it("styles itself from semantic tokens instead of hardcoded palette classes", () => {
+    const source = readFileSync(SOURCE_PATH, "utf8");
+
+    expect(source).toContain("const LoggingSettings");
+    expect(source.match(SEMANTIC_TOKEN) ?? []).not.toHaveLength(0);
+    expect(source.match(HARDCODED_PALETTE) ?? []).toHaveLength(0);
+  });
+
+  it("keeps the remove button destructive on hover instead of the ghost variant's foreground", () => {
+    const initialValue = [
+      {
+        callback_name: "langsmith",
+        callback_type: "success",
+        callback_vars: {},
+      },
+    ];
+
+    renderWithProviders(<LoggingSettings value={initialValue} onChange={vi.fn()} />);
+
+    const remove = screen.getByRole("button", { name: "Remove" });
+    expect(remove).toHaveClass("hover:text-destructive/80");
+    expect(remove).not.toHaveClass("hover:text-foreground");
+  });
+
+  it("reports the chosen event type when a different option is picked", async () => {
+    const user = userEvent.setup({ delay: null });
+    const mockOnChange = vi.fn();
+    const initialValue = [
+      {
+        callback_name: "langsmith",
+        callback_type: "success",
+        callback_vars: {},
+      },
+    ];
+
+    renderWithProviders(<LoggingSettings value={initialValue} onChange={mockOnChange} />);
+
+    await user.click(screen.getByRole("combobox", { name: "Event Type" }));
+    await user.click(await screen.findByRole("option", { name: "Failure Only" }));
+
+    expect(mockOnChange).toHaveBeenCalledWith([expect.objectContaining({ callback_type: "failure" })]);
   });
 
   it("correctly handles numerical input with decimal values", () => {

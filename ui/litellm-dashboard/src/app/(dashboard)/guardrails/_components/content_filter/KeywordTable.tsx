@@ -1,10 +1,10 @@
-import { DeleteOutlined } from "@ant-design/icons";
+import { Trash2 } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Button, Select } from "antd";
 import React from "react";
 import { DataTable } from "@/components/shared/DataTable";
-
-const { Option } = Select;
+import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ACTION_ITEMS } from "./action_options";
 
 interface BlockedWord {
   id: string;
@@ -31,13 +31,20 @@ const KeywordTable: React.FC<KeywordTableProps> = ({ keywords, onActionChange, o
       size: 150,
       cell: ({ row }) => (
         <Select
+          items={ACTION_ITEMS}
           value={row.original.action}
-          onChange={(value) => onActionChange(row.original.id, "action", value)}
-          style={{ width: 120 }}
-          size="small"
+          onValueChange={(value: string | null) => value && onActionChange(row.original.id, "action", value)}
         >
-          <Option value="BLOCK">Block</Option>
-          <Option value="MASK">Mask</Option>
+          <SelectTrigger size="sm" className="w-[120px]" aria-label="Action">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {ACTION_ITEMS.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
         </Select>
       ),
     },
@@ -51,7 +58,8 @@ const KeywordTable: React.FC<KeywordTableProps> = ({ keywords, onActionChange, o
       id: "actions",
       size: 100,
       cell: ({ row }) => (
-        <Button type="text" danger size="small" icon={<DeleteOutlined />} onClick={() => onRemove(row.original.id)}>
+        <Button variant="ghost" size="sm" onClick={() => onRemove(row.original.id)}>
+          <Trash2 />
           Delete
         </Button>
       ),
@@ -59,7 +67,7 @@ const KeywordTable: React.FC<KeywordTableProps> = ({ keywords, onActionChange, o
   ];
 
   if (keywords.length === 0) {
-    return <div style={{ textAlign: "center", padding: "40px 0", color: "#999" }}>No keywords added.</div>;
+    return <div className="py-10 text-center text-muted-foreground">No keywords added.</div>;
   }
 
   return <DataTable data={keywords} columns={columns} getRowId={(row) => row.id} size="compact" />;

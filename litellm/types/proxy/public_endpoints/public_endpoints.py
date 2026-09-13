@@ -1,6 +1,7 @@
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class PublicModelHubInfo(BaseModel):
@@ -42,6 +43,8 @@ class AgentCredentialField(BaseModel):
     options: list[str] | None = None
     default_value: str | None = None
     include_in_litellm_params: bool | None = None
+    validation_pattern: str | None = None
+    validation_message: str | None = None
 
 
 class AgentCreateInfo(BaseModel):
@@ -68,3 +71,53 @@ class SupportedEndpoint(BaseModel):
 
 class SupportedEndpointsResponse(BaseModel):
     endpoints: list[SupportedEndpoint]
+
+
+class AutoRouterPresetTiers(BaseModel):
+    """Exactly the four built-in tiers the dashboard's preset prefill can apply.
+
+    extra="forbid" on purpose: a tier name this dashboard cannot apply would grey out or crash the
+    picker, so such a catalog is rejected wholesale and the bundled one serves instead.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    SIMPLE: Sequence[str]
+    MEDIUM: Sequence[str]
+    COMPLEX: Sequence[str]
+    REASONING: Sequence[str]
+
+
+class AutoRouterPresetConfig(BaseModel):
+    """The complexity_router_config a preset prefills.
+
+    Only tiers is validated, because every dashboard consumer dereferences it; everything else
+    passes through verbatim with unknown fields kept (extra="allow"), so a catalog published after
+    this proxy shipped still serves its new fields intact.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    tiers: AutoRouterPresetTiers
+
+
+class AutoRouterPresetRecord(BaseModel):
+    """One auto-router preset as served to the dashboard's template picker."""
+
+    model_config = ConfigDict(extra="allow")
+
+    label: str
+    description: str
+    complexity_router_config: AutoRouterPresetConfig
+
+
+class ComplexityScorerDefaults(BaseModel):
+    """The complexity router's shipped heuristic scorer defaults.
+
+    The dashboard prefills its Advanced scoring controls from these rather than keeping its own copy, so
+    a recalibration of the defaults cannot leave the form reporting numbers the router no longer uses.
+    """
+
+    tier_boundaries: Mapping[str, float]
+    token_thresholds: Mapping[str, int]
+    dimension_weights: Mapping[str, float]
