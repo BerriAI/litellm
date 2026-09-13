@@ -10,6 +10,7 @@ from fastapi import HTTPException
 
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
+from litellm.constants import DEFAULT_IN_MEMORY_TTL
 from litellm.proxy._types import (
     LiteLLM_OrganizationTable,
     LiteLLM_TeamMembership,
@@ -131,6 +132,17 @@ def _cache(redis: RedisCache | None) -> UserApiKeyCache:
 
 def _refs() -> AuthObjectRefs:
     return AuthObjectRefs.from_token(UserAPIKeyAuth(token="t", user_id=USER_ID, team_id=TEAM_ID, org_id=ORG_ID))
+
+
+class _MutableClock:
+    def __init__(self) -> None:
+        self.now = 1_000_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
 
 
 async def _read_all_through_getters(
@@ -335,4 +347,20 @@ async def test_no_redis_goes_straight_to_one_query():
     await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=prisma)
 
     assert prisma.db.query_first.await_count == 1
+    assert cache.in_memory_cache.get_cache(f"team_membership:{USER_ID}:{TEAM_ID}") is not None
+
+
+@pytest.mark.asyncio
+async def test_org_entries_expire_with_default_in_memory_ttl_while_the_membership_reservation_does_not():
+    clock = _MutableClock()
+    cache = UserApiKeyCache(in_memory_cache=InMemoryCache(clock=clock), redis_cache=None)
+
+    await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=_prisma())
+
+    assert cache.in_memory_cache.get_cache(f"org_id:{ORG_ID}") is not None
+    assert cache.in_memory_cache.get_cache(f"team_membership:{USER_ID}:{TEAM_ID}") is not None
+
+    clock.advance(DEFAULT_IN_MEMORY_TTL + 1)
+
+    assert cache.in_memory_cache.get_cache(f"org_id:{ORG_ID}") is None
     assert cache.in_memory_cache.get_cache(f"team_membership:{USER_ID}:{TEAM_ID}") is not None
