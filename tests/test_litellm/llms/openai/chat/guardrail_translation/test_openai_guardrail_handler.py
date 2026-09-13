@@ -1893,6 +1893,49 @@ class TestScanOnlyToolResults:
         assert data["messages"][4]["content"] == "and then?"
 
 
+class ToolDroppingTextGuardrail(CustomGuardrail):
+    """Answers one text per non-tool message it saw, the way a guardrail that
+    filters tool rows out before scanning does, and hands back only texts."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="tool-dropping-redactor")
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        kept = [m for m in inputs.get("structured_messages") or [] if m.get("role") != "tool"]
+        return {**inputs, "texts": [str(m.get("content")).replace("POISON", "[BLOCKED]") for m in kept]}
+
+
+class TestPerMessageTextWriteBack:
+    """Texts that no longer pair one-to-one with what the handler extracted must be
+    rejected by name instead of sliding onto the wrong messages."""
+
+    @pytest.mark.asyncio
+    async def test_fewer_texts_than_extracted_over_a_tool_message_is_rejected(self):
+        from litellm.proxy.policy_engine.pipeline_executor import UnappliableRequestRewrite
+
+        handler = OpenAIChatCompletionsHandler()
+        original_messages = [
+            {"role": "system", "content": "SYSTEM-PROMPT"},
+            {"role": "user", "content": "fetch the page"},
+            {"role": "assistant", "content": "fetching"},
+            {"role": "tool", "tool_call_id": "call_1", "content": "page says POISON here"},
+            {"role": "user", "content": "and then?"},
+        ]
+        data = {"messages": json.loads(json.dumps(original_messages))}
+
+        with pytest.raises(UnappliableRequestRewrite) as excinfo:
+            await handler.process_input_messages(data=data, guardrail_to_apply=ToolDroppingTextGuardrail())
+
+        assert excinfo.value.guardrail_name == "tool-dropping-redactor"
+        assert data["messages"] == original_messages, "a rejected rewrite must leave the request untouched"
+
+
 class TestBuildBlockSseChunks:
     """build_block_sse_chunks turns a streaming ModifyResponseException into 200 SSE chunks"""
 

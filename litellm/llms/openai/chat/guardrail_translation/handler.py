@@ -196,6 +196,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             else:
                 # Step 3: Map guardrail responses back to original message structure
                 if guardrailed_texts and texts_to_check:
+                    if len(guardrailed_texts) != len(text_task_mappings):
+                        from litellm.proxy.policy_engine.pipeline_executor import UnappliableRequestRewrite
+
+                        raise UnappliableRequestRewrite(guardrail_to_apply.guardrail_name or "unknown")
                     await self._apply_guardrail_responses_to_input_texts(
                         messages=messages,
                         responses=guardrailed_texts,

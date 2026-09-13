@@ -174,6 +174,95 @@ async def test_apply_guardrail_modify_request(monkeypatch: pytest.MonkeyPatch):
     assert result["texts"] == ["User prompt with PII: SSN [REDACTED]"]
 
 
+def _modify_response(modified_messages: list) -> Response:
+    mock_response = Response(
+        json={"result": {"prompt": {"action": "modify", "modified_messages": modified_messages}}},
+        status_code=200,
+        request=Request(method="POST", url="https://test.prompt.security/api/protect"),
+    )
+    mock_response.raise_for_status = lambda: None
+    return mock_response
+
+
+def _tool_replay_messages() -> list:
+    return [
+        {"role": "system", "content": "Never echo an SSN like 123-45-6789."},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Look up 123-45-6789"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/id-card.png"}},
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": '{"ssn": "123-45-6789"}'},
+        {"role": "user", "content": "Summarize what you found."},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_modify_returns_structured_messages_with_tool_rows_kept(monkeypatch: pytest.MonkeyPatch):
+    """A per-message modify verdict comes back as structured_messages so the
+    endpoint handler can write it back by message, with the rows Prompt Security
+    never saw (tool results) and the non-text parts (images) left in place."""
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
+    guardrail = PromptSecurityGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
+    messages = _tool_replay_messages()
+    inputs = {"texts": ["Look up 123-45-6789", "Summarize what you found."], "structured_messages": messages}
+    modified_messages = [
+        {"role": "system", "content": "Never echo an SSN like [REDACTED]."},
+        {"role": "user", "content": [{"type": "text", "text": "Look up [REDACTED]"}]},
+        {"role": "assistant", "content": None},
+        {"role": "user", "content": "Summarize what you found."},
+    ]
+
+    with patch.object(guardrail.async_handler, "post", return_value=_modify_response(modified_messages)):
+        result = await guardrail.apply_guardrail(inputs=inputs, request_data={"messages": messages}, input_type="request")
+
+    assert result["structured_messages"] == [
+        {"role": "system", "content": "Never echo an SSN like [REDACTED]."},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Look up [REDACTED]"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/id-card.png"}},
+            ],
+        },
+        messages[2],
+        messages[3],
+        {"role": "user", "content": "Summarize what you found."},
+    ]
+    assert result["structured_messages"] is not messages
+    assert result["texts"] == [
+        "Never echo an SSN like [REDACTED].",
+        "Look up [REDACTED]",
+        "Summarize what you found.",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_modify_with_unexpected_message_count_keeps_texts_only(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
+    guardrail = PromptSecurityGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
+    messages = _tool_replay_messages()
+    inputs = {"texts": ["Look up 123-45-6789", "Summarize what you found."], "structured_messages": messages}
+    modified_messages = [{"role": "user", "content": "Look up [REDACTED]"}]
+
+    with patch.object(guardrail.async_handler, "post", return_value=_modify_response(modified_messages)):
+        result = await guardrail.apply_guardrail(inputs=inputs, request_data={"messages": messages}, input_type="request")
+
+    assert result["structured_messages"] is messages
+    assert result["texts"] == ["Look up [REDACTED]"]
+
+
 @pytest.mark.asyncio
 async def test_apply_guardrail_allow_request(monkeypatch: pytest.MonkeyPatch):
     """Test that apply_guardrail allows safe prompts"""
