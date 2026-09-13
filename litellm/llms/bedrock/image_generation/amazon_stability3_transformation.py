@@ -3,6 +3,9 @@ from typing import Final
 
 from openai.types.image import Image
 
+from litellm.litellm_core_utils.core_helpers import (
+    strip_internal_params_from_request_body,
+)
 from litellm.llms.bedrock.common_utils import BedrockError, get_cached_model_info
 from litellm.types.llms.bedrock import (
     AmazonStability3TextToImageRequest,
@@ -70,7 +73,9 @@ class AmazonStability3Config:
         """
         Transform the request body for the Stability 3 models
         """
-        data: Final = AmazonStability3TextToImageRequest(prompt=text, **optional_params)
+        data: Final = AmazonStability3TextToImageRequest(
+            prompt=text, **strip_internal_params_from_request_body(optional_params)
+        )
         return data
 
     @classmethod

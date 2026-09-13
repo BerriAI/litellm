@@ -4,12 +4,17 @@ import copy
 import logging
 import re
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.types.internal_params import (
+    LITELLM_CHAT_REQUEST_BODY_STRIP_PARAMS,
+    LITELLM_INTERNAL_REQUEST_BODY_PARAMS,
+    MCP_INTERNAL_PARAMS,
+)
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
 
 if TYPE_CHECKING:
@@ -620,10 +625,11 @@ def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:
 
 def filter_internal_params(data: dict, additional_internal_params: set | None = None) -> dict:
     """
-    Filter out LiteLLM internal parameters that shouldn't be sent to provider APIs.
+    Filter out LiteLLM internal MCP-handler parameters that shouldn't be re-dispatched.
 
-    This removes internal/MCP-related parameters that are used by LiteLLM internally
-    but should not be included in API requests to providers.
+    Used on completion kwargs (e.g. fallbacks) where the goal is to drop runtime
+    handler state before re-invoking, not to sanitize a serialized request body.
+    For the request-body boundary use `strip_internal_params_from_request_body`.
 
     Args:
         data: Dictionary of parameters to filter
@@ -635,19 +641,39 @@ def filter_internal_params(data: dict, additional_internal_params: set | None = 
     if not isinstance(data, dict):
         return data
 
-    # Known internal parameters that should never be sent to provider APIs
-    internal_params: Final = {
-        "skip_mcp_handler",
-        "mcp_handler_context",
-        "_skip_mcp_handler",
-    }
+    internal_params: Final = (
+        MCP_INTERNAL_PARAMS | additional_internal_params if additional_internal_params else MCP_INTERNAL_PARAMS
+    )
 
-    # Add any additional internal params if provided
-    if additional_internal_params:
-        internal_params.update(additional_internal_params)
-
-    # Filter out internal parameters
     return {k: v for k, v in data.items() if k not in internal_params}
+
+
+_RequestParamValue = TypeVar("_RequestParamValue")
+
+
+def strip_internal_params_from_request_body(data: Mapping[str, _RequestParamValue]) -> dict[str, _RequestParamValue]:
+    """
+    Remove every LiteLLM-internal optional_params key from a provider request body.
+
+    Applied at the serialization boundary (where optional_params becomes a request
+    body) so internal control knobs can never reach a provider that rejects unknown
+    fields. See `litellm.types.internal_params.LiteLLMInternalParam` for the registry.
+    """
+    return {k: v for k, v in data.items() if k not in LITELLM_INTERNAL_REQUEST_BODY_PARAMS}
+
+
+def strip_internal_params_from_chat_request_body(
+    data: Mapping[str, _RequestParamValue],
+) -> dict[str, _RequestParamValue]:
+    """
+    Strip variant for the chat-completion boundary that preserves keys consumed
+    inside `transform_request` (currently `cache_control_injection_points`, which
+    `AmazonConverseConfig` reads to append a `cachePoint` to Bedrock tool_config).
+    The shared chat handler re-applies `strip_internal_params_from_request_body`
+    to the body returned by `transform_request`, so splat-style transforms that
+    splat `**optional_params` into the wire body cannot leak the preserved key.
+    """
+    return {k: v for k, v in data.items() if k not in LITELLM_CHAT_REQUEST_BODY_STRIP_PARAMS}
 
 
 def redact_nested_match_and_regex_keys(
