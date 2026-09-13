@@ -11,9 +11,23 @@ If given, generate a unique model_id for the deployment.
 Ensures cooldowns are applied correctly.
 """
 
+import re
+from collections.abc import Mapping
 from typing import Final
 
 clientside_credential_keys: Final = ["api_key", "api_base", "base_url"]
+
+# Metadata key the proxy stamps with the admin opt-in scope that authorized
+# the caller's clientside credentials at auth time. Consumed by
+# strip_clientside_credentials_without_deployment_opt_in below to re-validate
+# per-deployment opt-in when a re-dispatch (server-side router fallback) would
+# otherwise forward those credentials to a deployment that never opted in.
+# User-supplied values for this key are stripped by the proxy (see
+# litellm/proxy/litellm_pre_call_utils.py _UNTRUSTED_METADATA_CONTROL_FIELDS),
+# so the scope cannot be forged by a caller.
+PROXY_CLIENTSIDE_CREDENTIAL_SCOPE_METADATA_KEY: Final = "litellm_proxy_clientside_credential_scope"
+PROXY_CLIENTSIDE_CREDENTIAL_SCOPE_PROXY_WIDE: Final = "proxy_wide"
+PROXY_CLIENTSIDE_CREDENTIAL_SCOPE_PER_MODEL: Final = "per_model"
 
 
 def _admin_config_fields_to_clear_on_base_override() -> list[str]:
@@ -103,3 +117,99 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> di
                 litellm_params[field] = request_kwargs[field]
 
     return litellm_params
+
+
+def _clientside_param_allowed_for_deployment(
+    param: str,
+    request_body_value: object,
+    configurable_clientside_auth_params: object,
+) -> bool:
+    """
+    Mirror of litellm.proxy.auth.auth_utils._is_param_allowed (kept here
+    because router_utils cannot import from the proxy package without a
+    circular import). A param is allowed when the deployment's
+    ``configurable_clientside_auth_params`` names it, or — for ``api_base``
+    only — a ``{"api_base": <pattern>}`` dict entry regex/equal-matches the
+    caller-supplied value.
+    """
+    if configurable_clientside_auth_params is None:
+        return False
+
+    for item in configurable_clientside_auth_params:
+        if isinstance(item, str) and param == item:
+            return True
+        if isinstance(item, dict) and param == "api_base" and isinstance(request_body_value, str):
+            pattern = item.get("api_base")
+            if isinstance(pattern, str) and (re.match(pattern, request_body_value) or pattern == request_body_value):
+                return True
+
+    return False
+
+
+def strip_clientside_credentials_without_deployment_opt_in(deployment: Mapping[str, object], kwargs: dict) -> None:
+    """
+    Re-validate the proxy's per-deployment clientside-credential opt-in at
+    (re-)dispatch time.
+
+    Auth time (litellm.proxy.auth.auth_utils._check_banned_params) validates
+    caller-supplied clientside credentials (api_key / api_base / base_url)
+    against the model the caller DECLARED only. Server-side router fallbacks
+    re-dispatch the same kwargs to a DIFFERENT deployment, which must re-consent:
+    without this check, a deployment that never opted in gets its api_base
+    overridden to the caller's URL while keeping its own api_key, exfiltrating
+    that deployment's provider key to the caller-chosen host.
+
+    Scoping (deliberately narrow so the SDK router's per-call credential
+    feature is unchanged):
+    - No scope stamp in kwargs metadata (plain SDK completion call, or a proxy
+      route that never stamped one): unchanged behavior.
+    - ``proxy_wide`` (general_settings.allow_client_side_credentials = true):
+      the admin opted every deployment in; unchanged behavior.
+    - ``per_model``: each clientside credential key in kwargs must be opted in
+      by the deployment being dispatched (its model_info /
+      litellm_params ``configurable_clientside_auth_params``); keys that are
+      not are stripped so the dispatch uses the deployment's own config.
+
+    Metadata buckets: the proxy stamps the scope into exactly one of
+    ``metadata`` / ``litellm_metadata`` (``_get_metadata_variable_name``).
+    On LITELLM_METADATA_ROUTES (/v1/messages, responses, batches, bedrock,
+    files) and the thread/assistant routes that bucket is
+    ``litellm_metadata``, while a caller-supplied provider-facing ``metadata``
+    object survives as a SECOND kwargs bucket. This helper therefore inspects
+    every bucket — reading only one let an unstamped caller ``metadata``
+    object shadow the stamp and skip stripping on fallback re-dispatch.
+    Non-dict buckets (e.g. a JSON-encoded string) cannot carry the stamp and
+    are skipped. Caller-forged scope values are stripped upstream
+    (_UNTRUSTED_METADATA_CONTROL_FIELDS), so any value found is
+    proxy-authored; if buckets ever disagree, fail closed to the most
+    restrictive scope (``per_model``), mirroring the both-bucket loops the
+    proxy uses at its other security boundaries.
+    """
+    scope: str | None = None
+    for metadata_key in ("metadata", "litellm_metadata"):
+        metadata_bucket: object = kwargs.get(metadata_key)
+        if not isinstance(metadata_bucket, dict):
+            continue
+        bucket_scope: object = metadata_bucket.get(PROXY_CLIENTSIDE_CREDENTIAL_SCOPE_METADATA_KEY)
+        if bucket_scope == PROXY_CLIENTSIDE_CREDENTIAL_SCOPE_PER_MODEL:
+            scope = PROXY_CLIENTSIDE_CREDENTIAL_SCOPE_PER_MODEL
+            break
+        if bucket_scope == PROXY_CLIENTSIDE_CREDENTIAL_SCOPE_PROXY_WIDE and scope is None:
+            scope = PROXY_CLIENTSIDE_CREDENTIAL_SCOPE_PROXY_WIDE
+    if scope != PROXY_CLIENTSIDE_CREDENTIAL_SCOPE_PER_MODEL:
+        return
+
+    allowed_params: object = None
+    model_info: object = deployment.get("model_info")
+    if isinstance(model_info, Mapping):
+        allowed_params = model_info.get("configurable_clientside_auth_params")
+    if allowed_params is None:
+        litellm_params: object = deployment.get("litellm_params")
+        if isinstance(litellm_params, Mapping):
+            allowed_params = litellm_params.get("configurable_clientside_auth_params")
+        else:
+            allowed_params = getattr(litellm_params, "configurable_clientside_auth_params", None)
+
+    for key in clientside_credential_keys:
+        if key in kwargs and not _clientside_param_allowed_for_deployment(key, kwargs[key], allowed_params):
+            kwargs.pop(key, None)
