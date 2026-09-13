@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 use super::hooks::{NoopOcrHooks, OcrHooks};
 use super::registry::{OcrAdapterKind, resolve_wire_adapter};
 use crate::Error;
-use crate::auth::InputSource;
+use crate::auth::{InputSource, TokenProviderHandle};
 use crate::constants::OCR_HTTP_TIMEOUT_SECS;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -68,6 +68,7 @@ pub struct OcrConnection {
     pub extra_headers_source: InputSource,
     pub timeout: Duration,
     pub max_download_bytes: u64,
+    pub max_response_bytes: usize,
     pub poll_timeout: Duration,
 }
 
@@ -82,6 +83,7 @@ impl Default for OcrConnection {
             extra_headers_source: InputSource::Deployment,
             timeout: Duration::from_secs(OCR_HTTP_TIMEOUT_SECS),
             max_download_bytes: crate::constants::OCR_DOWNLOAD_MAX_BYTES,
+            max_response_bytes: crate::constants::OCR_RESPONSE_MAX_BYTES,
             poll_timeout: Duration::from_secs(crate::constants::OCR_POLL_TIMEOUT_SECS),
         }
     }
@@ -95,6 +97,7 @@ pub struct LiteLLMOcrRequest {
     pub litellm_call_id: Option<String>,
     pub optional_params: Map<String, Value>,
     pub input_sources: BTreeMap<String, InputSource>,
+    pub azure_ad_token_provider: Option<TokenProviderHandle>,
     pub(crate) adapter: OcrAdapterKind,
 }
 
@@ -115,6 +118,7 @@ impl LiteLLMOcrRequest {
             litellm_call_id: None,
             optional_params,
             input_sources: BTreeMap::new(),
+            azure_ad_token_provider: None,
             adapter: adapter_kind,
         })
     }
@@ -130,6 +134,10 @@ impl LiteLLMOcrRequest {
             })
             .transpose()
             .map(|format| format.unwrap_or_default())
+    }
+
+    pub fn provider_name(&self) -> &'static str {
+        self.adapter.provider().as_str()
     }
 
     pub fn with_host_hooks(
@@ -168,6 +176,47 @@ impl LiteLLMOcrResponse {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn document_variants_preserve_provider_fields_when_rewriting_sources() {
+        for (value, original, replacement, expected) in [
+            (
+                json!({
+                    "type":"document_url",
+                    "document_url":"https://example.com/input.pdf",
+                    "document_name":"input.pdf"
+                }),
+                "https://example.com/input.pdf",
+                "data:application/pdf;base64,AA==",
+                json!({
+                    "type":"document_url",
+                    "document_url":"data:application/pdf;base64,AA==",
+                    "document_name":"input.pdf"
+                }),
+            ),
+            (
+                json!({
+                    "type":"image_url",
+                    "image_url":"https://example.com/input.png",
+                    "detail":"high"
+                }),
+                "https://example.com/input.png",
+                "data:image/png;base64,AA==",
+                json!({
+                    "type":"image_url",
+                    "image_url":"data:image/png;base64,AA==",
+                    "detail":"high"
+                }),
+            ),
+        ] {
+            let document: OcrDocument = serde_json::from_value(value).unwrap();
+            assert_eq!(document.source(), original);
+            assert_eq!(
+                serde_json::to_value(document.with_source(replacement.into())).unwrap(),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn response_serialization_flattens_extra_fields_and_omits_absent_native_response() {

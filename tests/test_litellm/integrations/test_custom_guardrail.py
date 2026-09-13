@@ -1,4 +1,5 @@
 import asyncio
+import datetime as dt
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
 from unittest.mock import AsyncMock
 
@@ -9,9 +10,16 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks, Mode
-from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailTracingDetail
+from litellm.types.utils import (
+    Choices,
+    GenericGuardrailAPIInputs,
+    GuardrailTracingDetail,
+    Message,
+    ModelResponse,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -2345,6 +2353,57 @@ class TestUndecoratedApplyGuardrailIsLogged:
 
         assert _Labelled.seen_label == "docs-style"
 
+    @pytest.mark.asyncio
+    async def test_post_call_recorded_outside_decorator_reaches_standard_logging_object(self):
+        """LIT-7608 regression: the auto-wrapped pre_call apply_guardrail copies the request bucket
+        into logging_obj.litellm_params["metadata"]. A post_call entry recorded later without the
+        decorator (the Bedrock streaming hook) must not be shadowed by that stale copy."""
+        messages: Final = [{"role": "user", "content": "hello there"}]
+        litellm_metadata: Final[dict] = {"user_api_key_user_id": "u1"}
+        logging_obj: Final = Logging(
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=messages,
+            stream=True,
+            call_type=CallTypes.acompletion.value,
+            start_time=dt.datetime.now(),
+            litellm_call_id="call-1",
+            function_id="fn-1",
+        )
+        logging_obj.update_environment_variables(
+            litellm_params={"litellm_metadata": litellm_metadata},
+            optional_params={},
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            custom_llm_provider="bedrock",
+        )
+        request_data: Final = {
+            "model": "bedrock-haiku",
+            "messages": messages,
+            "litellm_metadata": litellm_metadata,
+            "litellm_logging_obj": logging_obj,
+        }
+        guardrail: Final = _UndecoratedGuardrail(guardrail_name="bedrock-pre", event_hook=GuardrailEventHooks.pre_call)
+
+        await guardrail.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(texts=["hello there"]),
+            request_data=request_data,
+            input_type="request",
+            logging_obj=logging_obj,
+        )
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={"action": "NONE"},
+            request_data=request_data,
+            guardrail_status="success",
+            event_type=GuardrailEventHooks.post_call,
+        )
+        await logging_obj.async_success_handler(
+            result=ModelResponse(choices=[Choices(message=Message(role="assistant", content="general kenobi"))]),
+            start_time=dt.datetime.now(),
+            end_time=dt.datetime.now(),
+        )
+
+        entries: Final = logging_obj.model_call_details["standard_logging_object"]["guardrail_information"]
+        assert [e["guardrail_mode"] for e in entries] == ["pre_call", "post_call"]
+
 
 class _ApplyOnlyObserver(CustomGuardrail):
     """Overrides only apply_guardrail, like panw_prisma_airs; inherits async_logging_hook."""
@@ -3003,6 +3062,65 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
         data = {**self._request(), "functions": [{"name": "delete_db"}], "function_call": "auto"}
         await FunctionStrippingGuardrail(guardrail_name="g").async_pre_call_hook(
             user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="acompletion"
+        )
+
+        assert self._logged_response(data) == "mask"
+
+    @pytest.mark.asyncio
+    async def test_pre_call_hook_adding_tools_logs_mask(self):
+        class ToolInjectingGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def async_pre_call_hook(
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: object,
+                data: dict[str, object],
+                call_type: str,
+            ) -> dict[str, object]:
+                return {**data, "tools": [{"type": "function", "function": {"name": "guardrail_injected_tool"}}]}
+
+        data = self._request()
+        await ToolInjectingGuardrail(guardrail_name="g").async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="acompletion"
+        )
+
+        assert self._logged_response(data) == "mask"
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_adding_tools_logs_mask(self):
+        class ToolInjectingGuardrail(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: Optional["LiteLLMLoggingObj"] = None,
+            ) -> GenericGuardrailAPIInputs:
+                return {**inputs, "tools": [{"type": "function", "function": {"name": "guardrail_injected_tool"}}]}
+
+        data = self._request()
+        await ToolInjectingGuardrail(guardrail_name="g").apply_guardrail(
+            inputs={"texts": ["SECRET_PROMPT"]}, request_data=data, input_type="request"
+        )
+
+        assert self._logged_response(data) == "mask"
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_masking_inputs_in_place_logs_mask(self):
+        class InPlaceMaskingGuardrail(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: Optional["LiteLLMLoggingObj"] = None,
+            ) -> GenericGuardrailAPIInputs:
+                inputs["texts"] = ["<REDACTED>"]
+                return inputs
+
+        data = self._request()
+        await InPlaceMaskingGuardrail(guardrail_name="g").apply_guardrail(
+            inputs={"texts": ["SECRET_PROMPT"]}, request_data=data, input_type="request"
         )
 
         assert self._logged_response(data) == "mask"

@@ -124,9 +124,11 @@ from litellm.router_utils.add_retry_fallback_headers import (
     add_retry_headers_to_response,
     apply_quality_router_decision_headers,
     apply_remaining_usage_headers,
+    complexity_router_decision_headers,
     ensure_response_additional_headers,
     get_hidden_params_dict,
     prepare_response_for_header_attachment,
+    replace_complexity_router_headers,
     response_in_flight_token_count,
 )
 from litellm.router_utils.auto_router_model_naming import (
@@ -555,6 +557,7 @@ class FallbackAwareAnthropicMessagesStream:
     def __init__(self, async_generator: AsyncGenerator[bytes, None], source_iterator: object) -> None:
         self._async_generator = async_generator
         self._source_iterator = source_iterator
+        self.fallback_headers_adopted = False
         self._hidden_params = dict(  # mutable-ok: mutated in place by merge_fallback_hidden_params
             getattr(source_iterator, "_hidden_params", None) or {}
         )
@@ -565,6 +568,7 @@ class FallbackAwareAnthropicMessagesStream:
 
     def adopt_fallback_source(self, fallback_response: object) -> None:
         self._source_iterator = fallback_response
+        self.fallback_headers_adopted = True
 
     def __aiter__(self) -> "FallbackAwareAnthropicMessagesStream":
         return self
@@ -593,7 +597,9 @@ class FallbackAwareAnthropicMessagesStream:
         self._hidden_params = {  # mutable-ok: matches _hidden_params' existing dict[str, object] shape
             **self._hidden_params,
             **fallback_hidden_params,
-            "additional_headers": {**existing_headers, **fallback_headers},  # mutable-ok: same shape
+            "additional_headers": dict(  # mutable-ok: hidden params expect a writable header bag
+                replace_complexity_router_headers(existing_headers, fallback_headers)
+            ),
         }
 
 
@@ -3128,6 +3134,8 @@ class Router:
             async generator.
             """
 
+            fallback_headers_adopted: bool = False
+
             def __init__(self, async_generator: AsyncGenerator):
                 import time
                 from datetime import datetime
@@ -3178,6 +3186,12 @@ class Router:
                 # Preserve hidden params so response headers (model_id,
                 # api_base, additional_headers) keep flowing.
                 self._hidden_params = dict(getattr(source_iterator, "_hidden_params", None) or {})
+
+            def adopt_fallback_headers(self, fallback_response: object) -> tuple[dict[str, object], dict[str, object]]:
+                prepared: Final = Router._prepare_fallback_hidden_params(fallback_response)
+                self._hidden_params = {**prepared[0], "additional_headers": prepared[1]}  # mutable-ok: stream metadata
+                self.fallback_headers_adopted = True
+                return prepared
 
             def __aiter__(self):
                 return self
@@ -3269,8 +3283,8 @@ class Router:
                         include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
                     )
 
+                    prepared_fallback_hidden_params = wrapper.adopt_fallback_headers(fallback_response)
                     if hasattr(fallback_response, "__aiter__"):
-                        prepared_fallback_hidden_params = Router._prepare_fallback_hidden_params(fallback_response)
                         async for fallback_item in fallback_response:
                             Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                             if partial_usage is not None:
@@ -3305,7 +3319,8 @@ class Router:
                                 exc,
                             )
 
-        return FallbackResponsesStreamWrapper(stream_with_fallbacks())
+        wrapper: Final = FallbackResponsesStreamWrapper(stream_with_fallbacks())
+        return wrapper
 
     def _completion_streaming_iterator(
         self,
@@ -11108,7 +11123,7 @@ class Router:
         self,
         response: object,
         model_group: str | None = None,
-        request_kwargs: dict | None = None,
+        request_kwargs: dict[str, object] | None = None,
     ) -> Any:
         """
         Add the most accurate rate limit headers for a given model response.
@@ -11124,6 +11139,7 @@ class Router:
         additional_headers: Final = ensure_response_additional_headers(response)
         additional_headers["x-litellm-model-group"] = model_group
         apply_quality_router_decision_headers(additional_headers, request_kwargs)
+        additional_headers.update(complexity_router_decision_headers(request_kwargs))
 
         if model_group is not None:
             remaining_usage: Final = await self.get_remaining_model_group_usage(model_group)

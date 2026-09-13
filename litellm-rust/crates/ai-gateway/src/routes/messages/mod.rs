@@ -118,7 +118,8 @@ impl IntoResponse for MessagesRouteError {
             | Error::Connect(_)
             | Error::InvalidResponse(_)
             | Error::InvalidType { .. }
-            | Error::MissingField(_) => (
+            | Error::MissingField(_)
+            | Error::MissingDocumentUrl => (
                 StatusCode::BAD_GATEWAY,
                 "messages provider request failed".to_string(),
             ),

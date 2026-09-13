@@ -6,25 +6,27 @@ license.workspace = true
 repository.workspace = true
 autotests = false
 
-[[test]]
-name = "workspace_crate_allowlist"
-path = "tests/workspace_crate_allowlist.rs"
-
 [dependencies]
+bytes.workspace = true
+futures-util.workspace = true
 base64.workspace = true
 azure_core.workspace = true
 azure_identity.workspace = true
 data-url = "0.3.2"
 gcp_auth.workspace = true
 moka.workspace = true
+mime_guess = "2.0.5"
 rand.workspace = true
 reqwest.workspace = true
+rustls.workspace = true
+rustls-native-certs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error = "0.1"
 strum.workspace = true
 subtle.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tokio-tungstenite.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, optional = true }

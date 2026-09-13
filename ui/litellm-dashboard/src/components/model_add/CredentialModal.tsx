@@ -42,7 +42,7 @@ export default function CredentialModal({
   existingCredential = null,
 }: CredentialModalProps) {
   const isEdit = mode === "edit";
-  const [selectedProvider, setSelectedProvider] = useState<Providers>(
+  const [selectedProvider, setSelectedProvider] = useState<string | null>(
     (existingCredential?.credential_info.custom_llm_provider as Providers) ?? Providers.OpenAI,
   );
 
@@ -110,7 +110,7 @@ export default function CredentialModal({
                 {(control) => (
                   <Input
                     id={control.id}
-                    value={(control.value as string | undefined) ?? ""}
+                    value={typeof control.value === "string" ? control.value : ""}
                     onChange={control.onChange}
                     onBlur={control.onBlur}
                     placeholder="Enter a friendly name for these credentials"
@@ -131,10 +131,10 @@ export default function CredentialModal({
                     inputId={control.id}
                     placeholder="Select a provider"
                     options={providerOptions}
-                    value={(control.value as string | undefined) ?? ""}
+                    value={typeof control.value === "string" ? control.value : null}
                     onValueChange={(value) => {
                       control.onChange(value);
-                      resetCredentialFormOnProviderChange(formAdapter, value as Providers, setSelectedProvider);
+                      resetCredentialFormOnProviderChange(formAdapter, value, setSelectedProvider);
                     }}
                   />
                 )}

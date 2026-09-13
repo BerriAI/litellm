@@ -3234,6 +3234,17 @@
                 }
               ],
               "title": "User Email"
+            },
+            "user_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Id"
             }
           },
           "title": "KeyMetadata",
@@ -5130,6 +5141,49 @@
             }
           ],
           "summary": "Get Skill",
+          "tags": [
+            "anthropic_skills"
+          ]
+        }
+      },
+      "/v1/skills/{skill_id}/archive": {
+        "get": {
+          "description": "Stored skill upload, repacked so SKILL.md sits at the archive root.",
+          "operationId": "agent_skills_archive_v1_skills__skill_id__archive_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "skill_id",
+              "required": true,
+              "schema": {
+                "title": "Skill Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/zip": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Agent Skills Archive",
           "tags": [
             "anthropic_skills"
           ]
@@ -22415,47 +22469,34 @@
       },
       "/.well-known/oauth-protected-resource": {
         "get": {
-          "description": "OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.\n\nLegacy pattern: /{server_name}/mcp\nDiscovery path: /.well-known/oauth-protected-resource/{server_name}/mcp\n\nThis endpoint is kept for backward compatibility. New integrations should\nuse the standard MCP pattern (/mcp/{server_name}) instead.",
-          "operationId": "oauth_protected_resource_mcp__well_known_oauth_protected_resource_get",
-          "parameters": [
-            {
-              "in": "query",
-              "name": "mcp_server_name",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Mcp Server Name"
-              }
-            }
-          ],
+          "operationId": "oauth_protected_resource_root__well_known_oauth_protected_resource_get",
           "responses": {
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      ]
+                    },
+                    "title": "Response Oauth Protected Resource Root  Well Known Oauth Protected Resource Get",
+                    "type": "object"
                   }
                 }
               },
-              "description": "Validation Error"
+              "description": "Successful Response"
             }
           },
-          "summary": "Oauth Protected Resource Mcp",
+          "summary": "Oauth Protected Resource Root",
           "tags": [
             "mcp_byok_oauth"
           ]
@@ -24636,47 +24677,34 @@
       },
       "/.well-known/oauth-protected-resource": {
         "get": {
-          "description": "OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.\n\nLegacy pattern: /{server_name}/mcp\nDiscovery path: /.well-known/oauth-protected-resource/{server_name}/mcp\n\nThis endpoint is kept for backward compatibility. New integrations should\nuse the standard MCP pattern (/mcp/{server_name}) instead.",
-          "operationId": "oauth_protected_resource_mcp__well_known_oauth_protected_resource_get_2",
-          "parameters": [
-            {
-              "in": "query",
-              "name": "mcp_server_name",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Mcp Server Name"
-              }
-            }
-          ],
+          "operationId": "oauth_protected_resource_root__well_known_oauth_protected_resource_get_2",
           "responses": {
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      ]
+                    },
+                    "title": "Response Oauth Protected Resource Root  Well Known Oauth Protected Resource Get",
+                    "type": "object"
                   }
                 }
               },
-              "description": "Validation Error"
+              "description": "Successful Response"
             }
           },
-          "summary": "Oauth Protected Resource Mcp",
+          "summary": "Oauth Protected Resource Root",
           "tags": [
             "mcp_discoverable"
           ]
@@ -25047,6 +25075,129 @@
             }
           },
           "summary": "Authorize Flow",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/authorize/mcp-session": {
+        "get": {
+          "operationId": "authorize_mcp_session_authorize_mcp_session_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "redirect_uri",
+              "required": true,
+              "schema": {
+                "title": "Redirect Uri",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "client_id",
+              "required": true,
+              "schema": {
+                "title": "Client Id",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "state",
+              "required": false,
+              "schema": {
+                "default": "",
+                "title": "State",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "code_challenge",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Code Challenge"
+              }
+            },
+            {
+              "in": "query",
+              "name": "code_challenge_method",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Code Challenge Method"
+              }
+            },
+            {
+              "in": "query",
+              "name": "response_type",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Response Type"
+              }
+            },
+            {
+              "in": "query",
+              "name": "resource",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Resource"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Authorize Mcp Session",
           "tags": [
             "mcp_discoverable"
           ]
