@@ -31,7 +31,6 @@ from litellm.types.utils import (
     GuardrailStatus,
     GuardrailTracingDetail,
     LLMResponseTypes,
-    ModelResponse,
     StandardLoggingGuardrailInformation,
 )
 
@@ -907,6 +906,8 @@ class CustomGuardrail(CustomLogger):
         response: Final = (
             kwargs.get("async_complete_streaming_response") or kwargs.get("complete_streaming_response") or result
         )
+        from litellm.types.utils import ModelResponse
+
         output_translation: Final = (
             get_guardrail_translation_mapping(CallTypes.acompletion)()
             if isinstance(response, ModelResponse)
