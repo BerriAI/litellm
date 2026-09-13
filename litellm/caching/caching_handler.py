@@ -1160,25 +1160,24 @@ class LLMCachingHandler:
             return True
 
         kwargs_dict: Final = kwargs or {}
-        raw_candidates: Final = (
-            call_type,
-            original_function,
-            getattr(self, "original_function", None),
-            kwargs_dict.get("call_type"),
-            kwargs_dict.get("route_type"),
-            kwargs_dict.get("original_function"),
+        raw_source: Final = (
+            call_type
+            if call_type is not None
+            else (
+                original_function
+                if original_function is not None
+                else (
+                    getattr(self, "original_function", None)
+                    if getattr(self, "original_function", None) is not None
+                    else kwargs_dict.get("route_type") or kwargs_dict.get("call_type")
+                )
+            )
         )
-        candidates: Final = frozenset(
-            variant
-            for item in raw_candidates
-            if item is not None
-            for name in (getattr(item, "value", None) or getattr(item, "__name__", None) or str(item),)
-            for variant in (name, name.lstrip("_"))
-        )
-
-        if not candidates:
+        if raw_source is None:
             return False
 
+        val_name: Final = getattr(raw_source, "value", None) or getattr(raw_source, "__name__", None) or str(raw_source)
+        candidates: Final = frozenset((val_name, val_name.lstrip("_")))
         return bool(candidates & set(litellm.cache.supported_call_types))
 
     async def _add_streaming_response_to_cache(self, processed_chunk: ModelResponse):

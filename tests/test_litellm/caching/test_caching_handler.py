@@ -807,3 +807,35 @@ async def test_cache_keys_consistent_with_optional_params(monkeypatch):
         args=(),
     )
     assert hit is not None and hit.cached_result is not None
+
+
+@pytest.mark.asyncio
+async def test_call_type_restriction_cannot_be_bypassed_via_kwargs(monkeypatch):
+    import litellm
+    from litellm.caching.caching import Cache
+
+    async def _aembedding(**kwargs):
+        return None
+
+    cache = Cache(type="local", supported_call_types=["completion", "acompletion"])
+    monkeypatch.setattr(litellm, "cache", cache)
+
+    handler = LLMCachingHandler(original_function=_aembedding, request_kwargs={}, start_time=datetime.now())
+
+    assert (
+        handler._is_call_type_supported_by_cache(
+            original_function=_aembedding,
+            call_type="aembedding",
+            kwargs={"call_type": "acompletion"},
+        )
+        is False
+    )
+    assert (
+        handler._should_store_result_in_cache(
+            original_function=_aembedding,
+            call_type="aembedding",
+            kwargs={"call_type": "acompletion"},
+        )
+        is False
+    )
+    assert cache.should_use_cache(call_type="aembedding", route_type="acompletion") is False
