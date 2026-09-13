@@ -607,42 +607,31 @@ def testget_standard_logging_payload_session_id_empty_when_flag_off(monkeypatch)
 
 def test_truncate_standard_logging_payload():
     """
-    1. original messages, response, and error_str should NOT BE MODIFIED, since these are from kwargs
-    2. the `messages`, `response`, and `error_str` in new standard_logging_payload should be truncated
+    1. the payload passed in is never modified, since every callback of the request shares it
+    2. the `messages`, `response`, and `error_str` in the returned payload are truncated
     """
     _custom_logger = CustomLogger()
     standard_logging_payload: StandardLoggingPayload = (
         create_standard_logging_payload_with_long_content()
     )
     original_messages = standard_logging_payload["messages"]
-    len_original_messages = len(str(original_messages))
     original_response = standard_logging_payload["response"]
-    len_original_response = len(str(original_response))
     original_error_str = standard_logging_payload["error_str"]
-    len_original_error_str = len(str(original_error_str))
 
-    _custom_logger.truncate_standard_logging_payload_content(standard_logging_payload)
-
-    # Original messages, response, and error_str should NOT BE MODIFIED
-    assert standard_logging_payload["messages"] != original_messages
-    assert standard_logging_payload["response"] != original_response
-    assert standard_logging_payload["error_str"] != original_error_str
-    assert len_original_messages == len(str(original_messages))
-    assert len_original_response == len(str(original_response))
-    assert len_original_error_str == len(str(original_error_str))
-
-    print(
-        "logged standard_logging_payload",
-        json.dumps(standard_logging_payload, indent=2),
+    truncated = _custom_logger.truncate_standard_logging_payload_content(
+        standard_logging_payload
     )
 
-    # Logged messages, response, and error_str should be truncated
-    # assert len of messages is less than 10_500
-    assert len(str(standard_logging_payload["messages"])) < 10_500
-    # assert len of response is less than 10_500
-    assert len(str(standard_logging_payload["response"])) < 10_500
-    # assert len of error_str is less than 10_500
-    assert len(str(standard_logging_payload["error_str"])) < 10_500
+    assert standard_logging_payload["messages"] is original_messages
+    assert standard_logging_payload["response"] is original_response
+    assert standard_logging_payload["error_str"] is original_error_str
+
+    assert truncated["messages"] != original_messages
+    assert truncated["response"] != original_response
+    assert truncated["error_str"] != original_error_str
+    assert len(str(truncated["messages"])) < 10_500
+    assert len(str(truncated["response"])) < 10_500
+    assert len(str(truncated["error_str"])) < 10_500
 
 
 def test_strip_trailing_slash():

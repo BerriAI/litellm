@@ -822,46 +822,37 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     def truncate_standard_logging_payload_content(
         self,
         standard_logging_object: StandardLoggingPayload,
-    ):
+    ) -> StandardLoggingPayload:
         """
-        Truncate error strings and message content in logging payload
+        Return a copy of the logging payload with error_str, messages, and response truncated
 
         Some loggers like DataDog/ GCS Bucket have a limit on the size of the payload. (1MB)
 
-        This function truncates the error string and the message content if they exceed a certain length.
+        Every callback of a request shares one standard logging object, so the payload passed in is left
+        untouched and the callbacks that run later (the prompt caching router check, spend logs) still see
+        the original fields.
         """
-        MAX_STR_LENGTH: Final = 10_000
+        max_str_length: Final = 10_000
+        error_str, messages, response = (
+            self._truncate_field(field_value=standard_logging_object.get(field), max_length=max_str_length)
+            for field in ("error_str", "messages", "response")
+        )
+        return {
+            **standard_logging_object,
+            "error_str": standard_logging_object["error_str"] if error_str is None else error_str,
+            "messages": standard_logging_object["messages"] if messages is None else messages,
+            "response": standard_logging_object["response"] if response is None else response,
+        }
 
-        # Truncate fields that might exceed max length
-        fields_to_truncate: Final = ["error_str", "messages", "response"]
-        for field in fields_to_truncate:
-            self._truncate_field(
-                standard_logging_object=standard_logging_object,
-                field_name=field,
-                max_length=MAX_STR_LENGTH,
-            )
-
-    def _truncate_field(
-        self,
-        standard_logging_object: StandardLoggingPayload,
-        field_name: str,
-        max_length: int,
-    ) -> None:
+    def _truncate_field(self, field_value: object, max_length: int) -> str | None:
         """
-        Helper function to truncate a field in the logging payload
+        Return the truncated text of a field that exceeds max_length, or None when the field fits
 
-        This converts the field to a string and then truncates it if it exceeds the max length.
-
-        Why convert to string ?
-        1. User was sending a poorly formatted list for `messages` field, we could not predict where they would send content
-            - Converting to string and then truncating the logged content catches this
-        2. We want to avoid modifying the original `messages`, `response`, and `error_str` in the logging payload since these are in kwargs and could be returned to the user
+        The field is measured as a string because users send poorly formatted lists for `messages`, so there is
+        no fixed place the content would be.
         """
-        field_value: Final[object] = standard_logging_object.get(field_name)
-        if field_value:
-            str_value: Final = str(field_value)
-            if len(str_value) > max_length:
-                standard_logging_object[field_name] = self._truncate_text(text=str_value, max_length=max_length)
+        text: Final = str(field_value or "")
+        return self._truncate_text(text=text, max_length=max_length) if len(text) > max_length else None
 
     def _truncate_text(self, text: str, max_length: int) -> str:
         """Truncate text if it exceeds max_length"""
