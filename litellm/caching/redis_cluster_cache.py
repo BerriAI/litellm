@@ -56,6 +56,19 @@ class RedisClusterCache(RedisCache):
         async_redis_cluster_client: Final = self.init_async_client()
         return await async_redis_cluster_client.mget_nonatomic(keys=keys)
 
+    async def disconnect(self):
+        """
+        Overrides `disconnect` in redis_cache.py.
+
+        In cluster mode ``get_redis_connection_pool`` returns ``None`` (the
+        ``RedisCluster`` client builds its own per-node pools), so the base-class
+        implementation would dereference ``None``. Close the cluster client instead,
+        then let the base class tear down the sync client.
+        """
+        if self.redis_async_redis_cluster_client is not None:
+            await self.redis_async_redis_cluster_client.aclose()
+        await super().disconnect()
+
     async def test_connection(self) -> dict:
         """
         Test the Redis Cluster connection.
