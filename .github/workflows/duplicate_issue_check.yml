@@ -66,14 +66,20 @@ jobs:
           gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
             --json number,title,body,createdAt > issue.json
 
-      - name: Require the LiteLLM endpoint
+      - name: Require the LiteLLM endpoint and model
         env:
           LITELLM_API_BASE: ${{ vars.LITELLM_API_BASE }}
+          DUPLICATE_CHECK_MODEL: ${{ vars.DUPLICATE_CHECK_MODEL }}
         run: |
           set -euo pipefail
           if [ -z "${LITELLM_API_BASE}" ]; then
             echo "Set the LITELLM_API_BASE repo variable (e.g. https://llm.example.com) so Codex routes through LiteLLM." >&2
             echo "Without it the LiteLLM virtual key would be sent to api.openai.com and rejected." >&2
+            exit 1
+          fi
+          if [ -z "${DUPLICATE_CHECK_MODEL}" ]; then
+            echo "Set the DUPLICATE_CHECK_MODEL repo variable to a model your LiteLLM deployment serves." >&2
+            echo "There is no default on purpose: the cost per issue varies by 20x across candidates." >&2
             exit 1
           fi
 
@@ -90,7 +96,7 @@ jobs:
           sandbox: read-only
           # read-only denies network, and the whole method is searching the tracker with gh
           codex-args: '["-c", "sandbox_permissions=[\"network-full-access\"]"]'
-          model: ${{ vars.DUPLICATE_CHECK_MODEL || 'gpt-5.6' }}
+          model: ${{ vars.DUPLICATE_CHECK_MODEL }}
           # Issue authors have no write access and the action refuses them by default; the
           # prompt is fixed, the sandbox read-only, and the only token is read-only on a public repo
           allow-users: "*"
