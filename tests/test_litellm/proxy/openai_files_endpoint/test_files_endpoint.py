@@ -12,7 +12,7 @@ from pytest_mock import MockerFixture
 import litellm
 from litellm import Router
 from litellm.files.types import FileContentStreamingResult
-from litellm.proxy._types import LiteLLM_UserTableFiltered, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_UserTableFiltered, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.hooks import get_proxy_hook
 from litellm.proxy.management_endpoints.internal_user_endpoints import ui_view_users
 from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import (
@@ -235,23 +235,104 @@ def test_invalid_purpose(mocker: MockerFixture, monkeypatch, llm_router: Router)
     assert error["param"] == "purpose"
 
 
-def test_get_file_content_rejects_raw_cloud_storage_uri(llm_router: Router):
-    """A raw s3:// file id must be rejected on the proxy content endpoint.
+RAW_GCS_OUTPUT_FILE_ID: Final = (
+    "gs://my-gcs-bucket/litellm-vertex-files/publishers/google/models/gemini-3.8-flash/"
+    "prediction-model-2026-09-10T20:27:18.178864Z/predictions.jsonl"
+)
+RAW_S3_OUTPUT_FILE_ID: Final = "s3://my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
 
-    Such an id is not a managed unified id, so it would otherwise skip the
-    owner/team access check and let a caller read another tenant's batch output
-    object by its key. Callers must use the managed unified file id.
-    """
+
+def _raw_cloud_file_ids_in_every_encoding() -> tuple[tuple[str, str, str], ...]:
     from urllib.parse import quote
 
-    s3_file_id = "s3://my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
-    response = client.get(
-        f"/v1/files/{quote(s3_file_id, safe='')}/content?provider=bedrock",
-        headers={"Authorization": "Bearer test-key"},
+    return tuple(
+        (encoded_id, raw_id, provider)
+        for raw_id, provider in ((RAW_GCS_OUTPUT_FILE_ID, "vertex_ai"), (RAW_S3_OUTPUT_FILE_ID, "bedrock"))
+        for encoded_id in (quote(raw_id, safe=""), quote(quote(raw_id, safe=""), safe=""))
     )
 
-    assert response.status_code == 400
-    assert "managed file id" in response.json()["error"]["message"].lower()
+
+def _override_auth(
+    monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture, llm_router: Router, user_role: LitellmUserRoles
+) -> ProxyLogging:
+    import litellm.proxy.proxy_server as ps
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key", user_role=user_role, user_id="test-user"
+    )
+    return proxy_logging_obj
+
+
+@pytest.mark.parametrize(("encoded_id", "raw_id", "provider"), _raw_cloud_file_ids_in_every_encoding())
+def test_get_file_content_answers_403_for_a_raw_cloud_id_from_a_non_admin_key(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    llm_router: Router,
+    encoded_id: str,
+    raw_id: str,
+    provider: str,
+):
+    import litellm.proxy.proxy_server as ps
+
+    _override_auth(monkeypatch, mocker, llm_router, LitellmUserRoles.INTERNAL_USER)
+    afile_content = mocker.AsyncMock()
+    monkeypatch.setattr(litellm, "afile_content", afile_content)
+
+    try:
+        response = client.get(
+            f"/v1/files/{encoded_id}/content?provider={provider}",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 403, response.text
+    assert "proxy admin" in response.json()["error"]["message"]
+    afile_content.assert_not_called()
+
+
+@pytest.mark.parametrize(("encoded_id", "raw_id", "provider"), _raw_cloud_file_ids_in_every_encoding())
+def test_get_file_content_forwards_a_raw_cloud_id_from_a_proxy_admin_key(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    llm_router: Router,
+    encoded_id: str,
+    raw_id: str,
+    provider: str,
+):
+    import litellm.proxy.proxy_server as ps
+
+    _override_auth(monkeypatch, mocker, llm_router, LitellmUserRoles.PROXY_ADMIN)
+    afile_content = mocker.AsyncMock(
+        return_value=HttpxBinaryResponseContent(
+            response=httpx.Response(
+                status_code=200,
+                content=b'{"custom_id": "request-1"}\n',
+                headers={"content-type": "application/octet-stream"},
+            )
+        )
+    )
+    monkeypatch.setattr(litellm, "afile_content", afile_content)
+
+    try:
+        response = client.get(
+            f"/v1/files/{encoded_id}/content?provider={provider}",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert response.content == b'{"custom_id": "request-1"}\n'
+    afile_content.assert_called_once()
+    assert afile_content.call_args.kwargs["custom_llm_provider"] == provider
+    assert afile_content.call_args.kwargs["file_id"] == raw_id
 
 
 def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: Router):
