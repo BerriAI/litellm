@@ -927,3 +927,58 @@ def test_every_bedrock_config_get_error_class_keeps_provider_headers(config):
 
 def test_bedrock_get_error_class_audit_covers_every_surface():
     assert len(_bedrock_configs_with_get_error_class()) >= 30
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/global.openai.gpt-5.6-sol",
+        "bedrock/global.openai.gpt-5.6-terra",
+        "bedrock/global.openai.gpt-5.6-luna",
+        "bedrock/eu.openai.gpt-5.6-sol",
+        "bedrock/eu.openai.gpt-5.6-terra",
+        "bedrock/eu.openai.gpt-5.6-luna",
+        "bedrock/apac.openai.gpt-5.6-sol",
+        "bedrock/apac.openai.gpt-5.6-terra",
+        "bedrock/apac.openai.gpt-5.6-luna",
+        "bedrock/us.openai.gpt-5.6-sol",
+        "bedrock/us.openai.gpt-5.6-terra",
+        "bedrock/us.openai.gpt-5.6-luna",
+    ],
+)
+
+
+def test_bedrock_cross_region_openai_routing(model: str):
+    """
+    Ensure cross-region OpenAI inference profiles on Bedrock route to the
+    OpenAI-compatible config instead of falling back to Bedrock Converse.
+    """
+    import litellm
+    from litellm.llms.bedrock.common_utils import get_bedrock_chat_config
+    
+    assert BedrockModelInfo.get_bedrock_route(model) == "openai"
+    assert BedrockModelInfo._explicit_openai_route(model) is True
+
+    config = get_bedrock_chat_config(model)
+    assert isinstance(config, litellm.AmazonBedrockOpenAIConfig)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/converse/global.openai.gpt-5.6-sol",
+        "bedrock/converse/eu.openai.gpt-5.6-terra",
+        "bedrock/converse/us.openai.gpt-5.6-luna",
+    ],
+)
+
+
+def test_explicit_converse_prefix_overrides_openai_routing(model: str):
+    """
+    Ensure that a user can still explicitly force the Converse API for an OpenAI model
+    by using the `converse/` prefix, which takes precedence in route_mappings.
+    """
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    # Verify the explicit prefix intercepts the routing before the openai mapping
+    assert BedrockModelInfo.get_bedrock_route(model) == "converse"

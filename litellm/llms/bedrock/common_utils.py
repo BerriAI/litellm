@@ -1133,6 +1133,10 @@ class BedrockModelInfo(BaseLLMModelInfo):
             "agentcore/": "agentcore",
             "async_invoke/": "async_invoke",
             "openai/": "openai",
+            "global.openai.": "openai",
+            "eu.openai.": "openai",
+            "apac.openai.": "openai",
+            "us.openai.": "openai",
             "mantle/": "mantle",
         }
 
@@ -1257,7 +1261,13 @@ class BedrockModelInfo(BaseLLMModelInfo):
         Check if the model is an explicit openai route.
         Used for Bedrock imported models that use OpenAI Chat Completions format.
         """
-        return BedrockModelInfo._model_has_route_prefix(model, "openai/")
+        return (
+            BedrockModelInfo._model_has_route_prefix(model, "openai/")
+            or BedrockModelInfo._model_has_route_prefix(model, "global.openai.")
+            or BedrockModelInfo._model_has_route_prefix(model, "eu.openai.")
+            or BedrockModelInfo._model_has_route_prefix(model, "apac.openai.")
+            or BedrockModelInfo._model_has_route_prefix(model, "us.openai.")
+        )
 
     @staticmethod
     def get_bedrock_provider_config_for_messages_api(

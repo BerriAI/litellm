@@ -150,9 +150,9 @@ def test_proxy_cost_calculation_scenario():
 
 
 @pytest.mark.parametrize("profile", GPT_5_6_PROFILES, ids=lambda p: p.model_id)
-def test_bedrock_gpt_5_6_profiles_route_to_converse(profile, local_model_cost_map):
-    """GPT-5.6 is served by Converse on bedrock-runtime, never by Invoke."""
-    assert BedrockModelInfo.get_bedrock_route(f"bedrock/{profile.model_id}") == "converse"
+def test_bedrock_gpt_5_6_profiles_route_to_openai(profile, local_model_cost_map):
+    """GPT-5.6 is served by Openai on bedrock-runtime."""
+    assert BedrockModelInfo.get_bedrock_route(f"bedrock/{profile.model_id}") == "openai"
 
 
 def test_bedrock_gpt_5_6_above_272k_tier_applies_to_cost(local_model_cost_map):
