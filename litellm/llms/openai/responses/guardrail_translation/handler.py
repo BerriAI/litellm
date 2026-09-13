@@ -957,7 +957,10 @@ class OpenAIResponsesHandler(BaseTranslation):
             if deliver_ended_stream_rewrites and fallback_texts and tuple(fallback_texts) != (string_so_far,):
                 from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
-                raise UndeliverableStreamRewrite(guardrail_to_apply.guardrail_name or "unknown")
+                raise UndeliverableStreamRewrite(
+                    guardrail_to_apply.guardrail_name or "unknown",
+                    "the stream carried no terminal response envelope to write the text rewrite back into",
+                )
         return responses_so_far
 
     @staticmethod
@@ -1070,7 +1073,11 @@ class OpenAIResponsesHandler(BaseTranslation):
         ):
             from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
-            raise UndeliverableStreamRewrite(guardrail_name)
+            raise UndeliverableStreamRewrite(
+                guardrail_name,
+                f"the guardrail returned {len(post_guardrail_tool_calls)} tool calls and the stream's "
+                f"{len(tool_call_items)} function_call items could not be lined up with them by call_id",
+            )
         for output_item, rewrite in (
             (output_item, rewrites_by_call_id[call_id])
             for output_item, call_id in zip(tool_call_items, call_ids)

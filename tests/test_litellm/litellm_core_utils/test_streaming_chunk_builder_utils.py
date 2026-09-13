@@ -1288,6 +1288,61 @@ def _tool_call_delta_chunk(tool_call: dict[str, object] | ChatCompletionDeltaToo
     return {"choices": [{"delta": {"tool_calls": [tool_call]}}]}
 
 
+def _choice_tool_call_delta_chunk(choice_index: int, tool_call: dict[str, object]) -> dict[str, object]:
+    return {"choices": [{"index": choice_index, "delta": {"tool_calls": [tool_call]}}]}
+
+
+def test_get_combined_tool_content_keeps_each_choices_arguments_apart_when_choices_share_a_tool_index():
+    processor = ChunkProcessor.__new__(ChunkProcessor)
+    chunks = [
+        _choice_tool_call_delta_chunk(0, {"index": 0, "id": "call_a", "type": "function", "function": {"name": "f"}}),
+        _choice_tool_call_delta_chunk(1, {"index": 0, "id": "call_b", "type": "function", "function": {"name": "f"}}),
+        _choice_tool_call_delta_chunk(0, {"index": 0, "function": {"arguments": '{"fruit": "pers'}}),
+        _choice_tool_call_delta_chunk(1, {"index": 0, "function": {"arguments": '{"fruit": "dur'}}),
+        _choice_tool_call_delta_chunk(0, {"index": 0, "function": {"arguments": 'immon"}'}}),
+        _choice_tool_call_delta_chunk(1, {"index": 0, "function": {"arguments": 'ian"}'}}),
+    ]
+
+    combined = processor.get_combined_tool_content(chunks)
+
+    assert [(tool_call.id, tool_call.function.arguments) for tool_call in combined] == [
+        ("call_a", '{"fruit": "persimmon"}'),
+        ("call_b", '{"fruit": "durian"}'),
+    ]
+
+
+def test_stream_chunk_builder_keeps_each_choices_tool_call_arguments_apart():
+    def chunk(choice_index: int, tool_call: ChatCompletionDeltaToolCall) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-123",
+            object="chat.completion.chunk",
+            created=1234567890,
+            model="gpt-4.1-mini",
+            choices=[StreamingChoices(index=choice_index, delta=Delta(tool_calls=[tool_call]), finish_reason=None)],
+        )
+
+    def fragment(arguments: str, name: str | None = None, call_id: str | None = None) -> ChatCompletionDeltaToolCall:
+        return ChatCompletionDeltaToolCall(
+            id=call_id, index=0, type="function", function=Function(name=name, arguments=arguments)
+        )
+
+    response = stream_chunk_builder(
+        chunks=[
+            chunk(0, fragment("", name="lookup_fruit", call_id="call_a")),
+            chunk(1, fragment("", name="lookup_fruit", call_id="call_b")),
+            chunk(0, fragment('{"fruit": "pers')),
+            chunk(1, fragment('{"fruit": "dur')),
+            chunk(0, fragment('immon"}')),
+            chunk(1, fragment('ian"}')),
+        ]
+    )
+
+    assert [(tool_call.id, tool_call.function.arguments) for tool_call in response.choices[0].message.tool_calls] == [
+        ("call_a", '{"fruit": "persimmon"}'),
+        ("call_b", '{"fruit": "durian"}'),
+    ]
+
+
 def test_get_combined_tool_content_joins_many_dict_shaped_argument_fragments_in_order():
     processor = ChunkProcessor.__new__(ChunkProcessor)
     first_fragments = [f"a{i};" for i in range(300)]

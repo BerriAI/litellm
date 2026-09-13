@@ -1172,7 +1172,10 @@ class AnthropicMessagesHandler(BaseTranslation):
         if deliver_ended_stream_rewrites and unended_texts and tuple(unended_texts) != (string_so_far,):
             from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
-            raise UndeliverableStreamRewrite(guardrail_to_apply.guardrail_name or "unknown")
+            raise UndeliverableStreamRewrite(
+                guardrail_to_apply.guardrail_name or "unknown",
+                "the stream never reported a stop_reason, so the text rewrite has no assembled response to land on",
+            )
         return responses_so_far
 
     def _prepare_request_data(
@@ -1318,7 +1321,11 @@ class AnthropicMessagesHandler(BaseTranslation):
         if len(block_indices) != len(post_guardrail_tool_calls):
             from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
-            raise UndeliverableStreamRewrite(guardrail_name)
+            raise UndeliverableStreamRewrite(
+                guardrail_name,
+                f"the guardrail returned {len(post_guardrail_tool_calls)} tool calls for a stream that carried "
+                f"{len(block_indices)} tool_use blocks",
+            )
         rewrites_by_block: Final = MappingProxyType(
             {
                 index: after
