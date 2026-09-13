@@ -549,6 +549,25 @@ class TestCoralBricks:
         api_base, api_key = config._get_openai_compatible_provider_info(None, None)
         assert api_base == "https://inference.coralbricks.ai/v1"
 
+    def test_coralbricks_is_selectable_in_the_add_model_form(self):
+        path = os.path.join(
+            os.path.dirname(litellm.__file__), "proxy", "public_endpoints", "provider_create_fields.json"
+        )
+        with open(path) as f:
+            entries = [e for e in json.load(f) if e["litellm_provider"] == "coralbricks"]
+        assert len(entries) == 1, "coralbricks must appear exactly once in provider_create_fields.json"
+
+        entry = entries[0]
+        assert entry["provider"] == "CORALBRICKS"
+        assert entry["provider_display_name"] == "CoralBricks"
+        assert entry["default_model_placeholder"] == "coralbricks/glm-5.3-fp4"
+
+        fields = {f["key"]: f for f in entry["credential_fields"]}
+        assert fields["api_key"]["required"] is True
+        assert fields["api_key"]["field_type"] == "password"
+        assert fields["api_base"]["required"] is False
+        assert fields["api_base"]["placeholder"] == "https://inference.coralbricks.ai/v1"
+
 
 class TestCoralBricksPricing:
     """Regression coverage for the CoralBricks cost map (Greptile P2):
