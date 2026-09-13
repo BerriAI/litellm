@@ -566,7 +566,7 @@ def anthropic_messages_handler(
             model=model,
             provider=litellm.LlmProviders(custom_llm_provider),
         )
-    if anthropic_messages_provider_config is None and _deployment_supports_native_anthropic_messages(
+    if anthropic_messages_provider_config is None and _deployment_passes_through_anthropic_messages(
         kwargs.get("model_info")
     ):
         from litellm.llms.openai_like.messages.transformation import (
@@ -664,7 +664,3 @@ def anthropic_messages_handler(
         stream=stream,
         kwargs=kwargs,
     )
-
-
-def _deployment_supports_native_anthropic_messages(model_info: object) -> bool:
-    return _deployment_passes_through_anthropic_messages(model_info)

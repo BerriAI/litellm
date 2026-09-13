@@ -466,7 +466,7 @@ def _resolve_responses_api_provider_config(
     provider_config: Final = ProviderConfigManager.get_provider_responses_api_config(
         model=model, provider=custom_llm_provider
     )
-    if provider_config is not None or not _deployment_supports_native_responses(model_info):
+    if provider_config is not None or not _deployment_passes_through_responses(model_info):
         return provider_config
     return OpenAILikeResponsesConfig()
 
@@ -2291,7 +2291,3 @@ async def _aresponses_websocket(
         custom_llm_provider=_custom_llm_provider,
         **remaining_kwargs,
     )
-
-
-def _deployment_supports_native_responses(model_info: object) -> bool:
-    return _deployment_passes_through_responses(model_info)
