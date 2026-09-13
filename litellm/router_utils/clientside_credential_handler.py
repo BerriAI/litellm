@@ -59,6 +59,7 @@ def _admin_config_fields_to_clear_on_base_override() -> list[str]:
         # ``api_base`` for the same reason as the OCI entries above.
         "nvcf_function_id",
         "use_ssl",
+        "riva_offline",
     ]
     return typed_fields + kwargs_only_fields
 

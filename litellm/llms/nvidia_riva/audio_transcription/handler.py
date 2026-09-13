@@ -16,7 +16,9 @@ The handler is intentionally a thin orchestration layer:
 3. Construct ``riva.client.Auth`` honoring NVCF (function-id metadata + TLS)
    vs self-hosted (any host:port, optional TLS) modes.
 4. Stream the audio through Riva's ``streaming_response_generator`` and
-   aggregate ``is_final`` results into a single transcript.
+   aggregate ``is_final`` results into a single transcript, or, when
+   ``riva_offline`` is set, send the whole buffer through the unary
+   ``offline_recognize`` RPC for NIMs that only ship offline engines.
 5. Return a normalized ``TranscriptionResponse`` with ``duration`` exposed
    on ``_hidden_params`` so cost calculation works.
 
@@ -26,8 +28,8 @@ without the optional STT extras installed.
 
 import asyncio
 import inspect
-from collections.abc import Callable, Iterable
-from types import ModuleType
+from collections.abc import Callable, Iterable, Mapping
+from types import MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from litellm.litellm_core_utils.audio_utils.utils import (
@@ -71,6 +73,9 @@ class _RivaAuth(Protocol):
 class _AsrService(Protocol):
     @property
     def streaming_response_generator(self) -> Callable[..., Iterable[object]]: ...
+
+    @property
+    def offline_recognize(self) -> Callable[..., object]: ...
 
 
 class _EndpointingConfig(Protocol):
@@ -234,6 +239,7 @@ class NvidiaRivaAudioTranscription:
 
         response_format: Final = request_payload.get("response_format") or "json"
         timestamp_granularities: Final = request_payload.get("timestamp_granularities")
+        riva_offline: Final = bool(request_payload.get("riva_offline", False))
 
         riva_module, riva_asr_module = _import_riva()
         auth_obj: Final = self._construct_auth(
@@ -247,10 +253,6 @@ class NvidiaRivaAudioTranscription:
             riva_asr_module=riva_asr_module,
             recognition_config_dict=recognition_config_dict,
         )
-        streaming_config: Final[_StreamingRecognitionConfig] = riva_asr_module.StreamingRecognitionConfig(
-            config=recognition_config, interim_results=False
-        )
-
         logging_obj.pre_call(
             input=None,
             api_key=api_key,
@@ -261,24 +263,30 @@ class NvidiaRivaAudioTranscription:
                     "recognition_config": recognition_config_dict,
                     "nvcf_function_id_set": bool(optional_params.get("nvcf_function_id")),
                     "use_ssl": optional_params.get("use_ssl"),
+                    "riva_offline": riva_offline,
                 },
             },
         )
 
         try:
             asr_service: Final[_AsrService] = riva_module.ASRService(auth_obj)
-            audio_chunks: Final = self._iter_audio_chunks(resampled.pcm_bytes)
-            stream_kwargs: Final[dict[str, object]] = {
-                "audio_chunks": audio_chunks,
-                "streaming_config": streaming_config,
-            }
-            # Forward the deadline so the stream cannot block forever if the
-            # server stalls. Older riva-client versions do not accept a
-            # ``timeout`` kwarg, so pass it only when supported.
-            if timeout is not None and self._supports_timeout_kwarg(asr_service.streaming_response_generator):
-                stream_kwargs["timeout"] = float(timeout)
-            stream: Final = asr_service.streaming_response_generator(**stream_kwargs)
-            final_results: Final = self._collect_final_results(stream)
+            responses: Final = (
+                self._offline_responses(
+                    asr_service=asr_service,
+                    pcm_bytes=resampled.pcm_bytes,
+                    recognition_config=recognition_config,
+                    timeout=timeout,
+                )
+                if riva_offline
+                else self._streaming_responses(
+                    asr_service=asr_service,
+                    riva_asr_module=riva_asr_module,
+                    pcm_bytes=resampled.pcm_bytes,
+                    recognition_config=recognition_config,
+                    timeout=timeout,
+                )
+            )
+            final_results: Final = self._collect_final_results(responses, require_final=not riva_offline)
         except NvidiaRivaException:
             raise
         except Exception as e:
@@ -384,6 +392,47 @@ class NvidiaRivaAudioTranscription:
 
         return config
 
+    def _streaming_responses(
+        self,
+        asr_service: _AsrService,
+        riva_asr_module: ModuleType,
+        pcm_bytes: bytes,
+        recognition_config: _RecognitionConfig,
+        timeout: float | None,
+    ) -> Iterable[object]:
+        streaming_config: Final[_StreamingRecognitionConfig] = riva_asr_module.StreamingRecognitionConfig(
+            config=recognition_config, interim_results=False
+        )
+        return asr_service.streaming_response_generator(
+            audio_chunks=self._iter_audio_chunks(pcm_bytes),
+            streaming_config=streaming_config,
+            **self._timeout_kwargs(asr_service.streaming_response_generator, timeout),
+        )
+
+    def _offline_responses(
+        self,
+        asr_service: _AsrService,
+        pcm_bytes: bytes,
+        recognition_config: _RecognitionConfig,
+        timeout: float | None,
+    ) -> Iterable[object]:
+        return (
+            asr_service.offline_recognize(
+                audio_bytes=pcm_bytes,
+                config=recognition_config,
+                **self._timeout_kwargs(asr_service.offline_recognize, timeout),
+            ),
+        )
+
+    @classmethod
+    def _timeout_kwargs(cls, rpc: Callable[..., object], timeout: float | None) -> Mapping[str, float]:
+        # Forward the deadline so the call cannot block forever if the
+        # server stalls. Older riva-client versions do not accept a
+        # ``timeout`` kwarg, so pass it only when supported.
+        if timeout is None or not cls._supports_timeout_kwarg(rpc):
+            return MappingProxyType({})
+        return MappingProxyType({"timeout": float(timeout)})
+
     @staticmethod
     def _supports_timeout_kwarg(callable_obj: Callable[..., object]) -> bool:
         try:
@@ -404,9 +453,9 @@ class NvidiaRivaAudioTranscription:
             yield chunk
 
     @staticmethod
-    def _collect_final_results(stream) -> list[dict[str, object]]:
+    def _collect_final_results(stream: Iterable[object], require_final: bool = True) -> list[dict[str, object]]:
         """
-        Walk the gRPC stream, ignore empty / non-final chunks, and return a
+        Walk the gRPC responses, ignore empty / non-final chunks, and return a
         list of normalized final-result dicts. Matching the user's note: the
         ``id`` blocks with no ``results`` are streaming heartbeats and must
         be skipped.
@@ -415,7 +464,7 @@ class NvidiaRivaAudioTranscription:
         for response in stream:
             results = getattr(response, "results", None) or []
             for result in results:
-                if not getattr(result, "is_final", False):
+                if require_final and not getattr(result, "is_final", False):
                     continue
                 alternatives = getattr(result, "alternatives", None) or []
                 if not alternatives:
