@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 from types import TracebackType
 from typing import Final
@@ -14,6 +15,42 @@ from litellm.realtime_api.main import _with_resolved_session_model
 class FakeLogging:
     def update_from_kwargs(self, **kwargs):
         pass
+
+
+@pytest.mark.parametrize("provider", [litellm.LlmProviders.XAI, litellm.LlmProviders.OPENAI, litellm.LlmProviders.GEMINI])
+def test_realtime_handler_factory_does_not_read_headers_without_a_handler(provider):
+    from litellm.types.router import GenericLiteLLMParams
+
+    read_headers = MagicMock(side_effect=AssertionError("Headers must not be read"))
+    assert realtime_main.ProviderConfigManager.get_provider_realtime_handler(
+        provider, GenericLiteLLMParams(), read_headers
+    ) is None
+    read_headers.assert_not_called()
+
+
+def test_realtime_handler_factory_passes_actual_chatgpt_headers(tmp_path, monkeypatch):
+    from litellm.llms.chatgpt.realtime import ChatGPTRealtime
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("CHATGPT_AUTH_FILE", "auth.json")
+    (tmp_path / "auth.json").write_text(
+        json.dumps({"access_token": "factory-test-token", "account_id": "factory-account", "expires_at": time.time() + 3600})
+    )
+    params = GenericLiteLLMParams(litellm_session_id="factory-session")
+    headers = {"openai-alpha": "quicksilver=v2"}
+    extra_headers = {"x-gateway-route": "required"}
+    read_headers = MagicMock(return_value=headers)
+    result = realtime_main.ProviderConfigManager.get_provider_realtime_handler(
+        litellm.LlmProviders.CHATGPT, params, read_headers, extra_headers
+    )
+    assert isinstance(result, ChatGPTRealtime)
+    read_headers.assert_called_once_with()
+    outgoing_headers = result._get_additional_headers("unused")
+    assert outgoing_headers["openai-alpha"] == headers["openai-alpha"]
+    assert outgoing_headers["x-gateway-route"] == extra_headers["x-gateway-route"]
+    assert outgoing_headers["session_id"] == "factory-session"
+    assert outgoing_headers["Authorization"] == "Bearer factory-test-token"
 
 
 def test_resolves_top_level_session_model():
@@ -430,3 +467,29 @@ async def test_arealtime_azure_env_beta_protocol_wins_over_a_ga_client(monkeypat
     assert await _azure_backend_url_dialed_for(_GA_CLIENT) == (
         "wss://my-endpoint.openai.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=gpt-realtime"
     )
+
+
+@pytest.mark.parametrize("is_call", [False, True])
+@pytest.mark.parametrize("provider", ["chatgpt", "openai", "azure"])
+def test_realtime_http_provider_controls_dynamic_base_precedence(provider, is_call, monkeypatch):
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.delenv("CHATGPT_API_BASE", raising=False)
+    monkeypatch.delenv("OPENAI_CHATGPT_API_BASE", raising=False)
+    config, base, key = realtime_main._get_realtime_http_provider_config(
+        custom_llm_provider=provider,
+        dynamic_api_base="https://dynamic.example/v1",
+        dynamic_api_key="dynamic-key",
+        litellm_params=GenericLiteLLMParams(api_base="https://configured.example/v1"),
+        is_call=is_call,
+    )
+    expected_base = "https://configured.example/v1" if provider == "chatgpt" else "https://dynamic.example/v1"
+    assert base == expected_base
+    assert key == ("chatgpt-oauth" if provider == "chatgpt" else "dynamic-key")
+    assert config is not None
+    if provider == "chatgpt":
+        assert config.get_realtime_calls_url(base, "gpt-realtime-1.5") == expected_base + "/realtime/calls"
+    else:
+        assert config.get_realtime_calls_extra_headers({"x-gateway-route": "required"}) == {
+            "x-gateway-route": "required"
+        }

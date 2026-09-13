@@ -421,6 +421,7 @@ if TYPE_CHECKING:
     from litellm.llms.cohere.common_utils import CohereModelInfo
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
+    from litellm.llms.openai.realtime.handler import OpenAIRealtime
     from litellm.proxy._types import AllowedModelRegion
     from litellm.router_utils.get_retry_from_policy import (
         get_num_retries_from_retry_policy,
@@ -436,7 +437,7 @@ if TYPE_CHECKING:
         ChatCompletionToolCallFunctionChunk,
     )
     from litellm.types.rerank import RerankResponse
-    from litellm.types.router import LiteLLM_Params
+    from litellm.types.router import GenericLiteLLMParams, LiteLLM_Params
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
@@ -5926,6 +5927,7 @@ def _get_model_info_helper(
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
                 input_cost_per_audio_token=_model_info.get("input_cost_per_audio_token", None),
                 input_cost_per_image_token=_model_info.get("input_cost_per_image_token", None),
+                cache_read_input_image_token_cost=_model_info.get("cache_read_input_image_token_cost", None),
                 input_cost_per_video_token=_model_info.get("input_cost_per_video_token", None),
                 input_cost_per_image=_model_info.get("input_cost_per_image", None),
                 input_cost_per_audio_per_second=_model_info.get("input_cost_per_audio_per_second", None),
@@ -9136,6 +9138,10 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> BaseImageGenerationConfig | None:
+        if LlmProviders.CHATGPT == provider:
+            from litellm.llms.chatgpt.images import ChatGPTImageGenerationConfig
+
+            return ChatGPTImageGenerationConfig()
         if LlmProviders.OPENAI == provider:
             from litellm.llms.openai.image_generation import (
                 get_openai_image_generation_config,
@@ -9309,15 +9315,35 @@ class ProviderConfigManager:
         return None
 
     @staticmethod
+    def get_provider_realtime_handler(
+        provider: LlmProviders,
+        params: GenericLiteLLMParams,
+        get_headers: Callable[[], Mapping[str, str]],
+        extra_headers: Mapping[str, object] | None = None,
+    ) -> OpenAIRealtime | None:
+        if provider == LlmProviders.CHATGPT:
+            from litellm.llms.chatgpt.realtime import ChatGPTRealtime
+
+            return ChatGPTRealtime(params, get_headers(), extra_headers)
+        return None
+
+    @staticmethod
     def get_provider_realtime_http_config(
         model: str,
         provider: LlmProviders,
+        params: GenericLiteLLMParams | None = None,
+        is_call: bool = False,
     ) -> BaseRealtimeHTTPConfig | None:
         """
         Return the HTTP transformation config for realtime HTTP endpoints
         (POST /realtime/client_secrets and POST /realtime/calls).
         """
 
+        if LlmProviders.CHATGPT == provider:
+            from litellm.llms.chatgpt.realtime import ChatGPTRealtimeHTTPConfig
+            from litellm.types.router import GenericLiteLLMParams
+
+            return ChatGPTRealtimeHTTPConfig(params or GenericLiteLLMParams(), use_codex_backend=is_call)
         if LlmProviders.OPENAI == provider:
             from litellm.llms.openai.realtime.http_transformation import (
                 OpenAIRealtimeHTTPConfig,
@@ -9337,6 +9363,10 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> BaseImageEditConfig | None:
+        if LlmProviders.CHATGPT == provider:
+            from litellm.llms.chatgpt.images import ChatGPTImageEditConfig
+
+            return ChatGPTImageEditConfig()
         if LlmProviders.OPENAI == provider:
             from litellm.llms.openai.image_edit import get_openai_image_edit_config
 

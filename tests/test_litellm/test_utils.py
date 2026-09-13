@@ -995,6 +995,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "type": "number"
                 },
                 "cache_read_input_audio_token_cost": {"type": "number"},
+                "cache_read_input_image_token_cost": {"type": "number"},
                 "audio_transcription_config": {"type": "string"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
@@ -1186,6 +1187,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/messages",
                             "/v1/images/generations",
                             "/v1/realtime",
+                            "/v1/realtime/calls",
+                            "/v1/live",
                             "/v1/realtime/transcription_sessions",
                             "/v1/images/variations",
                             "/v1/images/edits",
@@ -1430,6 +1433,7 @@ def test_openai_models_in_model_info(monkeypatch):
         if (
             info.get("litellm_provider") == "openai"
             and info.get("supports_vision") is True
+            and info.get("mode") != "image_generation"
         ):
             if info.get("supports_pdf_input") is not True:
                 violated_models.append(model)

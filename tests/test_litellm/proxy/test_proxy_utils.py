@@ -1,6 +1,7 @@
 import datetime as real_datetime
 import smtplib
 from typing import Final
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -9,13 +10,8 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
-from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.proxy.utils import PrismaClient, ProxyLogging, get_custom_url, join_paths
 from litellm.types.guardrails import GuardrailEventHooks
-
-
-from unittest.mock import MagicMock, patch
-
-from litellm.proxy.utils import get_custom_url, join_paths
 
 
 def test_get_custom_url(monkeypatch):
@@ -2110,9 +2106,7 @@ def test_create_model_info_response_resolves_alias_to_deployment_model():
             ]
         )
 
-        response = create_model_info_response(
-            model_id="bedrock-claude-opus-5", provider="openai", llm_router=router
-        )
+        response = create_model_info_response(model_id="bedrock-claude-opus-5", provider="openai", llm_router=router)
     finally:
         litellm.model_cost.clear()
         litellm.model_cost.update(saved_model_cost)
@@ -2141,9 +2135,7 @@ def test_create_model_info_response_keeps_exact_alias_over_generalized_deploymen
             ]
         )
 
-        response = create_model_info_response(
-            model_id="claude-opus-5", provider="openai", llm_router=router
-        )
+        response = create_model_info_response(model_id="claude-opus-5", provider="openai", llm_router=router)
     finally:
         litellm.model_cost.clear()
         litellm.model_cost.update(saved_model_cost)
@@ -2167,9 +2159,7 @@ def test_create_model_info_response_falls_back_to_alias_for_opaque_deployment_na
             ]
         )
 
-        response = create_model_info_response(
-            model_id="gpt-4o", provider="openai", llm_router=router
-        )
+        response = create_model_info_response(model_id="gpt-4o", provider="openai", llm_router=router)
     finally:
         litellm.model_cost.clear()
         litellm.model_cost.update(saved_model_cost)
@@ -2194,9 +2184,7 @@ def test_create_model_info_response_resolves_mode_through_deployment_model():
             ]
         )
 
-        response = create_model_info_response(
-            model_id="my-embeddings", provider="openai", llm_router=router
-        )
+        response = create_model_info_response(model_id="my-embeddings", provider="openai", llm_router=router)
     finally:
         litellm.model_cost.clear()
         litellm.model_cost.update(saved_model_cost)
@@ -2274,7 +2262,9 @@ async def test_post_call_failure_hook_redacts_traceback_before_callbacks(monkeyp
     with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
         await proxy_logging_obj.post_call_failure_hook(
             request_data={"metadata": {}},
-            original_exception=HTTPException(status_code=400, detail="Upstream passthrough request failed with status 400"),
+            original_exception=HTTPException(
+                status_code=400, detail="Upstream passthrough request failed with status 400"
+            ),
             user_api_key_dict=UserAPIKeyAuth(),
             traceback_str=upstream_traceback,
         )
@@ -2282,6 +2272,130 @@ async def test_post_call_failure_hook_redacts_traceback_before_callbacks(monkeyp
     assert recorder.received_traceback is not None
     assert provider_key not in recorder.received_traceback
     assert "REDACTED" in recorder.received_traceback
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limiter_version", [1, 3])
+@pytest.mark.parametrize("limit", ["rpm_limit", "max_parallel_requests"])
+async def test_internal_realtime_observer_preserves_quota_and_custom_hooks(monkeypatch, limiter_version, limit):
+    import asyncio
+    from datetime import datetime
+
+    from litellm.caching.caching import DualCache
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.hooks.parallel_request_limiter import _PROXY_MaxParallelRequestsHandler
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        _PROXY_MaxParallelRequestsHandler_v3,
+        _request_stash,
+        get_request_stash,
+    )
+    from litellm.proxy.utils import InternalUsageCache, ProxyLogging
+
+    observed = []
+
+    class Hook(CustomLogger):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            observed.append(call_type)
+            return {**data, "extra_headers": {"x-hook": "required"}}
+
+    cache = DualCache()
+    limiter_type = _PROXY_MaxParallelRequestsHandler if limiter_version == 1 else _PROXY_MaxParallelRequestsHandler_v3
+    limiter = limiter_type(InternalUsageCache(dual_cache=cache))
+    proxy = ProxyLogging(UserApiKeyCache())
+    monkeypatch.setattr(litellm, "callbacks", [limiter, Hook()])
+    token = _request_stash.set(None)
+    try:
+        auth = UserAPIKeyAuth(api_key="observer-quota-test", **{limit: 1})
+        await proxy.pre_call_hook(
+            auth, {"model": "voice", "litellm_call_id": "signaling", "metadata": {}}, "arealtime_calls"
+        )
+        await asyncio.sleep(0)
+        initial_stash = get_request_stash()
+        result = await proxy.pre_call_hook(
+            auth,
+            {"model": "voice", "litellm_call_id": "observer", "metadata": {}},
+            "_arealtime",
+            internal_realtime_observer=True,
+        )
+        assert result["extra_headers"] == {"x-hook": "required"}
+        assert observed == ["arealtime_calls", "_arealtime"]
+        if limiter_version == 3:
+            assert get_request_stash() is initial_stash
+            assert initial_stash.owner_litellm_call_id == "signaling"
+        if limit == "max_parallel_requests":
+            await limiter.async_log_success_event(
+                {
+                    "litellm_call_id": "signaling",
+                    "litellm_params": {"metadata": {"user_api_key": auth.api_key, "user_api_key_model_max_budget": {}}},
+                },
+                litellm.ModelResponse(usage=litellm.Usage(total_tokens=0)),
+                datetime.now(),
+                datetime.now(),
+            )
+            if limiter_version == 3:
+                assert initial_stash.parallel_slot is None
+            await proxy.pre_call_hook(
+                auth, {"model": "voice", "litellm_call_id": "next", "metadata": {}}, "arealtime_calls"
+            )
+        if limiter_version == 1 and limit == "max_parallel_requests":
+            from litellm.proxy._types import InternalRequestOrigin
+
+            await asyncio.sleep(0)
+            observer_kwargs = {
+                "internal_request_origin": InternalRequestOrigin.REALTIME_OBSERVER,
+                "litellm_call_id": "observer",
+                "litellm_params": {"metadata": {"user_api_key": auth.api_key, "user_api_key_model_max_budget": {}}},
+            }
+            await limiter.async_log_success_event(
+                observer_kwargs,
+                litellm.ModelResponse(usage=litellm.Usage(total_tokens=17)),
+                datetime.now(),
+                datetime.now(),
+            )
+            current = await limiter.internal_usage_cache.async_get_cache(
+                key=f"{auth.api_key}::{datetime.now():%Y-%m-%d-%H-%M}::request_count", litellm_parent_otel_span=None
+            )
+            assert current["current_requests"] == 1
+            assert current["current_tpm"] == 17
+        with pytest.raises(HTTPException) as error:
+            await proxy.pre_call_hook(
+                auth,
+                {"model": "voice", "litellm_call_id": "forged", "metadata": {}, "internal_realtime_observer": True},
+                "_arealtime",
+            )
+        assert error.value.status_code == 429
+    finally:
+        _request_stash.reset(token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["key", "user", "team", "end_user"])
+async def test_internal_observer_missing_legacy_counter_only_adds_usage(scope):
+    from datetime import datetime
+
+    from litellm.proxy._types import InternalRequestOrigin
+    from litellm.proxy.hooks.parallel_request_limiter import _PROXY_MaxParallelRequestsHandler
+    from litellm.proxy.utils import InternalUsageCache
+
+    limiter = _PROXY_MaxParallelRequestsHandler(InternalUsageCache(dual_cache=DualCache()))
+    metadata = {"user_api_key": "expired-key", "user_api_key_model_max_budget": {}}
+    if scope in ("user", "team"):
+        metadata[f"user_api_key_{scope}_id"] = "expired-scope"
+    kwargs = {
+        "internal_request_origin": InternalRequestOrigin.REALTIME_OBSERVER,
+        "litellm_params": {"metadata": metadata},
+        **({"user": "expired-scope"} if scope == "end_user" else {}),
+    }
+    await limiter.async_log_success_event(
+        kwargs, litellm.ModelResponse(usage=litellm.Usage(total_tokens=23)), datetime.now(), datetime.now()
+    )
+    identity = "expired-key" if scope == "key" else "expired-scope"
+    current = await limiter.internal_usage_cache.async_get_cache(
+        key=f"{identity}::{datetime.now():%Y-%m-%d-%H-%M}::request_count", litellm_parent_otel_span=None
+    )
+    assert current == {"current_requests": 0, "current_tpm": 23, "current_rpm": 0}
 
 
 class TestPrismaClientTokenAuthBehindThePool:

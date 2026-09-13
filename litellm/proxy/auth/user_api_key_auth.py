@@ -359,7 +359,7 @@ async def _check_key_model_budget_with_fallback(
             model=model_name,
         )
     except litellm.BudgetExceededError as e:
-        if request_data.get("model") != model_name:
+        if request_data.get("model") != model_name or request.scope.get("litellm_pinned_realtime_model") == model_name:
             raise e
         fallback_model: Final = await model_max_budget_limiter.get_fallback_model_within_budget(
             user_api_key_dict=valid_token,
@@ -544,6 +544,38 @@ def _apply_budget_limits_to_end_user_params(
     verbose_proxy_logger.debug("Applied budget limits to end user %s", end_user_id)
 
 
+def get_websocket_api_key(websocket: WebSocket) -> str | None:
+    from litellm.proxy.proxy_server import general_settings
+
+    custom_header: Final = general_settings.get("litellm_key_header_name")
+    if isinstance(custom_header, str):
+        if not websocket.headers.get(custom_header):
+            return None
+        request: Final = Request(
+            {"type": "http", "headers": websocket.scope.get("headers", [])}  # mutable-ok: ASGI request scope
+        )
+        return get_api_key_from_custom_header(request, custom_header)
+    custom_key: Final = websocket.headers.get("x-litellm-api-key")
+    if custom_key is not None:
+        return _get_bearer_token_or_received_api_key(custom_key)
+    authorization: Final = websocket.headers.get("authorization")
+    if authorization:
+        if not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=403, detail="Invalid Authorization header format")
+        return authorization[len("Bearer ") :].strip()
+    api_key: Final = websocket.headers.get("api-key")
+    if api_key:
+        return api_key
+    return next(
+        (
+            protocol.strip().removeprefix("openai-insecure-api-key.")
+            for protocol in websocket.headers.get("sec-websocket-protocol", "").split(",")
+            if protocol.strip().startswith("openai-insecure-api-key.")
+        ),
+        None,
+    )
+
+
 async def user_api_key_auth_websocket(websocket: WebSocket):
     # Accept the WebSocket connection
 
@@ -566,40 +598,33 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
 
     request._url = websocket.url
 
-    query_params: Final = websocket.query_params
-
-    model: Final = query_params.get("model")
-
-    async def return_body():
-        return _realtime_request_body(model)
-
-    request.body = return_body
-
-    authorization: Final = websocket.headers.get("authorization")
-    # If no Authorization header, try the api-key header
-    if not authorization:
-        api_key = websocket.headers.get("api-key")
-        if not api_key:
-            # Try extracting from WebSocket subprotocol (browser clients)
-            for protocol in websocket.headers.get("sec-websocket-protocol", "").split(","):
-                protocol = protocol.strip()
-                if protocol.startswith("openai-insecure-api-key."):
-                    api_key = protocol[len("openai-insecure-api-key.") :]
-                    break
-        if not api_key:
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-            raise HTTPException(status_code=403, detail="No API key provided")
-    else:
-        # Extract the API key from the Bearer token
-        if not authorization.startswith("Bearer "):
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-            raise HTTPException(status_code=403, detail="Invalid Authorization header format")
-
-        api_key = authorization[len("Bearer ") :].strip()
+    try:
+        api_key: Final = get_websocket_api_key(websocket)
+    except HTTPException:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        raise
+    if not api_key:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        raise HTTPException(status_code=403, detail="No API key provided")
 
     # Call user_api_key_auth with the extracted API key
     # Note: You'll need to modify this to work with WebSocket context if needed
     try:
+        from litellm.proxy.realtime_endpoints.call_sessions import decode_call
+
+        call_token: Final = websocket.path_params.get("call_id") or websocket.query_params.get("call_id")
+        model: Final = (
+            decode_call(call_token, f"Bearer {api_key}").alias
+            if call_token is not None
+            else websocket.query_params.get("model")
+        )
+        if call_token is not None:
+            request.scope["litellm_pinned_realtime_model"] = model
+
+        async def return_body():
+            return _realtime_request_body(model)
+
+        request.body = return_body
         return await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
     except Exception as e:
         if is_invalid_virtual_key_error(e):

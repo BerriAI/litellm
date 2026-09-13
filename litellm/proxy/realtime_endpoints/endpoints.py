@@ -16,7 +16,10 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (
+    _normalize_media_type,  # pyright: ignore[reportPrivateUsage]  # reuse the shared HTTP media-type normalization contract
+    _read_request_body,
+)
 from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
     openai_error_param,
@@ -375,6 +378,11 @@ async def proxy_realtime_calls(
     request: Request,
     fastapi_response: Response,
 ) -> Response:
+    if _normalize_media_type(request.headers.get("content-type", "")) in ("application/json", "multipart/form-data"):
+        from litellm.proxy.realtime_endpoints.call_sessions import create_codex_realtime_call
+
+        return await create_codex_realtime_call(request)
+
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,

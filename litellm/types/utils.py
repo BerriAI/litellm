@@ -252,6 +252,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_creation_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_creation_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_read_input_token_cost: float | None
+    cache_read_input_image_token_cost: ReadOnly[float | None]
     cache_read_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_read_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_read_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
@@ -3559,6 +3560,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_read_input_token_cost_above_272k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_flex: float | None = None
     cache_read_input_audio_token_cost: float | None = None
+    cache_read_input_image_token_cost: float | None = None
     input_cost_per_character_above_128k_tokens: float | None = None
     input_cost_per_audio_token: float | None = None
     input_cost_per_token_cache_hit: float | None = None
@@ -3839,6 +3841,9 @@ all_litellm_params = (
         "enable_tag_filtering",
         "enable_json_schema_validation",
         "use_xai_oauth",
+        "chatgpt_auth_profile",
+        "chatgpt_token_dir",
+        "chatgpt_auth_file",
         "auto_router_config_path",
         "auto_router_config",
         "auto_router_default_model",

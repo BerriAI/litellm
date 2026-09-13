@@ -1,3 +1,4 @@
+import inspect
 from typing import Any, Final
 
 from pydantic import BaseModel, Field
@@ -35,7 +36,7 @@ def get_status_code(exception):
 ERROR_RESPONSES: Final = {
     get_status_code(exception): {
         "model": ErrorResponse,
-        "description": exception.__doc__ or exception.__name__,
+        "description": inspect.cleandoc(exception.__doc__ or exception.__name__),
     }
     for exception in LITELLM_EXCEPTION_TYPES
 }

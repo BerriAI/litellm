@@ -7,6 +7,7 @@ These are HTTP (not WebSocket) endpoints used by the WebRTC flow:
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -35,6 +36,14 @@ class BaseRealtimeHTTPConfig(ABC):
         Resolution order (provider-specific):
           explicit api_base → litellm.api_base → env var → hard-coded default
         """
+
+    def resolve_api_base(self, api_base: str | None, dynamic_api_base: str | None) -> str:
+        return self.get_api_base(dynamic_api_base or api_base)
+
+    def get_realtime_calls_extra_headers(
+        self, headers: dict[str, object] | None
+    ) -> dict[str, object] | None:  # mutable-ok: shared HTTP handler accepts a mutable header dictionary
+        return headers
 
     @abstractmethod
     def get_api_key(
@@ -96,6 +105,11 @@ class BaseRealtimeHTTPConfig(ABC):
         return {
             "Authorization": f"Bearer {ephemeral_key}",
         }
+
+    def transform_realtime_calls_response(
+        self, response: httpx.Response, model: str, model_id: str | None, headers: Mapping[str, object] | None
+    ) -> httpx.Response:
+        return response
 
     # ------------------------------------------------------------------ #
     # Error handling                                                      #

@@ -377,6 +377,7 @@ def image_generation(
         # Providers using llm_http_handler
         #########################################################
         elif custom_llm_provider in (
+            litellm.LlmProviders.CHATGPT,
             litellm.LlmProviders.RECRAFT,
             litellm.LlmProviders.AIML,
             litellm.LlmProviders.GEMINI,
@@ -401,6 +402,7 @@ def image_generation(
                 model=model,
                 prompt=prompt,
                 image_generation_provider_config=image_generation_config,
+                extra_headers=extra_headers,
                 image_generation_optional_request_params=optional_params,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params_dict,
@@ -867,6 +869,8 @@ def image_edit(
                     non_default_params,
                     extra_body if isinstance(extra_body, dict) else None,
                 )
+                if image_edit_provider_config.use_multipart_form_data()
+                else {**non_default_params, **(extra_body if isinstance(extra_body, dict) else {})}
             )
 
         # Pre Call logging
@@ -965,9 +969,9 @@ def image_edit(
 
 @client
 async def aimage_edit(
-    image: FileTypes | list[FileTypes],
-    model: str,
-    prompt: str,
+    image: FileTypes | list[FileTypes] | None = None,
+    model: str = "",
+    prompt: str = "",
     mask: str | None = None,
     n: int | None = None,
     quality: str | ImageGenerationRequestQuality | None = None,
@@ -1005,11 +1009,9 @@ async def aimage_edit(
                 model=model, api_base=local_vars.get("base_url", None)
             )
 
-        images: Final = image if isinstance(image, list) else [image]
-
         func: Final = partial(
             image_edit,
-            image=images,
+            image=image,
             prompt=prompt,
             mask=mask,
             model=model,

@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from httpx import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -2634,7 +2634,12 @@ def handle_realtime_stream_cost_calculation(
         if any(r.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE for r in results)
         else 0.0
     )
-    total_cost: Final = input_cost_per_token + output_cost_per_token + transcription_cost
+    live_audio_cost: Final = handle_live_session_duration_cost(
+        results=results,
+        custom_llm_provider=custom_llm_provider,
+        litellm_model_name=litellm_model_name,
+    )
+    total_cost: Final = input_cost_per_token + output_cost_per_token + transcription_cost + live_audio_cost
 
     _store_cost_breakdown_in_logging_obj(
         litellm_logging_obj=litellm_logging_obj,
@@ -2642,11 +2647,43 @@ def handle_realtime_stream_cost_calculation(
         completion_tokens_cost_usd_dollar=output_cost_per_token,
         cost_for_built_in_tools_cost_usd_dollar=0.0,
         total_cost_usd_dollar=total_cost,
-        additional_costs={"transcription_cost": transcription_cost} if transcription_cost > 0 else None,
+        additional_costs={  # mutable-ok: logging cost breakdown requires a concrete dict
+            name: cost
+            for name, cost in (("transcription_cost", transcription_cost), ("live_audio_cost", live_audio_cost))
+            if cost > 0
+        }
+        or None,
         data_residency=data_residency,
     )
 
     return total_cost
+
+
+class _LiveSessionDurationUsage(BaseModel):
+    audio_duration_ms: float = Field(strict=True, ge=0, allow_inf_nan=False)
+
+
+class _LiveSessionClosedEvent(BaseModel):
+    usage: _LiveSessionDurationUsage
+
+
+def handle_live_session_duration_cost(
+    results: OpenAIRealtimeStreamList,
+    custom_llm_provider: str,
+    litellm_model_name: str,
+) -> float:
+    terminal: Final = next((event for event in reversed(results) if event.get("type") == "session.closed"), None)
+    if terminal is None:
+        return 0.0
+    try:
+        usage: Final = _LiveSessionClosedEvent.model_validate(terminal).usage
+    except ValidationError:
+        return 0.0
+    try:
+        model_info: Final = litellm.get_model_info(model=litellm_model_name, custom_llm_provider=custom_llm_provider)
+    except Exception:
+        return 0.0
+    return usage.audio_duration_ms / 1000 * (model_info.get("input_cost_per_second") or 0.0)
 
 
 def handle_realtime_transcription_cost_calculation(

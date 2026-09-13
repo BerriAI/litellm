@@ -1400,6 +1400,10 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as e:
             verbose_proxy_logger.error("Error stopping DB health watchdog task: %s", e)
 
+    from litellm.proxy.realtime_endpoints.call_supervision import CALL_SUPERVISORS
+
+    await CALL_SUPERVISORS.shutdown()
+
     await _drain_spend_event_producer_on_shutdown()
 
     await flush_spend_counters_on_shutdown()
@@ -11914,6 +11918,22 @@ async def _reject_realtime_session(
         await _release_realtime_budget_reservation(user_api_key_dict)
 
 
+_CODEX_LIVE_AUTH_DEPENDENCY: Final = Depends(user_api_key_auth_websocket)
+
+
+@app.websocket("/v1/live/{call_id}")
+async def codex_live_sideband_endpoint(
+    websocket: WebSocket,
+    call_id: str,
+    user_api_key_dict: UserAPIKeyAuth = _CODEX_LIVE_AUTH_DEPENDENCY,
+) -> None:
+    from litellm.proxy.realtime_endpoints.call_sessions import codex_realtime_sideband
+
+    await codex_realtime_sideband(websocket, call_id, user_api_key_dict)
+
+
+@app.websocket("/v1/live")
+@app.websocket("/live")
 @app.websocket("/openai/v1/realtime")
 @app.websocket("/v1/realtime")
 @app.websocket("/realtime")
@@ -11921,12 +11941,18 @@ async def realtime_websocket_endpoint(
     websocket: WebSocket,
     model: str | None = fastapi.Query(None, description="The model to use for the websocket connection."),
     intent: str | None = fastapi.Query(None, description="The intent of the websocket connection."),
+    call_id: str | None = None,
     guardrails: str | None = fastapi.Query(
         None,
         description="Comma-separated list of guardrail names to apply to this request.",
     ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
 ):
+    if call_id is not None:
+        from litellm.proxy.realtime_endpoints.call_sessions import codex_realtime_sideband
+
+        await codex_realtime_sideband(websocket, call_id, user_api_key_dict)
+        return
     requested_protocols: Final = [
         p.strip() for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",") if p.strip()
     ]
@@ -11957,7 +11983,10 @@ async def realtime_websocket_endpoint(
     await websocket.accept(**accept_kwargs)
 
     # Only use explicit parameters, not all query params
-    query_params: Final = cast(RealtimeQueryParams, dict(_realtime_query_params_template(model, intent)))
+    query_params: Final = cast(
+        RealtimeQueryParams,
+        dict(_realtime_query_params_template(model, intent) + ((("call_id", call_id),) if call_id is not None else ())),
+    )
 
     data: dict[str, object] = {
         "model": route_model,

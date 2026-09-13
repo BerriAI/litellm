@@ -3399,6 +3399,66 @@ async def test_refused_session_does_not_stamp_the_reservation_ownership_marker()
     assert REALTIME_SESSION_SUCCESS_LOGGED_KEY not in session.logging.model_call_details
 
 
+def test_live_terminal_usage_survives_filtered_event_logging(monkeypatch):
+    from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
+
+    def terminal():
+        return {"type": "session.closed", "usage": {"audio_duration_ms": 4000, "backend_model_usage": []}}
+
+    monkeypatch.setattr(litellm, "logged_real_time_event_types", [])
+    stream = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
+    event = {**terminal(), "private_transcript": "Do not retain this text"}
+    stream.store_message(event)
+    assert stream.messages == [terminal()]
+    usage = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(stream.messages)
+    assert usage.total_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_live_attachment_does_not_dispatch_duplicate_usage():
+    worker = MagicMock()
+    logger = MagicMock()
+    stream = RealTimeStreaming(MagicMock(), MagicMock(), logger, logging_worker=worker, account_usage=False)
+    stream.store_message({"type": "session.closed", "usage": {"audio_duration_ms": 4000}})
+    await stream.log_messages()
+    worker.ensure_initialized_and_enqueue.assert_not_called()
+    logger.dispatch_success_handlers.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("account_usage", [False, True])
+async def test_attachment_cleanup_runs_in_owning_context_only(account_usage):
+    from litellm.litellm_core_utils.realtime_streaming import realtime_attachment_cleanup
+
+    contexts = []
+
+    async def one(name):
+        task = asyncio.current_task()
+        callback = AsyncMock(side_effect=lambda: contexts.append((name, asyncio.current_task() is task)))
+        token = realtime_attachment_cleanup.set(callback)
+        try:
+            websocket = MagicMock()
+            websocket.receive_text = AsyncMock(side_effect=RuntimeError("disconnected"))
+            backend = MagicMock()
+
+            async def recv(**kwargs):
+                await asyncio.Event().wait()
+
+            backend.recv = recv
+            stream = RealTimeStreaming(websocket, backend, MagicMock(), account_usage=account_usage)
+            await stream.bidirectional_forward()
+            if account_usage:
+                callback.assert_not_awaited()
+            else:
+                callback.assert_awaited_once()
+        finally:
+            realtime_attachment_cleanup.reset(token)
+
+    await asyncio.gather(one("first"), one("second"))
+    assert sorted(contexts) == ([] if account_usage else [("first", True), ("second", True)])
+    assert realtime_attachment_cleanup.get() is None
+
+
 @pytest.mark.asyncio
 async def test_transformed_transcription_completion_never_sends_response_create():
     from typing import Final
