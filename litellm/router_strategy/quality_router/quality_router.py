@@ -326,12 +326,13 @@ class QualityRouter(CustomLogger):
         baseline = resolve_baseline(self.litellm_router_instance, self.config.available_models)
         if baseline is None:
             return {}  # mutable-ok: immutable empty result for unresolved baseline
-        return {
+        fields: Final[StandardLoggingRoutingDecision] = {
             "savings_baseline_model": baseline.model,
             **(
                 {"savings_baseline_deployment_id": baseline.deployment_id} if baseline.deployment_id is not None else {}
             ),
         }
+        return fields
 
     async def async_pre_routing_hook(
         self,
@@ -468,7 +469,7 @@ class QualityRouter(CustomLogger):
             cause="quality_tier",
             tier=str(int(quality_tier)),
             score=score,
-            signals=list(signals),
+            signals=list(signals),  # mutable-ok: routing decision metadata uses a JSON list
             conversation_continuing=conversation_continuing,
         )
         quality_routing_decision.update(savings_fields)
