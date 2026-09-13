@@ -64,6 +64,7 @@ def cost_per_character(
     usage: Usage,
     prompt_characters: float | None = None,
     completion_characters: float | None = None,
+    service_tier: str | None = None,
     vertex_location: str | None = None,
 ) -> tuple[float, float]:
     """
@@ -74,6 +75,8 @@ def cost_per_character(
         - custom_llm_provider: str, "vertex_ai-*"
         - prompt_characters: float, the number of input characters
         - completion_characters: float, the number of output characters
+        - service_tier: optional tier derived from Gemini trafficType
+          ("priority" for ON_DEMAND_PRIORITY, "flex" for FLEX/batch).
         - vertex_location: the Vertex AI location serving the request; non-global
           locations apply the model's regional-endpoint uplift multiplier
 
@@ -92,6 +95,7 @@ def cost_per_character(
             model=model,
             custom_llm_provider=custom_llm_provider,
             usage=usage,
+            service_tier=service_tier,
         )
     else:
         try:
@@ -123,6 +127,7 @@ def cost_per_character(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 usage=usage,
+                service_tier=service_tier,
             )
 
     ## CALCULATE OUTPUT COST
@@ -131,6 +136,7 @@ def cost_per_character(
             model=model,
             custom_llm_provider=custom_llm_provider,
             usage=usage,
+            service_tier=service_tier,
         )
     else:
         completion_tokens: Final = usage.completion_tokens
@@ -162,6 +168,7 @@ def cost_per_character(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 usage=usage,
+                service_tier=service_tier,
             )
 
     vertex_uplift: Final = get_vertex_regional_endpoint_uplift(model_info, vertex_location)

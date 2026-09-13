@@ -23,6 +23,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
 )
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _encode_tool_call_id_with_signature,
@@ -89,6 +90,7 @@ from ..common_utils import (
     supports_response_json_schema,
 )
 from ..vertex_llm_base import VertexBase
+from .grounding_requests import calculate_grounding_requests
 from .transformation import (
     _gemini_convert_messages_with_history,
     async_transform_request_body,
@@ -105,6 +107,21 @@ if TYPE_CHECKING:
 else:
     LoggingClass = Any
     StreamingChoices = Any
+
+
+SUPPORTED_REASONING_EFFORTS: Final = ("minimal", "low", "medium", "high", "none", "disable")
+
+
+def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsError:
+    return UnsupportedParamsError(
+        message=(
+            f"Invalid `reasoning_effort`: {reasoning_effort!r}. "
+            f"Must be one of: {', '.join(repr(effort) for effort in SUPPORTED_REASONING_EFFORTS)}. "
+            "To drop this param, set `litellm.drop_params = True` or pass in `(.., drop_params=True)` "
+            "in the request - https://docs.litellm.ai/docs/completion/drop_params"
+        ),
+        status_code=400,
+    )
 
 
 class VertexAIBaseConfig:
@@ -841,7 +858,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 "includeThoughts": False,
             }
         else:
-            raise ValueError(f"Invalid reasoning effort: {reasoning_effort}")
+            raise _unsupported_reasoning_effort(reasoning_effort)
 
     @staticmethod
     def _map_reasoning_effort_to_thinking_level(
@@ -889,7 +906,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             else:
                 return {"thinkingLevel": "low", "includeThoughts": False}
         else:
-            raise ValueError(f"Invalid reasoning effort: {reasoning_effort}")
+            raise _unsupported_reasoning_effort(reasoning_effort)
 
     @staticmethod
     def _is_thinking_budget_zero(thinking_budget: int | None) -> bool:
@@ -948,7 +965,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         # For Gemini 3+ models, use thinkingLevel instead of thinkingBudget
         if model and VertexGeminiConfig._is_gemini_3_or_newer(model):
             if thinking_enabled:
-                if thinking_budget is None or thinking_budget == 0:
+                if thinking_budget == 0:
                     params["includeThoughts"] = False
                 else:
                     params["includeThoughts"] = True
@@ -1717,14 +1734,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         completion_response: GenerateContentResponseBody | BidiGenerateContentServerMessage,
     ) -> bool:
         """
-        Whether the response used Grounding with Google Search, detected via
-        groundingMetadata.webSearchQueries (an actual web search was performed).
+        Whether the response used Grounding with Google Search or Grounding with Google Maps,
+        detected via groundingMetadata.webSearchQueries (an actual web search was performed) or
+        groundingMetadata.groundingChunks[].maps (a Maps lookup was performed).
 
-        Google bills grounding-with-Google-Search retrieved tokens separately (a per-request /
-        per-query search fee) and excludes them from input token billing, unlike URL context /
-        File Search / code execution whose tool-use tokens are charged at the input token rate.
-        URL context also emits groundingMetadata (with groundingChunks but no webSearchQueries),
-        so presence of groundingMetadata alone is not a sufficient signal.
+        Google bills both groundings separately (a per-request / per-query fee) and excludes their
+        retrieved tokens from input token billing, unlike URL context / File Search / code execution
+        whose tool-use tokens are charged at the input token rate. URL context also emits
+        groundingMetadata (with web groundingChunks but no webSearchQueries), so presence of
+        groundingMetadata alone is not a sufficient signal.
         See https://ai.google.dev/gemini-api/docs/pricing and
         https://github.com/BerriAI/litellm/discussions/33198
         """
@@ -1732,7 +1750,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return False
         for candidate in completion_response["candidates"] or []:
             grounding_metadata, _, _, _ = VertexGeminiConfig._extract_candidate_metadata(candidate)
-            if VertexGeminiConfig._calculate_web_search_requests(grounding_metadata):
+            if calculate_grounding_requests(grounding_metadata).has_billable_grounding():
                 return True
         return False
 
@@ -1979,16 +1997,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @staticmethod
     def _calculate_web_search_requests(grounding_metadata: list[dict]) -> int | None:
-        web_search_requests: int | None = None
+        return calculate_grounding_requests(grounding_metadata).web_search_requests
 
-        if grounding_metadata and isinstance(grounding_metadata, list) and len(grounding_metadata) > 0:
-            for grounding_metadata_item in grounding_metadata:
-                web_search_queries = grounding_metadata_item.get("webSearchQueries")
-                if web_search_queries and web_search_requests:
-                    web_search_requests += len([q for q in web_search_queries if q])
-                elif web_search_queries:
-                    web_search_requests = len([q for q in web_search_queries if q])
-        return web_search_requests
+    @staticmethod
+    def _set_grounding_usage_counters(usage: Usage, grounding_metadata: Sequence[Mapping[str, object]]) -> None:
+        grounding_requests: Final = calculate_grounding_requests(grounding_metadata)
+        details: Final = cast(PromptTokensDetailsWrapper, usage.prompt_tokens_details)
+        if grounding_requests.web_search_requests is not None:
+            details.web_search_requests = grounding_requests.web_search_requests
+        if grounding_requests.google_maps_grounding_requests is not None:
+            details.google_maps_grounding_requests = grounding_requests.google_maps_grounding_requests
 
     @staticmethod
     def _create_streaming_choice(
@@ -2454,9 +2472,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             usage: Final = VertexGeminiConfig._calculate_usage(completion_response=completion_response)
 
-            web_search_requests: Final = VertexGeminiConfig._calculate_web_search_requests(grounding_metadata)
-            if web_search_requests is not None:
-                cast(PromptTokensDetailsWrapper, usage.prompt_tokens_details).web_search_requests = web_search_requests
+            VertexGeminiConfig._set_grounding_usage_counters(usage, grounding_metadata)
 
             setattr(model_response, "usage", usage)
 
@@ -3221,9 +3237,7 @@ class ModelResponseIterator:
             completion_response=processed_chunk,
         )
 
-        web_search_requests: Final = VertexGeminiConfig._calculate_web_search_requests(grounding_metadata)
-        if web_search_requests is not None:
-            cast(PromptTokensDetailsWrapper, usage.prompt_tokens_details).web_search_requests = web_search_requests
+        VertexGeminiConfig._set_grounding_usage_counters(usage, grounding_metadata)
 
         traffic_type: Final = processed_chunk.get("usageMetadata", {}).get("trafficType")
         if traffic_type:

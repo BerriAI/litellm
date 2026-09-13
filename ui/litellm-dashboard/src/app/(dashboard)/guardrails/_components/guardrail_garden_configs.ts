@@ -312,4 +312,16 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: "pre_call",
     defaultOn: false,
   },
+  alice: {
+    provider: "Alice",
+    guardrailNameSuggestion: "Alice",
+    mode: "pre_call",
+    defaultOn: false,
+  },
+  conduct: {
+    provider: "Conduct",
+    guardrailNameSuggestion: "Conduct Guard",
+    mode: "pre_call",
+    defaultOn: false,
+  },
 };

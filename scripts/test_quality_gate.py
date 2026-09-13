@@ -10,17 +10,12 @@ base.
 
 Every rule is seeded at exactly its count on the day the gate landed, so the
 suite's existing debt is grandfathered and any net-new violation trips the gate
-immediately. ``--update`` ratchets a limit down by the violations this branch
-fixed relative to its branch point (the merge-base), so the ceilings only ever
-fall. Base counts are measured with the *current* checker, so a rule introduced
-on this branch is counted at the base too and ratchets like every other one.
-
-Only ever falling is not the same as always falling, so the gate enforces the
-second half: a branch that clears violations and leaves the ceiling above its
-new count fails, naming the rules and telling the author to run
-``make lint-budget-update``. Without that, a removed violation could come back
-later under a ceiling nobody lowered. Drift already in the base is never
-blamed, so this fires only on the branch that did the clearing.
+immediately. ``--update`` ratchets a limit down by the violations fixed relative
+to ``--base``, so the ceilings only ever fall. Base counts are measured with the
+*current* checker, so a rule introduced on this branch is counted at the base too
+and ratchets like every other one. The ratchet runs as a scheduled automation
+against the repository's default branch, not on PR branches, so concurrent PRs never
+race to edit the same limit.
 
 The deliberate difference from its sibling: this gate has no headroom anywhere.
 Type discipline seeded LIT010/LIT011 at 1.5x to leave room for an in-flight
@@ -34,20 +29,21 @@ import argparse
 import json
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from types import MappingProxyType
+from types import FrameType, MappingProxyType
 from typing import Final, NamedTuple
 
 REPO_ROOT: Final = Path(__file__).resolve().parent.parent
 CHECKER: Final = REPO_ROOT / "scripts" / "check_test_quality.py"
 BUDGET_PATH: Final = REPO_ROOT / "test-quality-budget.json"
 TARGET: Final = "tests"
-DEFAULT_BASE: Final = "origin/litellm_internal_staging"
+TERMINATION_SIGNALS: Final = (signal.SIGTERM, signal.SIGHUP)
 
 _HUNK: Final = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
 _FILE_HEADER: Final = re.compile(r"^\+\+\+ b/(.+)$", re.MULTILINE)
@@ -116,22 +112,33 @@ def count_by_rule(violations: Sequence[Violation]) -> Mapping[str, int]:
     return MappingProxyType(dict(Counter(v.code for v in violations)))
 
 
-def base_counts(ref: str) -> Mapping[str, int]:
+def _exit_on_termination(signum: int, _frame: FrameType | None) -> None:
+    raise SystemExit(128 + signum)
+
+
+def _install_termination_handlers() -> None:
+    for termination in TERMINATION_SIGNALS:
+        if signal.getsignal(termination) == signal.SIG_DFL:
+            signal.signal(termination, _exit_on_termination)
+
+
+def base_counts(ref: str, repo_root: Path = REPO_ROOT, checker: Path = CHECKER) -> Mapping[str, int]:
     """Rule counts at `ref`, measured with the *current* rule logic rather than
     whatever the checker looked like at that commit."""
+    _install_termination_handlers()
     parent: Final = Path(tempfile.mkdtemp(prefix="tq_base_"))
     worktree: Final = parent / "wt"
     try:
-        _run(["git", "worktree", "add", "--detach", str(worktree), ref])
+        _run(["git", "worktree", "add", "--detach", str(worktree), ref], cwd=repo_root)
         (worktree / "scripts").mkdir(parents=True, exist_ok=True)
-        checker: Final = worktree / "scripts" / "check_test_quality.py"
-        shutil.copy(CHECKER, checker)
-        return count_by_rule(_check(worktree, checker))
+        base_checker: Final = worktree / "scripts" / "check_test_quality.py"
+        shutil.copy(checker, base_checker)
+        return count_by_rule(_check(worktree, base_checker))
     finally:
         # Teardown must never raise, or it masks the real error when the body failed.
         subprocess.run(
             ["git", "worktree", "remove", "--force", str(worktree)],
-            cwd=REPO_ROOT, capture_output=True, text=True,
+            cwd=repo_root, capture_output=True, text=True,
         )
         shutil.rmtree(parent, ignore_errors=True)
 
@@ -142,21 +149,6 @@ def over_ceiling(head: Mapping[str, int], budget: Mapping[str, Mapping[str, int]
     return frozenset(
         rule for rule, spec in budget.items() if head.get(rule, 0) > spec["limit"]
     )
-
-
-def unratcheted(
-    head: Mapping[str, int],
-    base: Mapping[str, int],
-    budget: Mapping[str, Mapping[str, int]],
-) -> tuple[Breach, ...]:
-    """Rules this branch cleared without lowering the ceiling behind them. Requires
-    both `head < base`, so drift already in the base is never blamed on this change,
-    and `head < limit`, so a ceiling already at the count is left alone."""
-    return tuple(sorted(
-        Breach(rule, head.get(rule, 0), spec["limit"], head.get(rule, 0) - base.get(rule, 0))
-        for rule, spec in budget.items()
-        if head.get(rule, 0) < base.get(rule, 0) and head.get(rule, 0) < spec["limit"]
-    ))
 
 
 def evaluate(
@@ -198,38 +190,15 @@ def introduced(
     return tuple(v for v in violations if v.line in changed.get(v.file, frozenset()))
 
 
-def touches_measured_tree(base_point: str) -> bool:
-    """Whether this branch changed anything that can move a count. A branch that
-    touches neither the test tree nor the checker cannot have cleared a violation,
-    so the base scan is skipped and the gate stays cheap on the common change."""
-    changed: Final = _run(
-        ["git", "diff", "--name-only", base_point, "--", TARGET, str(CHECKER.relative_to(REPO_ROOT))]
-    )
-    return bool(changed.strip())
-
-
 def cmd_check(base: str) -> None:
     budget: Final = json.loads(BUDGET_PATH.read_text())
     head: Final = head_violations()
     head_counts: Final = count_by_rule(head)
-    base_point: Final = resolve_base_point(base)
-    if not over_ceiling(head_counts, budget) and not touches_measured_tree(base_point):
+    if not over_ceiling(head_counts, budget):
         print(f"OK: every TQ rule is within its test-suite ceiling (base {base})")
         return
+    base_point: Final = resolve_base_point(base)
     base_at_point: Final = base_counts(base_point)
-    stale: Final = unratcheted(head_counts, base_at_point, budget)
-    if stale:
-        print(f"FAIL: TQ-rule limits were left above the count this branch reached (base {base}):")
-        for breach in stale:
-            print(
-                f"  {breach.rule}: this branch cleared {-breach.added} down to {breach.total}, "
-                f"but the limit is still {breach.cap}"
-            )
-        print(
-            "Run `make lint-budget-update` and commit the lowered limits, so the "
-            "violations you cleared cannot come back under a ceiling nobody moved."
-        )
-        raise SystemExit(1)
     breaches: Final = evaluate(head_counts, base_at_point, budget)
     if not breaches:
         print(f"OK: every TQ rule is within its test-suite ceiling (base {base})")
@@ -270,7 +239,7 @@ def ratcheted_budget(
     })
 
 
-def cmd_update(base_ref: str = DEFAULT_BASE) -> None:
+def cmd_update(base_ref: str) -> None:
     """Ratchet each rule's limit down by the violations this branch fixed."""
     budget: Final = json.loads(BUDGET_PATH.read_text())
     base_point: Final = resolve_base_point(base_ref)
@@ -294,19 +263,20 @@ def cmd_seed() -> None:
 
 def main() -> None:
     parser: Final = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", default=DEFAULT_BASE)
+    parser.add_argument("--base", help="Comparison ref (default: origin's current default branch)")
     parser.add_argument("--update", action="store_true")
     parser.add_argument("--seed", action="store_true")
     args: Final = parser.parse_args()
+    from default_branch import resolve_base_ref
     from gate_slot_lock import held_slot
 
     with held_slot():
         if args.seed:
             cmd_seed()
         elif args.update:
-            cmd_update(args.base)
+            cmd_update(resolve_base_ref(args.base, REPO_ROOT))
         else:
-            cmd_check(args.base)
+            cmd_check(resolve_base_ref(args.base, REPO_ROOT))
 
 
 if __name__ == "__main__":

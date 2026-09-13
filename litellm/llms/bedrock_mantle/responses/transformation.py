@@ -19,11 +19,14 @@ import json
 from collections.abc import Mapping
 from typing import Any, Final
 
+import httpx
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock_mantle.common_utils import (
     MANTLE_HOST_RE,
     BedrockMantleAuthMixin,
@@ -48,9 +51,12 @@ _BASE_SUFFIXES_TO_STRIP: Final = (
 )
 
 # Per Bedrock Mantle Responses API validation errors.
-_BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES = frozenset({"function", "mcp", "custom", "namespace", "tool_search"})
+_BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES: Final = frozenset(
+    {"function", "mcp", "custom", "namespace", "tool_search", "web_search"}
+)
 
 _BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS: Final = frozenset({"auto", "default"})
+_BEDROCK_MANTLE_OPENAI_PATH_SUPPORTED_REASONING_SUMMARIES: Final = frozenset({"auto"})
 
 _CODEX_ADDITIONAL_TOOLS_INPUT_ITEM_TYPE: Final = "additional_tools"
 
@@ -95,6 +101,11 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.BEDROCK_MANTLE
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     def get_complete_url(
         self,
@@ -177,6 +188,43 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         )
         return {key: value for key, value in params.items() if key != "service_tier"}
 
+    def _handle_unsupported_reasoning_summary(
+        self, params: dict[str, object], model: str, drop_params: bool
+    ) -> dict[str, object]:
+        reasoning: Final = params.get("reasoning")
+        if not self.use_openai_path or not isinstance(reasoning, dict):
+            return params
+        summary: Final = reasoning.get("summary")
+        if summary is None or (
+            isinstance(summary, str) and summary in _BEDROCK_MANTLE_OPENAI_PATH_SUPPORTED_REASONING_SUMMARIES
+        ):
+            return params
+        if not drop_params:
+            raise litellm.utils.UnsupportedParamsError(
+                status_code=400,
+                message=(
+                    f"bedrock_mantle does not support reasoning.summary={summary!r} for {model!r}; the Bedrock Mantle "
+                    "OpenAI Responses path only accepts 'auto'. Set `drop_params: true` (litellm_settings or this "
+                    'deployment\'s litellm_params) to have LiteLLM drop it, or set `model_reasoning_summary = "auto"` '
+                    "in the client (Codex CLI: ~/.codex/config.toml)."
+                ),
+            )
+        verbose_logger.warning(
+            "Bedrock Mantle Responses API: dropping unsupported reasoning.summary %r (supported: %s).",
+            summary,
+            sorted(_BEDROCK_MANTLE_OPENAI_PATH_SUPPORTED_REASONING_SUMMARIES),
+        )
+        stripped: Final = {  # mutable-ok: map_openai_params contract returns a plain dict
+            key: value for key, value in reasoning.items() if key != "summary"
+        }
+        return (
+            {**params, "reasoning": stripped}  # mutable-ok: map_openai_params contract returns a plain dict
+            if stripped
+            else {  # mutable-ok: map_openai_params contract returns a plain dict
+                key: value for key, value in params.items() if key != "reasoning"
+            }
+        )
+
     def transform_responses_api_request(
         self,
         model: str,
@@ -243,7 +291,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         return remaining_input, cls._filter_unsupported_tools(hoisted_tools)
 
     @staticmethod
-    def _agent_message_text(item: "Mapping[str, Any]") -> str:
+    def _agent_message_text(item: "Mapping[str, object]") -> str:
         content: Final = item.get("content")
         if not isinstance(content, list):
             return ""
@@ -254,7 +302,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         )
 
     @classmethod
-    def _normalize_agent_message_item(cls, item: "Mapping[str, Any]") -> "_RewrittenAssistantMessageItem | None":
+    def _normalize_agent_message_item(cls, item: "Mapping[str, object]") -> "_RewrittenAssistantMessageItem | None":
         text: Final = cls._agent_message_text(item)
         if not text:
             return None
@@ -266,7 +314,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         return rewritten
 
     @staticmethod
-    def _normalize_context_compaction_item(item: "Mapping[str, Any]") -> "_RewrittenCompactionItem | None":
+    def _normalize_context_compaction_item(item: "Mapping[str, object]") -> "_RewrittenCompactionItem | None":
         encrypted_content: Final = item.get("encrypted_content")
         if not isinstance(encrypted_content, str) or not encrypted_content:
             return None
@@ -274,7 +322,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         return rewritten
 
     @staticmethod
-    def _normalize_local_shell_call_item(item: "Mapping[str, Any]") -> "_RewrittenFunctionCallItem | None":
+    def _normalize_local_shell_call_item(item: "Mapping[str, object]") -> "_RewrittenFunctionCallItem | None":
         call_id: Final = item.get("call_id")
         if not isinstance(call_id, str) or not call_id:
             return None
@@ -333,12 +381,16 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         model: str,
         drop_params: bool,
     ) -> dict:
-        params: Final = self._handle_unsupported_service_tier(
-            super().map_openai_params(
-                response_api_optional_params=response_api_optional_params,
-                model=model,
+        params: Final = self._handle_unsupported_reasoning_summary(
+            self._handle_unsupported_service_tier(
+                super().map_openai_params(
+                    response_api_optional_params=response_api_optional_params,
+                    model=model,
+                    drop_params=drop_params,
+                ),
                 drop_params=drop_params,
             ),
+            model=model,
             drop_params=drop_params,
         )
 

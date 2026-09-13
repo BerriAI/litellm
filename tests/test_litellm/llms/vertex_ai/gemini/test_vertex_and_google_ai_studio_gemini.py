@@ -2,7 +2,7 @@ import asyncio
 import json
 import re
 from copy import deepcopy
-from typing import List, cast
+from typing import Final, List, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -549,9 +549,10 @@ def test_vertex_ai_non_grounded_usage_omits_tool_use_tokens():
 
 def test_response_has_search_grounding_detection():
     """
-    Only groundingMetadata.webSearchQueries signals an actual Google Search. URL context also
-    emits groundingMetadata (groundingChunks but no webSearchQueries) and must not be treated
-    as search grounding.
+    groundingMetadata.webSearchQueries signals an actual Google Search and
+    groundingMetadata.groundingChunks[].maps signals a Google Maps lookup. URL context also
+    emits groundingMetadata (web groundingChunks but no webSearchQueries) and must not be
+    treated as billable grounding.
     """
     assert (
         VertexGeminiConfig._response_has_search_grounding(
@@ -580,6 +581,101 @@ def test_response_has_search_grounding_detection():
     )
     assert VertexGeminiConfig._response_has_search_grounding({"candidates": []}) is False
     assert VertexGeminiConfig._response_has_search_grounding({}) is False
+    assert (
+        VertexGeminiConfig._response_has_search_grounding(
+            {
+                "candidates": [
+                    {
+                        "groundingMetadata": {
+                            "groundingChunks": [{"maps": {"uri": "https://maps.google.com/?cid=1", "placeId": "p1"}}]
+                        }
+                    }
+                ]
+            }
+        )
+        is True
+    )
+
+
+def test_vertex_ai_maps_grounding_tool_use_tokens_excluded_from_prompt_tokens():
+    """
+    Grounding with Google Maps retrieved tokens are billed like Google Search grounding: a
+    separate per-request / per-query fee, with toolUsePromptTokenCount surfaced on
+    prompt_tokens_details.tool_use_tokens but excluded from prompt_tokens. Before Maps detection
+    existed, a Vertex AI Maps-only response folded the 120 tool-use tokens into prompt_tokens.
+    Regression for https://github.com/BerriAI/litellm/issues/35906
+    """
+    v = VertexGeminiConfig()
+    completion_response = {
+        "candidates": [
+            {
+                "groundingMetadata": {
+                    "groundingChunks": [{"maps": {"uri": "https://maps.google.com/?cid=1", "placeId": "p1"}}]
+                }
+            }
+        ],
+        "usageMetadata": UsageMetadata(
+            promptTokenCount=15,
+            candidatesTokenCount=100,
+            toolUsePromptTokenCount=120,
+            totalTokenCount=235,
+        ),
+    }
+
+    usage = v._calculate_usage(completion_response=completion_response)
+
+    assert usage.prompt_tokens == 15
+    assert usage.completion_tokens == 100
+    assert usage.total_tokens == 235
+    assert usage.prompt_tokens_details.tool_use_tokens == 120
+
+
+def test_vertex_ai_maps_grounding_sets_google_maps_grounding_requests_non_streaming():
+    """
+    A Vertex AI Maps-only response (groundingChunks[].maps, no webSearchQueries) must set
+    google_maps_grounding_requests and leave web_search_requests unset, so the Maps fee is
+    billed instead of nothing (Vertex) or the Google Search fee (Gemini API).
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    completion_response = {
+        "candidates": [
+            {
+                "content": {"parts": [{"text": "Here are some coffee shops"}], "role": "model"},
+                "finishReason": "STOP",
+                "groundingMetadata": {
+                    "groundingChunks": [{"maps": {"uri": "https://maps.google.com/?cid=1", "placeId": "p1"}}],
+                    "groundingSupports": [],
+                },
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 15,
+            "candidatesTokenCount": 100,
+            "totalTokenCount": 115,
+        },
+    }
+
+    raw_response = MagicMock()
+    raw_response.json.return_value = completion_response
+
+    result = VertexGeminiConfig().transform_response(
+        model="gemini-2.5-flash",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    usage = result.usage
+    assert usage.prompt_tokens_details.google_maps_grounding_requests == 1
+    assert not hasattr(usage.prompt_tokens_details, "web_search_requests")
 
 
 def test_vertex_ai_search_grounding_tool_use_tokens_excluded_from_prompt_tokens():
@@ -1089,6 +1185,18 @@ def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
     }
 
 
+def test_vertex_ai_map_thinking_param_without_budget_tokens_for_gemini_3():
+    v = VertexGeminiConfig()
+    result = v.map_openai_params(
+        non_default_params={"thinking": {"type": "enabled"}},
+        optional_params={},
+        model="gemini-3.5-flash",
+        drop_params=False,
+    )
+
+    assert result["thinkingConfig"] == {"includeThoughts": True}
+
+
 def test_vertex_ai_map_tools():
     v = VertexGeminiConfig()
     optional_params = {}
@@ -1290,6 +1398,66 @@ def test_vertex_ai_streaming_usage_web_search_calculation():
     usage: Usage = completed_response.usage
     assert usage.prompt_tokens_details.web_search_requests is not None
     assert usage.prompt_tokens_details.web_search_requests == 2
+
+
+def test_vertex_ai_maps_grounding_chunk_parser_sets_maps_requests():
+    """A Vertex-shaped Maps-only streaming chunk sets the Maps counter and not the Search one."""
+    from unittest.mock import MagicMock
+
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    chunk = {
+        "candidates": [
+            {
+                "content": {"parts": [{"text": "Here"}]},
+                "groundingMetadata": {
+                    "groundingChunks": [{"maps": {"uri": "https://maps.google.com/?cid=1", "placeId": "p1"}}],
+                    "groundingSupports": [],
+                },
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 15, "candidatesTokenCount": 10, "totalTokenCount": 25},
+    }
+
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=MagicMock())
+    completed_response = iterator.chunk_parser(chunk)
+
+    usage = completed_response.usage
+    assert usage.prompt_tokens_details.google_maps_grounding_requests == 1
+    assert not hasattr(usage.prompt_tokens_details, "web_search_requests")
+
+
+def test_gemini_api_maps_grounding_chunk_parser_counts_queries_as_maps_requests():
+    """A Gemini-API-shaped Maps chunk (webSearchQueries plus maps chunks) bills Maps, not Search."""
+    from unittest.mock import MagicMock
+
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    chunk = {
+        "candidates": [
+            {
+                "content": {"parts": [{"text": "Here"}]},
+                "groundingMetadata": [
+                    {
+                        "webSearchQueries": ["coffee shops near the Louvre"],
+                        "groundingChunks": [{"maps": {"uri": "https://maps.google.com/?cid=1", "placeId": "p1"}}],
+                    }
+                ],
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 15, "candidatesTokenCount": 10, "totalTokenCount": 25},
+    }
+
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=MagicMock())
+    completed_response = iterator.chunk_parser(chunk)
+
+    usage = completed_response.usage
+    assert usage.prompt_tokens_details.google_maps_grounding_requests == 1
+    assert not hasattr(usage.prompt_tokens_details, "web_search_requests")
 
 
 def test_vertex_ai_transform_parts():
@@ -5579,3 +5747,92 @@ def test_accumulated_json_async_end_of_stream_drains_buffered_value():
     result = asyncio.run(iterator.__anext__())
     assert result is not None
     assert result.choices[0].delta.content == "a"
+
+
+def test_calculate_web_search_requests_counts_unique_queries():
+    """Gemini 3 per_query billing charges per unique query executed, not per emitted string.
+
+    Regression for #36377: duplicate webSearchQueries within and across grounding
+    metadata items must collapse to the distinct-query count, and empty strings must
+    be ignored, matching Google's documented Grounding-with-Search billing rule.
+    """
+    duplicates_in_one_item: Final = [
+        {"webSearchQueries": ["euro 2024 winner", "euro 2024 winner", "spain england final", ""]}
+    ]
+    assert VertexGeminiConfig._calculate_web_search_requests(duplicates_in_one_item) == 2
+
+    duplicates_across_items: Final = [
+        {"webSearchQueries": ["euro 2024 winner"]},
+        {"webSearchQueries": ["euro 2024 winner", "spain england final"]},
+    ]
+    assert VertexGeminiConfig._calculate_web_search_requests(duplicates_across_items) == 2
+
+    assert VertexGeminiConfig._calculate_web_search_requests([]) is None
+    assert VertexGeminiConfig._calculate_web_search_requests([{"webSearchQueries": ["", ""]}]) is None
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+@pytest.mark.parametrize(
+    "model",
+    ["gemini-2.5-flash", "gemini-3-pro-preview"],
+    ids=["thinking_budget_mapper", "thinking_level_mapper"],
+)
+@pytest.mark.parametrize("reasoning_effort", ["banana", "xhigh"])
+def test_invalid_reasoning_effort_is_a_400_not_a_500(custom_llm_provider, model, reasoning_effort):
+    """Regression for #40474.
+
+    Both reasoning_effort mappers used to end their if/elif chain in a bare `ValueError`, which
+    `exception_type()` has no branch for, so it fell through to `APIConnectionError` and the proxy
+    answered a malformed client request with a retryable HTTP 500. `xhigh` is covered alongside the
+    nonsense value because it is a member of litellm's own `REASONING_EFFORT` literal, so callers
+    bridging from OpenAI-shaped code reach it without typing anything wrong.
+    """
+    from litellm.utils import get_optional_params
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        get_optional_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            reasoning_effort=reasoning_effort,
+            drop_params=True,
+        )
+
+    assert exc_info.value.status_code == 400
+    message: Final = str(exc_info.value)
+    assert reasoning_effort in message
+    for supported in ("minimal", "low", "medium", "high", "none", "disable"):
+        assert supported in message
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_invalid_reasoning_effort_surfaces_as_400_through_completion(custom_llm_provider):
+    """The same request through `completion()` must not come back as a retryable 500.
+
+    Needs no provider credentials: param mapping runs before any network call.
+    """
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        completion(
+            model=f"{custom_llm_provider}/gemini-3-pro-preview",
+            messages=[{"role": "user", "content": "hi"}],
+            reasoning_effort="banana",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert not isinstance(exc_info.value, litellm.APIConnectionError)
+
+
+@pytest.mark.parametrize("model", ["gemini-2.5-flash", "gemini-3-pro-preview"])
+def test_supported_reasoning_efforts_still_map(model):
+    """Guards the fix against over-rejecting: every advertised value must still produce a config."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        SUPPORTED_REASONING_EFFORTS,
+    )
+
+    for effort in SUPPORTED_REASONING_EFFORTS:
+        result: Final = VertexGeminiConfig().map_openai_params(
+            non_default_params={"reasoning_effort": effort},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+        assert "thinkingConfig" in result

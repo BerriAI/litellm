@@ -35,7 +35,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-
 from litellm.llms.vertex_ai.batches.handler import (  # noqa: E402
     VertexAIBatchPrediction,
 )
@@ -176,6 +175,197 @@ def test_create_batch_async_returns_coroutine_and_uses_async_client():
     async_client.post.assert_awaited_once()
     # the async branch must NOT use the sync client for the request
     sync_client.post.assert_not_called()
+
+
+def test_create_batch_sync_does_not_resolve_publisher_models():
+    """Publisher-model jobs must not incur the endpoint-resolution GET, and the job model must
+    stay the publisher path untouched."""
+    h = _make_handler()
+    client = MagicMock()
+    client.post.return_value = _http_response()
+
+    with (
+        patch(f"{HMOD}._get_httpx_client", return_value=client),
+        patch(f"{HMOD}.safe_get") as safe_get,
+    ):
+        out = h.create_batch(
+            _is_async=False,
+            create_batch_data=CREATE_DATA,
+            api_base=None,
+            vertex_credentials=None,
+            vertex_project=PROJECT,
+            vertex_location=LOCATION,
+            timeout=600.0,
+            max_retries=None,
+        )
+
+    assert isinstance(out, LiteLLMBatch)
+    sent = json.loads(client.post.call_args.kwargs["data"])
+    assert sent["model"] == "publishers/google/models/gemini-1.5-flash-001"
+    safe_get.assert_not_called()
+
+
+ENDPOINT_ID = "7768560373388541952"
+ENDPOINT_CREATE_DATA = {
+    "input_file_id": f"gs://bucket/litellm-vertex-files/endpoints/{ENDPOINT_ID}/file-uuid"
+}
+TUNED_MODEL_RESOURCE = f"projects/{PROJECT}/locations/{LOCATION}/models/1234509876"
+
+
+def _endpoint_get_response(deployed_models: list | None = None) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {
+        "name": f"projects/{PROJECT}/locations/{LOCATION}/endpoints/{ENDPOINT_ID}",
+        "deployedModels": (
+            deployed_models if deployed_models is not None else [{"model": TUNED_MODEL_RESOURCE}]
+        ),
+    }
+    return resp
+
+
+def test_create_batch_sync_resolves_fine_tuned_endpoint_to_tuned_model():
+    """A fine-tuned Gemini file id must produce a batch job against the endpoint's deployed
+    tuned model resource; the v1 batch API rejects endpoint resources in `model` (LIT-6899)."""
+    h = _make_handler()
+    client = MagicMock()
+    client.post.return_value = _http_response()
+
+    with (
+        patch(f"{HMOD}._get_httpx_client", return_value=client),
+        patch(f"{HMOD}.safe_get", return_value=_endpoint_get_response()) as safe_get,
+    ):
+        out = h.create_batch(
+            _is_async=False,
+            create_batch_data=ENDPOINT_CREATE_DATA,
+            api_base=None,
+            vertex_credentials=None,
+            vertex_project=PROJECT,
+            vertex_location=LOCATION,
+            timeout=600.0,
+            max_retries=None,
+        )
+
+    assert isinstance(out, LiteLLMBatch)
+    get_args, get_kwargs = safe_get.call_args
+    assert get_args[1] == (
+        f"https://{LOCATION}-aiplatform.googleapis.com/v1/projects/{PROJECT}"
+        f"/locations/{LOCATION}/endpoints/{ENDPOINT_ID}"
+    )
+    assert get_kwargs["headers"]["Authorization"] == f"Bearer {TOKEN}"
+    sent = json.loads(client.post.call_args.kwargs["data"])
+    assert sent["model"] == TUNED_MODEL_RESOURCE
+
+
+@pytest.mark.parametrize(
+    "api_base, expected",
+    [
+        (
+            None,
+            f"https://{LOCATION}-aiplatform.googleapis.com/v1/projects/{PROJECT}"
+            f"/locations/{LOCATION}/endpoints/{ENDPOINT_ID}",
+        ),
+        (
+            "https://proxy.internal",
+            f"https://proxy.internal/v1/projects/{PROJECT}/locations/{LOCATION}/endpoints/{ENDPOINT_ID}",
+        ),
+        (
+            "https://proxy.internal/v1",
+            f"https://proxy.internal/v1/projects/{PROJECT}/locations/{LOCATION}/endpoints/{ENDPOINT_ID}",
+        ),
+        (
+            "https://proxy.internal/vertex",
+            f"https://proxy.internal/vertex/v1/projects/{PROJECT}/locations/{LOCATION}/endpoints/{ENDPOINT_ID}",
+        ),
+    ],
+)
+def test_build_endpoint_resolution_url(api_base, expected):
+    """A custom api_base must replace the Google host for the endpoint-resolution GET without
+    producing a malformed url (no ':' grafting, no doubled /v1)."""
+    url = VertexAIBatchPrediction._build_endpoint_resolution_url(
+        api_base=api_base,
+        model=f"projects/{PROJECT}/locations/{LOCATION}/endpoints/{ENDPOINT_ID}",
+        vertex_location=LOCATION,
+    )
+    assert url == expected
+
+
+def test_create_batch_sync_endpoint_resolution_error_raises():
+    h = _make_handler()
+    client = MagicMock()
+    resolve_response = MagicMock()
+    resolve_response.status_code = 404
+    resolve_response.text = "endpoint not found"
+
+    with (
+        patch(f"{HMOD}._get_httpx_client", return_value=client),
+        patch(f"{HMOD}.safe_get", return_value=resolve_response),
+    ):
+        with pytest.raises(VertexAIError) as exc_info:
+            h.create_batch(
+                _is_async=False,
+                create_batch_data=ENDPOINT_CREATE_DATA,
+                api_base=None,
+                vertex_credentials=None,
+                vertex_project=PROJECT,
+                vertex_location=LOCATION,
+                timeout=600.0,
+                max_retries=None,
+            )
+
+    assert exc_info.value.status_code == 404
+    client.post.assert_not_called()
+
+
+def test_create_batch_custom_endpoint_raises_400_without_io():
+    """custom_endpoint deployments have no Vertex batch surface; creating a job would target a
+    nonexistent publisher model, so the handler must 400 before any auth or HTTP work (LIT-6899)."""
+    h = _make_handler()
+    client = MagicMock()
+
+    with patch(f"{HMOD}._get_httpx_client", return_value=client):
+        with pytest.raises(VertexAIError) as exc_info:
+            h.create_batch(
+                _is_async=False,
+                create_batch_data=CREATE_DATA,
+                api_base=None,
+                vertex_credentials=None,
+                vertex_project=PROJECT,
+                vertex_location=LOCATION,
+                timeout=600.0,
+                max_retries=None,
+                custom_endpoint=True,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "custom_endpoint" in str(exc_info.value)
+    h._ensure_access_token.assert_not_called()
+    client.post.assert_not_called()
+
+
+def test_create_batch_sync_endpoint_without_deployed_model_raises_400():
+    h = _make_handler()
+    client = MagicMock()
+
+    with (
+        patch(f"{HMOD}._get_httpx_client", return_value=client),
+        patch(f"{HMOD}.safe_get", return_value=_endpoint_get_response(deployed_models=[])),
+    ):
+        with pytest.raises(VertexAIError) as exc_info:
+            h.create_batch(
+                _is_async=False,
+                create_batch_data=ENDPOINT_CREATE_DATA,
+                api_base=None,
+                vertex_credentials=None,
+                vertex_project=PROJECT,
+                vertex_location=LOCATION,
+                timeout=600.0,
+                max_retries=None,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "no deployed model" in str(exc_info.value)
+    client.post.assert_not_called()
 
 
 def test_create_batch_sync_httpstatuserror_propagates():

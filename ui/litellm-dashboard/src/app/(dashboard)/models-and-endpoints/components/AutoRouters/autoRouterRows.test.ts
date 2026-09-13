@@ -5,8 +5,9 @@ import { toAutoRouterRow, toAutoRouterRows } from "./autoRouterRows";
 
 // Existing cases assert resource classification, so they run as a proxy admin: the actor
 // gate is then a pass-through and canEdit/canDelete still reflect the row itself.
-const ADMIN = { userRole: "Admin", userID: "u-admin" };
-const TEAM_ADMIN = { userRole: "Internal User", userID: "u-team-admin" };
+const ADMIN = { userRole: "Admin", userID: "u-admin", isViewOnly: false };
+const TEAM_ADMIN = { userRole: "Internal User", userID: "u-team-admin", isViewOnly: false };
+const VIEW_ONLY_ADMIN = { userRole: "Admin", userID: "u-viewer", isViewOnly: true };
 
 const complexityDeployment = {
   model_name: "tri-tier-router",
@@ -224,7 +225,7 @@ describe("autoRouterRows actor gating", () => {
     { team_id: "team-1", members_with_roles: [{ user_id: "u-team-admin", user_email: "t@t", role: "admin" }] },
   ] as never;
 
-  const rowIn = (actor: { userRole: string; userID: string }, teamId: string | null) =>
+  const rowIn = (actor: { userRole: string; userID: string; isViewOnly: boolean }, teamId: string | null) =>
     toAutoRouterRow(
       { ...complexityDeployment, model_info: { id: "cid-1", db_model: true, team_id: teamId } },
       0,
@@ -258,5 +259,13 @@ describe("autoRouterRows actor gating", () => {
     const row = rowIn(ADMIN, "other-team");
     expect(row.canEdit).toBe(true);
     expect(row.canDelete).toBe(true);
+  });
+
+  // A proxy_admin_viewer session reads "Admin" through the masquerade, but PATCH and
+  // DELETE both 403 it, so its rows must not offer the affordances.
+  it("hides write affordances from a view-only admin session", () => {
+    const row = rowIn(VIEW_ONLY_ADMIN, null);
+    expect(row.canEdit).toBe(false);
+    expect(row.canDelete).toBe(false);
   });
 });

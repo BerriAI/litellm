@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Card } from "@/components/ui/card";
+import { matchesSearchTerm } from "@/utils/searchUtils";
 
 interface ModelGroupInfo {
   model_group: string;
@@ -76,7 +77,7 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
   const filteredData = useMemo(() => {
     return (
       modelHubData?.filter((model) => {
-        const matchesSearch = model.model_group.toLowerCase().includes(searchTerm.toLowerCase());
+        const matchesSearch = matchesSearchTerm(searchTerm, [model.model_group]);
         const matchesProvider = selectedProvider === "" || model.providers.includes(selectedProvider);
         const matchesMode = selectedMode === "" || model.mode === selectedMode;
 

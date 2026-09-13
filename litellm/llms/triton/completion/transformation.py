@@ -4,7 +4,7 @@ Translates from OpenAI's `/v1/chat/completions` endpoint to Triton's `/generate`
 
 import json
 from collections.abc import AsyncIterator, Iterator
-from typing import Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from httpx import Headers, Response
 
@@ -27,6 +27,9 @@ from litellm.types.utils import (
 )
 
 from ..common_utils import TritonError
+
+if TYPE_CHECKING:
+    import tiktoken
 
 
 class TritonConfig(BaseConfig):
@@ -92,7 +95,7 @@ class TritonConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -212,7 +215,7 @@ class TritonGenerateConfig(TritonConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -277,7 +280,7 @@ class TritonInferConfig(TritonConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

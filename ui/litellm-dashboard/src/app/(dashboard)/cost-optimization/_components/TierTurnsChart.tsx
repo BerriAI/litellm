@@ -11,7 +11,7 @@ import {
   type ComplexityTiers,
 } from "@/components/add_model/ComplexityRouterConfig";
 import { normalizeTierModels } from "@/components/add_model/complexity_router_tiers";
-import { chartColorValue, DonutChart, type ChartColor } from "@/components/shared/charts";
+import { chartColorValue, DEFAULT_COLOR_CYCLE, DonutChart } from "@/components/shared/charts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 import { viewGroup, type BenchmarkView } from "./autoRouterBenchmarks";
@@ -71,7 +71,6 @@ const tierModelsFor = (
   routerType: string,
   autoRouters: readonly AutoRouterDeployment[],
 ): string[] => {
-  if (!isComplexityTier(tier)) return [];
   const deployment = deploymentFor(routerName, routerType, autoRouters);
   if (!deployment) return [];
   const config = asRecord(deployment.litellm_params?.complexity_router_config);
@@ -83,8 +82,6 @@ interface TierTurnsChartProps {
   view: BenchmarkView;
   autoRouters: readonly AutoRouterDeployment[];
 }
-
-const TIER_DONUT_COLORS: readonly ChartColor[] = ["#c7d2fe", "#1e293b", "#d4b483", "#87a878"];
 
 const TierTurnsChart: React.FC<TierTurnsChartProps> = ({ view, autoRouters }) => {
   const group = viewGroup(view);
@@ -98,7 +95,7 @@ const TierTurnsChart: React.FC<TierTurnsChartProps> = ({ view, autoRouters }) =>
     turns,
     models: tierModelsFor(tier, group.router_name, group.router_type, autoRouters),
   }));
-  const colors = slices.map((_, idx) => TIER_DONUT_COLORS[idx % TIER_DONUT_COLORS.length]);
+  const colors = slices.map((_, idx) => DEFAULT_COLOR_CYCLE[idx % DEFAULT_COLOR_CYCLE.length]);
 
   return (
     <Card>

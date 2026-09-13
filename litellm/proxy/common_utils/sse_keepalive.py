@@ -91,6 +91,17 @@ def is_sse_content_type(content_type: str | None) -> bool:
     return content_type is not None and content_type.split(";", 1)[0].strip().lower() == _SSE_MEDIA_TYPE
 
 
+def split_complete_sse_frames(pending: bytes) -> tuple[bytes, bytes]:
+    """Split buffered SSE bytes into ``(complete_frames, unterminated_tail)``."""
+    boundary_end: Final = max(
+        (pending.rfind(delimiter) + len(delimiter) for delimiter in _SSE_FRAME_DELIMITERS if delimiter in pending),
+        default=0,
+    )
+    if boundary_end == 0:
+        return b"", pending
+    return pending[:boundary_end], pending[boundary_end:]
+
+
 def wrap_passthrough_sse_bytes_with_keepalive_pings(
     stream: AsyncGenerator[bytes, None],
     ping_interval_seconds: float | str | None,

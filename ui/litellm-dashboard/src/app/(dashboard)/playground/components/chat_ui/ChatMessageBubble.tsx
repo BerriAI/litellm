@@ -46,6 +46,7 @@ function ChatMessageBubble({
   return (
     <div className={`mb-4 min-w-0 ${isUser ? "text-right" : "text-left"}`}>
       <div
+        data-testid="message-surface"
         className={`inline-block min-w-0 max-w-[92%] overflow-hidden rounded-lg border p-3 text-left text-card-foreground shadow-xs sm:max-w-[85%] sm:px-4 ${
           isUser ? "border-info/20 bg-info/10" : "border-border bg-card"
         }`}
@@ -53,6 +54,7 @@ function ChatMessageBubble({
         {/* Header: role icon + name + model badge */}
         <div className="mb-1.5 flex min-w-0 items-center gap-2">
           <div
+            data-testid="message-avatar"
             className={`flex items-center justify-center w-6 h-6 rounded-full mr-1 ${
               isUser ? "bg-info/20" : "bg-muted"
             }`}

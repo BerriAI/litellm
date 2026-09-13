@@ -9,6 +9,7 @@ the reservation is refunded when the batch reaches a terminal state
 """
 
 import asyncio
+import logging
 import math
 import time
 import uuid
@@ -19,6 +20,7 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY, BATCH_ENQUEUED_TOKEN_TTL_SECONDS
 from litellm.proxy._types import UserAPIKeyAuth
 
@@ -233,8 +235,11 @@ class BatchEnqueuedTokenStore:
             try:
                 return await self._reserve_via_redis(reserve_script, refund_script, tokens=tokens, scopes=scopes)
             except Exception as e:  # noqa: BLE001  # any Redis failure must fall back to the in-memory counters
-                verbose_proxy_logger.warning(
-                    "Redis enqueued-token reserve failed, falling back to in-memory: %s", str(e)
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "Redis enqueued-token reserve failed, falling back to in-memory",
+                    e,
                 )
         return await self._reserve_in_memory(tokens=tokens, scopes=scopes, span=litellm_parent_otel_span)
 
@@ -374,8 +379,11 @@ class BatchEnqueuedTokenStore:
                     (serialized, ttl),
                 )
             except Exception as e:  # noqa: BLE001  # any Redis failure must fall back to the in-memory record
-                verbose_proxy_logger.warning(
-                    "Redis enqueued-token reservation save failed, falling back to in-memory: %s", str(e)
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "Redis enqueued-token reservation save failed, falling back to in-memory",
+                    e,
                 )
             else:
                 return
@@ -421,8 +429,11 @@ class BatchEnqueuedTokenStore:
                 await pop_script((self._record_key(batch_id),), (BATCH_ENQUEUED_TOKEN_TTL_SECONDS,))
             )
         except Exception as e:  # noqa: BLE001  # any Redis failure must fall back to the in-memory record
-            verbose_proxy_logger.warning(
-                "Redis enqueued-token reservation pop failed, falling back to in-memory: %s", str(e)
+            log_redis_failure(
+                verbose_proxy_logger,
+                logging.WARNING,
+                "Redis enqueued-token reservation pop failed, falling back to in-memory",
+                e,
             )
             return None
 

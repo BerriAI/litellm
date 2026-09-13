@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import React, { useEffect, useRef } from "react";
 import { useFormContext, useWatch } from "react-hook-form";
 import { describe, expect, it } from "vitest";
@@ -68,5 +69,25 @@ describe("ConditionalPublicModelName", () => {
     expect(screen.getByDisplayValue("my-custom-model")).toBeInTheDocument();
     expect(screen.getByText("my-custom-model")).toBeInTheDocument();
     expect(screen.queryByDisplayValue("custom")).not.toBeInTheDocument();
+  });
+
+  it("keeps the public name input focused across keystrokes", async () => {
+    const user = userEvent.setup();
+    render(
+      <MountedFormHost
+        defaultValues={{
+          model: ["gpt-4"],
+          model_mappings: [{ public_name: "gpt-4", litellm_model: "gpt-4" }],
+        }}
+      >
+        <ConditionalPublicModelName />
+      </MountedFormHost>,
+    );
+
+    const input = screen.getByDisplayValue("gpt-4");
+    await user.type(input, "-prod");
+
+    expect(input).toHaveValue("gpt-4-prod");
+    expect(input).toHaveFocus();
   });
 });

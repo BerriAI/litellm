@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, render, waitFor } from "@testing-library/react";
+import { fireEvent, render, waitFor, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -32,6 +32,8 @@ vi.mock("@/components/shared/charts", () => ({
   DonutChart: () => <div />,
   BarChart: () => <div />,
   CustomLegend: () => <div />,
+  chartColorValue: (color: string) => color,
+  DEFAULT_COLOR_CYCLE: ["blue", "cyan", "sky", "indigo", "violet", "purple", "fuchsia", "slate"],
   SEQUENTIAL_COLOR_RAMP: ["indigo"],
 }));
 
@@ -54,7 +56,7 @@ describe("CostOptimizationView daily activity", () => {
     useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole: "proxy_admin" });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-    const { getByRole, getByTestId, findByTestId, queryByText } = render(
+    render(
       <QueryClientProvider client={queryClient}>
         <CostOptimizationView accessToken="test-token" userId="u1" userRole="proxy_admin" />
       </QueryClientProvider>,
@@ -62,12 +64,12 @@ describe("CostOptimizationView daily activity", () => {
 
     await waitFor(() => expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(getByRole("tab", { name: "Prompt Caching" }));
-    await findByTestId("caching-settings");
+    fireEvent.click(screen.getByRole("tab", { name: "Prompt Caching" }));
+    await screen.findByTestId("caching-settings");
 
     expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(1);
     expect(mockUserDailyActivityCall).not.toHaveBeenCalled();
-    expect(queryByText(/Currently fetching spend data/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Currently fetching spend data/)).not.toBeInTheDocument();
   });
 
   it("shows the fetch-progress banner while the paginated fallback streams pages in", async () => {
@@ -82,13 +84,13 @@ describe("CostOptimizationView daily activity", () => {
     useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole: "proxy_admin" });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-    const { findByText, getByRole } = render(
+    render(
       <QueryClientProvider client={queryClient}>
         <CostOptimizationView accessToken="test-token" userId="u1" userRole="proxy_admin" />
       </QueryClientProvider>,
     );
 
-    expect(await findByText(/Currently fetching spend data: fetched 1 \/ 3 pages/)).toBeInTheDocument();
-    expect(getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    expect(await screen.findByText(/Currently fetching spend data: fetched 1 \/ 3 pages/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
   });
 });

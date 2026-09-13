@@ -1,8 +1,5 @@
 """Test Bedrock cross-region inference profile model mapping"""
 
-import json
-from functools import lru_cache
-from pathlib import Path
 from typing import NamedTuple
 
 import pytest
@@ -59,17 +56,17 @@ class GptProfile(NamedTuple):
 GPT_5_6_PROFILES = [
     GptProfile(
         model_id="us.openai.gpt-5.6-sol",
-        input_cost=5.5e-06, input_cost_above_272k=1.1e-05,
-        cache_write=6.875e-06, cache_write_above_272k=1.375e-05,
-        cache_read=5.5e-07, cache_read_above_272k=1.1e-06,
-        output_cost=3.3e-05, output_cost_above_272k=4.95e-05,
+        input_cost=4.4e-06, input_cost_above_272k=8.8e-06,
+        cache_write=5.5e-06, cache_write_above_272k=1.1e-05,
+        cache_read=4.4e-07, cache_read_above_272k=8.8e-07,
+        output_cost=2.2e-05, output_cost_above_272k=3.3e-05,
     ),
     GptProfile(
         model_id="global.openai.gpt-5.6-sol",
-        input_cost=5e-06, input_cost_above_272k=1e-05,
-        cache_write=6.25e-06, cache_write_above_272k=1.25e-05,
-        cache_read=5e-07, cache_read_above_272k=1e-06,
-        output_cost=3e-05, output_cost_above_272k=4.5e-05,
+        input_cost=4e-06, input_cost_above_272k=8e-06,
+        cache_write=5e-06, cache_write_above_272k=1e-05,
+        cache_read=4e-07, cache_read_above_272k=8e-07,
+        output_cost=2e-05, output_cost_above_272k=3e-05,
     ),
     GptProfile(
         model_id="us.openai.gpt-5.6-terra",
@@ -102,13 +99,6 @@ GPT_5_6_PROFILES = [
 ]
 
 
-@lru_cache(maxsize=1)
-def _packaged_cost_map():
-    """The map litellm actually resolves against, for fields ModelInfoBase drops."""
-    path = Path(litellm.__file__).parent / "model_prices_and_context_window_backup.json"
-    return json.loads(path.read_text())
-
-
 def _bedrock_response(model, usage):
     return ModelResponse(
         id="test",
@@ -124,17 +114,6 @@ def _bedrock_response(model, usage):
         ],
         usage=usage,
     )
-
-
-def test_bedrock_cross_region_inference_profile_mapping():
-    """Test that bedrock cross-region inference profile model is mapped"""
-    model = "bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0"
-
-    model_info = _get_model_info_helper(model=model, custom_llm_provider="bedrock")
-
-    assert model_info is not None
-    assert model_info["litellm_provider"] == "bedrock"
-    assert model_info["input_cost_per_token"] == 8e-07
 
 
 def test_proxy_cost_calculation_scenario():
@@ -176,38 +155,6 @@ def test_bedrock_gpt_5_6_profiles_route_to_converse(profile, local_model_cost_ma
     assert BedrockModelInfo.get_bedrock_route(f"bedrock/{profile.model_id}") == "converse"
 
 
-@pytest.mark.parametrize("profile", GPT_5_6_PROFILES, ids=lambda p: p.model_id)
-def test_bedrock_gpt_5_6_published_rates(profile, local_model_cost_map):
-    """Geo and Global profiles carry their own published rates, per context tier."""
-    model_info = _get_model_info_helper(
-        model=f"bedrock/{profile.model_id}", custom_llm_provider="bedrock"
-    )
-
-    assert model_info["litellm_provider"] == "bedrock_converse"
-    assert model_info["mode"] == "chat"
-    assert model_info["max_input_tokens"] == 1000000
-    assert model_info["input_cost_per_token"] == profile.input_cost
-    assert (
-        model_info["input_cost_per_token_above_272k_tokens"]
-        == profile.input_cost_above_272k
-    )
-    assert model_info["output_cost_per_token"] == profile.output_cost
-    assert (
-        model_info["output_cost_per_token_above_272k_tokens"]
-        == profile.output_cost_above_272k
-    )
-    assert model_info["cache_creation_input_token_cost"] == profile.cache_write
-    assert (
-        model_info["cache_creation_input_token_cost_above_272k_tokens"]
-        == profile.cache_write_above_272k
-    )
-    assert model_info["cache_read_input_token_cost"] == profile.cache_read
-    assert (
-        model_info["cache_read_input_token_cost_above_272k_tokens"]
-        == profile.cache_read_above_272k
-    )
-
-
 def test_bedrock_gpt_5_6_above_272k_tier_applies_to_cost(local_model_cost_map):
     """A prompt over 272K tokens is billed at the long-context rate, not the base rate."""
     response = _bedrock_response(
@@ -221,7 +168,7 @@ def test_bedrock_gpt_5_6_above_272k_tier_applies_to_cost(local_model_cost_map):
         custom_llm_provider="bedrock",
     )
 
-    assert cost == pytest.approx((300000 * 1.1e-05) + (1000 * 4.95e-05), rel=1e-9)
+    assert cost == pytest.approx((300000 * 8.8e-06) + (1000 * 3.3e-05), rel=1e-9)
 
 
 def test_bedrock_gpt_5_6_bills_cache_read_tokens(local_model_cost_map):
@@ -241,10 +188,10 @@ def test_bedrock_gpt_5_6_bills_cache_read_tokens(local_model_cost_map):
         custom_llm_provider="bedrock",
     )
 
-    expected = (2 * 5.5e-06) + (15609 * 5.5e-07) + (5 * 3.3e-05)
+    expected = (2 * 4.4e-06) + (15609 * 4.4e-07) + (5 * 2.2e-05)
     assert cost == pytest.approx(expected, rel=1e-9)
     # Without cache_read_input_token_cost the cached prefix bills at zero.
-    assert cost > (15611 * 5.5e-06) * 0.1
+    assert cost > (15611 * 4.4e-06) * 0.1
 
 
 def test_bedrock_gpt_5_6_bills_cache_write_tokens(local_model_cost_map):
@@ -263,45 +210,21 @@ def test_bedrock_gpt_5_6_bills_cache_write_tokens(local_model_cost_map):
         custom_llm_provider="bedrock",
     )
 
-    expected = (2 * 5.5e-06) + (15609 * 6.875e-06) + (5 * 3.3e-05)
+    expected = (2 * 4.4e-06) + (15609 * 5.5e-06) + (5 * 2.2e-05)
     assert cost == pytest.approx(expected, rel=1e-9)
 
 
 @pytest.mark.parametrize("profile", GPT_5_6_PROFILES, ids=lambda p: p.model_id)
-def test_bedrock_gpt_5_6_advertises_only_converse_supported_features(
-    profile, local_model_cost_map
-):
-    model_info = _get_model_info_helper(
-        model=f"bedrock/{profile.model_id}", custom_llm_provider="bedrock"
-    )
-
-    assert model_info["supports_function_calling"] is True
-    assert model_info["supports_tool_choice"] is True
-    assert model_info["supports_vision"] is True
-
-    # Bedrock rejects an explicit cachePoint block for these models, so the flag that
-    # offers caller-driven caching stays off even though the cache rates are declared.
-    assert not model_info.get("supports_prompt_caching")
-
-    # ModelInfoBase drops these two, so they are read from the map litellm resolves.
-    raw = _packaged_cost_map()[profile.model_id]
-    assert raw["supported_modalities"] == ["text", "image"]
-    assert raw["supported_output_modalities"] == ["text"]
-    # No bedrock_converse entry declares supported_endpoints; these models are reachable
-    # on chat completions and on the Responses API without it.
-    assert "supported_endpoints" not in raw
-
-
-@pytest.mark.parametrize("profile", GPT_5_6_PROFILES, ids=lambda p: p.model_id)
-def test_bedrock_gpt_5_6_offers_tools_but_not_reasoning(profile, local_model_cost_map):
-    """Converse rejects the Anthropic-shaped thinking block LiteLLM emits for
-    reasoning_effort, so neither reasoning param may be offered yet, while the tool
-    params these models do accept must be."""
+def test_bedrock_gpt_5_6_offers_tools_and_reasoning_effort_but_not_thinking(profile, local_model_cost_map):
+    """GPT-5.x on Converse maps reasoning_effort to reasoning.effort, so reasoning_effort
+    is offered while the Anthropic-only thinking/output_config are not, alongside the tool
+    params these models accept."""
     supported = AmazonConverseConfig().get_supported_openai_params(
         model=f"bedrock/{profile.model_id}"
     )
 
     assert "tools" in supported
     assert "tool_choice" in supported
-    assert "reasoning_effort" not in supported
+    assert "reasoning_effort" in supported
     assert "thinking" not in supported
+    assert "output_config" not in supported

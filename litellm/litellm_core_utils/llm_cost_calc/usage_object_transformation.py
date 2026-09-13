@@ -1,6 +1,6 @@
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Final
 
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
@@ -39,7 +39,7 @@ class TranscriptionUsageObjectTransformation:
         return None
 
 
-_INTERACTIONS_MODALITY_FIELDS: Mapping[str, str] = MappingProxyType(
+_INTERACTIONS_MODALITY_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "text": "text_tokens",
         "audio": "audio_tokens",
@@ -59,7 +59,7 @@ def _token_count(value: object) -> int:
 
 
 def _modality_token_sums(entries: Sequence[Mapping[str, Any]]) -> Mapping[str, int]:
-    fields = frozenset(field for entry in entries if (field := _modality_field(entry)) is not None)
+    fields: Final = frozenset(field for entry in entries if (field := _modality_field(entry)) is not None)
     return MappingProxyType(
         {
             field: sum(_token_count(entry.get("tokens")) for entry in entries if _modality_field(entry) == field)
@@ -69,10 +69,13 @@ def _modality_token_sums(entries: Sequence[Mapping[str, Any]]) -> Mapping[str, i
 
 
 def _google_search_query_count(usage_object: Mapping[str, Any]) -> int:
+    entries: Final = usage_object.get("grounding_tool_count")
+    if not isinstance(entries, Sequence):
+        return 0
     return sum(
         _token_count(entry.get("count"))
-        for entry in tuple(usage_object.get("grounding_tool_count") or ())
-        if isinstance(entry, Mapping) and entry.get("type") == "google_search"  # pyright: ignore[reportUnnecessaryIsInstance]  # provider JSON, not the empty tuple inferred from `or ()`
+        for entry in entries
+        if isinstance(entry, Mapping) and entry.get("type") == "google_search"
     )
 
 
@@ -112,30 +115,30 @@ class InteractionsUsageObjectTransformation:
 
     @staticmethod
     def transform_interactions_usage_object(usage_object: Mapping[str, Any]) -> Usage:
-        input_entries = tuple(usage_object.get("input_tokens_by_modality") or ()) + tuple(
+        input_entries: Final = tuple(usage_object.get("input_tokens_by_modality") or ()) + tuple(
             usage_object.get("tool_use_tokens_by_modality") or ()
         )
-        cached_sums = _modality_token_sums(tuple(usage_object.get("cached_tokens_by_modality") or ()))
-        output_sums = _modality_token_sums(tuple(usage_object.get("output_tokens_by_modality") or ()))
+        cached_sums: Final = _modality_token_sums(tuple(usage_object.get("cached_tokens_by_modality") or ()))
+        output_sums: Final = _modality_token_sums(tuple(usage_object.get("output_tokens_by_modality") or ()))
 
-        total_cached_tokens = _token_count(usage_object.get("total_cached_tokens"))
-        input_sums = _subtract_cached_from_input(
+        total_cached_tokens: Final = _token_count(usage_object.get("total_cached_tokens"))
+        input_sums: Final = _subtract_cached_from_input(
             input_sums=_modality_token_sums(input_entries),
             cached_sums=cached_sums,
             total_cached_tokens=total_cached_tokens,
         )
 
-        reasoning_tokens = _token_count(usage_object.get("total_reasoning_tokens")) or _token_count(
+        reasoning_tokens: Final = _token_count(usage_object.get("total_reasoning_tokens")) or _token_count(
             usage_object.get("total_thought_tokens")
         )
-        prompt_tokens = _token_count(usage_object.get("total_input_tokens")) + _token_count(
+        prompt_tokens: Final = _token_count(usage_object.get("total_input_tokens")) + _token_count(
             usage_object.get("total_tool_use_tokens")
         )
-        completion_tokens = _token_count(usage_object.get("total_output_tokens")) + reasoning_tokens
-        total_tokens = _token_count(usage_object.get("total_tokens")) or (prompt_tokens + completion_tokens)
+        completion_tokens: Final = _token_count(usage_object.get("total_output_tokens")) + reasoning_tokens
+        total_tokens: Final = _token_count(usage_object.get("total_tokens")) or (prompt_tokens + completion_tokens)
 
-        web_search_requests = _google_search_query_count(usage_object)
-        prompt_tokens_details = (
+        web_search_requests: Final = _google_search_query_count(usage_object)
+        prompt_tokens_details: Final = (
             PromptTokensDetailsWrapper(
                 cached_tokens=total_cached_tokens or None,
                 web_search_requests=web_search_requests or None,
@@ -144,7 +147,7 @@ class InteractionsUsageObjectTransformation:
             if input_sums or total_cached_tokens or web_search_requests
             else None
         )
-        completion_tokens_details = (
+        completion_tokens_details: Final = (
             CompletionTokensDetailsWrapper(
                 reasoning_tokens=reasoning_tokens or None,
                 **output_sums,

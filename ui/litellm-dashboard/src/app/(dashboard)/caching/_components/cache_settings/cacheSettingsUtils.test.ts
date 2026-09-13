@@ -25,6 +25,7 @@ describe("buildInitialValues", () => {
     const values = buildInitialValues({});
     expect(values.port).toBe("6379");
     expect(values.similarity_threshold).toBe("0.8");
+    expect(values.semantic_cache_scope).toBe("key");
     expect(values.ssl).toBe(false);
     expect(values.db).toBe("");
   });
@@ -73,6 +74,13 @@ describe("buildCachePayload", () => {
     const payload = buildCachePayload("semantic", { similarity_threshold: 0.9 }, { forTesting: false });
     expect(payload.type).toBe("redis-semantic");
     expect(payload.similarity_threshold).toBe(0.9);
+  });
+
+  it("should send the semantic cache scope only for a semantic cache", () => {
+    const semantic = buildCachePayload("semantic", { semantic_cache_scope: "end_user" }, { forTesting: false });
+    expect(semantic.semantic_cache_scope).toBe("end_user");
+    const node = buildCachePayload("node", { semantic_cache_scope: "end_user" }, { forTesting: false });
+    expect(node).not.toHaveProperty("semantic_cache_scope");
   });
 
   it("should keep type redis when testing a semantic cache so the test endpoint accepts it", () => {

@@ -133,6 +133,102 @@ def test_init_adaptive_router_reads_cost_from_litellm_params():
     }
 
 
+def test_init_adaptive_router_falls_back_to_model_info_cost():
+    """Custom pricing declared under model_info (the conventional location everywhere else in
+    LiteLLM: cost_calculator.py, add_deployment's litellm.model_cost registration) must still
+    feed cost-weighted routing, not silently zero it out."""
+    r = Router(
+        model_list=[
+            {
+                "model_name": "smart-cheap-router",
+                "litellm_params": {
+                    "model": "auto_router/adaptive_router",
+                    "adaptive_router_config": {
+                        "available_models": ["fast", "smart"],
+                    },
+                },
+            },
+            {
+                "model_name": "fast",
+                "litellm_params": {"model": "openai/gpt-4o-mini"},
+                "model_info": {"input_cost_per_token": 0.00000015},
+            },
+            {
+                "model_name": "smart",
+                "litellm_params": {"model": "openai/gpt-4o"},
+                "model_info": {"input_cost_per_token": 0.0000050},
+            },
+        ]
+    )
+    assert _adaptive(r, "smart-cheap-router").model_to_cost == {
+        "fast": 0.00000015,
+        "smart": 0.0000050,
+    }
+
+
+@pytest.mark.asyncio
+async def test_pick_model_favors_the_cheaper_model_info_priced_deployment():
+    """Same fix, exercised through pick_model's actual scoring rather than the model_to_cost
+    dict alone: with cost as the only weight and equal quality priors, the cheaper deployment
+    must win every draw. `smart` (expensive) is listed first deliberately: before the fix both
+    models silently cost 0.0, tying every score, and pick_best's insertion-order tie-break would
+    hand every request to the first-listed (expensive) model instead."""
+    r = Router(
+        model_list=[
+            {
+                "model_name": "smart-cheap-router",
+                "litellm_params": {
+                    "model": "auto_router/adaptive_router",
+                    "adaptive_router_config": {
+                        "available_models": ["smart", "fast"],
+                        "weights": {"quality": 0.0, "cost": 1.0},
+                    },
+                },
+            },
+            {
+                "model_name": "smart",
+                "litellm_params": {"model": "openai/gpt-4o"},
+                "model_info": {"input_cost_per_token": 0.0000050},
+            },
+            {
+                "model_name": "fast",
+                "litellm_params": {"model": "openai/gpt-4o-mini"},
+                "model_info": {"input_cost_per_token": 0.00000015},
+            },
+        ]
+    )
+    adaptive = _adaptive(r, "smart-cheap-router")
+
+    picks = [await adaptive.pick_model(RequestType.GENERAL) for _ in range(10)]
+
+    assert picks == ["fast"] * 10
+
+
+def test_init_adaptive_router_prefers_litellm_params_cost_over_model_info():
+    r = Router(
+        model_list=[
+            {
+                "model_name": "smart-cheap-router",
+                "litellm_params": {
+                    "model": "auto_router/adaptive_router",
+                    "adaptive_router_config": {
+                        "available_models": ["fast"],
+                    },
+                },
+            },
+            {
+                "model_name": "fast",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "input_cost_per_token": 0.00000015,
+                },
+                "model_info": {"input_cost_per_token": 0.0000050},
+            },
+        ]
+    )
+    assert _adaptive(r, "smart-cheap-router").model_to_cost == {"fast": 0.00000015}
+
+
 # ---- Fix 4: pre-routing dispatch ---------------------------------------
 
 

@@ -23,9 +23,10 @@ from litellm.proxy.management_helpers.access_group_team_sync import (
     sync_team_access_group_membership,
 )
 
-TEAM = "ags-team-a"
-OTHER_TEAM = "ags-team-b"
-GROUPS = ("ags-group-1", "ags-group-2", "ags-group-3")
+_XDIST_WORKER = os.environ.get("PYTEST_XDIST_WORKER", "master")
+TEAM = f"ags-team-a-{_XDIST_WORKER}"
+OTHER_TEAM = f"ags-team-b-{_XDIST_WORKER}"
+GROUPS = tuple(f"ags-group-{n}-{_XDIST_WORKER}" for n in (1, 2, 3))
 _DELETE_SEEDED = 'DELETE FROM "LiteLLM_AccessGroupTable" WHERE access_group_id = ANY($1::TEXT[])'
 _DELETE_TEAMS = 'DELETE FROM "LiteLLM_TeamTable" WHERE team_id = ANY($1::TEXT[])'
 

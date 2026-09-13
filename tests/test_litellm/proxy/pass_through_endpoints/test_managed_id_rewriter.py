@@ -1,12 +1,15 @@
 import datetime
+import json
+from collections.abc import AsyncIterator, Iterable
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.proxy.pass_through_endpoints.managed_id_codec import new_managed_id
+from litellm.proxy.pass_through_endpoints.managed_id_codec import decode, new_managed_id
 from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
     list_passthrough_ids_from_db,
+    rewrite_streamed_response_ids,
 )
 
 
@@ -27,7 +30,37 @@ def _prisma_client(file_rows=None, batch_rows=None) -> MagicMock:
     pc.db.litellm_managedobjecttable.find_many = AsyncMock(
         side_effect=lambda *args, take=None, **kwargs: list(batch_rows or [])[:take]
     )
+    pc.db.litellm_managedobjecttable.upsert = AsyncMock(return_value=None)
     return pc
+
+
+RAW_RESPONSE_ID = "resp_0123456789abcdef"
+
+
+def _response_stream_bytes(raw_id: str = RAW_RESPONSE_ID) -> bytes:
+    events = (
+        ("response.created", {"type": "response.created", "response": {"id": raw_id, "status": "in_progress"}}),
+        ("response.output_text.delta", {"type": "response.output_text.delta", "delta": "mango"}),
+        ("response.completed", {"type": "response.completed", "response": {"id": raw_id, "status": "completed"}}),
+    )
+    return b"".join(f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode() for name, payload in events)
+
+
+async def _chunks(payload: bytes, size: int) -> AsyncIterator[bytes]:
+    for start in range(0, len(payload), size):
+        yield payload[start : start + size]
+
+
+async def _collect(stream: AsyncIterator[bytes]) -> bytes:
+    return b"".join([chunk async for chunk in stream])
+
+
+def _response_ids(sse: bytes) -> Iterable[str]:
+    for line in sse.decode().splitlines():
+        if line.startswith("data:"):
+            event = json.loads(line[len("data:") :])
+            if "response" in event:
+                yield event["response"]["id"]
 
 
 def _file_row(unified_id: str) -> MagicMock:
@@ -67,9 +100,7 @@ def _batch_row(unified_id: str) -> MagicMock:
         ),
     ],
 )
-async def test_list_batches_out_of_range_limit_raises_400(
-    limit, expected_message, expected_openai_code
-):
+async def test_list_batches_out_of_range_limit_raises_400(limit, expected_message, expected_openai_code):
     pc = _prisma_client(batch_rows=[_batch_row(new_managed_id("openai", "batch_abc"))])
 
     with pytest.raises(ProxyException) as exc:
@@ -147,3 +178,98 @@ async def test_list_files_drops_batch_guardrail_key_persisted_by_an_older_proxy(
     assert result is not None
     assert "litellm_batch_guardrail" not in result["data"][0]
     assert result["data"][0]["filename"] == "test.jsonl"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chunk_size", [1, 7, 4096])
+async def test_streamed_response_is_owned_and_rewritten_across_chunk_boundaries(chunk_size: int):
+    """A streamed POST /v1/responses records the caller as owner once and returns
+    the minted id in every event, no matter how the transport splits the SSE bytes."""
+    pc = _prisma_client()
+
+    output = await _collect(
+        rewrite_streamed_response_ids(
+            stream=_chunks(_response_stream_bytes(), chunk_size),
+            provider="openai",
+            method="POST",
+            route="/openai_passthrough/v1/responses",
+            user_api_key_dict=_user(),
+            prisma_client=pc,
+        )
+    )
+
+    pc.db.litellm_managedobjecttable.upsert.assert_awaited_once()
+    created = pc.db.litellm_managedobjecttable.upsert.await_args.kwargs["data"]["create"]
+    assert created["created_by"] == "user-1"
+    assert created["team_id"] == "team-1"
+    assert created["file_purpose"] == "response"
+    assert created["model_object_id"] == f"passthrough:openai:{RAW_RESPONSE_ID}"
+    managed_id = created["unified_object_id"]
+    assert decode(managed_id).raw_provider_id == RAW_RESPONSE_ID
+    assert list(_response_ids(output)) == [managed_id, managed_id]
+    assert RAW_RESPONSE_ID.encode() not in output
+    assert output == _response_stream_bytes(managed_id)
+
+
+@pytest.mark.asyncio
+async def test_streamed_response_with_cr_only_frame_delimiters_is_still_owned_and_rewritten():
+    """SSE also terminates lines with a lone CR; those frames must mint and rewrite too."""
+    pc = _prisma_client()
+    payload = _response_stream_bytes().replace(b"\n", b"\r")
+
+    output = await _collect(
+        rewrite_streamed_response_ids(
+            stream=_chunks(payload, 7),
+            provider="openai",
+            method="POST",
+            route="/openai_passthrough/v1/responses",
+            user_api_key_dict=_user(),
+            prisma_client=pc,
+        )
+    )
+
+    pc.db.litellm_managedobjecttable.upsert.assert_awaited_once()
+    managed_id = pc.db.litellm_managedobjecttable.upsert.await_args.kwargs["data"]["create"]["unified_object_id"]
+    assert RAW_RESPONSE_ID.encode() not in output
+    assert output == _response_stream_bytes(managed_id).replace(b"\n", b"\r")
+
+
+@pytest.mark.asyncio
+async def test_streamed_bytes_untouched_on_routes_without_a_response_id():
+    pc = _prisma_client()
+    payload = _response_stream_bytes()
+
+    output = await _collect(
+        rewrite_streamed_response_ids(
+            stream=_chunks(payload, 5),
+            provider="openai",
+            method="POST",
+            route="/openai_passthrough/v1/chat/completions",
+            user_api_key_dict=_user(),
+            prisma_client=pc,
+        )
+    )
+
+    assert output == payload
+    pc.db.litellm_managedobjecttable.upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_streamed_response_stays_raw_and_intact_when_the_row_cannot_be_persisted():
+    pc = _prisma_client()
+    pc.db.litellm_managedobjecttable.upsert = AsyncMock(side_effect=RuntimeError("db down"))
+    payload = _response_stream_bytes()
+
+    output = await _collect(
+        rewrite_streamed_response_ids(
+            stream=_chunks(payload, 3),
+            provider="openai",
+            method="POST",
+            route="/openai_passthrough/v1/responses",
+            user_api_key_dict=_user(),
+            prisma_client=pc,
+        )
+    )
+
+    assert output == payload
+    pc.db.litellm_managedobjecttable.upsert.assert_awaited_once()

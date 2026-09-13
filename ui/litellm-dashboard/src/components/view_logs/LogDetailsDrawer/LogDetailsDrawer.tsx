@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bot, Check, ChevronLeft, ChevronRight, Copy, Sparkles, Wrench } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Bot, Check, Copy, Sparkles, Wrench } from "lucide-react";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LogEntry } from "../columns";
@@ -9,6 +8,7 @@ import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";
 import { getEventDisplayName } from "../utils";
 import { ClassifyTag } from "./ClassifyTag";
 import { DrawerHeader } from "./DrawerHeader";
+import { SidebarToggle } from "./SidebarToggle";
 import { useKeyboardNavigation } from "./useKeyboardNavigation";
 import { LogDetailContent, GuardrailJumpLink } from "./LogDetailContent";
 import { sessionSpendLogsCall } from "../../networking";
@@ -278,6 +278,7 @@ export function LogDetailsDrawer({
   ).length;
   const agentCount = sessionLogs.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length;
   const mcpCount = sessionLogs.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length;
+  const cacheHitCount = sessionLogs.filter((row) => String(row.cache_hit ?? "").toLowerCase() === "true").length;
   const logsForList = isSessionMode ? sessionLogs : currentLog ? [currentLog] : [];
   const leftPanelId = isSessionMode ? sessionId || "" : currentLog?.request_id || "";
   const leftPanelDisplayId = leftPanelId.length > 14 ? `${leftPanelId.slice(0, 11)}...` : leftPanelId;
@@ -312,26 +313,12 @@ export function LogDetailsDrawer({
           {logEntry?.request_id ? `Request ${logEntry.request_id} details` : "Request details"}
         </SheetTitle>
         <div style={{ height: "100%" }} className="flex relative">
-          {!isSidebarCollapsed ? (
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => setIsSidebarCollapsed(true)}
-              className="absolute top-2 left-2 z-20 bg-card! border! border-border! rounded-md!"
-              aria-label="Collapse trace sidebar"
-            >
-              <ChevronLeft className="size-4" />
-            </Button>
-          ) : (
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => setIsSidebarCollapsed(false)}
-              className="absolute top-2 left-2 z-20 bg-card! border! border-border! rounded-md!"
-              aria-label="Expand trace sidebar"
-            >
-              <ChevronRight className="size-4" />
-            </Button>
+          {!isSidebarCollapsed && (
+            <SidebarToggle
+              isCollapsed={false}
+              onToggle={() => setIsSidebarCollapsed(true)}
+              className="absolute top-2 left-2 z-raised"
+            />
           )}
           {!isSidebarCollapsed && (
             <div className="border-r border-border bg-muted flex flex-col" style={{ width: SIDEBAR_WIDTH_PX }}>
@@ -387,6 +374,11 @@ export function LogDetailsDrawer({
                     </>
                   )}
                 </div>
+                {isSessionMode && (
+                  <div className="text-[11px] text-muted-foreground font-mono whitespace-nowrap">
+                    {cacheHitCount}/{logsForList.length} cached
+                  </div>
+                )}
                 {isSessionMode && sessionTruncated && (
                   <div className="mt-1 text-[11px] text-warning font-mono">
                     Showing most recent {logsForList.length} of {sessionTotalCount}
@@ -460,6 +452,8 @@ export function LogDetailsDrawer({
             <DrawerHeader
               log={currentLog}
               onClose={onClose}
+              isSidebarCollapsed={isSidebarCollapsed}
+              onToggleSidebar={() => setIsSidebarCollapsed((collapsed) => !collapsed)}
               onPrevious={selectPreviousLog}
               onNext={selectNextLog}
               statusLabel={statusLabel}
