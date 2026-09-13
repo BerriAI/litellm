@@ -339,6 +339,43 @@ def test_chunk_parser_function_call_added_produces_tool_use():
     assert choice.finish_reason is None
 
 
+@pytest.mark.parametrize(
+    "event_type",
+    [
+        "response.function_call_arguments.delta",
+        "response.custom_tool_call_input.delta",
+    ],
+)
+def test_chunk_parser_empty_tool_call_delta_is_noop(event_type: str) -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    chunks: Final = (
+        {"type": event_type, "output_index": 0, "delta": ""},
+        {"type": event_type, "output_index": 0, "delta": '{"city":'},
+    )
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=iter(f"data: {json.dumps(chunk)}" for chunk in chunks),
+        sync_stream=True,
+    )
+
+    empty_result: Final = next(iterator)
+    assert empty_result.choices[0].delta.content == ""
+    assert empty_result.choices[0].delta.tool_calls is None
+    assert empty_result.choices[0].finish_reason is None
+
+    content_result: Final = next(iterator)
+    tool_calls: Final = content_result.choices[0].delta.tool_calls
+    assert tool_calls is not None
+    tool_call: Final = tool_calls[0]
+    assert tool_call.function.arguments == '{"city":'
+    assert content_result.choices[0].finish_reason is None
+
+    with pytest.raises(ValueError, match="Invalid function argument delta"):
+        iterator.chunk_parser({"type": event_type, "output_index": 0})
+
+
 def test_transform_response_with_reasoning_and_output():
     """Test transform_response handles ResponsesAPIResponse with reasoning items and output messages."""
     from unittest.mock import Mock
