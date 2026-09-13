@@ -1,5 +1,6 @@
 """Provider / exporter factory + the Baggage span processor."""
 
+import math
 import os
 import queue
 import threading
@@ -865,13 +866,13 @@ def build_metric_reader(config: OpenTelemetryV2Config) -> "MetricReader":
     else:
         exporter = ConsoleMetricExporter()
 
-    return PeriodicExportingMetricReader(exporter, export_interval_millis=_metric_export_interval_millis())
+    return PeriodicExportingMetricReader(exporter, export_interval_millis=resolve_metric_export_interval_millis())
 
 
 DEFAULT_METRIC_EXPORT_INTERVAL_MILLIS: Final = 5000
 
 
-def _metric_export_interval_millis() -> float:
+def resolve_metric_export_interval_millis() -> float:
     """The metric export period: ``OTEL_METRIC_EXPORT_INTERVAL`` if set, else 5s.
 
     The SDK only consults the variable when no explicit interval is passed, so
@@ -890,9 +891,9 @@ def _metric_export_interval_millis() -> float:
             DEFAULT_METRIC_EXPORT_INTERVAL_MILLIS,
         )
         return DEFAULT_METRIC_EXPORT_INTERVAL_MILLIS
-    if interval <= 0:
+    if not math.isfinite(interval) or interval <= 0:
         verbose_logger.warning(
-            "OTEL_METRIC_EXPORT_INTERVAL=%r must be positive; using %sms",
+            "OTEL_METRIC_EXPORT_INTERVAL=%r must be a positive finite number; using %sms",
             raw,
             DEFAULT_METRIC_EXPORT_INTERVAL_MILLIS,
         )
