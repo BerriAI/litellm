@@ -38,6 +38,7 @@ expected_env_vars = {
     "GOOGLE_APPLICATION_CREDENTIALS": "gcs_credentials",
     "OPIK_API_KEY": "opik_api_key",
     "LANGTRACE_API_KEY": "langtrace_api_key",
+    "TELEMETRY_DEV_API_KEY": "td_live_test",
     "LOGFIRE_TOKEN": "logfire_token",
     "ARIZE_SPACE_KEY": "arize_space_key",
     "ARIZE_API_KEY": "arize_api_key",
@@ -314,3 +315,36 @@ def test_get_combined_callback_list_returns_copy_when_dynamic_is_none():
     combined_callbacks.append("new_callback")
 
     assert global_callbacks == ["langfuse"]
+
+
+def test_telemetry_dev_callback_initialization(monkeypatch):
+    from litellm.integrations.telemetry_dev.telemetry_dev import TelemetryDevLogger
+    from litellm.litellm_core_utils.litellm_logging import (
+        _init_custom_logger_compatible_class,
+        get_custom_logger_compatible_class,
+    )
+
+    monkeypatch.setenv("TELEMETRY_DEV_API_KEY", "td_live_test")
+    monkeypatch.delenv("TELEMETRY_DEV_BASE_URL", raising=False)
+
+    config = TelemetryDevLogger.get_telemetry_dev_config()
+    assert config.endpoint == "https://ingest.telemetry.dev/v1/traces"
+    assert config.otlp_auth_headers == "Authorization=Bearer td_live_test"
+    assert config.protocol == "otlp_http"
+
+    monkeypatch.setenv("TELEMETRY_DEV_BASE_URL", "https://example.com/")
+    assert TelemetryDevLogger.get_telemetry_dev_config().endpoint == "https://example.com/v1/traces"
+    monkeypatch.delenv("TELEMETRY_DEV_BASE_URL")
+
+    logger = _init_custom_logger_compatible_class("telemetry_dev", internal_usage_cache=None, llm_router=None)
+    assert isinstance(logger, TelemetryDevLogger)
+    assert logger.callback_name == "telemetry_dev"
+    assert CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE["telemetry_dev"] is TelemetryDevLogger
+
+    # init is cached and lookup resolves to the same instance
+    assert _init_custom_logger_compatible_class("telemetry_dev", internal_usage_cache=None, llm_router=None) is logger
+    assert get_custom_logger_compatible_class("telemetry_dev") is logger
+
+    monkeypatch.delenv("TELEMETRY_DEV_API_KEY")
+    with pytest.raises(ValueError, match="TELEMETRY_DEV_API_KEY"):
+        TelemetryDevLogger.get_telemetry_dev_config()
