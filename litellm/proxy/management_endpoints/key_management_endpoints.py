@@ -153,7 +153,6 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     BudgetConfig,
-    ModelResponse,
     PersonalUIKeyGenerationConfig,
     TeamUIKeyGenerationConfig,
 )
@@ -7205,7 +7204,9 @@ async def test_key_logging(
     await asyncio.sleep(2)  # wait for callbacks to run, callbacks use batching so wait for the flush event
     callback_log_contents: Final = log_capture_string.getvalue()
 
-    health_check_event_id: Final = health_check_response.id if isinstance(health_check_response, ModelResponse) else ""
+    health_check_event_id: Final = (
+        health_check_response.id if isinstance(health_check_response, litellm.ModelResponse) else ""
+    )
     gcs_failure: Final = (
         await flush_gcs_and_describe_failures(get_custom_logger_compatible_class("gcs_bucket"), health_check_event_id)
         if "gcs_bucket" in logging_callbacks
