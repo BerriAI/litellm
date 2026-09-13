@@ -15,3 +15,9 @@ describe("navAccountDisplayName", () => {
     expect(navAccountDisplayName(null, "user-uuid-123")).toBe("user-uuid-123");
   });
 });
+
+it("localizes only the placeholder account label, preserving real account identities", () => {
+  expect(navAccountDisplayName(null, "default_user_id", "账户")).toBe("账户");
+  expect(navAccountDisplayName(null, "Account", "账户")).toBe("Account");
+  expect(navAccountDisplayName("admin@example.com", null, "账户")).toBe("admin@example.com");
+});

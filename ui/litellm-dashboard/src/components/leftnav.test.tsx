@@ -1,5 +1,7 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { I18nextProvider } from "react-i18next";
+import { createDashboardI18n } from "@/i18n";
 import { renderWithProviders } from "../../tests/test-utils";
 import Sidebar, { menuGroups, getBreadcrumb } from "./leftnav";
 
@@ -620,5 +622,39 @@ describe("getBreadcrumb", () => {
 
   it("falls back to a prettified title with no section for unknown routes", () => {
     expect(getBreadcrumb("/ui/some-unknown-page")).toEqual({ section: null, title: "Some Unknown Page" });
+  });
+});
+
+describe("localized navigation", () => {
+  it("changes visible and collapsed labels while retaining routes and permission filtering", async () => {
+    const internalUser = {
+      userId: "test-user-id",
+      accessToken: "test-access-token",
+      userRole: "internal",
+      isViewOnly: false,
+      token: "test-token",
+      userEmail: "test@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    };
+    mockUseAuthorized.mockReturnValue(internalUser);
+    const instance = createDashboardI18n("zh-CN");
+    renderWithProviders(
+      <I18nextProvider i18n={instance}>
+        <Sidebar collapsed />
+      </I18nextProvider>,
+    );
+    expect(screen.getByRole("link", { name: "虚拟密钥" })).toHaveAttribute("href", "/ui/api-keys");
+    expect(screen.getByRole("link", { name: "虚拟密钥" })).toHaveAttribute("title", "虚拟密钥");
+    expect(screen.getByRole("link", { name: "模型与端点" })).toHaveAttribute("href", "/ui/models-and-endpoints");
+    expect(screen.queryByRole("link", { name: "内部用户" })).not.toBeInTheDocument();
+    await act(async () => {
+      await instance.changeLanguage("en");
+    });
+    expect(screen.getByRole("link", { name: "Virtual Keys" })).toHaveAttribute("href", "/ui/api-keys");
+    expect(screen.getByRole("link", { name: "Virtual Keys" })).toHaveAttribute("title", "Virtual Keys");
+    expect(screen.queryByRole("link", { name: "Internal Users" })).not.toBeInTheDocument();
+    expect(menuGroups[0].items[0].label).toBe("Virtual Keys");
   });
 });
