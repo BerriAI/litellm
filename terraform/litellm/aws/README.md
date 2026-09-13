@@ -335,6 +335,17 @@ gateway_tokens_metric = {
 }
 ```
 
+### Load balancer and gateway timeouts
+
+The ALB idle timeout defaults to 600 seconds through `alb_idle_timeout_seconds`.
+The gateway receives `KEEPALIVE_TIMEOUT` set to 30 seconds above that value, so
+uvicorn keeps connections open longer than the load balancer. Override
+`gateway_extra_env.KEEPALIVE_TIMEOUT` when a different gateway timeout is needed.
+
+```hcl
+alb_idle_timeout_seconds = 600
+```
+
 Worked example for the request policy: 1,000 rps across 10 tasks is 100 rps
 per task (the ALB reports it as 6,000 per minute per target) against a target
 of 90 (5,400), so target tracking sizes the service to
