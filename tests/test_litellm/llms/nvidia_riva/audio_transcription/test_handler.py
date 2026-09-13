@@ -92,6 +92,8 @@ def mock_riva(monkeypatch):
 
     streaming_responses_holder = {"value": []}
     offline_response_holder = {"value": None}
+    offline_error_holder = {"value": None}
+    streaming_calls = []
     offline_calls = {}
 
     class FakeASRService:
@@ -100,12 +102,14 @@ def mock_riva(monkeypatch):
 
         def streaming_response_generator(self, audio_chunks, streaming_config):
             # Drain audio_chunks generator so we exercise the chunking path.
-            list(audio_chunks)
+            streaming_calls.append(list(audio_chunks))
             yield from streaming_responses_holder["value"]
 
         def offline_recognize(self, audio_bytes, config):
             offline_calls["audio_bytes"] = audio_bytes
             offline_calls["config"] = config
+            if offline_error_holder["value"] is not None:
+                raise offline_error_holder["value"]
             return offline_response_holder["value"]
 
     fake_riva_client = SimpleNamespace(
@@ -126,6 +130,8 @@ def mock_riva(monkeypatch):
         auth_calls=auth_calls,
         responses=streaming_responses_holder,
         offline_response=offline_response_holder,
+        offline_error=offline_error_holder,
+        streaming_calls=streaming_calls,
         offline_calls=offline_calls,
         client=fake_riva_client,
     )
@@ -206,11 +212,6 @@ def test_riva_offline_uses_unary_recognize_and_keeps_results_without_is_final(mo
     resampled buffer and a bare ``RecognitionConfig``, and must keep every
     result even though ``RecognizeResponse`` results carry no ``is_final``.
     """
-
-    def fail_streaming(self, audio_chunks, streaming_config):
-        raise AssertionError("streaming_response_generator must not be called in offline mode")
-
-    mock_riva.client.ASRService.streaming_response_generator = fail_streaming
     mock_riva.offline_response["value"] = _fake_response(
         results=[
             SimpleNamespace(alternatives=[_fake_alternative("Hello,", words=[_fake_word("Hello,", 0, 320)])]),
@@ -240,6 +241,7 @@ def test_riva_offline_uses_unary_recognize_and_keeps_results_without_is_final(mo
     assert response.text == "Hello, world."
     assert response["words"][1]["end"] == pytest.approx(0.87)
     assert response._hidden_params["audio_transcription_duration"] == pytest.approx(1.0, abs=0.05)
+    assert mock_riva.streaming_calls == []
     # 1 s of 16 kHz int16 mono sent as one buffer, not chunked.
     assert len(mock_riva.offline_calls["audio_bytes"]) == pytest.approx(32000, abs=1600)
     assert mock_riva.offline_calls["config"]._kwargs["language_code"] == "multi"
@@ -247,10 +249,6 @@ def test_riva_offline_uses_unary_recognize_and_keeps_results_without_is_final(mo
 
 
 def test_default_mode_streams_and_never_calls_offline_recognize(mock_riva, logging_obj):
-    def fail_offline(self, audio_bytes, config):
-        raise AssertionError("offline_recognize must not be called without riva_offline")
-
-    mock_riva.client.ASRService.offline_recognize = fail_offline
     mock_riva.responses["value"] = [
         _fake_response(results=[_fake_result(is_final=True, alternatives=[_fake_alternative("streamed")])])
     ]
@@ -268,6 +266,8 @@ def test_default_mode_streams_and_never_calls_offline_recognize(mock_riva, loggi
         api_base="localhost:50051",
     )
     assert response.text == "streamed"
+    assert mock_riva.offline_calls == {}
+    assert len(mock_riva.streaming_calls) == 1
     assert logging_obj.pre_call.call_args.kwargs["additional_args"]["complete_input_dict"]["riva_offline"] is False
 
 
@@ -279,10 +279,7 @@ def test_riva_offline_grpc_error_is_wrapped(mock_riva, logging_obj):
         def details(self):
             return "Unavailable model requested"
 
-    def raising_offline(self, audio_bytes, config):
-        raise FakeGrpcError("rpc fail")
-
-    mock_riva.client.ASRService.offline_recognize = raising_offline
+    mock_riva.offline_error["value"] = FakeGrpcError("rpc fail")
 
     impl = NvidiaRivaAudioTranscription()
     with pytest.raises(NvidiaRivaException) as excinfo:
