@@ -112,6 +112,48 @@ async def test_ui_view_users_proxy_admin_no_org_filter(mocker):
 
 
 @pytest.mark.asyncio
+async def test_ui_view_users_search_matches_user_id_or_email(mocker):
+    """
+    search= produces an OR where over user_id and user_email (case-insensitive)
+    without setting either single-field filter.
+    """
+    mock_prisma_client = mocker.MagicMock()
+
+    async def mock_find_many(*args, **kwargs):
+        where = kwargs.get("where") or {}
+        assert "user_id" not in where
+        assert "user_email" not in where
+        assert tuple(where["OR"]) == (
+            {"user_id": {"contains": "ali", "mode": "insensitive"}},
+            {"user_email": {"contains": "ali", "mode": "insensitive"}},
+        )
+        return []
+
+    mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
+
+    # Flag OFF by default
+    mocker.patch(  # test-quality-ok: endpoint reads settings via module global; same seam as sibling tests
+        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
+        return_value={},
+    )
+    mocker.patch(  # test-quality-ok: endpoint reads prisma_client via module global; same seam as sibling tests
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+    )
+
+    await ui_view_users(
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        ),
+        user_id=None,
+        user_email=None,
+        search="ali",
+        team_id=None,
+        page=1,
+        page_size=50,
+    )
+
+
+@pytest.mark.asyncio
 async def test_ui_view_users_org_admin_filtered_by_org(mocker):
     """
     Org admin with scope_user_search_to_org ON: find_many is called with

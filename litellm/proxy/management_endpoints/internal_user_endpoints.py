@@ -2660,6 +2660,10 @@ async def _resolve_team_org_filter(
 async def ui_view_users(
     user_id: str | None = fastapi.Query(default=None, description="User ID in the request parameters"),
     user_email: str | None = fastapi.Query(default=None, description="User email in the request parameters"),
+    search: str | None = fastapi.Query(
+        default=None,
+        description="Combined search: matches users whose 'user_id' or 'user_email' contains the value (case-insensitive).",
+    ),
     team_id: str | None = fastapi.Query(
         default=None,
         description="Team ID — used when a team admin searches for users to add to their team",
@@ -2669,7 +2673,7 @@ async def ui_view_users(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Filter users based on partial match of user_id or email with pagination.
+    Filter users based on partial match of user_id or email, or combined ``search``, with pagination.
 
     Behaviour depends on the ``scope_user_search_to_org`` UI-setting flag
     (stored in the ``litellm_uisettings`` table):
@@ -2721,9 +2725,15 @@ async def ui_view_users(
         if org_filter_ids is not None:
             where_conditions["organization_memberships"] = {"some": {"organization_id": {"in": org_filter_ids}}}
 
+        where: Final[Mapping[str, object]] = {  # mutable-ok: prisma serializes `where`, keep it a plain dict
+            key: value
+            for key, value in (*where_conditions.items(), *_user_search_where(search).items())
+            if value is not None
+        }
+
         # Query users with pagination and filters
         users: Final = await _user_table(prisma_client).find_many(
-            where=where_conditions,
+            where=where,
             skip=skip,
             take=page_size,
             order={"created_at": "desc"},

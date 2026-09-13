@@ -16646,7 +16646,7 @@ export interface paths {
         };
         /**
          * Ui View Users
-         * @description Filter users based on partial match of user_id or email with pagination.
+         * @description Filter users based on partial match of user_id or email, or combined ``search``, with pagination.
          *
          *     Behaviour depends on the ``scope_user_search_to_org`` UI-setting flag
          *     (stored in the ``litellm_uisettings`` table):
@@ -60802,6 +60802,8 @@ export interface operations {
                 user_id?: string | null;
                 /** @description User email in the request parameters */
                 user_email?: string | null;
+                /** @description Combined search: matches users whose 'user_id' or 'user_email' contains the value (case-insensitive). */
+                search?: string | null;
                 /** @description Team ID — used when a team admin searches for users to add to their team */
                 team_id?: string | null;
                 /** @description Page number for pagination */
