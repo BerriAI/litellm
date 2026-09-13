@@ -535,6 +535,9 @@ def _apply_budget_limits_to_end_user_params(
     if budget_info.rpm_limit is not None:
         end_user_params["end_user_rpm_limit"] = budget_info.rpm_limit
 
+    if budget_info.max_parallel_requests is not None:
+        end_user_params["end_user_max_parallel_requests"] = budget_info.max_parallel_requests
+
     if budget_info.max_budget is not None:
         end_user_params["end_user_max_budget"] = budget_info.max_budget
 
@@ -619,6 +622,8 @@ def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_use
         valid_token.end_user_tpm_limit = end_user_params["end_user_tpm_limit"]
     if end_user_params.get("end_user_rpm_limit") is not None:
         valid_token.end_user_rpm_limit = end_user_params["end_user_rpm_limit"]
+    if end_user_params.get("end_user_max_parallel_requests") is not None:
+        valid_token.end_user_max_parallel_requests = end_user_params["end_user_max_parallel_requests"]
     if end_user_params.get("allowed_model_region") is not None:
         valid_token.allowed_model_region = end_user_params["allowed_model_region"]
     if end_user_params.get("end_user_model_max_budget") is not None:
@@ -1580,6 +1585,12 @@ async def _user_api_key_auth_builder(
                             user_id=user_id,
                             user_email=user_email,
                             team_id=team_id,
+                            team_alias=(team_object.team_alias if team_object is not None else None),
+                            team_tpm_limit=(team_object.tpm_limit if team_object is not None else None),
+                            team_rpm_limit=(team_object.rpm_limit if team_object is not None else None),
+                            team_max_parallel_requests=(team_object.max_parallel_requests if team_object is not None else None),
+                            team_models=(team_object.models if team_object is not None else []),
+                            team_metadata=(team_object.metadata if team_object is not None else None),
                             org_id=org_id,
                             end_user_id=end_user_id,
                             parent_otel_span=parent_otel_span,
@@ -1590,11 +1601,17 @@ async def _user_api_key_auth_builder(
                     valid_token = UserAPIKeyAuth(
                         api_key=None,
                         team_id=team_id,
+                        team_alias=(team_object.team_alias if team_object is not None else None),
+                        team_tpm_limit=(team_object.tpm_limit if team_object is not None else None),
+                        team_rpm_limit=(team_object.rpm_limit if team_object is not None else None),
+                        team_max_parallel_requests=(team_object.max_parallel_requests if team_object is not None else None),
+                        team_models=(team_object.models if team_object is not None else []),
                         user_role=(
                             LitellmUserRoles(user_object.user_role)
                             if user_object is not None and user_object.user_role is not None
                             else LitellmUserRoles.INTERNAL_USER
                         ),
+                        user_max_parallel_requests=(user_object.max_parallel_requests if user_object is not None else None),
                         user_id=user_id,
                         user_email=user_email,
                         org_id=org_id,
