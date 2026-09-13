@@ -65598,7 +65598,8 @@
         "litellm_provider": "openai",
         "mode": "chat",
         "output_cost_per_token": 7.5e-05,
-        "source": "https://developers.openai.com/api/docs/pricing"
+        "source": "https://developers.openai.com/api/docs/pricing",
+        "supports_reasoning": true
     },
     "gpt-rosalind-research": {
         "cache_read_input_token_cost": 5e-07,
