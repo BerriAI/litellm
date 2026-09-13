@@ -1,12 +1,11 @@
 import asyncio
 import json
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import yaml
 from fastapi.testclient import TestClient
-
 
 import litellm
 
@@ -335,6 +334,86 @@ async def test_proxy_streaming_chunks_use_client_requested_model_before_alias_ma
     payload = json.loads(first[len("data: ") :].strip())
     assert payload["model"] == client_model_alias
     assert not payload["model"].startswith("hosted_vllm/")
+
+
+@pytest.mark.asyncio
+async def test_anthropic_streaming_message_start_uses_client_requested_model_across_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Keep the public model alias when an Anthropic message_start spans transport chunks."""
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    async def upstream_stream() -> AsyncGenerator[bytes, None]:
+        yield b'event: message_start\ndata: {"type":"message_start","message":{"model":"backend'
+        yield b'-model","id":"msg_1"}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n'
+
+    async def passthrough_iterator_hook(
+        user_api_key_dict: UserAPIKeyAuth,
+        response: AsyncIterator[object],
+        request_data: dict[str, object],
+    ) -> AsyncGenerator[object, None]:
+        async for chunk in response:
+            yield chunk
+
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "async_post_call_streaming_iterator_hook",
+        passthrough_iterator_hook,
+    )
+
+    logging_obj = MagicMock()
+    logging_obj.call_type = "anthropic_messages"
+    output = [
+        chunk
+        async for chunk in ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+            response=upstream_stream(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+            request_data={
+                "model": "backend-model",
+                "_litellm_client_requested_model": "my-alias",
+                "litellm_logging_obj": logging_obj,
+            },
+            proxy_logging_obj=proxy_server.proxy_logging_obj,
+        )
+    ]
+
+    streamed = b"".join(chunk if isinstance(chunk, bytes) else chunk.encode() for chunk in output)
+    message_start = json.loads(streamed.split(b"data: ", 1)[1].split(b"\n\n", 1)[0])
+    assert message_start["message"]["model"] == "my-alias"
+    assert b'event: message_stop\ndata: {"type":"message_stop"}\n\n' in streamed
+
+
+def test_anthropic_message_start_rewriter_bounds_unterminated_streams():
+    """Fall back to byte-for-byte pass-through when the first SSE frame is oversized."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.model_alias_rewriter import (
+        MAX_MESSAGE_START_BUFFER_BYTES,
+        AnthropicMessageStartModelRewriter,
+    )
+
+    rewriter = AnthropicMessageStartModelRewriter("my-alias")
+    pending = b"x" * MAX_MESSAGE_START_BUFFER_BYTES
+
+    assert rewriter.feed(pending) == b""
+    assert rewriter.feed(b"y") == pending + b"y"
+    assert rewriter.feed(b"z") == b"z"
+
+
+def test_anthropic_message_start_rewriter_stops_buffering_after_rewrite():
+    """Pass later transport chunks through directly after the alias has been restored."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.model_alias_rewriter import (
+        MAX_MESSAGE_START_BUFFER_BYTES,
+        AnthropicMessageStartModelRewriter,
+    )
+
+    rewriter = AnthropicMessageStartModelRewriter("my-alias")
+    message_start = b'event: message_start\ndata: {"type":"message_start","message":{"model":"backend-model"}}\n\n'
+    rewritten = rewriter.feed(message_start)
+    later_chunk = b"z" * (MAX_MESSAGE_START_BUFFER_BYTES + 1)
+
+    assert b'"model":"my-alias"' in rewritten
+    assert rewriter.feed(later_chunk) == later_chunk
 
 
 @pytest.mark.asyncio
