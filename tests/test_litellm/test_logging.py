@@ -1,5 +1,6 @@
 import ast
 import asyncio
+import importlib
 import json
 import logging
 import re
@@ -20,6 +21,7 @@ from litellm._logging import (
     AccessLogRedactionFilter,
     CorrelationContextFilter,
     CorrelationPlainFormatter,
+    ECSFormatter,
     JsonFormatter,
     LevelRoutingStreamHandler,
     SecretRedactionFilter,
@@ -29,6 +31,7 @@ from litellm._logging import (
     _parse_json_logs_env,
     _plain_log_format,
     _stdout_truncation_marker,
+    _turn_on_ecs,
     _turn_on_json,
     session_id_var,
     set_session_id,
@@ -1178,3 +1181,241 @@ def test_access_redaction_survives_the_uvicorn_json_log_config():
             lg.handlers[:] = handlers
             lg.setLevel(level)
             lg.propagate = True
+
+
+# ---------------------------------------------------------------------------
+# ECS formatter tests
+# ---------------------------------------------------------------------------
+
+
+def test_ecs_formatter_required_fields():
+    formatter = ECSFormatter()
+    record = logging.LogRecord(
+        name="LiteLLM",
+        level=logging.INFO,
+        pathname="proxy_server.py",
+        lineno=42,
+        msg="test message",
+        args=(),
+        exc_info=None,
+    )
+    obj = json.loads(formatter.format(record))
+
+    assert obj["message"] == "test message"
+    assert "@timestamp" in obj
+    assert obj["log"]["level"] == "info"
+    assert obj["log"]["logger"] == "LiteLLM"
+    assert obj["log"]["origin"]["file"]["name"] == "proxy_server.py"
+    assert obj["log"]["origin"]["file"]["line"] == 42
+    assert obj["service"]["name"] == "litellm"
+    assert obj["ecs"]["version"] == "8.11.0"
+
+
+def test_ecs_formatter_timestamp_is_utc_iso8601_with_ms():
+    formatter = ECSFormatter()
+    record = logging.LogRecord(
+        name="LiteLLM",
+        level=logging.DEBUG,
+        pathname="",
+        lineno=0,
+        msg="ts test",
+        args=(),
+        exc_info=None,
+    )
+    obj = json.loads(formatter.format(record))
+    assert re.match(
+        r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$", obj["@timestamp"]
+    ), f"Non-ECS timestamp: {obj['@timestamp']!r}"
+
+
+def test_ecs_formatter_log_level_is_lowercase():
+    formatter = ECSFormatter()
+    for level, expected in [
+        (logging.DEBUG, "debug"),
+        (logging.INFO, "info"),
+        (logging.WARNING, "warning"),
+        (logging.ERROR, "error"),
+        (logging.CRITICAL, "critical"),
+    ]:
+        record = logging.LogRecord(
+            name="LiteLLM",
+            level=level,
+            pathname="",
+            lineno=0,
+            msg="test",
+            args=(),
+            exc_info=None,
+        )
+        obj = json.loads(formatter.format(record))
+        assert obj["log"]["level"] == expected
+
+
+def test_ecs_formatter_error_fields_on_exception():
+    formatter = ECSFormatter()
+    try:
+        raise ValueError("something broke")
+    except ValueError:
+        exc_info = sys.exc_info()
+
+    record = logging.LogRecord(
+        name="LiteLLM",
+        level=logging.ERROR,
+        pathname="",
+        lineno=0,
+        msg="error occurred",
+        args=(),
+        exc_info=exc_info,
+    )
+    record.exc_text = formatter.formatException(exc_info)
+    obj = json.loads(formatter.format(record))
+
+    assert "error" in obj
+    assert obj["error"]["type"] == "ValueError"
+    assert obj["error"]["message"] == "something broke"
+    assert "stack_trace" in obj["error"]
+    assert "ValueError" in obj["error"]["stack_trace"]
+
+
+def test_ecs_formatter_extra_fields_passthrough():
+    formatter = ECSFormatter()
+    record = logging.LogRecord(
+        name="LiteLLM",
+        level=logging.DEBUG,
+        pathname="",
+        lineno=0,
+        msg="request received",
+        args=(),
+        exc_info=None,
+    )
+    record.api_base = "https://api.openai.com"
+    record.model = "gpt-4"
+    obj = json.loads(formatter.format(record))
+
+    assert obj["api_base"] == "https://api.openai.com"
+    assert obj["model"] == "gpt-4"
+
+
+def test_ecs_formatter_redacts_a_credential_in_a_structured_extra_value():
+    """Parity with JsonFormatter: safe_dumps(value_transform=_redact_structured_value)
+    must also run for ECS output, or a secret nested in an extra={...} dict leaks."""
+    formatter = ECSFormatter()
+    record = logging.LogRecord(
+        name="LiteLLM",
+        level=logging.DEBUG,
+        pathname="",
+        lineno=0,
+        msg="request sent",
+        args=(),
+        exc_info=None,
+    )
+    record.litellm_params = {"api_key": "sk-1234567890abcdefghijklmnopqrstuvwxyz"}
+    obj = json.loads(formatter.format(record))
+
+    assert "sk-1234567890abcdefghijklmnopqrstuvwxyz" not in json.dumps(obj)
+    assert "REDACTED" in obj["litellm_params"]["api_key"]
+
+
+def test_ecs_formatter_no_ecs_reserved_key_collision():
+    formatter = ECSFormatter()
+    record = logging.LogRecord(
+        name="LiteLLM",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="test",
+        args=(),
+        exc_info=None,
+    )
+    # Attempt to inject via extra - should not overwrite ECS structure
+    record.message = "injected"
+    obj = json.loads(formatter.format(record))
+    assert obj["message"] == "test"
+
+
+def test_ecs_mode_emits_one_record_per_logger(capfd):
+    _turn_on_ecs()
+    for lg in (verbose_logger, verbose_router_logger, verbose_proxy_logger):
+        lg.setLevel(logging.INFO)
+
+    verbose_logger.info("first info")
+    verbose_router_logger.info("second info from router")
+    verbose_proxy_logger.info("third info from proxy")
+
+    # All three records are INFO, so they must route to stdout and none to stderr
+    out, err = capfd.readouterr()
+    assert [raw for raw in err.splitlines() if raw.strip()] == []
+    lines = [raw for raw in out.splitlines() if raw.strip()]
+
+    assert len(lines) == 3, f"got {len(lines)} lines, want 3: {lines!r}"
+    for line in lines:
+        obj = json.loads(line)
+        assert "@timestamp" in obj
+        assert obj["log"]["level"] == "info"
+        assert obj["ecs"]["version"] == "8.11.0"
+        assert obj["service"]["name"] == "litellm"
+
+
+def test_get_uvicorn_json_log_config_uses_ecs_formatter_when_ecs_logs_enabled(monkeypatch):
+    """Regression test: _get_uvicorn_json_log_config() must select ECSFormatter for
+    every uvicorn formatter entry when LITELLM_ECS_LOGS is on, or uvicorn's own
+    access/error logs stay plain JSON while application logs are ECS."""
+    import litellm._logging as litellm_logging
+
+    monkeypatch.setattr(litellm_logging, "ecs_logs", True)
+    log_config = _get_uvicorn_json_log_config()
+
+    for formatter_config in log_config["formatters"].values():
+        assert formatter_config["()"] == "litellm._logging.ECSFormatter"
+
+
+def _run_sitecustomize_hook():
+    """Re-run litellm/sitecustomize.py's module body the way a copy of it in
+    site-packages runs at interpreter startup."""
+    return importlib.reload(importlib.import_module("litellm.sitecustomize"))
+
+
+def _loggers_are_on_ecs() -> bool:
+    return any(isinstance(handler.formatter, ECSFormatter) for handler in verbose_logger.handlers)
+
+
+def test_sitecustomize_hook_turns_on_ecs_when_the_env_var_is_set(monkeypatch):
+    """The hook is the documented zero-code-change path to ECS logs. Without this,
+    renaming _turn_on_ecs would leave the hook's except-Exception swallowing the
+    ImportError and ECS logging would silently never switch on."""
+    plain = logging.StreamHandler()
+    plain.setFormatter(JsonFormatter())
+    _initialize_loggers_with_handler(plain)
+    monkeypatch.setenv("LITELLM_ECS_LOGS", "true")
+
+    _run_sitecustomize_hook()
+
+    assert _loggers_are_on_ecs()
+
+
+def test_sitecustomize_hook_leaves_logging_alone_when_the_env_var_is_unset(monkeypatch):
+    plain = logging.StreamHandler()
+    plain.setFormatter(JsonFormatter())
+    _initialize_loggers_with_handler(plain)
+    monkeypatch.delenv("LITELLM_ECS_LOGS", raising=False)
+
+    _run_sitecustomize_hook()
+
+    assert not _loggers_are_on_ecs()
+
+
+def test_sitecustomize_hook_never_breaks_interpreter_startup(monkeypatch):
+    """A copy of this file in site-packages runs for every process in the environment,
+    so a broken or half-installed litellm must not raise out of it."""
+
+    def _raise(*_args, **_kwargs):
+        raise RuntimeError("litellm is half-installed")
+
+    plain = logging.StreamHandler()
+    plain.setFormatter(JsonFormatter())
+    _initialize_loggers_with_handler(plain)
+    monkeypatch.setenv("LITELLM_ECS_LOGS", "true")
+    monkeypatch.setattr(litellm._logging, "_turn_on_ecs", _raise)
+
+    _run_sitecustomize_hook()
+
+    assert not _loggers_are_on_ecs()
