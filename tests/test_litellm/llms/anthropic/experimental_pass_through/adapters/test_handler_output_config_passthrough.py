@@ -237,3 +237,50 @@ class TestPromptCacheOptionsForwarded:
         result = _call_prepare(extra_kwargs={"prompt_cache_options": {"mode": "explicit"}}, model="gpt-5.6")
         completion_kwargs = result[0] if isinstance(result, tuple) else result
         assert completion_kwargs["prompt_cache_options"] == {"mode": "explicit"}
+
+
+class TestDiagnosticsStrippedFromCompletionKwargs:
+    """``diagnostics`` (sent by Claude Code as a client-diagnostics-only field,
+    with no completion()/OpenAI equivalent) must not survive the
+    post-translation re-merge into ``completion_kwargs`` — non-Anthropic
+    backends reached via this bridge (e.g. Bedrock Converse via
+    ``additionalModelRequestFields``) reject an unrecognized field with 400
+    "Extra inputs are not permitted". Unlike the native Anthropic Messages
+    passthrough (``AnthropicMessagesConfig.transform_anthropic_messages_request``),
+    which only forwards keys declared on
+    ``AnthropicMessagesRequestOptionalParams`` and so drops ``diagnostics``
+    silently, this bridge re-merges every extra kwarg the translator didn't
+    consume, so the strip has to be explicit here too."""
+
+    def test_diagnostics_is_stripped(self):
+        extra_kwargs = {
+            "custom_llm_provider": "bedrock",
+            "diagnostics": {"trace_id": "abc123"},
+        }
+
+        result = _call_prepare(extra_kwargs=extra_kwargs)
+        completion_kwargs = result[0] if isinstance(result, tuple) else result
+
+        assert "diagnostics" not in completion_kwargs, (
+            "Raw diagnostics must not be forwarded — non-Anthropic backends "
+            "reject it with 400 'Extra inputs are not permitted'"
+        )
+
+    def test_contains_diagnostics(self):
+        assert "diagnostics" in ANTHROPIC_ONLY_REQUEST_KEYS
+
+    def test_other_extra_kwargs_still_passed_through_alongside_diagnostics(self):
+        """Regression guard: the strip must be narrow. Unrelated fields like
+        ``timeout`` continue to flow through even when ``diagnostics`` is
+        also present."""
+        extra_kwargs = {
+            "custom_llm_provider": "bedrock",
+            "diagnostics": {"trace_id": "abc123"},
+            "timeout": 30,
+        }
+
+        result = _call_prepare(extra_kwargs=extra_kwargs)
+        completion_kwargs = result[0] if isinstance(result, tuple) else result
+
+        assert "diagnostics" not in completion_kwargs
+        assert completion_kwargs.get("timeout") == 30
