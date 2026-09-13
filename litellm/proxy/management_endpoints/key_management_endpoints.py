@@ -39,7 +39,6 @@ from litellm.constants import (
     MINIMUM_CUSTOM_KEY_LENGTH,
     UI_SESSION_TOKEN_TEAM_ID,
 )
-from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.models.credentials import CredentialItem
@@ -163,6 +162,8 @@ if TYPE_CHECKING:
     import prisma
     from prisma import Prisma
     from prisma import models as prisma_models
+
+    from litellm.integrations.custom_logger import CustomLogger
 
 _RepositoryModelT = TypeVar("_RepositoryModelT", bound=BaseModel)
 
@@ -7136,7 +7137,7 @@ def _callback_entry_error(entry: Mapping[str, object]) -> str | None:
     return None
 
 
-async def flush_gcs_and_describe_failures(gcs_logger: CustomLogger | None, health_check_event_id: str) -> str | None:
+async def flush_gcs_and_describe_failures(gcs_logger: "CustomLogger | None", health_check_event_id: str) -> str | None:
     from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 
     if not isinstance(gcs_logger, GCSBucketLogger):
