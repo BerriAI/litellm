@@ -98,3 +98,95 @@ class TestBridgeInputTransformation:
             [{"type": "user_input", "content": [image_part]}]
         )
         assert transformed == [{"role": "user", "content": [image_part]}]
+
+
+class TestBridgeResponseFormat:
+    """The bridge used to drop response_format and response_mime_type entirely, so a caller
+    who asked the Interactions API for JSON silently got free text back from the Responses API.
+    """
+
+    def test_json_schema_response_format_becomes_text_format(self):
+        schema = {
+            "type": "object",
+            "properties": {"greeting": {"type": "string"}, "score": {"type": "number"}},
+            "required": ["greeting", "score"],
+        }
+        request = LiteLLMResponsesInteractionsConfig.transform_interactions_request_to_responses_request(
+            model="gemini-3.5-flash",
+            input="Say hello and give a score of 1.",
+            optional_params={
+                "response_format": {"type": "text", "mime_type": "application/json", "schema": schema},
+            },
+        )
+        assert request["text"] == {
+            "format": {
+                "type": "json_schema",
+                "name": "response_schema",
+                "schema": schema,
+                "strict": False,
+            }
+        }
+
+    def test_legacy_schema_and_response_mime_type_become_text_format(self):
+        schema = {"type": "object", "properties": {"greeting": {"type": "string"}}}
+        request = LiteLLMResponsesInteractionsConfig.transform_interactions_request_to_responses_request(
+            model="gemini-3.5-flash",
+            input="Say hello.",
+            optional_params={"response_format": schema, "response_mime_type": "application/json"},
+        )
+        assert request["text"]["format"]["type"] == "json_schema"
+        assert request["text"]["format"]["schema"] == schema
+
+    def test_json_mime_type_without_schema_becomes_json_object(self):
+        request = LiteLLMResponsesInteractionsConfig.transform_interactions_request_to_responses_request(
+            model="gemini-3.5-flash",
+            input="Say hello.",
+            optional_params={"response_mime_type": "application/json"},
+        )
+        assert request["text"] == {"format": {"type": "json_object"}}
+
+    def test_image_response_format_entry_is_skipped(self):
+        schema = {"type": "object", "properties": {"caption": {"type": "string"}}}
+        request = LiteLLMResponsesInteractionsConfig.transform_interactions_request_to_responses_request(
+            model="gemini-3.5-flash",
+            input="Describe this.",
+            optional_params={
+                "response_format": [
+                    {"type": "image", "aspect_ratio": "1:1"},
+                    {"type": "text", "mime_type": "application/json", "schema": schema},
+                ],
+            },
+        )
+        assert request["text"]["format"]["schema"] == schema
+
+    def test_image_only_response_format_leaves_text_unset(self):
+        request = LiteLLMResponsesInteractionsConfig.transform_interactions_request_to_responses_request(
+            model="gemini-3.5-flash",
+            input="Draw a cat.",
+            optional_params={"response_format": [{"type": "image", "aspect_ratio": "1:1"}]},
+        )
+        assert "text" not in request
+
+    def test_non_json_mime_type_leaves_text_unset(self):
+        request = LiteLLMResponsesInteractionsConfig.transform_interactions_request_to_responses_request(
+            model="gemini-3.5-flash",
+            input="Say hello.",
+            optional_params={"response_format": {"type": "text", "mime_type": "text/plain"}},
+        )
+        assert "text" not in request
+
+    def test_unrecognized_entry_type_is_not_read_as_a_bare_schema(self):
+        request = LiteLLMResponsesInteractionsConfig.transform_interactions_request_to_responses_request(
+            model="gemini-3.5-flash",
+            input="Say hello.",
+            optional_params={"response_format": {"type": "audio", "mime_type": "audio/wav"}},
+        )
+        assert "text" not in request
+
+    def test_request_without_response_format_is_unchanged(self):
+        request = LiteLLMResponsesInteractionsConfig.transform_interactions_request_to_responses_request(
+            model="gemini-3.5-flash",
+            input="Say hello.",
+            optional_params={},
+        )
+        assert "text" not in request
