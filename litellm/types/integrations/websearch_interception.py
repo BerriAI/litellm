@@ -27,6 +27,22 @@ class AnthropicServerToolUseBlock(BaseModel):
     input: AnthropicSearchQuery
 
 
+class RichWebSearchInput(TypedDict, total=False):
+    """
+    Optional richer search shape a model may emit alongside ``query``.
+
+    Collected from the intercepted tool call and forwarded only to search
+    providers whose config reports ``supports_rich_search_input()``; every
+    other provider keeps receiving the single ``query`` string.
+    """
+
+    objective: ReadOnly[str]
+    """Natural-language description of the goal behind the search."""
+
+    search_queries: ReadOnly[list[str]]  # mutable-ok: forwarded verbatim as litellm.asearch's list[str] query argument
+    """Two to five short keyword queries covering different angles."""
+
+
 class WebSearchInterceptionConfig(TypedDict, total=False):
     """
     Configuration parameters for WebSearchInterceptionLogger.
