@@ -6202,11 +6202,11 @@ def test_team_alias_targeting_deleted_team_deployment_keeps_requested_model(monk
     public name resolves at the gateway level. The rewrite must be skipped
     when the alias target has no live deployment.
     """
-    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+    from litellm.proxy.auth.auth_checks import stale_team_alias_bypass_enabled
     from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
 
     monkeypatch.delenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", raising=False)
-    pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
+    stale_team_alias_bypass_enabled.cache_clear()
 
     class _MockRouter:
         model_name_to_deployment_indices = {"gpt-4": [0]}
@@ -6226,11 +6226,11 @@ def test_team_alias_targeting_deleted_team_deployment_keeps_requested_model(monk
 
 
 def test_team_alias_targeting_live_team_deployment_still_rewrites(monkeypatch):
-    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+    from litellm.proxy.auth.auth_checks import stale_team_alias_bypass_enabled
     from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
 
     monkeypatch.delenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", raising=False)
-    pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
+    stale_team_alias_bypass_enabled.cache_clear()
 
     class _MockRouter:
         model_name_to_deployment_indices = {"model_name_team-1_live-uuid": [0]}
@@ -6261,12 +6261,11 @@ def test_team_alias_targeting_live_team_deployment_still_rewrites(monkeypatch):
 )
 def test_team_alias_rewrite_matches_auth_resolution(monkeypatch, alias_target, live_target, sibling, bypass):
     """Routing rewrites the model to exactly what the auth resolver reports."""
-    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
-    from litellm.proxy.auth.auth_checks import resolve_team_model_alias
+    from litellm.proxy.auth.auth_checks import resolve_team_model_alias, stale_team_alias_bypass_enabled
     from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
 
     monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "true" if bypass else "false")
-    pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
+    stale_team_alias_bypass_enabled.cache_clear()
 
     class _MockRouter:
         model_name_to_deployment_indices = {alias_target: [0]} if live_target else {}
@@ -6279,8 +6278,13 @@ def test_team_alias_rewrite_matches_auth_resolution(monkeypatch, alias_target, l
     with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
         _update_model_if_team_alias_exists(data=test_data, user_api_key_dict=user_api_key_dict)
 
+    assert stale_team_alias_bypass_enabled() is bypass
     expected = resolve_team_model_alias(
-        model="gpt-4", team_model_aliases=aliases, team_id="team-1", llm_router=_MockRouter(), stale_alias_bypass=bypass
+        model="gpt-4",
+        team_model_aliases=aliases,
+        team_id="team-1",
+        llm_router=_MockRouter(),
+        stale_alias_bypass=stale_team_alias_bypass_enabled(),
     )
     assert test_data["model"] == expected.model
 

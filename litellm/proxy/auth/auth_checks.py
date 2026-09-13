@@ -4015,7 +4015,7 @@ def _check_model_access_helper(
     if SpecialModelNames.all_proxy_models.value in filtered_models:
         all_model_access = True
 
-    if effective_model is not None and effective_model not in filtered_models and all_model_access is False:
+    if effective_model not in filtered_models and all_model_access is False:
         return False
     return True
 

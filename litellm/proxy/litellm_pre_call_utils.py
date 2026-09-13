@@ -151,7 +151,6 @@ def _sanitize_for_log(value: object) -> str:
 
 
 from litellm.router import Router
-from litellm.secret_managers.main import get_secret_bool
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -167,9 +166,6 @@ service_logger_obj: Final = ServiceLogging()  # used for tracking latency on OTE
 # Bounded dedup for stale-alias warnings (FIFO eviction when over cap).
 _MAX_STALE_ALIAS_WARNING_KEYS: Final = 10_000
 _STALE_TEAM_ALIAS_WARNING_KEYS: Final[OrderedDict[str, None]] = OrderedDict()
-# Cache the stale alias bypass flag at module load to avoid hot-path secret lookups
-_ENABLE_TEAM_STALE_ALIAS_BYPASS: bool | None = None
-_TEAM_MODEL_ALIASES: Final = TypeAdapter(dict[str, str] | None)
 
 
 if TYPE_CHECKING:
@@ -2510,22 +2506,19 @@ def _update_model_if_team_alias_exists(
     exist (e.g. a gateway-level model group shared with the team).
     """
     _model: Final = data.get("model")
-    team_model_aliases: Final = _TEAM_MODEL_ALIASES.validate_python(user_api_key_dict.team_model_aliases)
-    if not isinstance(_model, str) or not team_model_aliases or _model not in team_model_aliases:
+    team_model_aliases: Final = user_api_key_dict.team_model_aliases
+    if not isinstance(_model, str) or not isinstance(team_model_aliases, dict) or _model not in team_model_aliases:
         return
 
-    from litellm.proxy.auth.auth_checks import resolve_team_model_alias
+    from litellm.proxy.auth.auth_checks import resolve_team_model_alias, stale_team_alias_bypass_enabled
     from litellm.proxy.proxy_server import llm_router
 
-    global _ENABLE_TEAM_STALE_ALIAS_BYPASS
-    if _ENABLE_TEAM_STALE_ALIAS_BYPASS is None:
-        _ENABLE_TEAM_STALE_ALIAS_BYPASS = get_secret_bool("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", False)
     resolution: Final = resolve_team_model_alias(
         model=_model,
         team_model_aliases=team_model_aliases,
         team_id=user_api_key_dict.team_id,
         llm_router=llm_router,
-        stale_alias_bypass=_ENABLE_TEAM_STALE_ALIAS_BYPASS is True,
+        stale_alias_bypass=stale_team_alias_bypass_enabled(),
     )
     if resolution.reason == "deleted_target":
         _warn_stale_team_alias_once(

@@ -2230,11 +2230,10 @@ def test_update_model_if_team_alias_exists(data, user_api_key_dict, expected_mod
 
 def test_team_alias_stale_bypass_disabled_by_default(monkeypatch):
     monkeypatch.delenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", raising=False)
-    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+    from litellm.proxy.auth.auth_checks import stale_team_alias_bypass_enabled
     from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
 
-    # Reset module-level cache to ensure test isolation
-    pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
+    stale_team_alias_bypass_enabled.cache_clear()
 
     class _MockRouter:
         model_name_to_deployment_indices = {"model_name_team-1_legacy-uuid": [0]}
@@ -2256,11 +2255,8 @@ def test_team_alias_stale_bypass_disabled_by_default(monkeypatch):
 
 
 def test_team_alias_stale_bypass_enabled_by_flag(monkeypatch):
-    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+    from litellm.proxy.auth.auth_checks import stale_team_alias_bypass_enabled
     from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
-
-    # Reset module-level cache to ensure test isolation
-    pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
     class _MockRouter:
         model_name_to_deployment_indices = {"model_name_team-1_legacy-uuid": [0]}
@@ -2273,6 +2269,7 @@ def test_team_alias_stale_bypass_enabled_by_flag(monkeypatch):
         team_model_aliases={"gpt-4o": "model_name_team-1_legacy-uuid"},
     )
     monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "true")
+    stale_team_alias_bypass_enabled.cache_clear()
 
     with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
         _update_model_if_team_alias_exists(

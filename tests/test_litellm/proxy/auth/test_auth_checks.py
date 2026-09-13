@@ -637,9 +637,10 @@ def test_resolve_team_model_alias_follows_routing(
 
 def test_can_object_call_model_deleted_team_alias_target_checks_requested_name(monkeypatch):
     """An alias whose team-scoped target has no deployment is authorized as the requested name."""
-    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.auth.auth_checks import stale_team_alias_bypass_enabled
 
-    monkeypatch.setattr(auth_checks, "stale_team_alias_bypass_enabled", lambda: False)
+    monkeypatch.delenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", raising=False)
+    stale_team_alias_bypass_enabled.cache_clear()
     llm_router: Final = _router_with_team_deployment("gpt-4o-group", "team-1", "model_name_team-1_live")
     aliases: Final = {"gpt-4o-group": "model_name_team-1_deadbeef"}
 
@@ -665,9 +666,10 @@ def test_can_object_call_model_deleted_team_alias_target_checks_requested_name(m
 
 def test_can_object_call_model_bypassed_stale_alias_checks_requested_name(monkeypatch):
     """With the stale alias bypass on and a team deployment for the name, the requested name is checked."""
-    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.auth.auth_checks import stale_team_alias_bypass_enabled
 
-    monkeypatch.setattr(auth_checks, "stale_team_alias_bypass_enabled", lambda: True)
+    monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "true")
+    stale_team_alias_bypass_enabled.cache_clear()
     llm_router: Final = _router_with_team_deployment("gpt-4o-group", "team-1", "model_name_team-1_live")
     aliases: Final = {"gpt-4o-group": "model_name_team-1_live"}
 
@@ -690,7 +692,8 @@ def test_can_object_call_model_bypassed_stale_alias_checks_requested_name(monkey
         object_type="key",
     )
 
-    monkeypatch.setattr(auth_checks, "stale_team_alias_bypass_enabled", lambda: False)
+    monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "false")
+    stale_team_alias_bypass_enabled.cache_clear()
     assert _can_object_call_model(
         model="gpt-4o-group",
         llm_router=llm_router,
