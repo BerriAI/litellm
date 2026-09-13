@@ -28,7 +28,6 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret, get_secret_str
-from litellm.types.utils import LlmProviders
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
@@ -1311,7 +1310,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
 
         from litellm.utils import model_supports_native_endpoint
 
-        if model_supports_native_endpoint("/v1/messages", model, LlmProviders.BEDROCK):
+        if model_supports_native_endpoint("/v1/messages", model, litellm.LlmProviders.BEDROCK):
             from litellm.llms.bedrock.messages.native_transformation import (
                 AmazonBedrockNativeMessagesConfig,
             )
@@ -1350,7 +1349,7 @@ def get_bedrock_chat_config(model: str):
     from litellm.utils import model_supports_native_endpoint
 
     if not BedrockModelInfo.has_explicit_route(model) and model_supports_native_endpoint(
-        "/v1/chat/completions", model, LlmProviders.BEDROCK
+        "/v1/chat/completions", model, litellm.LlmProviders.BEDROCK
     ):
         return litellm.AmazonBedrockOpenAIChatCompletionsConfig()
 

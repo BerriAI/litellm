@@ -8100,9 +8100,8 @@ def _get_model_cost_entry_for_provider_config(
 
 
 def model_supports_native_endpoint(endpoint: str, model: str, provider: LlmProviders) -> bool:
-    from litellm.llms.bedrock.common_utils import BedrockModelInfo
-
-    base_model: Final = BedrockModelInfo.get_base_model(model) if provider is LlmProviders.BEDROCK else model
+    bedrock_model_info: Final = getattr(litellm, "BedrockModelInfo")
+    base_model: Final = bedrock_model_info.get_base_model(model) if provider is LlmProviders.BEDROCK else model
     candidate_models: Final = (model, base_model) if base_model != model else (model,)
     return any(
         isinstance(
