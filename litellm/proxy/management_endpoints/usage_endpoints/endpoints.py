@@ -67,6 +67,7 @@ async def usage_ai_chat(
                 model=data.model,
                 user_id=user_id,
                 is_admin=is_admin,
+                user_api_key_dict=user_api_key_dict,
             ),
             ping_interval_seconds=litellm.sse_keepalive_ping_interval_seconds,
             ping_chunk=SSE_COMMENT_PING,

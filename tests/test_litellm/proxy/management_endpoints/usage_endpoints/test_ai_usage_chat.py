@@ -8,15 +8,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
-    TOOL_HANDLERS,
     TOOLS_ADMIN,
     TOOLS_BASE,
+    CompletionDeps,
     _build_system_prompt,
     _summarise_entity_data,
     _summarise_usage_data,
     stream_usage_ai_chat,
 )
-
 
 SAMPLE_AGGREGATED_RESPONSE = {
     "results": [
@@ -149,22 +148,15 @@ async def _collect_events(**kwargs):
     return [json.loads(event.removeprefix("data: ").strip()) async for event in stream_usage_ai_chat(**kwargs)]
 
 
-def _patched_usage_tool():
-    """Replace the get_usage_data handler so no DB query is attempted.
-
-    TOOL_HANDLERS captures `_fetch_usage_data` at import time, so patching the
-    module attribute alone leaves the real (DB-backed) fetcher wired up.
-    """
-    return patch.dict(
-        "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.TOOL_HANDLERS",
-        {
-            "get_usage_data": {
-                "fetch": AsyncMock(return_value=SAMPLE_AGGREGATED_RESPONSE),
-                "summarise": _summarise_usage_data,
-                "label": "global usage data",
-            }
-        },
-    )
+def _usage_tool_handlers():
+    """Tool handler override so no DB query is attempted, injected via `tool_handlers=`."""
+    return {
+        "get_usage_data": {
+            "fetch": AsyncMock(return_value=SAMPLE_AGGREGATED_RESPONSE),
+            "summarise": _summarise_usage_data,
+            "label": "global usage data",
+        }
+    }
 
 
 class TestToolSchemas:
@@ -482,25 +474,21 @@ class TestRouterResolution:
         mock_router.acompletion = AsyncMock(
             side_effect=[_make_tool_call_response(), _make_stream("Total spend is $50.25")]
         )
+        mock_acompletion = AsyncMock()
 
-        with (
-            patch("litellm.proxy.proxy_server.llm_router", mock_router),
-            patch("litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm") as mock_litellm,
-            _patched_usage_tool(),
-        ):
-            mock_litellm.acompletion = AsyncMock()
-
-            events = await _collect_events(
-                messages=[{"role": "user", "content": "What is my total spend?"}],
-                model="my-gpt4",
-                user_id="user-123",
-                is_admin=True,
-            )
+        events = await _collect_events(
+            messages=[{"role": "user", "content": "What is my total spend?"}],
+            model="my-gpt4",
+            user_id="user-123",
+            is_admin=True,
+            deps=CompletionDeps(router=mock_router, acompletion=mock_acompletion),
+            tool_handlers=_usage_tool_handlers(),
+        )
 
         assert [e for e in events if e["type"] == "error"] == []
         assert [e["status"] for e in events if e["type"] == "tool_call"] == ["running", "complete"]
         assert [e["content"] for e in events if e["type"] == "chunk"] == ["Total spend is $50.25"]
-        mock_litellm.acompletion.assert_not_called()
+        mock_acompletion.assert_not_called()
 
         mock_router.get_model_list.assert_called_with(model_name="my-gpt4")
         assert mock_router.acompletion.await_count == 2
@@ -517,48 +505,90 @@ class TestRouterResolution:
         mock_router = MagicMock()
         mock_router.get_model_list.return_value = []
         mock_router.acompletion = AsyncMock()
+        mock_acompletion = AsyncMock(side_effect=[_make_tool_call_response(), _make_stream("Spend summary")])
 
-        with (
-            patch("litellm.proxy.proxy_server.llm_router", mock_router),
-            patch("litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm") as mock_litellm,
-            _patched_usage_tool(),
-        ):
-            mock_litellm.acompletion = AsyncMock(
-                side_effect=[_make_tool_call_response(), _make_stream("Spend summary")]
-            )
-
-            events = await _collect_events(
-                messages=[{"role": "user", "content": "What is my total spend?"}],
-                model="openai/gpt-4o-mini",
-                user_id="user-123",
-                is_admin=True,
-            )
+        events = await _collect_events(
+            messages=[{"role": "user", "content": "What is my total spend?"}],
+            model="openai/gpt-4o-mini",
+            user_id="user-123",
+            is_admin=True,
+            deps=CompletionDeps(router=mock_router, acompletion=mock_acompletion),
+            tool_handlers=_usage_tool_handlers(),
+        )
 
         assert [e for e in events if e["type"] == "error"] == []
         mock_router.acompletion.assert_not_called()
-        assert mock_litellm.acompletion.await_count == 2
-        assert mock_litellm.acompletion.await_args_list[0].kwargs["model"] == "openai/gpt-4o-mini"
+        assert mock_acompletion.await_count == 2
+        assert mock_acompletion.await_args_list[0].kwargs["model"] == "openai/gpt-4o-mini"
 
     @pytest.mark.asyncio
     async def test_no_router_configured_uses_litellm(self):
-        with (
-            patch("litellm.proxy.proxy_server.llm_router", None),
-            patch("litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm") as mock_litellm,
-            _patched_usage_tool(),
-        ):
-            mock_litellm.acompletion = AsyncMock(
-                side_effect=[_make_tool_call_response(), _make_stream("Spend summary")]
-            )
+        mock_acompletion = AsyncMock(side_effect=[_make_tool_call_response(), _make_stream("Spend summary")])
 
-            events = await _collect_events(
-                messages=[{"role": "user", "content": "What is my total spend?"}],
-                model="gpt-4o-mini",
-                user_id="user-123",
-                is_admin=True,
-            )
+        events = await _collect_events(
+            messages=[{"role": "user", "content": "What is my total spend?"}],
+            model="gpt-4o-mini",
+            user_id="user-123",
+            is_admin=True,
+            deps=CompletionDeps(router=None, acompletion=mock_acompletion),
+            tool_handlers=_usage_tool_handlers(),
+        )
 
         assert [e for e in events if e["type"] == "error"] == []
-        assert mock_litellm.acompletion.await_count == 2
+        assert mock_acompletion.await_count == 2
+
+
+class TestUsageAiChatSpendAttribution:
+    """
+    Regression: completions issued by the Usage dashboard's "Ask AI" chat must
+    carry the caller's key/user/team identity in `metadata`, the same as every
+    other proxied completion, so spend gets attributed and counts against the
+    caller's budget. Previously these completions carried no metadata at all,
+    so their cost was untracked regardless of which model handled them.
+    """
+
+    @pytest.mark.asyncio
+    async def test_both_completions_carry_caller_identity_in_metadata(self):
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+        mock_acompletion = AsyncMock(side_effect=[_make_tool_call_response(), _make_stream("Total spend is $50.25")])
+
+        await _collect_events(
+            messages=[{"role": "user", "content": "What is my total spend?"}],
+            model="gpt-4o-mini",
+            user_id="user-123",
+            is_admin=True,
+            deps=CompletionDeps(router=None, acompletion=mock_acompletion),
+            tool_handlers=_usage_tool_handlers(),
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="hashed-key",
+                user_id="user-123",
+                team_id="team-456",
+                user_role=LitellmUserRoles.INTERNAL_USER,
+            ),
+        )
+
+        assert mock_acompletion.await_count == 2
+        for call in mock_acompletion.await_args_list:
+            assert call.kwargs["metadata"]["user_api_key_user_id"] == "user-123"
+            assert call.kwargs["metadata"]["user_api_key_team_id"] == "team-456"
+            assert call.kwargs["metadata"]["user_api_key"] == "hashed-key"
+
+    @pytest.mark.asyncio
+    async def test_metadata_is_empty_without_a_caller_identity(self):
+        mock_acompletion = AsyncMock(side_effect=[_make_tool_call_response(), _make_stream("Spend summary")])
+
+        await _collect_events(
+            messages=[{"role": "user", "content": "What is my total spend?"}],
+            model="gpt-4o-mini",
+            user_id="user-123",
+            is_admin=True,
+            deps=CompletionDeps(router=None, acompletion=mock_acompletion),
+            tool_handlers=_usage_tool_handlers(),
+        )
+
+        for call in mock_acompletion.await_args_list:
+            assert call.kwargs["metadata"] == {}
 
 
 class TestUsageAiChatServiceAccountGuard:
@@ -622,8 +652,9 @@ class TestUsageAiChatKeepalive:
     async def _collect_endpoint_body(self, monkeypatch, interval, delay=0.3) -> tuple[list[bytes], dict]:
         import asyncio
 
-        import litellm
         from fastapi.responses import StreamingResponse
+
+        import litellm
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
         from litellm.proxy.management_endpoints.usage_endpoints.endpoints import (
             ChatMessage,
