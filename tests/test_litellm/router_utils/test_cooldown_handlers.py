@@ -440,7 +440,7 @@ class TestRoutingGroupCooldownAlternatives:
 
 
 class TestTeamModelCooldownAlternatives:
-    def _router(self, team_deployments: int):
+    def _router(self, team_deployments: int, blocked_ids: frozenset[str] = frozenset()):
         from litellm import Router
 
         return Router(
@@ -452,6 +452,7 @@ class TestTeamModelCooldownAlternatives:
                         "id": f"team-deploy-{i}",
                         "team_id": "team-1",
                         "team_public_model_name": "team-gpt-4o-mini",
+                        "blocked": f"team-deploy-{i}" in blocked_ids,
                     },
                 }
                 for i in range(team_deployments)
@@ -477,6 +478,21 @@ class TestTeamModelCooldownAlternatives:
         from litellm.router_utils.cooldown_handlers import _should_cooldown_deployment
 
         router = self._router(team_deployments=1)
+        assert (
+            _should_cooldown_deployment(
+                litellm_router_instance=router,
+                deployment="team-deploy-0",
+                exception_status=429,
+                original_exception=Exception("rate limited"),
+                requested_model_group="team-gpt-4o-mini",
+            )
+            is False
+        )
+
+    def test_429_with_only_a_blocked_sibling_keeps_single_deployment_exemption(self):
+        from litellm.router_utils.cooldown_handlers import _should_cooldown_deployment
+
+        router = self._router(team_deployments=2, blocked_ids=frozenset({"team-deploy-1"}))
         assert (
             _should_cooldown_deployment(
                 litellm_router_instance=router,

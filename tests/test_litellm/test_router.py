@@ -897,7 +897,7 @@ def test_arouter_test_team_model():
 
 
 def test_team_model_has_alternatives():
-    def team_deployment(deployment_id: str, team_id: str, public_model_name: str):
+    def team_deployment(deployment_id: str, team_id: str, public_model_name: str, blocked: bool = False):
         return {
             "model_name": f"model_name_{team_id}_{deployment_id}",
             "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
@@ -905,6 +905,7 @@ def test_team_model_has_alternatives():
                 "id": deployment_id,
                 "team_id": team_id,
                 "team_public_model_name": public_model_name,
+                "blocked": blocked,
             },
         }
 
@@ -914,6 +915,8 @@ def test_team_model_has_alternatives():
             team_deployment("team-a-2", "team-a", "shared-model"),
             team_deployment("team-a-solo", "team-a", "solo-model"),
             team_deployment("team-b-1", "team-b", "shared-model"),
+            team_deployment("team-c-1", "team-c", "paused-sibling-model"),
+            team_deployment("team-c-paused", "team-c", "paused-sibling-model", blocked=True),
             {
                 "model_name": "plain-model",
                 "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
@@ -926,6 +929,7 @@ def test_team_model_has_alternatives():
     assert router.team_model_has_alternatives("team-a-2") is True
     assert router.team_model_has_alternatives("team-a-solo") is False
     assert router.team_model_has_alternatives("team-b-1") is False
+    assert router.team_model_has_alternatives("team-c-1") is False
     assert router.team_model_has_alternatives("plain-1") is False
     assert router.team_model_has_alternatives("missing-deployment") is False
 
