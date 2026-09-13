@@ -1891,7 +1891,6 @@ def test_get_user_agent_tags():
     assert "User-Agent: litellm" in tags
     assert "User-Agent: litellm/0.1.0" in tags
 
-    # Case-insensitive header test
     tags_capitalized = StandardLoggingPayloadSetup._get_user_agent_tags(
         proxy_server_request={
             "headers": {
