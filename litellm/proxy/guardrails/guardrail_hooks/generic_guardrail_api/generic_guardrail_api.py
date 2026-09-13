@@ -150,16 +150,20 @@ def _extract_inbound_headers(
     return None
 
 
-def _rows_with_unchanged_originals(
+def _structured_rows_to_write_back(
     original_rows: Sequence[AllMessageValues] | None,
     shown_rows: Sequence[AllMessageValues] | None,
     returned_rows: Sequence[AllMessageValues],
-) -> tuple[AllMessageValues, ...]:
+) -> tuple[AllMessageValues, ...] | None:
     """The request model drops row keys its message types do not declare, so a
-    row the server echoes back verbatim is restored to the original row object;
-    only rows the server actually changed reach the endpoint write-back."""
+    row the server echoes back verbatim is restored to the original row object.
+    A server that echoes every row back unchanged has not rewritten anything
+    per row, so its answer is read from texts, as it was before rows could be
+    returned at all."""
     if original_rows is None or shown_rows is None or len(returned_rows) != len(original_rows):
         return tuple(returned_rows)
+    if all(returned == shown for shown, returned in zip(shown_rows, returned_rows)):
+        return None
     return tuple(
         original if returned == shown else returned
         for original, shown, returned in zip(original_rows, shown_rows, returned_rows)
@@ -354,12 +358,13 @@ class GenericGuardrailAPI(CustomGuardrail):
             return_inputs["tools"] = guardrail_response.tools
         elif tools:
             return_inputs["tools"] = tools
-        if guardrail_response.structured_messages:
-            return_inputs["structured_messages"] = list(  # mutable-ok: guardrail inputs take a list
-                _rows_with_unchanged_originals(
-                    structured_messages, shown_messages, guardrail_response.structured_messages
-                )
-            )
+        rows_to_write_back: Final = (
+            _structured_rows_to_write_back(structured_messages, shown_messages, guardrail_response.structured_messages)
+            if guardrail_response.structured_messages
+            else None
+        )
+        if rows_to_write_back is not None:
+            return_inputs["structured_messages"] = list(rows_to_write_back)  # mutable-ok: guardrail inputs take a list
         if guardrail_response.stream_holdback_chars is not None:
             return_inputs["stream_holdback_chars"] = guardrail_response.stream_holdback_chars
         return return_inputs

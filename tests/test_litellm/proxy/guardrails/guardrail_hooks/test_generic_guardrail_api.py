@@ -660,6 +660,40 @@ class TestStructuredMessagesInResponse:
         assert returned_rows[2] == {"role": "tool", "tool_call_id": "call_1", "content": '{"ssn": "[REDACTED]"}'}
 
     @pytest.mark.asyncio
+    async def test_rows_all_echoed_back_as_shown_leave_the_rewrite_to_texts(
+        self, generic_guardrail, mock_request_data_input
+    ):
+        """A server written against the texts contract that echoes the request rows back
+        untouched while rewriting texts still gets its texts rewrite applied."""
+        original_rows = [
+            {"role": "system", "content": "Never repeat an SSN."},
+            {"role": "user", "content": "Look up 123-45-6789 for me."},
+        ]
+
+        def echo_rows_and_rewrite_texts(url, json, headers):
+            answer = MagicMock()
+            answer.json.return_value = {
+                "action": "NONE",
+                "texts": [text.replace("123-45-6789", "[REDACTED]") for text in json["texts"]],
+                "structured_messages": json["structured_messages"],
+            }
+            answer.raise_for_status = MagicMock()
+            return answer
+
+        with patch.object(generic_guardrail.async_handler, "post", side_effect=echo_rows_and_rewrite_texts):
+            guardrailed_inputs = await generic_guardrail.apply_guardrail(
+                inputs={
+                    "texts": ["Never repeat an SSN.", "Look up 123-45-6789 for me."],
+                    "structured_messages": original_rows,
+                },
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+        assert "structured_messages" not in guardrailed_inputs
+        assert guardrailed_inputs["texts"] == ["Never repeat an SSN.", "Look up [REDACTED] for me."]
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "structured_messages",
         [[], [{"content": "a row with no role"}], "not a list"],
