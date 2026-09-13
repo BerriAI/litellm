@@ -5,20 +5,21 @@ import React, { useMemo } from "react";
 import SummaryCard from "@/components/shared/SummaryCard";
 import {
   autorouterOf,
+  CachingSavingsScope,
   cachingOf,
   compressionOf,
   gatewayAttributedCachingOf,
-  SAVINGS_DRIVERS,
   savedTokensOf,
+  savingsDriversFor,
   sumOverDays,
   usd,
 } from "@/app/(dashboard)/cost-optimization/_components/costOptimizationUtils";
 import { DailyData } from "@/components/UsagePage/types";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
-// The total sums SAVINGS_DRIVERS, so it is by construction the sum of what the
+// The total sums the selected drivers, so it is by construction the sum of what the
 // charts plot; the donut and timelines derive from the same list in costOptimizationUtils.
-const useSavingsTotals = (results: DailyData[]) =>
+const useSavingsTotals = (results: DailyData[], cachingScope: CachingSavingsScope) =>
   useMemo(
     () => ({
       compression: sumOverDays(results, compressionOf),
@@ -26,13 +27,26 @@ const useSavingsTotals = (results: DailyData[]) =>
       autorouter: sumOverDays(results, autorouterOf),
       gatewayAttributedCaching: sumOverDays(results, gatewayAttributedCachingOf),
       savedTokens: sumOverDays(results, savedTokensOf),
-      total: SAVINGS_DRIVERS.reduce((sum, { of }) => sum + sumOverDays(results, of), 0),
+      total: savingsDriversFor(cachingScope).reduce((sum, { of }) => sum + sumOverDays(results, of), 0),
     }),
-    [results],
+    [results, cachingScope],
   );
 
-const SavingsTiles = ({ results, isLoading }: { results: DailyData[]; isLoading: boolean }) => {
-  const totals = useSavingsTotals(results);
+interface SavingsTilesProps {
+  results: DailyData[];
+  isLoading: boolean;
+  cachingScope?: CachingSavingsScope;
+}
+
+const SavingsTiles = ({ results, isLoading, cachingScope = "litellm-injected" }: SavingsTilesProps) => {
+  const totals = useSavingsTotals(results, cachingScope);
+  const showAllCaching = cachingScope === "all";
+  const totalSavedInfo = showAllCaching
+    ? "The sum of compression, all prompt caching, and auto-router savings. The caching term includes client-supplied cache controls and providers that cache implicitly."
+    : "The sum of compression, LiteLLM-injected prompt caching, and auto-router savings. Caching that clients or providers brought on their own appears only in the caching tile's Total figure.";
+  const promptCachingInfo = showAllCaching
+    ? "What all caching saved against paying the input rate for every token, including client-supplied cache controls and providers that cache implicitly. The secondary figure isolates the share LiteLLM earned by inserting cache breakpoints itself."
+    : "What LiteLLM-injected caching saved against paying the input rate for every token. The secondary Total also counts requests that arrived with their own cache_control and providers that cache implicitly.";
 
   return (
     <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
@@ -40,7 +54,7 @@ const SavingsTiles = ({ results, isLoading }: { results: DailyData[]; isLoading:
         label="Total saved"
         value={usd(totals.total)}
         hint={isLoading ? "Loading..." : "Compression + prompt caching + auto-router"}
-        info="The sum of the three tiles beside it. Its caching term is the LiteLLM-injected share, so this total is what the gateway itself delivered; caching that clients or providers brought on their own appears only in the caching tile's Total figure."
+        info={totalSavedInfo}
       />
       <SummaryCard
         label="Compression savings"
@@ -50,10 +64,13 @@ const SavingsTiles = ({ results, isLoading }: { results: DailyData[]; isLoading:
       />
       <SummaryCard
         label="Prompt caching savings"
-        value={usd(totals.gatewayAttributedCaching)}
-        hint="LiteLLM injected"
-        secondary={{ label: "Total", value: usd(totals.caching) }}
-        info="What caching saved against paying the input rate for every token: the discount on tokens served from cache, less the premium providers charge to write a cache entry. The headline figure is the share LiteLLM earned by inserting the breakpoints itself, through configured injection points or auto prompt caching. The total beside it also counts requests that arrived with their own cache_control and providers that cache implicitly. Either can be negative on traffic that writes more cache than it reuses, which is why the headline is not always the smaller of the two."
+        value={usd(showAllCaching ? totals.caching : totals.gatewayAttributedCaching)}
+        hint={showAllCaching ? "All caching" : "LiteLLM injected"}
+        secondary={{
+          label: showAllCaching ? "LiteLLM injected" : "Total",
+          value: usd(showAllCaching ? totals.gatewayAttributedCaching : totals.caching),
+        }}
+        info={promptCachingInfo}
       />
       <SummaryCard
         label="Auto-router savings"
