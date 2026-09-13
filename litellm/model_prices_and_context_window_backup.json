@@ -34068,6 +34068,7 @@
         "supports_tool_choice": true
     },
     "inception/mercury-2.5": {
+        "cache_read_input_token_cost": 2e-08,
         "input_cost_per_token": 2e-07,
         "litellm_provider": "inception",
         "max_input_tokens": 260000,
@@ -34077,6 +34078,7 @@
         "output_cost_per_token": 7.5e-07,
         "source": "https://docs.inceptionlabs.ai/get-started/models",
         "supports_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true
