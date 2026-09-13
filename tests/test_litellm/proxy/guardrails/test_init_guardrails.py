@@ -157,6 +157,47 @@ def test_initialize_presidio_forwards_analyze_chunk_size_bytes():
 
 
 @pytest.mark.parametrize(
+    "mode, filter_scope, expected_hooks",
+    [
+        ("pre_mcp_call", None, {"pre_mcp_call"}),
+        (["pre_mcp_call", "post_mcp_call"], None, {"pre_mcp_call", "post_mcp_call"}),
+        ("pre_mcp_call", "both", {"pre_mcp_call", "post_call"}),
+        ("pre_call", None, {"pre_call", "post_call"}),
+    ],
+)
+def test_initialize_presidio_mcp_mode_does_not_add_post_call_scan(mode, filter_scope, expected_hooks):
+    """Regression: a `pre_mcp_call` Presidio guardrail used to also register a
+    `post_call` output scanner, so a blocked tool call that the model mentioned in
+    its answer turned the whole request into an HTTP 400 instead of a 200."""
+    import litellm
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import (
+        _OPTIONAL_PresidioPIIMasking,
+    )
+
+    guardrail_name = f"test_presidio_mcp_scope_{id(mode)}_{filter_scope}"
+    litellm_params = {
+        "guardrail": SupportedGuardrailIntegrations.PRESIDIO.value,
+        "mode": mode,
+        "presidio_analyzer_api_base": "https://fakelink.com/v1/presidio/analyze",
+        "presidio_anonymizer_api_base": "https://fakelink.com/v1/presidio/anonymize",
+    }
+    if filter_scope is not None:
+        litellm_params["presidio_filter_scope"] = filter_scope
+
+    InMemoryGuardrailHandler().initialize_guardrail(
+        guardrail={"guardrail_name": guardrail_name, "litellm_params": litellm_params}
+    )
+
+    registered_hooks = {
+        hook
+        for callback in litellm.callbacks
+        if isinstance(callback, _OPTIONAL_PresidioPIIMasking) and callback.guardrail_name == guardrail_name
+        for hook in ([callback.event_hook] if isinstance(callback.event_hook, str) else callback.event_hook)
+    }
+    assert registered_hooks == expected_hooks
+
+
+@pytest.mark.parametrize(
     "config_value, expected",
     [(True, True), (False, False), (None, False)],
 )
