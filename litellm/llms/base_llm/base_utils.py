@@ -50,6 +50,12 @@ class BaseLLMModelInfo(ABC):
         """
         return None
 
+    def get_model_cost_key(self, model: str) -> str | None:
+        """
+        Extra `litellm.model_cost` key to try for this provider's spelling of `model`, after the exact keys miss.
+        """
+        return None
+
     @abstractmethod
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         """

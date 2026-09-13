@@ -72,10 +72,6 @@ def resolve_fireworks_resource_name(model: str) -> str:
     return f"accounts/fireworks/models/{stripped}"
 
 
-def fireworks_cost_map_key(model: str) -> str:
-    return f"fireworks_ai/{resolve_fireworks_resource_name(model)}"
-
-
 class FireworksAIMixin:
     """
     Common Base Config functions across Fireworks AI Endpoints
