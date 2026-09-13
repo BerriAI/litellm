@@ -58,6 +58,9 @@ export const KeyTypeSelect = ({
 const SKILLS_HINT =
   "Enabled skills are visible to every key. Grant disabled (private) Claude Code plugins to this key here.";
 
+export const TPD_HINT =
+  "Daily token budget for batch submissions (/v1/batches). When set, batch input files are charged against this 24h window instead of the key's TPM/RPM limits. Online requests keep using TPM/RPM.";
+
 export const KeyAgentAndSkillFields = ({
   control,
   accessToken,

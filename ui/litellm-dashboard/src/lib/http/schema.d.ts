@@ -1843,6 +1843,7 @@ export interface paths {
          *     - max_parallel_requests: Optional[int] - The max number of parallel requests for the budget.
          *     - tpm_limit: Optional[int] - The tokens per minute limit for the budget.
          *     - rpm_limit: Optional[int] - The requests per minute limit for the budget.
+         *     - tpd_limit: Optional[int] - The tokens per day limit for the budget. Charged by batch submissions instead of tpm_limit/rpm_limit.
          *     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
          *     - budget_reset_at: Optional[datetime] - Datetime when the initial budget is reset. Default is now.
          */
@@ -1899,6 +1900,7 @@ export interface paths {
          *     - max_parallel_requests: Optional[int] - The max number of parallel requests for the budget.
          *     - tpm_limit: Optional[int] - The tokens per minute limit for the budget.
          *     - rpm_limit: Optional[int] - The requests per minute limit for the budget.
+         *     - tpd_limit: Optional[int] - The tokens per day limit for the budget. Charged by batch submissions instead of tpm_limit/rpm_limit.
          *     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
          *     - budget_reset_at: Optional[datetime] - Update the Datetime when the budget was last reset.
          */
@@ -3951,6 +3953,7 @@ export interface paths {
          *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
          *     - rpm_limit: Optional[int] - [Not Implemented Yet] Specify rpm limit for a given customer (Requests per minute)
+         *     - tpd_limit: Optional[int] - Specify tpd limit for a given customer (Tokens per day). Batch submissions are charged against it instead of tpm_limit/rpm_limit
          *     - model_max_budget: Optional[dict] - [Not Implemented Yet] Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d"}}
          *     - max_parallel_requests: Optional[int] - [Not Implemented Yet] Specify max parallel requests for a given customer.
          *     - soft_budget: Optional[float] - [Not Implemented Yet] Get alerts when customer crosses given budget, doesn't block requests.
@@ -4485,6 +4488,7 @@ export interface paths {
          *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
          *     - rpm_limit: Optional[int] - [Not Implemented Yet] Specify rpm limit for a given customer (Requests per minute)
+         *     - tpd_limit: Optional[int] - Specify tpd limit for a given customer (Tokens per day). Batch submissions are charged against it instead of tpm_limit/rpm_limit
          *     - model_max_budget: Optional[dict] - [Not Implemented Yet] Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d"}}
          *     - max_parallel_requests: Optional[int] - [Not Implemented Yet] Specify max parallel requests for a given customer.
          *     - soft_budget: Optional[float] - [Not Implemented Yet] Get alerts when customer crosses given budget, doesn't block requests.
@@ -7707,6 +7711,7 @@ export interface paths {
          *     - blocked: Optional[bool] - Whether the key is blocked.
          *     - rpm_limit: Optional[int] - Specify rpm limit for a given key (Requests per minute)
          *     - tpm_limit: Optional[int] - Specify tpm limit for a given key (Tokens per minute)
+         *     - tpd_limit: Optional[int] - Specify tpd limit for a given key (Tokens per day). Charged by batch submissions instead of tpm_limit/rpm_limit.
          *     - soft_budget: Optional[float] - Specify soft budget for a given key. Will trigger a slack alert when this soft budget is reached.
          *     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
@@ -8020,6 +8025,7 @@ export interface paths {
          *     - blocked: Optional[bool] - Whether the key is blocked.
          *     - rpm_limit: Optional[int] - Specify rpm limit for a given key (Requests per minute)
          *     - tpm_limit: Optional[int] - Specify tpm limit for a given key (Tokens per minute)
+         *     - tpd_limit: Optional[int] - Specify tpd limit for a given key (Tokens per day). Charged by batch submissions instead of tpm_limit/rpm_limit.
          *     - soft_budget: Optional[float] - Specify soft budget for a given key. Will trigger a slack alert when this soft budget is reached.
          *     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
          *     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
@@ -8146,6 +8152,7 @@ export interface paths {
          *     - metadata: Optional[dict] - Metadata for key. Example {"team": "core-infra", "app": "app2"}
          *     - tpm_limit: Optional[int] - Tokens per minute limit
          *     - rpm_limit: Optional[int] - Requests per minute limit
+         *     - tpd_limit: Optional[int] - Tokens per day limit, charged by batch submissions instead of tpm_limit/rpm_limit
          *     - model_rpm_limit: Optional[dict] - Model-specific RPM limits {"gpt-4": 100, "claude-v1": 200}
          *     - mcp_rpm_limit: Optional[dict] - Per-MCP-server RPM limits, keyed by MCP server name {"github": 100, "slack": 200}
          *     - tag_rpm_limit: Optional[dict] - Per-request-tag RPM limits, keyed by request tag {"cell-1": 1000, "cell-2": 500}. Each tag gets an independent counter; absent tags fall back to the key-level rpm limit.
@@ -8395,7 +8402,7 @@ export interface paths {
          *     way to page, sort or filter it.
          *
          *     `sort` takes a comma-separated list of `budget_id`, `max_budget`, `tpm_limit`,
-         *     `rpm_limit` or `created_at`, each optionally prefixed with `-` for descending,
+         *     `rpm_limit`, `tpd_limit` or `created_at`, each optionally prefixed with `-` for descending,
          *     and defaults to `-created_at`. `budget_id` is appended to every sort as the
          *     tiebreaker. `q` is a case-insensitive substring match on `budget_id`.
          *     `page_size` defaults to 50 and is capped at 100. Filters are
@@ -15463,6 +15470,7 @@ export interface paths {
          *     - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
          *     - tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for this team - all keys with this team_id will have at max this TPM limit
          *     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
+         *     - tpd_limit: Optional[int] - The TPD (Tokens Per Day) limit for this team. Batch submissions are charged against it instead of tpm_limit/rpm_limit
          *     - rpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of RPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating RPM, or "best_effort_throughput" for best effort enforcement.
          *     - tpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of TPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating TPM, or "best_effort_throughput" for best effort enforcement.
          *     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
@@ -15691,6 +15699,7 @@ export interface paths {
          *     - metadata: Optional[dict] - Metadata for team, store information for team. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *     - tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for this team - all keys with this team_id will have at max this TPM limit
          *     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
+         *     - tpd_limit: Optional[int] - The TPD (Tokens Per Day) limit for this team. Batch submissions are charged against it instead of tpm_limit/rpm_limit
          *     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
          *     - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set (either in the request or existing), soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
          *     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
@@ -16781,7 +16790,6 @@ export interface paths {
          *     - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
          *     - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-         *     - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
          *     - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
@@ -16887,7 +16895,6 @@ export interface paths {
          *         - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
          *         - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *         - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-         *         - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
          *         - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
          *         - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *         - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
@@ -24442,6 +24449,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /**
@@ -24494,6 +24503,11 @@ export interface components {
              * @description Requests will NOT fail if this is exceeded. Will fire alerting though.
              */
             soft_budget?: number | null;
+            /**
+             * Tpd Limit
+             * @description Max tokens per day, charged by batch submissions, allowed for this budget id.
+             */
+            tpd_limit?: number | null;
             /**
              * Tpm Limit
              * @description Max tokens per minute, allowed for this budget id.
@@ -27856,6 +27870,8 @@ export interface components {
             team_id?: string | null;
             /** Throttle On Budget Exceeded */
             throttle_on_budget_exceeded?: boolean | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Tpm Limit Type */
@@ -28016,6 +28032,8 @@ export interface components {
             token?: string | null;
             /** Token Id */
             token_id?: string | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Tpm Limit Type */
@@ -28746,6 +28764,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -28779,6 +28799,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -28887,6 +28909,8 @@ export interface components {
             team_id: string;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Updated At */
@@ -29054,6 +29078,8 @@ export interface components {
             team_id?: string | null;
             /** Token */
             token?: string | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Updated At */
@@ -30241,6 +30267,8 @@ export interface components {
             team_id: string;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Updated At */
@@ -30617,6 +30645,8 @@ export interface components {
             team_id?: string | null;
             /** Token */
             token?: string | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Updated At */
@@ -32261,6 +32291,11 @@ export interface components {
             /** Spend */
             spend?: number | null;
             /**
+             * Tpd Limit
+             * @description Max tokens per day, charged by batch submissions, allowed for this budget id.
+             */
+            tpd_limit?: number | null;
+            /**
              * Tpm Limit
              * @description Max tokens per minute, allowed for this budget id.
              */
@@ -32475,6 +32510,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -32596,6 +32633,8 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id: string;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -32782,6 +32821,8 @@ export interface components {
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
             team_member_tpm_limit?: number | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Tpm Limit Type */
@@ -33075,6 +33116,8 @@ export interface components {
             token?: string | null;
             /** Token Id */
             token_id?: string | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Tpm Limit Type */
@@ -33531,6 +33574,8 @@ export interface components {
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
             team_member_tpm_limit?: number | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -34940,6 +34985,8 @@ export interface components {
             team_id?: string | null;
             /** Throttle On Budget Exceeded */
             throttle_on_budget_exceeded?: boolean | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Tpm Limit Type */
@@ -36917,6 +36964,8 @@ export interface components {
             team_id: string;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Updated At */
@@ -37057,6 +37106,8 @@ export interface components {
             team_id: string;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Updated At */
@@ -38124,6 +38175,8 @@ export interface components {
             temp_budget_increase?: number | null;
             /** Throttle On Budget Exceeded */
             throttle_on_budget_exceeded?: boolean | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Tpm Limit Type */
@@ -38388,6 +38441,8 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id?: string | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -38583,6 +38638,8 @@ export interface components {
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
             team_member_tpm_limit?: number | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -39093,6 +39150,8 @@ export interface components {
             end_user_object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** End User Rpm Limit */
             end_user_rpm_limit?: number | null;
+            /** End User Tpd Limit */
+            end_user_tpd_limit?: number | null;
             /** End User Tpm Limit */
             end_user_tpm_limit?: number | null;
             /** Expires */
@@ -39261,10 +39320,14 @@ export interface components {
             team_soft_budget?: number | null;
             /** Team Spend */
             team_spend?: number | null;
+            /** Team Tpd Limit */
+            team_tpd_limit?: number | null;
             /** Team Tpm Limit */
             team_tpm_limit?: number | null;
             /** Token */
             token?: string | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Tpm Limit Per Model */

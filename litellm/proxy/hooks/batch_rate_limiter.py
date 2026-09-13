@@ -33,6 +33,7 @@ from litellm.batches.batch_utils import (
     _extract_file_access_credentials,
     _iter_batch_input_lines,
 )
+from litellm.constants import BATCH_TPD_DESCRIPTOR_SUFFIX, BATCH_TPD_WINDOW_SECONDS
 from litellm.exceptions import RateLimitErrorCategory
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import (
@@ -236,14 +237,48 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         file-bound/top-level routing model this function resolves. Charging
         project quotas here would let a caller bind the file to a model
         without a quota while rows execute against a quota-limited model.
+
+        Scopes with a ``tpd_limit`` (key, team, end user) are charged against a
+        daily token descriptor instead of their per-minute RPM/TPM descriptor,
+        because a batch's rows are scheduled by the provider and never share a
+        minute with the submission. The daily descriptor uses its own key so
+        its 24h window never collides with the online limiter's counters.
         """
-        return self.parallel_request_limiter._create_rate_limit_descriptors(
+        descriptors: Final = self.parallel_request_limiter._create_rate_limit_descriptors(
             user_api_key_dict=user_api_key_dict,
             data=data,
             rpm_limit_type=None,
             tpm_limit_type=None,
             model_has_failures=False,
         )
+        tpd_limits: Final[Mapping[str, tuple[str, int]]] = MappingProxyType(
+            {
+                key: (value, limit)
+                for key, value, limit in (
+                    ("api_key", user_api_key_dict.api_key, user_api_key_dict.tpd_limit),
+                    ("team", user_api_key_dict.team_id, user_api_key_dict.team_tpd_limit),
+                    ("end_user", user_api_key_dict.end_user_id, user_api_key_dict.end_user_tpd_limit),
+                )
+                if value and limit is not None
+            }
+        )
+        if not tpd_limits:
+            return descriptors
+        return [
+            *(d for d in descriptors if d["key"] not in tpd_limits),
+            *(
+                RateLimitDescriptor(
+                    key=f"{key}{BATCH_TPD_DESCRIPTOR_SUFFIX}",
+                    value=value,
+                    rate_limit={
+                        "requests_per_unit": None,
+                        "tokens_per_unit": limit,
+                        "window_size": BATCH_TPD_WINDOW_SECONDS,
+                    },
+                )
+                for key, (value, limit) in tpd_limits.items()
+            ),
+        ]
 
     @staticmethod
     def _project_has_any_io_token_limits(user_api_key_dict: UserAPIKeyAuth) -> bool:
@@ -610,7 +645,9 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         )
 
         now: Final = datetime.now().timestamp()
-        window_size: Final = self.parallel_request_limiter.window_size
+        window_size: Final = (descriptor.get("rate_limit") or {}).get(
+            "window_size"
+        ) or self.parallel_request_limiter.window_size
         reset_time: Final = now + window_size
         reset_time_formatted: Final = datetime.fromtimestamp(reset_time).strftime("%Y-%m-%d %H:%M:%S UTC")
 
@@ -643,10 +680,13 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 if descriptor.get("key") == PROJECT_ITPM_DESCRIPTOR_KEY
                 else batch_usage.total_tokens
             )
+            token_limit_label: Final = (
+                "TPD" if descriptor.get("key", "").endswith(BATCH_TPD_DESCRIPTOR_SUFFIX) else "TPM"
+            )
             detail = (
                 f"Batch rate limit exceeded for {descriptor.get('key', 'unknown')}: {descriptor.get('value', 'unknown')}. "
                 f"Batch contains {batch_token_count} tokens but only {remaining_display} tokens remaining "
-                f"out of {current_limit} TPM limit. "
+                f"out of {current_limit} {token_limit_label} limit. "
                 f"Limit resets at: {reset_time_formatted}"
             )
 

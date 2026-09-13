@@ -31,7 +31,13 @@ import {
   modelSentinelOptions,
   parseAllowedRoutes,
 } from "./keyEditFieldNormalizers";
-import { KeyAgentAndSkillFields, KeyBudgetNumberField, KeyTypeSelect, labelWithHint } from "./KeyEditViewControls";
+import {
+  KeyAgentAndSkillFields,
+  KeyBudgetNumberField,
+  KeyTypeSelect,
+  labelWithHint,
+  TPD_HINT,
+} from "./KeyEditViewControls";
 import {
   KeyEditFormValues,
   keyEditFormSchema,
@@ -506,6 +512,10 @@ export function KeyEditView({
                 onChange={onChange}
               />
             )}
+          </FormField>
+
+          <FormField control={form.control} name="tpd_limit" label={labelWithHint("TPD Limit (batch)", TPD_HINT)}>
+            {({ ref: _ref, ...field }) => <NumericalInput {...field} value={field.value ?? ""} min={0} />}
           </FormField>
 
           <FormField
