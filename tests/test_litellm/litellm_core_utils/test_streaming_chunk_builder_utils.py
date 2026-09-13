@@ -1,6 +1,7 @@
 import json
 from collections.abc import Mapping, Sequence
 from typing import Final
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -8,6 +9,7 @@ import pytest
 from litellm import ChatCompletionUsageBlock, stream_chunk_builder
 from litellm.types.utils import GenericStreamingChunk
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
+from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
@@ -1603,3 +1605,59 @@ def test_calculate_usage_falls_back_to_prompt_counter_when_mock_stream_has_no_ad
     )
 
     assert usage.prompt_tokens == 77
+
+
+@pytest.mark.parametrize(
+    ("message_delta_usage", "expected_cache_creation", "expected_cache_read"),
+    [
+        (
+            {
+                "input_tokens": 2,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 58352,
+                "output_tokens": 408,
+            },
+            0,
+            58352,
+        ),
+        ({"output_tokens": 408}, 58352, 0),
+    ],
+    ids=["delta_restates_cache_counts", "delta_reports_output_only"],
+)
+def test_anthropic_stream_usage_takes_cache_counts_from_last_event_that_reports_them(
+    message_delta_usage: Mapping[str, int], expected_cache_creation: int, expected_cache_read: int
+) -> None:
+    iterator: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [],
+                "stop_reason": None,
+                "usage": {
+                    "input_tokens": 2,
+                    "cache_creation_input_tokens": 58352,
+                    "cache_read_input_tokens": 0,
+                    "output_tokens": 1,
+                },
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": dict(message_delta_usage)},
+        {"type": "message_stop"},
+    )
+
+    response: Final = stream_chunk_builder(
+        chunks=[iterator.chunk_parser(event) for event in events],
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert response.usage.cache_creation_input_tokens == expected_cache_creation
+    assert response.usage.cache_read_input_tokens == expected_cache_read
+    assert response.usage.prompt_tokens == 58354
