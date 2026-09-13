@@ -21,21 +21,57 @@ _BUDGET_DURATION_WORD_ALIASES: Final[dict[str, str]] = {
     "monthly": "30d",
 }
 
+_DURATION_UNIT_ALIASES: Final[dict[str, str]] = {  # mutable-ok: constant lookup table
+    "s": "s",
+    "sec": "s",
+    "secs": "s",
+    "second": "s",
+    "seconds": "s",
+    "m": "m",
+    "min": "m",
+    "mins": "m",
+    "minute": "m",
+    "minutes": "m",
+    "h": "h",
+    "hr": "h",
+    "hrs": "h",
+    "hour": "h",
+    "hours": "h",
+    "d": "d",
+    "day": "d",
+    "days": "d",
+    "w": "w",
+    "wk": "w",
+    "wks": "w",
+    "week": "w",
+    "weeks": "w",
+    "mo": "mo",
+    "mos": "mo",
+    "mon": "mo",
+    "mons": "mo",
+    "month": "mo",
+    "months": "mo",
+}
+
 
 def _normalize_duration(duration: str) -> str:
     return _BUDGET_DURATION_WORD_ALIASES.get(duration.strip().lower(), duration)
 
 
 def _extract_from_regex(duration: str) -> tuple[int, str]:
-    match: Final = re.match(r"(\d+)(mo|[smhdw]?)", duration)
+    # Use fullmatch so trailing characters after a valid unit are rejected
+    # rather than silently dropped (e.g. "10mb" must not parse as 10 minutes).
+    match: Final = re.fullmatch(r"(\d+)([a-z]+)", duration)
 
     if not match:
         raise ValueError("Invalid duration format")
 
-    value, unit = match.groups()
-    value = int(value)
+    value, raw_unit = match.groups()
+    unit = _DURATION_UNIT_ALIASES.get(raw_unit)
+    if unit is None:
+        raise ValueError(f"Unsupported duration unit, passed duration: {duration}")
 
-    return value, unit
+    return int(value), unit
 
 
 def get_last_day_of_month(year, month):
@@ -191,11 +227,14 @@ def _setup_timezone(current_time: datetime, timezone_str: str = "UTC") -> tuple[
 
 def _parse_duration(duration: str) -> tuple[int | None, str | None]:
     """Parse the duration string into value and unit."""
-    match: Final = re.match(r"(\d+)([a-z]+)", duration)
+    match: Final = re.fullmatch(r"(\d+)([a-z]+)", duration)
     if not match:
         return None, None
 
-    value, unit = match.groups()
+    value, raw_unit = match.groups()
+    unit = _DURATION_UNIT_ALIASES.get(raw_unit)
+    if unit is None:
+        return None, None
     return int(value), unit
 
 
