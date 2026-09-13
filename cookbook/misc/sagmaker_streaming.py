@@ -1,9 +1,9 @@
 # Notes - on how to do sagemaker streaming using boto3
 import json
-import boto3
-
-import sys
 import os
+import sys
+
+import boto3
 from dotenv import load_dotenv
 
 load_dotenv()

@@ -3,11 +3,10 @@
 
 import argparse
 import asyncio
-import time
 import statistics
+import time
 
 import aiohttp
-
 
 REQUEST_BODY = {
     "model": "db-openai-endpoint",

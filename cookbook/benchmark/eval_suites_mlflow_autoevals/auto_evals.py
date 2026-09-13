@@ -2,9 +2,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-import litellm
-
 from autoevals.llm import *
+
+import litellm
 
 ###################
 
