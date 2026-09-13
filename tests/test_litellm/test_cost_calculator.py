@@ -28,7 +28,7 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
-from litellm.utils import TranscriptionResponse
+from litellm.utils import TranscriptionResponse, supports_prompt_caching
 
 
 @pytest.fixture
@@ -305,6 +305,71 @@ def test_github_copilot_mai_code_1_flash_pricing(_local_model_cost_map, model):
 
     assert prompt_usd == pytest.approx((800 * 7.5e-07) + (200 * 7.5e-08))
     assert completion_usd == pytest.approx(500 * 4.5e-06)
+
+
+GPT_REALTIME_2_FAMILY: Final = (
+    "azure/gpt-realtime-2",
+    "azure/gpt-realtime-2.1",
+    "azure/gpt-realtime-2.1-mini",
+    "gpt-realtime-2",
+    "gpt-realtime-2.1",
+    "gpt-realtime-2.1-mini",
+)
+
+
+def test_gpt_realtime_2_family_prices_audio_cache_writes_and_reads_alike(_local_model_cost_map: None) -> None:
+    """Azure publishes one cached-audio meter per gpt-realtime-2 deployment, so the write rate equals the read."""
+    audio_cache_rates: Final = {
+        model: (
+            litellm.model_cost[model].get("cache_read_input_audio_token_cost"),
+            litellm.model_cost[model].get("cache_creation_input_audio_token_cost"),
+        )
+        for model in GPT_REALTIME_2_FAMILY
+    }
+
+    assert all(read is not None and write == read for read, write in audio_cache_rates.values()), audio_cache_rates
+    assert audio_cache_rates["azure/gpt-realtime-2"] == (4e-07, 4e-07)
+
+
+GEMINI_LIVE_NATIVE_AUDIO_CASES: Final = (
+    ("gemini-live-2.5-flash-native-audio", "vertex_ai"),
+    ("gemini-live-2.5-flash-preview-native-audio-09-2025", "vertex_ai"),
+    ("gemini/gemini-live-2.5-flash-preview-native-audio-09-2025", "gemini"),
+)
+
+
+@pytest.mark.parametrize(("model", "provider"), GEMINI_LIVE_NATIVE_AUDIO_CASES)
+def test_gemini_live_native_audio_carries_no_cached_input_rate(
+    _local_model_cost_map: None, model: str, provider: str
+) -> None:
+    """Google prints N/A in both cached columns for every Live API row, so no cached-input rate can be charged."""
+    assert litellm.get_model_info(model, custom_llm_provider=provider)["cache_read_input_token_cost"] is None
+
+    prompt_usd, _ = cost_per_token(
+        model=model,
+        prompt_tokens=101_000,
+        completion_tokens=0,
+        custom_llm_provider=provider,
+        usage_object=Usage(
+            prompt_tokens=101_000,
+            completion_tokens=0,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=100_000),
+        ),
+    )
+
+    assert prompt_usd == pytest.approx(1_000 * 5e-07), "the 100k cached tokens drop out with no cached rate to charge"
+
+
+@pytest.mark.parametrize(("model", "provider"), GEMINI_LIVE_NATIVE_AUDIO_CASES)
+def test_gemini_live_native_audio_declares_prompt_caching_unsupported(
+    _local_model_cost_map: None, model: str, provider: str
+) -> None:
+    """The vendor's documented no has to be recorded as False, since an absent key reads back as None."""
+    assert litellm.get_model_info(model, custom_llm_provider=provider)["supports_prompt_caching"] is False
+    assert supports_prompt_caching(model=model, custom_llm_provider=provider) is False
+    assert supports_prompt_caching(model="gemini-2.5-flash", custom_llm_provider="vertex_ai") is True, (
+        "control: the helper swallows a lookup error into False, so without this a broken lookup reads as a pass"
+    )
 
 
 def test_cost_calculator_with_usage(_local_model_cost_map, monkeypatch):
@@ -4577,6 +4642,24 @@ def test_gemini_live_native_audio_ga_realtime_cost(_local_model_cost_map: None) 
 
     expected_cost = 8 * 5e-07 + 2 * 2e-06 + 23 * 1.2e-05
     assert cost == pytest.approx(expected_cost, rel=1e-9)
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["gemini-live-2.5-flash-native-audio", "vertex_ai/gemini-live-2.5-flash-native-audio"],
+)
+def test_gemini_live_native_audio_limits_and_capabilities_match_vendor_model_card(
+    _local_model_cost_map: None, model: str
+) -> None:
+    """Google's card for model ID gemini-live-2.5-flash-native-audio is the source for these limits and flags."""
+    info = litellm.get_model_info(model)
+
+    assert info["max_input_tokens"] == 131072
+    assert info["max_output_tokens"] == 65536
+    assert info["max_tokens"] == 65536
+    assert info["supports_response_schema"] is False
+    assert info["supports_url_context"] is False
+    assert info["supports_pdf_input"] is False
 
 
 @pytest.mark.parametrize(
