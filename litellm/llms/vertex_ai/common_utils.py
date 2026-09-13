@@ -698,6 +698,45 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     return parameters
 
 
+def _convert_consts_to_enums(
+    schema: dict[str, object],  # mutable-ok: Gemini schema is normalized in place
+    depth: int = 0,
+) -> None:
+    """
+    Converts 'const' to 'enum' only in schema fields (intentionally skips examples, etc)
+    """
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        return
+
+    if "const" in schema:
+        const_value: Final = schema.pop("const")  # rebind-ok: removes the unsupported keyword
+        enum_values: Final = [const_value]  # mutable-ok: JSON Schema enum requires an array
+        schema["enum"] = enum_values  # rebind-ok: replaces const with its singleton enum
+
+    for schema_map in (schema.get("$defs"), schema.get("properties")):
+        if not isinstance(schema_map, dict):
+            continue
+        for mapped_schema in schema_map.values():
+            if isinstance(mapped_schema, dict):
+                _convert_consts_to_enums(mapped_schema, depth + 1)
+
+    for direct_schema in (schema.get("additionalProperties"), schema.get("items")):
+        if isinstance(direct_schema, dict):
+            _convert_consts_to_enums(direct_schema, depth + 1)
+
+    for schema_list in (
+        schema.get("prefixItems"),
+        schema.get("anyOf"),
+        schema.get("oneOf"),
+        schema.get("allOf"),
+    ):
+        if not isinstance(schema_list, list):
+            continue
+        for listed_schema in schema_list:
+            if isinstance(listed_schema, dict):
+                _convert_consts_to_enums(listed_schema, depth + 1)
+
+
 def _build_json_schema(parameters: dict) -> dict:
     """
     Build a JSON Schema for use with Gemini's responseJsonSchema parameter.
@@ -707,6 +746,7 @@ def _build_json_schema(parameters: dict) -> dict:
     - Does NOT add propertyOrdering
     - Does NOT filter fields (allows additionalProperties)
     - Preserves $defs/$ref (Gemini 2.0+ supports JSON Schema references natively)
+    - Converts const values to equivalent single-value enums
 
     Parameters:
         parameters: dict - the JSON schema to process
@@ -714,13 +754,7 @@ def _build_json_schema(parameters: dict) -> dict:
     Returns:
         dict - the processed schema in standard JSON Schema format
     """
-    # Gemini 2.0+ with responseJsonSchema accepts standard JSON Schema as-is,
-    # including $ref, $defs, anyOf, etc. No transformations needed — the
-    # OpenAPI-specific fixes (unpack_defs, add_object_type, convert_anyof, etc.)
-    # are only required for responseSchema (Gemini 1.5) and can break valid
-    # JSON Schema by adding conflicting fields to $ref nodes.
-    # See: https://blog.google/technology/developers/gemini-api-structured-outputs/
-
+    _convert_consts_to_enums(parameters)
     return parameters
 
 

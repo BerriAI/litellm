@@ -1,6 +1,8 @@
+from typing import Literal, Annotated, Union
 from unittest.mock import patch
 
 import pytest
+from pydantic import BaseModel, Field
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
@@ -296,6 +298,149 @@ def test_build_vertex_schema():
     }
 
     assert _build_vertex_schema(parameters) == expected_output
+
+
+def test_build_json_schema_converts_nested_consts_to_enums_and_preserves_refs():
+    from litellm.llms.vertex_ai.common_utils import _build_json_schema
+
+    parameters = {
+        "$defs": {
+            "CreateAction": {
+                "properties": {
+                    "kind": {"const": "create", "type": "string"},
+                    "mode": {"enum": ["fast", "safe"], "type": "string"},
+                },
+                "required": ["kind"],
+                "type": "object",
+            },
+            "DeleteAction": {
+                "properties": {
+                    "kind": {"const": "delete", "type": "string"},
+                },
+                "required": ["kind"],
+                "type": "object",
+            },
+        },
+        "properties": {
+            "actions": {
+                "items": {
+                    "anyOf": [
+                        {"$ref": "#/$defs/CreateAction"},
+                        {"$ref": "#/$defs/DeleteAction"},
+                    ]
+                },
+                "type": "array",
+            },
+            "status": {"const": "pending", "type": "string"},
+        },
+        "type": "object",
+    }
+
+    result = _build_json_schema(parameters)
+
+    assert result == {
+        "$defs": {
+            "CreateAction": {
+                "properties": {
+                    "kind": {"enum": ["create"], "type": "string"},
+                    "mode": {"enum": ["fast", "safe"], "type": "string"},
+                },
+                "required": ["kind"],
+                "type": "object",
+            },
+            "DeleteAction": {
+                "properties": {
+                    "kind": {"enum": ["delete"], "type": "string"},
+                },
+                "required": ["kind"],
+                "type": "object",
+            },
+        },
+        "properties": {
+            "actions": {
+                "items": {
+                    "anyOf": [
+                        {"$ref": "#/$defs/CreateAction"},
+                        {"$ref": "#/$defs/DeleteAction"},
+                    ]
+                },
+                "type": "array",
+            },
+            "status": {"enum": ["pending"], "type": "string"},
+        },
+        "type": "object",
+    }
+
+
+def test_build_json_schema_converts_nested_consts_to_enums_and_preserves_refs_with_pydantic():
+    from litellm.llms.vertex_ai.common_utils import _build_json_schema
+
+    class CreateAction(BaseModel):
+        kind: Literal["create"]
+        resource_name: str
+
+    class DeleteAction(BaseModel):
+        kind: Literal["delete"]
+        resource_id: str
+
+    Action = Annotated[
+        Union[CreateAction, DeleteAction],
+        Field(discriminator="kind"),
+    ]
+
+    class ActionResponse(BaseModel):
+        status: Literal["pending"]
+        actions: list[Action]
+
+    pydantic_schema = ActionResponse.model_json_schema()
+
+    result = _build_json_schema(pydantic_schema)
+
+    assert result == {
+        "$defs": {
+            "CreateAction": {
+                "properties": {
+                    "kind": {"enum": ["create"], "title": "Kind", "type": "string"},
+                    "resource_name": {"title": "Resource Name", "type": "string"},
+                },
+                "required": ["kind", "resource_name"],
+                "title": "CreateAction",
+                "type": "object",
+            },
+            "DeleteAction": {
+                "properties": {
+                    "kind": {"enum": ["delete"], "title": "Kind", "type": "string"},
+                    "resource_id": {"title": "Resource Id", "type": "string"},
+                },
+                "required": ["kind", "resource_id"],
+                "title": "DeleteAction",
+                "type": "object",
+            }
+        },
+        "properties": {
+            "status": {"enum": ["pending"], "title": "Status", "type": "string"},
+            "actions": {
+                "items": {
+                    "discriminator": {
+                        "mapping": {
+                            "create": "#/$defs/CreateAction",
+                            "delete": "#/$defs/DeleteAction",
+                        },
+                        "propertyName": "kind",
+                    },
+                    "oneOf": [
+                        {"$ref": "#/$defs/CreateAction"},
+                        {"$ref": "#/$defs/DeleteAction"},
+                    ],
+                },
+                "title": "Actions",
+                "type": "array",
+            },
+        },
+        "required": ["status", "actions"],
+        "title": "ActionResponse",
+        "type": "object",
+    }
 
 
 def test_process_items_with_excessive_nesting():
