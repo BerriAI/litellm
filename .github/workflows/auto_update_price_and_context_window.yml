@@ -23,7 +23,7 @@ jobs:
           version: "0.10.9"
       - name: Update JSON Data
         run: |
-          uv run --frozen --with 'aiohttp==3.13.3' python ".github/workflows/auto_update_price_and_context_window_file.py"
+          uv run --frozen --with 'aiohttp==3.13.3' python ".github/scripts/auto_update_price_and_context_window_file.py"
       - name: Regenerate JSON Schema
         run: |
           uv run --frozen python ci_cd/generate_model_prices_schema.py

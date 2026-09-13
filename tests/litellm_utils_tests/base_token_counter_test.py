@@ -10,16 +10,11 @@ Usage:
     the abstract methods to provide provider-specific configuration.
 """
 
-import os
-import sys
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.types.utils import TokenCountResponse

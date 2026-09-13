@@ -2,7 +2,12 @@ import { z } from "zod/v4";
 
 import type { components } from "@/lib/http/schema";
 
-import { EMPTY_TEAM_ROW, type DefaultTeamRowValues, type DefaultUserSettingsFormValues } from "./schema";
+import {
+  EMPTY_TEAM_ROW,
+  type DefaultTeamRowValues,
+  type DefaultUserSettingsFormValues,
+  type DefaultUserSettingsSubmitValues,
+} from "./schema";
 
 export type InternalUserSettings = components["schemas"]["InternalUserSettingsResponse"];
 export type DefaultInternalUserParams = components["schemas"]["DefaultInternalUserParams"];
@@ -60,13 +65,13 @@ const textOrNull = (raw: string): string | null => (raw.trim() === "" ? null : r
 
 const listOrNull = <T>(items: readonly T[]): T[] | null => (items.length === 0 ? null : [...items]);
 
-const toTeamBody = (team: DefaultTeamRowValues): DefaultTeamBody => ({
+const toTeamBody = (team: DefaultUserSettingsSubmitValues["teams"][number]): DefaultTeamBody => ({
   team_id: team.team_id,
   max_budget_in_team: numberOrNull(team.max_budget_in_team),
   user_role: team.user_role,
 });
 
-export const buildBody = (values: DefaultUserSettingsFormValues): DefaultInternalUserParams => ({
+export const buildBody = (values: DefaultUserSettingsSubmitValues): DefaultInternalUserParams => ({
   user_role: asDefaultUserRole(values.user_role),
   max_budget: numberOrNull(values.max_budget),
   budget_duration: textOrNull(values.budget_duration),

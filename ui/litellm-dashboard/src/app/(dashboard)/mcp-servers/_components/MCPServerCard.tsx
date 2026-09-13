@@ -31,9 +31,9 @@ interface MCPServerCardProps {
 }
 
 const HEALTH_TONE: Record<string, { dot: string }> = {
-  healthy: { dot: "bg-green-500" },
-  unhealthy: { dot: "bg-red-500" },
-  unknown: { dot: "bg-gray-300" },
+  healthy: { dot: "bg-success" },
+  unhealthy: { dot: "bg-destructive" },
+  unknown: { dot: "bg-border" },
 };
 
 // Stop card-level click handler from firing when an interactive child is used.
@@ -233,7 +233,7 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
             </Tooltip>
           )}
           <Badge variant="outline">
-            <span className={cn("h-1.5 w-1.5 rounded-full", isPublic ? "bg-green-500" : "bg-orange-500")} />
+            <span className={cn("h-1.5 w-1.5 rounded-full", isPublic ? "bg-success" : "bg-warning")} />
             {isPublic ? "Public" : "Internal"}
           </Badge>
           {accessGroups.slice(0, 2).map((g) => (

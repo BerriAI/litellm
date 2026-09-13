@@ -10,9 +10,6 @@ import time
 import base64
 import inspect
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.exceptions import BadRequestError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler

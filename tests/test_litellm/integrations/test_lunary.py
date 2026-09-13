@@ -1,7 +1,4 @@
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.integrations.lunary import parse_tool_calls
 from litellm.types.utils import (

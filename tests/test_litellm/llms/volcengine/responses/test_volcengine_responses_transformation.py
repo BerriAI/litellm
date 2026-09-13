@@ -2,15 +2,12 @@
 Tests for Volcengine Responses API transformation.
 """
 
-import os
-import sys
 from typing import List, Literal, Optional, Union
 
 import httpx
 import pytest
 from pydantic import BaseModel, Field
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
 from litellm.llms.volcengine.responses.transformation import (
@@ -137,7 +134,7 @@ class TestVolcengineResponsesAPITransformation:
         monkeypatch.delenv("ARK_API_KEY", raising=False)
         monkeypatch.delenv("VOLCENGINE_API_KEY", raising=False)
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='Volcengine API key is required\\. Set ARK_API_KEY /'):
             config.validate_environment(headers={}, model="volcengine/demo", litellm_params={})
 
     def test_unsupported_params_are_dropped_with_extra_body(self):

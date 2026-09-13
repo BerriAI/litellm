@@ -32,6 +32,7 @@ class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
     file_object: LiteLLMBatch | LiteLLMFineTuningJob | ResponsesAPIResponse
     created_by: str | None = None
     team_id: str | None = None
+    org_id: str | None = None
 
 
 class LiteLLM_ManagedVectorStoreTable(LiteLLMPydanticObjectBase):

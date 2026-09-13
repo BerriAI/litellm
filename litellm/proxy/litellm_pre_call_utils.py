@@ -4,28 +4,41 @@ import json
 import re
 import time
 from collections import OrderedDict
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping, MutableMapping, Sequence
+from datetime import datetime
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from fastapi import HTTPException, Request
+from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
+from litellm._uuid import uuid
 from litellm.constants import (
+    CLIENT_OUTPUT_CEILING_METADATA_KEY,
+    CONSUMED_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
+    OTEL_SERVICE_NAME_METADATA_KEYS,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+    ROUTING_REQUEST_TAGS_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+    SESSION_ID_GENERATED_METADATA_KEY,
+    SESSION_ID_OMITTED_METADATA_KEY,
+    X_LITELLM_DISABLE_CALLBACKS,
 )
+from litellm.litellm_core_utils.core_helpers import is_codex_user_agent
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     TRUSTED_CALLBACK_VARS_FIELD,
     _request_blocked_callback_params,
     iter_client_callback_metadata_dicts,
 )
+from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import (
     is_url_destination_allowed_by_host,
@@ -35,20 +48,27 @@ from litellm.proxy._types import (
     AddTeamCallback,
     CommonProxyErrors,
     LitellmDataForBackendLLMCall,
+    LiteLLMRoutes,
     LitellmUserRoles,
+    ProxyErrorTypes,
+    ProxyException,
     SpecialHeaders,
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_utils import get_request_route
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
     get_metadata_variable_name_from_kwargs,
     strip_callback_config,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
+from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
+from litellm.types.integrations.anthropic_cache_control_hook import GATEWAY_INJECTED_CACHE_METADATA_KEY
 
 # Cache special headers as a frozenset for O(1) lookup performance
-_SPECIAL_HEADERS_CACHE: Final = frozenset(v.value.lower() for v in SpecialHeaders._member_map_.values())
+_SPECIAL_HEADERS_CACHE: Final = frozenset(str(v.value).lower() for v in SpecialHeaders)
 
 _REDACTED_HEADER_VALUE: Final = "***REDACTED***"
 _CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names() | frozenset(
@@ -60,11 +80,42 @@ _TRANSPORT_ONLY_CREDENTIAL_KEYS: Final = frozenset({"provider_specific_header", 
 # Excludes the two explicit litellm headers which are handled with higher priority.
 _GENERIC_SESSION_ID_HEADER_RE: Final = re.compile(r"^x-.+-session-id$", re.IGNORECASE)
 _EXPLICIT_SESSION_HEADERS: Final = frozenset({"x-litellm-trace-id", "x-litellm-session-id"})
+# Codex carries its conversation uuid in unprefixed headers, so the
+# x-<vendor>-session-id convention above never matches it. Current builds send
+# ``session-id``/``thread-id``; builds before the codex-api split sent
+# ``session_id``/``conversation_id``. Ordered session before thread.
+_CODEX_SESSION_ID_HEADERS: Final = ("session-id", "session_id", "thread-id", "conversation_id")
 # Session-id values must be non-empty strings of alphanumerics, hyphens, or underscores
 # (covers UUIDs and most common session-id formats).
 _SESSION_ID_VALUE_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
 
 _SHA256_HEX_RE: Final = re.compile(r"^[0-9a-f]{64}$")
+
+# W3C Trace Context traceparent header: https://www.w3.org/TR/trace-context/
+# e.g. "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+_TRACEPARENT_RE: Final = re.compile(r"^[0-9a-f]{2}-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}$", re.IGNORECASE)
+
+
+def _trace_id_from_traceparent(traceparent: str) -> str | None:
+    """Extract the trace-id from a W3C Trace Context traceparent header, e.g.
+    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" -> the 32-hex
+    trace-id in the middle. An all-zero trace-id is invalid per spec and is
+    rejected, matching how the OpenTelemetry SDK itself treats it."""
+    match: Final = _TRACEPARENT_RE.match(traceparent.strip())
+    if not match:
+        return None
+    trace_id: Final = match.group(1).lower()
+    return trace_id if trace_id != "0" * 32 else None
+
+
+def _session_id_from_baggage(baggage: str) -> str | None:
+    """Extract a session.id entry from a W3C Baggage header
+    (https://www.w3.org/TR/baggage/), e.g. "session.id=abc-123,user.id=42"."""
+    for pair in baggage.split(","):
+        key, _, value = pair.strip().partition("=")
+        if key.strip() == "session.id" and value.strip():
+            return value.strip()
+    return None
 
 
 def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
@@ -84,7 +135,7 @@ def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
 _ANTHROPIC_SESSION_ID_VALUE_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
 
-def _sanitize_for_log(value: Any) -> str:
+def _sanitize_for_log(value: object) -> str:
     """
     Basic log sanitization helper to reduce log-injection risk.
 
@@ -108,6 +159,7 @@ from litellm.types.utils import (
     CustomPricingLiteLLMParams,
     LlmProviders,
     ProviderSpecificHeader,
+    StandardCallbackDynamicParams,
     StandardLoggingUserAPIKeyMetadata,
     SupportedCacheControls,
 )
@@ -121,8 +173,10 @@ _ENABLE_TEAM_STALE_ALIAS_BYPASS: bool | None = None
 
 
 if TYPE_CHECKING:
+    from litellm.integrations.otel.model.destination import OtelDestination
+    from litellm.proxy.policy_engine.attachment_registry import AttachmentRegistry
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
-    from litellm.types.proxy.policy_engine import PolicyMatchContext
+    from litellm.types.proxy.policy_engine import Policy, PolicyMatchContext
 
     ProxyConfig = _ProxyConfig
 else:
@@ -174,11 +228,15 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "mock_tool_calls",
     "disable_global_guardrails",
     "disable_global_guardrail",
+    "enable_prompt_caching",
     "opted_out_global_guardrails",
     "applied_guardrails",
     "applied_policies",
     "policy_sources",
+    "guardrail_scan_ids",
+    "guardrail_scan_metadata",
     "routing_decision",
+    GATEWAY_INJECTED_CACHE_METADATA_KEY,
     "pillar_response_headers",
     "_guardrail_pipelines",
     "_pipeline_managed_guardrails",
@@ -209,7 +267,13 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "_code_interpreter_interception_converted_stream",
     "_code_interpreter_interception_sandbox_key",
     "_code_interpreter_interception_session_scoped",
+    "_headroom_interception_converted_stream",
     "max_agentic_loops",
+    # Recomputed below from the actual caller-controlled timeout sources (headers and
+    # body fields); a client-forged value here would let a request either dodge cooldown
+    # protection on a real deployment failure or force a false "not caller-controlled"
+    # reading that lets its own bad timeout cool down deployments other tenants rely on.
+    "client_side_timeout",
 )
 
 _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
@@ -226,8 +290,13 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     "applied_guardrails",
     "applied_policies",
     "policy_sources",
+    "guardrail_scan_ids",
+    "guardrail_scan_metadata",
     "routing_decision",
+    GATEWAY_INJECTED_CACHE_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+    CONSUMED_REQUEST_TAGS_METADATA_KEY,
+    ROUTING_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     "standard_logging_object",
     "proxy_server_request",
@@ -239,7 +308,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
 )
 
-_UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS: Final = frozenset(
+UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS: Final = frozenset(
     {
         "litellm-disable-message-redaction",
     }
@@ -257,7 +326,16 @@ _ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY: Final = "allow_client_mess
 _CLIENT_PRICING_CONTROL_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
 # ``model_info`` carries the same pricing fields when read by
 # ``use_custom_pricing_for_model``; strip from metadata for the same reason.
-_CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info"})
+# ``standard_logging_guardrail_information`` is proxy-written telemetry summed
+# into response_cost and spend; a client seeding it forges (even negative)
+# guardrail cost.
+_CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info", "standard_logging_guardrail_information"})
+# ``attempted_fallbacks`` and ``original_model_group`` are written by the router
+# and read by spend logs as fact; a client value has no legitimate meaning and no
+# key or team setting keeps it, so the strip is never gated.
+_ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
+    {"attempted_fallbacks", "original_model_group", CLIENT_OUTPUT_CEILING_METADATA_KEY}
+)
 _ALLOW_CLIENT_PRICING_OVERRIDE_METADATA_KEY: Final = "allow_client_pricing_override"
 
 # Request fields whose value, when URL-valued, becomes the outbound destination
@@ -267,7 +345,7 @@ _ALLOW_CLIENT_PRICING_OVERRIDE_METADATA_KEY: Final = "allow_client_pricing_overr
 _URL_DESTINATION_REQUEST_FIELDS: Final = ("model", "file_id")
 
 
-def _reject_url_valued_destinations(data: dict[str, Any]) -> None:
+def _reject_url_valued_destinations(data: dict[str, object]) -> None:
     """Reject URL-valued ``model``/``file_id`` unless admin-allowlisted.
 
     Some providers (HuggingFace, Oobabooga, Gemini files) accept a URL in the
@@ -311,6 +389,53 @@ def reject_url_valued_destination(field: str, value: str) -> None:
         )
 
 
+_METADATA_JSON_TYPE_NAMES: Final[Mapping[type, str]] = MappingProxyType(
+    {bool: "a boolean", int: "an integer", float: "a number", str: "a string", list: "an array"}
+)
+
+
+def _invalid_metadata_type_error(field: str, value: object) -> ProxyException:
+    received_type: Final = _METADATA_JSON_TYPE_NAMES.get(type(value), f"a {type(value).__name__}")
+    return ProxyException(
+        message=f"Invalid type for '{field}': expected an object, but got {received_type} instead.",
+        type=ProxyErrorTypes.bad_request_error,
+        param=field,
+        code=400,
+    )
+
+
+def _normalized_metadata_object(field: str, value: object) -> Mapping[str, object]:
+    """Return ``value`` as a metadata object or raise a 400 like OpenAI does.
+
+    A JSON string that parses to an object is accepted because multipart/form-data
+    and ``extra_body`` callers can only send metadata as a string. The caller pops
+    the raw value from the request body before validating so the failure-logging
+    hooks that inspect the body afterwards don't crash on it and mask the 400 as a 500.
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and isinstance((parsed := safe_json_loads(value)), dict):
+        return parsed
+    raise _invalid_metadata_type_error(field=field, value=value)
+
+
+def _normalized_metadata_slot(
+    request_data: MutableMapping[str, object], metadata_variable_name: str
+) -> dict[str, object]:
+    """Return the request's metadata slot as a dict, normalising it in place first.
+
+    Metadata can arrive as a JSON string (multipart/form-data, ``extra_body``). Parsing it here keeps
+    existing entries alive through a merge instead of silently overwriting them with an empty dict.
+    """
+    raw: Final = request_data.get(metadata_variable_name)
+    if isinstance(raw, dict):
+        return raw
+    parsed: Final = safe_json_loads(raw) if isinstance(raw, str) else None
+    normalized: Final[dict[str, object]] = parsed if isinstance(parsed, dict) else {}
+    request_data[metadata_variable_name] = normalized
+    return normalized
+
+
 def _strip_untrusted_request_header_controls(
     headers: Any,
     *,
@@ -320,13 +445,13 @@ def _strip_untrusted_request_header_controls(
         return
 
     for header_name in list(headers.keys()):
-        if isinstance(header_name, str) and header_name.lower() in _UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS:
+        if isinstance(header_name, str) and header_name.lower() in UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS:
             if allow_client_message_redaction_opt_out:
                 continue
             headers.pop(header_name, None)
 
 
-def _is_false_like(value: Any) -> bool:
+def _is_false_like(value: object) -> bool:
     if isinstance(value, bool):
         return value is False
     if isinstance(value, str):
@@ -371,7 +496,7 @@ def _key_or_team_allows_client_pricing_override(
     )
 
 
-def _strip_client_message_redaction_opt_out(data: dict[str, Any]) -> None:
+def _strip_client_message_redaction_opt_out(data: dict[str, object]) -> None:
     stripped: Final[list[str]] = []
     if "turn_off_message_logging" in data and _is_false_like(data["turn_off_message_logging"]):
         stripped.append("turn_off_message_logging")
@@ -422,7 +547,7 @@ def _strip_client_callback_credentials(
         )
 
 
-def _strip_client_pricing_overrides(data: dict[str, Any]) -> None:
+def _strip_client_pricing_overrides(data: dict[str, object]) -> None:
     """Drop pricing overrides from the request body and any metadata variant.
 
     Skipped only when the calling key/team carries
@@ -453,6 +578,20 @@ def _strip_client_pricing_overrides(data: dict[str, Any]) -> None:
         )
 
 
+def _strip_router_reserved_metadata(
+    data: dict[str, Any],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
+) -> None:
+    """Drop the router-owned fallback stamps from any client-supplied metadata bucket."""
+    for metadata_key in ("metadata", "litellm_metadata"):
+        if not isinstance(metadata := data.get(metadata_key), dict):
+            continue
+        for field in _ROUTER_RESERVED_METADATA_FIELDS & metadata.keys():
+            metadata.pop(field)
+            verbose_proxy_logger.debug(
+                "Stripped router-reserved metadata field from request body: %s.%s", metadata_key, field
+            )
+
+
 def _get_metadata_variable_name(request: Request) -> str:
     """
     Helper to return what the "metadata" field should be called in the request data
@@ -475,9 +614,9 @@ def _get_metadata_variable_name(request: Request) -> str:
 
 
 def _promoted_trace_control_fields(
-    requester_metadata: Mapping[str, Any],
-    litellm_metadata: Mapping[str, Any],
-) -> tuple[tuple[str, Any], ...]:
+    requester_metadata: Mapping[str, object],
+    litellm_metadata: Mapping[str, object],
+) -> tuple[tuple[str, object], ...]:
     """Return the caller's trace-control fields that ``litellm_metadata`` does not already set."""
     return tuple(
         (key, value)
@@ -511,6 +650,50 @@ def _extract_generic_session_id_from_headers(
     return None
 
 
+def _extract_codex_session_id_from_headers(
+    normalized: Mapping[str, str],
+) -> str | None:
+    """
+    Read Codex's conversation uuid off one of ``_CODEX_SESSION_ID_HEADERS``.
+
+    Codex sends no request metadata the Anthropic path could parse and no
+    ``x-``-prefixed session header, so without this every turn of a Codex session
+    falls through to a freshly generated per-call trace id and lands as its own
+    row in the logs instead of grouping.
+
+    Unprefixed names like ``session-id`` are generic enough that another client
+    could send one meaning something unrelated, and colliding values across
+    callers would merge their traces, so this only applies to callers that
+    identify as Codex.
+    """
+    user_agent: Final = normalized.get("user-agent")
+    if not isinstance(user_agent, str) or not is_codex_user_agent(user_agent):
+        return None
+    return next(
+        (
+            value
+            for value in (normalized.get(header) for header in _CODEX_SESSION_ID_HEADERS)
+            if isinstance(value, str) and _SESSION_ID_VALUE_RE.match(value)
+        ),
+        None,
+    )
+
+
+def _extract_bare_session_id_from_headers(
+    normalized: Mapping[str, str],
+) -> str | None:
+    """
+    Read a vendor-less ``x-session-id`` header (opencode sends ``X-Session-Id``
+    alongside ``x-session-affinity`` on every turn of a session). Checked after
+    the ``x-<vendor>-session-id`` scan so a more specific header such as
+    opencode's ``x-parent-session-id`` on subagent calls keeps winning.
+    """
+    value: Final = normalized.get("x-session-id")
+    if isinstance(value, str) and _SESSION_ID_VALUE_RE.match(value):
+        return value
+    return None
+
+
 def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
     """
     Extract chain id for call chaining from request headers.
@@ -520,6 +703,8 @@ def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
     2. ``x-litellm-session-id`` (explicit)
     3. Any ``x-<vendor>-session-id`` header whose value looks like a session id
        (alphanumeric / UUID, at least 8 chars).  E.g. ``x-claude-code-session-id``.
+    4. Codex's unprefixed ``session-id`` / ``thread-id``, for Codex callers only.
+    5. A vendor-less ``x-session-id`` header (e.g. opencode), same value rules.
 
     Header keys are matched case-insensitively so this works with raw header
     dicts from any transport.
@@ -534,6 +719,8 @@ def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
         normalized.get("x-litellm-trace-id")
         or normalized.get("x-litellm-session-id")
         or _extract_generic_session_id_from_headers(normalized)
+        or _extract_codex_session_id_from_headers(normalized)
+        or _extract_bare_session_id_from_headers(normalized)
     )
 
 
@@ -561,17 +748,65 @@ def _get_anthropic_session_id_from_metadata(metadata: object) -> str | None:
     return session_id
 
 
-def is_claude_code_user_agent(user_agent: str) -> bool:
-    """Claude Code identifies itself as ``claude-cli/<version> ...``; the IDE
-    extensions and the Agent SDK run through the same CLI and share that prefix."""
-    return user_agent.startswith("claude-cli/")
+def _is_llm_inference_route(request: Request) -> bool:
+    route: Final = get_request_route(request)
+    return RouteChecks.is_llm_api_route(route=route) and not RouteChecks.check_route_access(
+        route=route, allowed_routes=LiteLLMRoutes.mcp_routes.value
+    )
 
 
-def is_codex_user_agent(user_agent: str) -> bool:
-    """Codex identifies itself as ``codex_cli_rs/<version> ...`` (TUI),
-    ``codex_exec/<version> ...`` (exec mode), or ``codex_vscode/<version> ...``
-    (IDE extension); all share the ``codex_`` prefix."""
-    return user_agent.startswith("codex_")
+def apply_missing_session_id_policy(
+    data: dict[str, object],  # mutable-ok: stamps session ids in place on the request body the pipeline threads through
+    _metadata_variable_name: str,
+    general_settings: Mapping[str, object] | None,
+    request: Request,
+) -> None:
+    for metadata_key in ("metadata", "litellm_metadata"):
+        if isinstance(client_metadata := data.get(metadata_key), dict):
+            client_metadata.pop(SESSION_ID_OMITTED_METADATA_KEY, None)
+    metadata: Final = data.get(_metadata_variable_name)
+    policy: Final = general_settings.get("missing_session_id") if general_settings else None
+    if policy is None or not _is_llm_inference_route(request):
+        return
+    if not isinstance(metadata, dict):
+        return
+    if policy == "omit":
+        metadata[SESSION_ID_OMITTED_METADATA_KEY] = True
+        requester_metadata: Final = data.get("metadata")
+        requester_session_id: Final = (
+            requester_metadata.get("session_id") if isinstance(requester_metadata, dict) else None
+        )
+        if (
+            (body_session_id := data.get("litellm_session_id"))
+            and not metadata.get("session_id")
+            and not requester_session_id
+        ):
+            metadata["session_id"] = body_session_id
+        return
+    if data.get("litellm_session_id") or metadata.get("session_id"):
+        return
+    match policy:
+        case "generate":
+            session_id: Final = str(data.get("litellm_trace_id") or metadata.get("trace_id") or uuid.uuid4())
+            data["litellm_session_id"] = session_id  # rebind-ok: data is an out-param
+            data.setdefault("litellm_trace_id", session_id)
+            metadata["session_id"] = session_id
+            metadata[SESSION_ID_GENERATED_METADATA_KEY] = True
+        case "reject":
+            raise ProxyException(
+                message=(
+                    "Request has no session id. Send an `x-litellm-session-id` header or `metadata.session_id`. "
+                    "Required by `general_settings.missing_session_id: reject`."
+                ),
+                type=ProxyErrorTypes.bad_request_error,
+                param="session_id",
+                code=400,
+            )
+        case _:
+            verbose_proxy_logger.warning(
+                "Ignoring unknown general_settings.missing_session_id=%r; expected 'generate', 'reject' or 'omit'",
+                policy,
+            )
 
 
 def should_auto_drop_params_for_agentic_cli(user_agent: str, data: dict, proxy_config: ProxyConfig) -> bool:
@@ -580,6 +815,8 @@ def should_auto_drop_params_for_agentic_cli(user_agent: str, data: dict, proxy_c
     requests routed to providers that reject them. An explicit drop_params
     from the caller or in the operator's ``litellm_settings`` always wins
     over this default."""
+    from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
+
     if not (is_claude_code_user_agent(user_agent) or is_codex_user_agent(user_agent)):
         return False
     if "drop_params" in data:
@@ -639,6 +876,12 @@ def convert_key_logging_metadata_to_callback(
             team_callback_settings_obj.callbacks.append(data.callback_name)
 
     for var, value in data.callback_vars.items():
+        # New Relic routing reads these from the trusted-vars overlay with no
+        # callback-name check, so scope them to the newrelic entry: a team that
+        # put newrelic_* under a different callback never asked for New Relic and
+        # must not export to it.
+        if var.startswith("newrelic_") and data.callback_name != "newrelic":
+            continue
         if team_callback_settings_obj.callback_vars is None:
             team_callback_settings_obj.callback_vars = {}
         team_callback_settings_obj.callback_vars[var] = str(value)
@@ -735,6 +978,145 @@ def _get_dynamic_logging_metadata(
             team_id=user_api_key_dict.team_id, proxy_config=proxy_config
         )
     return callback_settings_obj
+
+
+_TENANT_OTEL_PARAMS: Final = TypeAdapter(StandardCallbackDynamicParams)
+
+
+def _tenant_otel_params(callback_vars: Mapping[str, str]) -> StandardCallbackDynamicParams:
+    try:
+        return _TENANT_OTEL_PARAMS.validate_python(callback_vars)
+    except PydanticValidationError:
+        return StandardCallbackDynamicParams()
+
+
+_NO_REQUEST_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+def _dynamically_disabled_backends(
+    user_api_key_dict: UserAPIKeyAuth,
+    request_headers: Mapping[str, str] | None,
+) -> frozenset[str]:
+    """The callbacks this request turned off, read the way dispatch reads them.
+
+    Same sources, precedence, and premium gate ``EnterpriseCallbackControls`` applies
+    before it skips a callback: the ``x-litellm-disable-callbacks`` header wins over the
+    key's stored list, team settings are not a source, and a non-premium proxy honours
+    neither. A destination has to agree with that decision, or a backend the key turned
+    off would still be exported to, now through the fan-out instead of the callback.
+    """
+    from litellm.proxy.proxy_server import premium_user
+
+    if litellm.allow_dynamic_callback_disabling is not True or not premium_user:
+        return frozenset()
+    header: Final = (request_headers if request_headers is not None else _NO_REQUEST_HEADERS).get(
+        X_LITELLM_DISABLE_CALLBACKS
+    )
+    if header is not None:
+        return frozenset(name.strip().lower() for name in header.split(","))
+    metadata: Final = user_api_key_dict.metadata
+    disabled: Final = metadata.get("litellm_disabled_callbacks") if metadata else None
+    if not isinstance(disabled, list):
+        return frozenset()
+    return frozenset(name.lower() for name in disabled if isinstance(name, str))
+
+
+def resolve_tenant_otel_destinations(
+    user_api_key_dict: UserAPIKeyAuth,
+    request_headers: Mapping[str, str] | None = None,
+) -> "tuple[OtelDestination, ...]":
+    """The OTLP destinations this request's key or team config overrides its traces to.
+
+    Key settings win over team settings outright, the same precedence
+    ``_get_dynamic_logging_metadata`` applies, so one caller never exports the same
+    backend to two accounts. An empty key-level list counts as configured, since that
+    is what disabling a key's callbacks writes. Returns empty when OTEL V2 is off, when
+    neither level named a destination-capable backend, or when the config is
+    incomplete, and the request then keeps the operator's own exporters.
+
+    Two entries naming the same backend merge their ``callback_vars`` last-wins, the
+    way ``convert_key_logging_metadata_to_callback`` merges them, so the destination
+    and the per-request tracer routing cannot read one config two ways.
+
+    A ``failure``-only entry is skipped: a destination is resolved during auth, before
+    the request has an outcome, so honouring the filter would mean holding every span
+    back until the call finishes. Those entries keep today's behaviour instead, where
+    the tenant's credentials reach the backend through per-request tracer routing and
+    the operator's exporter is left alone. Its ``callback_vars`` still take part in the
+    merge for a backend another entry made eligible, so the destination carries the
+    same credentials the runtime parser resolves for that request.
+
+    A backend the request disabled dynamically, through the key's
+    ``litellm_disabled_callbacks`` or the ``x-litellm-disable-callbacks`` header in
+    ``request_headers``, resolves to no destination, so the fan-out never carries the
+    request tree to that account and the operator's exporter is never suppressed for
+    it. That leaves the request exactly where it stood before destinations existed:
+    the OTel V2 logger itself is not on the disable list's class registry, so its own
+    span still routes to the tenant's credentials the way it did then.
+    """
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.integrations.otel.presets.destinations import destination_for
+
+    if not is_otel_v2_enabled():
+        return ()
+    key_entries: Final = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
+    entries: Final = (
+        key_entries
+        if key_entries is not None
+        else KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
+    )
+    if not entries:
+        return ()
+    disabled: Final = _dynamically_disabled_backends(user_api_key_dict, request_headers)
+    callbacks: Final = tuple(
+        callback
+        for item in entries
+        if (callback := _get_validated_callback_metadata(item=item, source="otel-destination")) is not None
+        if callback.callback_name.lower() not in disabled
+    )
+    return tuple(
+        destination
+        for name in dict.fromkeys(
+            callback.callback_name for callback in callbacks if callback.callback_type != "failure"
+        )
+        if (
+            destination := destination_for(
+                name,
+                _tenant_otel_params(
+                    MappingProxyType(
+                        {
+                            var: value
+                            for callback in callbacks
+                            if callback.callback_name == name
+                            for var, value in callback.callback_vars.items()
+                        }
+                    )
+                ),
+                _tenant_service_name(user_api_key_dict),
+            )
+        )
+        is not None
+    )
+
+
+def _tenant_service_name(user_api_key_dict: UserAPIKeyAuth) -> str | None:
+    """The ``service.name`` this key or team configured, the key winning over its team.
+
+    Same fields and same precedence the request-metadata build applies, read straight
+    off the auth object because destinations resolve during auth, before that metadata
+    is assembled.
+    """
+    sources: Final = (user_api_key_dict.metadata, user_api_key_dict.team_metadata)
+    return next(
+        (
+            stripped
+            for source in sources
+            if source
+            for field in OTEL_SERVICE_NAME_METADATA_KEYS
+            if isinstance(value := source.get(field), str) and (stripped := value.strip())
+        ),
+        None,
+    )
 
 
 def clean_headers(
@@ -848,6 +1230,19 @@ class LiteLLMProxyRequestSetup:
         stream_timeout_header: Final = headers.get("x-litellm-stream-timeout", None)
         if stream_timeout_header is not None:
             return float(stream_timeout_header)
+        return None
+
+    @staticmethod
+    def _get_keepalive_seconds_from_request(headers: Mapping[str, str]) -> float | None:
+        """
+        Get `keepalive_seconds` from the request headers, for clients (e.g. the
+        Vercel AI SDK) that can set custom headers more easily than extra body
+        fields. Subject to the same deployment-level allow_client_keepalive_override
+        gate as the request body field: see _resolve_keepalive_seconds.
+        """
+        keepalive_seconds_header: Final = headers.get("x-litellm-keepalive-seconds", None)
+        if keepalive_seconds_header is not None:
+            return float(keepalive_seconds_header)
         return None
 
     @staticmethod
@@ -1035,6 +1430,7 @@ class LiteLLMProxyRequestSetup:
     def add_litellm_data_for_backend_llm_call(
         *,
         headers: dict,
+        request_data: Mapping[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         general_settings: dict[str, Any] | None = None,
     ) -> LitellmDataForBackendLLMCall:
@@ -1053,17 +1449,37 @@ class LiteLLMProxyRequestSetup:
         if _organization is not None:
             data["organization"] = _organization
 
-        timeout: Final = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
-        if timeout is not None:
-            data["timeout"] = timeout
+        header_timeout: Final = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
+        if header_timeout is not None:
+            data["timeout"] = header_timeout
 
-        stream_timeout: Final = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers)
-        if stream_timeout is not None:
-            data["stream_timeout"] = stream_timeout
+        header_stream_timeout: Final = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers)
+        if header_stream_timeout is not None:
+            data["stream_timeout"] = header_stream_timeout
+
+        # Router._get_timeout resolves the effective per-attempt timeout from any of
+        # kwargs["timeout"], kwargs["request_timeout"], or kwargs["stream_timeout"], and a
+        # caller can supply any of those via the request body as well as the headers above.
+        # A deliberately tiny value can force a 408 on every deployment in a fallback chain,
+        # so this marker (never trusted verbatim from the client; stripped above) must cover
+        # every source cooldown_handlers._trigger_cooldown_for_failed_deployment needs to
+        # distinguish from a real deployment health signal.
+        if (
+            header_timeout is not None
+            or header_stream_timeout is not None
+            or request_data.get("timeout") is not None
+            or request_data.get("request_timeout") is not None
+            or request_data.get("stream_timeout") is not None
+        ):
+            data["client_side_timeout"] = True
 
         num_retries: Final = LiteLLMProxyRequestSetup._get_num_retries_from_request(headers)
         if num_retries is not None:
             data["num_retries"] = num_retries
+
+        keepalive_seconds: Final = LiteLLMProxyRequestSetup._get_keepalive_seconds_from_request(headers)
+        if keepalive_seconds is not None:
+            data["keepalive_seconds"] = keepalive_seconds
 
         return data
 
@@ -1113,6 +1529,33 @@ class LiteLLMProxyRequestSetup:
                     body_metadata["user_id"] = session_id
                 verbose_proxy_logger.debug("Extracted session_id from Anthropic metadata.user_id")
 
+        # Last-resort fallback: the W3C standards for trace/session propagation
+        # (https://www.w3.org/TR/trace-context/, https://www.w3.org/TR/baggage/).
+        # Lower priority than everything above - only fires when neither the
+        # explicit litellm headers nor the Anthropic-metadata path found
+        # anything - but lets a caller's existing traceparent/baggage headers
+        # (from real OTel instrumentation) correlate with litellm's own logs
+        # instead of generating an unrelated trace_id.
+        normalized_headers: Final = MappingProxyType({k.lower(): v for k, v in headers.items() if isinstance(k, str)})
+        if "litellm_trace_id" not in data:
+            traceparent: Final = normalized_headers.get("traceparent")
+            if isinstance(traceparent, str):
+                trace_id_from_traceparent: Final = _trace_id_from_traceparent(traceparent)
+                if trace_id_from_traceparent:
+                    metadata_from_headers["trace_id"] = trace_id_from_traceparent
+                    data["litellm_trace_id"] = trace_id_from_traceparent  # rebind-ok: data is an out-param
+                    verbose_proxy_logger.debug(
+                        "Extracted trace_id from W3C traceparent header: %s", trace_id_from_traceparent
+                    )
+        if "litellm_session_id" not in data:
+            baggage: Final = normalized_headers.get("baggage")
+            if isinstance(baggage, str):
+                session_id_from_baggage: Final = _session_id_from_baggage(baggage)
+                if session_id_from_baggage:
+                    metadata_from_headers["session_id"] = session_id_from_baggage
+                    data["litellm_session_id"] = session_id_from_baggage  # rebind-ok: data is an out-param
+                    verbose_proxy_logger.debug("Extracted session_id from W3C baggage header")
+
         if isinstance(data[_metadata_variable_name], dict):
             data[_metadata_variable_name].update(metadata_from_headers)
         return data
@@ -1121,6 +1564,8 @@ class LiteLLMProxyRequestSetup:
     def get_sanitized_user_information_from_key(
         user_api_key_dict: UserAPIKeyAuth,
     ) -> StandardLoggingUserAPIKeyMetadata:
+        stripped_metadata: Final = strip_callback_config(user_api_key_dict.metadata)
+        auth_metadata: Final = cast("dict[str, str] | None", stripped_metadata)  # cast-ok: metadata is free-form JSON
         user_api_key_logged_metadata: Final = StandardLoggingUserAPIKeyMetadata(
             user_api_key_hash=user_api_key_dict.api_key,  # just the hashed token
             user_api_key_alias=user_api_key_dict.key_alias,
@@ -1143,7 +1588,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_budget_reset_at=(
                 user_api_key_dict.budget_reset_at.isoformat() if user_api_key_dict.budget_reset_at else None
             ),
-            user_api_key_auth_metadata=strip_callback_config(user_api_key_dict.metadata),
+            user_api_key_auth_metadata=auth_metadata,
         )
         return user_api_key_logged_metadata
 
@@ -1173,8 +1618,19 @@ class LiteLLMProxyRequestSetup:
         )
         if user_api_key_dict.budget_reservation is not None:
             data[_metadata_variable_name]["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
-        # Add the full UserAPIKeyAuth object for MCP server access control
-        data[_metadata_variable_name]["user_api_key_auth"] = user_api_key_dict
+        if user_api_key_dict.matched_model_access_groups:
+            data[_metadata_variable_name][MODEL_ACCESS_GROUP_METADATA_KEY] = (
+                user_api_key_dict.matched_model_access_groups
+            )
+        # UserAPIKeyAuth object for MCP server access control
+        data[_metadata_variable_name]["user_api_key_auth"] = user_api_key_dict.model_copy(
+            update={
+                "metadata": strip_callback_config(user_api_key_dict.metadata),
+                "team_metadata": strip_callback_config(user_api_key_dict.team_metadata),
+                "project_metadata": strip_callback_config(user_api_key_dict.project_metadata),
+                "organization_metadata": strip_callback_config(user_api_key_dict.organization_metadata),
+            }
+        )
         return data
 
     @staticmethod
@@ -1196,10 +1652,11 @@ class LiteLLMProxyRequestSetup:
         )
 
         # ignore any special fields
-        added_metadata: Final = {}
-        for k, v in management_endpoint_metadata.items():
-            if k not in (LiteLLM_ManagementEndpoint_MetadataFields_Premium + LiteLLM_ManagementEndpoint_MetadataFields):
-                added_metadata[k] = v
+        added_metadata: Final = {
+            k: v
+            for k, v in (strip_callback_config(management_endpoint_metadata) or {}).items()
+            if k not in (LiteLLM_ManagementEndpoint_MetadataFields_Premium + LiteLLM_ManagementEndpoint_MetadataFields)
+        }
         if data[_metadata_variable_name].get("user_api_key_auth_metadata") is None:
             data[_metadata_variable_name]["user_api_key_auth_metadata"] = {}
         data[_metadata_variable_name]["user_api_key_auth_metadata"].update(added_metadata)
@@ -1239,6 +1696,9 @@ class LiteLLMProxyRequestSetup:
         ## KEY-LEVEL DISABLE FALLBACKS
         if "disable_fallbacks" in key_metadata and isinstance(key_metadata["disable_fallbacks"], bool):
             data["disable_fallbacks"] = key_metadata["disable_fallbacks"]
+
+        if isinstance(key_metadata.get("enable_prompt_caching"), bool):
+            data["enable_prompt_caching"] = key_metadata["enable_prompt_caching"]  # rebind-ok: data is an out-param
 
         ## KEY-LEVEL METADATA
         data = LiteLLMProxyRequestSetup.add_management_endpoint_metadata_to_request_metadata(
@@ -1289,7 +1749,9 @@ class LiteLLMProxyRequestSetup:
         callback_vars_dict.pop("success_callback", None)
         callback_vars_dict.pop("failure_callback", None)
         callback_vars_dict = {
-            key: (litellm.utils.get_secret(value, default_value=value) or value if isinstance(value, str) else value)
+            key: (
+                litellm.utils.get_secret(value, default_value=value) or value if isinstance(value, str) else str(value)
+            )
             for key, value in callback_vars_dict.items()
         }
 
@@ -1356,14 +1818,7 @@ class LiteLLMProxyRequestSetup:
             return
 
         _metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(request_data)
-        metadata = request_data.get(_metadata_variable_name)
-        if isinstance(metadata, str):
-            parsed: Final = safe_json_loads(metadata)
-            metadata = parsed if isinstance(parsed, dict) else {}
-            request_data[_metadata_variable_name] = metadata
-        elif not isinstance(metadata, dict):
-            metadata = {}
-            request_data[_metadata_variable_name] = metadata
+        metadata: Final = _normalized_metadata_slot(request_data, _metadata_variable_name)
 
         existing_tags: Final = metadata.get("tags")
         metadata["tags"] = LiteLLMProxyRequestSetup._merge_tags(
@@ -1415,24 +1870,39 @@ class LiteLLMProxyRequestSetup:
         # from (litellm_metadata vs metadata) so the merged tags are visible
         # to _tag_max_budget_check.
         _metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(request_data)
-        metadata = request_data.get(_metadata_variable_name)
-        # metadata can arrive as a JSON string (multipart/form-data, extra_body).
-        # Parse it so existing tags survive the merge — overwriting the string
-        # with {} would let a caller bypass _tag_max_budget_check on an
-        # over-budget body tag by also sending a within-budget header tag.
-        if isinstance(metadata, str):
-            parsed: Final = safe_json_loads(metadata)
-            metadata = parsed if isinstance(parsed, dict) else {}
-            request_data[_metadata_variable_name] = metadata
-        elif not isinstance(metadata, dict):
-            metadata = {}
-            request_data[_metadata_variable_name] = metadata
+        metadata: Final = _normalized_metadata_slot(request_data, _metadata_variable_name)
 
         existing_tags: Final = metadata.get("tags")
         metadata["tags"] = LiteLLMProxyRequestSetup._merge_tags(
             request_tags=existing_tags if isinstance(existing_tags, list) else None,
             tags_to_add=header_tags,
         )
+
+
+def refresh_proxy_server_request_body_snapshot(
+    data: MutableMapping[str, object],
+) -> None:
+    """
+    Re-snapshot ``data["proxy_server_request"]["body"]`` from the current state of ``data``.
+
+    ``add_litellm_data_to_request`` takes the initial snapshot before guardrails
+    (pre_call_hook) run. A guardrail that masks PII/PCI in place (e.g. Presidio)
+    mutates ``data`` afterward, so callers that persist ``proxy_server_request.body``
+    for audit/spend-tracking purposes must call this again post-guardrail, or the
+    persisted body silently bypasses whatever masking the guardrail applied.
+
+    By the time a caller refreshes post-guardrail, ``litellm.utils.function_setup``
+    has already stamped ``data["litellm_logging_obj"]`` with a live (non-serializable)
+    ``Logging`` instance, so it must be excluded here the same way ``secret_fields``
+    and ``proxy_server_request`` are.
+    """
+    proxy_server_request = data.get("proxy_server_request")
+    if not isinstance(proxy_server_request, dict):
+        return
+    _body_snapshot_exclude = (
+        frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj"}) | _TRANSPORT_ONLY_CREDENTIAL_KEYS
+    )
+    proxy_server_request["body"] = {k: v for k, v in data.items() if k not in _body_snapshot_exclude}
 
 
 async def add_litellm_data_to_request(
@@ -1471,6 +1941,13 @@ async def add_litellm_data_to_request(
             continue
         data.pop(_internal_key, None)
     _reject_url_valued_destinations(data)
+    _raw_metadata_by_field: Final = {
+        _metadata_field: data.pop(_metadata_field)
+        for _metadata_field in ("metadata", "litellm_metadata")
+        if data.get(_metadata_field) is not None
+    }
+    for _metadata_field, _raw_metadata in _raw_metadata_by_field.items():
+        data[_metadata_field] = _normalized_metadata_object(_metadata_field, _raw_metadata)
     # Strip spoofable auth metadata from user-supplied metadata dict
     _user_metadata = data.get("metadata")
     if isinstance(_user_metadata, dict):
@@ -1524,16 +2001,23 @@ async def add_litellm_data_to_request(
     # Init - Proxy Server Request
     # we do this as soon as entering so we track the original request
     ##########################################################
-    # Track arrival time for queue time metric. The body snapshot is filled
-    # in after the admin-injection strip below so the audit / spend-tracking
-    # consumers of proxy_server_request["body"] see the cleaned metadata
-    # rather than attacker-forged user_api_key_* fields.
-    arrival_time: Final = time.time()
+    # Track arrival time for queue time metric. Prefer the timestamp stamped at
+    # the top of user_api_key_auth (request.state.litellm_received_at): by the
+    # time this function runs, auth has already completed, so time.time() here
+    # would silently exclude the entire auth phase from the queue-time window.
+    # Falls back to time.time() for callers that never went through
+    # user_api_key_auth. The body snapshot is filled in after the
+    # admin-injection strip below so the audit / spend-tracking consumers of
+    # proxy_server_request["body"] see the cleaned metadata rather than
+    # attacker-forged user_api_key_* fields.
+    _litellm_received_at: Final[datetime | None] = getattr(request.state, "litellm_received_at", None)
+    arrival_time: Final = _litellm_received_at.timestamp() if _litellm_received_at is not None else time.time()
     data["proxy_server_request"] = {
         "url": str(request.url),
         "method": request.method,
         "headers": _logging_safe_headers,
         "body": None,  # filled in post-strip; see below
+        "credential_fields": tuple(sorted(name for name in _TRANSPORT_ONLY_CREDENTIAL_KEYS if name in data)),
         "arrival_time": arrival_time,  # Track when request arrived at proxy
     }
 
@@ -1545,6 +2029,7 @@ async def add_litellm_data_to_request(
     data.update(
         LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
             headers=_headers,
+            request_data=data,
             user_api_key_dict=user_api_key_dict,
             general_settings=general_settings,
         )
@@ -1554,6 +2039,12 @@ async def add_litellm_data_to_request(
         headers=_headers,
         data=data,
         _metadata_variable_name=_metadata_variable_name,
+    )
+    apply_missing_session_id_policy(
+        data=data,
+        _metadata_variable_name=_metadata_variable_name,
+        general_settings=general_settings,
+        request=request,
     )
 
     # Expose request headers under the metadata field for guardrails (fixes #17477)
@@ -1607,31 +2098,10 @@ async def add_litellm_data_to_request(
         cache_dict: Final = parse_cache_control(cache_control_header)
         data["ttl"] = cache_dict.get("s-maxage")
 
-    verbose_proxy_logger.debug("receiving data: %s", data)
-
-    # Parse metadata if it's a string (e.g., from multipart/form-data)
-    if "metadata" in data and data["metadata"] is not None:
-        if isinstance(data["metadata"], str):
-            data["metadata"] = safe_json_loads(data["metadata"])
-            if not isinstance(data["metadata"], dict):
-                verbose_proxy_logger.warning(
-                    "Failed to parse 'metadata' as JSON dict. Received value: %s", data["metadata"]
-                )
-        # requester_metadata is snapshotted AFTER the strip below so
-        # downstream consumers (e.g. PANW guardrail reading user_ip /
-        # profile_id) don't see attacker-injected admin slots preserved in
-        # the deepcopy.
-
-    # Parse litellm_metadata if it's a string (e.g., from multipart/form-data or extra_body)
-    if "litellm_metadata" in data and data["litellm_metadata"] is not None:
-        if isinstance(data["litellm_metadata"], str):
-            parsed_litellm_metadata: Final = safe_json_loads(data["litellm_metadata"])
-            if not isinstance(parsed_litellm_metadata, dict):
-                verbose_proxy_logger.warning(
-                    "Failed to parse 'litellm_metadata' as JSON dict. Received value: %s", data["litellm_metadata"]
-                )
-            else:
-                data["litellm_metadata"] = parsed_litellm_metadata
+    # requester_metadata is snapshotted AFTER the strip below so
+    # downstream consumers (e.g. PANW guardrail reading user_ip /
+    # profile_id) don't see attacker-injected admin slots preserved in
+    # the deepcopy.
 
     # Strip internal pipeline state and admin-injection slots from user input.
     # Runs AFTER the string-to-dict parse above so JSON-string metadata (sent
@@ -1666,6 +2136,7 @@ async def add_litellm_data_to_request(
     # would silently skip the field.
     if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
         _strip_client_pricing_overrides(data)
+    _strip_router_reserved_metadata(data)
 
     # Same reason as the strips above: runs after the metadata string-to-dict parse
     # so JSON-string metadata cannot smuggle callback credentials past the dict guard.
@@ -1687,9 +2158,7 @@ async def add_litellm_data_to_request(
     #     self-reference — body.proxy_server_request.body would be the same
     #     dict as body, producing an infinite traversal loop for any consumer
     #     that walks the structure.
-    _body_snapshot_exclude = frozenset({"secret_fields", "proxy_server_request"}) | _TRANSPORT_ONLY_CREDENTIAL_KEYS
-    _body_snapshot: Final = {k: v for k, v in data.items() if k not in _body_snapshot_exclude}
-    data["proxy_server_request"]["body"] = _body_snapshot
+    refresh_proxy_server_request_body_snapshot(data)
 
     # Snapshot the requester-supplied metadata for downstream consumers.
     # Taking the deepcopy after the user_api_key_* / _pipeline_managed_guardrails
@@ -1715,6 +2184,13 @@ async def add_litellm_data_to_request(
         for key, value in data["litellm_metadata"].items():
             if key not in data[_metadata_variable_name]:
                 data[_metadata_variable_name][key] = value
+        if _metadata_variable_name == "metadata":
+            data["metadata"]["tags"] = LiteLLMProxyRequestSetup._merge_tags(  # pyright: ignore[reportPrivateUsage]  # same-module helper, budget blocks the unsuppressed idiom sibling call sites use
+                request_tags=data["metadata"].get("tags"),
+                tags_to_add=data["litellm_metadata"].get("tags"),
+            )
+    if _metadata_variable_name == "metadata":
+        data.pop("litellm_metadata", None)
 
     data = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
         data=data,
@@ -1768,10 +2244,41 @@ async def add_litellm_data_to_request(
             tags_to_add=project_metadata["tags"],
         )
 
+    # inherited_tags: every tag key/team/project policy contributed, read
+    # directly from those three sources rather than snapshotted off the shared
+    # "tags" list. A pre-auth pass (apply_client_tag_policy_pre_auth, run from
+    # user_api_key_auth for _tag_max_budget_check) may already have merged the
+    # caller's own header tags into that same list before this function ever
+    # runs, so a snapshot taken here -- at any point in this function -- would
+    # misattribute caller-supplied tags as policy-backed. tag_based_routing.py's
+    # allow_fail_open reads this (rather than subtracting caller_tags from the
+    # final merged set) so a caller can't strip an inherited "!"/"&"
+    # constraint's protection just by resubmitting its exact value alongside a
+    # conflicting one.
+    _key_tags: Final = (key_metadata or MappingProxyType({})).get("tags") or ()
+    _team_tags: Final = team_metadata.get("tags") or ()
+    _project_tags: Final = project_metadata.get("tags") or ()
+    data[_metadata_variable_name]["inherited_tags"] = tuple(  # rebind-ok: matches this file's data[...] mutation idiom
+        dict.fromkeys((*_key_tags, *_team_tags, *_project_tags))
+    )
+
     ## TEAM-LEVEL METADATA
     data = LiteLLMProxyRequestSetup.add_management_endpoint_metadata_to_request_metadata(
         data=data,
         management_endpoint_metadata=team_metadata,
+        _metadata_variable_name=_metadata_variable_name,
+    )
+
+    # A key's OTel service name outranks its team's, so the key's values are
+    # re-applied after the last-writer-wins team metadata merge above
+    _key_otel_service_names: Final = {
+        field: value
+        for field, value in (key_metadata or {}).items()
+        if field in OTEL_SERVICE_NAME_METADATA_KEYS and isinstance(value, str) and value.strip()
+    }
+    data = LiteLLMProxyRequestSetup.add_management_endpoint_metadata_to_request_metadata(
+        data=data,
+        management_endpoint_metadata=_key_otel_service_names,
         _metadata_variable_name=_metadata_variable_name,
     )
 
@@ -1792,6 +2299,9 @@ async def add_litellm_data_to_request(
     # Follow same pattern as team and API key budgets
     data[_metadata_variable_name]["user_api_key_user_spend"] = user_api_key_dict.user_spend
     data[_metadata_variable_name]["user_api_key_user_max_budget"] = user_api_key_dict.user_max_budget
+    user_model_budget: Final = user_api_key_dict.user_model_max_budget
+    data[_metadata_variable_name]["user_api_key_user_model_max_budget"] = user_model_budget  # rebind-ok: out-param
+    data[_metadata_variable_name].update(carried_budget_metadata(user_api_key_dict))
 
     data[_metadata_variable_name]["user_api_key_metadata"] = strip_callback_config(user_api_key_dict.metadata)
     data[_metadata_variable_name]["user_api_key_team_metadata"] = strip_callback_config(user_api_key_dict.team_metadata)
@@ -1864,15 +2374,28 @@ async def add_litellm_data_to_request(
             tags_to_add=tags,
         )
 
-    if _metadata_variable_name != "metadata":
-        _user_metadata = data.get("metadata")
-        if isinstance(_user_metadata, dict):
-            _user_tags: Final = _user_metadata.get("tags")
-            if isinstance(_user_tags, list) and _user_tags:
-                data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
-                    request_tags=data[_metadata_variable_name].get("tags"),
-                    tags_to_add=_user_tags,
-                )
+    _caller_body_metadata: Final = data.get("metadata") if _metadata_variable_name != "metadata" else None
+    _caller_body_tags: Final = (
+        _caller_body_metadata.get("tags")
+        if isinstance(_caller_body_metadata, dict) and isinstance(_caller_body_metadata.get("tags"), list)
+        else None
+    )
+    if _caller_body_tags:
+        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(  # rebind-ok: matches file idiom
+            request_tags=data[_metadata_variable_name].get("tags"),
+            tags_to_add=_caller_body_tags,
+        )
+
+    # caller_tags: exactly what this request itself supplied (x-litellm-tags header,
+    # body "tags", or body "metadata.tags" on litellm_metadata routes), never
+    # anything from key/team/project metadata. Read directly from the header and
+    # body values here, the same way inherited_tags above is read directly from
+    # key/team/project metadata -- neither is derived by inspecting the shared
+    # "tags" list, which a pre-auth pass (apply_client_tag_policy_pre_auth) may
+    # have already merged caller header tags into before this function runs.
+    data[_metadata_variable_name]["caller_tags"] = tuple(  # rebind-ok: matches file idiom
+        dict.fromkeys((*(tags or ()), *(_caller_body_tags or ())))
+    )
 
     # Team Callbacks controls
     callback_settings_obj: Final = _get_dynamic_logging_metadata(
@@ -2180,16 +2703,16 @@ def _resolve_provider_from_deployment(
         if deployment is None:
             continue
 
-        litellm_params = getattr(deployment, "litellm_params", None)
+        litellm_params: object = getattr(deployment, "litellm_params", None)
         if litellm_params is None:
             continue
 
         custom_provider = getattr(litellm_params, "custom_llm_provider", None)
-        if custom_provider:
+        if isinstance(custom_provider, str) and custom_provider:
             return custom_provider
 
-        deployment_model = getattr(litellm_params, "model", "") or ""
-        if "/" in deployment_model:
+        deployment_model = getattr(litellm_params, "model", "")
+        if isinstance(deployment_model, str) and "/" in deployment_model:
             return deployment_model.split("/", 1)[0]
 
     return None
@@ -2508,6 +3031,28 @@ def _add_guardrails_from_policies_in_metadata(
     )
 
 
+def add_guardrails_from_auth_metadata(
+    user_api_key_dict: UserAPIKeyAuth,
+    data: dict,  # mutable-ok: writes guardrails into the live request dict, same contract as the helpers it wraps
+    metadata_variable_name: str,
+) -> None:
+    """Resolve key, team, and project guardrails, direct and via policies, onto the request metadata."""
+    _add_guardrails_from_key_or_team_metadata(
+        key_metadata=user_api_key_dict.metadata,
+        team_metadata=user_api_key_dict.team_metadata,
+        project_metadata=user_api_key_dict.project_metadata,
+        data=data,
+        metadata_variable_name=metadata_variable_name,
+    )
+    _add_guardrails_from_policies_in_metadata(
+        key_metadata=user_api_key_dict.metadata,
+        team_metadata=user_api_key_dict.team_metadata,
+        project_metadata=user_api_key_dict.project_metadata,
+        data=data,
+        metadata_variable_name=metadata_variable_name,
+    )
+
+
 async def move_guardrails_to_metadata(
     data: dict,
     _metadata_variable_name: str,
@@ -2540,22 +3085,8 @@ async def move_guardrails_to_metadata(
             data.pop("policies", None)
             return
 
-    # Check key/team/project-level guardrails
-    _add_guardrails_from_key_or_team_metadata(
-        key_metadata=user_api_key_dict.metadata,
-        team_metadata=user_api_key_dict.team_metadata,
-        project_metadata=project_metadata,
-        data=data,
-        metadata_variable_name=_metadata_variable_name,
-    )
-
-    #########################################################################################
-    # Add guardrails from policies attached to key/team/project metadata
-    #########################################################################################
-    _add_guardrails_from_policies_in_metadata(
-        key_metadata=user_api_key_dict.metadata,
-        team_metadata=user_api_key_dict.team_metadata,
-        project_metadata=project_metadata,
+    add_guardrails_from_auth_metadata(
+        user_api_key_dict=user_api_key_dict,
         data=data,
         metadata_variable_name=_metadata_variable_name,
     )
@@ -2612,8 +3143,9 @@ def _extract_policy_id(s: str) -> str | None:
 def _match_and_track_policies(
     data: dict,
     context: "PolicyMatchContext",
-    request_body_policies: Any,
-    policies_override: dict[str, Any] | None = None,
+    request_body_policies: Sequence[str],
+    policies_override: dict[str, "Policy"] | None = None,
+    attachment_registry_override: "AttachmentRegistry | None" = None,
 ) -> tuple[list[str], dict[str, str]]:
     """
     Match policies via attachments and request body, track them in metadata.
@@ -2630,7 +3162,9 @@ def _match_and_track_policies(
     from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 
     # Get matching policies via attachments (with match reasons for attribution)
-    attachment_registry: Final = get_attachment_registry()
+    attachment_registry: Final = (
+        attachment_registry_override if attachment_registry_override is not None else get_attachment_registry()
+    )
     matches_with_reasons: Final = attachment_registry.get_attached_policies_with_reasons(context)
     matching_policy_names: Final = [m["policy_name"] for m in matches_with_reasons]
     policy_reasons: Final = {m["policy_name"]: m["matched_via"] for m in matches_with_reasons}
@@ -2638,9 +3172,11 @@ def _match_and_track_policies(
     verbose_proxy_logger.debug("Policy engine: matched policies via attachments: %s", matching_policy_names)
 
     # Combine attachment-based policies with dynamic request body policies
-    all_policy_names: Final = set(matching_policy_names)
-    if request_body_policies and isinstance(request_body_policies, list):
-        all_policy_names.update(request_body_policies)
+    request_body_policies_list: Final = (
+        tuple(request_body_policies) if request_body_policies and isinstance(request_body_policies, list) else ()
+    )
+    all_policy_names: Final = tuple(dict.fromkeys((*matching_policy_names, *request_body_policies_list)))
+    if request_body_policies_list:
         verbose_proxy_logger.debug("Policy engine: added dynamic policies from request body: %s", request_body_policies)
 
     if not all_policy_names:
@@ -2671,7 +3207,7 @@ def _apply_resolved_guardrails_to_metadata(
     metadata_variable_name: str,
     context: "PolicyMatchContext",
     policy_names: list[str] | None = None,
-    policies: dict[str, Any] | None = None,
+    policies: dict[str, "Policy"] | None = None,
 ) -> None:
     """Apply resolved guardrails and pipelines to request metadata."""
     from litellm._logging import verbose_proxy_logger
@@ -2697,10 +3233,9 @@ def _apply_resolved_guardrails_to_metadata(
     if metadata_variable_name not in data:
         data[metadata_variable_name] = {}
 
-    # Track pipeline-managed guardrails to exclude from independent execution
-    pipeline_managed_guardrails: set = set()
+    # Record the pipelines and the guardrails they step; the hook loops skip those per pipeline mode
     if pipelines:
-        pipeline_managed_guardrails = PolicyResolver.get_pipeline_managed_guardrails(pipelines)
+        pipeline_managed_guardrails: Final = PolicyResolver.get_pipeline_managed_guardrails(pipelines)
         data[metadata_variable_name]["_guardrail_pipelines"] = pipelines
         data[metadata_variable_name]["_pipeline_managed_guardrails"] = pipeline_managed_guardrails
         verbose_proxy_logger.debug(
@@ -2712,18 +3247,14 @@ def _apply_resolved_guardrails_to_metadata(
     if not resolved_guardrails and not pipelines:
         return
 
-    existing_guardrails = data[metadata_variable_name].get("guardrails", [])
-    if not isinstance(existing_guardrails, list):
-        existing_guardrails = []
+    existing_guardrails: Final = data[metadata_variable_name].get("guardrails", [])
+    existing_guardrails_list: Final = existing_guardrails if isinstance(existing_guardrails, list) else []
 
     # Combine existing guardrails with policy-resolved guardrails (no duplicates)
-    # Exclude pipeline-managed guardrails from the flat list
-    combined = set(existing_guardrails)
-    combined.update(resolved_guardrails)
-    combined -= pipeline_managed_guardrails
-    data[metadata_variable_name]["guardrails"] = list(combined)
+    combined: Final = list(dict.fromkeys((*existing_guardrails_list, *resolved_guardrails)))
+    data[metadata_variable_name]["guardrails"] = combined
 
-    verbose_proxy_logger.debug("Policy engine: added guardrails to request metadata: %s", list(combined))
+    verbose_proxy_logger.debug("Policy engine: added guardrails to request metadata: %s", combined)
 
 
 async def add_guardrails_from_policy_engine(
@@ -2801,7 +3332,7 @@ async def add_guardrails_from_policy_engine(
                 request_body_names.append(item)
 
     # Resolve policy versions by ID from in-memory cache (populated by sync job; no DB in hot path)
-    merged_policies: Final[dict[str, Any]] = dict(registry.get_all_policies())
+    merged_policies: Final[dict[str, Policy]] = dict(registry.get_all_policies())
     fetched_policy_names: Final[list[str]] = []
     for policy_id in request_body_version_ids:
         result = registry.get_policy_by_id_for_request(policy_id=policy_id)
@@ -2835,36 +3366,36 @@ async def add_guardrails_from_policy_engine(
     )
 
 
+_ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
+    (LlmProviders.ANTHROPIC.value, LlmProviders.BEDROCK.value, LlmProviders.VERTEX_AI.value)
+)
+_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = LlmProviders.ANTHROPIC.value
+
+
 def add_provider_specific_headers_to_request(
     data: dict,
     headers: dict,
 ):
     from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
 
-    anthropic_headers: Final = {}
-    # boolean to indicate if a header was added
-    added_header = False
-    for header in ANTHROPIC_API_HEADERS:
-        if header in headers:
-            header_value = headers[header]
-            anthropic_headers[header] = header_value
-            added_header = True
+    anthropic_api_headers: Final = {header: headers[header] for header in ANTHROPIC_API_HEADERS if header in headers}
+    anthropic_oauth_credential_headers: Final = {
+        header: value
+        for header, value in headers.items()
+        if header.lower() == "authorization" and is_anthropic_oauth_key(value)
+    }
 
-    # Check for Authorization header with Anthropic OAuth token (sk-ant-oat*)
-    # This needs to be handled via provider-specific headers to ensure it only
-    # goes to Anthropic-compatible providers, not all providers in the router
-    for header, value in headers.items():
-        if header.lower() == "authorization" and is_anthropic_oauth_key(value):
-            anthropic_headers[header] = value
-            added_header = True
-            break
-    if added_header is True:
-        # Anthropic headers work across multiple providers
-        # Store as comma-separated list so retrieval can match any of them
-        data["provider_specific_header"] = ProviderSpecificHeader(
-            custom_llm_provider=f"{LlmProviders.ANTHROPIC.value},{LlmProviders.BEDROCK.value},{LlmProviders.VERTEX_AI.value}",
-            extra_headers=anthropic_headers,
+    scoped_headers: Final = [
+        ProviderSpecificHeader(custom_llm_provider=providers, extra_headers=extra_headers)
+        for providers, extra_headers in (
+            (_ANTHROPIC_API_HEADER_PROVIDERS, anthropic_api_headers),
+            (_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS, anthropic_oauth_credential_headers),
         )
+        if extra_headers
+    ]
+
+    if scoped_headers:
+        data["provider_specific_header"] = scoped_headers[0] if len(scoped_headers) == 1 else scoped_headers
 
 
 def _add_otel_traceparent_to_data(data: dict, request: Request):

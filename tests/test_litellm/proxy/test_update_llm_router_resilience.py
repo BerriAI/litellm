@@ -154,7 +154,7 @@ class TestDeleteDeploymentResilience:
         # Router has a model ID that's not in DB or config -> should be deleted
         mock_router.get_model_ids.return_value = ["db-id-1", "stale-id"]
         mock_router.delete_deployment.return_value = True
-        mock_router._generate_model_id = MagicMock(return_value="config-id-1")
+        mock_router.generate_model_id = MagicMock(return_value="config-id-1")
 
         with (
             patch.object(
@@ -182,3 +182,111 @@ class TestDeleteDeploymentResilience:
                 "the returned set must be what the db + config still want, so a caller can "
                 f"tell that eviction apart from a deployment that went missing; got {result}"
             )
+
+
+class TestDeleteDeploymentKeepsPluginConfigModels:
+    """Regression: _delete_deployment re-reads the raw config and hashes litellm_params to
+    compute the ids the config wants served. The Router used to derive plugin-bearing
+    deployment ids from the RESOLVED params (dotted paths swapped for live instances), so
+    the reconcile computed different ids and evicted every plugin-bearing auto-router one
+    sync after startup. load_config now pins model_info.id from the raw params before
+    resolution, so both sides hash the same input and the reconcile needs no resolution."""
+
+    @staticmethod
+    def _write_plugin_module(tmp_path):
+        (tmp_path / "rig_classifier.py").write_text(
+            "class _Classifier:\n"
+            "    async def classify(self, context):\n"
+            "        return 'SIMPLE'\n"
+            "\n"
+            "class _Narrower:\n"
+            "    async def run(self, context):\n"
+            "        return context\n"
+            "\n"
+            "classifier_instance = _Classifier()\n"
+            "narrower_instance = _Narrower()\n"
+        )
+
+    @staticmethod
+    def _raw_model_entry():
+        return {
+            "model_name": "smart-router",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_default_model": "gpt-4o-mini",
+                "complexity_router_config": {
+                    "classifier_type": "custom",
+                    "classifier_plugin": "rig_classifier.classifier_instance",
+                    "plugins": ["rig_classifier.narrower_instance"],
+                    "tiers": {"SIMPLE": "gpt-4o-mini"},
+                },
+            },
+        }
+
+    @pytest.mark.asyncio
+    async def test_plugin_bearing_config_model_survives_reconcile_and_stale_ids_still_evict(self, tmp_path):
+        import copy
+
+        from litellm import Router
+        from litellm.proxy.proxy_server import (
+            pin_complexity_router_model_id,
+            resolve_complexity_router_plugins,
+        )
+
+        self._write_plugin_module(tmp_path)
+        config_file_path = str(tmp_path / "config.yaml")
+
+        resolved_entry = copy.deepcopy(self._raw_model_entry())
+        pin_complexity_router_model_id(resolved_entry)
+        resolve_complexity_router_plugins(
+            model_name="smart-router",
+            complexity_router_config=resolved_entry["litellm_params"]["complexity_router_config"],
+            config_file_path=config_file_path,
+        )
+        router = Router(
+            model_list=[
+                {"model_name": "gpt-4o-mini", "litellm_params": {"model": "gpt-4o-mini"}},
+                resolved_entry,
+                {
+                    "model_name": "stale-model",
+                    "litellm_params": {"model": "gpt-4o"},
+                    "model_info": {"id": "stale-id"},
+                },
+            ]
+        )
+        assert "smart-router" in router.model_names
+        assert "stale-model" in router.model_names
+
+        raw_config = {
+            "model_list": [
+                {"model_name": "gpt-4o-mini", "litellm_params": {"model": "gpt-4o-mini"}},
+                self._raw_model_entry(),
+            ]
+        }
+        proxy_config = ProxyConfig()
+        with (
+            patch.object(proxy_config, "get_config", new_callable=AsyncMock, return_value=raw_config),
+            patch("litellm.proxy.proxy_server.llm_router", router),
+            patch("litellm.proxy.proxy_server.user_config_file_path", config_file_path),
+            patch("litellm.proxy.proxy_server.premium_user", False),
+        ):
+            result = await proxy_config._delete_deployment(db_models=[])
+
+        assert result is not None
+        assert "smart-router" in router.model_names
+        assert "stale-model" not in router.model_names
+
+    def test_pin_respects_an_explicit_model_id(self):
+        from litellm.proxy.proxy_server import pin_complexity_router_model_id
+
+        entry = self._raw_model_entry()
+        entry["model_info"] = {"id": "operator-pinned"}
+        pin_complexity_router_model_id(entry)
+        assert entry["model_info"]["id"] == "operator-pinned"
+
+    def test_pin_is_a_noop_without_a_complexity_router_config(self):
+        from litellm.proxy.proxy_server import pin_complexity_router_model_id
+
+        entry = {"model_name": "gpt-4o-mini", "litellm_params": {"model": "gpt-4o-mini"}}
+        pin_complexity_router_model_id(entry)
+        assert "model_info" not in entry

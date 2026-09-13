@@ -202,28 +202,29 @@ class SSOConfig(LiteLLMPydanticObjectBase):
 
 class DefaultTeamSSOParams(LiteLLMPydanticObjectBase):
     """
-    Default parameters to apply when a new team is automatically created by LiteLLM via SSO Groups
+    Default parameters applied to every /team/new call for fields not explicitly provided in the request.
+    `models` is the exception: it only applies to teams automatically created by LiteLLM via SSO Groups.
     """
 
     models: list[str] = Field(
         default=[],
-        description="Default list of models that new automatically created teams can access",
+        description="Default list of models for teams automatically created via SSO Groups",
     )
     max_budget: float | None = Field(
         default=None,
-        description="Default maximum budget (in USD) for new automatically created teams",
+        description="Default maximum budget (in USD) for new teams, when not explicitly provided",
     )
     budget_duration: str | None = Field(
         default=None,
-        description="Default budget duration for new automatically created teams (e.g. 'daily', 'weekly', 'monthly')",
+        description="Default budget duration for new teams, when not explicitly provided (e.g. '24h', '7d', '30d')",
     )
     tpm_limit: int | None = Field(
         default=None,
-        description="Default tpm limit for new automatically created teams",
+        description="Default tpm limit for new teams, when not explicitly provided",
     )
     rpm_limit: int | None = Field(
         default=None,
-        description="Default rpm limit for new automatically created teams",
+        description="Default rpm limit for new teams, when not explicitly provided",
     )
     team_member_permissions: list[KeyManagementRoutes] | None = Field(
         default=None,

@@ -4,6 +4,7 @@ Builds on top of PromptManagementBase to provide .prompt file support.
 """
 
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
@@ -96,7 +97,7 @@ class DotpromptManager(CustomPromptManagement):
         if prompt_id is None:
             return False
         try:
-            return prompt_id in self.prompt_manager.list_prompts()
+            return self.prompt_manager.get_prompt(prompt_id) is not None
         except Exception:
             # If there's any error accessing prompts, don't run prompt management
             return False
@@ -209,6 +210,8 @@ class DotpromptManager(CustomPromptManagement):
             prompt_spec=prompt_spec,
             prompt_label=prompt_label,
             prompt_version=prompt_version,
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
         )
 
     async def async_get_chat_completion_prompt(
@@ -345,14 +348,14 @@ class DotpromptManager(CustomPromptManagement):
         metadata: Final = json_data.get("metadata", {})
         self.prompt_manager.add_prompt(prompt_id, content, metadata)
 
-    def load_prompts_from_json(self, prompts_data: dict[str, dict[str, Any]]) -> None:
+    def load_prompts_from_json(self, prompts_data: dict[str, dict[str, object]]) -> None:
         """Load multiple prompts from JSON data."""
         self.prompt_manager.load_prompts_from_json_data(prompts_data)
 
-    def get_prompts_as_json(self) -> dict[str, dict[str, Any]]:
+    def get_prompts_as_json(self) -> dict[str, dict[str, object]]:
         """Get all prompts in JSON format."""
         return self.prompt_manager.get_all_prompts_as_json()
 
-    def convert_prompt_file_to_json(self, file_path: str) -> dict[str, Any]:
+    def convert_prompt_file_to_json(self, file_path: str) -> Mapping[str, object]:
         """Convert a .prompt file to JSON format."""
         return self.prompt_manager.prompt_file_to_json(file_path)

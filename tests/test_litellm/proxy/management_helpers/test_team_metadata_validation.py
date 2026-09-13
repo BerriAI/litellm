@@ -1,12 +1,9 @@
 import asyncio
-import os
-import sys
 from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.management_helpers.team_metadata_validation import (
@@ -22,6 +19,7 @@ from litellm.proxy.management_helpers.team_metadata_validation import (
     run_team_metadata_validation,
     validate_team_metadata_if_configured,
 )
+from pydantic import ValidationError
 
 
 def _registry_with(validator):
@@ -572,11 +570,14 @@ async def test_http_validator_service_outage_fails_closed(monkeypatch, kind, exi
     monkeypatch.setenv("TEAM_METADATA_VALIDATION_SERVICE_URL", _closed_port_url())
 
     with _configured(impls.validate_via_http):
-        with pytest.raises(ProxyException) as exc_info:
+        async def _drive():
             if kind == "create":
                 await _drive_create(metadata=request_payload)
             else:
                 await _drive_update(kind, existing_metadata, request_payload)
+
+        with pytest.raises(ProxyException) as exc_info:
+            await _drive()
 
     assert str(exc_info.value.code) == "503"
     assert DEFAULT_TEAM_METADATA_VALIDATION_UNAVAILABLE_MESSAGE in str(exc_info.value.message)
@@ -634,7 +635,7 @@ def test_parse_schema_round_trips_fields_in_order():
     ],
 )
 def test_parse_schema_malformed_raises(raw):
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         parse_team_metadata_schema(raw)
 
 
@@ -667,7 +668,7 @@ async def test_non_callable_validator_is_rejected_with_clean_500():
 
 
 def test_parse_schema_duplicate_error_lists_offending_keys():
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='team_metadata_schema contains duplicate keys: app_name') as exc_info:
         parse_team_metadata_schema(
             [{"key": "cost_center"}, {"key": "app_name"}, {"key": "cost_center"}, {"key": "app_name"}]
         )

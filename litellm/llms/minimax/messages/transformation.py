@@ -2,7 +2,7 @@
 MiniMax Anthropic transformation config - extends AnthropicConfig for MiniMax's Anthropic-compatible API
 """
 
-from typing import Final
+from typing import Any, Final  # noqa: TID251  # override below must mirror the legacy base signature
 
 import litellm
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -48,6 +48,26 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
         For China, set to: https://api.minimaxi.com/anthropic
         """
         return api_base or get_secret_str("MINIMAX_API_BASE") or "https://api.minimax.io/anthropic/v1/messages"
+
+    def validate_anthropic_messages_environment(
+        self,
+        headers: dict,  # mutable-ok: mirrors the legacy base override signature
+        model: str,
+        messages: list[Any],  # mutable-ok: mirrors the legacy base override signature
+        optional_params: dict,  # mutable-ok: mirrors the legacy base override signature
+        litellm_params: dict,  # mutable-ok: mirrors the legacy base override signature
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict, str | None]:  # mutable-ok: mirrors the legacy base override signature
+        return super().validate_anthropic_messages_environment(
+            headers=headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_key=self.get_api_key(api_key=api_key),
+            api_base=api_base,
+        )
 
     def get_complete_url(
         self,

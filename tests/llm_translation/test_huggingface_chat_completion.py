@@ -3,15 +3,10 @@ Test HuggingFace LLM
 """
 
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from base_llm_unit_tests import BaseLLMChatTest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import pytest
 

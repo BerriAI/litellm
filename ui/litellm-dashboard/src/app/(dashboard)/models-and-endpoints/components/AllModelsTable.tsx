@@ -73,6 +73,7 @@ interface AllModelsTableProps {
   availableModelAccessGroups: string[];
   userRole: string;
   userID: string;
+  isViewOnly: boolean;
   onModelIdClick: (modelId: string) => void;
   onTeamIdClick: (teamId: string) => void;
   onDeleteClick: (modelId: string) => void;
@@ -120,6 +121,7 @@ export function AllModelsTable({
   availableModelAccessGroups,
   userRole,
   userID,
+  isViewOnly,
   onModelIdClick,
   onTeamIdClick,
   onDeleteClick,
@@ -132,6 +134,7 @@ export function AllModelsTable({
     const columnDeps = {
       userRole,
       userID,
+      isViewOnly,
       onModelIdClick,
       onTeamIdClick,
       onDeleteClick,
@@ -139,7 +142,7 @@ export function AllModelsTable({
       pausingModelId,
     };
     return getModelsTableColumns(columnDeps);
-  }, [userRole, userID, onModelIdClick, onTeamIdClick, onDeleteClick, onTogglePauseClick, pausingModelId]);
+  }, [userRole, userID, isViewOnly, onModelIdClick, onTeamIdClick, onDeleteClick, onTogglePauseClick, pausingModelId]);
 
   const modelGroupOptions = useMemo(
     () => [
@@ -216,7 +219,7 @@ export function AllModelsTable({
                 <span
                   className={cn(
                     "size-2 shrink-0 rounded-full",
-                    selectedTeamValue === PERSONAL_TEAM_VALUE ? "bg-blue-500" : "bg-green-500",
+                    selectedTeamValue === PERSONAL_TEAM_VALUE ? "bg-info" : "bg-success",
                   )}
                 />
                 <span className="text-muted-foreground">Team</span>
@@ -278,7 +281,7 @@ export function AllModelsTable({
                     options={modelGroupOptions}
                     value={(get(MODEL_NAME_COLUMN_ID) as string) ?? ALL_MODEL_GROUPS_VALUE}
                     onValueChange={(value) =>
-                      set(MODEL_NAME_COLUMN_ID, value === ALL_MODEL_GROUPS_VALUE ? undefined : value)
+                      set(MODEL_NAME_COLUMN_ID, value === ALL_MODEL_GROUPS_VALUE ? undefined : value ?? undefined)
                     }
                     placeholder="Filter by Public Model Name"
                     emptyText="No models found"
@@ -289,7 +292,7 @@ export function AllModelsTable({
                     options={accessGroupOptions}
                     value={(get(ACCESS_GROUPS_COLUMN_ID) as string) ?? ALL_MODEL_GROUPS_VALUE}
                     onValueChange={(value) =>
-                      set(ACCESS_GROUPS_COLUMN_ID, value === ALL_MODEL_GROUPS_VALUE ? undefined : value)
+                      set(ACCESS_GROUPS_COLUMN_ID, value === ALL_MODEL_GROUPS_VALUE ? undefined : value ?? undefined)
                     }
                     placeholder="Filter by Model Access Group"
                     emptyText="No model access groups found"

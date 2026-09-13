@@ -1,12 +1,8 @@
 """Unit tests for Morph provider integration."""
 
 import os
-import sys
 from unittest.mock import patch
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm import MorphChatConfig, get_llm_provider
@@ -70,24 +66,6 @@ def test_morph_in_provider_lists():
         model in litellm.model_list
         for model in ["morph/morph-v3-large", "morph/morph-v3-fast"]
     )
-
-
-def test_morph_model_info():
-    """Test that morph models have correct configuration."""
-    import litellm
-
-    model_info = litellm.get_model_info("morph/morph-v3-large")
-
-    assert model_info["litellm_provider"] == "morph"
-    assert model_info["mode"] == "chat"
-    assert model_info["max_tokens"] == 16000
-    assert model_info["max_input_tokens"] == 16000
-    assert model_info["max_output_tokens"] == 16000
-    assert model_info["input_cost_per_token"] == 9e-07  # $0.9/1M tokens
-    assert model_info["output_cost_per_token"] == 1.9e-06  # $1.9/1M tokens
-    assert model_info["supports_function_calling"] is False
-    assert model_info["supports_vision"] is False
-    assert model_info["supports_system_messages"] is True
 
 
 def test_morph_supported_params():

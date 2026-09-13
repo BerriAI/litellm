@@ -162,10 +162,10 @@ class AktoGuardrail(CustomGuardrail):
     def build_request_body(
         inputs: GenericGuardrailAPIInputs,
         request_data: dict | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Build the LLM request body from guardrail inputs (messages, model, tools)."""
         model: Final = inputs.get("model", "") or ""
-        body: Final[dict[str, Any]] = {"model": model}
+        body: Final[dict[str, object]] = {"model": model}
 
         structured: Final = inputs.get("structured_messages")
         if structured:
@@ -194,7 +194,7 @@ class AktoGuardrail(CustomGuardrail):
     def build_response_body(
         inputs: GenericGuardrailAPIInputs,
         request_data: dict | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Build the LLM response body, preferring the actual model response if available."""
         model_response: Final = request_data.get("response") if request_data else None
         if model_response is not None and hasattr(model_response, "model_dump"):
@@ -224,7 +224,7 @@ class AktoGuardrail(CustomGuardrail):
         *,
         status_code: int = 200,
         include_response: bool = False,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Build the flat MIRRORING payload sent to Akto's HTTP proxy endpoint.
 
         All body fields use double-encoding: json.dumps({"body": json.dumps(actual_body)})

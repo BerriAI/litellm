@@ -1,11 +1,12 @@
 import os
 import re
 import time
-from typing import Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from httpx import Headers, Response
 from pydantic import TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix, is_bedrock_arn
 from litellm.litellm_core_utils.cloud_storage_security import (
     BEDROCK_MANAGED_S3_BATCH_PREFIX,
 )
@@ -28,7 +29,14 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import LiteLLMBatch, LlmProviders
 
 from ..base_aws_llm import BaseAWSLLM
-from ..common_utils import CommonBatchFilesUtils, resolve_s3_encryption_key_id
+from ..common_utils import (
+    CommonBatchFilesUtils,
+    merge_bedrock_aws_request_params,
+    resolve_s3_encryption_key_id,
+)
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 # Bedrock batch input files are uploaded as
 # s3://bucket/litellm-bedrock-files-{model, ":" -> "-"}-{uuid4}.jsonl (see
@@ -130,11 +138,14 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         Get the complete URL for Bedrock batch creation.
         Bedrock batch jobs are created via the model invocation job API.
         """
-        aws_region_name: Final = self._get_aws_region_name(optional_params, model)
+        request_params: Final = merge_bedrock_aws_request_params(litellm_params, optional_params)
+        aws_region_name: Final = self._get_aws_region_name(request_params, model)
 
         # Bedrock model invocation job endpoint
-        # Format: https://bedrock.{region}.amazonaws.com/model-invocation-job
-        bedrock_endpoint: Final = f"https://bedrock.{aws_region_name}.amazonaws.com/model-invocation-job"
+        # Format: https://bedrock.{region}.{partition dns suffix}/model-invocation-job
+        bedrock_endpoint: Final = (
+            f"https://bedrock.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}/model-invocation-job"
+        )
 
         return bedrock_endpoint
 
@@ -232,14 +243,16 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
 
         # For Bedrock, we need to return a pre-signed request with AWS auth headers
         # Use common utility for AWS signing
+        request_params: Final = merge_bedrock_aws_request_params(litellm_params, optional_params)
+        aws_region_name: Final = self._get_aws_region_name(request_params, model)
         endpoint_url: Final = (
-            f"https://bedrock.{self._get_aws_region_name(optional_params, model)}.amazonaws.com/model-invocation-job"
+            f"https://bedrock.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}/model-invocation-job"
         )
         signed_headers, signed_data = self.common_utils.sign_aws_request(
             service_name="bedrock",
             data=bedrock_request,
             endpoint_url=endpoint_url,
-            optional_params=optional_params,
+            optional_params=request_params,
             method="POST",
         )
 
@@ -255,7 +268,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         self,
         model: str | None,
         raw_response: Response,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         litellm_params: dict,
     ) -> LiteLLMBatch:
         """
@@ -365,7 +378,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         """
         # For Bedrock, batch_id should be the full job ARN
         # The GetModelInvocationJob API expects the full ARN as the identifier
-        if not batch_id.startswith("arn:aws:bedrock:"):
+        if not is_bedrock_arn(batch_id):
             raise ValueError(f"Invalid batch_id format. Expected ARN, got: {batch_id}")
 
         # Extract the job identifier from the ARN - use the full ARN path part
@@ -384,14 +397,17 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         import urllib.parse as _ul
 
         encoded_arn: Final = _ul.quote(batch_id, safe="")
-        endpoint_url: Final = f"https://bedrock.{region}.amazonaws.com/model-invocation-job/{encoded_arn}"
+        endpoint_url: Final = (
+            f"https://bedrock.{region}.{get_aws_dns_suffix(region)}/model-invocation-job/{encoded_arn}"
+        )
 
         # Use common utility for AWS signing
+        request_params: Final = merge_bedrock_aws_request_params(litellm_params, optional_params)
         signed_headers, _ = self.common_utils.sign_aws_request(
             service_name="bedrock",
             data={},  # GET request has no body
             endpoint_url=endpoint_url,
-            optional_params=optional_params,
+            optional_params=request_params,
             method="GET",
         )
 
@@ -520,7 +536,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         self,
         model: str | None,
         raw_response: Response,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         litellm_params: dict,
     ) -> LiteLLMBatch:
         """

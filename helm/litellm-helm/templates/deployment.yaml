@@ -56,104 +56,10 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
-            - name: HOST
-              value: "{{ .Values.listen | default "0.0.0.0" }}"
-            - name: PORT
-              value: {{ .Values.service.port | quote}}
-            {{- if .Values.db.deployStandalone }}
-            - name: DATABASE_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "litellm.fullname" . }}-dbcredentials
-                  key: username
-            - name: DATABASE_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "litellm.fullname" . }}-dbcredentials
-                  key: password
-            - name: DATABASE_HOST
-              value: {{ .Release.Name }}-postgresql
-            - name: DATABASE_NAME
-              value: litellm
-            {{- else if .Values.db.useExisting }}
-            - name: DATABASE_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.db.secret.name }}
-                  key: {{ .Values.db.secret.usernameKey }}
-            - name: DATABASE_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.db.secret.name }}
-                  key: {{ .Values.db.secret.passwordKey }}
-            - name: DATABASE_HOST
-              {{- if .Values.db.secret.endpointKey }}
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.db.secret.name }}
-                  key: {{ .Values.db.secret.endpointKey }}
-              {{- else }}
-              value: {{ .Values.db.endpoint }}
-              {{- end }}
-            - name: DATABASE_NAME
-              value: {{ .Values.db.database }}
-            - name: DATABASE_URL
-              value: {{ .Values.db.url | quote }}
-            {{- end }}
-            {{- if and .Values.db.useExisting .Values.db.secret.readReplicaUrlKey }}
-            - name: DATABASE_URL_READ_REPLICA
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.db.secret.name }}
-                  key: {{ .Values.db.secret.readReplicaUrlKey }}
-            {{- else if .Values.db.readReplicaUrl }}
-            - name: DATABASE_URL_READ_REPLICA
-              value: {{ .Values.db.readReplicaUrl | quote }}
-            {{- end }}
-            - name: PROXY_MASTER_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.masterkeySecretName | default (printf "%s-masterkey" (include "litellm.fullname" .)) }}
-                  key: {{ .Values.masterkeySecretKey | default "masterkey" }}
-            {{- if .Values.redis.enabled }}
-            - name: REDIS_HOST
-              value: {{ include "litellm.redis.serviceName" . }}
-            - name: REDIS_PORT
-              value: {{ include "litellm.redis.port" . | quote }}
-            - name: REDIS_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "redis.secretName" .Subcharts.redis }}
-                  key: {{include "redis.secretPasswordKey" .Subcharts.redis }}
-            {{- end }}
-            {{- /*
-              Inject LITELLM_LOG only when envVars does not already define it.
-            */}}
-            {{- if and .Values.logLevel (not (hasKey (default dict .Values.envVars) "LITELLM_LOG")) }}
-            - name: LITELLM_LOG
-              value: {{ .Values.logLevel | quote }}
-            {{- end }}
-            {{- if .Values.envVars }}
-            {{- range $key, $val := .Values.envVars }}
-            - name: {{ $key }}
-              value: {{ $val | quote }}
-            {{- end }}
-            {{- end }}
-            {{- with .Values.extraEnvVars }}
-              {{- toYaml . | nindent 12 }}
-            {{- end }}
-            {{- if .Values.billingMetrics.enabled }}
-            {{- include "litellm.billingMetricsEnv" . | nindent 12 }}
-            {{- end }}
-            {{- if .Values.migrationJob.enabled }}
-            # Schema updates are owned by the dedicated migrations Job; skip
-            # the proxy's startup `prisma db push` so N replicas don't race
-            # one DB on every rollout. Placed last (after envVars and
-            # extraEnvVars) so this override can't be silently shadowed by a
-            # user-supplied DISABLE_SCHEMA_UPDATE under last-wins duplicate-env
-            # semantics — same pattern the migrations Job uses.
-            - name: DISABLE_SCHEMA_UPDATE
-              value: "true"
+            {{- include "litellm.proxyEnv" . | nindent 12 }}
+            {{- include "litellm.proxyMetricsEnv" . | nindent 12 }}
+            {{- if .Values.collector.enabled }}
+            {{- include "litellm.collectorEnv" . | nindent 12 }}
             {{- end }}
           envFrom:
           {{- range .Values.environmentSecrets }}
@@ -182,6 +88,11 @@ spec:
             - name: http
               containerPort: {{ .Values.service.port }}
               protocol: TCP
+            {{- if .Values.metricsServer.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metricsServer.port }}
+              protocol: TCP
+            {{- end }}
           livenessProbe:
             httpGet:
               path: {{ .Values.livenessProbe.path | quote }}
@@ -226,6 +137,10 @@ spec:
           {{- if .Values.billingMetrics.enabled }}
             {{- include "litellm.billingMetricsVolumeMounts" . | nindent 12 }}
           {{- end }}
+          {{- if include "litellm.collector.socketDir" . }}
+            - name: collector-socket
+              mountPath: {{ include "litellm.collector.socketDir" . }}
+          {{- end }}
           {{- with .Values.volumeMounts }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -233,6 +148,53 @@ spec:
           lifecycle:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+      {{- if .Values.collector.enabled }}
+        - name: {{ include "litellm.name" . }}-collector
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: {{ toYaml .Values.collector.command | nindent 12 }}
+          env:
+            {{- include "litellm.proxyEnv" . | nindent 12 }}
+            {{- include "litellm.collectorEnv" . | nindent 12 }}
+            - name: LITELLM_JOB_ROLE
+              value: collector
+            {{- if not (hasKey (default dict .Values.envVars) "CONFIG_FILE_PATH") }}
+            - name: CONFIG_FILE_PATH
+              value: /etc/litellm/config.yaml
+            {{- end }}
+          envFrom:
+          {{- range .Values.environmentSecrets }}
+            - secretRef:
+                name: {{ . }}
+          {{- end }}
+          {{- range .Values.environmentConfigMaps }}
+            - configMapRef:
+                name: {{ . }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.collector.resources | nindent 12 }}
+          volumeMounts:
+            - name: litellm-config
+              mountPath: /etc/litellm/config.yaml
+              subPath: config.yaml
+          {{- if include "litellm.collector.socketDir" . }}
+            - name: collector-socket
+              mountPath: {{ include "litellm.collector.socketDir" . }}
+          {{- end }}
+          {{ if .Values.securityContext.readOnlyRootFilesystem }}
+            - name: tmp
+              mountPath: /tmp
+            - name: cache
+              mountPath: /.cache
+            - name: npm
+              mountPath: /.npm
+          {{- end }}
+          {{- with .Values.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- end }}
       {{- with .Values.extraContainers }}
         {{- tpl (toYaml .) $ | nindent 8 }}
       {{- end }}
@@ -260,6 +222,11 @@ spec:
                 path: "config.yaml"
         {{- if .Values.billingMetrics.enabled }}
         {{- include "litellm.billingMetricsVolumes" . | nindent 8 }}
+        {{- end }}
+        {{- if include "litellm.collector.socketDir" . }}
+        - name: collector-socket
+          emptyDir:
+            sizeLimit: 1Mi
         {{- end }}
       {{- with .Values.volumes }}
         {{- toYaml . | nindent 8 }}

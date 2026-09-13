@@ -13,14 +13,11 @@ constructs a ``UserAPIKeyAuth`` from them. The fix has two parts:
    ``"proxy_admin"`` into ``LitellmUserRoles.PROXY_ADMIN``.
 """
 
-import os
-import sys
 
 import pytest
 from fastapi import Request
 from starlette.datastructures import Headers
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.auth.oauth2_proxy_hook import (
@@ -141,7 +138,7 @@ async def test_refuses_to_map_non_identity_fields(configure_proxy, privileged_fi
     configure_proxy(mappings={privileged_field: f"x-{privileged_field}"})
     request = _request_with_headers({f"x-{privileged_field}": "proxy_admin"})
 
-    with pytest.raises(ValueError) as exc:
+    with pytest.raises(ValueError, match='proxy auth refuses to map non-identity UserAPIKeyAuth') as exc:
         await handle_oauth2_proxy_request(request)
     assert privileged_field in str(exc.value)
 

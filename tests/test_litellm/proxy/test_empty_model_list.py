@@ -5,16 +5,11 @@ These tests verify that /v2/model/info and /model_group/info endpoints
 return empty data arrays instead of 500 errors when no models are configured.
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system-path
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.proxy_server import app

@@ -1,5 +1,8 @@
+from collections.abc import Mapping, MutableMapping
+from types import MappingProxyType
 from typing import Final
 
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
 
 AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
@@ -14,10 +17,16 @@ AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
         "aws_web_identity_token",
         "aws_sts_endpoint",
         "aws_external_id",
+        "aws_session_tags",
         "aws_bedrock_runtime_endpoint",
         "aws_bedrock_project_id",
     }
 )
+
+# Keys `completion()` forwards from its own kwargs into `get_litellm_params`,
+# which are otherwise invisible to it because that call site passes explicit
+# named arguments rather than `**kwargs`.
+FORWARDED_KWARGS_KEYS: Final = AWS_CREDENTIAL_KWARGS_KEYS
 
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls
@@ -40,6 +49,9 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "vertex_ai_project",
             "vertex_ai_location",
             "vertex_ai_credentials",
+            "gigachat_scope",
+            "gigachat_auth_url",
+            "gigachat_access_token",
             "tpm",
             "rpm",
             "itpm",
@@ -103,7 +115,7 @@ def get_litellm_params(
     custom_prompt_dict: dict | None = None,
     litellm_metadata: dict | None = None,
     disable_add_transform_inline_image_block: bool | None = None,
-    drop_params: bool | None = None,
+    drop_params: bool | str | None = None,
     prompt_id: str | None = None,
     prompt_variables: dict | None = None,
     async_call: bool | None = None,
@@ -165,7 +177,7 @@ def get_litellm_params(
         "custom_prompt_dict": custom_prompt_dict,
         "litellm_metadata": litellm_metadata,
         "disable_add_transform_inline_image_block": disable_add_transform_inline_image_block,
-        "drop_params": drop_params,
+        "drop_params": normalize_drop_params(drop_params),
         "prompt_id": prompt_id,
         "prompt_variables": prompt_variables,
         "async_call": async_call,
@@ -184,3 +196,19 @@ def get_litellm_params(
                 litellm_params[key] = kwargs[key]
 
     return litellm_params
+
+
+def add_trusted_model_credentials_to_litellm_params(
+    litellm_params_dict: MutableMapping[str, object], kwargs: Mapping[str, object]
+) -> None:
+    """
+    Carry the immutable server-side credential snapshot into litellm_params.
+
+    get_litellm_params has a fixed signature, so callers that need the snapshot to
+    survive into the logging object and the downstream file read have to re-add it. Only
+    a MappingProxyType is accepted, since providers resolve trusted configuration such
+    as a Bedrock file bucket from it and must not read a request-supplied mapping.
+    """
+    trusted_model_credentials: Final = kwargs.get("_litellm_internal_model_credentials")
+    if isinstance(trusted_model_credentials, MappingProxyType):
+        litellm_params_dict["_litellm_internal_model_credentials"] = trusted_model_credentials

@@ -5,6 +5,8 @@ from collections.abc import Coroutine
 from functools import partial
 from typing import Final, Literal, overload
 
+from httpx._types import FileContent
+
 import litellm
 from litellm.constants import DEFAULT_VIDEO_ENDPOINT_MODEL
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
@@ -1344,6 +1346,8 @@ async def avideo_edit(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
+    *,
+    video: FileContent | None = None,
     **kwargs,
 ) -> VideoObject:
     """
@@ -1359,6 +1363,7 @@ async def avideo_edit(
             video_edit,
             video_id=video_id,
             prompt=prompt,
+            video=video,
             timeout=timeout,
             custom_llm_provider=custom_llm_provider,
             extra_headers=extra_headers,
@@ -1396,6 +1401,8 @@ def video_edit(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
+    *,
+    video: FileContent | None = None,
     **kwargs,
 ) -> VideoObject | Coroutine[object, object, VideoObject]:
     """
@@ -1444,6 +1451,7 @@ def video_edit(
         return base_llm_http_handler.video_edit_handler(
             prompt=prompt,
             video_id=video_id,
+            video_file=video,
             video_provider_config=provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,

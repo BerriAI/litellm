@@ -12,8 +12,9 @@ before the ``thinking_disabled`` computation, so the tests are focused on
 the computation and threading rather than the full request pipeline.
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
     LiteLLMMessagesToCompletionTransformationHandler,

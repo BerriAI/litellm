@@ -19,15 +19,16 @@ received).
 from __future__ import annotations
 
 import math
+import time
 
 import pytest
 from pydantic import BaseModel, ConfigDict
 
 from datadog_reader import DdLogEvent, DdLogsReader
 from e2e_config import CHEAP_ANTHROPIC_MODEL, CHEAP_OPENAI_MODEL, unique_marker
-from e2e_http import NoBody
 from lifecycle import ResourceManager
-from logging_client import LoggingClient, first_ok
+from logging_client import INVALID_UPSTREAM_API_KEY, LoggingClient, first_ok, readiness_details_body
+from models import LiteLLMParamsBody
 
 pytestmark = pytest.mark.e2e
 
@@ -46,19 +47,17 @@ class _DdMessagePayload(BaseModel):
     status: str
     call_type: str
     stream: bool | None = None
+    error_str: str | None = None
 
 
 def _assert_datadog_configured(client: LoggingClient) -> None:
     """Recorded state: the proxy reports the DataDog callback among its active
     callbacks, so a missing destination config fails here, before any
     delivery-based assertion can time out confusingly."""
-    result = client.proxy.probe("/health/readiness/details", params=NoBody())
-    assert result.status_code == 200, (
-        f"/health/readiness/details must answer 200, got {result.status_code}: {result.body[:300]}"
-    )
-    assert DD_LOGGER_NAME in result.body, (
+    body = readiness_details_body(client)
+    assert DD_LOGGER_NAME in body, (
         f"the proxy must report the {DD_LOGGER_NAME} callback active "
-        f"(callbacks + DD_* env in the compose config); got: {result.body[:400]}"
+        f"(callbacks + DD_* env in the compose config); got: {body[:400]}"
     )
 
 
@@ -89,18 +88,14 @@ def _assert_exactly_one_event(
     # indexed event status from the parsed payload's status attribute
     # ("success") and normalizes it to its OK severity - so "ok" is what a
     # successfully ingested success event looks like on the search API.
-    assert event.status == "ok", (
-        f"success events must index at DataDog's ok severity, got {event.status!r}"
-    )
+    assert event.status == "ok", f"success events must index at DataDog's ok severity, got {event.status!r}"
 
     payload = _DdMessagePayload.model_validate(event.attributes)
     assert payload.status == "success", f"payload status must be success, got {payload.status!r}"
     assert payload.model_group == model_group, (
         f"payload model_group must be {model_group!r}, got {payload.model_group!r}"
     )
-    assert payload.call_type == call_type, (
-        f"payload call_type must be {call_type!r}, got {payload.call_type!r}"
-    )
+    assert payload.call_type == call_type, f"payload call_type must be {call_type!r}, got {payload.call_type!r}"
     assert payload.total_tokens > 0, f"payload must count real tokens, got {payload.total_tokens}"
     # Relative tolerance, not bit-equality: the cost round-trips through
     # DataDog's attribute indexing, whose float serialization may drift in the
@@ -109,9 +104,7 @@ def _assert_exactly_one_event(
         f"payload response_cost {payload.response_cost} must equal the anchor cost {cost_anchor}"
     )
     if expect_stream:
-        assert payload.stream is True, (
-            f"a streamed call's payload must record stream=true, got {payload.stream!r}"
-        )
+        assert payload.stream is True, f"a streamed call's payload must record stream=true, got {payload.stream!r}"
     return payload
 
 
@@ -211,7 +204,9 @@ class TestDataDogLogDelivery:
         marker = unique_marker()
         outcome = first_ok(
             client,
-            lambda: client.chat_raw(key, CHEAP_ANTHROPIC_MODEL, f"reply with one word {marker}", stream=True, max_tokens=16),
+            lambda: client.chat_raw(
+                key, CHEAP_ANTHROPIC_MODEL, f"reply with one word {marker}", stream=True, max_tokens=16
+            ),
         )
         assert outcome.is_streaming, f"response must be an event stream, got content-type {outcome.content_type!r}"
         assert outcome.chunks > 0, "the stream must deliver at least one event"
@@ -231,9 +226,7 @@ class TestDataDogLogDelivery:
             cost_anchor=spend_row.spend,
             expect_stream=True,
         )
-        assert spend_row.total_tokens is not None, (
-            "the spend row must record total_tokens for the token cross-check"
-        )
+        assert spend_row.total_tokens is not None, "the spend row must record total_tokens for the token cross-check"
         assert spend_row.total_tokens == payload.total_tokens, (
             f"the spend row and the DataDog event must agree on tokens: "
             f"{spend_row.total_tokens} vs {payload.total_tokens}"
@@ -255,7 +248,9 @@ class TestDataDogLogDelivery:
         marker = unique_marker()
         outcome = first_ok(
             client,
-            lambda: client.messages_raw(key, CHEAP_ANTHROPIC_MODEL, f"reply with one word {marker}", max_tokens=16, stream=True),
+            lambda: client.messages_raw(
+                key, CHEAP_ANTHROPIC_MODEL, f"reply with one word {marker}", max_tokens=16, stream=True
+            ),
         )
         assert outcome.is_streaming, f"response must be an event stream, got content-type {outcome.content_type!r}"
         assert outcome.chunks > 0, "the stream must deliver at least one event"
@@ -275,9 +270,7 @@ class TestDataDogLogDelivery:
             cost_anchor=spend_row.spend,
             expect_stream=True,
         )
-        assert spend_row.total_tokens is not None, (
-            "the spend row must record total_tokens for the token cross-check"
-        )
+        assert spend_row.total_tokens is not None, "the spend row must record total_tokens for the token cross-check"
         assert spend_row.total_tokens == payload.total_tokens, (
             f"the spend row and the DataDog event must agree on tokens: "
             f"{spend_row.total_tokens} vs {payload.total_tokens}"
@@ -319,10 +312,89 @@ class TestDataDogLogDelivery:
             cost_anchor=spend_row.spend,
             expect_stream=True,
         )
-        assert spend_row.total_tokens is not None, (
-            "the spend row must record total_tokens for the token cross-check"
-        )
+        assert spend_row.total_tokens is not None, "the spend row must record total_tokens for the token cross-check"
         assert spend_row.total_tokens == payload.total_tokens, (
             f"the spend row and the DataDog event must agree on tokens: "
             f"{spend_row.total_tokens} vs {payload.total_tokens}"
+        )
+
+
+def _assert_exactly_one_failure_event(events: list[DdLogEvent], *, model_group: str) -> _DdMessagePayload:
+    """The enforced behavior for a failed call: the intake holds exactly one
+    event for the deployment, sourced from litellm, indexed at an error-grade
+    severity (DataDog derives it from the payload's status="failure"; observed
+    as its "emergency" bucket), whose payload carries the provider error and
+    no cost."""
+    assert events, "no DataDog log event for the failed call reached the intake within the deadline"
+    assert len(events) == 1, (
+        f"expected exactly ONE DataDog log event for the failed call, got {len(events)} - "
+        "more than one event for one call is the duplicate-delivery bug"
+    )
+    event = events[0]
+    assert "source:litellm" in event.tags, (
+        f"the ingested event must carry the litellm source (shipped as ddsource), got tags {event.tags!r}"
+    )
+    assert event.status in ("error", "emergency"), (
+        f"failure events must index at an error-grade severity, got {event.status!r}"
+    )
+    payload = _DdMessagePayload.model_validate(event.attributes)
+    assert payload.status == "failure", f"payload status must be failure, got {payload.status!r}"
+    assert payload.model_group == model_group, (
+        f"payload model_group must be {model_group!r}, got {payload.model_group!r}"
+    )
+    assert not payload.response_cost, f"a failed call must not be billed, got response_cost={payload.response_cost!r}"
+    return payload
+
+
+class TestDataDogFailureDelivery:
+    @pytest.mark.covers("logging.datadog.failure.exports_metric", exercised_on=["chat_completions"])
+    def test_failed_chat_completions_emits_one_error_event(
+        self, client: LoggingClient, dd_logs: DdLogsReader, resources: ResourceManager
+    ) -> None:
+        """A /chat/completions call that fails at the provider must reach the
+        DataDog logs intake as exactly one error-grade event carrying the
+        provider error - failure metrics drive alerting and SLOs, so a dropped
+        failure event is an invisible outage.
+
+        A deployment with an invalid upstream key lets the request pass proxy
+        auth and fail at the provider (the same lever as the OTEL error test).
+        Failure payloads carry no prompt to mark, so the read-back queries the
+        indexed @model_group attribute of the per-run unique deployment name;
+        proxy-side 401s during key propagation never reach the provider and
+        ship no payload, so exactly one provider failure exists for it."""
+        _assert_datadog_configured(client)
+
+        model_name = f"dd-err-{unique_marker()}"
+        model_id = client.create_model(
+            model_name,
+            LiteLLMParamsBody(model="anthropic/claude-haiku-4-5", api_key=INVALID_UPSTREAM_API_KEY),
+        )
+        resources.defer(lambda: client.delete_model(model_id))
+        key = client.key_with_alias(f"dd-err-key-{unique_marker()}", models=[model_name])
+        resources.defer(lambda: client.delete_key(key))
+
+        deadline = time.monotonic() + client.proxy.poll_timeout
+        while True:
+            outcome = client.chat_raw(key, model_name, "trigger an upstream auth failure", max_tokens=16)
+            assert not outcome.ok, "the call must fail; the deployment's upstream key is invalid"
+            assert outcome.status_code != -1, (
+                "network failure between the test and the proxy while provoking the provider "
+                "failure; retrying now could double-log the failure payload and falsely trip "
+                f"the exactly-one assertion - fix the rig connectivity first: {outcome.body[:200]}"
+            )
+            if "AnthropicException" in outcome.body or time.monotonic() >= deadline:
+                break
+            time.sleep(client.proxy.poll_interval)
+        assert "AnthropicException" in outcome.body, (
+            "never saw the upstream provider failure before the deadline; the key may still be "
+            f"propagating - last outcome {outcome.status_code}: {outcome.body[:200]}"
+        )
+        assert outcome.status_code == 401, (
+            f"an upstream auth failure must map to 401, got {outcome.status_code}: {outcome.body[:200]}"
+        )
+
+        events = dd_logs.poll_events_for_query(f"@model_group:{model_name}")
+        payload = _assert_exactly_one_failure_event(events, model_group=model_name)
+        assert payload.error_str is not None and "AnthropicException" in payload.error_str, (
+            f"the event must carry the provider error, got error_str={payload.error_str!r}"
         )

@@ -2,6 +2,7 @@
 Repository classes for database operations.
 """
 
+from litellm.repositories.autorouter_session_repository import AutoRouterSessionRepository
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.credentials_repository import CredentialsRepository
@@ -28,6 +29,7 @@ from litellm.repositories.table_repositories import (
     ClaudeCodePluginRepository,
     ConfigOverridesRepository,
     DailyGuardrailMetricsRepository,
+    DailyGuardrailUsageUnitsRepository,
     DailyPolicyMetricsRepository,
     DailyTagSpendRepository,
     DailyToolSpendRepository,
@@ -70,10 +72,14 @@ from litellm.repositories.table_repositories import (
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.unit_of_work import (
+    BudgetCascadeUnitOfWork,
+    BudgetWindowWrites,
     KeySpendResetWrites,
+    LinkedSpendResetWrites,
     SpendResetUnitOfWork,
     TeamSpendResetWrites,
     UserSpendResetWrites,
+    budget_cascade_unit_of_work,
     spend_reset_unit_of_work,
 )
 from litellm.repositories.user_repository import UserRepository
@@ -87,14 +93,18 @@ __all__ = [
     "AdaptiveRouterStateRepository",
     "AgentsRepository",
     "AuditLogRepository",
+    "AutoRouterSessionRepository",
     "BatchTable",
+    "BudgetCascadeUnitOfWork",
     "BudgetRepository",
+    "BudgetWindowWrites",
     "CacheConfigRepository",
     "ClaudeCodePluginRepository",
     "ConfigOverridesRepository",
     "ConfigRepository",
     "CredentialsRepository",
     "DailyGuardrailMetricsRepository",
+    "DailyGuardrailUsageUnitsRepository",
     "DailyPolicyMetricsRepository",
     "DailyTagSpendRepository",
     "DailyToolSpendRepository",
@@ -107,6 +117,7 @@ __all__ = [
     "InvitationLinkRepository",
     "JWTKeyMappingRepository",
     "KeySpendResetWrites",
+    "LinkedSpendResetWrites",
     "MCPServerRepository",
     "MCPToolsetRepository",
     "MCPUserCredentialsRepository",
@@ -149,5 +160,6 @@ __all__ = [
     "WorkflowEventRepository",
     "WorkflowMessageRepository",
     "WorkflowRunRepository",
+    "budget_cascade_unit_of_work",
     "spend_reset_unit_of_work",
 ]

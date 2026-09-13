@@ -14,12 +14,12 @@ use std::sync::Arc;
 use litellm_ai_gateway::io::realtime_pool::{PoolConfig, RealtimePool, upstream_key};
 use litellm_ai_gateway::routes;
 use litellm_ai_gateway::state::AppState;
+#[cfg(feature = "python-config")]
+use litellm_config::load_model_list;
 use litellm_core::router::{Deployment, LiteLLMParams, Router};
 
 use litellm_ai_gateway::integrations::custom_logger::CustomLogger;
 use litellm_ai_gateway::integrations::litellm_python_proxy_api::LiteLLMPythonProxyAPILogger;
-#[cfg(feature = "python-config")]
-use litellm_ai_gateway::python;
 
 /// Bind to localhost by default so the gateway is not a public, unauthenticated
 /// provider proxy out of the box. Override with `HOST` (e.g. `0.0.0.0`).
@@ -124,10 +124,10 @@ fn resolve_port() -> u16 {
 fn build_router() -> Router {
     #[cfg(feature = "python-config")]
     if let Ok(config_path) = std::env::var("LITELLM_CONFIG_PATH") {
-        match python::config::load_router_from_config(&config_path) {
-            Ok(router) => {
+        match load_model_list(std::path::Path::new(&config_path)) {
+            Ok(deployments) => {
                 eprintln!("loaded model_list from {config_path} via python config reader");
-                return router;
+                return Router::new(deployments);
             }
             Err(err) => {
                 eprintln!("config load failed ({err}); falling back to env deployment");

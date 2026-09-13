@@ -23,6 +23,9 @@ func resourceLiteLLMOrganization() *schema.Resource {
 		Read:   resourceLiteLLMOrganizationRead,
 		Update: resourceLiteLLMOrganizationUpdate,
 		Delete: resourceLiteLLMOrganizationDelete,
+		Importer: &schema.ResourceImporter{
+			StateContext: schema.ImportStatePassthroughContext,
+		},
 
 		Schema: map[string]*schema.Schema{
 			"organization_alias": {

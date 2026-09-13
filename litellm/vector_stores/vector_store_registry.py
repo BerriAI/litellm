@@ -1,7 +1,14 @@
 # litellm/proxy/vector_stores/vector_store_registry.py
 import json
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Final, get_args
+from typing import (
+    TYPE_CHECKING,
+    Any,  # noqa: TID251  # untyped non_default_params dict is the only source of the unknown key type
+    Final,
+    cast,  # noqa: TID251  # untyped non_default_params dict is the only source of the unknown key type
+    get_args,
+)
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import remove_items_at_indices
@@ -105,7 +112,9 @@ class VectorStoreRegistry:
         Dynamically extracts all parameters defined in VECTOR_STORE_OPENAI_PARAMS.
         """
         # Get the list of supported param names from the Literal type
-        supported_params: Final = get_args(VECTOR_STORE_OPENAI_PARAMS)
+        supported_params: Final = tuple(
+            param for param in get_args(VECTOR_STORE_OPENAI_PARAMS) if isinstance(param, str)
+        )
 
         # Extract only the params that exist in the tool
         kwargs: Final = {param: tool.get(param) for param in supported_params if param in tool}
@@ -336,7 +345,9 @@ class VectorStoreRegistry:
                 try:
                     # Check if it still exists in database
                     db_vector_store = await ManagedVectorStoresRepository(prisma_client).table.find_unique(
-                        where={"vector_store_id": vector_store_id}
+                        where=cast(  # cast-ok: every value is already an object, only the popped id is stub-untyped
+                            "Mapping[str, object]", {"vector_store_id": vector_store_id}
+                        )
                     )
                     if db_vector_store is None:
                         # Vector store was deleted from database, remove from cache
@@ -494,7 +505,7 @@ class VectorStoreRegistry:
                 vector_stores_from_db.append(_litellm_managed_vector_store)
         return vector_stores_from_db
 
-    def get_credentials_for_vector_store(self, vector_store_id: str) -> dict[str, Any]:
+    def get_credentials_for_vector_store(self, vector_store_id: str) -> dict[str, object]:
         """
         Get the credentials for a vector store
 

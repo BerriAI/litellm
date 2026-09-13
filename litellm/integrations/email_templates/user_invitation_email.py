@@ -131,7 +131,7 @@ USER_INVITATION_EMAIL_TEMPLATE: Final = """
             </div>
 
             <div class="btn-container">
-                <a href="{base_url}" class="btn">Accept Invitation</a>
+                <a href="{invitation_link}" class="btn">Accept Invitation</a>
             </div>
             
             <div class="quickstart">

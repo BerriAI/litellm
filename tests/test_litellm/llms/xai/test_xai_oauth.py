@@ -556,7 +556,7 @@ def test_get_llm_provider_uses_single_xai_provider(monkeypatch):
 
 
 def test_xai_oauth_alias_is_not_a_provider():
-    with pytest.raises(Exception):
+    with pytest.raises(litellm.BadRequestError):
         get_llm_provider("xai_oauth/grok-4")
 
 

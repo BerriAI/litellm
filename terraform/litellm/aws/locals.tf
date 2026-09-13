@@ -25,6 +25,36 @@ locals {
     var.tags,
   )
 
+  # Networking, database, and cache are each either module-owned or
+  # bring-your-own. Everything downstream reads these locals rather than the
+  # resources, so a resource going to zero instances doesn't ripple.
+  create_vpc         = var.vpc_id == ""
+  vpc_id             = local.create_vpc ? aws_vpc.this[0].id : var.vpc_id
+  public_subnet_ids  = local.create_vpc ? aws_subnet.public[*].id : var.public_subnet_ids
+  private_subnet_ids = local.create_vpc ? aws_subnet.private[*].id : var.private_subnet_ids
+
+  task_security_group_ids = concat([aws_security_group.tasks.id], var.additional_task_security_group_ids)
+
+  # `byo_*` is the existing-store branch, `database_enabled` is either branch.
+  # Neither branch means the component is absent: no DB (no key management,
+  # spend tracking, or UI persistence) or no Redis (per-task rate limits and
+  # cooldowns instead of cluster-wide).
+  # nonsensitive() on the emptiness check only: without it the sensitivity of
+  # the URLs propagates into every value derived from these flags, redacting
+  # unrelated task-definition and output diffs in the plan.
+  byo_database     = !var.create_database && nonsensitive(var.database_url != "")
+  byo_redis        = !var.create_redis && nonsensitive(var.redis_url != "")
+  database_enabled = var.create_database || local.byo_database
+  redis_enabled    = var.create_redis || local.byo_redis
+
+  # Aurora and ElastiCache subnet groups both demand two AZs, so supplied
+  # private subnets have to cover two whenever either store is module-created.
+  managed_stores_need_two_azs = var.create_database || var.create_redis
+
+  # Every uvicorn worker in every gateway task counts its own rate limits when
+  # there is no Redis to share them through, so the ceiling is tasks x workers.
+  max_gateway_processes = (var.gateway_autoscaling_enabled ? var.gateway_max_capacity : var.gateway_desired_count) * var.gateway_num_workers
+
   gateway_path_prefixes = [
     "/v1/chat/*", "/chat/*",
     "/v1/completions*", "/completions*",
@@ -56,7 +86,7 @@ locals {
     "/queue/chat/*",
     "/v1beta/*",
     "/interactions/*",
-    "/anthropic/*", "/azure/*", "/azure_ai/*", "/aws/*", "/bedrock/*",
+    "/anthropic/*", "/azure/*", "/azure_ai/*", "/aws/*", "/bedrock/*", "/comprehendmedical*",
     "/cohere/*", "/gemini/*", "/google/*",
     "/vertex_ai/*", "/vertex-ai/*",
     "/assemblyai/*", "/eu.assemblyai/*",

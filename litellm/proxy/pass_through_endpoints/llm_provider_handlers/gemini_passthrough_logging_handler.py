@@ -92,7 +92,7 @@ class GeminiPassthroughLoggingHandler:
                 litellm_params={},
                 api_key="",
                 request_data={},
-                encoding=litellm.encoding,
+                encoding=getattr(litellm, "encoding", None),
             )
             kwargs = GeminiPassthroughLoggingHandler._create_gemini_response_logging_payload_for_generate_content(
                 litellm_model_response=litellm_model_response,

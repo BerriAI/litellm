@@ -1041,3 +1041,309 @@ async def test_executor_failure_is_not_tagged():
             )
 
     assert is_advisor_orchestration_failure(exc_info.value) is False
+
+
+# ---------------------------------------------------------------------------
+# 15. The advisor sub-call resolves through the proxy router when the advisor
+#     model is configured in model_list, instead of dialing the public
+#     Anthropic API (regression for LIT-5307).
+# ---------------------------------------------------------------------------
+
+
+def _router_with_advisor_deployment(
+    recorder, advisor_model="claude-opus-4-8", deployment_model=None, model_group_alias=None
+):
+    """Build a Router whose only deployment is the advisor model on Foundry.
+
+    The recorder replaces ``litellm.anthropic_messages`` before construction
+    because Router binds it at init time, so the returned Router exercises the
+    real deployment-resolution path and records what it dispatched.
+    """
+    import litellm
+    from litellm.router import Router
+
+    with patch("litellm.anthropic_messages", new=recorder):
+        return Router(
+            model_list=[
+                {
+                    "model_name": advisor_model,
+                    "litellm_params": {
+                        "model": deployment_model or f"azure_ai/{advisor_model}",
+                        "api_base": "http://127.0.0.1:1/foundry",
+                        "api_key": "fake-foundry-key",
+                    },
+                }
+            ],
+            model_group_alias=model_group_alias,
+            num_retries=0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_advisor_sub_call_routes_through_proxy_router():
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        AdvisorOrchestrationHandler,
+    )
+
+    router_calls = []
+
+    async def recorder(**kwargs):
+        router_calls.append(kwargs)
+        return _make_text_response("Use trial division.", model="claude-opus-4-8")
+
+    router = _router_with_advisor_deployment(recorder)
+
+    call_count = 0
+
+    async def mock_call(model, messages, tools, stream, max_tokens, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _make_advisor_tool_use_response()
+        return _make_text_response("Final answer.")
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+            side_effect=mock_call,
+        ),
+        patch.object(proxy_server, "llm_router", router),
+    ):
+        h = AdvisorOrchestrationHandler()
+        result = await h.handle(
+            model="executor-model",
+            messages=MESSAGES,
+            tools=[{**ADVISOR_TOOL, "model": "claude-opus-4-8"}],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="azure_ai",
+        )
+
+    assert call_count == 2
+    assert len(router_calls) == 1
+    assert router_calls[0]["model"] == "azure_ai/claude-opus-4-8"
+    assert router_calls[0]["api_base"] == "http://127.0.0.1:1/foundry"
+    assert router_calls[0]["api_key"] == "fake-foundry-key"
+    assert "Final answer." in result["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("router_kwargs", "advisor_model"),
+    [
+        pytest.param({"model_group_alias": {"advisor": "claude-opus-4-8"}}, "advisor", id="model_group_alias"),
+        pytest.param(
+            {"advisor_model": "azure_ai/*", "deployment_model": "azure_ai/*"},
+            "azure_ai/claude-opus-4-8",
+            id="wildcard",
+        ),
+    ],
+)
+async def test_advisor_sub_call_routes_through_router_for_alias_and_wildcard(router_kwargs, advisor_model):
+    """Alias and wildcard advisor models resolve through the router like exact model_list matches."""
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        AdvisorOrchestrationHandler,
+    )
+
+    router_calls = []
+
+    async def recorder(**kwargs):
+        router_calls.append(kwargs)
+        return _make_text_response("Use trial division.", model="claude-opus-4-8")
+
+    router = _router_with_advisor_deployment(recorder, **router_kwargs)
+
+    call_count = 0
+
+    async def mock_call(model, messages, tools, stream, max_tokens, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _make_advisor_tool_use_response()
+        return _make_text_response("Final answer.")
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+            side_effect=mock_call,
+        ),
+        patch.object(proxy_server, "llm_router", router),
+    ):
+        h = AdvisorOrchestrationHandler()
+        await h.handle(
+            model="executor-model",
+            messages=MESSAGES,
+            tools=[{**ADVISOR_TOOL, "model": advisor_model}],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="azure_ai",
+        )
+
+    assert call_count == 2
+    assert len(router_calls) == 1
+    assert router_calls[0]["model"] == "azure_ai/claude-opus-4-8"
+    assert router_calls[0]["api_base"] == "http://127.0.0.1:1/foundry"
+    assert router_calls[0]["api_key"] == "fake-foundry-key"
+
+
+@pytest.mark.asyncio
+async def test_advisor_sub_call_bypasses_router_for_unconfigured_model():
+    """An advisor model the router doesn't know about keeps the SDK-level path."""
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        AdvisorOrchestrationHandler,
+    )
+
+    router_calls = []
+
+    async def recorder(**kwargs):
+        router_calls.append(kwargs)
+        return _make_text_response("should not be used")
+
+    router = _router_with_advisor_deployment(recorder, advisor_model="some-other-model")
+
+    call_count = 0
+
+    async def mock_call(model, messages, tools, stream, max_tokens, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _make_advisor_tool_use_response()
+        if tools is None:
+            return _make_text_response("Advice.", model="claude-opus-4-8")
+        return _make_text_response("Final answer.")
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+            side_effect=mock_call,
+        ),
+        patch.object(proxy_server, "llm_router", router),
+    ):
+        h = AdvisorOrchestrationHandler()
+        await h.handle(
+            model="executor-model",
+            messages=MESSAGES,
+            tools=[{**ADVISOR_TOOL, "model": "claude-opus-4-8"}],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="azure_ai",
+        )
+
+    assert router_calls == []
+    assert call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_advisor_sub_call_client_override_bypasses_router():
+    """A caller-supplied api_key/api_base override must not be re-routed."""
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        AdvisorOrchestrationHandler,
+    )
+
+    router_calls = []
+
+    async def recorder(**kwargs):
+        router_calls.append(kwargs)
+        return _make_text_response("should not be used")
+
+    router = _router_with_advisor_deployment(recorder)
+
+    sub_calls = []
+
+    async def mock_call(model, messages, tools, stream, max_tokens, **kwargs):
+        sub_calls.append({"model": model, "tools": tools, **kwargs})
+        if len(sub_calls) == 1:
+            return _make_advisor_tool_use_response()
+        if tools is None:
+            return _make_text_response("Advice.", model="claude-opus-4-8")
+        return _make_text_response("Final answer.")
+
+    advisor_tool = {
+        **ADVISOR_TOOL,
+        "model": "claude-opus-4-8",
+        "api_key": "client-key",
+        "api_base": "https://client.example.com",
+    }
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+            side_effect=mock_call,
+        ),
+        patch.object(proxy_server, "llm_router", router),
+        patch.dict(proxy_server.general_settings, {"allow_client_side_credentials": True}),
+        patch.object(litellm, "user_url_validation", False),
+    ):
+        h = AdvisorOrchestrationHandler()
+        await h.handle(
+            model="executor-model",
+            messages=MESSAGES,
+            tools=[advisor_tool],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="azure_ai",
+        )
+
+    assert router_calls == []
+    advisor_sub_calls = [c for c in sub_calls if c["tools"] is None]
+    assert len(advisor_sub_calls) == 1
+    assert advisor_sub_calls[0]["api_key"] == "client-key"
+    assert advisor_sub_calls[0]["api_base"] == "https://client.example.com"
+
+
+# ---------------------------------------------------------------------------
+# 16. In-sequence system rows (e.g. Claude Code SessionStart hook output) are
+#     excluded from the advisor sub-call context but kept for the executor: a
+#     trailing system row followed by the appended question turn is rejected
+#     upstream ("role 'system' must precede an 'assistant' message or end the
+#     array").
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_advisor_context_excludes_in_sequence_system_rows():
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        AdvisorOrchestrationHandler,
+    )
+
+    messages_with_system_row = [
+        *MESSAGES,
+        {"role": "system", "content": "SessionStart hook output: prefer functional style."},
+    ]
+
+    sub_calls = []
+
+    async def mock_call(model, messages, tools, stream, max_tokens, **kwargs):
+        sub_calls.append({"messages": messages, "tools": tools})
+        if len(sub_calls) == 1:
+            return _make_advisor_tool_use_response()
+        if tools is None:
+            return _make_text_response("Advice.", model="claude-opus-4-6")
+        return _make_text_response("Final answer.")
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+        side_effect=mock_call,
+    ):
+        h = AdvisorOrchestrationHandler()
+        await h.handle(
+            model="openai/gpt-4o-mini",
+            messages=messages_with_system_row,
+            tools=[ADVISOR_TOOL],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="openai",
+        )
+
+    assert len(sub_calls) == 3
+    advisor_messages = sub_calls[1]["messages"]
+    assert sub_calls[1]["tools"] is None
+    assert [m["role"] for m in advisor_messages if m["role"] == "system"] == []
+    assert advisor_messages[-1]["role"] == "user"
+    executor_roles = [m["role"] for m in sub_calls[0]["messages"]]
+    assert "system" in executor_roles

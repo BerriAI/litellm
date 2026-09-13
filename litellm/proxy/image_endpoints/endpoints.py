@@ -1,8 +1,11 @@
 import asyncio
+import io
 import traceback
+from collections.abc import Sequence
+from typing import Final, get_type_hints
 
 import orjson
-from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import ORJSONResponse
 
 import litellm
@@ -13,15 +16,22 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_utils.http_parsing_utils import (
+    coerce_numeric_form_fields,
+    numeric_form_fields,
+)
+from litellm.proxy.common_utils.openai_error_payload import (
+    error_status_code,
+    openai_error_param,
+    openai_error_type,
+)
 from litellm.proxy.route_llm_request import route_request
+from litellm.types.images.main import ImageEditRequestParams
 from litellm.types.llms.openai import ChatCompletionUserMessage
 
 router: Final = APIRouter()
 
-import io
-from typing import Final
-
-from fastapi import UploadFile
+IMAGE_EDIT_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(get_type_hints(ImageEditRequestParams))
 
 
 async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
@@ -36,10 +46,10 @@ async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
 
 
 async def batch_to_bytesio(
-    uploads: list[UploadFile] | None,
+    uploads: Sequence[UploadFile] | None,
 ) -> list[io.BytesIO] | None:
     """
-    Convert a list of UploadFiles to a list of BytesIO buffers, or None.
+    Convert a sequence of UploadFiles to a list of BytesIO buffers, or None.
     """
     if not uploads:
         return None
@@ -195,18 +205,18 @@ async def image_generation(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
+                code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
             )
         else:
             error_msg: Final = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+                type=openai_error_type(e, error_status_code(e, 500)),
+                param=openai_error_param(e),
                 openai_code=getattr(e, "code", None),
-                code=getattr(e, "status_code", 500),
+                code=error_status_code(e, 500),
             )
 
 
@@ -281,7 +291,12 @@ async def image_edit_api(
     #########################################################
     # Read request body and convert UploadFiles to BytesIO
     #########################################################
-    data: Final = await _read_request_body(request=request)
+    data: Final = dict(
+        coerce_numeric_form_fields(
+            parsed_body=await _read_request_body(request=request),
+            numeric_fields=IMAGE_EDIT_NUMERIC_FORM_FIELDS,
+        )
+    )
     image_files: Final = await batch_to_bytesio(image)
     mask_files: Final = await batch_to_bytesio(mask)
     if image_files:

@@ -8,7 +8,7 @@ Docs: https://openrouter.ai/docs/parameters
 
 from collections.abc import AsyncIterator, Iterator
 from enum import Enum
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 
@@ -21,6 +21,11 @@ from litellm.types.utils import ModelResponse, ModelResponseStream
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import OpenRouterException
+
+if TYPE_CHECKING:
+    import tiktoken
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class CacheControlSupportedModels(str, Enum):
@@ -172,12 +177,12 @@ class OpenrouterConfig(OpenAIGPTConfig):
         model: str,
         raw_response: httpx.Response,
         model_response: ModelResponse,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         request_data: dict,
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

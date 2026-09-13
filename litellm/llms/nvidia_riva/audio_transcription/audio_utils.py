@@ -16,7 +16,7 @@ import io
 import os
 import tempfile
 from dataclasses import dataclass
-from typing import Any, Final, cast
+from typing import Final, Protocol, cast
 
 from litellm.llms.nvidia_riva.audio_transcription.transformation import (
     RIVA_TARGET_NUM_CHANNELS,
@@ -24,10 +24,30 @@ from litellm.llms.nvidia_riva.audio_transcription.transformation import (
 )
 from litellm.llms.nvidia_riva.common_utils import NvidiaRivaException
 
-# Keep this as Any: the module intentionally avoids importing numpy at module
-# import time (optional dependency), and project-wide mypy config evaluates this
-# file in contexts where conditional type aliases can degrade to "FloatArray?".
-FloatArray = Any
+
+class FloatArray(Protocol):
+    """Structural view of the ``numpy.ndarray`` surface this module relies on."""
+
+    @property
+    def ndim(self) -> int: ...
+
+    @property
+    def shape(self) -> tuple[int, ...]: ...
+
+    @property
+    def size(self) -> int: ...
+
+    def mean(self, axis: int) -> "FloatArray": ...
+
+    def ravel(self) -> "FloatArray": ...
+
+    def astype(self, dtype: object) -> "FloatArray": ...
+
+    def tobytes(self) -> bytes: ...
+
+    def __getitem__(self, key: object) -> "FloatArray": ...
+
+    def __mul__(self, other: float) -> "FloatArray": ...
 
 
 _INSTALL_HINT = "Install Riva STT extras to enable automatic audio resampling: `pip install 'litellm[stt-nvidia-riva]'`"
