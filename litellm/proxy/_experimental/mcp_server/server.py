@@ -139,14 +139,10 @@ class _JSONRPCErrorEnvelopeForLogging(TypedDict):
     error: ReadOnly[_JSONRPCErrorForLogging]
 
 
-_JSONRPC_REQUEST_FOR_LOGGING_ADAPTER: Final[
-    TypeAdapter[_JSONRPCRequestForLogging | tuple[object, ...]]
-] = TypeAdapter(
+_JSONRPC_REQUEST_FOR_LOGGING_ADAPTER: Final[TypeAdapter[_JSONRPCRequestForLogging | tuple[object, ...]]] = TypeAdapter(
     _JSONRPCRequestForLogging | tuple[object, ...]
 )
-_JSONRPC_PARAMS_FOR_LOGGING_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(
-    Mapping[str, object]
-)
+_JSONRPC_PARAMS_FOR_LOGGING_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _JSONRPC_ERROR_FOR_LOGGING_ADAPTER: Final[TypeAdapter[_JSONRPCErrorEnvelopeForLogging]] = TypeAdapter(
     _JSONRPCErrorEnvelopeForLogging
 )
@@ -3726,7 +3722,9 @@ if MCP_AVAILABLE:
             if tool_name is not None:
                 spend_logs_metadata["mcp_tool_name"] = tool_name
 
-            request_data: Final[dict[str, object]] = {  # mutable-ok: auth enrichment mutates this legacy request payload
+            request_data: Final[
+                dict[str, object]
+            ] = {  # mutable-ok: auth enrichment mutates this legacy request payload
                 "model": "MCP: protocol_error",
                 "call_type": CallTypes.call_mcp_tool.value,
                 "litellm_call_id": str(uuid.uuid4()),
@@ -3799,9 +3797,7 @@ if MCP_AVAILABLE:
             json_body: Final = stripped_body
         else:
             data_lines: Final = tuple(
-                line.removeprefix(b"data:").lstrip()
-                for line in raw_body.splitlines()
-                if line.startswith(b"data:")
+                line.removeprefix(b"data:").lstrip() for line in raw_body.splitlines() if line.startswith(b"data:")
             )
             if len(data_lines) != 1:
                 return None
