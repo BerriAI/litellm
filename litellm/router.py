@@ -13878,6 +13878,7 @@ class Router:
                 cooldown_time=_cooldown_time,
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
+                model_ids=model_ids,
             )
 
         if strategy == "simple-shuffle":
@@ -13910,6 +13911,7 @@ class Router:
                 cooldown_time=_cooldown_time,
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
+                model_ids=model_ids,
             )
         self._override_selector_pre_call_check(strategy, strategy_selector, deployment)
         verbose_router_logger.info(
@@ -14024,6 +14026,7 @@ class Router:
                 cooldown_time=_cooldown_time,
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
+                model_ids=model_ids,
             )
 
         # 6. Apply load balancing strategy
@@ -14057,6 +14060,7 @@ class Router:
                 cooldown_time=_cooldown_time,
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
+                model_ids=model_ids,
             )
         self._override_selector_pre_call_check(strategy, strategy_selector, deployment)
 

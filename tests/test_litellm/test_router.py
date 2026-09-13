@@ -7735,6 +7735,52 @@ def test_get_available_deployment_raises_when_addressed_dict_is_blocked():
         router.get_available_deployment(model="dep-0", request_kwargs={})
 
 
+def _cool_down(router: Router, *deployment_ids: str) -> None:
+    for deployment_id in deployment_ids:
+        router.cooldown_cache.add_deployment_to_cooldown(
+            model_id=deployment_id,
+            original_exception=litellm.RateLimitError(message="upstream 429", llm_provider="openai", model="gpt-4o"),
+            exception_status=429,
+            cooldown_time=60,
+        )
+
+
+async def _select_deployment(router: Router, use_async: bool) -> None:
+    if use_async:
+        await router.async_get_available_deployment(model="gpt-4o", request_kwargs={})
+        return
+    router.get_available_deployment(model="gpt-4o", request_kwargs={})
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_get_available_deployment_names_cooldown_when_every_deployment_is_cooled_down(use_async: bool):
+    from litellm.types.router import RouterErrors, RouterRateLimitError
+
+    router: Final = _router_with_two_deployments([False, False])
+    _cool_down(router, "dep-0", "dep-1")
+    with pytest.raises(RouterRateLimitError) as exc_info:
+        await _select_deployment(router, use_async)
+    assert exc_info.value.all_deployments_in_cooldown is True
+    assert exc_info.value.type == "all_deployments_in_cooldown"
+    assert RouterErrors.all_deployments_in_cooldown.value in str(exc_info.value)
+    assert str(exc_info.value).startswith("No deployments available for selected model, Try again in ")
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_get_available_deployment_keeps_generic_error_when_cooldown_is_partial(use_async: bool):
+    from litellm.types.router import RouterErrors, RouterRateLimitError
+
+    router: Final = _router_with_two_deployments([False, True])
+    _cool_down(router, "dep-0")
+    with pytest.raises(RouterRateLimitError) as exc_info:
+        await _select_deployment(router, use_async)
+    assert exc_info.value.all_deployments_in_cooldown is False
+    assert exc_info.value.type == "rate_limit_error"
+    assert RouterErrors.all_deployments_in_cooldown.value not in str(exc_info.value)
+
+
 def _router_with_two_pass_through_deployments(blocked_flags):
     import litellm
 
