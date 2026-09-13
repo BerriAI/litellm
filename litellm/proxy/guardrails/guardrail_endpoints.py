@@ -36,7 +36,7 @@ from litellm.types.guardrails import (
     ApplyGuardrailRequest,
     ApplyGuardrailResponse,
     BaseLitellmParams,
-    BedrockGuardrailConfigModel,
+    BedrockGuardrailUIConfigModel,
     Guardrail,
     GuardrailEventHooks,
     GuardrailInfoResponse,
@@ -1840,6 +1840,7 @@ def _build_field_dict(
 def _extract_fields_recursive(
     model: type[BaseModel],
     depth: int = 0,
+    parent_required: bool = True,
 ) -> dict[str, object]:
     # Check if we've exceeded the maximum recursion depth
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
@@ -1865,7 +1866,7 @@ def _extract_fields_recursive(
 
         # Get field metadata
         description = field.description or field_name
-        required = field.is_required()
+        required = parent_required and field.is_required()
 
         # Check if this is a BaseModel subclass
         is_basemodel_subclass = (
@@ -1876,7 +1877,7 @@ def _extract_fields_recursive(
 
         if is_basemodel_subclass:
             # Recursively get fields from the nested model
-            nested_fields = _extract_fields_recursive(cast(type[BaseModel], field_annotation), depth + 1)
+            nested_fields = _extract_fields_recursive(cast(type[BaseModel], field_annotation), depth + 1, required)
             fields[field_name] = {
                 "description": description,
                 "required": required,
@@ -1959,7 +1960,7 @@ async def get_provider_specific_params():
     ```
     """
     # Get fields from the models
-    bedrock_fields: Final = _get_fields_from_model(BedrockGuardrailConfigModel)
+    bedrock_fields: Final = _get_fields_from_model(BedrockGuardrailUIConfigModel)
     presidio_fields: Final = _get_fields_from_model(PresidioPresidioConfigModelUserInterface)
     lakera_v2_fields: Final = _get_fields_from_model(LakeraV2GuardrailConfigModel)
     tool_permission_fields: Final = _get_fields_from_model(ToolPermissionGuardrailConfigModel)
