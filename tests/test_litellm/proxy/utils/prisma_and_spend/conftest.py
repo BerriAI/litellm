@@ -13,18 +13,13 @@ needing a generated Prisma client or a real database.
 from __future__ import annotations
 
 import asyncio
-import sys
 import threading
 from dataclasses import dataclass, field
 from email.message import EmailMessage
-from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
-
 
 VOLATILE_KEYS = frozenset(
     {
@@ -188,6 +183,7 @@ def patched_prisma_import(monkeypatch: pytest.MonkeyPatch) -> Iterator[MagicMock
     directly and restore in teardown.
     """
     import prisma as _prisma_pkg
+
     import litellm.proxy.utils as _utils_mod
 
     fake_prisma = MagicMock(name="FakePrisma")

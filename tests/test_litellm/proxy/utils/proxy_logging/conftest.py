@@ -6,15 +6,10 @@ live here. Tests should not declare fixtures inline.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from typing import Any, Dict, Optional
 from unittest.mock import MagicMock
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
-
 
 VOLATILE_KEYS = frozenset(
     {

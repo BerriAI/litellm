@@ -25,19 +25,6 @@ Tests cover (consolidating PRs #23706 and #22727):
    the fallback inference path from being exercised).
 """
 
-import os
-import sys
-from unittest.mock import MagicMock, patch
-
-import pytest
-
-# Anchor sys.path to this file's location — not the working-directory-relative
-# pattern Greptile flagged on PR #23706. Resolves correctly regardless of
-# where pytest is invoked from.
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../.."))
-)
-
 from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
     ANTHROPIC_ONLY_REQUEST_KEYS,
     LiteLLMMessagesToCompletionTransformationHandler,
