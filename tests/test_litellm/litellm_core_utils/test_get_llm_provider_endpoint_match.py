@@ -207,3 +207,36 @@ class TestGigachatApiBaseResolvesProvider:
         assert dynamic_api_key == "gigachat-key-from-env"
         assert returned_api_base == "https://gigachat.devices.sberbank.ru/api/v1"
         assert model == "GigaChat-2"
+
+
+class TestGondolaApiBaseResolution:
+    """
+    ``api_base`` pointing at Gondola's gateway resolves to the ``gondola``
+    provider through the generic JSON-provider branch, and a caller-supplied
+    key wins over the stored env secret so another provider's credential is
+    never sent to Gondola.
+    """
+
+    def test_gondola_api_base_resolves_with_env_key(self, monkeypatch):
+        monkeypatch.setenv("GONDOLA_API_KEY", "gnd_from_env")
+
+        _, provider, dynamic_api_key, api_base = get_llm_provider(
+            model="some-model",
+            api_base="https://api.gondola-ai.com/v1",
+        )
+
+        assert provider == "gondola"
+        assert dynamic_api_key == "gnd_from_env"
+        assert api_base == "https://api.gondola-ai.com/v1"
+
+    def test_caller_supplied_key_is_not_replaced_by_env_secret(self, monkeypatch):
+        monkeypatch.setenv("GONDOLA_API_KEY", "gnd_from_env")
+
+        _, provider, dynamic_api_key, _ = get_llm_provider(
+            model="some-model",
+            api_base="https://api.gondola-ai.com/v1",
+            api_key="gnd_caller-supplied",
+        )
+
+        assert provider == "gondola"
+        assert dynamic_api_key == "gnd_caller-supplied"

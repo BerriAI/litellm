@@ -62,6 +62,17 @@ describe("provider_info_helpers", () => {
       expect(result.logo).toBe(providerLogoMap[Providers.Groq]);
     });
 
+    it("should map gondola slug and GONDOLA enum key to the Gondola display name and logo", () => {
+      const fromSlug = getProviderLogoAndName("gondola");
+      expect(fromSlug.displayName).toBe(Providers.GONDOLA);
+      expect(fromSlug.logo).toBe(providerLogoMap[Providers.GONDOLA]);
+      expect(fromSlug.logo).toBeTruthy();
+
+      const fromEnumKey = getProviderLogoAndName("GONDOLA");
+      expect(fromEnumKey.displayName).toBe(Providers.GONDOLA);
+      expect(fromEnumKey.logo).toBe(providerLogoMap[Providers.GONDOLA]);
+    });
+
     it("should map scx-ai slug and SCX_AI enum key to the SCX.ai display name and logo", () => {
       const fromSlug = getProviderLogoAndName("scx-ai");
       expect(fromSlug.displayName).toBe(Providers.SCX_AI);
@@ -199,6 +210,10 @@ describe("provider_info_helpers", () => {
 
     it("should return gemini-pro placeholder for Vertex_AI provider", () => {
       expect(getPlaceholder(Providers.Vertex_AI)).toBe("gemini-pro");
+    });
+
+    it("should return a gondola model placeholder for GONDOLA provider", () => {
+      expect(getPlaceholder(Providers.GONDOLA)).toBe("gondola/deepseek-v3.2");
     });
 
     it("should return an scx-ai model placeholder for SCX_AI provider", () => {

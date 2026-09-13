@@ -65,6 +65,15 @@
       "max_completion_tokens": "max_tokens"
     }
   },
+  "gondola": {
+    "base_url": "https://api.gondola-ai.com/v1",
+    "api_key_env": "GONDOLA_API_KEY",
+    "api_base_env": "GONDOLA_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/messages"]
+  },
   "abliteration": {
     "base_url": "https://api.abliteration.ai/v1",
     "api_key_env": "ABLITERATION_API_KEY"
