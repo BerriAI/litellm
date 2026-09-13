@@ -63,7 +63,15 @@ class VertexPassthroughLoggingHandler:
         request_body: dict | None = None,
         **kwargs,
     ) -> PassThroughEndpointLoggingTypedDict:
-        vertex_location: Final = get_vertex_location_from_url(url_route)
+        # Prefer the vertex_location already set on the logging object (from
+        # litellm_params vertex_location config) over the URL-extracted value.
+        # The URL location may differ from the configured serving location
+        # (e.g. URL says us-central1 but model is configured as global).
+        url_vertex_location: Final = get_vertex_location_from_url(url_route)
+        vertex_location: Final = (
+            logging_obj.optional_params.get("vertex_location")
+            or url_vertex_location
+        )
         if vertex_location is not None:
             logging_obj.optional_params["vertex_location"] = vertex_location
         if "predictLongRunning" in url_route:
@@ -500,7 +508,13 @@ class VertexPassthroughLoggingHandler:
         - Logs in litellm callbacks
         """
         kwargs: dict[str, object] = {}
-        vertex_location: Final = get_vertex_location_from_url(url_route)
+        # Prefer the vertex_location already set on the logging object (from
+        # litellm_params vertex_location config) over the URL-extracted value.
+        url_vertex_location: Final = get_vertex_location_from_url(url_route)
+        vertex_location: Final = (
+            litellm_logging_obj.optional_params.get("vertex_location")
+            or url_vertex_location
+        )
         if vertex_location is not None:
             litellm_logging_obj.optional_params["vertex_location"] = vertex_location
         model = model or VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
