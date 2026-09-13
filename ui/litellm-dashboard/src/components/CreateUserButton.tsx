@@ -26,6 +26,7 @@ import {
   userCreateCall,
 } from "./networking";
 import OnboardingModal, { InvitationLink } from "./onboarding_link";
+import { orgsAdministeredBy } from "@/utils/roles";
 
 // Helper function to generate UUID compatible across all environments
 const generateUUID = (): string => {
@@ -170,6 +171,9 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
     label: `${org.organization_alias} (${org.organization_id})`,
     value: org.organization_id ?? "",
   }));
+  const administeredOrganizationIds = orgsAdministeredBy(organizations, userID)
+    .map((org) => org.organization_id)
+    .filter((id): id is string => Boolean(id));
 
   useEffect(() => {
     const fetchData = async () => {
@@ -192,6 +196,14 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
     setBaseUrl(getProxyBaseUrl());
     fetchData();
   }, []);
+
+  const handleOpen = () => {
+    form.reset({
+      ...defaultValues,
+      organization_ids: administeredOrganizationIds.length > 0 ? administeredOrganizationIds : undefined,
+    });
+    setIsModalVisible(true);
+  };
 
   const handleCancel = () => {
     setIsModalVisible(false);
@@ -325,7 +337,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
   // Original return for standalone mode
   return (
     <>
-      <Button type="button" onClick={() => setIsModalVisible(true)}>
+      <Button type="button" onClick={handleOpen}>
         + Invite User
       </Button>
       <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleCancel()}>

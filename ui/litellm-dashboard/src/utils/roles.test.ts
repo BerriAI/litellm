@@ -6,6 +6,7 @@ import {
   isAdminRole,
   spendScopeUserId,
   isOrgAdminForAnyOrg,
+  orgsAdministeredBy,
   isOrgAdminSessionRole,
   isProxyAdminRole,
   isUserTeamAdminForAnyTeam,
@@ -189,6 +190,27 @@ describe("roles", () => {
       expect(isOrgAdminForAnyOrg([{ organization_id: "org-1" } as unknown as Organization], "user-1")).toBe(false);
       expect(isOrgAdminForAnyOrg([orgWithMembers([{ user_id: "user-1", user_role: "org_admin" }])], null)).toBe(false);
       expect(isOrgAdminForAnyOrg([orgWithMembers([{ user_id: "user-1", user_role: "org_admin" }])], "")).toBe(false);
+    });
+  });
+
+  describe("orgsAdministeredBy", () => {
+    const org = (organization_id: string, members: { user_id: string; user_role: string }[]): Organization =>
+      ({ organization_id, members }) as unknown as Organization;
+
+    it("returns only the organizations the user administers", () => {
+      const organizations = [
+        org("org-1", [{ user_id: "user-1", user_role: "internal_user" }]),
+        org("org-2", [{ user_id: "user-1", user_role: "org_admin" }]),
+        org("org-3", [{ user_id: "user-2", user_role: "org_admin" }]),
+      ];
+
+      expect(orgsAdministeredBy(organizations, "user-1").map((o) => o.organization_id)).toEqual(["org-2"]);
+    });
+
+    it("returns an empty list for missing organizations or a missing user id", () => {
+      expect(orgsAdministeredBy(null, "user-1")).toEqual([]);
+      expect(orgsAdministeredBy(undefined, "user-1")).toEqual([]);
+      expect(orgsAdministeredBy([org("org-1", [{ user_id: "user-1", user_role: "org_admin" }])], null)).toEqual([]);
     });
   });
 
