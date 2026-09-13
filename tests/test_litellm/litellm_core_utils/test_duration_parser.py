@@ -23,9 +23,7 @@ class TestStandardizedResetTime(unittest.TestCase):
 
         # Weekly reset (7d) - should reset on next Monday
         wednesday = datetime(2023, 5, 17, 15, 45, 0, tzinfo=timezone.utc)  # A Wednesday
-        weekly_expected = datetime(
-            2023, 5, 22, 0, 0, 0, tzinfo=timezone.utc
-        )  # Next Monday
+        weekly_expected = datetime(2023, 5, 22, 0, 0, 0, tzinfo=timezone.utc)  # Next Monday
         weekly_result = get_next_standardized_reset_time("7d", wednesday, "UTC")
         self.assertEqual(weekly_result, weekly_expected)
 
@@ -76,6 +74,43 @@ class TestStandardizedResetTime(unittest.TestCase):
         second_result = get_next_standardized_reset_time("15s", base_time, "UTC")
         self.assertEqual(second_result, second_expected)
 
+    def test_multi_day_overflow_for_sub_day_units(self):
+        """Large hour/minute/second durations that span more than 24h must advance
+        by the actual number of days they overflow, not always exactly 1 day.
+
+        Regression test for https://github.com/BerriAI/litellm/issues/17993:
+        _handle_hour_reset/_handle_minute_reset/_handle_second_reset hardcoded
+        `timedelta(days=1)` on overnight rollover regardless of how many days the
+        value actually spanned, so e.g. "8760h" (365 days) landed 1 day out
+        instead of 365.
+        """
+        base_time = datetime(2023, 5, 15, 0, 0, 0, tzinfo=timezone.utc)
+
+        # 50h from midnight = 2 days + 2h out
+        hour_expected = datetime(2023, 5, 17, 2, 0, 0, tzinfo=timezone.utc)
+        hour_result = get_next_standardized_reset_time("50h", base_time, "UTC")
+        self.assertEqual(hour_result, hour_expected)
+
+        # 4000m (66h40m) from midnight = 2 days, 18h, 40m out
+        minute_expected = datetime(2023, 5, 17, 18, 40, 0, tzinfo=timezone.utc)
+        minute_result = get_next_standardized_reset_time("4000m", base_time, "UTC")
+        self.assertEqual(minute_result, minute_expected)
+
+        # 200000s from midnight = 2 days, 7h, 33m, 20s out
+        second_expected = datetime(2023, 5, 17, 7, 33, 20, tzinfo=timezone.utc)
+        second_result = get_next_standardized_reset_time("200000s", base_time, "UTC")
+        self.assertEqual(second_result, second_expected)
+
+        # Durations expressed in different units but covering the same span
+        # (365 days) must land on the exact same instant.
+        year_in_days = get_next_standardized_reset_time("365d", base_time, "UTC")
+        year_in_hours = get_next_standardized_reset_time("8760h", base_time, "UTC")
+        year_in_minutes = get_next_standardized_reset_time("525600m", base_time, "UTC")
+        year_in_seconds = get_next_standardized_reset_time("31536000s", base_time, "UTC")
+        self.assertEqual(year_in_days, year_in_hours)
+        self.assertEqual(year_in_days, year_in_minutes)
+        self.assertEqual(year_in_days, year_in_seconds)
+
     def test_timezone_handling(self):
         """Test timezone handling with different regions"""
         # Base time: 2023-05-15 22:30:00 UTC (late in UTC day)
@@ -105,17 +140,13 @@ class TestStandardizedResetTime(unittest.TestCase):
         # Europe/London (UTC+1): 11:30 PM, so next 15m reset is 11:45 PM
         london = ZoneInfo("Europe/London")
         london_expected = datetime(2023, 5, 15, 23, 45, 0, tzinfo=london)
-        london_result = get_next_standardized_reset_time(
-            "15m", base_time, "Europe/London"
-        )
+        london_result = get_next_standardized_reset_time("15m", base_time, "Europe/London")
         self.assertEqual(london_result, london_expected)
 
         # Test Bangkok timezone (UTC+7): 5:30 AM next day, so next reset is midnight the day after
         bangkok = ZoneInfo("Asia/Bangkok")
         bangkok_expected = datetime(2023, 5, 17, 0, 0, 0, tzinfo=bangkok)
-        bangkok_result = get_next_standardized_reset_time(
-            "1d", base_time, "Asia/Bangkok"
-        )
+        bangkok_result = get_next_standardized_reset_time("1d", base_time, "Asia/Bangkok")
         self.assertEqual(bangkok_result, bangkok_expected)
 
     def test_edge_cases(self):
@@ -137,16 +168,12 @@ class TestStandardizedResetTime(unittest.TestCase):
 
         # 30m near midnight - should roll over to next day
         midnight_minute_expected = datetime(2023, 5, 16, 0, 0, 0, tzinfo=timezone.utc)
-        midnight_minute_result = get_next_standardized_reset_time(
-            "30m", near_midnight, "UTC"
-        )
+        midnight_minute_result = get_next_standardized_reset_time("30m", near_midnight, "UTC")
         self.assertEqual(midnight_minute_result, midnight_minute_expected)
 
         # Invalid timezone - should fall back to UTC
         invalid_tz_expected = datetime(2023, 5, 16, 0, 0, 0, tzinfo=timezone.utc)
-        invalid_tz_result = get_next_standardized_reset_time(
-            "1d", on_hour, "NonExistentTimeZone"
-        )
+        invalid_tz_result = get_next_standardized_reset_time("1d", on_hour, "NonExistentTimeZone")
         self.assertEqual(invalid_tz_result, invalid_tz_expected)
 
     def test_iana_timezones_previously_unsupported(self):
@@ -164,17 +191,13 @@ class TestStandardizedResetTime(unittest.TestCase):
         sydney = ZoneInfo("Australia/Sydney")
         # At 15:00 UTC it's 01:00 AEST May 16 → next midnight is May 17 00:00 AEST
         sydney_expected = datetime(2023, 5, 17, 0, 0, 0, tzinfo=sydney)
-        sydney_result = get_next_standardized_reset_time(
-            "1d", base_time, "Australia/Sydney"
-        )
+        sydney_result = get_next_standardized_reset_time("1d", base_time, "Australia/Sydney")
         self.assertEqual(sydney_result, sydney_expected)
 
         # America/Chicago (UTC-5): at 15:00 UTC it's 10:00 CDT → next midnight is May 16 00:00 CDT
         chicago = ZoneInfo("America/Chicago")
         chicago_expected = datetime(2023, 5, 16, 0, 0, 0, tzinfo=chicago)
-        chicago_result = get_next_standardized_reset_time(
-            "1d", base_time, "America/Chicago"
-        )
+        chicago_result = get_next_standardized_reset_time("1d", base_time, "America/Chicago")
         self.assertEqual(chicago_result, chicago_expected)
 
     def test_dst_fall_back(self):
@@ -209,107 +232,77 @@ class TestResetTimeOfDay(unittest.TestCase):
 
     def test_daily_reset_before_offset_is_today(self):
         now = datetime(2023, 5, 15, 8, 0, 0, tzinfo=timezone.utc)
-        result = get_next_standardized_reset_time(
-            "1d", now, "UTC", reset_time_of_day=time(12, 0)
-        )
+        result = get_next_standardized_reset_time("1d", now, "UTC", reset_time_of_day=time(12, 0))
         self.assertEqual(result, datetime(2023, 5, 15, 12, 0, 0, tzinfo=timezone.utc))
 
     def test_daily_reset_after_offset_is_tomorrow(self):
         now = datetime(2023, 5, 15, 14, 0, 0, tzinfo=timezone.utc)
-        result = get_next_standardized_reset_time(
-            "1d", now, "UTC", reset_time_of_day=time(12, 0)
-        )
+        result = get_next_standardized_reset_time("1d", now, "UTC", reset_time_of_day=time(12, 0))
         self.assertEqual(result, datetime(2023, 5, 16, 12, 0, 0, tzinfo=timezone.utc))
 
     def test_daily_reset_exactly_at_offset_rolls_forward(self):
         now = datetime(2023, 5, 15, 12, 0, 0, tzinfo=timezone.utc)
-        result = get_next_standardized_reset_time(
-            "1d", now, "UTC", reset_time_of_day=time(12, 0)
-        )
+        result = get_next_standardized_reset_time("1d", now, "UTC", reset_time_of_day=time(12, 0))
         self.assertEqual(result, datetime(2023, 5, 16, 12, 0, 0, tzinfo=timezone.utc))
 
     def test_daily_reset_with_seconds_offset(self):
         now = datetime(2023, 5, 15, 8, 0, 0, tzinfo=timezone.utc)
-        result = get_next_standardized_reset_time(
-            "1d", now, "UTC", reset_time_of_day=time(9, 30, 15)
-        )
+        result = get_next_standardized_reset_time("1d", now, "UTC", reset_time_of_day=time(9, 30, 15))
         self.assertEqual(result, datetime(2023, 5, 15, 9, 30, 15, tzinfo=timezone.utc))
 
     def test_offset_applies_in_configured_timezone(self):
         # 2023-05-15 22:30 UTC == 2023-05-16 01:30 in Jerusalem (IDT, UTC+3),
         # so the next noon-Jerusalem reset is 2023-05-16 12:00 IDT.
         now = datetime(2023, 5, 15, 22, 30, 0, tzinfo=timezone.utc)
-        result = get_next_standardized_reset_time(
-            "1d", now, "Asia/Jerusalem", reset_time_of_day=time(12, 0)
-        )
+        result = get_next_standardized_reset_time("1d", now, "Asia/Jerusalem", reset_time_of_day=time(12, 0))
         jerusalem = result.astimezone(ZoneInfo("Asia/Jerusalem"))
-        self.assertEqual(
-            (jerusalem.year, jerusalem.month, jerusalem.day), (2023, 5, 16)
-        )
+        self.assertEqual((jerusalem.year, jerusalem.month, jerusalem.day), (2023, 5, 16))
         self.assertEqual(jerusalem.hour, 12)
         self.assertEqual(jerusalem.minute, 0)
 
     def test_weekly_reset_lands_on_monday_at_offset(self):
         wednesday = datetime(2023, 5, 17, 15, 45, 0, tzinfo=timezone.utc)
-        result = get_next_standardized_reset_time(
-            "7d", wednesday, "UTC", reset_time_of_day=time(12, 0)
-        )
+        result = get_next_standardized_reset_time("7d", wednesday, "UTC", reset_time_of_day=time(12, 0))
         self.assertEqual(result, datetime(2023, 5, 22, 12, 0, 0, tzinfo=timezone.utc))
 
     def test_weekly_reset_today_is_monday_before_offset_is_today(self):
         monday_morning = datetime(2023, 5, 22, 9, 0, 0, tzinfo=timezone.utc)
-        result = get_next_standardized_reset_time(
-            "7d", monday_morning, "UTC", reset_time_of_day=time(12, 0)
-        )
+        result = get_next_standardized_reset_time("7d", monday_morning, "UTC", reset_time_of_day=time(12, 0))
         self.assertEqual(result, datetime(2023, 5, 22, 12, 0, 0, tzinfo=timezone.utc))
 
     def test_weekly_reset_today_is_monday_after_offset_is_next_week(self):
         monday_afternoon = datetime(2023, 5, 22, 15, 0, 0, tzinfo=timezone.utc)
-        result = get_next_standardized_reset_time(
-            "7d", monday_afternoon, "UTC", reset_time_of_day=time(12, 0)
-        )
+        result = get_next_standardized_reset_time("7d", monday_afternoon, "UTC", reset_time_of_day=time(12, 0))
         self.assertEqual(result, datetime(2023, 5, 29, 12, 0, 0, tzinfo=timezone.utc))
 
     def test_monthly_30d_lands_on_first_at_offset(self):
         now = datetime(2023, 5, 15, 10, 30, 0, tzinfo=timezone.utc)
-        result = get_next_standardized_reset_time(
-            "30d", now, "UTC", reset_time_of_day=time(12, 0)
-        )
+        result = get_next_standardized_reset_time("30d", now, "UTC", reset_time_of_day=time(12, 0))
         self.assertEqual(result, datetime(2023, 6, 1, 12, 0, 0, tzinfo=timezone.utc))
 
     def test_monthly_1mo_today_is_first_before_offset_is_today(self):
         now = datetime(2023, 5, 1, 9, 0, 0, tzinfo=timezone.utc)
-        result = get_next_standardized_reset_time(
-            "1mo", now, "UTC", reset_time_of_day=time(12, 0)
-        )
+        result = get_next_standardized_reset_time("1mo", now, "UTC", reset_time_of_day=time(12, 0))
         self.assertEqual(result, datetime(2023, 5, 1, 12, 0, 0, tzinfo=timezone.utc))
 
     def test_monthly_year_rollover_at_offset(self):
         now = datetime(2023, 12, 15, 9, 0, 0, tzinfo=timezone.utc)
-        result = get_next_standardized_reset_time(
-            "1mo", now, "UTC", reset_time_of_day=time(12, 0)
-        )
+        result = get_next_standardized_reset_time("1mo", now, "UTC", reset_time_of_day=time(12, 0))
         self.assertEqual(result, datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc))
 
     def test_custom_day_reset_applies_offset(self):
         now = datetime(2023, 5, 15, 10, 30, 0, tzinfo=timezone.utc)
-        result = get_next_standardized_reset_time(
-            "3d", now, "UTC", reset_time_of_day=time(12, 0)
-        )
+        result = get_next_standardized_reset_time("3d", now, "UTC", reset_time_of_day=time(12, 0))
         self.assertEqual(result, datetime(2023, 5, 18, 12, 0, 0, tzinfo=timezone.utc))
 
     def test_sub_day_durations_ignore_offset(self):
         base = datetime(2023, 5, 15, 15, 20, 30, tzinfo=timezone.utc)
         self.assertEqual(
-            get_next_standardized_reset_time(
-                "2h", base, "UTC", reset_time_of_day=time(12, 0)
-            ),
+            get_next_standardized_reset_time("2h", base, "UTC", reset_time_of_day=time(12, 0)),
             datetime(2023, 5, 15, 16, 0, 0, tzinfo=timezone.utc),
         )
         self.assertEqual(
-            get_next_standardized_reset_time(
-                "30m", base, "UTC", reset_time_of_day=time(12, 0)
-            ),
+            get_next_standardized_reset_time("30m", base, "UTC", reset_time_of_day=time(12, 0)),
             datetime(2023, 5, 15, 15, 30, 0, tzinfo=timezone.utc),
         )
 
