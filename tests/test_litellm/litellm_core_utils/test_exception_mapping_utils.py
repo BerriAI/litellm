@@ -1409,3 +1409,71 @@ def test_bedrock_timeout_mapping_keeps_retry_after_readable(status_code):
     exception_headers = _get_response_headers(original_exception=exc_info.value)
     assert exception_headers is not None
     assert litellm.utils._get_retry_after_from_exception_header(response_headers=exception_headers) == 7
+
+
+_GUARDRAIL_BLOCK_ERROR = {
+    "message": "Content blocked: secret_project_codename pattern detected",
+    "param": "None",
+    "code": "400",
+    "provider_specific_fields": {
+        "error": "Content blocked: secret_project_codename pattern detected",
+        "pattern": "secret_project_codename",
+        "guardrail_name": "block-secret-project",
+        "guardrail_mode": "pre_call",
+    },
+}
+
+
+def _openai_handler_error(error_type: str, headers: dict[str, str]) -> OpenAIError:
+    """What litellm/llms/openai/openai.py raises after the openai SDK rejects a 400:
+    the SDK's str() carries the wire body, and the handler copies headers and body over."""
+    wire_error = {**_GUARDRAIL_BLOCK_ERROR, "type": error_type}
+    wire = httpx.Response(
+        status_code=400,
+        headers=headers,
+        json={"error": wire_error},
+        request=httpx.Request("POST", "http://localhost:4000/v1/chat/completions"),
+    )
+    return OpenAIError(
+        status_code=400,
+        message=f"Error code: 400 - {{'error': {wire_error}}}",
+        headers=wire.headers,
+        body=wire_error,
+    )
+
+
+@pytest.mark.parametrize("error_type", ["None", "invalid_request_error"])
+def test_litellm_proxy_guardrail_block_keeps_body_and_headers(error_type: str):
+    """An SDK caller behind a proxy tells a guardrail block from any other 400 by the body's
+    provider_specific_fields and the proxy's x-litellm-* headers, so the mapped BadRequestError
+    must carry both whichever error.type the proxy version on the other end emits."""
+    proxy_headers = {"x-litellm-call-id": "call-guardrail", "x-litellm-applied-guardrails": "block-secret-project"}
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        exception_type(
+            model="claude-haiku-4-5",
+            original_exception=_openai_handler_error(error_type, proxy_headers),
+            custom_llm_provider="litellm_proxy",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert exc_info.value.body["provider_specific_fields"]["guardrail_name"] == "block-secret-project"
+    assert exc_info.value.body["type"] == error_type
+    assert proxy_headers.items() <= exc_info.value.headers.items()
+
+
+def test_openai_compatible_vendor_400_keeps_body_but_not_headers():
+    """A vendor's own response headers stay on e.response the way every other mapped provider
+    error keeps them; only a LiteLLM proxy upstream puts headers on e.headers."""
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        exception_type(
+            model="gpt-5.4-mini",
+            original_exception=_openai_handler_error("vendor_specific_error", {"openai-organization": "org-1"}),
+            custom_llm_provider="openai",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert exc_info.value.body["type"] == "vendor_specific_error"
+    assert exc_info.value.headers is None
