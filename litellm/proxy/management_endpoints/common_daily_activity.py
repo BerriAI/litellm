@@ -743,15 +743,23 @@ def _build_aggregated_sql_query(
     # only from LiteLLM_DailyGatewayRequests. The remaining spend, token and
     # api_requests rollups are still served from here.
     sql_query: Final = f"""
+        WITH top_api_keys AS (
+            SELECT api_key AS top_api_key
+            FROM "{pg_table}"
+            WHERE {where_clause}
+            GROUP BY api_key
+            ORDER BY SUM(spend) DESC, api_key
+            LIMIT {_MAX_API_KEYS_IN_BREAKDOWN}
+        )
         SELECT
             date,
-            api_key,
+            tk.top_api_key AS api_key,
             model,
             COALESCE(NULLIF(model_group, ''), model) AS model_group,
             custom_llm_provider,
             mcp_namespaced_tool_name,
             endpoint,
-            GROUPING(date, api_key, model, COALESCE(NULLIF(model_group, ''), model),
+            GROUPING(date, tk.top_api_key, model, COALESCE(NULLIF(model_group, ''), model),
                      custom_llm_provider, mcp_namespaced_tool_name,
                      endpoint) AS group_level,
             SUM(spend)::float AS spend,
@@ -768,21 +776,22 @@ def _build_aggregated_sql_query(
             SUM(api_requests)::bigint AS api_requests,
             SUM(successful_requests)::bigint AS successful_requests,
             SUM(failed_requests)::bigint AS failed_requests
-        FROM "{pg_table}"
+        FROM "{pg_table}" t
+        LEFT JOIN top_api_keys tk ON tk.top_api_key = t.api_key
         WHERE {where_clause}
         GROUP BY GROUPING SETS (
             (date),
-            (date, api_key),
+            (date, tk.top_api_key),
             (date, model),
-            (date, model, api_key),
+            (date, model, tk.top_api_key),
             (date, COALESCE(NULLIF(model_group, ''), model)),
-            (date, COALESCE(NULLIF(model_group, ''), model), api_key),
+            (date, COALESCE(NULLIF(model_group, ''), model), tk.top_api_key),
             (date, custom_llm_provider),
-            (date, custom_llm_provider, api_key),
+            (date, custom_llm_provider, tk.top_api_key),
             (date, mcp_namespaced_tool_name),
-            (date, mcp_namespaced_tool_name, api_key),
+            (date, mcp_namespaced_tool_name, tk.top_api_key),
             (date, endpoint),
-            (date, endpoint, api_key),
+            (date, endpoint, tk.top_api_key),
             ()
         )
     """
@@ -959,6 +968,11 @@ _GROUP_DATE_MCP: Final = 61  # 0b0111101
 _GROUP_DATE_MCP_API_KEY: Final = 29  # 0b0011101
 _GROUP_DATE_ENDPOINT: Final = 62  # 0b0111110
 _GROUP_DATE_ENDPOINT_API_KEY: Final = 30  # 0b0011110
+
+# Six of the thirteen grouping sets in _build_aggregated_sql_query are keyed on api_key, so
+# without a cap the result grows with every distinct key and the prisma query engine OOMs
+# buffering it. Keys outside the top N fall into a NULL api_key bucket the dispatcher skips.
+_MAX_API_KEYS_IN_BREAKDOWN: Final = 100
 
 
 def _record_to_spend_metrics(record: _GroupingSetsRow) -> SpendMetrics:
