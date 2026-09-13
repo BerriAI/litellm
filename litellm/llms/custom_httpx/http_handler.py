@@ -236,9 +236,9 @@ def _prepare_request_data_and_content(
 
 
 # Cache for SSL contexts to avoid creating duplicate contexts with the same configuration
-# Key: tuple of (cafile, ssl_security_level, ssl_ecdh_curve)
+# Key: tuple of (cafile, ssl_cert_dir, ssl_security_level, ssl_ecdh_curve)
 # Value: ssl.SSLContext
-_ssl_context_cache: Final[dict[tuple[str | None, str | None, str | None], ssl.SSLContext]] = {}
+_ssl_context_cache: Final[dict[tuple[str | None, str | None, str | None, str | None], ssl.SSLContext]] = {}
 
 
 def _create_ssl_context(
@@ -249,8 +249,14 @@ def _create_ssl_context(
     """
     Create an SSL context with the given configuration.
     This is separated from get_ssl_configuration to enable caching.
+
+    With no CA bundle configured, create_default_context loads the OS trust store, which is also the
+    only place OpenSSL reads SSL_CERT_DIR from; certifi is layered on top so a host with a thin or
+    absent system store still reaches public providers.
     """
     custom_ssl_context: Final = ssl.create_default_context(cafile=cafile)
+    if cafile is None:
+        custom_ssl_context.load_verify_locations(cafile=certifi.where())
 
     # Optimize SSL handshake performance
     # Set minimum TLS version to 1.2 for better performance
@@ -329,6 +335,18 @@ def get_ssl_verify(
     return ssl_verify if ssl_verify is not None else True
 
 
+def _resolve_cafile(ssl_verify: bool | str) -> str | None:
+    """
+    Resolve the explicitly configured CA bundle path, or None when the operator configured none.
+    """
+    if isinstance(ssl_verify, str) and os.path.exists(ssl_verify):
+        return ssl_verify
+    ssl_cert_file: Final = os.getenv("SSL_CERT_FILE")
+    if ssl_cert_file and os.path.exists(ssl_cert_file):
+        return ssl_cert_file
+    return None
+
+
 def get_ssl_configuration(
     ssl_verify: VerifyTypes | None = None,
 ) -> bool | str | ssl.SSLContext:
@@ -340,7 +358,7 @@ def get_ssl_configuration(
     2. If ssl_verify is False -> disable SSL verification (ssl=False)
     3. If ssl_verify is a string -> use it as a path to CA bundle file
     4. If SSL_CERT_FILE environment variable is set and exists -> use it as CA bundle file
-    5. Else will use default SSL context with certifi CA bundle
+    5. Else use the OS trust store (where OpenSSL reads SSL_CERT_DIR) with certifi layered on top
 
     If ssl_security_level is set, it will apply the security level to the SSL context.
 
@@ -367,19 +385,12 @@ def get_ssl_configuration(
     ssl_security_level: Final = os.getenv("SSL_SECURITY_LEVEL", litellm.ssl_security_level)
     ssl_ecdh_curve: Final = os.getenv("SSL_ECDH_CURVE", litellm.ssl_ecdh_curve)
 
-    cafile = None
-    if isinstance(ssl_verify, str) and os.path.exists(ssl_verify):
-        cafile = ssl_verify
-    if not cafile:
-        ssl_cert_file: Final = os.getenv("SSL_CERT_FILE")
-        if ssl_cert_file and os.path.exists(ssl_cert_file):
-            cafile = ssl_cert_file
-        else:
-            cafile = certifi.where()
+    cafile: Final = _resolve_cafile(ssl_verify)
+    ssl_cert_dir: Final = os.getenv("SSL_CERT_DIR")
 
     if ssl_verify is not False:
         # Create cache key from configuration parameters
-        cache_key: Final = (cafile, ssl_security_level, ssl_ecdh_curve)
+        cache_key: Final = (cafile, ssl_cert_dir, ssl_security_level, ssl_ecdh_curve)
 
         # Check if we have a cached SSL context for this configuration
         if cache_key not in _ssl_context_cache:
