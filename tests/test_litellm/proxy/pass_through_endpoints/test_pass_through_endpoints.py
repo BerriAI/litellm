@@ -6,7 +6,7 @@ from collections.abc import Callable
 from contextlib import ExitStack, contextmanager
 from io import BytesIO
 from types import SimpleNamespace
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -32,7 +32,11 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import (
+    PassThroughEndpointLoggingResultValues,
+    ProxyException,
+    UserAPIKeyAuth,
+)
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
@@ -5873,3 +5877,92 @@ async def test_chat_completion_pass_through_endpoint_answers_an_openai_typed_err
         )
 
     assert (raised.value.type, raised.value.param, raised.value.code) == ("invalid_request_error", None, "400")
+
+
+ANTHROPIC_SSE_STREAM = (
+    "event: message_start",
+    'data: {"type":"message_start","message":{"id":"msg_01","type":"message","role":"assistant",'
+    '"model":"claude-sonnet-4-5-20250929","content":[],"stop_reason":null,"stop_sequence":null,'
+    '"usage":{"input_tokens":17,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,'
+    '"output_tokens":5}}}',
+    "event: content_block_start",
+    'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+    "event: content_block_delta",
+    'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello there."}}',
+    "event: content_block_stop",
+    'data: {"type":"content_block_stop","index":0}',
+    "event: message_delta",
+    'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},'
+    '"usage":{"output_tokens":40}}',
+    "event: message_stop",
+    'data: {"type":"message_stop"}',
+)
+
+
+def _log_passthrough_stream(url: str) -> tuple[PassThroughEndpointLoggingResultValues, float | None]:
+    from datetime import datetime
+
+    from litellm.proxy.pass_through_endpoints.streaming_handler import (
+        PassThroughStreamingHandler,
+    )
+
+    logging_obj: Final = MagicMock(spec=LiteLLMLoggingObj)
+    logging_obj.model_call_details = {}
+    logging_obj.optional_params = {}
+    logging_obj.litellm_call_id = "test-call-id"
+
+    result, kwargs = PassThroughStreamingHandler._build_passthrough_logging_result(
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=PassThroughEndpointLogging(),
+        url_route=url,
+        request_body={"model": "claude-sonnet-4-5-20250929"},
+        endpoint_type=HttpPassThroughEndpointHelpers.get_endpoint_type(url),
+        start_time=datetime.now(),
+        raw_bytes=[(line + "\n").encode("utf-8") for line in ANTHROPIC_SSE_STREAM],
+        end_time=datetime.now(),
+        model="claude-sonnet-4-5-20250929",
+    )
+    return result, kwargs.get("response_cost")
+
+
+def test_anthropic_compatible_passthrough_stream_is_billed_off_api_anthropic_com():
+    """
+    Regression for #40117: classified off the hostname alone, this stream reached the
+    generic branch and logged "cannot parse chunks to standard response object" at zero cost.
+    """
+    anthropic_result, anthropic_cost = _log_passthrough_stream("https://api.anthropic.com/v1/messages")
+    custom_result, custom_cost = _log_passthrough_stream("https://my-provider.example.com/v1/messages")
+
+    assert custom_cost == anthropic_cost
+    assert custom_cost is not None and custom_cost > 0
+    assert custom_result.usage.prompt_tokens == anthropic_result.usage.prompt_tokens == 17
+    assert custom_result.usage.completion_tokens == anthropic_result.usage.completion_tokens == 40
+
+
+def test_openai_compatible_passthrough_route_resolves_off_api_openai_com():
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
+
+    assert (
+        HttpPassThroughEndpointHelpers.get_endpoint_type("https://my-provider.example.com/v1/chat/completions")
+        == EndpointType.OPENAI
+    )
+    assert (
+        HttpPassThroughEndpointHelpers.get_endpoint_type("https://my-provider.example.com/openai/v1/chat/completions/")
+        == EndpointType.OPENAI
+    )
+
+
+def test_passthrough_routes_outside_the_known_shapes_stay_generic():
+    """
+    Over-claiming a route feeds a body the handler cannot parse and drops the log row
+    entirely, which is the failure mode LIT-4527 fixed for Vertex.
+    """
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
+
+    for url in (
+        "https://my-provider.example.com/v1/messages/count_tokens",
+        "https://my-provider.example.com/v1/messages/batches",
+        "https://my-provider.example.com/v1/embeddings",
+        "https://upstream.example.com/ml/api/v1/time-series-forecast/predict",
+    ):
+        assert HttpPassThroughEndpointHelpers.get_endpoint_type(url) == EndpointType.GENERIC

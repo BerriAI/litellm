@@ -374,6 +374,11 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             or (parsed_url.hostname and "openai.com" in parsed_url.hostname)
         ):
             return EndpointType.OPENAI
+        route: Final = parsed_url.path.rstrip("/")
+        if route.endswith("/v1/messages"):
+            return EndpointType.ANTHROPIC
+        elif route.endswith("/v1/chat/completions"):
+            return EndpointType.OPENAI
         return EndpointType.GENERIC
 
     @staticmethod
