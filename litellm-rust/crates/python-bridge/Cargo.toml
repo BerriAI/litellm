@@ -17,7 +17,6 @@ panic-test = []
 trace-parity = [
     "dep:tracing",
     "litellm-core/observability",
-    "litellm-ai-gateway/trace-parity",
 ]
 
 [dependencies]
@@ -25,7 +24,6 @@ futures-util.workspace = true
 tracing = { workspace = true, optional = true }
 litellm-core = { workspace = true, features = ["bedrock-auth"] }
 litellm-token-counter.workspace = true
-litellm-ai-gateway = { workspace = true, default-features = false }
 litellm-python-interop.workspace = true
 pyo3.workspace = true
 pyo3-async-runtimes.workspace = true
@@ -35,6 +33,7 @@ tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
 criterion.workspace = true
+rstest.workspace = true
 tokio-tungstenite.workspace = true
 tracing.workspace = true
 

@@ -445,6 +445,12 @@ class RealTimeStreaming:
             )
             sent = False
             for msg in transformed:
+                if isinstance(msg, bytes):
+                    await self.provider_config.pace_backend_send(msg)
+                    await self.backend_ws.send(msg)
+                    self._content_sent_after_setup = True
+                    sent = True
+                    continue
                 try:
                     msg_obj = _decode_json_object(msg)
                 except (json.JSONDecodeError, TypeError):
@@ -1013,7 +1019,7 @@ class RealTimeStreaming:
                     cast(str, transcript),
                     item_id=cast(str | None, event.get("item_id")),
                 )
-                if not blocked:
+                if not blocked and not self._is_transcription_session:
                     await self._send_to_backend(json.dumps({"type": "response.create"}))
                 continue
             ## LOGGING

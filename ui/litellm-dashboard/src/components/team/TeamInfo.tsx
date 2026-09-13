@@ -1467,7 +1467,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                               showNeverResets
                               placeholder="Inherit team reset period"
                               value={value === null ? NEVER_RESETS_BUDGET_DURATION : value}
-                              onChange={(next) => onChange(next === NEVER_RESETS_BUDGET_DURATION ? null : next)}
+                              onChange={(next) =>
+                                onChange(next === NEVER_RESETS_BUDGET_DURATION ? null : next ?? undefined)
+                              }
                             />
                           )}
                         </FormField>
