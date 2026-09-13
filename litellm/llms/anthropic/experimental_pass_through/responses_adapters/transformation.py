@@ -650,7 +650,25 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             cast(Iterable[object], response.output)  # cast-ok: output items re-validated per item
         )
 
-        for item in response.output:
+        # An upstream whose dialect fails ResponsesAPIResponse.model_validate
+        # reaches this function through the model_construct fallback, whose
+        # output items are GenericResponseOutputItem -- litellm's own wrapper,
+        # not an openai-SDK type and not a dict. Without normalisation none of
+        # the branches below matches and every item is silently skipped.
+        _sdk_item_types: Final = (ResponseReasoningItem, ResponseOutputMessage, ResponseFunctionToolCall)
+
+        def _normalised(item: object) -> object:
+            if isinstance(item, (dict, *_sdk_item_types)):
+                return item
+            _dump = getattr(item, "model_dump", None)
+            if callable(_dump):
+                _dumped = _dump()
+                return _dumped if isinstance(_dumped, dict) else item
+            return item
+
+        output_items: Final = tuple(_normalised(_raw_item) for _raw_item in response.output)
+
+        for item in output_items:
             if isinstance(item, ResponseReasoningItem):
                 reasoning_block = self._thinking_block_from_reasoning_item(item.summary, item.encrypted_content)
                 if reasoning_block is not None:

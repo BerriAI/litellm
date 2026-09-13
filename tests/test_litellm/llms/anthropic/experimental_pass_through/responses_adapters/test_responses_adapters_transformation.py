@@ -1695,6 +1695,124 @@ class TestTranslateResponse:
         assert result["stop_reason"] == "tool_use"
 
 
+class TestTranslateResponseGenericOutputItems:
+    """GenericResponseOutputItem output must not be silently dropped.
+
+    litellm itself manufactures GenericResponseOutputItem objects for
+    ResponsesAPIResponse.output (the chat-completions bridge in
+    responses/litellm_completion_transformation/transformation.py and the
+    proxy MCP handler), and on the model_construct fallback path of the
+    openai responses transformation (observed on v1.100.0 with a gateway
+    whose reasoning items carry content[].output_text instead of summary,
+    which fails model_validate). GenericResponseOutputItem is not an
+    openai-SDK type and not a dict, so the isinstance dispatch in
+    translate_response matched none of its branches and dropped every
+    item: /v1/messages answered with an empty content array while usage
+    flowed through.
+    """
+
+    @staticmethod
+    def _make_generic_item(item_type: str, **overrides: Any) -> Any:
+        """Build a GenericResponseOutputItem the way the completion bridge does."""
+        from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+
+        base: Dict[str, Any] = {
+            "type": item_type,
+            "id": "item_1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [OutputText(type="output_text", text="hi", annotations=[])],
+        }
+        base.update(overrides)
+        return GenericResponseOutputItem(**base)
+
+    def test_generic_message_item_becomes_text_block(self):
+        response = _make_mock_response(
+            output=[
+                self._make_generic_item(
+                    "reasoning",
+                    id="rs_1",
+                    content=[
+                        {
+                            "type": "output_text",
+                            "text": "thinking about the command",
+                            "annotations": [],
+                        }
+                    ],
+                ),
+                self._make_generic_item(
+                    "message",
+                    id="msg_1",
+                    content=[
+                        {
+                            "type": "output_text",
+                            "text": "<verdict>safe</verdict>",
+                            "annotations": [],
+                        }
+                    ],
+                ),
+            ]
+        )
+        result: Any = _ADAPTER.translate_response(response)
+
+        text_blocks = [b for b in result["content"] if b.get("type") == "text"]
+        assert len(text_blocks) == 1
+        assert text_blocks[0]["text"] == "<verdict>safe</verdict>"
+        assert result["stop_reason"] == "end_turn"
+
+    def test_generic_function_call_item_becomes_tool_use(self):
+        fc = self._make_generic_item(
+            "function_call",
+            call_id="call_1",
+            name="get_weather",
+            arguments='{"city": "NYC"}',
+            content=[],
+        )
+        response = _make_mock_response(output=[fc])
+        result: Any = _ADAPTER.translate_response(response)
+
+        assert len(result["content"]) == 1
+        block = result["content"][0]
+        assert block["type"] == "tool_use"
+        assert block["id"] == "call_1"
+        assert block["name"] == "get_weather"
+        assert block["input"] == {"city": "NYC"}
+        assert result["stop_reason"] == "tool_use"
+
+    def test_model_construct_output_survives(self):
+        """End-to-end fallback shape: whatever pydantic's model_construct
+        yields for a raw provider payload (dict or GenericResponseOutputItem,
+        depending on the union's first arm), the content must arrive."""
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        response = ResponsesAPIResponse.model_construct(
+            id="resp_generic_1",
+            created_at=1788788375,
+            model="glm-5.3-flash",
+            status="completed",
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "<verdict>safe</verdict>",
+                            "annotations": [],
+                        }
+                    ],
+                }
+            ],
+        )
+        result: Any = _ADAPTER.translate_response(response)
+
+        text_blocks = [b for b in result["content"] if b.get("type") == "text"]
+        assert len(text_blocks) == 1
+        assert text_blocks[0]["text"] == "<verdict>safe</verdict>"
+
+
 class TestToolResultImages:
     """Images inside tool_result blocks must survive translation: the
     function_call_output carries a text placeholder and the image is sent as an
