@@ -82,7 +82,7 @@ from typing_extensions import (
     override,
 )
 
-from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject, CachedTokensDetails
 from litellm.types.responses.main import (
     CustomToolCallOutputItem,
     GenericResponseOutputItem,
@@ -1283,12 +1283,6 @@ class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     text_tokens: int | None = None
 
     model_config = {"extra": "allow"}
-
-
-class CachedTokensDetails(BaseModel):
-    text_tokens: int | None = None
-    audio_tokens: int | None = None
-    image_tokens: int | None = None
 
 
 class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
