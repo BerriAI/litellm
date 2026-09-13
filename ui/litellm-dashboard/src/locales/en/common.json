@@ -1,0 +1,11 @@
+{
+  "language": {
+    "name": "Language",
+    "switchTo": "Switch language"
+  },
+  "languages": {
+    "en": "English",
+    "zh-CN": "简体中文"
+  },
+  "loadError": "An error occurred while loading the page."
+}

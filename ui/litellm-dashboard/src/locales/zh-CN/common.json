@@ -1,0 +1,11 @@
+{
+  "language": {
+    "name": "语言",
+    "switchTo": "切换语言"
+  },
+  "languages": {
+    "en": "English",
+    "zh-CN": "简体中文"
+  },
+  "loadError": "加载页面时发生错误。"
+}
