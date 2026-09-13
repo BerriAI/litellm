@@ -53,7 +53,6 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
     blocked_responses_stream_usage,
-    messages_with_slot_texts,
     stream_item_field,
     stream_item_fingerprint,
     stream_item_items,
@@ -396,20 +395,6 @@ def _patched_request_fields(
     )
 
 
-def _guardrailed_structured_messages(
-    structured_messages: Sequence[AllMessageValues] | None,
-    sent_text_count: int,
-    guardrailed_inputs: GenericGuardrailAPIInputs,
-) -> Sequence[AllMessageValues] | None:
-    returned: Final = guardrailed_inputs.get("structured_messages")
-    if returned is not None and returned is not structured_messages:
-        return returned
-    rewritten_texts: Final = guardrailed_inputs.get("texts")
-    if not structured_messages or rewritten_texts is None or len(rewritten_texts) == sent_text_count:
-        return None
-    return messages_with_slot_texts(structured_messages, rewritten_texts)
-
-
 def _patch_or_convert_request_fields(
     raw_input: object,
     instructions: object,
@@ -488,8 +473,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             form.chat_tools for form in LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(original_tools)
         )
         extracted: Final = self._extract_guardrail_inputs(data, input_data, flattened_tool_groups)
-        sent_texts: Final = extracted.inputs.get("texts")
-        if not sent_texts:
+        if not extracted.inputs.get("texts"):
             return data
         if structured_messages:
             extracted.inputs["structured_messages"] = structured_messages
@@ -502,9 +486,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         self._apply_guardrailed_tools_to_data(
             data, original_tools, flattened_tool_groups, guardrailed_inputs.get("tools")
         )
-        written_back: Final = self._written_back_request_fields(
-            data, structured_messages, len(sent_texts), guardrailed_inputs
-        )
+        written_back: Final = self._written_back_request_fields(data, structured_messages, guardrailed_inputs)
         if written_back is not None:
             data["input"] = list(written_back.input)  # mutable-ok: JSON body
             if written_back.instructions is None:
@@ -571,11 +553,10 @@ class OpenAIResponsesHandler(BaseTranslation):
     def _written_back_request_fields(
         data: Mapping[str, object],
         structured_messages: Sequence[AllMessageValues] | None,
-        sent_text_count: int,
         guardrailed_inputs: GenericGuardrailAPIInputs,
     ) -> _RequestFields | None:
-        guardrailed: Final = _guardrailed_structured_messages(structured_messages, sent_text_count, guardrailed_inputs)
-        if guardrailed is None:
+        guardrailed: Final = guardrailed_inputs.get("structured_messages")
+        if guardrailed is None or guardrailed is structured_messages:
             return None
         return _patch_or_convert_request_fields(
             data.get("input"),

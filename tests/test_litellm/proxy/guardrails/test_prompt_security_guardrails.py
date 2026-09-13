@@ -1,5 +1,6 @@
 import asyncio
 import base64
+from collections.abc import Mapping, Sequence
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -12,6 +13,7 @@ from litellm.proxy.guardrails.guardrail_hooks.prompt_security.prompt_security im
     PromptSecurityGuardrailMissingSecrets,
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
+from litellm.types.llms.openai import AllMessageValues
 
 
 def test_prompt_security_guard_config(monkeypatch: pytest.MonkeyPatch):
@@ -174,7 +176,7 @@ async def test_apply_guardrail_modify_request(monkeypatch: pytest.MonkeyPatch):
     assert result["texts"] == ["User prompt with PII: SSN [REDACTED]"]
 
 
-def _modify_response(modified_messages: list) -> Response:
+def _modify_response(modified_messages: Sequence[Mapping[str, object]]) -> Response:
     mock_response = Response(
         json={"result": {"prompt": {"action": "modify", "modified_messages": modified_messages}}},
         status_code=200,
@@ -184,7 +186,7 @@ def _modify_response(modified_messages: list) -> Response:
     return mock_response
 
 
-def _tool_replay_messages() -> list:
+def _tool_replay_messages() -> list[AllMessageValues]:
     return [
         {"role": "system", "content": "Never echo an SSN like 123-45-6789."},
         {
@@ -224,7 +226,9 @@ async def test_modify_returns_structured_messages_with_tool_rows_kept(monkeypatc
     ]
 
     with patch.object(guardrail.async_handler, "post", return_value=_modify_response(modified_messages)):
-        result = await guardrail.apply_guardrail(inputs=inputs, request_data={"messages": messages}, input_type="request")
+        result = await guardrail.apply_guardrail(
+            inputs=inputs, request_data={"messages": messages}, input_type="request"
+        )
 
     assert result["structured_messages"] == [
         {"role": "system", "content": "Never echo an SSN like [REDACTED]."},
@@ -257,7 +261,9 @@ async def test_modify_with_unexpected_message_count_keeps_texts_only(monkeypatch
     modified_messages = [{"role": "user", "content": "Look up [REDACTED]"}]
 
     with patch.object(guardrail.async_handler, "post", return_value=_modify_response(modified_messages)):
-        result = await guardrail.apply_guardrail(inputs=inputs, request_data={"messages": messages}, input_type="request")
+        result = await guardrail.apply_guardrail(
+            inputs=inputs, request_data={"messages": messages}, input_type="request"
+        )
 
     assert result["structured_messages"] is messages
     assert result["texts"] == ["Look up [REDACTED]"]

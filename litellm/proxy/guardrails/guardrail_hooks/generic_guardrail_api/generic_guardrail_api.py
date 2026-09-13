@@ -7,7 +7,7 @@
 
 import fnmatch
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 
 import httpx
@@ -24,7 +24,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.llms.openai import ChatCompletionToolParam
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPIMetadata,
     GenericGuardrailAPIRequest,
@@ -148,6 +148,22 @@ def _extract_inbound_headers(
             pass
 
     return None
+
+
+def _rows_with_unchanged_originals(
+    original_rows: Sequence[AllMessageValues] | None,
+    shown_rows: Sequence[AllMessageValues] | None,
+    returned_rows: Sequence[AllMessageValues],
+) -> tuple[AllMessageValues, ...]:
+    """The request model drops row keys its message types do not declare, so a
+    row the server echoes back verbatim is restored to the original row object;
+    only rows the server actually changed reach the endpoint write-back."""
+    if original_rows is None or shown_rows is None or len(returned_rows) != len(original_rows):
+        return tuple(returned_rows)
+    return tuple(
+        original if returned == shown else returned
+        for original, shown, returned in zip(original_rows, shown_rows, returned_rows)
+    )
 
 
 class GenericGuardrailAPI(CustomGuardrail):
@@ -322,6 +338,8 @@ class GenericGuardrailAPI(CustomGuardrail):
         texts: list,
         images: list[str] | None,
         tools: list[ChatCompletionToolParam] | None,
+        structured_messages: Sequence[AllMessageValues] | None,
+        shown_messages: Sequence[AllMessageValues] | None,
         guardrail_response: GenericGuardrailAPIResponse,
     ) -> GenericGuardrailAPIInputs:
         # Action is NONE or no modifications needed
@@ -336,6 +354,12 @@ class GenericGuardrailAPI(CustomGuardrail):
             return_inputs["tools"] = guardrail_response.tools
         elif tools:
             return_inputs["tools"] = tools
+        if guardrail_response.structured_messages:
+            return_inputs["structured_messages"] = list(  # mutable-ok: guardrail inputs take a list
+                _rows_with_unchanged_originals(
+                    structured_messages, shown_messages, guardrail_response.structured_messages
+                )
+            )
         if guardrail_response.stream_holdback_chars is not None:
             return_inputs["stream_holdback_chars"] = guardrail_response.stream_holdback_chars
         return return_inputs
@@ -473,6 +497,8 @@ class GenericGuardrailAPI(CustomGuardrail):
                 texts=texts,
                 images=images,
                 tools=tools,
+                structured_messages=structured_messages,
+                shown_messages=guardrail_request.structured_messages,
                 guardrail_response=guardrail_response,
             )
 
