@@ -5661,6 +5661,7 @@ def _get_model_info_helper(
     custom_llm_provider: str | None = None,
     api_base: str | None = None,
     api_key: str | None = None,
+    discover_model_info: bool = False,
 ) -> ModelInfoBase:
     """
     Helper for 'get_model_info'. Separated out to avoid infinite loop caused by returning 'supported_openai_param's
@@ -5700,7 +5701,9 @@ def _get_model_info_helper(
             provider_config = ProviderConfigManager.get_provider_model_info(
                 model=model, provider=LlmProviders(custom_llm_provider)
             )
-        if provider_config is not None:
+        dynamic_model_info: ModelInfoBase | None = None
+        should_query_provider: Final = custom_llm_provider not in ("vllm", "hosted_vllm") or discover_model_info
+        if provider_config is not None and should_query_provider:
             provider_get_model_info: Final = getattr(provider_config, "get_model_info", None)
             if callable(provider_get_model_info):
                 try:
@@ -5710,14 +5713,16 @@ def _get_model_info_helper(
                         api_key=api_key,
                     )
                     if provider_model_info is not None:
-                        return provider_model_info
+                        if custom_llm_provider not in ("vllm", "hosted_vllm"):
+                            return provider_model_info
+                        dynamic_model_info = provider_model_info
                 except Exception as e:
                     verbose_logger.warning(
                         "Could not get dynamic model info for model=%s, provider=%s; "
                         "falling back to the static cost map: %s",
                         model,
                         custom_llm_provider,
-                        e,
+                        type(e).__name__ if custom_llm_provider in ("vllm", "hosted_vllm") else e,
                     )
 
         if custom_llm_provider == "huggingface":
@@ -5829,6 +5834,8 @@ def _get_model_info_helper(
                     key, _model_info = generalization
 
             if _model_info is None or key is None:
+                if dynamic_model_info is not None:
+                    return dynamic_model_info
                 raise ValueError(
                     "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
                 )
@@ -6040,6 +6047,12 @@ def _get_model_info_helper(
             for cost_key, cost_value in _model_info.items():
                 if cost_key not in returned_model_info and _ABOVE_THRESHOLD_COST_KEY.search(cost_key) is not None:
                     returned_model_info[cost_key] = cost_value
+            if dynamic_model_info is not None and dynamic_model_info.get("max_input_tokens") is not None:
+                merged_model_info: Final[ModelInfoBase] = {
+                    **returned_model_info,
+                    "max_input_tokens": dynamic_model_info["max_input_tokens"],
+                }
+                return merged_model_info
             return returned_model_info
     except Exception as e:
         verbose_logger.debug("Error getting model info: %s", e)
@@ -6053,6 +6066,7 @@ def _build_model_info(
     custom_llm_provider: str | None = None,
     api_base: str | None = None,
     api_key: str | None = None,
+    discover_model_info: bool = False,
 ) -> ModelInfo:
     supported_openai_params = litellm.get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider)
 
@@ -6061,6 +6075,7 @@ def _build_model_info(
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
         api_key=api_key,
+        discover_model_info=discover_model_info,
     )
 
     provider_info: Final = get_provider_info(model=model, custom_llm_provider=custom_llm_provider)
@@ -6089,6 +6104,7 @@ def get_model_info(
     custom_llm_provider: str | None = None,
     api_base: str | None = None,
     api_key: str | None = None,
+    discover_model_info: bool = False,
 ) -> ModelInfo:
     """
     Get a dict for the maximum tokens (context window), input_cost_per_token, output_cost_per_token  for a given model.
@@ -6096,6 +6112,10 @@ def get_model_info(
     Parameters:
     - model (str): The name of the model.
     - custom_llm_provider (str | null): the provider used for the model. If provided, used to check if the litellm model info is for that provider.
+    - api_base (str | null): the deployment endpoint used for provider-scoped discovery.
+    - api_key (str | null): the deployment credential used for provider-scoped discovery.
+    - discover_model_info (bool): opt in to a synchronous, uncached vLLM metadata lookup; defaults to False.
+      Explicit api_base never inherits an ambient API key. Discovery overlays context only, not output limits.
 
     Returns:
         dict: A dictionary containing the following information:
@@ -6161,10 +6181,16 @@ def get_model_info(
             "supported_openai_params": ["temperature", "max_tokens", "top_p", "frequency_penalty", "presence_penalty"]
         }
     """
-    # api_key is a per-caller credential, not part of the model identity, so it is
-    # kept out of the cache key; explicit keys are resolved without the cache.
-    if api_key is not None:
-        return _build_model_info(model, custom_llm_provider, api_base, api_key)
+    # Credentials are per caller, and live discovery must observe endpoint changes,
+    # so neither path can safely reuse the static metadata cache.
+    if api_key is not None or discover_model_info:
+        return _build_model_info(
+            model,
+            custom_llm_provider,
+            api_base,
+            api_key,
+            discover_model_info,
+        )
     return _cached_get_model_info(model, custom_llm_provider, api_base)
 
 
@@ -8903,7 +8929,7 @@ class ProviderConfigManager:
                 VLLMModelInfo,  # experimental approach, to reduce bloat on __init__.py
             )
 
-            return VLLMModelInfo()
+            return VLLMModelInfo(provider="hosted_vllm" if provider == LlmProviders.HOSTED_VLLM else "vllm")
         elif LlmProviders.LEMONADE == provider:
             return litellm.LemonadeChatConfig()
         elif LlmProviders.CLARIFAI == provider:

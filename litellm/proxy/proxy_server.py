@@ -9265,17 +9265,51 @@ def select_data_generator(
 
 
 def get_litellm_model_info(model: dict = {}):
+    """Model-info route enrichment; vLLM lookups perform I/O and must run off the event loop."""
     model_info: Final = model.get("model_info", {})
-    model_to_lookup = model.get("litellm_params", {}).get("model", None)
+    litellm_params: Final = model.get("litellm_params") or _EMPTY_MAPPING
+    configured_model: Final = litellm_params.get("model", None)
+    use_base_model: Final = (isinstance(configured_model, str) and "azure" in configured_model) or bool(
+        model_info.get("base_model")
+    )
+    model_to_lookup: Final = model_info.get("base_model", None) if use_base_model else configured_model
     try:
-        if "azure" in model_to_lookup or model_info.get("base_model"):
-            model_to_lookup = model_info.get("base_model", None)
-        litellm_model_info: Final = litellm.get_model_info(model_to_lookup)
-        return litellm_model_info
+        static_model_info = litellm.get_model_info(model_to_lookup)
+    except Exception:  # noqa: BLE001  # get_model_info wraps unmapped-model failures in bare Exception.
+        static_model_info = _EMPTY_MAPPING
+
+    provider: Final = litellm_params.get("custom_llm_provider") or (
+        configured_model.partition("/")[0] if isinstance(configured_model, str) else None
+    )
+    if provider not in ("vllm", "hosted_vllm"):
+        return static_model_info
+    try:
+        credential_name: Final = litellm_params.get("litellm_credential_name")
+        credentials: Final = (
+            CredentialAccessor.get_credential_values(credential_name)
+            if isinstance(credential_name, str)
+            else _EMPTY_MAPPING
+        )
+        live_model_info: Final = litellm.get_model_info(
+            configured_model,
+            custom_llm_provider=provider,
+            api_base=credentials.get("api_base", litellm_params.get("api_base")),
+            api_key=credentials.get("api_key", litellm_params.get("api_key")),
+            discover_model_info=True,
+        )
+        return {
+            **live_model_info,
+            **static_model_info,
+            **(
+                {"max_input_tokens": live_model_info["max_input_tokens"]}
+                if live_model_info["max_input_tokens"] is not None
+                else {}
+            ),
+        }
     except Exception:
         # this should not block returning on /model/info
         # if litellm does not have info on the model it should return {}
-        return {}
+        return static_model_info
 
 
 def on_backoff(details):
@@ -14416,7 +14450,8 @@ async def model_info_v2(
     # Fill in model info based on config.yaml and litellm model_prices_and_context_window.json
     # This must happen before teamId filtering so that direct_access and access_via_team_ids are populated
     for i, _model in enumerate(all_models):
-        all_models[i] = _enrich_model_info_with_litellm_data(
+        all_models[i] = await asyncio.to_thread(
+            _enrich_model_info_with_litellm_data,
             model=_model,
             debug=debug if debug is not None else False,
             llm_router=llm_router,
@@ -15160,7 +15195,9 @@ async def model_info_v1(
                 status_code=400,
                 detail={"error": f"Model id = {litellm_model_id} not found on litellm proxy"},
             )
-        _deployment_info_dict = _get_proxy_model_info(model=deployment_info.model_dump(exclude_none=True))
+        _deployment_info_dict = await asyncio.to_thread(
+            _get_proxy_model_info, model=deployment_info.model_dump(exclude_none=True)
+        )
         single_model_list: list[dict] = [_deployment_info_dict]
         if prisma_client is not None:
             single_model_list = await _populate_team_access_on_models(
@@ -15226,7 +15263,9 @@ async def model_info_v1(
         all_models = _filter_models_to_user_accessible(all_models)
 
     all_models = [
-        _translate_model_name_for_response(_enrich_model_info_with_litellm_data(model=model, llm_router=llm_router))
+        _translate_model_name_for_response(
+            await asyncio.to_thread(_enrich_model_info_with_litellm_data, model=model, llm_router=llm_router)
+        )
         for model in all_models
     ]
 

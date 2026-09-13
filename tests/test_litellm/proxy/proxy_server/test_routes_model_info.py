@@ -9,10 +9,13 @@ Pins (PR2):
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+import threading
+from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
+import litellm
 from litellm.proxy import proxy_server
 
 from .conftest import normalize  # type: ignore[import-not-found]
@@ -128,7 +131,6 @@ def test_v1_model_info_no_model_list_error(client, auth_as, null_router, path):
     assert "LLM Model List not loaded" in response.text
 
 
-
 def test_get_proxy_model_info_surfaces_supports_parallel_function_calling(local_model_cost_map):
     """``GET /v1/model/info`` enriches each deployment through ``_get_proxy_model_info``; a registry
     entry declaring parallel function calling must land in ``model_info`` instead of null."""
@@ -140,6 +142,145 @@ def test_get_proxy_model_info_surfaces_supports_parallel_function_calling(local_
         }
     )
     assert enriched["model_info"]["supports_parallel_function_calling"] is True
+
+
+def test_get_proxy_model_info_discovers_vllm_context_with_config_precedence(
+    monkeypatch,
+):
+    response = MagicMock()
+    response.json.return_value = {"data": [{"id": "shared", "max_model_len": 262_144}]}
+    request = MagicMock(return_value=response)
+    monkeypatch.setattr(proxy_server.litellm.module_level_client, "get", request)
+
+    enriched = proxy_server._get_proxy_model_info(
+        model={
+            "model_name": "vllm-model",
+            "litellm_params": {
+                "model": "hosted_vllm/shared",
+                "api_base": "https://vllm.example/v1",
+                "api_key": "endpoint-secret",
+            },
+            "model_info": {
+                "id": "vllm-deployment",
+                "max_input_tokens": 200_000,
+                "max_output_tokens": 32_768,
+            },
+        }
+    )
+
+    assert enriched["model_info"]["max_input_tokens"] == 200_000
+    assert enriched["model_info"]["max_output_tokens"] == 32_768
+    assert enriched["model_info"]["max_tokens"] is None
+    assert "api_key" not in enriched["litellm_params"]
+    assert request.call_args.kwargs["headers"] == {"Authorization": "Bearer endpoint-secret"}
+
+
+@pytest.mark.parametrize(
+    "path,params",
+    [
+        ("/v1/model/info", {"litellm_model_id": "vllm-route-deployment"}),
+        ("/v1/model/info", {}),
+        ("/v2/model/info", {}),
+    ],
+)
+@pytest.mark.parametrize("explicit_context", [None, 200_000])
+@pytest.mark.parametrize("named_credential", [False, True])
+def test_model_info_routes_refresh_discovered_context_below_explicit_config(
+    client,
+    auth_as,
+    monkeypatch,
+    path,
+    params,
+    explicit_context,
+    named_credential,
+    local_model_cost_map,
+    mock_prisma,
+):
+    response = MagicMock()
+    response.json.return_value = {"data": [{"id": "shared", "max_model_len": 262_144}]}
+    request = MagicMock(return_value=response)
+    monkeypatch.setattr(litellm.module_level_client, "get", request)
+    model_list = [
+        {
+            "model_name": "vllm-model",
+            "litellm_params": {
+                "model": "hosted_vllm/shared",
+                "api_base": "https://vllm.example/v1",
+                "api_key": "endpoint-secret",
+            },
+            "model_info": {
+                "id": "vllm-route-deployment",
+                "base_model": "gpt-4o",
+                **({"max_input_tokens": explicit_context} if explicit_context else {}),
+            },
+        }
+    ]
+    if named_credential:
+        from litellm.types.utils import CredentialItem
+
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="vllm-credential",
+                    credential_values={"api_base": "https://vllm.example/v1", "api_key": "endpoint-secret"},
+                    credential_info={},
+                )
+            ],
+        )
+        model_list[0]["litellm_params"] = {
+            "model": "hosted_vllm/shared",
+            "api_base": "https://overridden.example/v1",
+            "litellm_credential_name": "vllm-credential",
+        }
+    router = litellm.Router(model_list=model_list)
+    from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
+
+    router.get_model_group_info(model_group="vllm-model")
+    model_has_no_cost_mapping(model="vllm-model", llm_router=router)
+    request.assert_not_called()
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma if path == "/v2/model/info" else None)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
+
+    base = litellm.get_model_info("gpt-4o")
+    for context in (262_144, 65_536, None):
+        response.json.return_value = {"data": [{"id": "shared", "max_model_len": context}] if context else []}
+        with auth_as():
+            result = client.get(path, params=params)
+        assert result.status_code == 200, result.text
+        deployment = result.json()["data"][0]
+        assert deployment["model_info"]["max_input_tokens"] == (explicit_context or context or base["max_input_tokens"])
+        assert deployment["model_info"]["max_output_tokens"] == base["max_output_tokens"]
+        assert deployment["model_info"]["input_cost_per_token"] == base["input_cost_per_token"]
+        assert "api_key" not in deployment["litellm_params"]
+        assert "endpoint-secret" not in result.text
+    assert request.call_count == 3
+    for call in request.call_args_list:
+        assert call.kwargs["url"] == "https://vllm.example/v1/models"
+        assert call.kwargs["headers"] == {"Authorization": "Bearer endpoint-secret"}
+
+
+@pytest.mark.asyncio
+async def test_model_info_discovery_runs_outside_the_event_loop(app, auth_as, configured_router, monkeypatch):
+    event_loop_thread = threading.get_ident()
+    lookup_threads: list[int] = []
+
+    def lookup(model):
+        lookup_threads.append(threading.get_ident())
+        return model
+
+    monkeypatch.setattr(proxy_server, "_get_proxy_model_info", lookup)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        with auth_as():
+            response = await client.get("/v1/model/info", params={"litellm_model_id": "abc"})
+    assert response.status_code == 200
+    assert len(lookup_threads) == 1
+    assert lookup_threads[0] != event_loop_thread
 
 
 def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch):
@@ -161,9 +302,7 @@ def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch
     router.get_model_list = MagicMock(return_value=[deployment])
     monkeypatch.setattr(model_checks, "get_provider_models", fake_get_provider_models)
 
-    expanded_deployments = proxy_server.expand_wildcard_deployments_for_model_info(
-        [deployment]
-    )
+    expanded_deployments = proxy_server.expand_wildcard_deployments_for_model_info([deployment])
     allowed_model_names = proxy_server._get_v1_model_info_allowed_model_names(
         user_api_key_dict=UserAPIKeyAuth(
             api_key="sk-test",
@@ -399,14 +538,10 @@ def test_v2_model_info_exclude_auto_routers_shrinks_total_count(client, auth_as,
     assert len(payload["data"]) == payload["total_count"]
 
 
-def test_v2_model_info_exclude_auto_routers_paginates_over_the_filtered_set(
-    client, auth_as, mixed_auto_router_router
-):
+def test_v2_model_info_exclude_auto_routers_paginates_over_the_filtered_set(client, auth_as, mixed_auto_router_router):
     """Page size applies to the filtered list, so no page silently comes back short."""
     with auth_as():
-        response = client.get(
-            "/v2/model/info", params={"exclude_auto_routers": "true", "page": 1, "size": 1}
-        )
+        response = client.get("/v2/model/info", params={"exclude_auto_routers": "true", "page": 1, "size": 1})
     payload = response.json()
     assert payload["total_count"] == 2
     assert payload["total_pages"] == 2
