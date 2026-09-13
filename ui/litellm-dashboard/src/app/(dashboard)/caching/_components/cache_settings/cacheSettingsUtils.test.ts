@@ -80,6 +80,20 @@ describe("buildCachePayload", () => {
     expect(payload.similarity_threshold).toBe(0.9);
   });
 
+  it.each(["cluster", "sentinel"] as const)(
+    "should never send redis-semantic for %s, which the semantic cache cannot connect to",
+    (redisType) => {
+      const payload = buildCachePayload(
+        redisType,
+        { similarity_threshold: 0.9, semantic_cache_scope: "end_user" },
+        { forTesting: false, semanticEnabled: true },
+      );
+      expect(payload.type).toBe("redis");
+      expect(payload).not.toHaveProperty("similarity_threshold");
+      expect(payload).not.toHaveProperty("semantic_cache_scope");
+    },
+  );
+
   it("should omit semantic fields when semantic caching is disabled, even if they hold values", () => {
     const payload = buildCachePayload(
       "node",
@@ -98,8 +112,6 @@ describe("buildCachePayload", () => {
       { forTesting: false, semanticEnabled: true },
     );
     expect(enabled.semantic_cache_scope).toBe("end_user");
-    // Disabled must omit the scope rather than send null: the backend rejects a null scope
-    // when it rebuilds the cache, while an omitted one falls back to its default.
     const disabled = buildCachePayload(
       "node",
       { semantic_cache_scope: "end_user" },

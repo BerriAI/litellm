@@ -93,6 +93,26 @@ describe("CacheSettings", () => {
       renderSettings();
       expect(await screen.findByText("Similarity Threshold")).toBeInTheDocument();
     });
+
+    it("should load a saved redis-semantic config as a node with the toggle on", async () => {
+      getCacheSettingsCall.mockResolvedValue({ current_values: { type: "redis-semantic", host: "localhost" } });
+      renderSettings();
+      expect(await screen.findByText("Similarity Threshold")).toBeInTheDocument();
+      expect(screen.getByText("Node (Single Instance)")).toBeInTheDocument();
+      expect(screen.getByRole("switch")).not.toHaveAttribute("data-disabled");
+    });
+
+    it.each([
+      ["cluster", "Startup Nodes"],
+      ["sentinel", "Sentinel Nodes"],
+    ])("should disable the toggle and hide the semantic fields for %s", async (redisType, topologyField) => {
+      getCacheSettingsCall.mockResolvedValue({ current_values: { redis_type: redisType, similarity_threshold: 0.9 } });
+      renderSettings();
+      expect(await screen.findByText(topologyField)).toBeInTheDocument();
+      expect(screen.getByRole("switch")).toHaveAttribute("data-disabled");
+      expect(screen.getByText(/Semantic caching needs a single Redis node/)).toBeInTheDocument();
+      expect(screen.queryByText("Similarity Threshold")).not.toBeInTheDocument();
+    });
   });
 
   describe("when a field fails inline validation", () => {
