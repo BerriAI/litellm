@@ -83,8 +83,8 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.fallback_generalizations import (
-    match_backfill_generalizations,
     match_capability_generalizations,
+    match_fill_missing_generalizations,
 )
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 
@@ -5822,9 +5822,12 @@ def _get_model_info_helper(
                         _model_info = None
 
             if _model_info is not None and key is not None and _model_info.get("mode", "chat") in _BACKFILL_MODES:
-                backfill: Final = match_backfill_generalizations(key)
-                if backfill is not None:
-                    _model_info = {**{k: v for k, v in backfill.items() if k not in _model_info}, **_model_info}
+                fill_missing: Final = match_fill_missing_generalizations(key)
+                if fill_missing is not None:
+                    _model_info = {
+                        **{k: v for k, v in fill_missing.items() if k not in _model_info},
+                        **_model_info,
+                    }
 
             if _model_info is None:
                 generalization: Final = _get_model_info_from_generalization(

@@ -34,10 +34,10 @@ rules never mix the two and never use ``extends``. A rule whose
 Rules are only consulted after exact and case-insensitive lookups miss, so an
 exact cost-map entry always takes precedence over any rule.
 
-Rules flagged with ``backfill_exact_entries: true`` also fill only keys missing
+Rules flagged with ``fill_missing_fields: true`` also fill only keys missing
 from an exact cost-map entry, while values already present on the entry win on
-conflict. Only flagged capability rules participate in this backfill; routing
-rules never do.
+conflict. Only flagged capability rules participate in this fill; routing rules
+never do.
 
 Patterns are matched case-insensitively with ``re.search`` and are not implicitly
 anchored: a rule must include ``^`` and ``$`` to bind to the whole model name,
@@ -62,7 +62,7 @@ PATTERN_FIELD: Final = "pattern"
 MODEL_INFO_FIELD: Final = "model_info"
 PROVIDER_KEY: Final = "litellm_provider"
 LEGACY_EXTENDS_FIELD: Final = "extends"
-BACKFILL_FIELD: Final = "backfill_exact_entries"
+FILL_MISSING_FIELDS_FIELD: Final = "fill_missing_fields"
 
 
 def _resolve_legacy_extends(rules: list) -> list:
@@ -104,7 +104,7 @@ class _RoutingRule:
 class _CapabilityRule:
     pattern: re.Pattern
     model_info: dict
-    backfill_exact_entries: bool
+    fill_missing_fields: bool
 
 
 _CompiledRule = _RoutingRule | _CapabilityRule
@@ -132,9 +132,9 @@ def _compile_rule(rule: object) -> tuple[_CompiledRule, ...]:
             e,
         )
         return ()
-    backfill: Final = rule.get(BACKFILL_FIELD) is True
+    fill_missing_fields: Final = rule.get(FILL_MISSING_FIELDS_FIELD) is True
     if PROVIDER_KEY not in model_info:
-        return (_CapabilityRule(pattern=compiled, model_info=model_info, backfill_exact_entries=backfill),)
+        return (_CapabilityRule(pattern=compiled, model_info=model_info, fill_missing_fields=fill_missing_fields),)
     provider: Final = model_info[PROVIDER_KEY]
     if not isinstance(provider, str):
         verbose_logger.warning(
@@ -148,7 +148,7 @@ def _compile_rule(rule: object) -> tuple[_CompiledRule, ...]:
         return (_RoutingRule(pattern=compiled, provider=provider),)
     return (
         _RoutingRule(pattern=compiled, provider=provider),
-        _CapabilityRule(pattern=compiled, model_info=model_info, backfill_exact_entries=backfill),
+        _CapabilityRule(pattern=compiled, model_info=model_info, fill_missing_fields=fill_missing_fields),
     )
 
 
@@ -159,7 +159,7 @@ class _FallbackGeneralizations:
         self.rules: list = []
         self.routing_rules: tuple = ()
         self.capability_rules: tuple = ()
-        self.backfill_rules: tuple = ()
+        self.fill_missing_rules: tuple = ()
 
     def set_rules(self, rules: list | None) -> None:
         installed: Final = rules if isinstance(rules, list) else []
@@ -167,7 +167,7 @@ class _FallbackGeneralizations:
         self.rules = installed
         self.routing_rules = tuple(rule for rule in compiled if isinstance(rule, _RoutingRule))
         self.capability_rules = tuple(rule for rule in compiled if isinstance(rule, _CapabilityRule))
-        self.backfill_rules = tuple(rule for rule in self.capability_rules if rule.backfill_exact_entries)
+        self.fill_missing_rules = tuple(rule for rule in self.capability_rules if rule.fill_missing_fields)
 
     def match_routing(self, model: str) -> str | None:
         if not model:
@@ -185,16 +185,16 @@ class _FallbackGeneralizations:
             return None
         return {key: value for model_info in matched for key, value in model_info.items()}
 
-    def match_backfill(self, model: str) -> dict | None:
+    def match_fill_missing(self, model: str) -> dict | None:
         if not model:
             return None
-        matched = tuple(rule.model_info for rule in self.backfill_rules if rule.pattern.search(model) is not None)
+        matched = tuple(rule.model_info for rule in self.fill_missing_rules if rule.pattern.search(model) is not None)
         if not matched:
             return None
-        backfill: Final = {
+        fill_missing: Final = {
             key: value for model_info in matched for key, value in model_info.items() if key != PROVIDER_KEY
         }
-        return backfill or None
+        return fill_missing or None
 
 
 _registry: Final = _FallbackGeneralizations()
@@ -233,10 +233,10 @@ def match_capability_generalizations(model: str) -> dict | None:
     return _registry.match_capabilities(model)
 
 
-def match_backfill_generalizations(model: str) -> dict | None:
+def match_fill_missing_generalizations(model: str) -> dict | None:
     """Return the union of flagged capability rules matching ``model``.
 
     Later rules override earlier ones on key conflicts. Returns ``None`` when no
     flagged rule matches. O(number of rules); only call once exact lookups have matched.
     """
-    return _registry.match_backfill(model)
+    return _registry.match_fill_missing(model)

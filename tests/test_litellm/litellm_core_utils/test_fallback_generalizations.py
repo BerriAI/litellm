@@ -15,8 +15,8 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.fallback_generalizations import (
     get_fallback_generalization_rules,
-    match_backfill_generalizations,
     match_capability_generalizations,
+    match_fill_missing_generalizations,
     match_routing_generalization,
     set_fallback_generalizations,
 )
@@ -116,19 +116,19 @@ def test_capability_union_is_last_wins_in_file_order(restore_generalizations):
     }
 
 
-def test_backfill_requires_per_rule_opt_in(restore_generalizations):
+def test_fill_missing_requires_per_rule_opt_in(restore_generalizations):
     restore_generalizations(
         [
             {"name": "base", "pattern": r"^acme-", "model_info": {"supports_reasoning": True}},
             {
                 "name": "opt-in",
                 "pattern": r"^acme-",
-                "backfill_exact_entries": True,
+                "fill_missing_fields": True,
                 "model_info": {"supports_vision": True},
             },
         ]
     )
-    assert match_backfill_generalizations("acme-1") == {"supports_vision": True}
+    assert match_fill_missing_generalizations("acme-1") == {"supports_vision": True}
     assert match_capability_generalizations("acme-1") == {
         "supports_reasoning": True,
         "supports_vision": True,
@@ -137,31 +137,31 @@ def test_backfill_requires_per_rule_opt_in(restore_generalizations):
     restore_generalizations(
         [{"name": "base", "pattern": r"^acme-", "model_info": {"supports_reasoning": True}}]
     )
-    assert match_backfill_generalizations("acme-1") is None
+    assert match_fill_missing_generalizations("acme-1") is None
 
     restore_generalizations(
         [
             {
                 "name": "mixed",
                 "pattern": r"^acme-",
-                "backfill_exact_entries": True,
+                "fill_missing_fields": True,
                 "model_info": {"litellm_provider": "openai", "supports_vision": True},
             }
         ]
     )
-    assert match_backfill_generalizations("acme-1") == {"supports_vision": True}
+    assert match_fill_missing_generalizations("acme-1") == {"supports_vision": True}
 
     restore_generalizations(
         [
             {
                 "name": "route",
                 "pattern": r"^acme-",
-                "backfill_exact_entries": True,
+                "fill_missing_fields": True,
                 "model_info": {"litellm_provider": "openai"},
             }
         ]
     )
-    assert match_backfill_generalizations("acme-1") is None
+    assert match_fill_missing_generalizations("acme-1") is None
 
 
 def test_routing_rules_are_excluded_from_capability_results(restore_generalizations):
@@ -347,7 +347,7 @@ def test_exact_entry_takes_precedence_over_rule(restore_generalizations):
     assert info["input_cost_per_token"] != 999.0
 
 
-def test_exact_entries_backfill_only_missing_fields(restore_generalizations, monkeypatch):
+def test_exact_entries_fill_only_missing_fields(restore_generalizations, monkeypatch):
     monkeypatch.setattr(
         litellm,
         "model_cost",
@@ -380,7 +380,7 @@ def test_exact_entries_backfill_only_missing_fields(restore_generalizations, mon
             {
                 "name": "acme-backfill",
                 "pattern": r"^acme-",
-                "backfill_exact_entries": True,
+                "fill_missing_fields": True,
                 "model_info": {"supports_reasoning": True, "max_tokens": 5},
             }
         ]
@@ -726,8 +726,8 @@ def test_shipped_wandb_rule_loses_to_mapped_non_reasoning_entries(shipped_cost_m
         assert litellm.supports_reasoning(model=model, custom_llm_provider="wandb") is False, model
 
 
-def test_shipped_wandb_rule_does_not_backfill_mapped_entries(shipped_cost_map):
-    assert match_backfill_generalizations("wandb/meta-llama/Llama-3.1-8B-Instruct") is None
+def test_shipped_wandb_rule_does_not_fill_missing_mapped_entries(shipped_cost_map):
+    assert match_fill_missing_generalizations("wandb/meta-llama/Llama-3.1-8B-Instruct") is None
 
 
 def test_shipped_wandb_rule_is_anchored_to_the_wandb_namespace(shipped_cost_map):
