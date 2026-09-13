@@ -1982,7 +1982,9 @@ def _stream_spend_via_logging(complete_response, *, model: str, custom_llm_provi
     )
     logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
     logging_obj.optional_params = {}
-    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response)
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(
+        complete_response, custom_llm_provider
+    )
     cost = logging_obj._response_cost_calculator(result=complete_response)
     assert cost is not None
     return cost
@@ -2022,7 +2024,9 @@ def test_stream_spend_prices_vertex_anthropic_cache_read_tokens():
 
     # A leftover usage.cost=0 must not override token-based stream spend.
     usage.cost = 0
-    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response)
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(
+        complete_response, "vertex_ai"
+    )
     assert get_response_cost_from_hidden_params(complete_response._hidden_params) is None
 
     stream_spend = _stream_spend_via_logging(
