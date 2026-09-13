@@ -10,6 +10,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import (
     map_finish_reason,
+    strip_internal_params_from_chat_request_body,
     strip_internal_params_from_request_body,
 )
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
@@ -183,7 +184,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         headers: dict,
     ) -> dict:
         ## SETUP ##
-        sanitized_params: Final = strip_internal_params_from_request_body(copy.deepcopy(optional_params))
+        sanitized_params: Final = strip_internal_params_from_chat_request_body(copy.deepcopy(optional_params))
         stream: Final = sanitized_params.pop("stream", None)
         custom_prompt_dict: Final[dict] = litellm_params.pop("custom_prompt_dict", None) or {}
         hf_model_name: Final = litellm_params.get("hf_model_name", None)
@@ -196,7 +197,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             provider=provider,
             custom_prompt_dict=custom_prompt_dict,
         )
-        inference_params = {k: v for k, v in sanitized_params.items() if k not in self.aws_authentication_params}
+        inference_params = strip_internal_params_from_request_body(
+            {k: v for k, v in sanitized_params.items() if k not in self.aws_authentication_params}
+        )
         request_data: dict = {}
         if provider == "cohere":
             if model.startswith("cohere.command-r"):
@@ -223,14 +226,16 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 headers=headers,
             )
 
-            return transformed_request
+            return strip_internal_params_from_request_body(transformed_request)
         elif provider == "nova":
-            return litellm.AmazonInvokeNovaConfig().transform_request(
-                model=model,
-                messages=messages,
-                optional_params=sanitized_params,
-                litellm_params=litellm_params,
-                headers=headers,
+            return strip_internal_params_from_request_body(
+                litellm.AmazonInvokeNovaConfig().transform_request(
+                    model=model,
+                    messages=messages,
+                    optional_params=sanitized_params,
+                    litellm_params=litellm_params,
+                    headers=headers,
+                )
             )
         elif provider == "ai21":
             ## LOAD CONFIG
@@ -256,21 +261,25 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             self._apply_config_to_params(config, inference_params)
             request_data = {"prompt": prompt, **inference_params}
         elif provider == "twelvelabs":
-            return litellm.AmazonTwelveLabsPegasusConfig().transform_request(
-                model=model,
-                messages=messages,
-                optional_params=sanitized_params,
-                litellm_params=litellm_params,
-                headers=headers,
+            return strip_internal_params_from_request_body(
+                litellm.AmazonTwelveLabsPegasusConfig().transform_request(
+                    model=model,
+                    messages=messages,
+                    optional_params=sanitized_params,
+                    litellm_params=litellm_params,
+                    headers=headers,
+                )
             )
         elif provider == "openai":
             # OpenAI imported models use OpenAI Chat Completions format
-            return litellm.AmazonBedrockOpenAIConfig().transform_request(
-                model=model,
-                messages=messages,
-                optional_params=sanitized_params,
-                litellm_params=litellm_params,
-                headers=headers,
+            return strip_internal_params_from_request_body(
+                litellm.AmazonBedrockOpenAIConfig().transform_request(
+                    model=model,
+                    messages=messages,
+                    optional_params=sanitized_params,
+                    litellm_params=litellm_params,
+                    headers=headers,
+                )
             )
         else:
             raise BedrockError(

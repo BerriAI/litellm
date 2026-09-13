@@ -285,7 +285,7 @@ def test_invoke_delegate_paths_do_not_leak_internal_params(model):
     knobs must be stripped before the hand-off or they leak just like the
     inference_params splat did (#30371)."""
     seeded = {param.value: "internal" for param in LiteLLMInternalParam}
-    seeded.update({"temperature": 0.5})
+    seeded.update({"temperature": 0.5, "cache_control_injection_points": [{"location": "tool_config"}]})
 
     request_body = AmazonInvokeConfig().transform_request(
         model=model,
@@ -299,3 +299,25 @@ def test_invoke_delegate_paths_do_not_leak_internal_params(model):
     for param in LiteLLMInternalParam:
         assert param.value not in serialized, f"{param.value} leaked into {model} body"
     assert "temperature" in serialized
+
+
+def test_nova_invoke_preserves_tool_cache_points_without_leaking_internal_params():
+    from copy import deepcopy
+
+    params = {
+        "tools": [{"toolSpec": {"name": "lookup", "description": "Lookup", "inputSchema": {"json": {"type": "object", "properties": {}}}}}],
+        "cache_control_injection_points": [{"location": "tool_config"}],
+        "skip_mcp_handler": True,
+        "stream_chunk_size": 7,
+    }
+    original = deepcopy(params)
+    body = AmazonInvokeConfig().transform_request(
+        model="amazon.nova-pro-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=params,
+        litellm_params={},
+        headers={},
+    )
+    assert body["toolConfig"]["tools"][-1] == {"cachePoint": {"type": "default"}}
+    assert not any(param.value in json.dumps(body) for param in LiteLLMInternalParam)
+    assert params == original

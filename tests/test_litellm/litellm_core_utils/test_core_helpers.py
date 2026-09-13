@@ -423,13 +423,10 @@ class TestInternalParamFiltering:
         assert result == {"temperature": 0.5, "max_tokens": 10}
 
     def test_keeps_unknown_provider_native_params(self):
-        # Native provider params we do not enumerate must pass through (no allowlist over-drop).
         result = strip_internal_params_from_request_body({"anthropic_beta": "x", "top_k": 3})
         assert result == {"anthropic_beta": "x", "top_k": 3}
 
     def test_fallback_filter_keeps_non_mcp_internal_params(self):
-        # filter_internal_params feeds fallback re-dispatch; it must NOT drop
-        # cache_control_injection_points / stream_chunk_size the way the body filter does.
         kwargs = {
             "skip_mcp_handler": True,
             "cache_control_injection_points": [{"location": "message"}],
