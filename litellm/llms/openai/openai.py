@@ -1469,6 +1469,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     ) -> ImageResponse:
         data = {}
         try:
+            # extra_headers is an HTTP-header concern, not a JSON body field.
+            # Strip it defensively so it never reaches the request body even if a
+            # caller accidentally leaves it in optional_params.
+            optional_params.pop("extra_headers", None)
             data = {"model": model, "prompt": prompt, **optional_params}
             max_retries: Final = data.pop("max_retries", 2)
             if not isinstance(max_retries, int):

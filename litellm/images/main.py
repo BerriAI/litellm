@@ -474,8 +474,9 @@ def image_generation(
             or custom_llm_provider == LlmProviders.LITELLM_PROXY.value
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
-            if extra_headers is not None:
-                optional_params["extra_headers"] = extra_headers
+            # extra_headers belongs on the HTTP request, not in the JSON body.
+            # Pop it so it does not leak into optional_params → data → request body.
+            optional_params.pop("extra_headers", None)
             # Forward OpenAI organization if present (set by proxy pre-call utils)
             organization: Final[str | None] = kwargs.get("organization", None)
             model_response = openai_chat_completions.image_generation(
