@@ -15,6 +15,7 @@ export interface HealthReadinessDetailsResponse {
   is_detailed_debug?: boolean;
   show_no_redis_warning?: boolean;
   show_env_credential_login_warning?: boolean;
+  insecure_master_key_reason?: "example_key" | "missing" | null;
 }
 
 const fetchHealthReadinessDetails = async (accessToken: string): Promise<HealthReadinessDetailsResponse> => {

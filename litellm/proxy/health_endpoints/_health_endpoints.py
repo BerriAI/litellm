@@ -42,6 +42,11 @@ from litellm.proxy.auth.auth_checks import (
 from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
 )
+from litellm.proxy.auth.master_key_policy import (
+    InsecureMasterKeyReason,
+    alternative_auth_enabled,
+    insecure_master_key_reason,
+)
 from litellm.proxy.auth.model_checks import get_key_models
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -1675,6 +1680,12 @@ def _show_env_credential_login_warning() -> bool:
     return is_env_credential_login_enabled(general_settings)
 
 
+def _insecure_master_key_reason() -> InsecureMasterKeyReason | None:
+    from litellm.proxy.proxy_server import general_settings, master_key
+
+    return insecure_master_key_reason(master_key, alternative_auth_enabled=alternative_auth_enabled(general_settings))
+
+
 async def _get_health_readiness_details(
     response: Response | None = None,
 ) -> dict[str, Any]:
@@ -1717,6 +1728,7 @@ async def _get_health_readiness_details(
         is_detailed_debug: Final = verbose_logger.isEnabledFor(logging.DEBUG)
         show_no_redis_warning: Final = await _show_no_redis_warning()
         show_env_credential_login_warning: Final = _show_env_credential_login_warning()
+        insecure_master_key_reason: Final = _insecure_master_key_reason()
 
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
@@ -1745,6 +1757,7 @@ async def _get_health_readiness_details(
                 "is_detailed_debug": is_detailed_debug,
                 "show_no_redis_warning": show_no_redis_warning,
                 "show_env_credential_login_warning": show_env_credential_login_warning,
+                "insecure_master_key_reason": insecure_master_key_reason,
             }
         else:
             return {
@@ -1758,6 +1771,7 @@ async def _get_health_readiness_details(
                 "is_detailed_debug": is_detailed_debug,
                 "show_no_redis_warning": show_no_redis_warning,
                 "show_env_credential_login_warning": show_env_credential_login_warning,
+                "insecure_master_key_reason": insecure_master_key_reason,
             }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service Unhealthy ({e})")
