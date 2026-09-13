@@ -187,6 +187,16 @@ class RouteChecks:
         if denied_auth_enforced_pass_through_route:
             raise RouteChecks._auth_pass_through_denied_exception(route=route)
 
+        if valid_token.metadata.get("password_reset_required") is True:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "This account's password must be changed before the session can be used: "
+                    "it was either found in a known data breach or set by an admin. "
+                    "Change it via POST /user/password/change (UI: /ui/change-password), then log in again."
+                ),
+            )
+
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Virtual key is not allowed to call this route. Only allowed to call routes: {valid_token.allowed_routes}. Tried to call route: {route}",

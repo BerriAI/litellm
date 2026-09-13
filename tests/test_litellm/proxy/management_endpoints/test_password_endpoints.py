@@ -74,6 +74,10 @@ async def test_change_password_success_writes_new_scrypt_hash():
     stored = update_kwargs["data"]["password"]
     assert stored != NEW_PASSWORD
     assert verify_password(NEW_PASSWORD, stored)
+    # A successful change lifts any pending forced reset and re-arms the
+    # login-time breach screen for the new password.
+    assert update_kwargs["data"]["password_reset_required"] is False
+    assert update_kwargs["data"]["last_breach_check_at"] is None
 
 
 @pytest.mark.asyncio

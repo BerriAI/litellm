@@ -173,12 +173,17 @@ async def _hash_password_in_dict(
     """Validate and hash password field in-place if present.
 
     ``password_prevalidated`` skips the policy checks for callers that already
-    validated the password (the bulk path screens its whole batch upfront)."""
+    validated the password (the bulk path screens its whole batch upfront).
+
+    An admin-set password is known to whoever set it, so the user is also
+    flagged for a forced password change at next login."""
     if "password" in data and data["password"] is not None:
         if not password_prevalidated:
             validate_password_policy(data["password"], general_settings)
             await validate_password_not_breached(data["password"], general_settings)
         data["password"] = hash_password(data["password"])
+        data["password_reset_required"] = True
+        data["last_breach_check_at"] = None
 
 
 def _strip_password_from_response(response) -> None:
@@ -1644,7 +1649,7 @@ async def user_update(
     Parameters:
         - user_id: Optional[str] - Specify a user id. If not set, a unique id will be generated.
         - user_email: Optional[str] - Specify a user email.
-        - password: Optional[str] - Set the user's password (admin only). Must satisfy the configured password policy. Users change their own password with POST /user/password/change.
+        - password: Optional[str] - Set the user's password (admin only). Must satisfy the configured password policy. The user is required to change it at their next login. Users change their own password with POST /user/password/change.
         - user_alias: Optional[str] - A descriptive name for you to know who this user id refers to.
         - teams: Optional[list] - specify a list of team id's a user belongs to.
         - send_invite_email: Optional[bool] - Specify if an invite email should be sent.

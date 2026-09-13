@@ -10,14 +10,16 @@ import secrets
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 import jwt
 from fastapi import HTTPException
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME, LITELLM_UI_SESSION_DURATION
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -27,6 +29,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_utils import is_sso_provider_fully_configured
+from litellm.proxy.auth.password_policy import is_breach_check_enabled, is_password_breached
 from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
@@ -43,6 +46,56 @@ from litellm.proxy.utils import (
 from litellm.repositories.user_repository import UserRepository
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.ui_sso import ReturnedUITokenObject
+
+if TYPE_CHECKING:
+    from prisma import types as prisma_types
+
+BREACH_RECHECK_INTERVAL: Final = timedelta(hours=24)
+PASSWORD_RESET_ALLOWED_ROUTES: Final = ("/user/password/change",)
+
+
+def _breach_recheck_due(last_breach_check_at: datetime | None) -> bool:
+    if last_breach_check_at is None:
+        return True
+    last_checked_utc: Final = (
+        last_breach_check_at
+        if last_breach_check_at.tzinfo is not None
+        else last_breach_check_at.replace(tzinfo=timezone.utc)
+    )
+    return datetime.now(timezone.utc) - last_checked_utc >= BREACH_RECHECK_INTERVAL
+
+
+async def screen_login_password_for_breach(
+    user_id: str,
+    password: str,
+    last_breach_check_at: datetime | None,
+    general_settings: Mapping[str, object],
+    prisma_client: PrismaClient,
+    client: AsyncHTTPHandler | None = None,
+) -> bool:
+    """Screens a successfully verified login password against HIBP, stamps
+    ``password_reset_required`` when breached, and returns whether a breach was
+    found so the login it runs in can restrict the session it is about to mint.
+    Fails open (HIBP or DB trouble never fails the login) and rechecks a given
+    user at most once per ``BREACH_RECHECK_INTERVAL``."""
+    if not is_breach_check_enabled(general_settings):
+        return False
+    if not _breach_recheck_due(last_breach_check_at):
+        return False
+    breached: Final = await is_password_breached(password, general_settings, client)
+    checked_at: Final = datetime.now(timezone.utc)
+    breached_update: Final[prisma_types.LiteLLM_UserTableUpdateInput] = {
+        "last_breach_check_at": checked_at,
+        "password_reset_required": True,
+    }
+    recheck_update: Final[prisma_types.LiteLLM_UserTableUpdateInput] = {"last_breach_check_at": checked_at}
+    update_data: Final = breached_update if breached else recheck_update
+    find_user: Final[prisma_types.LiteLLM_UserTableWhereInput] = {"user_id": user_id}
+    try:
+        await UserRepository(prisma_client).table.update(where=find_user, data=update_data)
+    except Exception as e:  # noqa: BLE001  # a failed stamp must never surface into the login
+        verbose_proxy_logger.warning("Login-time breach screening could not update user %s: %s", user_id, e)
+    return breached
 
 
 async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -> None:
@@ -116,6 +169,7 @@ class LoginResult:
     user_email: str | None
     user_role: str
     login_method: Literal["sso", "username_password"]
+    password_reset_required: bool
 
     def __init__(
         self,
@@ -124,12 +178,14 @@ class LoginResult:
         user_email: str | None,
         user_role: str,
         login_method: Literal["sso", "username_password"] = "username_password",
+        password_reset_required: bool = False,
     ):
         self.user_id = user_id
         self.key = key
         self.user_email = user_email
         self.user_role = user_role
         self.login_method = login_method
+        self.password_reset_required = password_reset_required
 
 
 async def authenticate_user(
@@ -322,20 +378,25 @@ async def authenticate_user(
 
         if verify_password(password, _password):
             await _rehash_password_if_needed(_user_row.user_id, password, _password)
+            breached_now: Final = prisma_client is not None and await screen_login_password_for_breach(
+                user_id=_user_row.user_id,
+                password=password,
+                last_breach_check_at=getattr(_user_row, "last_breach_check_at", None),
+                general_settings=general_settings,
+                prisma_client=prisma_client,
+            )
+            password_reset_required: Final = breached_now or getattr(_user_row, "password_reset_required", None) is True
             if os.getenv("DATABASE_URL") is not None:
                 response = await generate_key_helper_fn(
                     request_type="key",
-                    **{
-                        "user_role": user_role,
-                        "duration": LITELLM_UI_SESSION_DURATION,
-                        "key_max_budget": litellm.max_ui_session_budget,
-                        "models": [],
-                        "aliases": {},
-                        "config": {},
-                        "spend": 0,
-                        "user_id": user_id,
-                        "team_id": "litellm-dashboard",
-                    },
+                    user_role=user_role,
+                    duration=LITELLM_UI_SESSION_DURATION,
+                    key_max_budget=litellm.max_ui_session_budget,
+                    spend=0,
+                    user_id=user_id,
+                    team_id="litellm-dashboard",
+                    allowed_routes=list(PASSWORD_RESET_ALLOWED_ROUTES) if password_reset_required else None,
+                    metadata={"password_reset_required": True} if password_reset_required else {},
                 )
             else:
                 raise ProxyException(
@@ -353,6 +414,7 @@ async def authenticate_user(
                 user_email=user_email,
                 user_role=cast(str, user_role),
                 login_method="username_password",
+                password_reset_required=password_reset_required,
             )
         else:
             raise ProxyException(
@@ -426,4 +488,5 @@ def create_ui_token_object(
         auth_header_name=general_settings.get("litellm_key_header_name", "Authorization"),
         disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
         server_root_path=get_server_root_path(),
+        password_reset_required=login_result.password_reset_required,
     )
