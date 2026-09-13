@@ -2397,7 +2397,9 @@ async def test_async_post_call_failure_hook_persists_no_raw_model_on_an_unknown_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("response_cost", [None, 0.0])
-async def test_proxy_track_cost_callback_resolves_breakdown_cost(response_cost):
+async def test_proxy_track_cost_callback_resolves_breakdown_cost(  # test-quality-ok: writer arguments
+    response_cost,
+):
     logger: Final = _ProxyDBLogger()
     kwargs: Final = {
         **_offload_kwargs(),
@@ -2409,9 +2411,15 @@ async def test_proxy_track_cost_callback_resolves_breakdown_cost(response_cost):
         },
     }
     with (
-        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
-        patch("litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock) as counters,
-        patch("litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock),
+        patch(  # test-quality-ok: proxy_logging_obj is read off proxy_server in the callback body
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_proxy_logging,
+        patch(  # test-quality-ok: increment_spend_counters is read off proxy_server in the callback body
+            "litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock
+        ) as counters,
+        patch(  # test-quality-ok: update_cache is read off proxy_server in the callback body
+            "litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock
+        ),
     ):
         mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock(return_value=True)
         mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
@@ -2429,7 +2437,7 @@ async def test_proxy_track_cost_callback_resolves_breakdown_cost(response_cost):
 
 
 @pytest.mark.asyncio
-async def test_proxy_track_cost_callback_keeps_zero_on_cache_hit():
+async def test_proxy_track_cost_callback_keeps_zero_on_cache_hit():  # test-quality-ok: writer arguments
     logger: Final = _ProxyDBLogger()
     kwargs: Final = {
         **_offload_kwargs(),
@@ -2442,9 +2450,15 @@ async def test_proxy_track_cost_callback_keeps_zero_on_cache_hit():
         },
     }
     with (
-        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
-        patch("litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock) as counters,
-        patch("litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock),
+        patch(  # test-quality-ok: proxy_logging_obj is read off proxy_server in the callback body
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_proxy_logging,
+        patch(  # test-quality-ok: increment_spend_counters is read off proxy_server in the callback body
+            "litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock
+        ) as counters,
+        patch(  # test-quality-ok: update_cache is read off proxy_server in the callback body
+            "litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock
+        ),
     ):
         mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock(return_value=True)
         mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
