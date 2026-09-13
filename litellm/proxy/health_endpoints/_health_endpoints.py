@@ -443,6 +443,11 @@ async def health_services_endpoint(
             }
             return pointfive_health
         if service == "webhook":
+            if not _is_proxy_admin(user_api_key_dict):
+                webhook_non_admin_detail: Final[_ServiceTestErrorDetail] = {
+                    "error": "Only proxy admins can trigger the webhook test alert."
+                }
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=webhook_non_admin_detail)
             user_info: Final = CallInfo(
                 token=user_api_key_dict.token or "",
                 spend=1,
