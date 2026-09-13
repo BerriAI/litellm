@@ -9,10 +9,11 @@ from httpx import Request, Response
 
 from litellm.exceptions import Timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
 from litellm.proxy.guardrails.guardrail_hooks.neuraltrust.neuraltrust import (
     NeuralTrustGuardrail,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import Choices, GenericGuardrailAPIInputs, Message, ModelResponse
 
 
 def _response(payload: object, status_code: int = 200) -> Response:
@@ -288,6 +289,174 @@ class TestNeuralTrustGuardrail:
         assert result["tool_calls"] == rewritten_tool_calls
         assert result["tool_calls"] is not original_tool_calls
         assert result["structured_messages"][0]["tool_calls"] == rewritten_tool_calls
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("emptied", ["", None])
+    async def test_transform_emptied_output_blanks_text_instead_of_restoring_original(
+        self, emptied: str | None
+    ) -> None:
+        guardrail = _guardrail(event_hook="post_call")
+        mock_post = AsyncMock(
+            return_value=_response(
+                {
+                    "status": "transform",
+                    "transformed_payload": {"messages": [{"role": "assistant", "content": emptied}]},
+                }
+            )
+        )
+        with patch.object(guardrail.async_handler, "post", mock_post):
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["my ssn is 123-45-6789"]},
+                request_data={},
+                input_type="response",
+                logging_obj=_logging(),
+            )
+        assert result["texts"] == [""]
+
+    @pytest.mark.asyncio
+    async def test_transform_emptied_output_keeps_choice_alignment(self) -> None:
+        guardrail = _guardrail(event_hook="post_call")
+        rewritten = [
+            {"role": "assistant", "content": ""},
+            {"role": "assistant", "content": "card ending [REDACTED]"},
+        ]
+        mock_post = AsyncMock(
+            return_value=_response({"status": "transform", "transformed_payload": {"messages": rewritten}})
+        )
+        with patch.object(guardrail.async_handler, "post", mock_post):
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["ssn 123-45-6789", "card ending 4242"]},
+                request_data={},
+                input_type="response",
+                logging_obj=_logging(),
+            )
+        assert result["texts"] == ["", "card ending [REDACTED]"]
+
+    @pytest.mark.asyncio
+    async def test_transform_emptied_output_reaches_client_blank_and_aligned(self) -> None:
+        guardrail = _guardrail(event_hook="post_call")
+        rewritten = [
+            {"role": "assistant", "content": ""},
+            {"role": "assistant", "content": "card ending [REDACTED]"},
+        ]
+        mock_post = AsyncMock(
+            return_value=_response({"status": "transform", "transformed_payload": {"messages": rewritten}})
+        )
+        response = ModelResponse(
+            id="chatcmpl-1",
+            created=1,
+            model="gpt-4o-mini",
+            object="chat.completion",
+            choices=[
+                Choices(finish_reason="stop", index=0, message=Message(content="ssn 123-45-6789", role="assistant")),
+                Choices(finish_reason="stop", index=1, message=Message(content="card ending 4242", role="assistant")),
+            ],
+        )
+        with patch.object(guardrail.async_handler, "post", mock_post):
+            processed = await OpenAIChatCompletionsHandler().process_output_response(response, guardrail)
+        assert processed.choices[0].message.content == ""
+        assert processed.choices[1].message.content == "card ending [REDACTED]"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("sent_texts", [{}, {"texts": []}])
+    async def test_transform_tool_call_only_output_adds_no_text(self, sent_texts: GenericGuardrailAPIInputs) -> None:
+        guardrail = _guardrail(event_hook="post_call")
+        original_tool_calls = [
+            {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": '{"ssn":"123-45-6789"}'}}
+        ]
+        rewritten_tool_calls = [
+            {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": '{"ssn":"[REDACTED]"}'}}
+        ]
+        mock_post = AsyncMock(
+            return_value=_response(
+                {
+                    "status": "transform",
+                    "transformed_payload": {
+                        "messages": [{"role": "assistant", "content": None, "tool_calls": rewritten_tool_calls}]
+                    },
+                }
+            )
+        )
+        with patch.object(guardrail.async_handler, "post", mock_post):
+            result = await guardrail.apply_guardrail(
+                inputs={**sent_texts, "tool_calls": original_tool_calls},
+                request_data={},
+                input_type="response",
+                logging_obj=_logging(),
+            )
+        assert not result.get("texts")
+        assert result["tool_calls"] == rewritten_tool_calls
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("emptied", ["", None])
+    async def test_transform_emptied_input_blanks_text_and_message(self, emptied: str | None) -> None:
+        guardrail = _guardrail()
+        mock_post = AsyncMock(
+            return_value=_response(
+                {
+                    "status": "transform",
+                    "transformed_payload": {"messages": [{"role": "user", "content": emptied}]},
+                }
+            )
+        )
+        with patch.object(guardrail.async_handler, "post", mock_post):
+            result = await guardrail.apply_guardrail(
+                inputs={
+                    "texts": ["my ssn is 123-45-6789"],
+                    "structured_messages": [{"role": "user", "content": "my ssn is 123-45-6789"}],
+                },
+                request_data={},
+                input_type="request",
+                logging_obj=_logging(),
+            )
+        assert result["texts"] == [""]
+        assert result["structured_messages"] == [{"role": "user", "content": emptied}]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("returned", [1, 3])
+    async def test_transform_output_message_count_mismatch_fail_closed(self, returned: int) -> None:
+        guardrail = _guardrail(event_hook="post_call")
+        rewritten = [{"role": "assistant", "content": "[REDACTED]"} for _ in range(returned)]
+        mock_post = AsyncMock(
+            return_value=_response({"status": "transform", "transformed_payload": {"messages": rewritten}})
+        )
+        with patch.object(guardrail.async_handler, "post", mock_post):
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail.apply_guardrail(
+                    inputs={"texts": ["ssn 111-11-1111", "ssn 222-22-2222"]},
+                    request_data={},
+                    input_type="response",
+                    logging_obj=_logging(),
+                )
+        assert exc_info.value.status_code == 400
+        assert "transform missing payload" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_transform_input_message_count_mismatch_fail_closed(self) -> None:
+        guardrail = _guardrail()
+        mock_post = AsyncMock(
+            return_value=_response(
+                {
+                    "status": "transform",
+                    "transformed_payload": {"messages": [{"role": "user", "content": "ssn is [REDACTED]"}]},
+                }
+            )
+        )
+        with patch.object(guardrail.async_handler, "post", mock_post):
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail.apply_guardrail(
+                    inputs={
+                        "texts": ["you are a helpful assistant", "ssn is 123-45-6789"],
+                        "structured_messages": [
+                            {"role": "system", "content": "you are a helpful assistant"},
+                            {"role": "user", "content": "ssn is 123-45-6789"},
+                        ],
+                    },
+                    request_data={},
+                    input_type="request",
+                    logging_obj=_logging(),
+                )
+        assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
     async def test_transform_messages_keeps_tool_calls_when_omitted(self) -> None:

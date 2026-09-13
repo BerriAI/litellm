@@ -46,9 +46,9 @@ class _TrustGuardUnreachable(Exception):
     """Transport or availability failure; eligible for unreachable_fallback."""
 
 
-def _message_text(message: Mapping[str, object]) -> str | None:
+def _message_text(message: Mapping[str, object]) -> str:
     content: Final = message.get("content")
-    return content if isinstance(content, str) and content else None
+    return content if isinstance(content, str) else ""
 
 
 def _copy_message(value: object) -> Mapping[str, object] | None:
@@ -63,7 +63,7 @@ def _copy_messages(messages: Sequence[object]) -> tuple[Mapping[str, object], ..
 
 
 def _texts_from_messages(messages: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
-    return tuple(text for message in messages if (text := _message_text(message)) is not None)
+    return tuple(_message_text(message) for message in messages)
 
 
 def _tool_calls_in_message(message: Mapping[str, object]) -> tuple[object, ...] | None:
@@ -118,13 +118,24 @@ def _assistant_messages(texts: Sequence[str], tool_calls: object) -> tuple[Mappi
     return tuple(_assistant_message(text, tool_calls if index == last else None) for index, text in enumerate(texts))
 
 
+def _sent_messages(
+    inputs: GenericGuardrailAPIInputs,
+    input_type: Literal["request", "response"],
+) -> Sequence[Mapping[str, object]]:
+    if input_type == "response":
+        return _assistant_messages(tuple(inputs.get("texts") or ()), inputs.get("tool_calls"))
+    structured: Final = inputs.get("structured_messages")
+    if structured:
+        return structured
+    return tuple({"role": "user", "content": text} for text in (inputs.get("texts") or ()))  # mutable-ok: outbound JSON
+
+
 def _inputs_with_messages(
     inputs: GenericGuardrailAPIInputs,
     messages: Sequence[Mapping[str, object]],
     *,
     replace_tool_calls: bool,
 ) -> GenericGuardrailAPIInputs:
-    texts: Final = _texts_from_messages(messages)
     extracted: Final = _tool_calls_from_messages(messages) if replace_tool_calls else None
     original_tool_calls: Final = inputs.get("tool_calls")
     if extracted is not None and original_tool_calls is not None and len(extracted) != len(original_tool_calls):
@@ -132,11 +143,15 @@ def _inputs_with_messages(
     merged: Final[GenericGuardrailAPIInputs] = {  # mutable-ok: GenericGuardrailAPIInputs is a TypedDict
         **inputs,
         "structured_messages": list(messages),  # mutable-ok: GenericGuardrailAPIInputs.structured_messages is a list
-        "texts": list(texts) if texts else inputs.get("texts"),  # mutable-ok: GenericGuardrailAPIInputs.texts is a list
     }
+    rebuilt: Final[GenericGuardrailAPIInputs] = (
+        {**merged, "texts": list(_texts_from_messages(messages))}  # mutable-ok: TypedDict field is a list
+        if inputs.get("texts")
+        else merged
+    )
     if extracted is None:
-        return merged
-    return {**merged, "tool_calls": list(extracted)}  # mutable-ok: GenericGuardrailAPIInputs.tool_calls is a list
+        return rebuilt
+    return {**rebuilt, "tool_calls": list(extracted)}  # mutable-ok: GenericGuardrailAPIInputs.tool_calls is a list
 
 
 class NeuralTrustGuardrail(CustomGuardrail):
@@ -217,7 +232,11 @@ class NeuralTrustGuardrail(CustomGuardrail):
                 },
             )
         if status == STATUS_TRANSFORM:
-            return self._apply_transform(inputs, result.get("transformed_payload"))
+            return self._apply_transform(
+                inputs,
+                result.get("transformed_payload"),
+                sent_count=len(_sent_messages(inputs, input_type)),
+            )
         if status == STATUS_REPORT:
             verbose_proxy_logger.info("TrustGuard report-only findings trace_id=%s", result.get("trace_id"))
         return inputs
@@ -247,23 +266,11 @@ class NeuralTrustGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         input_type: Literal["request", "response"],
     ) -> Mapping[str, object]:
-        if input_type == "request":
-            structured: Final = inputs.get("structured_messages")
-            messages: Final = (
-                structured
-                if structured
-                else tuple(
-                    {"role": "user", "content": text}  # mutable-ok: outbound JSON
-                    for text in (inputs.get("texts") or ())
-                )
-            )
-            tools: Final = inputs.get("tools")
-            if tools:
-                return {"messages": messages, "tools": tools}  # mutable-ok: outbound JSON
-            return {"messages": messages}  # mutable-ok: outbound JSON
-
-        output_messages: Final = _assistant_messages(tuple(inputs.get("texts") or ()), inputs.get("tool_calls"))
-        return {"messages": output_messages}  # mutable-ok: outbound JSON
+        messages: Final = _sent_messages(inputs, input_type)
+        tools: Final = inputs.get("tools") if input_type == "request" else None
+        if tools:
+            return {"messages": messages, "tools": tools}  # mutable-ok: outbound JSON
+        return {"messages": messages}  # mutable-ok: outbound JSON
 
     async def _call_evaluate(self, body: dict[str, object]) -> dict[str, object]:  # mutable-ok: TrustGuard JSON
         url: Final = f"{self.api_base}{EVALUATE_PATH}"
@@ -335,6 +342,8 @@ class NeuralTrustGuardrail(CustomGuardrail):
     def _apply_transform(
         inputs: GenericGuardrailAPIInputs,
         transformed: object,
+        *,
+        sent_count: int,
     ) -> GenericGuardrailAPIInputs:
         if not isinstance(transformed, Mapping):
             raise HTTPException(status_code=400, detail=TRANSFORM_MISSING)
@@ -342,7 +351,7 @@ class NeuralTrustGuardrail(CustomGuardrail):
         raw_messages: Final = transformed.get("messages")
         if isinstance(raw_messages, list) and raw_messages:
             rewritten_messages: Final = _copy_messages(raw_messages)
-            if rewritten_messages is None:
+            if rewritten_messages is None or len(rewritten_messages) != sent_count:
                 raise HTTPException(status_code=400, detail=TRANSFORM_MISSING)
             return _inputs_with_messages(inputs, rewritten_messages, replace_tool_calls=True)
 
