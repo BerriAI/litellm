@@ -2,6 +2,7 @@ import { Check, Copy } from "lucide-react";
 import { useState, useCallback } from "react";
 import moment from "moment";
 import { AuditLogEntry, AUDIT_TABLE_NAME_DISPLAY } from "../AuditLogsTableColumns";
+import { getAuditObjectName } from "../auditObjectLabel";
 import DefaultProxyAdminTag from "../../common_components/DefaultProxyAdminTag";
 import CopyButton from "@/components/shared/CopyButton";
 import { StatusBadge, type StatusTone } from "@/components/shared/table_cells/status_badge";
@@ -172,6 +173,7 @@ export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
   if (!log) return null;
 
   const tableDisplay = AUDIT_TABLE_NAME_DISPLAY[log.table_name] ?? log.table_name;
+  const objectName = getAuditObjectName(log);
 
   return (
     <Sheet open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
@@ -189,6 +191,7 @@ export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
           <div className="mb-5 rounded-lg border border-border bg-muted p-4">
             <p className="mb-2 text-xs font-semibold tracking-wide text-foreground uppercase">Details</p>
             <MetadataRow label="Table" value={tableDisplay} />
+            {objectName != null && <MetadataRow label="Name" value={objectName} />}
             <MetadataRow
               label="Object ID"
               value={
