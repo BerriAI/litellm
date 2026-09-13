@@ -200,5 +200,10 @@
       "temperature_max": 1.99
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "wallaby": {
+    "base_url": "https://api.wallabytoken.com/v1",
+    "api_key_env": "WALLABY_API_KEY",
+    "api_base_env": "WALLABY_API_BASE"
   }
 }
