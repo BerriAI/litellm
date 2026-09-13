@@ -362,3 +362,61 @@ def test_sigv4_no_duplicate_content_type_when_caller_sets_lowercase():
         "Duplicate keys produce 'application/json, application/json' in the "
         "SigV4 canonical string and cause a 401."
     )
+
+
+def test_claude_platform_strips_workspace_id_aliases_from_request_body():
+    """Regression for #29272.
+
+    `workspace_id` (and its aliases `aws_workspace_id`, `anthropic-workspace-id`,
+    `anthropic_workspace_id`) is consumed only as the
+    `anthropic-workspace-id` header. They were left in `optional_params`, so
+    the inherited `AnthropicConfig.transform_request` serialized them as
+    top-level fields of the JSON body and Anthropic's `/v1/messages`
+    rejected the request with `unknown field`.
+
+    Verify every alias is popped from both `optional_params` and
+    `litellm_params` once `validate_environment` runs.
+    """
+    from litellm.llms.bedrock.claude_platform.transformation import (
+        BedrockClaudePlatformConfig,
+    )
+
+    config = BedrockClaudePlatformConfig()
+
+    optional_params = {
+        "workspace_id": "wrkspc_a",
+        "aws_workspace_id": "wrkspc_b",
+        "anthropic-workspace-id": "wrkspc_c",
+        "anthropic_workspace_id": "wrkspc_d",
+        "max_tokens": 1024,  # must survive
+    }
+    litellm_params = {
+        "workspace_id": "wrkspc_e",
+        "anthropic_workspace_id": "wrkspc_f",
+        "metadata": {"trace_id": "abc"},  # must survive
+    }
+
+    headers = config.validate_environment(
+        api_key="fake-platform-key",
+        headers={},
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+    )
+
+    assert headers["anthropic-workspace-id"] == "wrkspc_a"
+
+    # No alias survives into params that downstream transformers serialize.
+    for key in (
+        "workspace_id",
+        "aws_workspace_id",
+        "anthropic-workspace-id",
+        "anthropic_workspace_id",
+    ):
+        assert key not in optional_params, f"{key} leaked into optional_params"
+        assert key not in litellm_params, f"{key} leaked into litellm_params"
+
+    # Unrelated params untouched.
+    assert optional_params["max_tokens"] == 1024
+    assert litellm_params["metadata"] == {"trace_id": "abc"}
