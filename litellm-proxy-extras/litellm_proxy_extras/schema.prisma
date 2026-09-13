@@ -586,6 +586,8 @@ model LiteLLM_EndUserTable {
   object_permission_id String?
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
   object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
+  fallback_end_user_id String?
+  @@index([fallback_end_user_id])
   blocked Boolean @default(false)
 }
 

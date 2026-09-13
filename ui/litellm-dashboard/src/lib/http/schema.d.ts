@@ -3945,6 +3945,7 @@ export interface paths {
          *     - blocked: bool - Flag to allow or disallow requests for this end-user. Default is False.
          *     - max_budget: Optional[float] - The maximum budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
          *     - budget_id: Optional[str] - The identifier for an existing budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
+         *     - fallback_end_user_id: Optional[str] - Another customer whose budget is charged once this customer's own budget is exhausted. Depth is one: the fallback customer cannot itself have a fallback.
          *     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
          *     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
          *     - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
@@ -4050,6 +4051,7 @@ export interface paths {
          *     - blocked: bool = False  # allow/disallow requests for this end-user
          *     - max_budget: Optional[float] = None
          *     - budget_id: Optional[str] = None  # give either a budget_id or max_budget
+         *     - fallback_end_user_id: Optional[str] = None  # customer charged once this customer's budget is exhausted; depth one, null clears
          *     - allowed_model_region: Optional[AllowedModelRegion] = (
          *         None  # require all user requests to use models in this specific region
          *     )
@@ -4479,6 +4481,7 @@ export interface paths {
          *     - blocked: bool - Flag to allow or disallow requests for this end-user. Default is False.
          *     - max_budget: Optional[float] - The maximum budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
          *     - budget_id: Optional[str] - The identifier for an existing budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
+         *     - fallback_end_user_id: Optional[str] - Another customer whose budget is charged once this customer's own budget is exhausted. Depth is one: the fallback customer cannot itself have a fallback.
          *     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
          *     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
          *     - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
@@ -4584,6 +4587,7 @@ export interface paths {
          *     - blocked: bool = False  # allow/disallow requests for this end-user
          *     - max_budget: Optional[float] = None
          *     - budget_id: Optional[str] = None  # give either a budget_id or max_budget
+         *     - fallback_end_user_id: Optional[str] = None  # customer charged once this customer's budget is exhausted; depth one, null clears
          *     - allowed_model_region: Optional[AllowedModelRegion] = (
          *         None  # require all user requests to use models in this specific region
          *     )
@@ -26864,6 +26868,8 @@ export interface components {
             budget_id?: string | null;
             /** Default Model */
             default_model?: string | null;
+            /** Fallback End User Id */
+            fallback_end_user_id?: string | null;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
@@ -29075,6 +29081,8 @@ export interface components {
             budget_id?: string | null;
             /** Default Model */
             default_model?: string | null;
+            /** Fallback End User Id */
+            fallback_end_user_id?: string | null;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
@@ -32230,6 +32238,8 @@ export interface components {
             budget_reset_at?: string | null;
             /** Default Model */
             default_model?: string | null;
+            /** Fallback End User Id */
+            fallback_end_user_id?: string | null;
             /**
              * Max Budget
              * @description Requests will fail if this budget (in USD) is exceeded.
@@ -37959,6 +37969,8 @@ export interface components {
             budget_id?: string | null;
             /** Default Model */
             default_model?: string | null;
+            /** Fallback End User Id */
+            fallback_end_user_id?: string | null;
             /** Max Budget */
             max_budget?: number | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;

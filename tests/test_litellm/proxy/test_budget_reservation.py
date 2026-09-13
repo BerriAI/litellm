@@ -3348,3 +3348,103 @@ async def test_unreserved_model_access_group_is_charged_alongside_a_reserved_one
     assert counter_cache.in_memory_cache.get_cache(
         key=model_access_group_spend_counter_key("starter")
     ) == pytest.approx(4.2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/v1/chat/completions", "/v1/responses", "/v1/messages"])
+@pytest.mark.parametrize("own_spend,billing_id", [(1.0, "person"), (11.0, "pool"), (11.0, None)])
+@pytest.mark.parametrize("pool_model_cap", [0, 100])
+async def test_fallback_budget_reservation_and_spend_attribution(
+    spend_counter_state, monkeypatch, route, own_spend, billing_id, pool_model_cap
+):
+    import json
+    from fastapi import Request
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.auth.auth_checks import _cache_key_object
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.hooks.model_max_budget_limiter import _PROXY_VirtualKeyModelMaxBudgetLimiter
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    monkeypatch.setattr(litellm, "max_budget", 0.0)
+    counters, cache = spend_counter_state
+    own = LiteLLM_EndUserTable(
+        user_id="person", blocked=False, spend=own_spend, fallback_end_user_id="pool",
+        allowed_model_region="eu",
+        object_permission={"object_permission_id": "restricted", "vector_stores": ["vs-own"]},
+        litellm_budget_table=LiteLLM_BudgetTable(
+            max_budget=10, tpm_limit=100, rpm_limit=2,
+            model_max_budget={"gpt-4o-mini": {"max_budget": 0 if own_spend >= 10 else 10, "budget_duration": "1d"}},
+        ),
+    )
+    pool = LiteLLM_EndUserTable(
+        user_id="pool", blocked=False, spend=101.0 if billing_id is None else 3.0,
+        litellm_budget_table=LiteLLM_BudgetTable(
+            max_budget=100,
+            model_max_budget={"gpt-4o-mini": {"max_budget": pool_model_cap, "budget_duration": "1d"}},
+        ),
+    )
+    cache.set_cache("end_user_id:person", own)
+    cache.set_cache("end_user_id:pool", pool)
+    counters.set_cache("spend:end_user:person", own_spend)
+    counters.set_cache("spend:end_user:pool", pool.spend)
+    prisma = MagicMock()
+    prisma.get_data = AsyncMock(return_value=None)
+    prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr(ps, "prisma_client", prisma)
+    monkeypatch.setattr(ps, "master_key", "sk-local-test")
+    monkeypatch.setattr(ps, "user_custom_auth", None)
+    monkeypatch.setattr(ps, "general_settings", {})
+    router = Router(model_list=[{
+        "model_name": "gpt-4o-mini",
+        "litellm_params": {"model": "gpt-4o-mini", "api_key": "sk-fake"},
+        "model_info": {"input_cost_per_token": 0.0, "output_cost_per_token": 0.1},
+    }])
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "proxy_logging_obj", ProxyLogging(user_api_key_cache=cache))
+    monkeypatch.setattr(ps, "model_max_budget_limiter", _PROXY_VirtualKeyModelMaxBudgetLimiter(DualCache()))
+    hashed_key = ps.hash_token("sk-fallback-test")
+    if billing_id is not None:
+        await _cache_key_object(hashed_key, UserAPIKeyAuth(token=hashed_key), cache, None)
+    request = Request({"type": "http", "path": route, "method": "POST", "headers": []})
+    body = {**_request_body(), "user": "person"}
+    request._body = json.dumps(body).encode()
+    if billing_id is None:
+        with pytest.raises(ProxyException) as exc:
+            await user_api_key_auth(request=request, api_key="Bearer sk-fallback-test")
+        assert str(exc.value.code) == "401"
+        return
+    if billing_id == "pool" and pool_model_cap == 0:
+        with pytest.raises(ProxyException, match="End User: pool, exceeded budget for model") as exc:
+            await user_api_key_auth(request=request, api_key="Bearer sk-fallback-test")
+        assert int(exc.value.code) == 429
+        assert counters.get_cache("spend:end_user:pool") == 3.0
+        return
+    token = await user_api_key_auth(request=request, api_key="Bearer sk-fallback-test")
+    assert (token.billing_end_user_id or token.end_user_id) == billing_id
+    limiter = _PROXY_MaxParallelRequestsHandler_v3(ps.proxy_logging_obj.internal_usage_cache)
+    descriptors = limiter._create_rate_limit_descriptors(token, body, None, None, False)
+    end_user_descriptor = next(d for d in descriptors if d["key"] == "end_user")
+    assert end_user_descriptor["value"] == "person"
+    assert end_user_descriptor["rate_limit"]["requests_per_unit"] == 2
+    assert [entry["counter_key"] for entry in token.budget_reservation["entries"]] == [f"spend:end_user:{billing_id}"]
+    assert counters.get_cache("spend:end_user:person") == own_spend + (1 if billing_id == "person" else 0)
+    assert counters.get_cache("spend:end_user:pool") == 3.0 + (1 if billing_id == "pool" else 0)
+    assert (token.end_user_tpm_limit, token.end_user_rpm_limit, token.allowed_model_region) == (100, 2, "eu")
+    assert token.end_user_object_permission == own.object_permission
+    assert token.end_user_max_budget == (100 if billing_id == "pool" else 10)
+    data = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata({"metadata": {}}, token, "metadata")
+    payload = get_logging_payload(
+        {"model": "gpt-4o-mini", "call_type": "acompletion", "litellm_params": data, "response_cost": 0.25},
+        {"id": "fallback-test", "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}},
+        datetime.now(timezone.utc),
+        datetime.now(timezone.utc),
+    )
+    assert payload["end_user"] == billing_id
+    await ps.increment_spend_counters(
+        None, None, None, 0.25, end_user_id=payload["end_user"], budget_reservation=token.budget_reservation
+    )
+    assert counters.get_cache("spend:end_user:person") == own_spend + (0.25 if billing_id == "person" else 0)
+    assert counters.get_cache("spend:end_user:pool") == 3.0 + (0.25 if billing_id == "pool" else 0)

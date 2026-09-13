@@ -45,6 +45,7 @@ client = TestClient(app)
 @pytest.fixture
 def mock_prisma_client():
     with patch("litellm.proxy.proxy_server.prisma_client") as mock:
+        mock.db.litellm_endusertable.update_many = AsyncMock(return_value=0)
         yield mock
 
 
@@ -414,6 +415,7 @@ def test_update_customer_response_keeps_nested_budget_server_fields(mock_prisma_
         "spend": 0.0,
         "allowed_model_region": None,
         "default_model": None,
+        "fallback_end_user_id": None,
         "budget_id": "b-1",
         "object_permission_id": None,
         "object_permission": None,
@@ -690,6 +692,7 @@ _FULL_DB_ROW = {
     "spend": 1.5,
     "allowed_model_region": None,
     "default_model": None,
+    "fallback_end_user_id": None,
     "budget_id": "b1",
     "object_permission_id": "p1",
     "litellm_budget_table": {
@@ -735,6 +738,7 @@ _EXPECTED_CUSTOMER = {
     "spend": 1.5,
     "allowed_model_region": None,
     "default_model": None,
+    "fallback_end_user_id": None,
     "budget_id": "b1",
     "litellm_budget_table": {
         "budget_id": "b1",
@@ -976,6 +980,9 @@ def test_customer_delete_invalidates_end_user_and_registry_caches(mock_prisma_cl
             headers={"Authorization": "Bearer k"},
         )
 
+    mock_prisma_client.db.litellm_endusertable.update_many.assert_awaited_once_with(
+        where={"fallback_end_user_id": {"in": ["c1", "c2"]}}, data={"fallback_end_user_id": None}
+    )
     assert response.status_code == 200, response.text
     assert recording_cache.deleted == [
         "end_user_id:c1",
@@ -987,3 +994,52 @@ def test_customer_delete_invalidates_end_user_and_registry_caches(mock_prisma_cl
         "end_user_id:c2",
         "end_user_restricted_registry",
     ]
+
+
+@pytest.mark.parametrize("endpoint", ["new", "update"])
+@pytest.mark.parametrize("failure", ["missing", "self", "nested"])
+def test_customer_fallback_validation(mock_prisma_client, mock_user_api_key_auth, endpoint, failure):
+    own = LiteLLM_EndUserTable(user_id="person", blocked=False)
+    target = LiteLLM_EndUserTable(
+        user_id="pool", blocked=False, fallback_end_user_id="third" if failure == "nested" else None
+    )
+
+    table = mock_prisma_client.db.litellm_endusertable
+    table.find_first = AsyncMock(side_effect=[
+        *([own] if endpoint == "update" else []),
+        None if failure == "missing" else target,
+    ])
+    table.create = AsyncMock()
+    table.update = AsyncMock()
+    response = client.post(
+        f"/customer/{endpoint}",
+        json={"user_id": "person", "fallback_end_user_id": "person" if failure == "self" else "pool"},
+    )
+    assert response.status_code == 422
+    table.create.assert_not_awaited()
+    table.update.assert_not_awaited()
+
+
+@pytest.mark.parametrize("endpoint", ["new", "update"])
+def test_customer_fallback_round_trip(mock_prisma_client, mock_user_api_key_auth, endpoint):
+    own = LiteLLM_EndUserTable(user_id="person", blocked=False, fallback_end_user_id="pool")
+    pool = LiteLLM_EndUserTable(user_id="pool", blocked=False)
+
+    async def find_first(where, **kwargs):
+        return {"person": own, "pool": pool}.get(where.get("user_id"))
+
+    table = mock_prisma_client.db.litellm_endusertable
+    table.find_first = AsyncMock(side_effect=find_first)
+    table.create = AsyncMock(return_value=own)
+    table.update = AsyncMock(return_value=own)
+    response = client.post(f"/customer/{endpoint}", json={"user_id": "person", "fallback_end_user_id": "pool"})
+    assert response.status_code == 200
+    assert response.json()["fallback_end_user_id"] == "pool"
+    writer = table.create if endpoint == "new" else table.update
+    assert writer.call_args.kwargs["data"]["fallback_end_user_id"] == "pool"
+    cleared = own.model_copy(update={"fallback_end_user_id": None})
+    table.update = AsyncMock(return_value=cleared)
+    response = client.post("/customer/update", json={"user_id": "person", "fallback_end_user_id": None})
+    assert response.status_code == 200
+    assert response.json()["fallback_end_user_id"] is None
+    assert table.update.call_args.kwargs["data"]["fallback_end_user_id"] is None
