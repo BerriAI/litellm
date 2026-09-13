@@ -1737,6 +1737,9 @@ if TYPE_CHECKING:
     from .llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
         AmazonBedrockOpenAIConfig as AmazonBedrockOpenAIConfig,
     )
+    from .llms.bedrock.chat.openai_chat_completions_transformation import (
+        AmazonBedrockOpenAIChatCompletionsConfig as AmazonBedrockOpenAIChatCompletionsConfig,
+    )
     from .llms.bedrock.image_generation.amazon_stability1_transformation import (
         AmazonStabilityConfig as AmazonStabilityConfig,
     )
@@ -1839,6 +1842,9 @@ if TYPE_CHECKING:
     )
     from .llms.bedrock_mantle.responses.transformation import (
         BedrockMantleResponsesAPIConfig as BedrockMantleResponsesAPIConfig,
+    )
+    from .llms.bedrock.responses.transformation import (
+        AmazonBedrockResponsesAPIConfig as AmazonBedrockResponsesAPIConfig,
     )
     from .llms.gemini.interactions.transformation import (
         GoogleAIStudioInteractionsConfig as GoogleAIStudioInteractionsConfig,

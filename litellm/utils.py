@@ -8080,6 +8080,23 @@ def _get_model_cost_entry_for_provider_config(
     return {}
 
 
+def model_supports_native_endpoint(endpoint: str, model: str, provider: LlmProviders) -> bool:
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    base_model: Final = BedrockModelInfo.get_base_model(model) if provider is LlmProviders.BEDROCK else model
+    candidate_models: Final = (model, base_model) if base_model != model else (model,)
+    return any(
+        isinstance(
+            supported_endpoints := _get_model_cost_entry_for_provider_config(candidate_model, provider).get(
+                "supported_endpoints"
+            ),
+            (list, tuple),
+        )
+        and endpoint in supported_endpoints
+        for candidate_model in candidate_models
+    )
+
+
 class ProviderConfigManager:
     # Dictionary mapping for O(1) provider lookup
     # Stores tuples of (factory_function, needs_model_parameter)
@@ -8538,6 +8555,20 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> BaseAnthropicMessagesConfig | None:
+        if provider is LlmProviders.BEDROCK and model_supports_native_endpoint(
+            "/v1/messages", model, LlmProviders.BEDROCK
+        ):
+            from litellm.llms.bedrock.messages.native_transformation import (
+                AmazonBedrockNativeMessagesConfig,
+            )
+
+            return AmazonBedrockNativeMessagesConfig()
+        if provider is LlmProviders.BEDROCK_MANTLE and model_supports_native_endpoint(
+            "/v1/messages", model, LlmProviders.BEDROCK_MANTLE
+        ):
+            from litellm.llms.bedrock.messages.native_transformation import mantle_native_messages_config
+
+            return mantle_native_messages_config()
         return ProviderConfigManager._get_provider_anthropic_messages_config_cached(model=model, provider=provider)
 
     @staticmethod
@@ -8810,6 +8841,12 @@ class ProviderConfigManager:
             return litellm.BedrockMantleResponsesAPIConfig(
                 use_openai_path=mantle_base_segment(model, litellm.model_cost) == "openai/v1"
             )
+        elif litellm.LlmProviders.BEDROCK == provider:
+            if model is None or not model_supports_native_endpoint("/v1/responses", model, LlmProviders.BEDROCK):
+                return None
+            from litellm.llms.bedrock.responses.transformation import AmazonBedrockResponsesAPIConfig
+
+            return AmazonBedrockResponsesAPIConfig()
         return None
 
     @staticmethod

@@ -28,6 +28,7 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret, get_secret_str
+from litellm.types.utils import LlmProviders
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
@@ -1292,6 +1293,15 @@ class BedrockModelInfo(BaseLLMModelInfo):
 
             return AmazonMantleMessagesConfig()
 
+        from litellm.utils import model_supports_native_endpoint
+
+        if model_supports_native_endpoint("/v1/messages", model, LlmProviders.BEDROCK):
+            from litellm.llms.bedrock.messages.native_transformation import (
+                AmazonBedrockNativeMessagesConfig,
+            )
+
+            return AmazonBedrockNativeMessagesConfig()
+
         #########################################################
         # This goes through litellm.AmazonAnthropicClaude3MessagesConfig()
         # Since bedrock Invoke supports Native Anthropic Messages API
@@ -1346,6 +1356,11 @@ def get_bedrock_chat_config(model: str):
         )
 
         return AmazonMantleConfig()
+
+    from litellm.utils import model_supports_native_endpoint
+
+    if model_supports_native_endpoint("/v1/chat/completions", model, LlmProviders.BEDROCK):
+        return litellm.AmazonBedrockOpenAIChatCompletionsConfig()
 
     # Handle provider-specific configs
     if bedrock_invoke_provider == "amazon":

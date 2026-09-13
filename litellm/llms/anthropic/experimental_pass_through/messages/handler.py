@@ -31,13 +31,14 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, LlmProviders
 from litellm.utils import ProviderConfigManager, client
 
 from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler
 from ..responses_adapters.handler import LiteLLMMessagesToResponsesAPIHandler
 from ..utils import is_reasoning_auto_summary_enabled
 from .interceptors import get_messages_interceptors
+from .native_utils import get_native_messages_request_params
 from .utils import AnthropicMessagesRequestUtils, mock_response
 
 # Providers that are routed directly to the OpenAI Responses API instead of
@@ -566,8 +567,8 @@ def anthropic_messages_handler(
             model=model,
             provider=litellm.LlmProviders(custom_llm_provider),
         )
-    if anthropic_messages_provider_config is None and _deployment_passes_through_anthropic_messages(
-        kwargs.get("model_info")
+    if anthropic_messages_provider_config is None and _deployment_supports_native_anthropic_messages(
+        kwargs.get("model_info"), model=model, custom_llm_provider=custom_llm_provider
     ):
         from litellm.llms.openai_like.messages.transformation import (
             OpenAILikeAnthropicMessagesConfig,
@@ -641,6 +642,11 @@ def anthropic_messages_handler(
             custom_llm_provider=custom_llm_provider,
         )
     )
+    forwarded_anthropic_messages_optional_request_params: Final = get_native_messages_request_params(
+        optional_params=anthropic_messages_optional_request_params,
+        kwargs=kwargs,
+        preserves_request_body=getattr(anthropic_messages_provider_config, "preserves_request_body", False),
+    )
     if is_reasoning_auto_summary_enabled():
         thinking_param: Final = anthropic_messages_optional_request_params.get("thinking")
         if isinstance(thinking_param, dict) and thinking_param.get("type") != "disabled":
@@ -653,7 +659,7 @@ def anthropic_messages_handler(
         model=model,
         messages=strip_provider_specific_fields_from_anthropic_messages(messages),
         anthropic_messages_provider_config=anthropic_messages_provider_config,
-        anthropic_messages_optional_request_params=dict(anthropic_messages_optional_request_params),
+        anthropic_messages_optional_request_params=forwarded_anthropic_messages_optional_request_params,
         _is_async=is_async,
         client=client,
         custom_llm_provider=custom_llm_provider,
@@ -664,3 +670,15 @@ def anthropic_messages_handler(
         stream=stream,
         kwargs=kwargs,
     )
+
+
+def _deployment_supports_native_anthropic_messages(
+    model_info: object, model: str | None, custom_llm_provider: str | None
+) -> bool:
+    if _deployment_passes_through_anthropic_messages(model_info):
+        return True
+    if model is None or custom_llm_provider not in tuple(provider.value for provider in LlmProviders):
+        return False
+    from litellm.utils import model_supports_native_endpoint
+
+    return model_supports_native_endpoint("/v1/messages", model, LlmProviders(custom_llm_provider))
