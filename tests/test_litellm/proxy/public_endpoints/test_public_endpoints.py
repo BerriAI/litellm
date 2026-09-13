@@ -347,13 +347,6 @@ def test_chatgpt_provider_fields():
 
 
 def test_tencent_provider_fields():
-    """Tencent TokenHub must be selectable in the Add Model flow.
-
-    The dropdown is driven entirely by /public/providers/fields, so a missing
-    entry means Tencent cannot be added through the UI at all. The credential
-    fields must match what the backend honors: a required api_key (TENCENT_API_KEY)
-    and an optional api_base override (TENCENT_API_BASE).
-    """
     app_instance = FastAPI()
     app_instance.include_router(router)
     test_client = TestClient(app_instance)
