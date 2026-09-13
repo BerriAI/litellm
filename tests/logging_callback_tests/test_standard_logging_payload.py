@@ -634,6 +634,14 @@ def test_truncate_standard_logging_payload():
     assert len(str(truncated["error_str"])) < 10_500
 
 
+def test_truncate_standard_logging_payload_keeps_a_partial_payload_intact():
+    """A payload built with only some of its fields comes back with exactly those keys and values"""
+    _custom_logger = CustomLogger()
+    partial_payload = StandardLoggingPayload(request_tags=["tag"], metadata=StandardLoggingMetadata())
+
+    assert _custom_logger.truncate_standard_logging_payload_content(partial_payload) == partial_payload
+
+
 def test_strip_trailing_slash():
     common_api_base = "https://api.test.com"
     assert (
