@@ -1891,6 +1891,9 @@ if TYPE_CHECKING:
     from .llms.deepseek.chat.transformation import (
         DeepSeekChatConfig as _DeepSeekChatConfig,
     )
+    from .llms.token_kiosk.chat.transformation import (
+        TokenKioskConfig as _TokenKioskConfig,
+    )
     from .llms.tencent.chat.transformation import (
         TencentChatConfig as _TencentChatConfig,
     )
@@ -1936,6 +1939,7 @@ if TYPE_CHECKING:
     # Type stubs for lazy-loaded config classes (to help mypy understand types)
     VLLMConfig: Type[_VLLMConfig]
     DeepSeekChatConfig: Type[_DeepSeekChatConfig]
+    TokenKioskConfig: Type[_TokenKioskConfig]
     TencentChatConfig: Type[_TencentChatConfig]
     GenAIHubOrchestrationConfig: Type[_GenAIHubOrchestrationConfig]
     GenAIHubEmbeddingConfig: Type[_GenAIHubEmbeddingConfig]
@@ -1977,6 +1981,7 @@ if TYPE_CHECKING:
         JinaAIEmbeddingConfig as JinaAIEmbeddingConfig,
     )
     from .llms.xai.chat.transformation import XAIChatConfig as XAIChatConfig
+    from .llms.token_kiosk.chat.transformation import TokenKioskConfig as TokenKioskConfig
     from .llms.zai.chat.transformation import ZAIChatConfig as ZAIChatConfig
     from .llms.aiml.chat.transformation import AIMLChatConfig as AIMLChatConfig
     from .llms.volcengine.chat.transformation import (
