@@ -4282,9 +4282,9 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/deepseek-v4-pro",
-        1.74e-06,
-        3.48e-06,
-        1.45e-07,
+        1.2e-06,
+        1.2e-06,
+        6e-07,
         1048576,
         384000,
         False,
