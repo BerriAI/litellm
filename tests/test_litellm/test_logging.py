@@ -846,6 +846,10 @@ _SHA256_HEX = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
 _LIMIT_SIZED_TOKEN = "t" * 4096
 
 
+def _base64_run(length: int) -> str:
+    return (_PDF_BASE64 * (length // len(_PDF_BASE64) + 1))[:length]
+
+
 def test_debug_record_collapses_long_base64_runs():
     """A DEBUG line dumping a document upload keeps its text but not the megabytes of
     base64, which cost seconds of event-loop time per line in the secret regex alone."""
@@ -870,7 +874,7 @@ def test_debug_record_collapses_long_base64_runs():
 
 @pytest.mark.parametrize("run_length,collapses", ((4096, False), (4097, True)))
 def test_base64_run_collapses_only_past_the_limit(run_length, collapses):
-    record = _make_record(logging.DEBUG, "%s", ("A" * run_length,))
+    record = _make_record(logging.DEBUG, "%s", (_base64_run(run_length),))
 
     assert StdoutLogTruncationFilter().filter(record) is True
 
@@ -880,7 +884,7 @@ def test_base64_run_collapses_only_past_the_limit(run_length, collapses):
 @pytest.mark.parametrize("limit,collapses", (("0", False), ("100", True)))
 def test_base64_collapse_limit_follows_the_env(monkeypatch, limit, collapses):
     monkeypatch.setenv("MAX_BASE64_LENGTH_STDOUT_LOG", limit)
-    record = _make_record(logging.DEBUG, "%s", ("A" * 200,))
+    record = _make_record(logging.DEBUG, "%s", (_base64_run(200),))
 
     assert StdoutLogTruncationFilter().filter(record) is True
 
@@ -891,11 +895,42 @@ def test_info_record_collapses_base64_before_truncating(monkeypatch):
     """The collapse runs at every level ahead of the INFO+ cap, so an error echoing a
     document upload comes out as its text around a size placeholder, not a head and tail."""
     monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
-    record = _make_record(logging.ERROR, "Exception: bad document %s (status 400)", ("A" * 100_000,))
+    record = _make_record(logging.ERROR, "Exception: bad document %s (status 400)", (_base64_run(100_000),))
 
     assert StdoutLogTruncationFilter().filter(record) is True
 
     assert record.getMessage() == "Exception: bad document [base64_data truncated: 73.2KB] (status 400)"
+
+
+@pytest.mark.parametrize(
+    "run",
+    (_SHA256_HEX * 80, "0123456789" * 512, "ABCDEFGHIJKLMNOP" * 320, "abcdefghijklmnop" * 320, "A" * 4097 + "=="),
+    ids=("hex", "digits", "upper", "lower", "padded_upper"),
+)
+def test_single_case_runs_are_not_mistaken_for_base64(run):
+    """A long hex digest, numeric id, or padding run stays in the log line: base64 of any
+    real payload mixes cases, so only mixed-case runs are collapsed and labeled base64."""
+    record = _make_record(logging.DEBUG, "checksum %s", (run,))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert record.getMessage() == f"checksum {run}"
+
+
+def test_debug_traceback_collapses_base64_runs():
+    """An exception that echoes a document upload gets the same collapse in its traceback
+    as the message does, at DEBUG too, so the secret regex never sees the payload in full."""
+    try:
+        raise ValueError(f"bad document: {_base64_run(100_000)}")
+    except ValueError:
+        exc_info = sys.exc_info()
+    record = _make_record(logging.DEBUG, "call failed", exc_info=exc_info)
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert record.exc_text is not None
+    assert "Traceback (most recent call last)" in record.exc_text
+    assert record.exc_text.endswith("ValueError: bad document: [base64_data truncated: 73.2KB]")
 
 
 def test_base64_collapse_applies_end_to_end(caplog):
