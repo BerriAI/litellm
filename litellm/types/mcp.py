@@ -392,7 +392,7 @@ class MCPPreCallRequestObject(BaseModel):
     arguments: dict[str, Any]
     server_name: str | None = None
     tool_description: str | None = None
-    tool_input_schema: dict[str, object] | None = None
+    tool_input_schema: Mapping[str, object] | None = None
     user_api_key_auth: dict[str, Any] | None = None
     hidden_params: HiddenParams = HiddenParams()
 
@@ -417,7 +417,7 @@ class MCPDuringCallRequestObject(BaseModel):
     arguments: dict[str, Any]
     server_name: str | None = None
     tool_description: str | None = None
-    tool_input_schema: dict[str, object] | None = None
+    tool_input_schema: Mapping[str, object] | None = None
     start_time: float | None = None
     hidden_params: HiddenParams = HiddenParams()
 

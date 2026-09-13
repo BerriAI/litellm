@@ -242,7 +242,8 @@ _user_env_vars_cache: Final[dict[tuple[str, str], tuple[dict[str, str], float]]]
 _USER_ENV_VARS_CACHE_TTL: Final = 60  # seconds
 _USER_ENV_VARS_CACHE_MAX_SIZE: Final = 4096  # cap to prevent unbounded growth
 
-_NO_LISTED_TOOLS: Final[Mapping[str | None, Mapping[str, MCPTool]]] = MappingProxyType({})
+_ListedToolsByCaller: TypeAlias = Mapping[str | None, Mapping[str, MCPTool]]
+_NO_LISTED_TOOLS: Final[_ListedToolsByCaller] = MappingProxyType({})
 _LISTED_TOOLS_CALLERS_PER_SERVER: Final = 256
 
 # Auth types whose upstream OAuth endpoints (protected-resource + authorization-server metadata) the
@@ -1948,9 +1949,7 @@ class MCPServerManager:
             "gmail_send_email": "zapier_mcp_server",
         }
         """
-        self._listed_tools_by_server_id: dict[
-            str, Mapping[str | None, Mapping[str, MCPTool]]
-        ] = {}  # mutable-ok: refreshed per tools/list
+        self._listed_tools_by_server_id: dict[str, _ListedToolsByCaller] = {}  # mutable-ok: refreshed per tools/list
         self._upstream_initialize_instructions_by_server_id: dict[str, str] = {}
         # Per-server monotonic timestamp of last upstream prefetch attempt (success,
         # empty result, or failure). Used to throttle re-probes for servers that do
@@ -5392,7 +5391,11 @@ class MCPServerManager:
         listed: Final = self._listed_tools_by_server_id.get(server.server_id, _NO_LISTED_TOOLS).get(identity)
         if not listed:
             return None
-        return listed.get(name) or listed.get(strip_known_server_prefix(name, server))
+        tool: Final = listed.get(name) or listed.get(strip_known_server_prefix(name, server))
+        if tool is None:
+            return None
+        description: Final = (server.tool_name_to_description or {}).get(tool.name)
+        return tool if description is None else tool.model_copy(update={"description": description})
 
     def _create_prefixed_prompts(
         self, prompts: Sequence[Prompt], server: MCPServer, add_prefix: bool = True
