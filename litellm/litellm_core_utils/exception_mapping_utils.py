@@ -1,3 +1,4 @@
+import inspect
 import json
 import re
 import traceback
@@ -203,11 +204,18 @@ def _get_response_headers(original_exception: Exception) -> httpx.Headers | None
     return _response_headers
 
 
+def _accepted_init_kwargs(exception_class: type[Exception], candidates: Mapping[str, object]) -> Mapping[str, object]:
+    accepted: Final = inspect.signature(exception_class).parameters
+    return {name: value for name, value in candidates.items() if name in accepted}
+
+
 def extract_and_raise_litellm_exception(
     response: Any | None,
     error_str: str,
     model: str,
     custom_llm_provider: str,
+    body: object | None = None,
+    headers: Mapping[str, str] | None = None,
 ):
     """
     Covers scenario where litellm sdk calling proxy.
@@ -217,32 +225,19 @@ def extract_and_raise_litellm_exception(
     Relevant Issue: https://github.com/BerriAI/litellm/issues/7259
     """
     pattern: Final = r"litellm\.\w+Error"
-
-    # Search for the exception in the error string
     match: Final = re.search(pattern, error_str)
-
-    # Extract the exception if found
-    if match:
-        exception_name = match.group(0)
-        exception_name = exception_name.strip().replace("litellm.", "")
-        raised_exception_obj: Final = getattr(litellm, exception_name, None)
-        if raised_exception_obj:
-            # Try with response parameter first, fall back to without it
-            # Some exceptions (e.g., APIConnectionError) don't accept response param
-            try:
-                raise raised_exception_obj(
-                    message=error_str,
-                    llm_provider=custom_llm_provider,
-                    model=model,
-                    response=response,
-                )
-            except TypeError:
-                # Exception doesn't accept response parameter
-                raise raised_exception_obj(
-                    message=error_str,
-                    llm_provider=custom_llm_provider,
-                    model=model,
-                )
+    if match is None:
+        return
+    exception_name: Final = match.group(0).removeprefix("litellm.")
+    raised_exception_obj: Final = getattr(litellm, exception_name, None)
+    if not raised_exception_obj:
+        return
+    raise raised_exception_obj(
+        message=error_str,
+        llm_provider=custom_llm_provider,
+        model=model,
+        **_accepted_init_kwargs(raised_exception_obj, {"response": response, "body": body, "headers": headers}),
+    )
 
 
 class _ProviderHTTPException(Protocol):
@@ -339,6 +334,8 @@ def _map_openai_exception(
             model=model,
             response=getattr(original_exception, "response", None),
             litellm_debug_info=extra_information,
+            body=getattr(original_exception, "body", None),
+            headers=upstream_headers,
         )
     elif "invalid_encrypted_content" in error_str or "could not be verified" in error_str:
         helpful_message: Final = (
@@ -2443,6 +2440,8 @@ def exception_type(
                     error_str=error_str,
                     model=model,
                     custom_llm_provider=custom_llm_provider,
+                    body=getattr(original_exception, "body", None),
+                    headers=_litellm_proxy_response_headers(mappable_exception, custom_llm_provider),
                 )
             if (
                 custom_llm_provider == "openai"

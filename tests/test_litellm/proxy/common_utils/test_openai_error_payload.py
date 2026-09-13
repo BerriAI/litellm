@@ -145,7 +145,7 @@ def test_a_status_carried_by_an_exception_drives_the_type_it_reports():
     assert openai_error_type(exc, error_status_code(exc, 400)) == "permission_error"
 
 
-def test_the_stringified_none_an_older_upstream_proxy_sent_is_treated_as_absent():
+def test_a_stringified_none_type_or_param_is_treated_as_absent():
     """A proxy fronting a proxy older than 1.102 receives {"type": "None", "param": "None"} on
     the wire; the SDK now keeps that body on the mapped exception, and re-emitting the literal
     is the exact bug this module exists to stop."""

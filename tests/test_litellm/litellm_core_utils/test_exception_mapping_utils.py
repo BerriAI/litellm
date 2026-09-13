@@ -1424,35 +1424,37 @@ _GUARDRAIL_BLOCK_ERROR = {
 }
 
 
-def _openai_handler_error(error_type: str, headers: dict[str, str]) -> OpenAIError:
-    """What litellm/llms/openai/openai.py raises after the openai SDK rejects a 400:
+def _openai_handler_error(
+    error_type: str,
+    headers: dict[str, str],
+    status_code: int = 400,
+    message: str = _GUARDRAIL_BLOCK_ERROR["message"],
+) -> OpenAIError:
+    """What litellm/llms/openai/openai.py raises after the openai SDK rejects a request:
     the SDK's str() carries the wire body, and the handler copies headers and body over."""
-    wire_error = {**_GUARDRAIL_BLOCK_ERROR, "type": error_type}
-    wire = httpx.Response(
-        status_code=400,
-        headers=headers,
-        json={"error": wire_error},
-        request=httpx.Request("POST", "http://localhost:4000/v1/chat/completions"),
-    )
+    wire_error = {**_GUARDRAIL_BLOCK_ERROR, "type": error_type, "code": str(status_code), "message": message}
     return OpenAIError(
-        status_code=400,
-        message=f"Error code: 400 - {{'error': {wire_error}}}",
-        headers=wire.headers,
+        status_code=status_code,
+        message=f"Error code: {status_code} - {{'error': {wire_error}}}",
+        headers=httpx.Headers(headers),
         body=wire_error,
     )
 
 
-@pytest.mark.parametrize("error_type", ["None", "invalid_request_error"])
-def test_litellm_proxy_guardrail_block_keeps_body_and_headers(error_type: str):
-    """An SDK caller behind a proxy tells a guardrail block from any other 400 by the body's
-    provider_specific_fields and the proxy's x-litellm-* headers, so the mapped BadRequestError
-    must carry both whichever error.type the proxy version on the other end emits."""
-    proxy_headers = {"x-litellm-call-id": "call-guardrail", "x-litellm-applied-guardrails": "block-secret-project"}
+_PROXY_HEADERS = {"x-litellm-call-id": "call-guardrail", "x-litellm-applied-guardrails": "block-secret-project"}
 
+
+@pytest.mark.parametrize(
+    ("error_type", "status_code"), [("None", 400), ("invalid_request_error", 400), ("None", 422)]
+)
+def test_litellm_proxy_guardrail_block_keeps_body_and_headers(error_type: str, status_code: int):
+    """An SDK caller behind a proxy tells a guardrail block from any other 4xx by the body's
+    provider_specific_fields and the proxy's x-litellm-* headers, so the mapped BadRequestError
+    must carry both whichever error.type and status the proxy version on the other end emits."""
     with pytest.raises(litellm.BadRequestError) as exc_info:
         exception_type(
             model="claude-haiku-4-5",
-            original_exception=_openai_handler_error(error_type, proxy_headers),
+            original_exception=_openai_handler_error(error_type, _PROXY_HEADERS, status_code=status_code),
             custom_llm_provider="litellm_proxy",
             completion_kwargs={},
             extra_kwargs={},
@@ -1460,7 +1462,30 @@ def test_litellm_proxy_guardrail_block_keeps_body_and_headers(error_type: str):
 
     assert exc_info.value.body["provider_specific_fields"]["guardrail_name"] == "block-secret-project"
     assert exc_info.value.body["type"] == error_type
-    assert proxy_headers.items() <= exc_info.value.headers.items()
+    assert exc_info.value.headers == _PROXY_HEADERS
+
+
+@pytest.mark.parametrize(
+    "relayed_class", [litellm.BadRequestError, litellm.ContentPolicyViolationError]
+)
+def test_litellm_proxy_relayed_litellm_error_keeps_body_and_headers(relayed_class: type[litellm.BadRequestError]):
+    """A proxy relaying a provider's own litellm error names the class in the message, which
+    re-raises that class on the SDK side before the generic 400 mapping runs; it must carry the
+    body and the proxy headers the same way the generic mapping now does."""
+    message = f"litellm.{relayed_class.__name__}: {_GUARDRAIL_BLOCK_ERROR['message']}"
+
+    with pytest.raises(relayed_class) as exc_info:
+        exception_type(
+            model="claude-haiku-4-5",
+            original_exception=_openai_handler_error("None", _PROXY_HEADERS, message=message),
+            custom_llm_provider="litellm_proxy",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert type(exc_info.value) is relayed_class
+    assert exc_info.value.body["provider_specific_fields"]["guardrail_name"] == "block-secret-project"
+    assert exc_info.value.headers == _PROXY_HEADERS
 
 
 def test_openai_compatible_vendor_400_keeps_body_but_not_headers():

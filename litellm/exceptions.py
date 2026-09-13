@@ -626,6 +626,7 @@ class ContentPolicyViolationError(BadRequestError):
         litellm_debug_info: str | None = None,
         provider_specific_fields: dict | None = None,
         body: dict | None = None,
+        headers: Mapping[str, str] | None = None,
     ):
         self.status_code = 400
         self.message = f"litellm.ContentPolicyViolationError: {message}"
@@ -640,6 +641,7 @@ class ContentPolicyViolationError(BadRequestError):
             response=response,
             litellm_debug_info=self.litellm_debug_info,
             body=body,
+            headers=headers,
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):
