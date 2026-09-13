@@ -1073,3 +1073,40 @@ async def test_prometheus_fallback_stats_job_runs_when_the_lock_is_free_or_absen
     await jobs["prometheus_fallback_stats_job"]()
 
     assert send_fallback_stats.await_count == 2
+
+
+def _window_router(tiers: dict[str, str]):
+    import litellm
+
+    return litellm.Router(
+        model_list=[
+            {"model_name": "narrow", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "k"}},
+            {"model_name": "wide", "litellm_params": {"model": "openai/gpt-4.1", "api_key": "k"}},
+            {
+                "model_name": "router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {"tiers": tiers},
+                    "complexity_router_default_model": "narrow",
+                },
+            },
+        ]
+    )
+
+
+def test_get_litellm_model_info_derives_window_for_an_auto_router_marker():
+    router = _window_router({"SIMPLE": "narrow", "COMPLEX": "wide"})
+    marker = {"model_name": "router", "litellm_params": {"model": "auto_router/complexity_router"}}
+
+    assert get_litellm_model_info(model=marker).get("max_input_tokens") is None
+    assert get_litellm_model_info(model=marker, llm_router=router) == {"max_input_tokens": 1_047_576}
+
+
+def test_get_litellm_model_info_still_prices_a_concrete_deployment_sharing_the_router_name():
+    router = _window_router({"SIMPLE": "narrow", "COMPLEX": "wide"})
+    concrete = {"model_name": "router", "litellm_params": {"model": "openai/gpt-4o-mini"}}
+
+    result = get_litellm_model_info(model=concrete, llm_router=router)
+
+    assert result.get("max_input_tokens") == 128_000
+    assert result.get("input_cost_per_token") is not None

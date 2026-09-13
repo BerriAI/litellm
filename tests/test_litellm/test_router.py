@@ -15679,3 +15679,50 @@ async def test_an_open_circuit_breaker_skips_the_session_binding_without_a_warni
     assert binding is None
     assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
     assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
+
+
+def _auto_router_deployment(model_name: str, tiers: dict, tags: list[str] | None = None) -> dict:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {"tiers": tiers},
+            "complexity_router_default_model": "narrow-model",
+            **({"tags": tags} if tags is not None else {}),
+        },
+    }
+
+
+def _tiered_router(*auto_routers: dict) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {"model_name": "narrow-model", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "k"}},
+            {"model_name": "wide-model", "litellm_params": {"model": "openai/gpt-4.1", "api_key": "k"}},
+            *auto_routers,
+        ]
+    )
+
+
+def test_get_auto_router_context_window_derives_from_the_tier_groups():
+    router = _tiered_router(_auto_router_deployment("auto", {"SIMPLE": "narrow-model", "COMPLEX": "wide-model"}))
+
+    assert router.get_auto_router_context_window("auto") == 1_047_576
+
+
+def test_get_auto_router_context_window_is_none_for_a_name_no_auto_router_owns():
+    router = _tiered_router(_auto_router_deployment("auto", {"SIMPLE": "narrow-model"}))
+
+    assert router.get_auto_router_context_window("narrow-model") is None
+    assert router.get_auto_router_context_window("not-a-real-model") is None
+
+
+def test_get_auto_router_context_window_is_the_narrowest_strategy_tagged_under_one_name():
+    """Tags select one strategy rather than escalating between them, so a caller whose tags land on
+    the narrowest gets no second chance at a wider one."""
+    router = _tiered_router(
+        _auto_router_deployment("auto", {"SIMPLE": "narrow-model"}, tags=["default"]),
+        _auto_router_deployment("auto", {"SIMPLE": "wide-model"}, tags=["big"]),
+    )
+
+    assert len(router.complexity_routers["auto"]) == 2
+    assert router.get_auto_router_context_window("auto") == 128_000

@@ -10266,14 +10266,38 @@ class Router:
                     model_info.get("base_model") or litellm_params.get("base_model") or litellm_params.get("model")
                     for model_info, litellm_params in zip(model_infos, params)
                 )
-                if isinstance(key, str) and key
+                if isinstance(key, str) and key and not key.startswith(AUTO_ROUTER_MODEL_PREFIX)
             )
         )
+        configured_input: Final = self._widest_configured_limit(model_infos, "max_input_tokens")
         return DeploymentModelListingInfo(
             cost_map_keys=cost_map_keys,
-            max_input_tokens=self._widest_configured_limit(model_infos, "max_input_tokens"),
+            max_input_tokens=(
+                configured_input if configured_input is not None else self.get_auto_router_context_window(model_name)
+            ),
             max_output_tokens=self._widest_configured_limit(model_infos, "max_output_tokens"),
         )
+
+    def get_auto_router_context_window(self, model_name: str) -> int | None:
+        """The context window an auto-router under ``model_name`` can serve, or None.
+
+        An auto-router deployment is a marker whose ``litellm_params.model`` is absent from the cost
+        map, so every other source a listing consults answers nothing and the router advertises no
+        window at all. The window it can actually serve lives in the tier model groups it dispatches
+        to, and only the strategy knows those.
+
+        Smallest across the strategies registered under the name: a listing carries no request
+        tags, tags select one strategy rather than escalating between them, and a caller whose tags
+        land on the narrowest gets no second chance at a wider one.
+
+        Derived for complexity routers only; the adaptive, quality and semantic strategies hold
+        their candidates in a different shape and are not covered.
+        """
+        tagged: Final = self.complexity_routers.get(model_name) or ()
+        windows: Final = tuple(
+            window for window in (entry.strategy.advertised_context_window() for entry in tagged) if window is not None
+        )
+        return min(windows) if windows else None
 
     @staticmethod
     def _widest_configured_limit(model_infos: Sequence[Mapping[str, Any]], field: str) -> int | None:

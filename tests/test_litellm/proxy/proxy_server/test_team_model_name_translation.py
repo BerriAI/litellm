@@ -804,7 +804,7 @@ async def test_model_info_v1_litellm_model_id_include_team_models_filters_inacce
     monkeypatch.setattr(ps, "llm_model_list", [team_row])
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "prisma_client", MagicMock())
-    monkeypatch.setattr(ps, "_get_proxy_model_info", lambda model: team_row)
+    monkeypatch.setattr(ps, "_get_proxy_model_info", lambda model, llm_router=None: team_row)
     monkeypatch.setattr(ps, "_populate_team_access_on_models", _fake_populate)
 
     caller = UserAPIKeyAuth(
@@ -839,7 +839,7 @@ async def test_model_info_v1_litellm_model_id_team_id_applies_team_filter(monkey
     monkeypatch.setattr(ps, "llm_model_list", [team_row])
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "prisma_client", MagicMock())
-    monkeypatch.setattr(ps, "_get_proxy_model_info", lambda model: team_row)
+    monkeypatch.setattr(ps, "_get_proxy_model_info", lambda model, llm_router=None: team_row)
     monkeypatch.setattr(ps, "_populate_team_access_on_models", _fake_populate)
     monkeypatch.setattr(ps, "_filter_models_by_team_id", team_filter)
 

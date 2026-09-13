@@ -2615,6 +2615,29 @@ class ComplexityRouter(CustomLogger):
         deployments: Final = list_models(model_name=group) if callable(list_models) else None
         return tuple(deployments) if isinstance(deployments, list) else ()
 
+    def advertised_context_window(self) -> int | None:
+        """The context window this router can serve, or None when any tier group's window is
+        unresolvable.
+
+        A marker deployment carries no provider metadata, so a listing has nothing to report for it
+        unless the tiers are walked. The direction of each aggregate tracks whether a fit check
+        exists at that level. Within a group it is the smallest, because the core router picks a
+        deployment inside a group without one. Across the tier groups it is the widest only while
+        context-window escalation is on, since that is what moves a prompt off a tier too small to
+        hold it before dispatch; with escalation off the classifier's tier is final, so the only
+        window every request is sure of is the smallest. A group whose window is unknown is never
+        escalated onto and its presence makes the whole answer a guess: report nothing instead.
+        """
+        groups: Final = frozenset(group for pool in self._tier_pools().values() for group in pool)
+        windows: Final = tuple(
+            window
+            for window, unknown in (self._group_window_facts(group) for group in groups)
+            if window is not None and not unknown
+        )
+        if not groups or len(windows) != len(groups):
+            return None
+        return max(windows) if self.config.enable_context_window_escalation else min(windows)
+
     def _group_output_ceiling(self, group: str) -> int | None:
         """Smallest max_output_tokens across the group's deployments, or None when any deployment
         declares none: the core router picks within the group without a fit check, and a ceiling

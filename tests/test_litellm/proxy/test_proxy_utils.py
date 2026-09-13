@@ -2328,3 +2328,118 @@ class TestPrismaClientTokenAuthBehindThePool:
         assert isinstance(client.db, RoutingPrismaWrapper)
         assert client.db.writer.iam_token_db_auth is True
         assert client.db.reader.iam_token_db_auth is True
+
+
+def _auto_router_model_list(
+    tiers: dict[str, str | list[str]],
+    router_model_info: dict[str, object] | None = None,
+) -> list[dict]:
+    return [
+        {
+            "model_name": "narrow",
+            "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+        },
+        {
+            "model_name": "wide",
+            "litellm_params": {"model": "openai/gpt-4.1", "api_key": "test-key"},
+        },
+        {
+            "model_name": "unmapped",
+            "litellm_params": {"model": "openai/no-such-model-xyz", "api_key": "test-key"},
+        },
+        {
+            "model_name": "router",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {"tiers": tiers},
+                "complexity_router_default_model": "narrow",
+            },
+            **({"model_info": router_model_info} if router_model_info is not None else {}),
+        },
+    ]
+
+
+def test_create_model_info_response_derives_window_from_auto_router_tiers():
+    router = litellm.Router(model_list=_auto_router_model_list({"SIMPLE": "narrow", "COMPLEX": "wide"}))
+
+    response = create_model_info_response(
+        model_id="router",
+        provider="openai",
+        llm_router=router,
+        get_model_info=_raise_unmapped,
+    )
+
+    assert response["max_input_tokens"] == 1_047_576
+
+
+def test_create_model_info_response_auto_router_window_is_widest_across_tiers():
+    """The narrow tier must not decide the advertised window: escalation moves an oversized
+    prompt onto a tier that fits, so the wide end is what the router serves."""
+    narrow_only = litellm.Router(model_list=_auto_router_model_list({"SIMPLE": "narrow"}))
+    both = litellm.Router(model_list=_auto_router_model_list({"SIMPLE": "narrow", "COMPLEX": "wide"}))
+
+    def window(router: litellm.Router) -> int | None:
+        return create_model_info_response(
+            model_id="router", provider="openai", llm_router=router, get_model_info=_raise_unmapped
+        ).get("max_input_tokens")
+
+    assert window(narrow_only) == 128_000
+    assert window(both) == 1_047_576
+
+
+def test_create_model_info_response_omits_auto_router_window_when_a_tier_is_unresolvable():
+    router = litellm.Router(model_list=_auto_router_model_list({"SIMPLE": "wide", "COMPLEX": "unmapped"}))
+
+    response = create_model_info_response(
+        model_id="router",
+        provider="openai",
+        llm_router=router,
+        get_model_info=_raise_unmapped,
+    )
+
+    assert "max_input_tokens" not in response
+
+
+def test_create_model_info_response_auto_router_configured_window_outranks_derivation():
+    router = litellm.Router(
+        model_list=_auto_router_model_list(
+            {"SIMPLE": "narrow", "COMPLEX": "wide"}, router_model_info={"max_input_tokens": 555_000}
+        )
+    )
+
+    response = create_model_info_response(
+        model_id="router",
+        provider="openai",
+        llm_router=router,
+        get_model_info=_raise_unmapped,
+    )
+
+    assert response["max_input_tokens"] == 555_000
+
+
+def test_create_model_info_response_auto_router_window_does_not_leak_between_routers():
+    """Every auto-router marker shares one cost-map key, so a window declared on one router used to
+    come back as the advertised window of every other router in the process."""
+    router = litellm.Router(
+        model_list=[
+            *_auto_router_model_list({"SIMPLE": "wide", "COMPLEX": "unmapped"}),
+            {
+                "model_name": "declared-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {"tiers": {"SIMPLE": "narrow"}},
+                    "complexity_router_default_model": "narrow",
+                },
+                "model_info": {"max_input_tokens": 555_000},
+            },
+        ]
+    )
+
+    def window(model_id: str) -> int | None:
+        return create_model_info_response(
+            model_id=model_id, provider="openai", llm_router=router, get_model_info=litellm.get_model_info
+        ).get("max_input_tokens")
+
+    assert litellm.model_cost.get("auto_router/complexity_router", {}).get("max_input_tokens") == 555_000
+    assert window("declared-router") == 555_000
+    assert window("router") is None

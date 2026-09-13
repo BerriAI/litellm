@@ -15184,3 +15184,67 @@ class TestNonReasoningTier:
             "complex",
             "reasoning",
         )
+
+
+class TestAdvertisedContextWindow:
+    """A marker deployment carries no provider metadata, so a listing reports no window for the
+    router unless the tier groups are walked. The direction of each aggregate tracks whether a fit
+    check exists at that level: escalation checks fit between tiers, nothing checks it within a
+    group.
+    """
+
+    @staticmethod
+    def _router(*deployments: tuple, **overrides) -> ComplexityRouter:
+        return ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=_windowed_router(*deployments),
+            complexity_router_config=_tier_config(**overrides),
+        )
+
+    def test_reports_the_widest_tier_a_prompt_can_be_escalated_onto(self):
+        router = self._router(_SMALL, _BIG)
+        assert router.advertised_context_window() == 200000
+
+    def test_escalation_off_reports_the_tier_a_request_cannot_be_moved_off(self):
+        """With escalation disabled the classifier's tier is final, so the widest would promise a
+        window that a request classified onto the narrow tier can never reach."""
+        router = self._router(_SMALL, _BIG, enable_context_window_escalation=False)
+        assert router.advertised_context_window() == 16385
+
+    def test_a_single_tier_router_reports_that_tier(self):
+        router = self._router(_SMALL, _BIG, tiers={"SIMPLE": "small-model"})
+        assert router.advertised_context_window() == 16385
+
+    def test_a_group_is_judged_by_its_smallest_member(self):
+        """Two deployments serve one tier and the core router picks between them with no fit
+        check, so the group can only promise the smaller window."""
+        router = self._router(
+            ("mixed", "openai/gpt-4o-mini", 200000),
+            ("mixed", "openai/gpt-3.5-turbo", 16385),
+            tiers={"SIMPLE": "mixed"},
+        )
+        assert router.advertised_context_window() == 16385
+
+    def test_an_unresolvable_tier_makes_the_whole_answer_a_guess(self):
+        """Escalation never lands on a group whose window is unknown, so it cannot raise the
+        maximum, and a maximum over the rest would promise what the router may not serve."""
+        router = self._router(
+            _BIG,
+            ("unmapped", "openai/no-such-model-xyz", None),
+            tiers={"SIMPLE": "unmapped", "COMPLEX": "big-model"},
+        )
+        assert router.advertised_context_window() is None
+
+    def test_a_group_with_one_unresolvable_deployment_reports_nothing(self):
+        """The group's own minimum is only a floor over the members that resolved. The core router
+        can still pick the unmapped sibling, whose real window may be smaller than either."""
+        router = self._router(
+            ("partly-mapped", "openai/gpt-4o-mini", 200000),
+            ("partly-mapped", "openai/no-such-model-xyz", None),
+            tiers={"SIMPLE": "partly-mapped"},
+        )
+        assert router.advertised_context_window() is None
+
+    def test_a_tier_naming_a_group_that_does_not_exist_reports_nothing(self):
+        router = self._router(_SMALL, tiers={"SIMPLE": "small-model", "COMPLEX": "absent-group"})
+        assert router.advertised_context_window() is None

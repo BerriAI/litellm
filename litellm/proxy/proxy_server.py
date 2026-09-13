@@ -9264,9 +9264,18 @@ def select_data_generator(
     )
 
 
-def get_litellm_model_info(model: dict = {}):
+def get_litellm_model_info(model: dict = {}, llm_router: Router | None = None):
     model_info: Final = model.get("model_info", {})
     model_to_lookup = model.get("litellm_params", {}).get("model", None)
+    if _is_auto_router_model(model):
+        window: Final = (
+            llm_router.get_auto_router_context_window(str(model.get("model_name") or ""))
+            if llm_router is not None
+            else None
+        )
+        if window is None:
+            return _EMPTY_MAPPING
+        return MappingProxyType({"max_input_tokens": window})
     try:
         if "azure" in model_to_lookup or model_info.get("base_model"):
             model_to_lookup = model_info.get("base_model", None)
@@ -13533,10 +13542,10 @@ def _enrich_model_info_with_litellm_data(
 
     # read litellm model_prices_and_context_window.json to get the following:
     # input_cost_per_token, output_cost_per_token, max_tokens
-    litellm_model_info = get_litellm_model_info(model=model)
+    litellm_model_info = get_litellm_model_info(model=model, llm_router=llm_router)
 
     # 2nd pass on the model, try seeing if we can find model in litellm model_cost map
-    if litellm_model_info == {}:
+    if litellm_model_info == {} and not _is_auto_router_model(model):
         # use litellm_param model_name to get model_info
         litellm_params = model.get("litellm_params", {})
         litellm_model = litellm_params.get("model", None)
@@ -13545,7 +13554,7 @@ def _enrich_model_info_with_litellm_data(
         except Exception:
             litellm_model_info = {}
     # 3rd pass on the model, try seeing if we can find model but without the "/" in model cost map
-    if litellm_model_info == {}:
+    if litellm_model_info == {} and not _is_auto_router_model(model):
         # use litellm_param model_name to get model_info
         litellm_params = model.get("litellm_params", {})
         litellm_model = litellm_params.get("model", None)
@@ -14994,16 +15003,16 @@ def _translate_model_name_for_response(model: dict) -> dict:
     return {**model, "model_name": team_public}
 
 
-def _get_proxy_model_info(model: dict) -> dict:
+def _get_proxy_model_info(model: dict, llm_router: Router | None = None) -> dict:
     # provided model_info in config.yaml
     model_info: Final = model.get("model_info", {})
 
     # read litellm model_prices_and_context_window.json to get the following:
     # input_cost_per_token, output_cost_per_token, max_tokens
-    litellm_model_info = get_litellm_model_info(model=model)
+    litellm_model_info = get_litellm_model_info(model=model, llm_router=llm_router)
 
     # 2nd pass on the model, try seeing if we can find model in litellm model_cost map
-    if litellm_model_info == {}:
+    if litellm_model_info == {} and not _is_auto_router_model(model):
         # use litellm_param model_name to get model_info
         litellm_params = model.get("litellm_params", {})
         litellm_model = litellm_params.get("model", None)
@@ -15012,7 +15021,7 @@ def _get_proxy_model_info(model: dict) -> dict:
         except Exception:
             litellm_model_info = {}
     # 3rd pass on the model, try seeing if we can find model but without the "/" in model cost map
-    if litellm_model_info == {}:
+    if litellm_model_info == {} and not _is_auto_router_model(model):
         # use litellm_param model_name to get model_info
         litellm_params = model.get("litellm_params", {})
         litellm_model = litellm_params.get("model", None)
@@ -15160,7 +15169,9 @@ async def model_info_v1(
                 status_code=400,
                 detail={"error": f"Model id = {litellm_model_id} not found on litellm proxy"},
             )
-        _deployment_info_dict = _get_proxy_model_info(model=deployment_info.model_dump(exclude_none=True))
+        _deployment_info_dict = _get_proxy_model_info(
+            model=deployment_info.model_dump(exclude_none=True), llm_router=llm_router
+        )
         single_model_list: list[dict] = [_deployment_info_dict]
         if prisma_client is not None:
             single_model_list = await _populate_team_access_on_models(
