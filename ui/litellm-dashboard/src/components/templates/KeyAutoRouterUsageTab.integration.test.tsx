@@ -32,6 +32,7 @@ const stats = {
   avg_session_seconds: 30,
   avg_tokens_per_session: 100,
   spend: 1.25,
+  classifier_cost: 0.25,
   saved_spend: 8.75,
   baseline_spend: 10,
   saved_pct: 87.5,
@@ -84,6 +85,11 @@ describe("KeyAutoRouterUsageTab", () => {
     expect(await screen.findByText("$8.75")).toBeInTheDocument();
     expect(screen.getByText("Actual auto-router spend")).toBeInTheDocument();
     expect(screen.getByText("$1.25")).toBeInTheDocument();
+    expect(screen.getByText("LLM spend")).toBeInTheDocument();
+    expect(screen.getByText("$1.00")).toBeInTheDocument();
+    expect(screen.getByText("Classification cost")).toBeInTheDocument();
+    expect(screen.getByText("$0.2500")).toBeInTheDocument();
+    expect(screen.getByText("($62.50 / 1K turns)")).toBeInTheDocument();
     expect(screen.getByText("Estimated spend at highest-tier model")).toBeInTheDocument();
     expect(screen.getByText("$10.00")).toBeInTheDocument();
     expect(screen.getByText("Auto-router prompt caching")).toBeInTheDocument();

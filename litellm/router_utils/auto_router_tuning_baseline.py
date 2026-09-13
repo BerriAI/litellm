@@ -20,6 +20,7 @@ HEURISTIC_V1_TUNING_FIELDS: Final = (
     "reasoning_override_min_score",
     "token_thresholds",
     "dimension_weights",
+    "custom_dimensions",
     "code_keywords",
     "reasoning_keywords",
     "technical_keywords",
@@ -51,7 +52,17 @@ def tuning_fingerprint(complexity_router_config: object) -> str | None:
     supplied: Final = ((_TUNING_FIELD_SET - frozenset(("tier_model_configs",))) & frozenset(raw)) | (
         frozenset(("tier_model_configs",)) if validated.tier_model_configs else frozenset()
     )
-    payload: Final = validated.model_dump(mode="json", include=supplied)
+    payload: Final = validated.model_dump(
+        mode="json",
+        include=supplied,
+        exclude={
+            "custom_dimensions": {
+                index: {"scoring_mode"}
+                for index, dimension in enumerate(validated.custom_dimensions)
+                if dimension.scoring_mode == "binary"
+            }
+        },
+    )
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 

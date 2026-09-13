@@ -39,6 +39,7 @@ class _AgentOpsSettings(BaseSettings):
 def agentops_preset(
     *,
     config_overrides: OpenTelemetryV2Config | None = None,
+    allow_missing_credentials: bool = False,
 ) -> OpenTelemetryV2Config:
     """Build the AgentOps config without any network I/O.
 

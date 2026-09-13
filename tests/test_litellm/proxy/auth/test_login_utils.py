@@ -23,6 +23,7 @@ from litellm.proxy.auth.login_utils import (
     LoginResult,
     authenticate_user,
     get_ui_credentials,
+    is_env_credential_login_enabled,
 )
 
 
@@ -185,6 +186,7 @@ async def test_authenticate_user_invalid_credentials():
         assert exc_info.value.type == ProxyErrorTypes.auth_error
         assert exc_info.value.code == "401"
         assert "Invalid credentials" in exc_info.value.message
+        assert "UI_USERNAME" in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -799,3 +801,158 @@ class TestDisablePasswordLoginWhenSSOEnabled:
 
         assert isinstance(result, LoginResult)
         assert result.user_id == LITELLM_PROXY_ADMIN_NAME
+
+
+class TestDisableEnvCredentialLogin:
+    """`disable_env_credential_login` must reject a login with the env
+    credentials (UI_USERNAME/UI_PASSWORD, or the master-key fallback when
+    UI_PASSWORD is unset) while leaving database-user password logins
+    untouched, so admins with real accounts keep a way in."""
+
+    @pytest.mark.asyncio
+    async def test_rejects_correct_env_credentials_when_disabled(self):
+        master_key = "sk-1234"
+        ui_username = "admin"
+        ui_password = "env-only-password"
+
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+
+        with patch.dict(os.environ, {"UI_USERNAME": ui_username, "UI_PASSWORD": ui_password}):
+            with pytest.raises(ProxyException) as exc_info:
+                await authenticate_user(
+                    username=ui_username,
+                    password=ui_password,
+                    master_key=master_key,
+                    prisma_client=mock_prisma_client,
+                    general_settings={"disable_env_credential_login": True},
+                )
+
+        assert exc_info.value.type == ProxyErrorTypes.auth_error
+        assert exc_info.value.code == "401"
+        assert "UI_USERNAME" not in exc_info.value.message
+        assert "UI_PASSWORD" not in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_rejects_master_key_fallback_when_disabled(self):
+        """With UI_PASSWORD unset, the master key IS the env password, so the
+        setting must reject it too or it protects nothing by default."""
+        master_key = "sk-1234"
+
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+
+        with patch.dict(os.environ, {"UI_USERNAME": "admin"}, clear=True):
+            with pytest.raises(ProxyException) as exc_info:
+                await authenticate_user(
+                    username="admin",
+                    password=master_key,
+                    master_key=master_key,
+                    prisma_client=mock_prisma_client,
+                    general_settings={"disable_env_credential_login": True},
+                )
+
+        assert exc_info.value.code == "401"
+
+    @pytest.mark.asyncio
+    async def test_db_user_login_still_works_when_disabled(self):
+        master_key = "sk-1234"
+        user_email = "admin@example.com"
+        password = "Str0ng!Passw0rd"
+
+        mock_user = LiteLLM_UserTable(
+            user_id="db-admin-1",
+            user_email=user_email,
+            password=hash_token(token=password),
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=mock_user)
+
+        with patch.dict(
+            os.environ,
+            {
+                "UI_USERNAME": "admin",
+                "UI_PASSWORD": "env-password",
+                "DATABASE_URL": "postgresql://test:test@localhost/test",
+            },
+            clear=True,
+        ):
+            with ExitStack() as stack:
+                stack.enter_context(
+                    patch(  # test-quality-ok: internal orchestration, no HTTP boundary; matches pre-existing tests
+                        "litellm.proxy.auth.login_utils.generate_key_helper_fn",
+                        new_callable=AsyncMock,
+                        return_value={"token": "db-user-token"},
+                    )
+                )
+                result = await authenticate_user(
+                    username=user_email,
+                    password=password,
+                    master_key=master_key,
+                    prisma_client=mock_prisma_client,
+                    general_settings={"disable_env_credential_login": True},
+                )
+
+        assert isinstance(result, LoginResult)
+        assert result.user_id == "db-admin-1"
+        assert result.user_role == LitellmUserRoles.PROXY_ADMIN
+
+    @pytest.mark.asyncio
+    async def test_env_login_still_works_when_setting_absent(self):
+        """Env-credential login is the bootstrap path on a fresh install and
+        must stay on by default."""
+        master_key = "sk-1234"
+        ui_username = "admin"
+
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+
+        with patch.dict(
+            os.environ,
+            {
+                "UI_USERNAME": ui_username,
+                "UI_PASSWORD": master_key,
+                "DATABASE_URL": "postgresql://test:test@localhost/test",
+            },
+            clear=True,
+        ):
+            with ExitStack() as stack:
+                _patch_successful_admin_login_deps(stack)
+                result = await authenticate_user(
+                    username=ui_username,
+                    password=master_key,
+                    master_key=master_key,
+                    prisma_client=mock_prisma_client,
+                    general_settings={},
+                )
+
+        assert isinstance(result, LoginResult)
+        assert result.user_id == LITELLM_PROXY_ADMIN_NAME
+
+
+class TestIsEnvCredentialLoginEnabled:
+    """Drives the Admin UI warning banner: it must be True exactly when a
+    login with the env credentials could actually succeed."""
+
+    def test_enabled_by_default(self):
+        assert is_env_credential_login_enabled({}) is True
+
+    def test_disabled_by_dedicated_setting(self):
+        assert is_env_credential_login_enabled({"disable_env_credential_login": True}) is False
+
+    def test_explicit_false_keeps_it_enabled(self):
+        assert is_env_credential_login_enabled({"disable_env_credential_login": False}) is True
+
+    def test_disabled_when_sso_gate_blocks_all_password_logins(self):
+        """`disable_password_login_when_sso_enabled` with SSO configured
+        rejects every username/password login before the env comparison runs,
+        so the banner must not nag about an already-unreachable path."""
+        with ExitStack() as stack:
+            _patch_sso_configured(stack, configured=True)
+            assert is_env_credential_login_enabled({"disable_password_login_when_sso_enabled": True}) is False
+
+    def test_enabled_when_sso_gate_is_set_but_sso_not_configured(self):
+        with ExitStack() as stack:
+            _patch_sso_configured(stack, configured=False)
+            assert is_env_credential_login_enabled({"disable_password_login_when_sso_enabled": True}) is True
