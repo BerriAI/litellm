@@ -70,11 +70,6 @@ class InMemoryCache(BaseCache):
             if isinstance(value, bytes):
                 return sys.getsizeof(value) / 1024 <= self.max_size_per_item
 
-            # Handle special types without full conversion when possible
-            if hasattr(value, "__sizeof__"):  # Use __sizeof__ if available
-                size: Final = value.__sizeof__() / 1024
-                return size <= self.max_size_per_item
-
             # Fallback for complex types
             if isinstance(value, BaseModel) and hasattr(value, "model_dump"):  # Pydantic v2
                 value = value.model_dump()
@@ -83,7 +78,10 @@ class InMemoryCache(BaseCache):
 
             # Only convert to JSON if absolutely necessary
             if not isinstance(value, (str, bytes)):
-                value = json.dumps(value, default=str)
+                try:
+                    value = json.dumps(value, default=str)
+                except (TypeError, ValueError):
+                    value = repr(value)
 
             return sys.getsizeof(value) / 1024 <= self.max_size_per_item
 
