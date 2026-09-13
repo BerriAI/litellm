@@ -1,0 +1,92 @@
+name: Agent Shin — PR triage
+
+# LLM-as-judge triage for external pull requests.
+#
+# DRY-RUN BY DEFAULT. Closures and public comments are gated on the repo
+# variable `AGENT_SHIN_ENABLED` being set to the string `"true"`. Until then,
+# every run only writes its verdict to the workflow step summary so the team
+# can QA the judge's decisions before flipping it on.
+#
+# To enable for real:
+#   1. Add a repo secret `OPENAI_API_KEY` (or compatible).
+#   2. Set repo variable `AGENT_SHIN_ENABLED` to `true`
+#      (Settings > Secrets and variables > Actions > Variables).
+#
+# This workflow deliberately has NO pull_request/pull_request_target trigger
+# (see PR #30784 and the agent-shin bridge repo). Instant reaction to fork PR
+# events comes from the BerriAI/agent-shin Cloudflare Worker, which receives
+# GitHub App webhooks and dispatches this workflow with the PR number. Only
+# base-repo code runs here, on a trigger fork authors cannot fire.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to triage."
+        required: true
+      close:
+        description: "If true and AGENT_SHIN_ENABLED=true, actually close on fail."
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  triage:
+    if: github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout triage script
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install LLM client
+        run: pip install --no-cache-dir --require-hashes -r .github/scripts/triage-requirements.txt
+
+      - name: Run Agent Shin
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # workflow_dispatch can only be fired by actors with actions:write
+          # (maintainers, or the agent-shin bridge app — which itself refuses
+          # to dispatch unless AGENT_SHIN_ENABLED is "true"), so exposing the
+          # LLM key here cannot be forced by an external user churning fork
+          # PRs while the bot is still in dry-run.
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
+          TRIAGE_MODEL: ${{ vars.TRIAGE_MODEL }}
+          AGENT_SHIN_ENABLED: ${{ vars.AGENT_SHIN_ENABLED }}
+          DISPATCH_CLOSE: ${{ github.event.inputs.close }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          ARGS=(--repo "${{ github.repository }}" --pr "${PR_NUMBER}")
+          # Fail-safe gating: only the EXACT string "true" enables the
+          # destructive --close path. The workflow_dispatch input is a
+          # `choice` dropdown of "true"/"false" so the UI is constrained,
+          # but the API (`gh workflow run -f close=...`) accepts any
+          # string, and a `!= "false"` check would treat "True", "yes",
+          # "1", "TRUE", typos, and accidental whitespace as enabling
+          # closure. Mirror the Greptile closer's `= "true"` pattern.
+          if [ "${AGENT_SHIN_ENABLED:-false}" = "true" ] && [ "${DISPATCH_CLOSE:-false}" = "true" ]; then
+            ARGS+=(--close)
+            echo "::notice::Agent Shin is ENABLED and running in close-on-fail mode."
+          elif [ "${AGENT_SHIN_ENABLED:-false}" = "true" ]; then
+            echo "::notice::Agent Shin is ENABLED but this run is dry-run (close != 'true'). Bridge-dispatched runs always pass close=false: instant triage never closes, only the review gate's grace-window path does."
+          else
+            echo "::notice::Agent Shin is in DRY-RUN mode (AGENT_SHIN_ENABLED is not 'true'). No comments will be posted; no PRs will be closed."
+          fi
+          python3 .github/scripts/triage_with_llm.py "${ARGS[@]}"
