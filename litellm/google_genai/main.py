@@ -198,6 +198,7 @@ class GenerateContentHelper:
             optional_params=dict(generate_content_config_dict),
             litellm_params={
                 "litellm_call_id": litellm_call_id,
+                **generate_content_provider_config.get_generate_content_logging_params(litellm_params),
             },
             custom_llm_provider=custom_llm_provider,
         )
