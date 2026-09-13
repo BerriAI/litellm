@@ -226,6 +226,30 @@ class AutoRouterBenchmarkGroup(AutoRouterBenchmarkTotals):
     )
 
 
+class AutoRouterSessionResponse(BaseModel):
+    """One auto-routed session as its own key sees it: what the last turn ran on, and what the session cost
+    against the router's savings baseline (the priciest model in its hardest tier)."""
+
+    session_id: str
+    router_name: str = Field(description="The auto-router alias the session's requests were sent to")
+    router_type: str = Field(description="complexity, adaptive or quality")
+    turns: int = Field(description="Auto-routed turns the rollup has recorded for this session so far")
+    last_model: str = Field(description="The deployment model the most recent turn was routed to")
+    spend: float = Field(description="What the session's routed traffic actually cost, classifier calls included")
+    saved_spend: float = Field(description="Estimated savings against the baseline, net of classifier cost")
+    baseline_spend: float = Field(description="spend plus saved_spend: the estimated single-model cost")
+    baseline_model: str | None = Field(
+        description="The savings baseline most of this session's turns were priced against, recorded turn by "
+        "turn, so it still names the counterfactual after the router is reconfigured or removed. None when no "
+        "turn recorded one: rows from before the baseline was recorded, and adaptive and quality routers, "
+        "which derive no baseline and so report no savings"
+    )
+    baseline_models: Mapping[str, int] = Field(
+        description="Turns priced against each baseline model; more than one entry means the router's "
+        "baseline changed mid-session and baseline_spend mixes both"
+    )
+
+
 class AutoRouterBenchmarksResponse(BaseModel):
     """Benchmarks for the auto-router dashboard, aggregated from the per-session rollup."""
 

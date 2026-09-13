@@ -11,6 +11,8 @@ body, so a single long-lived proxy serves every reliability behavior.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from pydantic import ValidationError
 
 from proxy_client import ProxyClient
@@ -46,6 +48,13 @@ def create_bad_base_deployment(proxy: ProxyClient, name: str) -> str:
     fails with a real connection error the fallback can reroute around."""
     return proxy.create_model(
         name, LiteLLMParamsBody(model=REAL_MODEL, api_key=REAL_KEY, api_base="http://127.0.0.1:9/v1")
+    )
+
+
+def create_never_benched_refusing_deployment(proxy: ProxyClient, name: str) -> str:
+    return proxy.create_model(
+        name,
+        LiteLLMParamsBody(model=REAL_MODEL, api_key=REAL_KEY, api_base="http://127.0.0.1:9/v1", cooldown_time=0),
     )
 
 
@@ -109,6 +118,7 @@ def chat_override(
     override: RouterSettingsOverride | None = None,
     stream: bool = False,
     cache: dict[str, bool] | None = {"no-cache": True},
+    history: Sequence[ChatMessage] = (),
 ) -> StreamingResponse:
     """POST /chat/completions with an optional per-request router_settings_override,
     returning the raw outcome so tests read status, body, and reliability headers."""
@@ -117,7 +127,7 @@ def chat_override(
         headers=proxy.transport.bearer(key),
         json=ReliabilityChatBody(
             model=model,
-            messages=[ChatMessage(role="user", content=content)],
+            messages=[*history, ChatMessage(role="user", content=content)],
             max_tokens=512,
             stream=stream,
             router_settings_override=override,

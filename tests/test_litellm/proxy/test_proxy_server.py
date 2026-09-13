@@ -7338,6 +7338,88 @@ async def test_update_general_settings_apply_user_budget_to_team_keys_yaml_wins(
         assert ps.general_settings["apply_user_budget_to_team_keys"] is True
 
 
+def _fill_user_api_key_cache(cache: DualCache, count: int) -> None:
+    for index in range(count):
+        cache.set_cache(key=f"key-{index}", value={"token": f"key-{index}"}, local_only=True)
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_user_api_key_cache_max_size_resizes_the_running_cache(monkeypatch):
+    """The Admin UI writes the capacity to the DB config, so the running cache has
+    to pick it up on reload; otherwise the knob only works after a restart."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    cache = UserApiKeyCache()
+    monkeypatch.setattr(proxy_server_module, "general_settings", {})
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
+    await ProxyConfig()._update_general_settings(db_general_settings={"user_api_key_cache_max_size": 300})
+
+    assert proxy_server_module.general_settings["user_api_key_cache_max_size"] == 300
+
+    _fill_user_api_key_cache(cache, 250)
+    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_clearing_user_api_key_cache_max_size_restores_the_default(monkeypatch):
+    """Blanking the field in the dashboard deletes the key, so the cache must fall
+    back to the default capacity rather than keep the last configured size."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    cache = UserApiKeyCache()
+    cache.update_in_memory_max_size(5000)
+    monkeypatch.setattr(proxy_server_module, "general_settings", {"user_api_key_cache_max_size": 5000})
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
+    await ProxyConfig()._update_general_settings(db_general_settings={"store_model_in_db": True})
+
+    assert "user_api_key_cache_max_size" not in proxy_server_module.general_settings
+
+    _fill_user_api_key_cache(cache, 201)
+    assert cache.get_cache(key="key-0", local_only=True) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("db_value", [0, -5, "lots"])
+async def test_update_general_settings_ignores_an_invalid_user_api_key_cache_max_size(db_value, monkeypatch):
+    """A non-positive capacity would make the eviction loop pop an empty heap on the
+    next write, so a bad DB value must leave the running cache untouched."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    cache = UserApiKeyCache()
+    cache.update_in_memory_max_size(300)
+    monkeypatch.setattr(proxy_server_module, "general_settings", {})
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
+    await ProxyConfig()._update_general_settings(db_general_settings={"user_api_key_cache_max_size": db_value})
+
+    assert "user_api_key_cache_max_size" not in proxy_server_module.general_settings
+
+    _fill_user_api_key_cache(cache, 250)
+    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_user_api_key_cache_max_size_yaml_wins(monkeypatch):
+    """A DB value must not silently override an explicit YAML capacity on reload."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config._yaml_general_settings_keys = {"user_api_key_cache_max_size"}
+    cache = UserApiKeyCache()
+    cache.update_in_memory_max_size(300)
+    monkeypatch.setattr(proxy_server_module, "general_settings", {"user_api_key_cache_max_size": 300})
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
+    await proxy_config._update_general_settings(db_general_settings={"user_api_key_cache_max_size": 10})
+
+    assert proxy_server_module.general_settings["user_api_key_cache_max_size"] == 300
+
+    _fill_user_api_key_cache(cache, 250)
+    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "db_value,expected",
@@ -8362,7 +8444,7 @@ async def test_increment_spend_counters_finalizes_after_unreserved_increments():
     async def assert_reservation_not_finalized_yet(**kwargs):
         assert budget_reservation["finalized"] is False
         incremented_counters.append(kwargs["counter_key"])
-        return ps._PendingSpendIncrement(
+        return ps.PendingSpendIncrement(
             counter_key=kwargs["counter_key"], increment=kwargs["increment"]
         )
 
@@ -9207,6 +9289,126 @@ class TestLazyFeaturesNotImportedAtStartup:
 
 class TestLazyFeatureMiddleware:
     """Behavior of the middleware itself, exercised in isolation."""
+
+    @pytest.mark.asyncio
+    async def test_llm_passthrough_loads_on_first_provider_request(self, monkeypatch):
+        """An app that never registered the provider passthrough routes 404s a
+        provider request; behind the middleware the same request registers the
+        routes and is forwarded to the provider with the configured key."""
+        import respx
+        from fastapi import FastAPI
+
+        from litellm.proxy._lazy_features import LAZY_FEATURES, LazyFeatureMiddleware
+
+        monkeypatch.setenv("MISTRAL_API_KEY", "sk-upstream")
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        feat = next(f for f in LAZY_FEATURES if f.name == "llm_passthrough")
+        target_app = FastAPI()
+        target_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-virtual")
+        mw = LazyFeatureMiddleware(target_app, fastapi_app=target_app, features=(feat,))
+
+        with respx.mock() as upstream:
+            route = upstream.get("https://api.mistral.ai/v1/models").mock(
+                return_value=httpx.Response(200, json={"object": "list", "data": []})
+            )
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=target_app), base_url="http://t") as bare:
+                assert (await bare.get("/mistral/v1/models")).status_code == 404
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=mw), base_url="http://t") as lazy:
+                response = await lazy.get("/mistral/v1/models")
+
+            assert (response.status_code, response.json()) == (200, {"object": "list", "data": []})
+            assert route.calls.last.request.headers["authorization"] == "Bearer sk-upstream"
+
+    def test_llm_passthrough_prefixes_cover_every_route_the_module_registers(self):
+        """A route the module registers under a prefix the feature does not claim
+        would 404 until an unrelated provider request happens to load the module."""
+        from litellm.proxy._lazy_features import LAZY_FEATURES
+
+        feat = next(f for f in LAZY_FEATURES if f.name == "llm_passthrough")
+        paths = [r.path for r in importlib.import_module(feat.module_path).router.routes]
+
+        assert {"/mistral/{endpoint:path}", "/openai/{endpoint:path}"} <= set(paths)
+        unreachable = [p for p in paths if not feat.matches(p.replace("{endpoint:path}", "x"))]
+        assert unreachable == [], f"routes the middleware would never load: {unreachable}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("first_hit", ["/v1/realtime/calls", "/openai/v1/models"])
+    async def test_lazy_routes_land_in_registry_order_not_first_hit_order(self, first_hit):
+        """Two lazy features with overlapping paths must answer a request with the
+        same handler no matter which one a deployment happens to hit first."""
+        from fastapi import APIRouter, FastAPI
+
+        from litellm.proxy._lazy_features import LazyFeature, LazyFeatureMiddleware
+
+        def make_register(path, handler):
+            def register(app, module):
+                router = APIRouter()
+                router.add_api_route(path, lambda: {"handler": handler}, methods=["POST"])
+                app.include_router(router)
+
+            return register
+
+        catch_all = LazyFeature(
+            name="catch_all",
+            module_path="json",
+            path_prefixes=("/openai/",),
+            register_fn=make_register("/openai/{endpoint:path}", "catch_all"),
+        )
+        specific = LazyFeature(
+            name="specific",
+            module_path="base64",
+            path_prefixes=("/openai/v1/realtime", "/v1/realtime"),
+            register_fn=make_register("/openai/v1/realtime/calls", "specific"),
+        )
+
+        target_app = FastAPI()
+        mw = LazyFeatureMiddleware(target_app, fastapi_app=target_app, features=(catch_all, specific))
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=mw), base_url="http://t") as client:
+            await client.post(first_hit)
+            await client.post("/openai/v1/models")
+            response = await client.post("/openai/v1/realtime/calls")
+
+        assert response.json() == {"handler": "catch_all"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("root_path", ["", "/api"])
+    async def test_reserved_slot_keeps_lazy_catch_all_ahead_of_later_eager_routes(self, root_path):
+        """/{mcp_server_name}/mcp is registered after the provider passthrough router
+        at startup, so /mistral/mcp must keep reaching the provider catch-all once
+        that router loads lazily instead of being swallowed by the MCP route. The
+        native /mistral/v1/files route sits ahead of it, so that path neither loads
+        the feature nor changes owner, with or without a SERVER_ROOT_PATH prefix."""
+        from fastapi import APIRouter, FastAPI
+
+        from litellm.proxy._lazy_features import LazyFeature, LazyFeatureMiddleware, reserve_lazy_slot
+
+        def register(app, module):
+            router = APIRouter()
+            router.add_api_route("/mistral/{endpoint:path}", lambda: {"handler": "passthrough"}, methods=["POST"])
+            app.include_router(router)
+
+        passthrough = LazyFeature(
+            name="llm_passthrough", module_path="json", path_prefixes=("/mistral/",), register_fn=register
+        )
+        target_app = FastAPI(root_path=root_path)
+        target_app.add_api_route("/mistral/v1/files", lambda: {"handler": "files"}, methods=["POST"])
+        reserve_lazy_slot(target_app, "llm_passthrough", features=(passthrough,))
+        target_app.add_api_route("/{mcp_server_name}/mcp", lambda: {"handler": "mcp"}, methods=["POST"])
+        target_app.add_middleware(LazyFeatureMiddleware, fastapi_app=target_app, features=(passthrough,))
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=target_app), base_url="http://t") as client:
+            files_first = (await client.post(f"{root_path}/mistral/v1/files")).json()["handler"]
+            loaded_after_files = frozenset(target_app.state.lazy_loaded)
+            handlers = [
+                (await client.post(f"{root_path}{path}")).json()["handler"]
+                for path in ("/mistral/mcp", "/mistral/v1/files")
+            ]
+
+        assert (files_first, loaded_after_files) == ("files", frozenset())
+        assert handlers == ["passthrough", "files"]
 
     @pytest.mark.asyncio
     async def test_first_request_triggers_load_subsequent_does_not(self):
@@ -10245,6 +10447,27 @@ def test_get_config_list_includes_apply_user_budget_to_team_keys(monkeypatch):
         fields = {item["field_name"]: item for item in resp.json()}
         assert "apply_user_budget_to_team_keys" in fields
         assert fields["apply_user_budget_to_team_keys"]["field_type"] == "Boolean"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_get_config_list_includes_user_api_key_cache_max_size(monkeypatch):
+    """The Admin UI General Settings table renders whatever /config/list returns,
+    so the cache capacity has to be exposed there as an Integer to be editable."""
+    mock_prisma = MagicMock()
+    mock_config_table = MagicMock()
+    mock_config_table.find_first = AsyncMock(return_value=None)
+    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", mock_prisma)
+    app.dependency_overrides[proxy_server_module.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        client = TestClient(app)
+        resp = client.get("/config/list", params={"config_type": "general_settings"})
+        assert resp.status_code == 200, resp.text
+        fields = {item["field_name"]: item for item in resp.json()}
+        assert fields["user_api_key_cache_max_size"]["field_type"] == "Integer"
     finally:
         app.dependency_overrides.clear()
 
@@ -12878,6 +13101,48 @@ async def test_load_config_router_authorizes_fallback_targets_against_the_callin
     router, _, _ = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
 
     assert router.fallback_access_check is router_fallback_access_check
+
+
+@pytest.mark.asyncio
+async def test_load_config_user_api_key_cache_max_size_keeps_more_than_200_entries(tmp_path, monkeypatch):
+    """The auth cache used to be pinned at InMemoryCache's 200 entry default, so a
+    deployment with more keys than that evicted constantly and every request
+    fell through to the DB. The YAML knob has to raise the cap on the live cache."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump({"general_settings": {"user_api_key_cache_max_size": "1000"}}))
+
+    cache = UserApiKeyCache()
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
+    await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    _fill_user_api_key_cache(cache, 999)
+    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_value", [0, -1, "unbounded"])
+async def test_load_config_rejects_a_non_positive_user_api_key_cache_max_size(tmp_path, bad_value, monkeypatch):
+    """InMemoryCache treats 0 as 'cache nothing' and a negative cap makes eviction
+    pop an empty heap, so the proxy must refuse to boot with such a value instead
+    of silently disabling auth caching."""
+    from pydantic import ValidationError
+
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump({"general_settings": {"user_api_key_cache_max_size": bad_value}}))
+
+    cache = UserApiKeyCache()
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
+    with pytest.raises(ValidationError):
+        await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    _fill_user_api_key_cache(cache, 150)
+    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
 
 
 def test_docs_redoc_openapi_are_reachable_by_default():

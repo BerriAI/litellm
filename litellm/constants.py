@@ -53,6 +53,7 @@ S3_BOUNDED_OBJECT_KEY_HEAD_BYTES: Final = 64
 S3_PREFIX_DIGEST_CHARS: Final = 16
 # s3 allows 2048 bytes of combined metadata headers, which Content-Disposition counts against
 MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES: Final = 1024
+MAX_FILE_LIST_LIMIT: Final = 10000
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = int(os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1))
 budget_reservation_disabled_info_emitted = False
@@ -143,6 +144,7 @@ DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD: Final = float(
     os.getenv("DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD", 0.3)
 )
 MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH: Final = int(os.getenv("MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH", 150))
+MAX_LITELLM_CALL_ID_LENGTH: Final = 256
 MAX_GUARDRAIL_SCAN_METADATA_HEADER_LENGTH: Final = 2048
 
 DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS: Final = 2000
@@ -571,6 +573,7 @@ ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS: Final = int(
 LOGGING_WORKER_CONCURRENCY: Final = int(os.getenv("LOGGING_WORKER_CONCURRENCY", 100))  # Must be above 0
 LOGGING_WORKER_MAX_QUEUE_SIZE: Final = int(os.getenv("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000))
 LOGGING_WORKER_MAX_TIME_PER_COROUTINE: Final = float(os.getenv("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0))
+LOGGING_WORKER_TIMEOUT_SUMMARY_WINDOW_SECONDS: Final = 5.0
 LOGGING_WORKER_CLEAR_PERCENTAGE: Final = int(
     os.getenv("LOGGING_WORKER_CLEAR_PERCENTAGE", 50)
 )  # Percentage of queue to clear (default: 50%)
@@ -2002,6 +2005,7 @@ NON_INFERENCE_CALL_TYPES: Final[frozenset[str]] = frozenset(
 
 UNKNOWN_MODEL_SPEND_LOG_MODEL: Final[str] = "unknown-model"
 MAX_SPEND_LOG_MODEL_NAME_LENGTH: Final[int] = 256
+MCP_SPEND_LOG_MODEL_PREFIX: Final[str] = "MCP: "
 
 # PTU reservation rollup writes rows to LiteLLM_DailyTeamSpend with this
 # sentinel api_key so PTU flat cost stays distinguishable from real per-request

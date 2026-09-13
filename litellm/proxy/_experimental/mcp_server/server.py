@@ -56,6 +56,7 @@ from litellm.proxy._experimental.mcp_server.mcp_debug import (
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     _redact_mcp_resource_url,
+    get_byok_www_authenticate,
     get_passthrough_www_authenticate,
     get_route_relative_request_path,
     well_known_root_suffix,
@@ -2852,7 +2853,7 @@ if MCP_AVAILABLE:
                     "server_name": mcp_server.server_name or mcp_server.name,
                     "message": "User identity is required for BYOK servers",
                 },
-                headers={"WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'},
+                headers={"WWW-Authenticate": get_byok_www_authenticate()},
             )
 
         # Check shared credential cache before hitting the DB.
@@ -2873,9 +2874,7 @@ if MCP_AVAILABLE:
                                 "Complete the OAuth authorization flow to provide your API key."
                             ),
                         },
-                        headers={
-                            "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
-                        },
+                        headers={"WWW-Authenticate": get_byok_www_authenticate()},
                     )
                 return
 
@@ -2914,7 +2913,7 @@ if MCP_AVAILABLE:
                         "Complete the OAuth authorization flow to provide your API key."
                     ),
                 },
-                headers={"WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'},
+                headers={"WWW-Authenticate": get_byok_www_authenticate()},
             )
 
     async def execute_mcp_tool(
@@ -3068,9 +3067,7 @@ if MCP_AVAILABLE:
                                 "Complete the OAuth authorization flow to provide your API key."
                             ),
                         },
-                        headers={
-                            "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
-                        },
+                        headers={"WWW-Authenticate": get_byok_www_authenticate()},
                     )
                 mcp_auth_header = byok_cred
             elif mcp_server.is_byok:
@@ -3339,6 +3336,43 @@ if MCP_AVAILABLE:
             )
         return result
 
+    async def fire_mcp_tool_call_failure_logging(
+        logging_obj: LiteLLMLoggingObj | None,
+        exception: Exception,
+        start_time: datetime,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        request_data: Mapping[str, object],
+    ) -> None:
+        """Failure logging shared by the ``/mcp`` path and the REST endpoint. Call from
+        inside the ``except`` block so the traceback is still available.
+
+        The failure handlers run first because ``_ProxyDBLogger.async_post_call_failure_hook``
+        builds the failure spend-log row from the ``standard_logging_object`` they produce;
+        both gate on ``should_run_logging``, so the ``@client`` wrapper does not log twice.
+        A relayed upstream 401 (``MCPUpstreamAuthError``) is an expected caller-must-reauth
+        signal and skips ``post_call_failure_hook``, which fires the ``llm_exceptions`` alert.
+        """
+        from litellm.proxy.proxy_server import proxy_logging_obj
+
+        traceback_str: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
+        if logging_obj is not None:
+            end_time: Final = datetime.now()  # noqa: DTZ005  # naive to match `start_time`, which it is subtracted from
+            logging_obj.failure_handler(exception, traceback_str, start_time, end_time)
+            await logging_obj.async_failure_handler(exception, traceback_str, start_time, end_time)
+
+        if isinstance(exception, MCPUpstreamAuthError) or not proxy_logging_obj or user_api_key_auth is None:
+            return
+        sanitized_request_data: Final = {
+            key: value for key, value in request_data.items() if key not in _MCP_CREDENTIAL_REQUEST_FIELDS
+        }
+        await proxy_logging_obj.post_call_failure_hook(
+            request_data=sanitized_request_data,
+            original_exception=exception,
+            user_api_key_dict=user_api_key_auth,
+            route="/mcp/call_tool",
+            traceback_str=traceback_str,
+        )
+
     @client
     async def call_mcp_tool(
         name: str,
@@ -3405,40 +3439,8 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
                 **kwargs,
             )
-        except MCPUpstreamAuthError:
-            # A client-forwarded pass-through upstream 401 is an expected caller-must-reauth signal, so
-            # re-raise it without post_call_failure_hook, which fires the proxy's llm_exceptions alert.
-            # mcp_server_tool_call then downgrades it to an informational isError result for the
-            # streamable client. Note: this function is @client-decorated, so the decorator's standard
-            # failure logging still records the event (spend log / OTel); only the extra alert sink is
-            # skipped here.
-            raise
         except Exception as e:
-            traceback_str: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
-            from litellm.proxy.proxy_server import proxy_logging_obj
-
-            # Ordering is load-bearing. ``_ProxyDBLogger.async_post_call_failure_hook``,
-            # reached below, writes the failure spend-log row from this logger's
-            # ``standard_logging_object``, which only exists once the failure handlers
-            # have run. Flush them first or the row lands with
-            # ``guardrail_information=None`` and a guardrail block is never counted.
-            #
-            # Not double-logged: both handlers gate on ``should_run_logging`` and then
-            # mark it, so the ``@client`` wrapper's own post-raise logging no-ops on this
-            # logger, same as ``_fire_mcp_tool_call_logging`` does for ``isError=True``.
-            if litellm_logging_obj is not None:
-                end_time: Final = datetime.now()  # noqa: DTZ005  # naive to match `start_time`, which it is subtracted from
-                litellm_logging_obj.failure_handler(e, traceback_str, start_time, end_time)
-                await litellm_logging_obj.async_failure_handler(e, traceback_str, start_time, end_time)
-
-            if proxy_logging_obj and user_api_key_auth:
-                await proxy_logging_obj.post_call_failure_hook(
-                    request_data=kwargs,
-                    original_exception=e,
-                    user_api_key_dict=user_api_key_auth,
-                    route="/mcp/call_tool",
-                    traceback_str=traceback_str,
-                )
+            await fire_mcp_tool_call_failure_logging(litellm_logging_obj, e, start_time, user_api_key_auth, kwargs)
             raise
 
         if litellm_logging_obj:
@@ -4255,20 +4257,6 @@ if MCP_AVAILABLE:
             return None
         return _get_authorization_header_from_scope(scope)
 
-    def _is_delegate_upstream_probe_target(server: MCPServer) -> bool:
-        """Whether ``server`` is an interactive delegate-auth server whose client-supplied
-        token should be preflighted upstream.
-
-        Mirrors the anonymous-delegate gate in ``get_allowed_mcp_servers``: the flow is
-        resolved via ``effective_oauth2_flow`` so an unstamped M2M-shape row fails closed
-        (its stored client credentials drive egress; the caller's bearer is irrelevant).
-        """
-        return (
-            server.auth_type == MCPAuth.oauth2
-            and server.delegate_auth_to_upstream is True
-            and MCPServerManager.effective_oauth2_flow(server) != "client_credentials"
-        )
-
     async def _probe_upstream_auth(
         url: str,
         auth_header: str,
@@ -4329,7 +4317,7 @@ if MCP_AVAILABLE:
         mcp_servers: list[str] | None,
         client_ip: str | None,
     ) -> None:
-        """Probe pass-through and delegate-auth upstream servers in parallel before the MCP session starts.
+        """Probe pass-through upstream servers in parallel before the MCP session starts.
 
         Only servers the caller's key is already authorized to reach are probed —
         the list is derived from _get_allowed_mcp_servers so that a user cannot
@@ -4341,38 +4329,9 @@ if MCP_AVAILABLE:
         if the upstream accepts it but forbids the caller.
         Fails-open: network errors are logged and the request is allowed through.
 
-        Delegate-auth servers (``auth_type=oauth2`` + ``delegate_auth_to_upstream``)
-        are probed with the caller's bare ``Authorization`` bearer. That bearer is only
-        an upstream token (never a LiteLLM key) when admission took the delegate bypass,
-        so the delegate target is resolved through ``get_mcp_server_by_name`` -- the same
-        resolver admission used -- rather than the wider allowed-server prefix/access-group
-        matching. A name that only reaches a delegate server via server_id or an access
-        group would have been admitted as a real LiteLLM key, so probing it would leak that
-        key upstream; requiring the admission-resolver match closes that gap. Without the
-        probe a rejected token is absorbed by the tools/list handler and masked as an empty
-        tool list. Gated to single-server routes so one rejected token cannot 401 a
-        multi-server aggregate connect, matching the OBO preflight gating; the challenge
-        echoes the requested name so aliased routes get the same resource_metadata URL as
-        the tokenless preemptive challenge.
         """
         forwarded_auth: Final = _get_forwarded_auth_from_scope(scope)
-        requested_single_target: Final = mcp_servers[0] if mcp_servers is not None and len(mcp_servers) == 1 else None
-        # The bare Authorization header (no x-litellm-api-key) is a valid upstream token
-        # only when admission classified it as one, i.e. the single requested name resolves
-        # to a delegate server under admission's own resolver. Resolve it the same way here
-        # so a server_id- or access-group-named delegate (which admission would have treated
-        # as a LiteLLM key) is never probed with that key.
-        delegate_server: Final = (
-            global_mcp_server_manager.get_mcp_server_by_name(requested_single_target, client_ip=client_ip)
-            if requested_single_target
-            else None
-        )
-        delegate_auth: Final = (
-            _get_authorization_header_from_scope(scope)
-            if delegate_server is not None and _is_delegate_upstream_probe_target(delegate_server)
-            else None
-        )
-        if not forwarded_auth and not delegate_auth:
+        if not forwarded_auth:
             return
 
         # Use the authorized server set, not the raw user-supplied names, so that
@@ -4382,35 +4341,20 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
             client_ip=client_ip,
         )
-        passthrough_targets: Final[tuple[tuple[MCPServer, str, str], ...]] = (
-            tuple(
-                (srv, forwarded_auth, srv.name)
-                for srv in allowed_servers
-                # Restrict to genuine OAuth pass-through servers (auth_type none +
-                # Authorization in extra_headers). Gateway-managed OAuth2 servers
-                # must not receive the ``resource_metadata=`` challenge emitted
-                # below — they require ``authorization_uri=`` pointing at the
-                # gateway AS metadata. ``is_oauth_passthrough`` already requires
-                # ``auth_type in (None, MCPAuth.none)``, which is mutually
-                # exclusive with ``has_client_credentials`` (oauth2 + M2M flow),
-                # so M2M servers are implicitly excluded here.
-                if srv.is_oauth_passthrough
-            )
-            if forwarded_auth
-            else ()
+        passthrough_targets: Final[tuple[tuple[MCPServer, str, str], ...]] = tuple(
+            (srv, forwarded_auth, srv.name)
+            for srv in allowed_servers
+            # Restrict to genuine OAuth pass-through servers (auth_type none +
+            # Authorization in extra_headers). Gateway-managed OAuth2 servers
+            # must not receive the ``resource_metadata=`` challenge emitted
+            # below — they require ``authorization_uri=`` pointing at the
+            # gateway AS metadata. ``is_oauth_passthrough`` already requires
+            # ``auth_type in (None, MCPAuth.none)``, which is mutually
+            # exclusive with ``has_client_credentials`` (oauth2 + M2M flow),
+            # so M2M servers are implicitly excluded here.
+            if srv.is_oauth_passthrough
         )
-        # Probe the admission-resolved delegate server only when the caller is actually
-        # authorized for it (present in the IP-filtered allowed set), keyed by server_id.
-        delegate_targets: Final[tuple[tuple[MCPServer, str, str], ...]] = (
-            tuple(
-                (srv, delegate_auth, requested_single_target)
-                for srv in allowed_servers
-                if delegate_server is not None and srv.server_id == delegate_server.server_id
-            )
-            if delegate_auth and requested_single_target
-            else ()
-        )
-        probe_targets: Final = passthrough_targets + delegate_targets
+        probe_targets: Final = passthrough_targets
         if not probe_targets:
             return
 

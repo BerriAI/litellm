@@ -25,7 +25,7 @@ from openai.types.chat.chat_completion_named_tool_choice_param import (
 from openai.types.chat.chat_completion_named_tool_choice_param import (
     Function as NamedToolChoiceFunction,
 )
-from openai.types.responses import ResponseFunctionToolCall
+from openai.types.responses import ResponseFunctionToolCall, ResponseFunctionWebSearch
 from openai.types.responses.response_create_params import ResponseInputParam
 from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomParam
 from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
@@ -45,6 +45,7 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionAssistantMessage,
     ChatCompletionImageObject,
     ChatCompletionImageUrlObject,
     ChatCompletionRedactedThinkingBlock,
@@ -114,6 +115,14 @@ NAMESPACE_DESCRIPTION_SEPARATOR: Final = "\n\n"
 class ResponsesToolChatForm:
     chat_tools: tuple[ChatToolParam, ...]
     web_search_options: OpenAIWebSearchOptions | None
+
+
+@dataclass(frozen=True, slots=True)
+class ResponsesReasoningChatForm:
+    """The Responses ``reasoning`` object as the two params Chat Completions takes."""
+
+    effort: str | None
+    summary: str | None
 
 
 if TYPE_CHECKING:
@@ -309,6 +318,79 @@ class LiteLLMCompletionResponsesConfig:
         return supported_params is not None and "web_search_options" not in supported_params
 
     @staticmethod
+    def _completion_bridges_back_to_responses_api(
+        model: str,
+        custom_llm_provider: str | None,
+        tools: Sequence[ChatCompletionToolParam | OpenAIMcpServerTool] | None,
+        web_search_options: OpenAIWebSearchOptions | None,
+        reasoning_effort: str | None,
+        reasoning_summary: str | None,
+        api_base: str | None,
+    ) -> bool:
+        """
+        Whether ``litellm.completion`` will route this model back onto the Responses API.
+
+        Delegates to the same check ``litellm.completion`` itself runs, and is asked with the
+        params this transform is about to emit, so the two cannot reach different answers.
+        """
+        from litellm.main import responses_api_bridge_check
+
+        try:
+            model_info, _ = responses_api_bridge_check(
+                model=model,
+                custom_llm_provider=custom_llm_provider or "",
+                web_search_options=web_search_options,
+                tools=tools,
+                reasoning_effort=reasoning_effort,
+                reasoning_summary=reasoning_summary,
+                api_base=api_base,
+            )
+        except Exception as e:  # noqa: BLE001  # a capability probe must never fail the request it probes for
+            verbose_logger.debug("responses bridge: reasoning effort mode check failed: %s", e)
+            return False
+        return model_info.get("mode") == "responses"
+
+    @staticmethod
+    def _transform_reasoning_for_chat_completion(
+        reasoning_param: Reasoning | str | None,
+        model: str,
+        custom_llm_provider: str | None,
+        tools: Sequence[ChatCompletionToolParam | OpenAIMcpServerTool] | None = None,
+        web_search_options: OpenAIWebSearchOptions | None = None,
+        api_base: str | None = None,
+    ) -> ResponsesReasoningChatForm:
+        """
+        Split the Responses ``reasoning`` object into the params Chat Completions understands.
+
+        ``reasoning_effort`` is a string enum there, so the object is never forwarded whole: a chat
+        provider either rejects it or silently drops it, and dropping it turns reasoning off while
+        still billing for the turn. ``summary`` has no chat equivalent, so it rides the
+        ``reasoning_summary`` alias, which ``litellm.completion`` reassembles into ``{effort,
+        summary}`` when it bridges the model back onto the Responses API, and is sent to nothing
+        else.
+        """
+        if not reasoning_param:
+            return ResponsesReasoningChatForm(effort=None, summary=None)
+        if isinstance(reasoning_param, str):
+            return ResponsesReasoningChatForm(effort=reasoning_param, summary=None)
+
+        effort: Final = reasoning_param.get("effort")
+        summary: Final = reasoning_param.get("summary")
+        if summary is None:
+            return ResponsesReasoningChatForm(effort=effort, summary=None)
+
+        bridges_back: Final = LiteLLMCompletionResponsesConfig._completion_bridges_back_to_responses_api(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            tools=tools,
+            web_search_options=web_search_options,
+            reasoning_effort=effort,
+            reasoning_summary=summary,
+            api_base=api_base,
+        )
+        return ResponsesReasoningChatForm(effort=effort, summary=summary if bridges_back else None)
+
+    @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
         model: str,
         input: str | ResponseInputParam,
@@ -338,23 +420,14 @@ class LiteLLMCompletionResponsesConfig:
         if text_param:
             response_format = LiteLLMCompletionResponsesConfig._transform_text_format_to_response_format(text_param)
 
-        # Extract reasoning_effort from reasoning parameter
-        reasoning_effort: Reasoning | str | None = None
-        reasoning_param: Final = responses_api_request.get("reasoning")
-        if reasoning_param:
-            if isinstance(reasoning_param, dict):
-                # reasoning can be {"effort": "low|medium|high", "summary": "detailed"}
-                # Keep the full dict when summary is set so the responses API bridge can
-                # forward it; otherwise use the effort string for chat completion (e.g. Gemini).
-                if "summary" in reasoning_param:
-                    reasoning_effort = reasoning_param
-                elif "effort" in reasoning_param:
-                    reasoning_effort = reasoning_param.get("effort")
-                else:
-                    reasoning_effort = reasoning_param
-            elif isinstance(reasoning_param, str):
-                # reasoning could be a string directly
-                reasoning_effort = reasoning_param
+        reasoning: Final = LiteLLMCompletionResponsesConfig._transform_reasoning_for_chat_completion(
+            reasoning_param=responses_api_request.get("reasoning"),
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            tools=tools,
+            web_search_options=web_search_options,
+            api_base=kwargs.get("api_base"),
+        )
 
         litellm_completion_request: dict = {
             "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
@@ -377,7 +450,8 @@ class LiteLLMCompletionResponsesConfig:
             "service_tier": kwargs.get("service_tier"),
             "web_search_options": web_search_options,
             "response_format": response_format,
-            "reasoning_effort": reasoning_effort,
+            "reasoning_effort": reasoning.effort,
+            "reasoning_summary": reasoning.summary,
             "context_management": responses_api_request.get("context_management"),
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
@@ -635,6 +709,7 @@ class LiteLLMCompletionResponsesConfig:
                 merged_assistant = LiteLLMCompletionResponsesConfig._merged_trailing_assistant_message(
                     messages=messages,
                     chat_completion_messages=chat_completion_messages,
+                    hosted_search=_input.get("type") == "web_search_call",
                 )
                 if merged_assistant is not None:
                     messages[-1] = merged_assistant
@@ -807,29 +882,44 @@ class LiteLLMCompletionResponsesConfig:
         chat_completion_messages: Sequence[
             AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage
         ],
-    ) -> ChatCompletionResponseMessage | None:
-        """Fold an assistant content message into a directly preceding assistant
-        tool_calls message. Providers like DeepSeek and Anthropic require tool
-        results immediately after the tool_calls message, so an assistant message
-        between them is rejected."""
+        hosted_search: bool = False,
+    ) -> ChatCompletionAssistantMessage | None:
+        """Keep replayed search context on the assistant turn so client tool results
+        still immediately follow the assistant that requested them."""
         if not messages or len(chat_completion_messages) != 1:
             return None
-        last_message = messages[-1]
-        new_message = chat_completion_messages[0]
-        if not isinstance(last_message, dict):
+        if not isinstance(messages[-1], dict):
             return None
+        last_message: Final = _STR_KEY_DICT_ADAPTER.validate_python(messages[-1])
+        new_message: Final = _STR_KEY_DICT_ADAPTER.validate_python(chat_completion_messages[0])
         if last_message.get("role") != "assistant" or new_message.get("role") != "assistant":
             return None
-        if not last_message.get("tool_calls") or last_message.get("content") or new_message.get("tool_calls"):
+        if not (last_message.get("tool_calls") or hosted_search) or new_message.get("tool_calls"):
             return None
-        new_content = new_message.get("content")
+        new_content: Final = new_message.get("content")
         if new_content is None:
             return None
+        previous_content: Final = last_message.get("content")
+        content: Final = (
+            new_content
+            if not previous_content
+            else [  # mutable-ok: outbound chat content uses JSON arrays
+                block
+                for value in (previous_content, new_content)
+                for block in (
+                    (ChatCompletionTextObject(type="text", text=value),)
+                    if isinstance(value, str)
+                    else _OBJECT_LIST_ADAPTER.validate_python(value)
+                )
+            ]
+        )
         merged: Final = {  # mutable-ok: json.dumps rejects MappingProxyType in outbound chat messages
             **last_message,
-            "content": new_content,
+            "content": content,
         }
-        return cast(ChatCompletionResponseMessage, merged)  # cast-ok: TypedDict spread widens to dict[str, object]
+        return cast(  # cast-ok: preserves the assistant fields and content blocks
+            ChatCompletionAssistantMessage, merged
+        )
 
     @staticmethod
     def _deduplicate_tool_call_output_messages(
@@ -1252,6 +1342,14 @@ class LiteLLMCompletionResponsesConfig:
         - ResponseReasoningItemParam
         - ItemReference
         """
+        if input_item.get("type") == "web_search_call":
+            search: Final = ResponseFunctionWebSearch.model_validate(input_item)
+            return [  # mutable-ok: input conversion returns chat message lists
+                GenericChatCompletionMessage(
+                    role="assistant",
+                    content="Hosted web search: " + search.model_dump_json(exclude_none=True),
+                )
+            ]
         if LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(input_item):
             # handle executed tool call results
             return (
@@ -1438,7 +1536,6 @@ class LiteLLMCompletionResponsesConfig:
         return input_item.get("type") in [
             "function_call_output",
             "custom_tool_call_output",
-            "web_search_call",
             "computer_call_output",
             "tool_result",  # Anthropic/MCP format
         ]
@@ -2041,7 +2138,7 @@ class LiteLLMCompletionResponsesConfig:
     def transform_chat_completion_tools_to_responses_tools(
         chat_completion_response: ModelResponse,
         responses_api_request: ResponsesAPIOptionalRequestParams | None = None,
-    ) -> list[ResponseFunctionToolCall | CustomToolCallOutputItem]:
+    ) -> list[ResponseFunctionToolCall | ResponseFunctionWebSearch | CustomToolCallOutputItem]:
         """
         Transform a Chat Completion tools into a Responses API tools.
 
@@ -2064,7 +2161,12 @@ class LiteLLMCompletionResponsesConfig:
         custom_tool_names: Final = extract_custom_tool_names(request_tools)
         namespace_tool_names: Final = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(request_tools)
 
-        responses_tools: Final[list[ResponseFunctionToolCall | CustomToolCallOutputItem]] = []
+        web_search_calls: Final = LiteLLMCompletionResponsesConfig._web_search_calls_by_call_id(
+            chat_completion_response
+        )
+        responses_tools: Final[
+            list[ResponseFunctionToolCall | ResponseFunctionWebSearch | CustomToolCallOutputItem]
+        ] = []  # mutable-ok: preserves provider tool-call order
         for tool in all_chat_completion_tools:
             if tool.type == "function":
                 function_definition = tool.function
@@ -2072,8 +2174,10 @@ class LiteLLMCompletionResponsesConfig:
                 tool_id = tool.id or ""
                 tool_arguments = serialize_tool_call_arguments(function_definition.get("arguments"))
 
-                # Check if this is a custom tool
-                if is_custom_tool_call(tool_name, custom_tool_names):
+                web_search_call = web_search_calls.get(tool_id)
+                if web_search_call is not None:
+                    responses_tools.append(web_search_call)
+                elif is_custom_tool_call(tool_name, custom_tool_names):
                     # Build custom_tool_call output item
                     input_str = unwrap_custom_tool_arguments(tool_arguments)
                     custom_item = CustomToolCallOutputItem(
@@ -2127,6 +2231,35 @@ class LiteLLMCompletionResponsesConfig:
 
                     responses_tools.append(output_tool_call)
         return responses_tools
+
+    @staticmethod
+    def _web_search_calls_by_call_id(
+        chat_completion_response: ModelResponse,
+    ) -> Mapping[str, ResponseFunctionWebSearch]:
+        calls: Final[dict[str, ResponseFunctionWebSearch]] = {}  # mutable-ok: indexes provider-built calls
+        for choice in chat_completion_response.choices:
+            provider_fields = getattr(choice.message, "provider_specific_fields", None)
+            if not isinstance(provider_fields, Mapping):
+                continue
+            web_search_calls = provider_fields.get("web_search_calls")
+            items = (
+                web_search_calls.values()
+                if isinstance(web_search_calls, Mapping)
+                else web_search_calls
+                if isinstance(web_search_calls, Sequence)
+                else ()
+            )
+            for item in items:
+                try:
+                    call = (
+                        item
+                        if isinstance(item, ResponseFunctionWebSearch)
+                        else ResponseFunctionWebSearch.model_validate(item)
+                    )
+                except (TypeError, ValueError):
+                    continue
+                calls[call.id.removeprefix("ws_")] = call
+        return MappingProxyType(calls)
 
     @staticmethod
     def _map_chat_completion_finish_reason_to_responses_status(
@@ -2326,6 +2459,7 @@ class LiteLLMCompletionResponsesConfig:
         | OutputFunctionToolCall
         | OutputImageGenerationCall
         | ResponseFunctionToolCall
+        | ResponseFunctionWebSearch
         | CustomToolCallOutputItem
     ]:
         responses_output: list[
@@ -2334,6 +2468,7 @@ class LiteLLMCompletionResponsesConfig:
             | OutputFunctionToolCall
             | OutputImageGenerationCall
             | ResponseFunctionToolCall
+            | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
         ] = []
 

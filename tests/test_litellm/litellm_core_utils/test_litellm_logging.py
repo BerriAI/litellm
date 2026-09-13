@@ -3,6 +3,7 @@ import contextlib
 import datetime
 import os
 import sys
+from collections.abc import Callable
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -5889,6 +5890,81 @@ def test_resolve_vertex_location_for_cost_default_region(monkeypatch):
     assert _resolve("vertex_ai", None, None, "gemini-3.5-flash") == "us-central1"
 
 
+def test_resolve_mantle_region_for_cost(monkeypatch):
+    """Bedrock Mantle requests resolve the served region the way dispatch does (explicit
+    aws_region_name, then the api_base host, then the default); other providers get None."""
+    from litellm.litellm_core_utils.litellm_logging import _resolve_mantle_region_for_cost
+
+    for var in ("BEDROCK_MANTLE_REGION", "BEDROCK_MANTLE_API_BASE", "AWS_REGION_NAME", "AWS_REGION"):
+        monkeypatch.delenv(var, raising=False)
+
+    assert _resolve_mantle_region_for_cost("bedrock", {"aws_region_name": "us-gov-west-1"}) is None
+    assert _resolve_mantle_region_for_cost(None, {"aws_region_name": "us-gov-west-1"}) is None
+    assert _resolve_mantle_region_for_cost("bedrock_mantle", {"aws_region_name": "us-gov-west-1"}) == "us-gov-west-1"
+    assert (
+        _resolve_mantle_region_for_cost(
+            "bedrock_mantle",
+            {"api_base": "https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1/chat/completions"},
+        )
+        == "us-gov-west-1"
+    )
+    assert _resolve_mantle_region_for_cost("bedrock_mantle", None) == "us-east-1"
+
+
+def test_response_cost_calculator_prices_mantle_calls_on_the_served_region(monkeypatch):
+    """
+    Mantle responses carry no region of their own (the OpenAI-compatible transform rebuilds the
+    response, and streams never had one), so the logging layer must price them from the region
+    the deployment was served in: an explicit aws_region_name or the api_base host, both of which
+    must select the GovCloud row over the commercial one.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=""))
+    for var in ("BEDROCK_MANTLE_REGION", "BEDROCK_MANTLE_API_BASE", "AWS_REGION_NAME", "AWS_REGION"):
+        monkeypatch.delenv(var, raising=False)
+
+    def cost_with(litellm_params):
+        logging_obj = LitellmLogging(
+            model="xai.grok-4.3",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=datetime.now(),
+            litellm_call_id="mantle-region",
+            function_id="f",
+        )
+        logging_obj.update_environment_variables(
+            model="xai.grok-4.3",
+            user="",
+            optional_params={},
+            litellm_params=litellm_params,
+            custom_llm_provider="bedrock_mantle",
+        )
+        response = ModelResponse(
+            id="resp-1",
+            model="xai.grok-4.3",
+            choices=[{"message": {"role": "assistant", "content": "hello"}, "index": 0, "finish_reason": "stop"}],
+            usage={"prompt_tokens": 38, "completion_tokens": 20, "total_tokens": 58},
+        )
+        return logging_obj._response_cost_calculator(result=response)
+
+    commercial = litellm.model_cost["bedrock_mantle/xai.grok-4.3"]
+    gov = litellm.model_cost["bedrock_mantle/us-gov-west-1/xai.grok-4.3"]
+    expected_commercial = 38 * commercial["input_cost_per_token"] + 20 * commercial["output_cost_per_token"]
+    expected_gov = 38 * gov["input_cost_per_token"] + 20 * gov["output_cost_per_token"]
+    assert expected_gov != expected_commercial
+
+    assert cost_with({"api_base": ""}) == pytest.approx(expected_commercial)
+    assert cost_with({"aws_region_name": "us-gov-west-1"}) == pytest.approx(expected_gov)
+    assert cost_with(
+        {"api_base": "https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1/chat/completions"}
+    ) == pytest.approx(expected_gov)
+
+
 def test_response_cost_calculator_prices_proxy_vertex_calls_on_the_configured_location(monkeypatch):
     """
     Proxy-shaped logging objects (created before the router picks a deployment) carry the
@@ -6945,3 +7021,61 @@ def test_classifier_audit_is_not_added_to_other_calls(logging_obj, call_type, or
     logging_obj.model_call_details["litellm_params"] = {"metadata": {"internal_call_origin": origin}}
     logging_obj.pre_call(input=[], api_key=None, additional_args={"complete_input_dict": {"input": "embedding"}})
     assert logging_obj.classifier_input is None
+
+
+def _run_while_a_thread_grows(target: dict, read: Callable[[], None], reads: int) -> None:
+    import itertools
+    import threading
+
+    stop: Final = threading.Event()
+
+    def grow() -> None:
+        for counter in itertools.count():
+            if stop.is_set():
+                return
+            key: Final = f"late_{counter % 64}"
+            if key in target:
+                del target[key]
+            else:
+                target[key] = counter
+
+    writer: Final = threading.Thread(target=grow, daemon=True)
+    previous_interval: Final = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    writer.start()
+    try:
+        for _ in range(reads):
+            read()
+    finally:
+        stop.set()
+        writer.join(timeout=5)
+        sys.setswitchinterval(previous_interval)
+
+
+def test_merge_litellm_metadata_survives_a_thread_growing_metadata_mid_merge():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    metadata: Final = {f"key_{i}": i for i in range(2000)}
+    litellm_params: Final = {"metadata": metadata, "litellm_metadata": {"model_group": "gpt"}}
+
+    def read() -> None:
+        merged: Final = StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params)
+        assert merged["key_1999"] == 1999
+        assert merged["model_group"] == "gpt"
+
+    _run_while_a_thread_grows(metadata, read, reads=300)
+
+
+def test_get_additional_headers_survives_a_thread_growing_headers_mid_copy():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    headers: Final = {f"llm_provider-x-custom-{i}": str(i) for i in range(2000)}
+    headers["x-ratelimit-remaining-requests"] = "7"
+
+    def read() -> None:
+        copied: Final = StandardLoggingPayloadSetup.get_additional_headers(headers)
+        assert copied is not None
+        assert copied["x_ratelimit_remaining_requests"] == 7
+        assert copied["llm_provider-x-custom-1999"] == "1999"
+
+    _run_while_a_thread_grows(headers, read, reads=300)

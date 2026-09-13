@@ -1900,3 +1900,198 @@ class TestOCIImageUrlTransformation:
             adapt_messages_to_generic_oci_standard(messages)
 
         assert "image_url" in str(exc_info.value)
+
+
+import itertools
+from unittest.mock import patch
+
+from litellm.llms.oci.chat.transformation import OCIStreamWrapper, _iter_sse_events
+
+_STREAM_GENERIC_MODEL = "xai.grok-4"
+_STREAM_COHERE_MODEL = "cohere.command-latest"
+
+_GENERIC_TEXT_EVENT = (
+    'data: {{"index":0,"message":{{"role":"ASSISTANT","content":[{{"type":"TEXT","text":"{text}"}}]}},"pad":"aaa"}}'
+)
+_GENERIC_TERMINAL_EVENT = (
+    'data: {"message":{"role":"ASSISTANT","content":[{"type":"TEXT","text":""}]},"finishReason":"stop","pad":"a"}'
+)
+_COHERE_TEXT_EVENT = 'data: {{"apiFormat":"COHERE","text":"{text}","pad":"aaaaaa"}}'
+_COHERE_TERMINAL_EVENT = (
+    'data: {"apiFormat":"COHERE","text":"123","finishReason":"COMPLETE",'
+    '"chatHistory":[{"role":"USER","message":"count"},{"role":"CHATBOT","message":"123"}]}'
+)
+
+
+def _make_stream_wrapper(model: str) -> OCIStreamWrapper:
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {"custom_llm_provider": "oci", "litellm_params": {}}
+    return OCIStreamWrapper(
+        completion_stream=iter([]),
+        model=model,
+        custom_llm_provider="oci",
+        logging_obj=logging_obj,
+    )
+
+
+def _ticking_clock():
+    """A ``time.time`` stand-in that advances a full second on every call.
+
+    Without it the whole test runs inside one wall-clock second, so a per-chunk
+    ``created`` would coincidentally match and the drift would go unnoticed.
+    """
+    return itertools.count(1_700_000_000.0)
+
+
+class TestOCIStreamWrapperIdentityPinning:
+    """One OCI streaming completion must present one id, one created and the
+    wrapper's model on every chunk, the way every other provider does."""
+
+    def test_generic_stream_shares_one_id_created_and_model(self):
+        wrapper = _make_stream_wrapper(_STREAM_GENERIC_MODEL)
+        events = [
+            _GENERIC_TEXT_EVENT.format(text="1"),
+            _GENERIC_TEXT_EVENT.format(text="2"),
+            _GENERIC_TEXT_EVENT.format(text="3"),
+            _GENERIC_TERMINAL_EVENT,
+        ]
+
+        with patch("time.time", side_effect=_ticking_clock()):
+            chunks = [wrapper.chunk_creator(event) for event in events]
+
+        assert len(chunks) == 4
+        assert len({chunk.id for chunk in chunks}) == 1
+        assert chunks[0].id.startswith("chatcmpl-")
+        assert len({chunk.created for chunk in chunks}) == 1
+        assert {chunk.model for chunk in chunks} == {_STREAM_GENERIC_MODEL}
+        assert [chunk.choices[0].delta.content for chunk in chunks[:3]] == ["1", "2", "3"]
+        assert chunks[-1].choices[0].finish_reason == "stop"
+        assert all(chunk._hidden_params["custom_llm_provider"] == "oci" for chunk in chunks)
+
+    def test_cohere_stream_shares_one_id_created_and_model(self):
+        """Rebuilding each chunk through the shared creator must not disturb the
+        Cohere bookkeeping that suppresses the terminal event's repeated text."""
+        wrapper = _make_stream_wrapper(_STREAM_COHERE_MODEL)
+        events = [
+            _COHERE_TEXT_EVENT.format(text="1"),
+            _COHERE_TEXT_EVENT.format(text="2"),
+            _COHERE_TEXT_EVENT.format(text="3"),
+            _COHERE_TERMINAL_EVENT,
+        ]
+
+        with patch("time.time", side_effect=_ticking_clock()):
+            chunks = [wrapper.chunk_creator(event) for event in events]
+
+        assert len(chunks) == 4
+        assert len({chunk.id for chunk in chunks}) == 1
+        assert len({chunk.created for chunk in chunks}) == 1
+        assert {chunk.model for chunk in chunks} == {_STREAM_COHERE_MODEL}
+        assert [chunk.choices[0].delta.content for chunk in chunks[:3]] == ["1", "2", "3"]
+        assert chunks[-1].choices[0].finish_reason == "stop"
+        assert chunks[-1].choices[0].delta.content is None
+        assert wrapper._cohere_text_emitted is True
+
+    def test_id_is_pinned_to_the_wrapper_response_id(self):
+        wrapper = _make_stream_wrapper(_STREAM_GENERIC_MODEL)
+
+        first = wrapper.chunk_creator(_GENERIC_TEXT_EVENT.format(text="1"))
+
+        assert wrapper.response_id == first.id
+        assert wrapper.created == first.created
+
+
+class TestOCIStreamWrapperDoneSentinel:
+    """OCI's GENERIC apiFormat closes the stream with a literal `[DONE]` line;
+    parsing it as JSON turned every streaming completion into a 500."""
+
+    @pytest.mark.parametrize("done_event", ["data: [DONE]", "data:[DONE]", "data: [DONE] "])
+    def test_done_sentinel_returns_none(self, done_event):
+        wrapper = _make_stream_wrapper(_STREAM_GENERIC_MODEL)
+        assert wrapper.chunk_creator(done_event) is None
+
+    def test_done_sentinel_off_the_sse_splitter_is_skipped(self):
+        wrapper = _make_stream_wrapper(_STREAM_GENERIC_MODEL)
+        wire = (
+            f"{_GENERIC_TEXT_EVENT.format(text='1')}\n\n"
+            f"{_GENERIC_TEXT_EVENT.format(text='2')}\n\n"
+            f"{_GENERIC_TERMINAL_EVENT}\n\n"
+            "data: [DONE]\n\n"
+        )
+
+        events = list(_iter_sse_events(iter([wire])))
+        assert events[-1] == "data: [DONE]"
+
+        chunks = [wrapper.chunk_creator(event) for event in events]
+        assert chunks[-1] is None
+
+        emitted = [chunk for chunk in chunks if chunk is not None]
+        assert len(emitted) == 3
+        assert len({chunk.id for chunk in emitted}) == 1
+
+    def test_unparseable_payload_still_raises_oci_error(self):
+        from litellm.llms.oci.common_utils import OCIError
+
+        wrapper = _make_stream_wrapper(_STREAM_GENERIC_MODEL)
+        with pytest.raises(OCIError, match="Chunk cannot be parsed as JSON"):
+            wrapper.chunk_creator("data: not-json-at-all")
+
+    def test_done_lookalike_payload_still_raises_oci_error(self):
+        from litellm.llms.oci.common_utils import OCIError
+
+        wrapper = _make_stream_wrapper(_STREAM_GENERIC_MODEL)
+        with pytest.raises(OCIError, match="Chunk cannot be parsed as JSON"):
+            wrapper.chunk_creator("data: [DONE] trailing garbage")
+
+
+_GENERIC_TOOL_CALL_EVENT = (
+    'data: {"index":0,"message":{"role":"ASSISTANT","content":[],'
+    '"toolCalls":[{"type":"FUNCTION","id":"call_1","name":"get_weather","arguments":"{}"}]}}'
+)
+_GENERIC_TOOL_TERMINAL_EVENT = (
+    'data: {"index":0,"message":{"role":"ASSISTANT","content":[]},"finishReason":"TOOL_CALLS"}'
+)
+
+
+def _drain_stream(model: str, events: list[str]) -> list:
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {"custom_llm_provider": "oci", "litellm_params": {}}
+    wrapper = OCIStreamWrapper(
+        completion_stream=iter(events),
+        model=model,
+        custom_llm_provider="oci",
+        logging_obj=logging_obj,
+    )
+    return list(wrapper)
+
+
+class TestOCIStreamWrapperTerminalChunk:
+    """OCI's ``chunk_creator`` override bypasses the shared handler's
+    finish-reason bookkeeping, so the shared end-of-stream finalizer used to
+    append a synthetic ``stop`` chunk after OCI's own terminal chunk, silently
+    downgrading a ``tool_calls`` completion for any client that reads the
+    finish reason off the last chunk."""
+
+    def test_generic_tool_call_stream_ends_on_tool_calls(self):
+        chunks = _drain_stream(
+            _STREAM_GENERIC_MODEL,
+            [_GENERIC_TOOL_CALL_EVENT, _GENERIC_TOOL_TERMINAL_EVENT, "data: [DONE]"],
+        )
+
+        assert [chunk.choices[0].finish_reason for chunk in chunks] == [None, "tool_calls"]
+        assert len({chunk.id for chunk in chunks}) == 1
+
+    def test_generic_text_stream_emits_exactly_one_finish_reason(self):
+        chunks = _drain_stream(
+            _STREAM_GENERIC_MODEL,
+            [_GENERIC_TEXT_EVENT.format(text="1"), _GENERIC_TERMINAL_EVENT, "data: [DONE]"],
+        )
+
+        assert [chunk.choices[0].finish_reason for chunk in chunks] == [None, "stop"]
+
+    def test_cohere_stream_emits_exactly_one_finish_reason(self):
+        chunks = _drain_stream(
+            _STREAM_COHERE_MODEL,
+            [_COHERE_TEXT_EVENT.format(text="123"), _COHERE_TERMINAL_EVENT],
+        )
+
+        assert [chunk.choices[0].finish_reason for chunk in chunks] == [None, "stop"]
