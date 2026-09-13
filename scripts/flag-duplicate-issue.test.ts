@@ -31,8 +31,13 @@ const config: FlagConfig = { repo: "BerriAI/litellm", issueNumber: 35, dryRun: f
 
 describe("parseVerdict", () => {
   test("accepts the schema's shape, with a null duplicate_of", () => {
-    const parsed = parseVerdict('{"duplicate_of": null, "confidence": 0.9, "evidence": "Nothing matches.", "considered": [1]}');
+    const parsed = parseVerdict('{"duplicate_of": null, "confidence": 0.9, "evidence": "Nothing matches."}');
     expect(parsed).toEqual({ kind: "verdict", verdict: { duplicate_of: null, confidence: 0.9, evidence: "Nothing matches." } });
+  });
+
+  test("keeps only the three fields the flag step uses, whatever else Codex sends", () => {
+    const parsed = parseVerdict('{"duplicate_of": 12, "confidence": 0.99, "evidence": "Same traceback.", "considered": [12, 34]}');
+    expect(parsed).toEqual({ kind: "verdict", verdict: { duplicate_of: 12, confidence: 0.99, evidence: "Same traceback." } });
   });
 
   test("rejects non-JSON, a non-object, a non-integer target, a missing confidence and empty evidence", () => {
