@@ -1943,6 +1943,7 @@ async def _user_api_key_auth_builder(
             _user_api_key_obj = update_valid_token_with_end_user_params(
                 valid_token=_user_api_key_obj, end_user_params=end_user_params
             )
+            _user_api_key_obj.via_virtual_key = True
 
             await _maybe_enforce_master_key_end_user_model_max_budget(
                 valid_token=_user_api_key_obj,
@@ -3538,12 +3539,21 @@ async def _run_post_custom_auth_checks(
         )
 
     # 4. Check end-user model_max_budget
-    await _enforce_end_user_model_max_budget_checks(
-        valid_token=valid_token,
-        request_data=request_data,
-        route=route,
-        request=request,
-    )
+    end_user_mmb: Final = valid_token.end_user_model_max_budget
+    if (
+        not skip_budget_checks
+        and end_user_mmb is not None
+        and isinstance(end_user_mmb, dict)
+        and len(end_user_mmb) > 0
+        and current_models
+        and valid_token.end_user_id is not None
+    ):
+        for model_name in current_models:
+            await model_max_budget_limiter.is_end_user_within_model_budget(
+                end_user_id=valid_token.end_user_id,
+                end_user_model_max_budget=end_user_mmb,
+                model=model_name,
+            )
 
     # team / user / end_user / project context objects are fetched by
     # the centralized common_checks gate in user_api_key_auth after
