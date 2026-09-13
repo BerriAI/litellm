@@ -443,6 +443,7 @@ class TestDeepSeekThinkingParams:
         )
 
         assert result["thinking"] == {"type": "enabled"}
+        assert result["reasoning_effort"] == "medium"
 
     def test_map_reasoning_effort_low(self):
         """Test that reasoning_effort='low' maps to thinking enabled."""
@@ -457,6 +458,7 @@ class TestDeepSeekThinkingParams:
         )
 
         assert result["thinking"] == {"type": "enabled"}
+        assert result["reasoning_effort"] == "low"
 
     def test_map_reasoning_effort_high(self):
         """Test that reasoning_effort='high' maps to thinking enabled."""
@@ -471,6 +473,43 @@ class TestDeepSeekThinkingParams:
         )
 
         assert result["thinking"] == {"type": "enabled"}
+        assert result["reasoning_effort"] == "high"
+
+    def test_map_graded_effort_is_forwarded_not_collapsed(self):
+        """Every effort value reaches DeepSeek, which grades it server-side."""
+        for effort in ("minimal", "low", "medium", "default", "high", "xhigh", "max", "ultra"):
+            result = self.config.map_openai_params(
+                non_default_params={"reasoning_effort": effort},
+                optional_params={},
+                model=self.model,
+                drop_params=False,
+            )
+            assert result["thinking"] == {"type": "enabled"}
+            assert result["reasoning_effort"] == effort
+
+    def test_explicit_thinking_is_honoured_exactly_as_given(self):
+        """An explicit toggle decides thinking, and no effort is merged into it."""
+        result = self.config.map_openai_params(
+            non_default_params={"thinking": {"type": "enabled"}, "reasoning_effort": "low"},
+            optional_params={},
+            model=self.model,
+            drop_params=False,
+        )
+        assert result["thinking"] == {"type": "enabled"}
+        assert "reasoning_effort" not in result
+
+    def test_disabled_thinking_carries_no_effort(self):
+        """Nothing is thinking, so an effort value would be meaningless."""
+        for params in ({"reasoning_effort": "none"},
+                       {"thinking": {"type": "disabled"}}):
+            result = self.config.map_openai_params(
+                non_default_params=params,
+                optional_params={},
+                model=self.model,
+                drop_params=False,
+            )
+            assert result["thinking"] == {"type": "disabled"}
+            assert "reasoning_effort" not in result
 
     def test_map_reasoning_effort_none_does_not_enable_thinking(self):
         """Test that reasoning_effort='none' does not enable thinking."""
