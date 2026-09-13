@@ -2,13 +2,44 @@
 Translates from OpenAI's `/v1/chat/completions` to DashScope's `/v1/chat/completions`
 """
 
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
+from types import MappingProxyType
 from typing import Any, Final, Literal, overload
+
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+
+THINKING_OFF_REASONING_EFFORTS: Final = frozenset({"none", "disable"})
+DASHSCOPE_THINKING_PARAMS: Final = frozenset({"thinking", "reasoning_effort"})
+
+
+class DashScopeThinkingBody(TypedDict, total=False):
+    enable_thinking: ReadOnly[bool]
+    thinking_budget: ReadOnly[int]
+    reasoning_effort: ReadOnly[str]
+
+
+def _dashscope_thinking_body(thinking: object, reasoning_effort: object) -> DashScopeThinkingBody:
+    if isinstance(thinking, dict):
+        enabled: Final = thinking.get("type") != "disabled"
+        budget: Final = thinking.get("budget_tokens")
+        if enabled and isinstance(budget, int) and not isinstance(budget, bool):
+            with_budget: Final[DashScopeThinkingBody] = {"enable_thinking": enabled, "thinking_budget": budget}
+            return with_budget
+        toggled: Final[DashScopeThinkingBody] = {"enable_thinking": enabled}
+        return toggled
+    if isinstance(reasoning_effort, str):
+        if reasoning_effort in THINKING_OFF_REASONING_EFFORTS:
+            off: Final[DashScopeThinkingBody] = {"enable_thinking": False}
+            return off
+        with_effort: Final[DashScopeThinkingBody] = {"enable_thinking": True, "reasoning_effort": reasoning_effort}
+        return with_effort
+    untouched: Final[DashScopeThinkingBody] = {}
+    return untouched
 
 
 class DashScopeChatConfig(OpenAIGPTConfig):
@@ -73,3 +104,35 @@ class DashScopeChatConfig(OpenAIGPTConfig):
         if resolved_api_base.endswith("/chat/completions"):
             return resolved_api_base
         return f"{resolved_api_base}/chat/completions"
+
+    def get_supported_openai_params(self, model: str) -> list:
+        base_params: Final = super().get_supported_openai_params(model)
+        return [*base_params, "thinking", "reasoning_effort"]  # mutable-ok: inherited list contract
+
+    def _map_openai_params(
+        self,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
+        model: str,
+        drop_params: bool,
+    ) -> dict[str, object]:
+        supported_openai_params: Final = frozenset(self.get_supported_openai_params(model))
+        passthrough_params: Final = MappingProxyType(
+            {
+                k: v
+                for k, v in non_default_params.items()
+                if k in supported_openai_params and k not in DASHSCOPE_THINKING_PARAMS
+            }
+        )
+        native: Final = _dashscope_thinking_body(
+            non_default_params.get("thinking"), non_default_params.get("reasoning_effort")
+        )
+        if not native:
+            return {**optional_params, **passthrough_params}  # mutable-ok: dict return contract of OpenAIGPTConfig
+        existing: Final = optional_params.get("extra_body")
+        existing_body: Final = existing if isinstance(existing, Mapping) else MappingProxyType({})
+        return {  # mutable-ok: dict return contract of OpenAIGPTConfig
+            **optional_params,
+            **passthrough_params,
+            "extra_body": {**existing_body, **native},  # mutable-ok: the OpenAI SDK json-encodes extra_body from a dict
+        }

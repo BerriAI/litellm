@@ -7,12 +7,14 @@ DashScope is an OpenAI-compatible provider with minor customizations.
 
 
 
-from litellm.types.llms.openai import AllMessageValues
+import json
+
 import pytest
 
 import litellm
 from litellm import completion
 from litellm.llms.dashscope.chat.transformation import DashScopeChatConfig
+from litellm.types.llms.openai import AllMessageValues
 
 
 class TestDashScopeConfig:
@@ -185,3 +187,126 @@ class TestDashScopeConfig:
         )
 
         assert transformed_tools[0].get("cache_control") == {"type": "ephemeral"}
+
+
+class TestDashScopeThinkingParams:
+    """thinking and reasoning_effort reach DashScope as enable_thinking, thinking_budget and reasoning_effort."""
+
+    @staticmethod
+    def _map(**non_default_params: object) -> dict[str, object]:
+        return DashScopeChatConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params={},
+            model="qwen3.8-max",
+            drop_params=False,
+        )
+
+    @pytest.mark.parametrize(
+        ("thinking", "expected"),
+        [
+            ({"type": "enabled", "budget_tokens": 4096}, {"enable_thinking": True, "thinking_budget": 4096}),
+            ({"type": "enabled"}, {"enable_thinking": True}),
+            ({"type": "disabled"}, {"enable_thinking": False}),
+            ({"type": "disabled", "budget_tokens": 4096}, {"enable_thinking": False}),
+        ],
+    )
+    def test_thinking_maps_to_enable_thinking_and_budget(self, thinking, expected):
+        assert self._map(thinking=thinking)["extra_body"] == expected
+
+    @pytest.mark.parametrize("effort", ["low", "medium", "high", "minimal"])
+    def test_reasoning_effort_enables_thinking_and_is_forwarded(self, effort):
+        params = self._map(reasoning_effort=effort)
+
+        assert params["extra_body"] == {"enable_thinking": True, "reasoning_effort": effort}
+
+    @pytest.mark.parametrize("effort", ["none", "disable"])
+    def test_reasoning_effort_off_disables_thinking(self, effort):
+        assert self._map(reasoning_effort=effort)["extra_body"] == {"enable_thinking": False}
+
+    def test_thinking_budget_wins_over_reasoning_effort(self):
+        params = self._map(thinking={"type": "enabled", "budget_tokens": 512}, reasoning_effort="high")
+
+        assert params["extra_body"] == {"enable_thinking": True, "thinking_budget": 512}
+
+    def test_no_thinking_params_leaves_extra_body_absent(self):
+        params = self._map(temperature=0.5, max_tokens=16)
+
+        assert "extra_body" not in params
+        assert params["temperature"] == 0.5
+        assert params["max_tokens"] == 16
+
+    def test_thinking_params_never_become_top_level_kwargs(self):
+        params = self._map(thinking={"type": "enabled"}, reasoning_effort="high")
+
+        assert "thinking" not in params
+        assert "reasoning_effort" not in params
+
+    def test_existing_extra_body_is_preserved_and_not_mutated(self):
+        caller_extra_body = {"enable_search": True}
+        params = DashScopeChatConfig().map_openai_params(
+            non_default_params={"thinking": {"type": "enabled"}},
+            optional_params={"extra_body": caller_extra_body},
+            model="qwen3.8-max",
+            drop_params=False,
+        )
+
+        assert params["extra_body"] == {"enable_search": True, "enable_thinking": True}
+        assert caller_extra_body == {"enable_search": True}
+
+    def test_caller_optional_params_are_not_mutated(self):
+        caller_optional_params = {"temperature": 0.2, "extra_body": {"enable_search": True}}
+        params = DashScopeChatConfig().map_openai_params(
+            non_default_params={"thinking": {"type": "disabled"}, "max_tokens": 8},
+            optional_params=caller_optional_params,
+            model="qwen3.8-max",
+            drop_params=False,
+        )
+
+        assert params == {
+            "temperature": 0.2,
+            "max_tokens": 8,
+            "extra_body": {"enable_search": True, "enable_thinking": False},
+        }
+        assert params is not caller_optional_params
+        assert caller_optional_params == {"temperature": 0.2, "extra_body": {"enable_search": True}}
+
+    def test_get_optional_params_accepts_thinking_without_drop_params(self):
+        params = litellm.get_optional_params(
+            model="qwen3.8-max",
+            custom_llm_provider="dashscope",
+            thinking={"type": "disabled"},
+            drop_params=False,
+        )
+
+        assert params["extra_body"]["enable_thinking"] is False
+        assert "thinking" not in params
+
+    @pytest.mark.respx()
+    def test_thinking_disabled_reaches_the_wire_as_enable_thinking(self, respx_mock):
+        litellm.disable_aiohttp_transport = True
+        api_base = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+        route = respx_mock.post(f"{api_base}/chat/completions").respond(
+            json={
+                "id": "chatcmpl-456",
+                "object": "chat.completion",
+                "created": 1677652288,
+                "model": "qwen3.8-max",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "4"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+            },
+            status_code=200,
+        )
+
+        completion(
+            model="dashscope/qwen3.8-max",
+            messages=[{"role": "user", "content": "2+2?"}],
+            api_key="fake-dashscope-key",
+            api_base=api_base,
+            thinking={"type": "disabled"},
+            drop_params=False,
+        )
+
+        sent = json.loads(route.calls.last.request.content)
+        assert sent["enable_thinking"] is False
+        assert "thinking" not in sent
+        assert "extra_body" not in sent
