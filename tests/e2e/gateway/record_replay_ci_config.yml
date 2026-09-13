@@ -1,3 +1,10 @@
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   store_model_in_db: true
+
+litellm_settings:
+  cache: true
+  cache_params:
+    type: redis
+    host: 127.0.0.1
+    port: 6379

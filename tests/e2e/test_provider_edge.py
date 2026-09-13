@@ -996,6 +996,19 @@ class TestStreamingFidelity:
     provider actually sent, not as one coalesced body. The unit of fidelity is the
     HTTP transfer chunk, so every assertion here is made at the transfer layer."""
 
+    def test_binary_eventstream_record_and_replay_preserve_transfer_chunks(self, tmp_path: Path) -> None:
+        root: Final = tmp_path / "bundle"
+        binary_chunks: Final = (b"\x00\x00\x01\xff:message-", b"type\x00\xfe\r\n", b"\x00\xff\x00\x80")
+        with chunked_provider(chunks=binary_chunks, content_type="application/vnd.amazon.eventstream") as provider:
+            with running_edge(record_backend(root), {"openai": provider_url(provider)}) as edge:
+                recorded_head, recorded_chunks, recorded_ending = raw_stream_post(edge.port, STREAM_PATH, STREAM_BODY)
+        replayed_head, replayed_chunks, replayed_ending = replay_stream(root)
+        assert response_header(recorded_head, "content-type") == "application/vnd.amazon.eventstream"
+        assert response_header(replayed_head, "content-type") == "application/vnd.amazon.eventstream"
+        assert recorded_chunks == replayed_chunks == list(binary_chunks)
+        assert stream_chunks(recorded_stream(root)) == list(binary_chunks)
+        assert recorded_ending == replayed_ending == "terminated"
+
     def test_a_streamed_response_records_its_chunk_boundaries(self, tmp_path: Path) -> None:
         root = tmp_path / "bundle"
         record_stream(root)
