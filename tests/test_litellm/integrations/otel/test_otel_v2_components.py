@@ -730,13 +730,12 @@ def test_otlp_metric_exporter_uses_cumulative_histogram_temporality():
     assert temporality[Histogram] is AggregationTemporality.CUMULATIVE
 
 
-def test_metric_reader_default_interval_is_5s(monkeypatch):
+def test_metric_export_interval_defaults_to_5s(monkeypatch):
     monkeypatch.delenv("OTEL_METRIC_EXPORT_INTERVAL", raising=False)
-    reader = providers.build_metric_reader(OpenTelemetryV2Config(exporter="console"))
-    assert reader._export_interval_millis == 5000  # noqa: SLF001  # reader exposes no public accessor
+    assert providers.resolve_metric_export_interval_millis() == 5000
 
 
-def test_metric_reader_honours_otel_metric_export_interval(monkeypatch):
+def test_metric_export_interval_honours_otel_metric_export_interval(monkeypatch):
     """``OTEL_METRIC_EXPORT_INTERVAL`` is the standard knob for the export period.
 
     The SDK reads it only when no explicit interval is passed, and litellm
@@ -746,15 +745,14 @@ def test_metric_reader_honours_otel_metric_export_interval(monkeypatch):
     charges for.
     """
     monkeypatch.setenv("OTEL_METRIC_EXPORT_INTERVAL", "60000")
-    reader = providers.build_metric_reader(OpenTelemetryV2Config(exporter="console"))
-    assert reader._export_interval_millis == 60000  # noqa: SLF001  # reader exposes no public accessor
+    assert providers.resolve_metric_export_interval_millis() == 60000
 
 
-@pytest.mark.parametrize("raw", ["", "abc", "0", "-5"])
-def test_metric_reader_rejects_bad_interval(monkeypatch, raw):
+@pytest.mark.parametrize("raw", ["", "abc", "0", "-5", "nan", "inf", "-inf"])
+def test_metric_export_interval_rejects_bad_values(monkeypatch, raw):
+    """A bad value keeps the 5s default; ``inf`` in particular would start no export worker."""
     monkeypatch.setenv("OTEL_METRIC_EXPORT_INTERVAL", raw)
-    reader = providers.build_metric_reader(OpenTelemetryV2Config(exporter="console"))
-    assert reader._export_interval_millis == 5000  # noqa: SLF001  # reader exposes no public accessor
+    assert providers.resolve_metric_export_interval_millis() == 5000
 
 
 def test_otlp_logs_endpoint_normalization():
