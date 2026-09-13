@@ -40,6 +40,26 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
             ):
                 return
 
+            # Zero-cost models bypass budget enforcement everywhere else - both
+            # common_checks and the reservation path skip them via
+            # _is_model_cost_zero. Without the same exemption here, a user at
+            # their personal max_budget also loses access to models that cannot
+            # incur cost, so a free-model fallback stops working under a
+            # personal cap while it keeps working under a team cap.
+            # Imported lazily to avoid a circular import via proxy.utils.
+            from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+            from litellm.proxy.proxy_server import llm_router
+
+            if _is_model_cost_zero(
+                model=data.get("model") if data else None,
+                llm_router=llm_router,
+            ):
+                verbose_proxy_logger.debug(
+                    "MaxBudgetLimiter: skipping personal budget check for zero-cost model: %s",
+                    data.get("model") if data else None,
+                )
+                return
+
             # The reservation path admits at the strict-`<` boundary and
             # atomically pre-fills the same counter we'd read here. Re-checking
             # with `>=` would reject a request the reservation already admitted
