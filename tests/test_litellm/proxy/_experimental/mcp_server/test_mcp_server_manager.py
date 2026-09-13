@@ -3433,6 +3433,29 @@ class TestMCPServerManager:
         )
         assert extra_headers == {"Authorization": "Bearer upstream-token"}
 
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_legacy_delegate_strips_repeated_admission_key(self):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        server = MCPServer(
+            server_id="server-legacy-delegate-repeated-key",
+            name="legacy-delegate",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+        )
+        extra_headers = await self._capture_call_extra_headers(
+            server,
+            oauth2_headers={"Authorization": "Bearer sk-litellm-key"},
+            raw_headers={
+                "x-litellm-api-key": "Bearer sk-litellm-key",
+                "authorization": "Bearer sk-litellm-key",
+            },
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-key"),
+        )
+        assert not extra_headers or "authorization" not in {k.lower() for k in extra_headers}
+
     def test_should_strip_caller_authorization_new_modes(self):
         from litellm.proxy._types import UserAPIKeyAuth
 
