@@ -1310,7 +1310,9 @@ class BedrockModelInfo(BaseLLMModelInfo):
 
         from litellm.utils import model_supports_native_endpoint
 
-        if model_supports_native_endpoint("/v1/messages", model, litellm.LlmProviders.BEDROCK):
+        if not BedrockModelInfo.has_explicit_route(model) and model_supports_native_endpoint(
+            "/v1/messages", model, litellm.LlmProviders.BEDROCK
+        ):
             from litellm.llms.bedrock.messages.native_transformation import (
                 AmazonBedrockNativeMessagesConfig,
             )

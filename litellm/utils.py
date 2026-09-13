@@ -8573,8 +8573,10 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> BaseAnthropicMessagesConfig | None:
-        if provider is LlmProviders.BEDROCK and model_supports_native_endpoint(
-            "/v1/messages", model, LlmProviders.BEDROCK
+        if (
+            provider is LlmProviders.BEDROCK
+            and not litellm.BedrockModelInfo.has_explicit_route(model)
+            and model_supports_native_endpoint("/v1/messages", model, LlmProviders.BEDROCK)
         ):
             from litellm.llms.bedrock.messages.native_transformation import (
                 AmazonBedrockNativeMessagesConfig,

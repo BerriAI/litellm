@@ -116,6 +116,28 @@ def test_bedrock_converse_catalog_model_prefers_declared_native_chat(monkeypatch
     assert type(get_bedrock_chat_config("converse/anthropic.claude-sonnet-4-6")).__name__ == "AmazonConverseConfig"
 
 
+def test_bedrock_messages_route_prefers_explicit_invoke(monkeypatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "bedrock/anthropic.claude-sonnet-4-6",
+        {"supported_endpoints": ["/v1/messages"]},  # mutable-ok: provider interface
+    )
+
+    assert isinstance(
+        ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="anthropic.claude-sonnet-4-6",
+            provider=LlmProviders.BEDROCK,
+        ),
+        AmazonBedrockNativeMessagesConfig,
+    )
+    assert type(
+        ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="invoke/anthropic.claude-sonnet-4-6",
+            provider=LlmProviders.BEDROCK,
+        )
+    ).__name__ == "AmazonAnthropicClaudeMessagesConfig"
+
+
 def test_native_chat_url_and_bearer_auth(monkeypatch):
     config = AmazonBedrockOpenAIChatCompletionsConfig()  # rebind-ok: test capture
 
