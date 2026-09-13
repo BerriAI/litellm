@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+from contextlib import ExitStack
 from typing import Final
 import json
 from datetime import datetime, timedelta, timezone
@@ -17,27 +19,36 @@ from litellm.proxy._types import (
     GenerateKeyRequest,
     NewUserRequest,
     LiteLLM_BudgetTable,
+    LiteLLM_ObjectPermissionBase,
     LiteLLM_OrganizationTable,
     LiteLLM_ProjectTableCachedObj,
     LiteLLM_TeamTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LiteLLM_VerificationToken,
+    LiteLLMKeyType,
     LitellmUserRoles,
     Member,
     ProxyException,
+    RegenerateKeyRequest,
     ResetSpendRequest,
     UpdateKeyRequest,
 )
+from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.proxy.auth.auth_checks import _delete_cache_key_object, _project_cache_key
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     _check_org_key_limits,
     _check_project_key_limits,
     _check_team_key_limits,
     _common_key_generation_helper,
+    _effective_key_after_update,
+    _effective_key_for_generate,
+    _enforce_custom_key_policy,
     _enforce_upperbound_key_params,
+    _execute_virtual_key_regeneration,
     _get_and_validate_existing_key,
     _list_key_helper,
     _persist_deleted_verification_tokens,
@@ -62,6 +73,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     validate_key_team_change,
 )
 from litellm.proxy.proxy_server import app
+from litellm.types.proxy.management_endpoints.key_management_endpoints import CustomKeyPolicyRequest
 
 client = TestClient(app)
 
@@ -1026,7 +1038,7 @@ async def test_key_generation_with_mcp_tool_permissions(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_key_update_object_permissions_existing_permission(monkeypatch):
+async def test_key_update_object_permissions_existing_permission():
     """
     Test updating object permissions when a key already has an existing object_permission_id.
 
@@ -1046,9 +1058,7 @@ async def test_key_update_object_permissions_existing_permission(monkeypatch):
         _handle_update_object_permission,
     )
 
-    # Mock prisma client
     mock_prisma_client = AsyncMock()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     # Mock existing key with object_permission_id
     existing_key_row = LiteLLM_VerificationToken(
@@ -1088,6 +1098,7 @@ async def test_key_update_object_permissions_existing_permission(monkeypatch):
     result = await _handle_update_object_permission(
         data_json=data_json,
         existing_key_row=existing_key_row,
+        prisma_client=mock_prisma_client,
     )
 
     # Verify the object_permission was removed from data_json and object_permission_id was set
@@ -1102,7 +1113,7 @@ async def test_key_update_object_permissions_existing_permission(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_key_update_object_permissions_no_existing_permission(monkeypatch):
+async def test_key_update_object_permissions_no_existing_permission():
     """
     Test creating object permissions when a key has no existing object_permission_id.
 
@@ -1122,9 +1133,7 @@ async def test_key_update_object_permissions_no_existing_permission(monkeypatch)
         _handle_update_object_permission,
     )
 
-    # Mock prisma client
     mock_prisma_client = AsyncMock()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     existing_key_row_no_perm = LiteLLM_VerificationToken(
         token="test_token_hash_2",
@@ -1155,6 +1164,7 @@ async def test_key_update_object_permissions_no_existing_permission(monkeypatch)
     result = await _handle_update_object_permission(
         data_json=data_json,
         existing_key_row=existing_key_row_no_perm,
+        prisma_client=mock_prisma_client,
     )
 
     # Verify new object_permission_id was set
@@ -1165,7 +1175,7 @@ async def test_key_update_object_permissions_no_existing_permission(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_key_update_object_permissions_missing_permission_record(monkeypatch):
+async def test_key_update_object_permissions_missing_permission_record():
     """
     Test creating object permissions when existing object_permission_id record is not found.
 
@@ -1185,9 +1195,7 @@ async def test_key_update_object_permissions_missing_permission_record(monkeypat
         _handle_update_object_permission,
     )
 
-    # Mock prisma client
     mock_prisma_client = AsyncMock()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     existing_key_row_missing_perm = LiteLLM_VerificationToken(
         token="test_token_hash_3",
@@ -1218,6 +1226,7 @@ async def test_key_update_object_permissions_missing_permission_record(monkeypat
     result = await _handle_update_object_permission(
         data_json=data_json,
         existing_key_row=existing_key_row_missing_perm,
+        prisma_client=mock_prisma_client,
     )
 
     # Verify new object_permission_id was set
@@ -11935,6 +11944,10 @@ async def test_execute_virtual_key_regeneration_rejects_over_limit_duration(monk
             "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
             new_callable=AsyncMock,
         ),
+        patch(  # test-quality-ok: archival path is outside upperbound rejection
+            "litellm.proxy.management_endpoints.key_management_endpoints._persist_deleted_verification_tokens",
+            new_callable=AsyncMock,
+        ) as persist_deleted_verification_tokens,
         patch(
             "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
             new_callable=AsyncMock,
@@ -11955,6 +11968,7 @@ async def test_execute_virtual_key_regeneration_rejects_over_limit_duration(monk
     assert exc_info.value.status_code == 400
     assert "duration" in str(exc_info.value.detail)
     # Rejected regenerate must not reach the DB update.
+    persist_deleted_verification_tokens.assert_not_awaited()
     assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 0
 
 
@@ -12012,6 +12026,1011 @@ async def test_execute_virtual_key_regeneration_allows_within_limit_duration(mon
             proxy_logging_obj=MagicMock(),
         )
     assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_virtual_key_regeneration_rejects_when_custom_key_update_hook_denies():
+    existing_key = _make_regenerate_existing_key()
+    data = RegenerateKeyRequest(duration="3000d")
+    mock_prisma_client = _make_regenerate_mock_prisma()
+    received_data: list[UpdateKeyRequest] = []
+
+    async def hook(data: UpdateKeyRequest) -> dict[str, object]:
+        received_data.append(data)
+        if data.duration and duration_in_seconds(data.duration) > duration_in_seconds("7d"):
+            return {"decision": False, "message": "duration must be <= 7d"}
+        return {"decision": True}
+
+    with (
+        patch(  # test-quality-ok: deterministic token setup for policy rejection
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_new_token",
+            new_callable=AsyncMock,
+            return_value="sk-newtoken1234ab12",
+        ),
+        patch(  # test-quality-ok: grace-period path is outside policy rejection
+            "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
+            new_callable=AsyncMock,
+        ) as insert_deprecated_key,
+        patch(  # test-quality-ok: archival path is outside policy rejection
+            "litellm.proxy.management_endpoints.key_management_endpoints._persist_deleted_verification_tokens",
+            new_callable=AsyncMock,
+        ) as persist_deleted_verification_tokens,
+        patch(  # test-quality-ok: cache eviction is outside policy rejection
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: rotation callback is outside policy rejection
+            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_rotated_hook",
+            new_callable=AsyncMock,
+        ),
+        patch("litellm.proxy.proxy_server.user_custom_key_update", hook),  # test-quality-ok: inject policy hook
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await _execute_virtual_key_regeneration(
+                prisma_client=mock_prisma_client,
+                key_in_db=existing_key,
+                hashed_api_key="abc123",
+                key="abc123",
+                data=data,
+                user_api_key_dict=_make_regenerate_user_api_key_dict(),
+                litellm_changed_by=None,
+                user_api_key_cache=MagicMock(),
+                proxy_logging_obj=MagicMock(),
+            )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "duration must be <= 7d"
+    insert_deprecated_key.assert_not_awaited()
+    persist_deleted_verification_tokens.assert_not_awaited()
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 0
+    assert len(received_data) == 1
+    assert received_data[0].key == "abc123"
+    assert received_data[0].duration == "3000d"
+
+
+@pytest.mark.asyncio
+async def test_execute_virtual_key_regeneration_allows_when_custom_key_update_hook_approves():
+    existing_key = _make_regenerate_existing_key()
+    data = RegenerateKeyRequest(duration="5d")
+    mock_prisma_client = _make_regenerate_mock_prisma()
+    received_data: list[UpdateKeyRequest] = []
+
+    async def hook(data: UpdateKeyRequest) -> dict[str, object]:
+        received_data.append(data)
+        if data.duration and duration_in_seconds(data.duration) > duration_in_seconds("7d"):
+            return {"decision": False, "message": "duration must be <= 7d"}
+        return {"decision": True}
+
+    with (
+        patch(  # test-quality-ok: deterministic token setup for policy approval
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_new_token",
+            new_callable=AsyncMock,
+            return_value="sk-newtoken1234ab12",
+        ),
+        patch(  # test-quality-ok: grace-period path is outside policy approval
+            "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: verify archival follows policy approval
+            "litellm.proxy.management_endpoints.key_management_endpoints._persist_deleted_verification_tokens",
+            new_callable=AsyncMock,
+        ) as persist_deleted_verification_tokens,
+        patch(  # test-quality-ok: cache eviction is outside policy approval
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: rotation callback is outside policy approval
+            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_rotated_hook",
+            new_callable=AsyncMock,
+        ),
+        patch("litellm.proxy.proxy_server.user_custom_key_update", hook),  # test-quality-ok: inject policy hook
+    ):
+        await _execute_virtual_key_regeneration(
+            prisma_client=mock_prisma_client,
+            key_in_db=existing_key,
+            hashed_api_key="abc123",
+            key="abc123",
+            data=data,
+            user_api_key_dict=_make_regenerate_user_api_key_dict(),
+            litellm_changed_by=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 1
+    persist_deleted_verification_tokens.assert_awaited_once()
+    assert persist_deleted_verification_tokens.call_args.kwargs["keys"] == [existing_key]
+    assert len(received_data) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "data",
+    [None, RegenerateKeyRequest(), RegenerateKeyRequest(duration=""), RegenerateKeyRequest(budget_duration="")],
+)
+async def test_execute_virtual_key_regeneration_skips_custom_key_update_hook_without_changes(data):
+    mock_prisma_client = _make_regenerate_mock_prisma()
+
+    async def hook(data: UpdateKeyRequest) -> dict[str, object]:
+        raise AssertionError(f"custom key update hook called with {data}")
+
+    with (
+        patch(  # test-quality-ok: deterministic token setup for unchanged request
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_new_token",
+            new_callable=AsyncMock,
+            return_value="sk-newtoken1234ab12",
+        ),
+        patch(  # test-quality-ok: grace-period path is outside unchanged request
+            "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: cache eviction is outside unchanged request
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: rotation callback is outside unchanged request
+            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_rotated_hook",
+            new_callable=AsyncMock,
+        ),
+        patch("litellm.proxy.proxy_server.user_custom_key_update", hook),  # test-quality-ok: inject policy hook
+    ):
+        await _execute_virtual_key_regeneration(
+            prisma_client=mock_prisma_client,
+            key_in_db=_make_regenerate_existing_key(),
+            hashed_api_key="abc123",
+            key="abc123",
+            data=data,
+            user_api_key_dict=_make_regenerate_user_api_key_dict(),
+            litellm_changed_by=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_virtual_key_regeneration_hides_the_untouched_modal_expiry_from_the_custom_key_update_hook():
+    mock_prisma_client = _make_regenerate_mock_prisma()
+    untouched_modal_body = RegenerateKeyRequest(
+        key_alias=None, max_budget=None, tpm_limit=None, rpm_limit=None, duration="", grace_period=""
+    )
+    received_data: list[UpdateKeyRequest] = []
+
+    async def hook(data: UpdateKeyRequest) -> dict[str, object]:
+        received_data.append(data)
+        if data.duration is not None and duration_in_seconds(data.duration) > duration_in_seconds("7d"):
+            return {"decision": False, "message": "duration must be <= 7d"}
+        return {"decision": True}
+
+    with (
+        patch(  # test-quality-ok: deterministic token setup for the untouched modal body
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_new_token",
+            new_callable=AsyncMock,
+            return_value="sk-newtoken1234ab12",
+        ),
+        patch(  # test-quality-ok: grace-period path is outside the hook input
+            "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: cache eviction is outside the hook input
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: rotation callback is outside the hook input
+            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_rotated_hook",
+            new_callable=AsyncMock,
+        ),
+        patch("litellm.proxy.proxy_server.user_custom_key_update", hook),  # test-quality-ok: inject policy hook
+    ):
+        await _execute_virtual_key_regeneration(
+            prisma_client=mock_prisma_client,
+            key_in_db=_make_regenerate_existing_key(),
+            hashed_api_key="abc123",
+            key="abc123",
+            data=untouched_modal_body,
+            user_api_key_dict=_make_regenerate_user_api_key_dict(),
+            litellm_changed_by=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 1
+    assert len(received_data) == 1
+    assert "duration" not in received_data[0].model_fields_set
+    assert received_data[0].model_fields_set >= {"key", "key_alias", "max_budget", "tpm_limit", "rpm_limit"}
+
+
+_POLICY_DENIAL_MESSAGE = "key duration must be 7d or less"
+_POLICY_HASHED_TOKEN = "0d62f396c1317066f55a96086517047c737087c61eb2bf016b72e6298927b15b"
+_POLICY_GENERATED_KEY = {"key": "sk-test-key", "expires": None, "user_id": "test-user", "team_id": None}
+
+
+def _seven_day_policy(received: list[CustomKeyPolicyRequest]):
+    async def policy(policy_request: CustomKeyPolicyRequest) -> dict[str, object]:
+        received.append(policy_request)
+        expires = policy_request.effective_key.expires
+        if isinstance(expires, datetime) and expires > datetime.now(timezone.utc) + timedelta(days=7):
+            return {"decision": False, "message": _POLICY_DENIAL_MESSAGE}
+        return {"decision": True}
+
+    return policy
+
+
+def _assert_expires_in(effective_key: LiteLLM_VerificationToken, duration: str) -> None:
+    expires = effective_key.expires
+    assert isinstance(expires, datetime)
+    assert expires.tzinfo is not None
+    expected = datetime.now(timezone.utc) + timedelta(seconds=duration_in_seconds(duration=duration))
+    assert abs((expires - expected).total_seconds()) < 60
+
+
+def _regenerate_policy_mocks(policy, insert_deprecated_key: AsyncMock, persist: AsyncMock) -> ExitStack:
+    stack = ExitStack()
+    stack.enter_context(
+        patch(  # test-quality-ok: deterministic token setup for the policy path
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_new_token",
+            new_callable=AsyncMock,
+            return_value="sk-newtoken1234ab12",
+        )
+    )
+    stack.enter_context(
+        patch(  # test-quality-ok: grace-period write must not run on a denied regenerate
+            "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
+            insert_deprecated_key,
+        )
+    )
+    stack.enter_context(
+        patch(  # test-quality-ok: archival write must not run on a denied regenerate
+            "litellm.proxy.management_endpoints.key_management_endpoints._persist_deleted_verification_tokens",
+            persist,
+        )
+    )
+    stack.enter_context(
+        patch(  # test-quality-ok: cache eviction is outside the policy path
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        )
+    )
+    stack.enter_context(
+        patch(  # test-quality-ok: rotation callback is outside the policy path
+            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_rotated_hook",
+            new_callable=AsyncMock,
+        )
+    )
+    stack.enter_context(
+        patch("litellm.proxy.proxy_server.user_custom_key_policy", policy)  # test-quality-ok: inject policy hook
+    )
+    return stack
+
+
+async def _regenerate_under_policy(mock_prisma_client, existing_key, data):
+    return await _execute_virtual_key_regeneration(
+        prisma_client=mock_prisma_client,
+        key_in_db=existing_key,
+        hashed_api_key="abc123",
+        key="abc123",
+        data=data,
+        user_api_key_dict=_make_regenerate_user_api_key_dict(),
+        litellm_changed_by=None,
+        user_api_key_cache=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_regenerate_rejects_when_custom_key_policy_denies_the_effective_expiry():
+    existing_key = _make_regenerate_existing_key()
+    mock_prisma_client = _make_regenerate_mock_prisma()
+    received: list[CustomKeyPolicyRequest] = []
+    insert_deprecated_key = AsyncMock()
+    persist = AsyncMock()
+
+    with _regenerate_policy_mocks(_seven_day_policy(received), insert_deprecated_key, persist):
+        with pytest.raises(HTTPException) as exc_info:
+            await _regenerate_under_policy(mock_prisma_client, existing_key, RegenerateKeyRequest(duration="3000d"))
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == _POLICY_DENIAL_MESSAGE
+    insert_deprecated_key.assert_not_awaited()
+    persist.assert_not_awaited()
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 0
+    assert [policy_request.operation for policy_request in received] == ["regenerate"]
+    assert received[0].existing_key is not None
+    assert received[0].existing_key.token == "abc123"
+    assert isinstance(received[0].request, RegenerateKeyRequest)
+    assert received[0].request.duration == "3000d"
+    _assert_expires_in(received[0].effective_key, "3000d")
+
+
+@pytest.mark.asyncio
+async def test_regenerate_within_custom_key_policy_rotates_the_key():
+    existing_key = _make_regenerate_existing_key()
+    mock_prisma_client = _make_regenerate_mock_prisma()
+    received: list[CustomKeyPolicyRequest] = []
+    persist = AsyncMock()
+
+    with _regenerate_policy_mocks(_seven_day_policy(received), AsyncMock(), persist):
+        await _regenerate_under_policy(mock_prisma_client, existing_key, RegenerateKeyRequest(duration="5d"))
+
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 1
+    persist.assert_awaited_once()
+    assert persist.call_args.kwargs["keys"] == [existing_key]
+    assert [policy_request.operation for policy_request in received] == ["regenerate"]
+    _assert_expires_in(received[0].effective_key, "5d")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("data", [None, RegenerateKeyRequest()])
+async def test_regenerate_without_changes_still_runs_custom_key_policy(data):
+    existing_key = _make_regenerate_existing_key()
+    mock_prisma_client = _make_regenerate_mock_prisma()
+    received: list[CustomKeyPolicyRequest] = []
+
+    async def freeze_rotation(policy_request: CustomKeyPolicyRequest) -> dict[str, object]:
+        received.append(policy_request)
+        return {"decision": False, "message": "key rotation is frozen"}
+
+    with _regenerate_policy_mocks(freeze_rotation, AsyncMock(), AsyncMock()):
+        with pytest.raises(HTTPException) as exc_info:
+            await _regenerate_under_policy(mock_prisma_client, existing_key, data)
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "key rotation is frozen"
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 0
+    assert [policy_request.operation for policy_request in received] == ["regenerate"]
+    assert received[0].existing_key == existing_key
+    assert received[0].effective_key == existing_key
+
+
+def _policy_existing_team_key() -> LiteLLM_VerificationToken:
+    return LiteLLM_VerificationToken(
+        token=_POLICY_HASHED_TOKEN, user_id="test-user", team_id="team-a", max_budget=200.0
+    )
+
+
+def _setup_update_key_fn_policy_mocks(monkeypatch, existing_key: LiteLLM_VerificationToken) -> AsyncMock:
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=existing_key)
+    mock_prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(return_value=None)
+    mock_prisma_client.update_data = AsyncMock(return_value={"data": {"max_budget": 50.0, "team_id": "team-a"}})
+    _setup_update_key_mocks(monkeypatch, mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object", AsyncMock(return_value=None)
+    )
+    return mock_prisma_client
+
+
+def _assert_update_policy_request(policy_request: CustomKeyPolicyRequest, request: UpdateKeyRequest) -> None:
+    assert policy_request.operation == "update"
+    assert policy_request.request is request
+    assert policy_request.existing_key is not None
+    assert policy_request.existing_key.max_budget == 200.0
+    assert policy_request.effective_key.team_id == "team-a"
+    assert policy_request.effective_key.user_id == "test-user"
+    assert policy_request.effective_key.max_budget == 50.0
+    _assert_expires_in(policy_request.effective_key, request.duration or "")
+
+
+@pytest.mark.asyncio
+async def test_update_key_fn_runs_custom_key_policy_on_the_effective_row(monkeypatch):
+    from litellm.proxy.management_endpoints.key_management_endpoints import update_key_fn
+
+    mock_prisma_client = _setup_update_key_fn_policy_mocks(monkeypatch, _policy_existing_team_key())
+    received: list[CustomKeyPolicyRequest] = []
+    policy = _seven_day_policy(received)
+    data = UpdateKeyRequest(
+        key=_POLICY_HASHED_TOKEN, duration="5d", max_budget=50.0, auto_rotate=True, rotation_interval="30d"
+    )
+
+    with (
+        patch(  # test-quality-ok: cache eviction is outside the policy path
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+        patch("litellm.proxy.proxy_server.user_custom_key_policy", policy),  # test-quality-ok: inject policy hook
+    ):
+        await update_key_fn(
+            request=MagicMock(),
+            data=data,
+            user_api_key_dict=_make_regenerate_user_api_key_dict(),
+            litellm_changed_by=None,
+        )
+
+    mock_prisma_client.update_data.assert_awaited_once()
+    assert len(received) == 1
+    _assert_update_policy_request(received[0], data)
+    key_rotation_at = received[0].effective_key.key_rotation_at
+    assert key_rotation_at is not None
+    assert abs(key_rotation_at - (datetime.now(timezone.utc) + timedelta(days=30))) < timedelta(seconds=60)
+
+
+@pytest.mark.asyncio
+async def test_update_key_fn_rejects_when_custom_key_policy_denies(monkeypatch):
+    from litellm.proxy.management_endpoints.key_management_endpoints import update_key_fn
+
+    mock_prisma_client = _setup_update_key_fn_policy_mocks(monkeypatch, _policy_existing_team_key())
+    received: list[CustomKeyPolicyRequest] = []
+    policy = _seven_day_policy(received)
+
+    with patch("litellm.proxy.proxy_server.user_custom_key_policy", policy):  # test-quality-ok: inject policy hook
+        with pytest.raises(ProxyException) as exc_info:
+            await update_key_fn(
+                request=MagicMock(),
+                data=UpdateKeyRequest(key=_POLICY_HASHED_TOKEN, duration="3000d", max_budget=50.0),
+                user_api_key_dict=_make_regenerate_user_api_key_dict(),
+                litellm_changed_by=None,
+            )
+
+    assert str(exc_info.value.code) == "403"
+    assert exc_info.value.message == _POLICY_DENIAL_MESSAGE
+    mock_prisma_client.update_data.assert_not_awaited()
+    assert [policy_request.operation for policy_request in received] == ["update"]
+    _assert_expires_in(received[0].effective_key, "3000d")
+
+
+async def _process_single_key_update_under_policy(prisma_client: AsyncMock, data: UpdateKeyRequest, policy):
+    with (
+        patch(  # test-quality-ok: cache eviction is outside the policy path
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: update callback is outside the policy path
+            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_updated_hook",
+            new_callable=AsyncMock,
+        ),
+    ):
+        return await _process_single_key_update(
+            update_key_request=data,
+            user_api_key_dict=_make_regenerate_user_api_key_dict(),
+            litellm_changed_by=None,
+            prisma_client=prisma_client,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+            llm_router=None,
+            existing_key_row=_policy_existing_team_key(),
+            user_custom_key_policy=policy,
+        )
+
+
+@pytest.mark.asyncio
+async def test_process_single_key_update_runs_custom_key_policy_on_the_effective_row():
+    mock_prisma_client = AsyncMock()
+    updated_row = MagicMock()
+    updated_row.model_dump.return_value = {"max_budget": 50.0, "team_id": "team-a"}
+    mock_prisma_client.update_data = AsyncMock(return_value={"data": updated_row})
+    received: list[CustomKeyPolicyRequest] = []
+    data = UpdateKeyRequest(key=_POLICY_HASHED_TOKEN, duration="5d", max_budget=50.0)
+
+    result = await _process_single_key_update_under_policy(mock_prisma_client, data, _seven_day_policy(received))
+
+    assert result["max_budget"] == 50.0
+    mock_prisma_client.update_data.assert_awaited_once()
+    assert len(received) == 1
+    _assert_update_policy_request(received[0], data)
+
+
+@pytest.mark.asyncio
+async def test_process_single_key_update_rejects_when_custom_key_policy_denies():
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.update_data = AsyncMock()
+    received: list[CustomKeyPolicyRequest] = []
+    data = UpdateKeyRequest(key=_POLICY_HASHED_TOKEN, duration="3000d", max_budget=50.0)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _process_single_key_update_under_policy(mock_prisma_client, data, _seven_day_policy(received))
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == _POLICY_DENIAL_MESSAGE
+    mock_prisma_client.update_data.assert_not_awaited()
+    assert [policy_request.operation for policy_request in received] == ["update"]
+
+
+_OBJECT_PERMISSION_ID_AFTER_POLICY = "perm-after-policy"
+
+
+def _record_object_permission_writes(mock_prisma_client: AsyncMock, events: list[str]) -> None:
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=None)
+
+    async def upsert(**_kwargs: object) -> MagicMock:
+        events.append("permission row upsert")
+        return MagicMock(object_permission_id=_OBJECT_PERMISSION_ID_AFTER_POLICY)
+
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock(side_effect=upsert)
+
+
+def _recording_policy(events: list[str], allowed: bool):
+    async def policy(policy_request: CustomKeyPolicyRequest) -> dict[str, object]:
+        events.append("policy")
+        return {"decision": allowed, "message": "key max_budget must be 1000 or less"}
+
+    return policy
+
+
+def _assert_permission_row_written_after_policy(events: list[str], written: Mapping[str, object]) -> None:
+    assert events == ["policy", "permission row upsert"]
+    assert written["object_permission_id"] == _OBJECT_PERMISSION_ID_AFTER_POLICY
+    assert "object_permission" not in written
+
+
+def _assert_permission_row_untouched(mock_prisma_client: AsyncMock, events: list[str]) -> None:
+    assert events == ["policy"]
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_not_awaited()
+
+
+def _update_with_object_permission(max_budget: float) -> UpdateKeyRequest:
+    return UpdateKeyRequest(
+        key=_POLICY_HASHED_TOKEN,
+        max_budget=max_budget,
+        object_permission=LiteLLM_ObjectPermissionBase(vector_stores=["vs-1"]),
+    )
+
+
+def _setup_update_key_fn_object_permission_mocks(monkeypatch, allowed: bool) -> tuple[AsyncMock, list[str]]:
+    mock_prisma_client = _setup_update_key_fn_policy_mocks(monkeypatch, _policy_existing_team_key())
+    events: list[str] = []
+    _record_object_permission_writes(mock_prisma_client, events)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_key_policy", _recording_policy(events, allowed))
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object", AsyncMock()
+    )
+    return mock_prisma_client, events
+
+
+async def _update_key_fn_with_object_permission(max_budget: float):
+    from litellm.proxy.management_endpoints.key_management_endpoints import update_key_fn
+
+    return await update_key_fn(
+        request=MagicMock(),
+        data=_update_with_object_permission(max_budget=max_budget),
+        user_api_key_dict=_make_regenerate_user_api_key_dict(),
+        litellm_changed_by=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_key_fn_writes_the_object_permission_row_only_after_the_policy_allows(monkeypatch):
+    mock_prisma_client, events = _setup_update_key_fn_object_permission_mocks(monkeypatch, allowed=True)
+
+    await _update_key_fn_with_object_permission(max_budget=50.0)
+
+    _assert_permission_row_written_after_policy(events, mock_prisma_client.update_data.await_args.kwargs["data"])
+
+
+@pytest.mark.asyncio
+async def test_update_key_fn_denied_by_the_policy_leaves_the_object_permission_row_untouched(monkeypatch):
+    mock_prisma_client, events = _setup_update_key_fn_object_permission_mocks(monkeypatch, allowed=False)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _update_key_fn_with_object_permission(max_budget=5000.0)
+
+    assert str(exc_info.value.code) == "403"
+    _assert_permission_row_untouched(mock_prisma_client, events)
+    mock_prisma_client.update_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_single_key_update_writes_the_object_permission_row_only_after_the_policy_allows():
+    mock_prisma_client = AsyncMock()
+    updated_row = MagicMock()
+    updated_row.model_dump.return_value = {"max_budget": 50.0, "team_id": "team-a"}
+    mock_prisma_client.update_data = AsyncMock(return_value={"data": updated_row})
+    events: list[str] = []
+    _record_object_permission_writes(mock_prisma_client, events)
+
+    await _process_single_key_update_under_policy(
+        mock_prisma_client, _update_with_object_permission(max_budget=50.0), _recording_policy(events, allowed=True)
+    )
+
+    _assert_permission_row_written_after_policy(events, mock_prisma_client.update_data.await_args.kwargs["data"])
+
+
+@pytest.mark.asyncio
+async def test_process_single_key_update_denied_by_the_policy_leaves_the_object_permission_row_untouched():
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.update_data = AsyncMock()
+    events: list[str] = []
+    _record_object_permission_writes(mock_prisma_client, events)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _process_single_key_update_under_policy(
+            mock_prisma_client, _update_with_object_permission(max_budget=5000.0), _recording_policy(events, allowed=False)
+        )
+
+    assert exc_info.value.status_code == 403
+    _assert_permission_row_untouched(mock_prisma_client, events)
+    mock_prisma_client.update_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_regenerate_writes_the_object_permission_row_only_after_the_policy_allows():
+    mock_prisma_client = _make_regenerate_mock_prisma()
+    events: list[str] = []
+    _record_object_permission_writes(mock_prisma_client, events)
+    data = RegenerateKeyRequest(max_budget=50.0, object_permission=LiteLLM_ObjectPermissionBase(vector_stores=["vs-1"]))
+
+    with _regenerate_policy_mocks(_recording_policy(events, allowed=True), AsyncMock(), AsyncMock()):
+        await _regenerate_under_policy(mock_prisma_client, _make_regenerate_existing_key(), data)
+
+    _assert_permission_row_written_after_policy(
+        events, mock_prisma_client.db.litellm_verificationtoken.update.await_args.kwargs["data"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_regenerate_denied_by_the_policy_leaves_the_object_permission_row_untouched():
+    mock_prisma_client = _make_regenerate_mock_prisma()
+    events: list[str] = []
+    _record_object_permission_writes(mock_prisma_client, events)
+    data = RegenerateKeyRequest(max_budget=5000.0, object_permission=LiteLLM_ObjectPermissionBase(vector_stores=["vs-1"]))
+
+    with _regenerate_policy_mocks(_recording_policy(events, allowed=False), AsyncMock(), AsyncMock()):
+        with pytest.raises(HTTPException) as exc_info:
+            await _regenerate_under_policy(mock_prisma_client, _make_regenerate_existing_key(), data)
+
+    assert exc_info.value.status_code == 403
+    _assert_permission_row_untouched(mock_prisma_client, events)
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_keys_runs_custom_key_policy_per_key(monkeypatch):
+    from litellm.proxy.management_endpoints.key_management_endpoints import bulk_update_keys
+    from litellm.types.proxy.management_endpoints.key_management_endpoints import (
+        BulkUpdateKeyRequest,
+        BulkUpdateKeyRequestItem,
+    )
+
+    existing_keys = [
+        LiteLLM_VerificationToken(token="test-key-1", user_id="user-123", max_budget=None),
+        LiteLLM_VerificationToken(token="test-key-2", user_id="user-123", max_budget=50.0),
+    ]
+    updated_row = MagicMock()
+    updated_row.model_dump.return_value = {"user_id": "user-123", "max_budget": 100.0}
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(side_effect=existing_keys)
+    mock_prisma_client.update_data = AsyncMock(return_value={"data": updated_row})
+    mock_prisma_client.get_data = AsyncMock(return_value=None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    received: list[CustomKeyPolicyRequest] = []
+
+    async def cap_max_budget(policy_request: CustomKeyPolicyRequest) -> dict[str, object]:
+        received.append(policy_request)
+        max_budget = policy_request.effective_key.max_budget
+        if max_budget is not None and max_budget > 100:
+            return {"decision": False, "message": "max_budget must be 100 or less"}
+        return {"decision": True}
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_key_policy", cap_max_budget)
+
+    with (
+        patch(  # test-quality-ok: cache eviction is outside the policy path
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: update callback is outside the policy path
+            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_updated_hook",
+            new_callable=AsyncMock,
+        ),
+    ):
+        response = await bulk_update_keys(
+            data=BulkUpdateKeyRequest(
+                keys=[
+                    BulkUpdateKeyRequestItem(key="test-key-1", max_budget=100.0),
+                    BulkUpdateKeyRequestItem(key="test-key-2", max_budget=500.0),
+                ]
+            ),
+            user_api_key_dict=_make_regenerate_user_api_key_dict(),
+            litellm_changed_by=None,
+        )
+
+    assert [update.key for update in response.successful_updates] == ["test-key-1"]
+    assert [(failed.key, failed.failed_reason) for failed in response.failed_updates] == [
+        ("test-key-2", "max_budget must be 100 or less")
+    ]
+    assert mock_prisma_client.update_data.await_count == 1
+    assert [policy_request.operation for policy_request in received] == ["update", "update"]
+    assert [policy_request.effective_key.max_budget for policy_request in received] == [100.0, 500.0]
+    assert [
+        policy_request.existing_key.max_budget if policy_request.existing_key is not None else "missing"
+        for policy_request in received
+    ] == [None, 50.0]
+
+
+def _policy_generate_prisma() -> MagicMock:
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_budgettable.create = AsyncMock(return_value=MagicMock(budget_id="budget-1"))
+    mock_prisma.jsonify_object = MagicMock(side_effect=lambda data: json.loads(data) if isinstance(data, str) else data)
+    return mock_prisma
+
+
+def _generate_policy_mocks(mock_prisma: MagicMock, generate_key_helper: AsyncMock, policy) -> ExitStack:
+    stack = ExitStack()
+    stack.enter_context(patch("litellm.proxy.proxy_server.prisma_client", mock_prisma))  # test-quality-ok: fake DB
+    stack.enter_context(patch("litellm.proxy.proxy_server.llm_router", None))  # test-quality-ok: no router in test
+    stack.enter_context(patch("litellm.proxy.proxy_server.premium_user", True))  # test-quality-ok: premium fields
+    stack.enter_context(patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"))  # test-quality-ok: admin
+    stack.enter_context(patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()))  # test-quality-ok: cache
+    stack.enter_context(
+        patch(  # test-quality-ok: the key write must not run on a denied generate
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+            generate_key_helper,
+        )
+    )
+    stack.enter_context(
+        patch("litellm.proxy.proxy_server.user_custom_key_policy", policy)  # test-quality-ok: inject policy hook
+    )
+    return stack
+
+
+def _generate_request(duration: str, organization_id: str | None) -> GenerateKeyRequest:
+    return GenerateKeyRequest(
+        duration=duration,
+        organization_id=organization_id,
+        guardrails=["g1"],
+        tags=["t1"],
+        soft_budget=10.0,
+        max_budget=20.0,
+    )
+
+
+def _assert_generate_policy_request(
+    policy_request: CustomKeyPolicyRequest, duration: str, organization_id: str | None
+) -> None:
+    assert policy_request.operation == "generate"
+    assert policy_request.existing_key is None
+    assert policy_request.effective_key.org_id == organization_id
+    assert policy_request.effective_key.max_budget == 20.0
+    assert policy_request.effective_key.metadata["guardrails"] == ["g1"]
+    assert policy_request.effective_key.metadata["tags"] == ["t1"]
+    _assert_expires_in(policy_request.effective_key, duration)
+
+
+@pytest.mark.asyncio
+async def test_generate_key_rejects_when_custom_key_policy_denies_before_any_write():
+    mock_prisma = _policy_generate_prisma()
+    generate_key_helper = AsyncMock(return_value=_POLICY_GENERATED_KEY)
+    received: list[CustomKeyPolicyRequest] = []
+    data = _generate_request("3000d", organization_id="org-1")
+
+    with _generate_policy_mocks(mock_prisma, generate_key_helper, _seven_day_policy(received)):
+        with pytest.raises(ProxyException) as exc_info:
+            await generate_key_fn(
+                data=data, user_api_key_dict=_make_regenerate_user_api_key_dict(), litellm_changed_by=None
+            )
+
+    assert str(exc_info.value.code) == "403"
+    assert exc_info.value.message == _POLICY_DENIAL_MESSAGE
+    mock_prisma.db.litellm_budgettable.create.assert_not_awaited()
+    generate_key_helper.assert_not_awaited()
+    assert len(received) == 1
+    _assert_generate_policy_request(received[0], "3000d", organization_id="org-1")
+    assert received[0].request is data
+    assert data.duration == "3000d"
+    assert data.guardrails == ["g1"]
+    assert data.tags == ["t1"]
+    assert data.organization_id == "org-1"
+
+
+@pytest.mark.asyncio
+async def test_generate_key_within_custom_key_policy_creates_the_key():
+    mock_prisma = _policy_generate_prisma()
+    generate_key_helper = AsyncMock(return_value=_POLICY_GENERATED_KEY)
+    received: list[CustomKeyPolicyRequest] = []
+    data = _generate_request("5d", organization_id=None)
+
+    with _generate_policy_mocks(mock_prisma, generate_key_helper, _seven_day_policy(received)):
+        await generate_key_fn(
+            data=data, user_api_key_dict=_make_regenerate_user_api_key_dict(), litellm_changed_by=None
+        )
+
+    mock_prisma.db.litellm_budgettable.create.assert_awaited_once()
+    generate_key_helper.assert_awaited_once()
+    assert len(received) == 1
+    _assert_generate_policy_request(received[0], "5d", organization_id=None)
+    assert received[0].request is data
+
+
+@pytest.mark.asyncio
+async def test_service_account_generate_rejects_when_custom_key_policy_denies():
+    from litellm.proxy.management_endpoints.key_management_endpoints import generate_service_account_key_fn
+
+    mock_prisma = _policy_generate_prisma()
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=MagicMock())
+    generate_key_helper = AsyncMock(return_value=_POLICY_GENERATED_KEY)
+    received: list[CustomKeyPolicyRequest] = []
+
+    with (
+        _generate_policy_mocks(mock_prisma, generate_key_helper, _seven_day_policy(received)),
+        patch(  # test-quality-ok: team lookup is outside the policy path
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await generate_service_account_key_fn(
+                data=GenerateKeyRequest(team_id="team-1", duration="3000d"),
+                user_api_key_dict=_make_regenerate_user_api_key_dict(),
+                litellm_changed_by=None,
+            )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == _POLICY_DENIAL_MESSAGE
+    generate_key_helper.assert_not_awaited()
+    mock_prisma.db.litellm_budgettable.create.assert_not_awaited()
+    assert [policy_request.operation for policy_request in received] == ["generate"]
+    assert received[0].existing_key is None
+    assert received[0].effective_key.team_id == "team-1"
+    assert received[0].effective_key.user_id is None
+    _assert_expires_in(received[0].effective_key, "3000d")
+
+
+@pytest.mark.asyncio
+async def test_effective_key_after_update_decodes_json_string_columns_and_keeps_omitted_fields():
+    existing_key = LiteLLM_VerificationToken(token="tok", user_id="u1", team_id="team-a")
+    non_default_values = await prepare_key_update_data(
+        data=UpdateKeyRequest(
+            key="tok", router_settings={"num_retries": 3}, budget_limits=[{"budget_duration": "1d", "max_budget": 2.0}]
+        ),
+        existing_key_row=existing_key,
+    )
+    assert isinstance(non_default_values["router_settings"], str)
+    assert isinstance(non_default_values["budget_limits"], str)
+
+    effective_key = _effective_key_after_update(existing_key_row=existing_key, non_default_values=non_default_values)
+
+    assert effective_key.router_settings == {"num_retries": 3}
+    assert effective_key.budget_limits is not None
+    assert effective_key.budget_limits[0]["max_budget"] == 2.0
+    assert effective_key.budget_limits[0]["budget_duration"] == "1d"
+    assert effective_key.budget_limits[0]["reset_at"] is not None
+    assert effective_key.team_id == "team-a"
+    assert effective_key.user_id == "u1"
+
+
+@pytest.mark.asyncio
+async def test_effective_key_after_update_clears_expiry_for_a_minus_one_duration():
+    existing_key = LiteLLM_VerificationToken(token="tok", expires=datetime(2027, 1, 1, tzinfo=timezone.utc))
+    non_default_values = await prepare_key_update_data(
+        data=UpdateKeyRequest(key="tok", duration="-1"), existing_key_row=existing_key
+    )
+
+    effective_key = _effective_key_after_update(existing_key_row=existing_key, non_default_values=non_default_values)
+
+    assert effective_key.expires is None
+
+
+def test_effective_key_after_update_swaps_the_object_permission_id_and_drops_the_stale_relation():
+    existing_key = LiteLLM_VerificationToken(
+        token="tok",
+        object_permission_id="op-old",
+        object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-old", mcp_servers=["old"]),
+    )
+
+    effective_key = _effective_key_after_update(
+        existing_key_row=existing_key, non_default_values={"object_permission_id": "op-new"}
+    )
+
+    assert effective_key.object_permission_id == "op-new"
+    assert effective_key.object_permission is None
+    assert existing_key.object_permission is not None
+    assert existing_key.object_permission.mcp_servers == ["old"]
+
+
+def test_effective_key_for_generate_reflects_the_processed_request_without_mutating_it():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    data = GenerateKeyRequest(
+        duration="5d",
+        organization_id="org-1",
+        metadata={"a": 1},
+        guardrails=["g1"],
+        tags=["t1"],
+        budget_duration="1d",
+        max_budget=3.0,
+        budget_limits=[{"budget_duration": "1d", "max_budget": 5.0}],
+        auto_rotate=True,
+        rotation_interval="30d",
+        object_permission={"mcp_servers": ["srv"]},
+        key_type=LiteLLMKeyType.LLM_API,
+    )
+
+    effective_key = _effective_key_for_generate(data=data, now=now)
+
+    assert effective_key.expires == now + timedelta(days=5)
+    assert effective_key.key_rotation_at == now + timedelta(days=30)
+    assert effective_key.budget_limits is not None
+    assert effective_key.budget_limits[0]["max_budget"] == 5.0
+    assert effective_key.budget_limits[0]["reset_at"] is not None
+    assert effective_key.object_permission is None
+    assert effective_key.org_id == "org-1"
+    assert effective_key.metadata == {"a": 1, "guardrails": ["g1"], "tags": ["t1"]}
+    assert effective_key.max_budget == 3.0
+    assert effective_key.budget_duration == "1d"
+    assert effective_key.budget_reset_at is not None
+    assert effective_key.key_type == "llm_api"
+    assert effective_key.allowed_routes == ["llm_api_routes"]
+    assert data.metadata == {"a": 1}
+    assert data.guardrails == ["g1"]
+    assert data.tags == ["t1"]
+    assert data.duration == "5d"
+    assert data.budget_limits is not None
+    assert data.budget_limits[0].reset_at is None
+    assert data.object_permission is not None
+    assert data.object_permission.mcp_servers == ["srv"]
+
+
+def test_effective_key_for_generate_stores_no_budget_windows_for_an_empty_list():
+    effective_key = _effective_key_for_generate(
+        data=GenerateKeyRequest(budget_limits=[]), now=datetime(2026, 1, 1, tzinfo=timezone.utc)
+    )
+
+    assert effective_key.budget_limits is None
+
+
+def test_effective_key_for_generate_without_duration_never_expires():
+    effective_key = _effective_key_for_generate(
+        data=GenerateKeyRequest(), now=datetime(2026, 1, 1, tzinfo=timezone.utc)
+    )
+
+    assert effective_key.expires is None
+    assert effective_key.budget_reset_at is None
+    assert effective_key.key_rotation_at is None
+    assert effective_key.key_type == "default"
+
+
+def _policy_request_for_generate() -> CustomKeyPolicyRequest:
+    return CustomKeyPolicyRequest(
+        operation="generate",
+        existing_key=None,
+        effective_key=LiteLLM_VerificationToken(token="tok"),
+        request=GenerateKeyRequest(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_enforce_custom_key_policy_rejects_a_sync_hook():
+    def sync_hook(policy_request: CustomKeyPolicyRequest) -> dict[str, object]:
+        return {"decision": True}
+
+    with pytest.raises(ValueError, match="user_custom_key_policy must be a coroutine"):
+        await _enforce_custom_key_policy(hook=sync_hook, build_policy_request=_policy_request_for_generate)
+
+
+@pytest.mark.asyncio
+async def test_enforce_custom_key_policy_uses_the_default_denial_message():
+    async def deny(policy_request: CustomKeyPolicyRequest) -> dict[str, object]:
+        return {"decision": False}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _enforce_custom_key_policy(hook=deny, build_policy_request=_policy_request_for_generate)
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Authentication Failed - Custom Auth Rule"
+
+
+@pytest.mark.asyncio
+async def test_enforce_custom_key_policy_allows_when_the_decision_is_missing():
+    received: list[CustomKeyPolicyRequest] = []
+
+    async def no_decision(policy_request: CustomKeyPolicyRequest) -> dict[str, object]:
+        received.append(policy_request)
+        return {}
+
+    await _enforce_custom_key_policy(hook=no_decision, build_policy_request=_policy_request_for_generate)
+
+    assert len(received) == 1
+    assert received[0].operation == "generate"
+
+
+@pytest.mark.asyncio
+async def test_enforce_custom_key_policy_never_builds_the_request_without_a_hook():
+    await _enforce_custom_key_policy(
+        hook=None, build_policy_request=lambda: pytest.fail("policy request built without a hook")
+    )
 
 
 @pytest.mark.asyncio
@@ -13773,10 +14792,6 @@ async def test_regenerate_applies_normalized_mcp_object_permission():
         ),
         patch(
             "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_vector_stores_against_team",
-            new_callable=AsyncMock,
-        ),
-        patch(
-            "litellm.proxy.management_endpoints.key_management_endpoints._persist_deleted_verification_tokens",
             new_callable=AsyncMock,
         ),
         patch(
@@ -18290,3 +19305,38 @@ async def test_key_creator_cannot_detach_project_without_admin_access():
         )
     assert exc.value.status_code == 403
     assert "Only proxy admins, team admins, or org admins" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_team_keys_runs_custom_key_policy_per_key(monkeypatch):
+    from litellm.types.proxy.management_endpoints.key_management_endpoints import (
+        BulkUpdateTeamKeysRequest,
+        KeyUpdateFields,
+    )
+
+    keys = [_make_team_key("tok-a"), _make_team_key("tok-b")]
+    mock = _setup_team_keys_mocks(
+        monkeypatch, find_many=keys, update_data=AsyncMock(return_value={"data": _updated({"max_budget": 50.0})})
+    )
+    received: list[CustomKeyPolicyRequest] = []
+
+    async def freeze_tok_b(policy_request: CustomKeyPolicyRequest) -> dict[str, object]:
+        received.append(policy_request)
+        if policy_request.existing_key is not None and policy_request.existing_key.token == "tok-b":
+            return {"decision": False, "message": "tok-b is frozen"}
+        return {"decision": True}
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_key_policy", freeze_tok_b)
+
+    response = await _call_as_admin(
+        BulkUpdateTeamKeysRequest(
+            team_id="team-abc", key_ids=["tok-a", "tok-b"], update_fields=KeyUpdateFields(max_budget=50.0)
+        )
+    )
+
+    assert [update.key for update in response.successful_updates] == ["tok-a"]
+    assert [(failed.key, failed.failed_reason) for failed in response.failed_updates] == [("tok-b", "tok-b is frozen")]
+    mock.update_data.assert_awaited_once()
+    assert [policy_request.operation for policy_request in received] == ["update", "update"]
+    assert [policy_request.effective_key.max_budget for policy_request in received] == [50.0, 50.0]
+    assert [policy_request.effective_key.team_id for policy_request in received] == ["team-abc", "team-abc"]
