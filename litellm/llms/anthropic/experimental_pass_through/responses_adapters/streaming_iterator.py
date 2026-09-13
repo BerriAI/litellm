@@ -1,12 +1,30 @@
 # What is this?
 ## Translates OpenAI call to Anthropic `/v1/messages` format
+import asyncio
 import json
 import traceback
 from collections import deque
-from typing import Any, AsyncIterator, Dict
+from collections.abc import AsyncIterator, Iterator, Mapping
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    encrypted_reasoning_signature,
+)
+from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+    refusal_stop_details,
+    responses_output_refusal_text,
+)
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
+
+from .transformation import (
+    REASONING_SUMMARY_PART_SEPARATOR,
+    LiteLLMAnthropicToResponsesAPIAdapter,
+)
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 
 
 class AnthropicResponsesStreamWrapper:
@@ -17,9 +35,10 @@ class AnthropicResponsesStreamWrapper:
       response.created                   -> message_start
       response.output_item.added         -> content_block_start (if message/function_call)
       response.output_text.delta         -> content_block_delta (text_delta)
+      response.reasoning_summary_part.added -> content_block_delta (thinking_delta separator)
       response.reasoning_summary_text.delta -> content_block_delta (thinking_delta)
       response.function_call_arguments.delta -> content_block_delta (input_json_delta)
-      response.output_item.done          -> content_block_stop
+      response.output_item.done          -> content_block_delta (signature_delta) + content_block_stop
       response.completed                 -> message_delta + message_stop
     """
 
@@ -27,22 +46,25 @@ class AnthropicResponsesStreamWrapper:
         self,
         responses_stream: Any,
         model: str,
+        litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
     ) -> None:
         self.responses_stream = responses_stream
         self.model = model
         self._message_id: str = f"msg_{uuid.uuid4()}"
+        if litellm_logging_obj is not None:
+            litellm_logging_obj.record_streamed_anthropic_message_id(self._message_id)
         self._current_block_index: int = -1
         # Map item_id -> content_block_index so we can stop the right block later
-        self._item_id_to_block_index: Dict[str, int] = {}
+        self._item_id_to_block_index: dict[str, int] = {}
         # Track open function_call items by item_id so we can emit tool_use start
-        self._pending_tool_ids: Dict[str, str] = (
-            {}
-        )  # item_id -> call_id / name accumulator
+        self._pending_tool_ids: dict[str, str] = {}  # item_id -> call_id / name accumulator
         self._sent_message_start = False
         self._sent_message_stop = False
-        self._chunk_queue: deque = deque()
+        self._chunk_queue: deque[dict[str, object]] = deque()
+        self._refusal_text: str = ""
+        self._sync_responses_iterator: Iterator[object] | None = None
 
-    def _make_message_start(self) -> Dict[str, Any]:
+    def _make_message_start(self) -> dict[str, object]:
         return {
             "type": "message_start",
             "message": {
@@ -66,7 +88,52 @@ class AnthropicResponsesStreamWrapper:
         self._current_block_index += 1
         return self._current_block_index
 
-    def _process_event(self, event: Any) -> None:  # noqa: PLR0915
+    def _open_block(self, item_id: str | None, content_block: Mapping[str, object]) -> int:
+        block_idx = self._next_block_index()
+        if item_id:
+            self._item_id_to_block_index[item_id] = block_idx
+        self._chunk_queue.append(
+            {
+                "type": "content_block_start",
+                "index": block_idx,
+                "content_block": content_block,
+            }
+        )
+        return block_idx
+
+    @staticmethod
+    def _field(source: object, name: str) -> object:
+        return source.get(name) if isinstance(source, dict) else getattr(source, name, None)
+
+    def _close_reasoning_item(self, item: object, item_id: str | None) -> None:
+        block_idx: Final = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
+        encrypted_content: Final = self._field(item, "encrypted_content")
+        signature: Final = (
+            encrypted_reasoning_signature(encrypted_content)
+            if isinstance(encrypted_content, str) and encrypted_content
+            else None
+        )
+        if block_idx < 0 and signature is None:
+            return
+        if block_idx < 0:
+            redacted_idx: Final = self._open_block(
+                item_id,
+                {"type": "redacted_thinking", "data": signature},  # mutable-ok: API message payload
+            )
+            stop: Final = {"type": "content_block_stop", "index": redacted_idx}  # mutable-ok: API message payload
+            self._chunk_queue.append(stop)
+            return
+        if signature is not None:
+            self._chunk_queue.append(
+                {  # mutable-ok: API message payload
+                    "type": "content_block_delta",
+                    "index": block_idx,
+                    "delta": {"type": "signature_delta", "signature": signature},  # mutable-ok: API message payload
+                }
+            )
+        self._chunk_queue.append({"type": "content_block_stop", "index": block_idx})  # mutable-ok: API message payload
+
+    def _process_event(self, event: object) -> None:
         """Convert one Responses API event into zero or more Anthropic chunks queued for emission."""
         event_type = getattr(event, "type", None)
         if event_type is None and isinstance(event, dict):
@@ -77,102 +144,48 @@ class AnthropicResponsesStreamWrapper:
 
         # ---- message_start ----
         if event_type == "response.created":
-            self._sent_message_start = True
-            self._chunk_queue.append(self._make_message_start())
+            if not self._sent_message_start:
+                self._sent_message_start = True
+                self._chunk_queue.append(self._make_message_start())
             return
 
         # ---- content_block_start for a new output message item ----
         if event_type == "response.output_item.added":
-            item = getattr(event, "item", None) or (
-                event.get("item") if isinstance(event, dict) else None
-            )
+            item = getattr(event, "item", None) or (event.get("item") if isinstance(event, dict) else None)
             if item is None:
                 return
-            item_type = getattr(item, "type", None) or (
-                item.get("type") if isinstance(item, dict) else None
-            )
-            item_id = getattr(item, "id", None) or (
-                item.get("id") if isinstance(item, dict) else None
-            )
+            item_type: Final = getattr(item, "type", None) or (item.get("type") if isinstance(item, dict) else None)
+            item_id = getattr(item, "id", None) or (item.get("id") if isinstance(item, dict) else None)
 
             if item_type == "message":
-                block_idx = self._next_block_index()
-                if item_id:
-                    self._item_id_to_block_index[item_id] = block_idx
-                self._chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": block_idx,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
+                self._open_block(item_id, {"type": "text", "text": ""})
             elif item_type == "function_call":
-                call_id = (
-                    getattr(item, "call_id", None)
-                    or (item.get("call_id") if isinstance(item, dict) else None)
-                    or ""
+                call_id: Final = (
+                    getattr(item, "call_id", None) or (item.get("call_id") if isinstance(item, dict) else None) or ""
                 )
-                name = (
-                    getattr(item, "name", None)
-                    or (item.get("name") if isinstance(item, dict) else None)
-                    or ""
-                )
-                block_idx = self._next_block_index()
+                name = getattr(item, "name", None) or (item.get("name") if isinstance(item, dict) else None) or ""
                 if item_id:
-                    self._item_id_to_block_index[item_id] = block_idx
                     self._pending_tool_ids[item_id] = call_id
-                self._chunk_queue.append(
+                self._open_block(
+                    item_id,
                     {
-                        "type": "content_block_start",
-                        "index": block_idx,
-                        "content_block": {
-                            "type": "tool_use",
-                            "id": call_id,
-                            "name": name,
-                            "input": {},
-                        },
-                    }
-                )
-            elif item_type == "reasoning":
-                block_idx = self._next_block_index()
-                if item_id:
-                    self._item_id_to_block_index[item_id] = block_idx
-                self._chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": block_idx,
-                        "content_block": {"type": "thinking", "thinking": ""},
-                    }
+                        "type": "tool_use",
+                        "id": call_id,
+                        "name": name,
+                        "input": {},
+                    },
                 )
             return
 
-        # ---- text delta ----
-        if event_type == "response.output_text.delta":
-            item_id = getattr(event, "item_id", None) or (
-                event.get("item_id") if isinstance(event, dict) else None
-            )
-            delta = getattr(event, "delta", "") or (
-                event.get("delta", "") if isinstance(event, dict) else ""
-            )
-            block_idx = (
-                self._item_id_to_block_index.get(item_id, -1)
-                if item_id
-                else self._current_block_index
-            )
+        if event_type == "response.refusal.delta":
+            delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
+            if not isinstance(delta, str) or not delta:
+                return
+            self._refusal_text = self._refusal_text + delta
+            item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
+            block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
             if block_idx < 0:
-                # Some providers (e.g. LMStudio) skip response.output_item.added,
-                # so no text block is open yet; synthesize content_block_start
-                # instead of emitting a delta with index -1
-                block_idx = self._next_block_index()
-                if item_id:
-                    self._item_id_to_block_index[item_id] = block_idx
-                self._chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": block_idx,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
+                block_idx = self._open_block(item_id, {"type": "text", "text": ""})
             self._chunk_queue.append(
                 {
                     "type": "content_block_delta",
@@ -182,19 +195,57 @@ class AnthropicResponsesStreamWrapper:
             )
             return
 
+        # ---- text delta ----
+        if event_type == "response.output_text.delta":
+            item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
+            delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
+            block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
+            if block_idx < 0:
+                # Some providers (e.g. LMStudio) skip response.output_item.added,
+                # so no text block is open yet; synthesize content_block_start
+                # instead of emitting a delta with index -1
+                block_idx = self._open_block(item_id, {"type": "text", "text": ""})
+            self._chunk_queue.append(
+                {
+                    "type": "content_block_delta",
+                    "index": block_idx,
+                    "delta": {"type": "text_delta", "text": delta},
+                }
+            )
+            return
+
+        if event_type == "response.reasoning_summary_part.added":
+            part_item_id: Final = self._field(event, "item_id")
+            summary_index: Final = self._field(event, "summary_index")
+            part_block_idx: Final = (
+                self._item_id_to_block_index.get(part_item_id, -1) if isinstance(part_item_id, str) else -1
+            )
+            if part_block_idx < 0 or not isinstance(summary_index, int) or summary_index == 0:
+                return
+            self._chunk_queue.append(
+                {  # mutable-ok: API message payload
+                    "type": "content_block_delta",
+                    "index": part_block_idx,
+                    "delta": {  # mutable-ok: API message payload
+                        "type": "thinking_delta",
+                        "thinking": REASONING_SUMMARY_PART_SEPARATOR,
+                    },
+                }
+            )
+            return
+
         # ---- reasoning summary text delta ----
         if event_type == "response.reasoning_summary_text.delta":
-            item_id = getattr(event, "item_id", None) or (
-                event.get("item_id") if isinstance(event, dict) else None
-            )
-            delta = getattr(event, "delta", "") or (
-                event.get("delta", "") if isinstance(event, dict) else ""
-            )
-            block_idx = (
-                self._item_id_to_block_index.get(item_id, self._current_block_index)
-                if item_id
-                else self._current_block_index
-            )
+            item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
+            delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
+            block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
+            if block_idx < 0:
+                if not delta:
+                    return
+                block_idx = self._open_block(
+                    item_id,
+                    {"type": "thinking", "thinking": "", "signature": ""},  # mutable-ok: API message payload
+                )
             self._chunk_queue.append(
                 {
                     "type": "content_block_delta",
@@ -206,12 +257,8 @@ class AnthropicResponsesStreamWrapper:
 
         # ---- function call arguments delta ----
         if event_type == "response.function_call_arguments.delta":
-            item_id = getattr(event, "item_id", None) or (
-                event.get("item_id") if isinstance(event, dict) else None
-            )
-            delta = getattr(event, "delta", "") or (
-                event.get("delta", "") if isinstance(event, dict) else ""
-            )
+            item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
+            delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
             block_idx = (
                 self._item_id_to_block_index.get(item_id, self._current_block_index)
                 if item_id
@@ -228,20 +275,16 @@ class AnthropicResponsesStreamWrapper:
 
         # ---- output item done -> content_block_stop ----
         if event_type == "response.output_item.done":
-            item = getattr(event, "item", None) or (
-                event.get("item") if isinstance(event, dict) else None
-            )
+            item = getattr(event, "item", None) or (event.get("item") if isinstance(event, dict) else None)
             item_id = (
-                getattr(item, "id", None)
-                or (item.get("id") if isinstance(item, dict) else None)
-                if item
-                else None
+                getattr(item, "id", None) or (item.get("id") if isinstance(item, dict) else None) if item else None
             )
-            block_idx = (
-                self._item_id_to_block_index.get(item_id, self._current_block_index)
-                if item_id
-                else self._current_block_index
-            )
+            if self._field(item, "type") == "reasoning":
+                self._close_reasoning_item(item, item_id)
+                return
+            block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
+            if block_idx < 0:
+                return
             self._chunk_queue.append(
                 {
                     "type": "content_block_stop",
@@ -256,58 +299,51 @@ class AnthropicResponsesStreamWrapper:
             "response.failed",
             "response.incomplete",
         ):
-            response_obj = getattr(event, "response", None) or (
+            response_obj: Final = getattr(event, "response", None) or (
                 event.get("response") if isinstance(event, dict) else None
             )
-            stop_reason = "end_turn"
-            input_tokens = 0
-            output_tokens = 0
-            cache_creation_tokens = 0
-            cache_read_tokens = 0
+            output: Final = (getattr(response_obj, "output", None) or ()) if response_obj is not None else ()
+            refusal_text: Final = responses_output_refusal_text(output) or (self._refusal_text or None)
+            status: Final = getattr(response_obj, "status", None) if response_obj is not None else None
+            has_tool_call: Final = any(
+                getattr(item, "type", None) == "function_call"
+                or (isinstance(item, dict) and item.get("type") == "function_call")
+                for item in output
+            )
+            stop_reason: Final = (
+                "max_tokens"
+                if status == "incomplete"
+                else "refusal"
+                if refusal_text is not None
+                else "tool_use"
+                if has_tool_call
+                else "end_turn"
+            )
+            anthropic_usage: Final[AnthropicUsage] = (
+                LiteLLMAnthropicToResponsesAPIAdapter.translate_responses_api_usage_to_anthropic_usage(
+                    getattr(response_obj, "usage", None)
+                )
+                if response_obj is not None
+                else AnthropicUsage(input_tokens=0, output_tokens=0)
+            )
 
-            if response_obj is not None:
-                status = getattr(response_obj, "status", None)
-                if status == "incomplete":
-                    stop_reason = "max_tokens"
-                usage = getattr(response_obj, "usage", None)
-                if usage is not None:
-                    input_tokens = getattr(usage, "input_tokens", 0) or 0
-                    output_tokens = getattr(usage, "output_tokens", 0) or 0
-                    cache_creation_tokens = getattr(usage, "input_tokens_details", None)  # type: ignore[assignment]
-                    cache_read_tokens = getattr(usage, "output_tokens_details", None)  # type: ignore[assignment]
-                    # Prefer direct cache fields if present
-                    cache_creation_tokens = int(
-                        getattr(usage, "cache_creation_input_tokens", 0) or 0
-                    )
-                    cache_read_tokens = int(
-                        getattr(usage, "cache_read_input_tokens", 0) or 0
-                    )
-
-            # Check if tool_use was in the output to override stop_reason
-            if response_obj is not None:
-                output = getattr(response_obj, "output", []) or []
-                for out_item in output:
-                    out_type = getattr(out_item, "type", None) or (
-                        out_item.get("type") if isinstance(out_item, dict) else None
-                    )
-                    if out_type == "function_call":
-                        stop_reason = "tool_use"
-                        break
-
-            usage_delta: Dict[str, Any] = {
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
+            message_delta_payload: Final = {  # mutable-ok: fresh message_delta payload built per chunk
+                "stop_reason": stop_reason,
+                "stop_sequence": None,
+                **(
+                    {  # mutable-ok: fresh message_delta stop_details entry built per chunk
+                        "stop_details": refusal_stop_details(refusal_text)
+                    }
+                    if stop_reason == "refusal"
+                    else {}  # mutable-ok: empty spread placeholder for non-refusal stop
+                ),
             }
-            if cache_creation_tokens:
-                usage_delta["cache_creation_input_tokens"] = cache_creation_tokens
-            if cache_read_tokens:
-                usage_delta["cache_read_input_tokens"] = cache_read_tokens
 
             self._chunk_queue.append(
                 {
                     "type": "message_delta",
-                    "delta": {"stop_reason": stop_reason, "stop_sequence": None},
-                    "usage": usage_delta,
+                    "delta": message_delta_payload,
+                    "usage": dict(anthropic_usage),
                 }
             )
             self._chunk_queue.append({"type": "message_stop"})
@@ -317,7 +353,7 @@ class AnthropicResponsesStreamWrapper:
     def __aiter__(self) -> "AnthropicResponsesStreamWrapper":
         return self
 
-    async def __anext__(self) -> Dict[str, Any]:
+    async def __anext__(self) -> dict[str, object]:
         # Return any queued chunks first
         if self._chunk_queue:
             return self._chunk_queue.popleft()
@@ -330,16 +366,24 @@ class AnthropicResponsesStreamWrapper:
 
         # Consume the upstream stream
         try:
-            async for event in self.responses_stream:
-                self._process_event(event)
-                if self._chunk_queue:
-                    return self._chunk_queue.popleft()
+            if hasattr(self.responses_stream, "__aiter__"):
+                async for event in self.responses_stream:
+                    self._process_event(event)
+                    if self._chunk_queue:
+                        return self._chunk_queue.popleft()
+            else:
+                if self._sync_responses_iterator is None:
+                    self._sync_responses_iterator = iter(self.responses_stream)
+                sync_iterator: Final = self._sync_responses_iterator
+                missing: Final = object()
+                while (event := await asyncio.to_thread(next, sync_iterator, missing)) is not missing:
+                    self._process_event(event)
+                    if self._chunk_queue:
+                        return self._chunk_queue.popleft()
         except StopAsyncIteration:
             pass
         except Exception as e:
-            verbose_logger.error(
-                f"AnthropicResponsesStreamWrapper error: {e}\n{traceback.format_exc()}"
-            )
+            verbose_logger.error("AnthropicResponsesStreamWrapper error: %s\n%s", e, traceback.format_exc())
 
         # Drain any remaining queued chunks
         if self._chunk_queue:

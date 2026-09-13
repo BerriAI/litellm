@@ -1,23 +1,21 @@
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from mcp.types import (
     CallToolRequestParams,
     CallToolResult,
     ListToolsResult,
+    PaginatedRequestParams,
     TextContent,
 )
 from mcp.types import Tool as MCPTool
 
 from litellm.experimental_mcp_client.tools import (
+    list_tools_with_pagination,
+    transform_mcp_tool_to_anthropic_tool,
     _get_function_arguments,
     _normalize_mcp_input_schema,
     call_mcp_tool,
@@ -108,6 +106,134 @@ async def test_load_mcp_tools_openai_format(mock_session, mock_list_tools_result
     assert result[0]["type"] == "function"
     assert result[0]["function"]["name"] == "test_tool"
     mock_session.list_tools.assert_called_once()
+
+
+@pytest.mark.asyncio()
+async def test_load_mcp_tools_follows_pagination(mock_session):
+    mock_session.list_tools.side_effect = [
+        ListToolsResult(
+            tools=[
+                MCPTool(name="tool_a", description="a", inputSchema={}),
+                MCPTool(name="tool_b", description="b", inputSchema={}),
+            ],
+            nextCursor="page-2",
+        ),
+        ListToolsResult(tools=[MCPTool(name="tool_c", description="c", inputSchema={})]),
+    ]
+    result = await load_mcp_tools(mock_session, format="mcp")
+    assert [tool.name for tool in result] == ["tool_a", "tool_b", "tool_c"]
+    assert mock_session.list_tools.call_count == 2
+    second_call_params = mock_session.list_tools.call_args_list[1].kwargs["params"]
+    assert isinstance(second_call_params, PaginatedRequestParams)
+    assert second_call_params.cursor == "page-2"
+
+
+@pytest.mark.asyncio()
+async def test_pagination_walk_stops_at_page_cap(mock_session, monkeypatch):
+    monkeypatch.setattr("litellm.experimental_mcp_client.tools.MCP_TOOL_LISTING_MAX_PAGES", 2)
+    mock_session.list_tools.side_effect = [
+        ListToolsResult(
+            tools=[MCPTool(name="tool_0", description="0", inputSchema={})],
+            nextCursor="page-2",
+        ),
+        ListToolsResult(
+            tools=[MCPTool(name="tool_1", description="1", inputSchema={})],
+            nextCursor="page-3",
+        ),
+        ListToolsResult(tools=[MCPTool(name="tool_2", description="2", inputSchema={})]),
+    ]
+    result = await list_tools_with_pagination(mock_session)
+    assert [tool.name for tool in result] == ["tool_0", "tool_1"]
+    assert mock_session.list_tools.call_count == 2
+
+
+@pytest.mark.asyncio()
+async def test_pagination_walk_stops_on_repeated_cursor(mock_session):
+    mock_session.list_tools.side_effect = [
+        ListToolsResult(
+            tools=[MCPTool(name="tool_0", description="0", inputSchema={})],
+            nextCursor="same-cursor",
+        ),
+        ListToolsResult(
+            tools=[MCPTool(name="tool_1", description="1", inputSchema={})],
+            nextCursor="same-cursor",
+        ),
+    ]
+    result = await list_tools_with_pagination(mock_session)
+    assert [tool.name for tool in result] == ["tool_0", "tool_1"]
+    assert mock_session.list_tools.call_count == 2
+
+
+@pytest.mark.asyncio()
+async def test_pagination_walk_treats_empty_cursor_as_terminal(mock_session):
+    mock_session.list_tools.side_effect = [
+        ListToolsResult(
+            tools=[MCPTool(name="tool_0", description="0", inputSchema={})],
+            nextCursor="",
+        ),
+    ]
+    result = await list_tools_with_pagination(mock_session)
+    assert [tool.name for tool in result] == ["tool_0"]
+    mock_session.list_tools.assert_called_once()
+
+
+@pytest.mark.asyncio()
+async def test_pagination_walk_stops_at_whole_walk_deadline(mock_session, monkeypatch):
+    import anyio
+
+    from litellm.experimental_mcp_client.tools import list_tools_with_pagination
+
+    monkeypatch.setattr("litellm.experimental_mcp_client.tools.MCP_CLIENT_TIMEOUT", 0.2)
+    monkeypatch.setattr("litellm.experimental_mcp_client.tools.MCP_TOOL_LISTING_TIMEOUT", 0.2)
+
+    async def slow_page(params=None):
+        await anyio.sleep(0.15)
+        idx = int(params.cursor) if params is not None else 0
+        return ListToolsResult(
+            tools=[MCPTool(name=f"tool_{idx}", description=str(idx), inputSchema={})],
+            nextCursor=str(idx + 1),
+        )
+
+    mock_session.list_tools = slow_page
+    result = await list_tools_with_pagination(mock_session)
+
+    assert [tool.name for tool in result] == ["tool_0"]
+
+
+@pytest.mark.asyncio()
+async def test_pagination_walk_honors_explicit_deadline_over_globals(mock_session, monkeypatch):
+    import anyio
+
+    from litellm.experimental_mcp_client.tools import list_tools_with_pagination
+
+    monkeypatch.setattr("litellm.experimental_mcp_client.tools.MCP_CLIENT_TIMEOUT", 0.1)
+    monkeypatch.setattr("litellm.experimental_mcp_client.tools.MCP_TOOL_LISTING_TIMEOUT", 0.1)
+
+    async def slow_page(params=None):
+        await anyio.sleep(0.15)
+        idx = int(params.cursor) if params is not None else 0
+        tools = [MCPTool(name=f"tool_{idx}", description=str(idx), inputSchema={})]
+        if idx == 0:
+            return ListToolsResult(tools=tools, nextCursor="1")
+        return ListToolsResult(tools=tools)
+
+    mock_session.list_tools = slow_page
+    result = await list_tools_with_pagination(mock_session, listing_deadline=2.0)
+
+    assert [tool.name for tool in result] == ["tool_0", "tool_1"]
+
+
+@pytest.mark.asyncio()
+async def test_load_mcp_tools_openai_format_spans_pages(mock_session):
+    mock_session.list_tools.side_effect = [
+        ListToolsResult(
+            tools=[MCPTool(name="tool_a", description="a", inputSchema={})],
+            nextCursor="page-2",
+        ),
+        ListToolsResult(tools=[MCPTool(name="tool_b", description="b", inputSchema={})]),
+    ]
+    result = await load_mcp_tools(mock_session, format="openai")
+    assert [t["function"]["name"] for t in result] == ["tool_a", "tool_b"]
 
 
 def test_get_function_arguments():
@@ -250,3 +376,93 @@ def test_transform_mcp_tool_to_openai_responses_api_tool():
     assert "query" in openai_tool["parameters"]["properties"]
     assert openai_tool["parameters"]["required"] == ["query"]
     assert openai_tool["parameters"]["additionalProperties"] == False
+
+
+def test_transform_mcp_tool_to_anthropic_tool():
+    """
+    Regression test (LIT-4517): MCP tools must reach /v1/messages in Anthropic's
+    own tool shape.
+
+    Given: An MCP tool
+    When:  It is transformed for the Anthropic Messages API
+    Then:  It carries name/description/input_schema, the shape that endpoint
+           accepts, rather than an OpenAI function block
+
+    /v1/messages rejects an OpenAI-shaped tool outright ("Input tag 'function'
+    does not match any of the expected tags"), so reusing either OpenAI
+    transform here loses every MCP tool.
+    """
+    tool = MCPTool(
+        name="read_wiki_structure",
+        description="Get a list of documentation topics",
+        inputSchema={
+            "type": "object",
+            "properties": {"repoName": {"type": "string"}},
+            "required": ["repoName"],
+        },
+    )
+
+    anthropic_tool = transform_mcp_tool_to_anthropic_tool(tool)
+
+    assert anthropic_tool["name"] == "read_wiki_structure"
+    assert anthropic_tool["description"] == "Get a list of documentation topics"
+    assert anthropic_tool["type"] == "custom"
+    assert anthropic_tool["input_schema"]["type"] == "object"
+    assert "repoName" in anthropic_tool["input_schema"]["properties"]
+    assert anthropic_tool["input_schema"]["required"] == ["repoName"]
+    assert "function" not in anthropic_tool, "Anthropic tools must not carry an OpenAI function block"
+    assert "parameters" not in anthropic_tool, "Anthropic names the schema input_schema, not parameters"
+
+
+def test_transform_mcp_tool_to_anthropic_tool_normalizes_empty_schema():
+    """A tool with no declared arguments must still present a valid object schema."""
+    anthropic_tool = transform_mcp_tool_to_anthropic_tool(
+        MCPTool(name="noargs", description=None, inputSchema={})
+    )
+
+    assert anthropic_tool["name"] == "noargs"
+    assert anthropic_tool["description"] == ""
+    assert anthropic_tool["input_schema"]["type"] == "object"
+    assert anthropic_tool["input_schema"]["properties"] == {}
+
+
+def test_transform_mcp_tool_to_anthropic_tool_strips_keys_anthropic_rejects():
+    """
+    Regression test (LIT-4517): an MCP schema with keys Anthropic does not accept
+    must be sanitized, so the same tool cannot succeed on /chat/completions and 400
+    on /v1/messages.
+
+    Given: An MCP tool whose inputSchema carries $schema, legacy definitions and oneOf
+    When:  It is transformed for the Anthropic Messages API
+    Then:  Only keys in AnthropicInputSchema survive, matching the chat path
+
+    The chat path runs the schema through the same sanitizer, so before this the two
+    routes diverged: a clean-schema server (deepwiki) worked on both, but a server
+    with a richer schema would be rejected only on messages.
+    """
+    from litellm.types.llms.anthropic import AnthropicInputSchema
+
+    tool = MCPTool(
+        name="rich",
+        description="tool with a dirty schema",
+        inputSchema={
+            "type": "object",
+            "properties": {"q": {"type": "string"}},
+            "required": ["q"],
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "definitions": {"D": {"type": "string"}},
+            "oneOf": [{"required": ["q"]}],
+        },
+    )
+
+    anthropic_tool = transform_mcp_tool_to_anthropic_tool(tool)
+    schema_keys = set(anthropic_tool["input_schema"].keys())
+
+    assert schema_keys <= set(AnthropicInputSchema.__annotations__.keys()), (
+        f"schema must only carry keys Anthropic accepts, got {schema_keys}"
+    )
+    assert "$schema" not in schema_keys
+    assert "definitions" not in schema_keys
+    assert "oneOf" not in schema_keys
+    assert anthropic_tool["input_schema"]["properties"] == {"q": {"type": "string"}}
+    assert anthropic_tool["input_schema"]["required"] == ["q"]

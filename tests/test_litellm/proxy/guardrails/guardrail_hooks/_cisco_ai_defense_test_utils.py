@@ -1,6 +1,5 @@
 import json
 import os
-import sys
 from contextlib import contextmanager
 from datetime import datetime
 from types import SimpleNamespace
@@ -39,7 +38,6 @@ def _make_model_response_with_content(content: str) -> ModelResponse:
     )
 
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm import DualCache
 from litellm.proxy._types import UserAPIKeyAuth

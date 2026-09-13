@@ -4,8 +4,8 @@ from .errors import AnthropicContextManagementError
 from .result import PolyfillResult
 
 __all__ = [
-    "apply_context_management",
-    "AnthropicContextManagementError",
     "CLEARED_TOOL_RESULT_PLACEHOLDER",
+    "AnthropicContextManagementError",
     "PolyfillResult",
+    "apply_context_management",
 ]

@@ -1,44 +1,287 @@
-from typing import Any, Optional, Union
+import json
+import math
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Any, Final, Protocol, TypedDict, cast
 
-from pydantic import BaseModel
-
-from litellm.types.utils import HiddenParams
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 
-def _add_headers_to_response(response: Any, headers: dict) -> Any:
+class FallbackErrorInfo(TypedDict):
+    message: str
+    type: str
+    param: str | None
+    code: str | None
+
+
+class _HiddenParamsHost(Protocol):
+    _hidden_params: dict[str, object]
+
+
+_EMPTY_OBJECT_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
+_ROUTING_HEADER_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_COMPLEXITY_ROUTER_HEADER_PREFIX: Final = "x-litellm-complexity-router-"
+
+
+def _routing_header_mapping(value: object) -> Mapping[str, object]:
+    try:
+        mapping: Final[Mapping[str, object]] = _ROUTING_HEADER_MAPPING.validate_python(value, strict=True)
+        return mapping
+    except ValidationError:
+        return _EMPTY_OBJECT_MAPPING
+
+
+def _header_string(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized: Final = value.strip()
+    return normalized if normalized and all(" " <= character <= "~" for character in normalized) else None
+
+
+def complexity_router_decision_headers(request_kwargs: object) -> Mapping[str, str]:
+    data: Final = _routing_header_mapping(request_kwargs)
+    metadata_key: Final = "litellm_metadata" if "litellm_metadata" in data else "metadata"
+    decision: Final = _routing_header_mapping(_routing_header_mapping(data.get(metadata_key)).get("routing_decision"))
+    if decision.get("router_type") != "complexity":
+        return MappingProxyType({})
+    score: Final = decision.get("score")
+    values: Final = (
+        ("tier", decision.get("tier")),
+        ("cause", decision.get("cause")),
+        (
+            "score",
+            str(score)
+            if isinstance(score, (int, float)) and not isinstance(score, bool) and math.isfinite(score)
+            else None,
+        ),
+        (
+            "reasoning-effort",
+            _routing_header_mapping(decision.get("tier_litellm_params")).get("reasoning_effort"),
+        ),
+    )
+    return MappingProxyType(
+        {
+            f"{_COMPLEXITY_ROUTER_HEADER_PREFIX}{key}": header_value
+            for key, value in values
+            if (header_value := _header_string(value)) is not None
+        }
+    )
+
+
+def replace_complexity_router_headers(
+    existing_headers: Mapping[str, object], new_headers: Mapping[str, object]
+) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in (*existing_headers.items(), *new_headers.items())
+            if key in new_headers or not key.startswith(_COMPLEXITY_ROUTER_HEADER_PREFIX)
+        }
+    )
+
+
+class HiddenParamsAsyncIteratorWrapper:
+    """
+    Wraps a bare async generator/iterator (e.g. a provider's raw SSE
+    streaming response) that cannot itself hold a ``_hidden_params``
+    attribute, so router-derived headers (ITPM/OTPM, model-group, retry,
+    fallback) can attach to a streaming response the same way they attach
+    to object-based responses (e.g. ``CustomStreamWrapper``).
+    """
+
+    def __init__(self, inner: object) -> None:
+        self._inner = inner
+        self._hidden_params: dict[str, object] = {}
+
+    def __aiter__(self) -> "HiddenParamsAsyncIteratorWrapper":
+        return self
+
+    async def __anext__(self) -> object:
+        return await cast(Any, self._inner).__anext__()
+
+    async def aclose(self) -> None:
+        aclose: Final = getattr(self._inner, "aclose", None)
+        if callable(aclose):
+            await aclose()
+
+
+def prepare_response_for_header_attachment(response: object) -> object | None:
+    if response is None:
+        return None
+    if isinstance(response, dict) or hasattr(response, "_hidden_params"):
+        return response
+    if hasattr(response, "__anext__"):
+        return HiddenParamsAsyncIteratorWrapper(response)
+    return response
+
+
+def response_has_hidden_params(response: object) -> bool:
+    if isinstance(response, dict):
+        return "_hidden_params" in response
+    return hasattr(response, "_hidden_params")
+
+
+def ensure_response_additional_headers(response: object) -> dict[str, object]:
+    hidden_params: Final = get_hidden_params_dict(response, create=isinstance(response, dict))
+    _write_hidden_params(response, hidden_params)
+    additional_headers = hidden_params.get("additional_headers")
+    if not isinstance(additional_headers, dict):
+        additional_headers = {}
+        hidden_params["additional_headers"] = additional_headers
+    return additional_headers
+
+
+def apply_quality_router_decision_headers(
+    additional_headers: dict[str, object],
+    request_kwargs: object,
+) -> None:
+    metadata: Final = (request_kwargs.get("metadata") or {}) if isinstance(request_kwargs, dict) else {}
+    decision: Final = metadata.get("quality_router_decision") if isinstance(metadata, dict) else None
+    if not isinstance(decision, dict):
+        return
+    quality_header_fields: Final = (
+        ("routed_model", "x-litellm-quality-router-model"),
+        ("quality_tier", "x-litellm-quality-router-tier"),
+        ("routed_via", "x-litellm-quality-router-via"),
+        ("matched_keyword", "x-litellm-quality-router-keyword"),
+        ("complexity_tier", "x-litellm-quality-router-complexity"),
+    )
+    for field, header in quality_header_fields:
+        if decision.get(field) is not None:
+            additional_headers[header] = str(decision[field])
+
+
+def response_in_flight_token_count(response: object) -> int:
+    usage: Final = response.get("usage") if isinstance(response, dict) else getattr(response, "usage", None)
+    if usage is None:
+        return 0
+    if isinstance(usage, dict):
+        total: Final = int(usage.get("total_tokens") or 0)
+        if total:
+            return total
+        return int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)
+    return int(getattr(usage, "total_tokens", 0) or 0)
+
+
+def apply_remaining_usage_headers(
+    additional_headers: dict[str, object],
+    remaining_usage: dict[str, int],
+    in_flight_tokens: int,
+) -> None:
+    in_flight_delta: Final = {
+        "x-ratelimit-remaining-tokens": in_flight_tokens,
+        "x-ratelimit-remaining-requests": 1,
+    }
+    for header, value in remaining_usage.items():
+        if value is not None and header not in additional_headers:
+            additional_headers[header] = value - in_flight_delta.get(header, 0)
+
+
+def _normalize_hidden_params(hidden_params: object) -> dict[str, object]:
+    if isinstance(hidden_params, BaseModel):
+        return cast("dict[str, object]", hidden_params.model_dump())
+    if isinstance(hidden_params, dict):
+        return cast("dict[str, object]", hidden_params)
+    return {}
+
+
+def get_hidden_params_dict(
+    response: object,
+    *,
+    create: bool = False,
+) -> dict[str, object]:
+    if isinstance(response, dict):
+        hidden_params = _normalize_hidden_params(response.get("_hidden_params"))
+        if not hidden_params and create:
+            hidden_params = {}
+            response["_hidden_params"] = hidden_params
+        return hidden_params
+
+    hidden_params = _normalize_hidden_params(cast(object, getattr(response, "_hidden_params", None)))
+    return hidden_params
+
+
+def _write_hidden_params(response: object, hidden_params: dict[str, object]) -> None:
+    if isinstance(response, dict):
+        response["_hidden_params"] = hidden_params
+    elif hasattr(response, "_hidden_params"):
+        cast(_HiddenParamsHost, response)._hidden_params = hidden_params
+
+
+def _ensure_additional_headers_dict(
+    hidden_params: dict[str, object],
+) -> dict[str, object]:
+    additional_headers: Final = hidden_params.get("additional_headers")
+    if isinstance(additional_headers, dict):
+        return cast("dict[str, object]", additional_headers)
+    return {}
+
+
+def get_fallback_error_info(error: Exception) -> FallbackErrorInfo:
+    message: Final = cast(object, getattr(error, "message", str(error)))
+    error_type: Final = cast(object, getattr(error, "type", error.__class__.__name__))
+    param: Final = cast(object, getattr(error, "param", None))
+    code: Final = cast(object, getattr(error, "status_code", getattr(error, "code", None)))
+    return FallbackErrorInfo(
+        message=str(message),
+        type=str(error_type),
+        param=str(param) if param is not None else None,
+        code=str(code) if code is not None else None,
+    )
+
+
+def _coerce_error_dicts(items: list[object]) -> list[dict[str, object]]:
+    return [cast("dict[str, object]", item) for item in items if isinstance(item, dict)]
+
+
+def get_fallback_errors_from_headers(
+    additional_headers: dict[str, object],
+) -> list[dict[str, object]]:
+    existing_errors: Final = additional_headers.get("x-litellm-fallback-errors")
+    if isinstance(existing_errors, list):
+        return _coerce_error_dicts(cast("list[object]", existing_errors))
+    if isinstance(existing_errors, str):
+        try:
+            parsed_errors: Final[object] = cast(object, json.loads(existing_errors))
+        except json.JSONDecodeError:
+            return []
+        if isinstance(parsed_errors, list):
+            return _coerce_error_dicts(cast("list[object]", parsed_errors))
+    return []
+
+
+def _add_headers_to_response(response: object, headers: dict[str, object]) -> object:
     """
     Helper function to add headers to a response's hidden params
     """
-    if response is None or not isinstance(response, BaseModel):
+    if response is None:
         return response
 
-    hidden_params: Optional[Union[dict, HiddenParams]] = getattr(
-        response, "_hidden_params", {}
-    )
+    if (
+        not isinstance(response, BaseModel)
+        and not isinstance(response, dict)
+        and not hasattr(response, "_hidden_params")
+    ):
+        return response
 
-    if hidden_params is None:
-        hidden_params_dict = {}
-    elif isinstance(hidden_params, HiddenParams):
-        hidden_params_dict = hidden_params.model_dump()
-    else:
-        hidden_params_dict = hidden_params
+    hidden_params: Final = get_hidden_params_dict(response, create=isinstance(response, dict))
+    additional_headers: Final = _ensure_additional_headers_dict(hidden_params)
+    additional_headers.update(headers)
+    hidden_params["additional_headers"] = additional_headers
 
-    hidden_params_dict.setdefault("additional_headers", {})
-    hidden_params_dict["additional_headers"].update(headers)
-
-    setattr(response, "_hidden_params", hidden_params_dict)
+    _write_hidden_params(response, hidden_params)
     return response
 
 
 def add_retry_headers_to_response(
-    response: Any,
+    response: object,
     attempted_retries: int,
-    max_retries: Optional[int] = None,
-) -> Any:
+    max_retries: int | None = None,
+) -> object:
     """
     Add retry headers to the request
     """
-    retry_headers = {
+    retry_headers: Final[dict[str, object]] = {
         "x-litellm-attempted-retries": attempted_retries,
     }
     if max_retries is not None:
@@ -48,9 +291,10 @@ def add_retry_headers_to_response(
 
 
 def add_fallback_headers_to_response(
-    response: Any,
+    response: object,
     attempted_fallbacks: int,
-) -> Any:
+    fallback_errors: list[FallbackErrorInfo] | None = None,
+) -> object:
     """
     Add fallback headers to the response
 
@@ -64,7 +308,19 @@ def add_fallback_headers_to_response(
     Note: It's intentional that we don't add max_fallbacks in response headers
     Want to avoid bloat in the response headers for performance.
     """
-    fallback_headers = {
+    fallback_headers: Final[dict[str, object]] = {
         "x-litellm-attempted-fallbacks": attempted_fallbacks,
     }
-    return _add_headers_to_response(response, fallback_headers)
+    response = _add_headers_to_response(response, fallback_headers)
+    if fallback_errors is None or response is None:
+        return response
+
+    hidden_params: Final = get_hidden_params_dict(response, create=isinstance(response, dict))
+    additional_headers: Final = _ensure_additional_headers_dict(hidden_params)
+    merged_errors: Final = get_fallback_errors_from_headers(additional_headers) + [
+        cast("dict[str, object]", error) for error in fallback_errors
+    ]
+    additional_headers["x-litellm-fallback-errors"] = json.dumps(merged_errors)
+    hidden_params["additional_headers"] = additional_headers
+    _write_hidden_params(response, hidden_params)
+    return response

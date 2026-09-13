@@ -4,7 +4,7 @@ JSONPath Extractor Module
 Extracts field values from data using simple JSONPath-like expressions.
 """
 
-from typing import Any, List, Union
+from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
 
@@ -15,7 +15,7 @@ class JsonPathExtractor:
     @staticmethod
     def extract_fields(
         data: dict,
-        jsonpath_expressions: List[str],
+        jsonpath_expressions: list[str],
     ) -> str:
         """
         Extract field values from data using JSONPath-like expressions.
@@ -27,7 +27,7 @@ class JsonPathExtractor:
 
         Returns concatenated string of all extracted values.
         """
-        extracted_values: List[str] = []
+        extracted_values: Final[list[str]] = []
 
         for expr in jsonpath_expressions:
             try:
@@ -38,14 +38,12 @@ class JsonPathExtractor:
                     else:
                         extracted_values.append(str(value))
             except Exception as e:
-                verbose_proxy_logger.debug(
-                    "Failed to extract field %s: %s", expr, str(e)
-                )
+                verbose_proxy_logger.debug("Failed to extract field %s: %s", expr, str(e))
 
         return "\n".join(extracted_values)
 
     @staticmethod
-    def evaluate(data: dict, expr: str) -> Union[str, List[str], None]:
+    def evaluate(data: dict, expr: str) -> str | list[str] | None:
         """
         Evaluate a simple JSONPath-like expression.
 
@@ -57,7 +55,7 @@ class JsonPathExtractor:
         if not expr or not data:
             return None
 
-        parts = expr.replace("[*]", ".[*]").split(".")
+        parts: Final = expr.replace("[*]", ".[*]").split(".")
         current: Any = data
 
         for i, part in enumerate(parts):

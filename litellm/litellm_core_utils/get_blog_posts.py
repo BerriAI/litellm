@@ -14,14 +14,14 @@ import time
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from importlib.resources import files
-from typing import Dict, List, Optional
+from typing import Final
 
 import httpx
 from pydantic import BaseModel
 
 from litellm import verbose_logger
 
-BLOG_POSTS_TTL_SECONDS: int = 3600  # 1 hour
+BLOG_POSTS_TTL_SECONDS: Final[int] = 3600  # 1 hour
 
 
 class BlogPost(BaseModel):
@@ -32,7 +32,7 @@ class BlogPost(BaseModel):
 
 
 class BlogPostsResponse(BaseModel):
-    posts: List[BlogPost]
+    posts: list[BlogPost]
 
 
 class GetBlogPosts:
@@ -45,15 +45,13 @@ class GetBlogPosts:
     - Falls back to the bundled local backup on any failure
     """
 
-    _cached_posts: Optional[List[Dict[str, str]]] = None
+    _cached_posts: list[dict[str, str]] | None = None
     _last_fetch_time: float = 0.0
 
     @staticmethod
-    def load_local_blog_posts() -> List[Dict[str, str]]:
+    def load_local_blog_posts() -> list[dict[str, str]]:
         """Load the bundled local backup blog posts."""
-        content = json.loads(
-            files("litellm").joinpath("blog_posts.json").read_text(encoding="utf-8")
-        )
+        content: Final = json.loads(files("litellm").joinpath("blog_posts.json").read_text(encoding="utf-8"))
         return content.get("posts", [])
 
     @staticmethod
@@ -63,23 +61,23 @@ class GetBlogPosts:
 
         Returns the raw XML text. Raises on network errors.
         """
-        response = httpx.get(url, timeout=timeout)
+        response: Final = httpx.get(url, timeout=timeout)
         response.raise_for_status()
         return response.text
 
     @staticmethod
-    def parse_rss_to_posts(xml_text: str, max_posts: int = 1) -> List[Dict[str, str]]:
+    def parse_rss_to_posts(xml_text: str, max_posts: int = 1) -> list[dict[str, str]]:
         """
         Parse RSS XML and return a list of blog post dicts.
 
         Extracts title, description, date (YYYY-MM-DD), and url from each <item>.
         """
-        root = ET.fromstring(xml_text)
-        channel = root.find("channel")
+        root: Final = ET.fromstring(xml_text)
+        channel: Final = root.find("channel")
         if channel is None:
             raise ValueError("RSS feed missing <channel> element")
 
-        posts: List[Dict[str, str]] = []
+        posts: Final[list[dict[str, str]]] = []
         for item in channel.findall("item"):
             if len(posts) >= max_posts:
                 break
@@ -113,18 +111,17 @@ class GetBlogPosts:
         return posts
 
     @staticmethod
-    def validate_blog_posts(posts: List[Dict[str, str]]) -> bool:
+    def validate_blog_posts(posts: list[dict[str, str]]) -> bool:
         """Return True if posts is a non-empty list."""
         if not isinstance(posts, list) or len(posts) == 0:
             verbose_logger.warning(
-                "LiteLLM: Parsed RSS feed has no valid posts. "
-                "Falling back to local backup.",
+                "LiteLLM: Parsed RSS feed has no valid posts. Falling back to local backup.",
             )
             return False
         return True
 
     @classmethod
-    def get_blog_posts(cls, url: str) -> List[Dict[str, str]]:
+    def get_blog_posts(cls, url: str) -> list[dict[str, str]]:
         """
         Return the blog posts list.
 
@@ -134,18 +131,17 @@ class GetBlogPosts:
         if os.getenv("LITELLM_LOCAL_BLOG_POSTS", "").lower() == "true":
             return cls.load_local_blog_posts()
 
-        now = time.time()
-        cached = cls._cached_posts
+        now: Final = time.time()
+        cached: Final = cls._cached_posts
         if cached is not None and (now - cls._last_fetch_time) < BLOG_POSTS_TTL_SECONDS:
             return cached
 
         try:
-            xml_text = cls.fetch_rss_feed(url)
-            posts = cls.parse_rss_to_posts(xml_text)
+            xml_text: Final = cls.fetch_rss_feed(url)
+            posts: Final = cls.parse_rss_to_posts(xml_text)
         except Exception as e:
             verbose_logger.warning(
-                "LiteLLM: Failed to fetch blog posts from %s: %s. "
-                "Falling back to local backup.",
+                "LiteLLM: Failed to fetch blog posts from %s: %s. Falling back to local backup.",
                 url,
                 str(e),
             )
@@ -159,6 +155,6 @@ class GetBlogPosts:
         return posts
 
 
-def get_blog_posts(url: str) -> List[Dict[str, str]]:
+def get_blog_posts(url: str) -> list[dict[str, str]]:
     """Public entry point — returns the blog posts list."""
     return GetBlogPosts.get_blog_posts(url=url)

@@ -1,5 +1,5 @@
 import types
-from typing import List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
@@ -23,21 +23,21 @@ class AmazonMistralConfig(AmazonInvokeConfig, BaseConfig):
     - `top_k` (float) top k for model
     """
 
-    max_tokens: Optional[int] = None
-    temperature: Optional[float] = None
-    top_p: Optional[float] = None
-    top_k: Optional[float] = None
-    stop: Optional[List[str]] = None
+    max_tokens: int | None = None
+    temperature: float | None = None
+    top_p: float | None = None
+    top_k: float | None = None
+    stop: list[str] | None = None
 
     def __init__(
         self,
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None,
-        top_p: Optional[int] = None,
-        top_k: Optional[float] = None,
-        stop: Optional[List[str]] = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: int | None = None,
+        top_k: float | None = None,
+        stop: list[str] | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -63,7 +63,7 @@ class AmazonMistralConfig(AmazonInvokeConfig, BaseConfig):
             and v is not None
         }
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return ["max_tokens", "temperature", "top_p", "stop", "stream"]
 
     def map_openai_params(
@@ -87,9 +87,7 @@ class AmazonMistralConfig(AmazonInvokeConfig, BaseConfig):
         return optional_params
 
     @staticmethod
-    def get_outputText(
-        completion_response: dict, model_response: "ModelResponse"
-    ) -> str:
+    def get_outputText(completion_response: dict, model_response: "ModelResponse") -> str:
         """This function extracts the output text from a bedrock mistral completion.
         As a side effect, it updates the finish reason for a model response.
 
@@ -103,17 +101,11 @@ class AmazonMistralConfig(AmazonInvokeConfig, BaseConfig):
         """
         if "choices" in completion_response:
             outputText = completion_response["choices"][0]["message"]["content"]
-            model_response.choices[0].finish_reason = completion_response["choices"][0][
-                "finish_reason"
-            ]
+            model_response.choices[0].finish_reason = completion_response["choices"][0]["finish_reason"]
         elif "outputs" in completion_response:
             outputText = completion_response["outputs"][0]["text"]
-            model_response.choices[0].finish_reason = completion_response["outputs"][0][
-                "stop_reason"
-            ]
+            model_response.choices[0].finish_reason = completion_response["outputs"][0]["stop_reason"]
         else:
-            raise BedrockError(
-                message="Unexpected mistral completion response", status_code=400
-            )
+            raise BedrockError(message="Unexpected mistral completion response", status_code=400)
 
         return outputText

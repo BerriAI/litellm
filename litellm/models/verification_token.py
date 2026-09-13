@@ -6,7 +6,6 @@ Canonical definition for ``litellm_verificationtoken``. Re-exported from
 """
 
 from datetime import datetime
-from typing import Dict, List, Optional, Union
 
 from pydantic import ConfigDict
 
@@ -15,60 +14,63 @@ from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 
 class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
-    token: Optional[str] = None
-    key_name: Optional[str] = None
-    key_alias: Optional[str] = None
+    token: str | None = None
+    key_name: str | None = None
+    key_alias: str | None = None
     spend: float = 0.0
-    max_budget: Optional[float] = None
-    expires: Optional[Union[str, datetime]] = None
-    models: List = []
-    aliases: Dict = {}
-    config: Dict = {}
-    user_id: Optional[str] = None
-    team_id: Optional[str] = None
-    agent_id: Optional[str] = None
-    project_id: Optional[str] = None
-    max_parallel_requests: Optional[int] = None
-    metadata: Dict = {}
-    tpm_limit: Optional[int] = None
-    rpm_limit: Optional[int] = None
-    budget_duration: Optional[str] = None
-    budget_reset_at: Optional[datetime] = None
-    allowed_cache_controls: Optional[list] = []
-    allowed_routes: Optional[list] = []
-    permissions: Dict = {}
-    model_spend: Dict = {}
-    model_max_budget: Dict = {}
+    max_budget: float | None = None
+    expires: str | datetime | None = None
+    models: list = []
+    aliases: dict = {}
+    config: dict = {}
+    user_id: str | None = None
+    team_id: str | None = None
+    agent_id: str | None = None
+    project_id: str | None = None
+    max_parallel_requests: int | None = None
+    metadata: dict = {}
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    budget_duration: str | None = None
+    budget_reset_at: datetime | None = None
+    allowed_cache_controls: list | None = []
+    allowed_routes: list | None = []
+    key_type: str | None = None
+    permissions: dict = {}
+    model_spend: dict = {}
+    model_max_budget: dict = {}
+    budget_fallbacks: dict[str, list[str]] = {}
     soft_budget_cooldown: bool = False
-    blocked: Optional[bool] = None
-    litellm_budget_table: Optional[dict] = None
-    budget_id: Optional[str] = None
-    org_id: Optional[str] = None  # org id for a given key
-    created_at: Optional[datetime] = None
-    created_by: Optional[str] = None
-    updated_at: Optional[datetime] = None
-    updated_by: Optional[str] = None
-    last_active: Optional[datetime] = None
-    object_permission_id: Optional[str] = None
-    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
-    access_group_ids: Optional[List[str]] = None
-    rotation_count: Optional[int] = 0
-    auto_rotate: Optional[bool] = False
-    rotation_interval: Optional[str] = None
-    last_rotation_at: Optional[datetime] = None
-    key_rotation_at: Optional[datetime] = None
-    router_settings: Optional[dict] = None
-    budget_limits: Optional[List[dict]] = None
+    blocked: bool | None = None
+    litellm_budget_table: dict | None = None
+    budget_id: str | None = None
+    org_id: str | None = None  # org id for a given key
+    created_at: datetime | None = None
+    created_by: str | None = None
+    updated_at: datetime | None = None
+    updated_by: str | None = None
+    settings_updated_at: datetime | None = None
+    last_active: datetime | None = None
+    object_permission_id: str | None = None
+    object_permission: LiteLLM_ObjectPermissionTable | None = None
+    access_group_ids: list[str] | None = None
+    rotation_count: int | None = 0
+    auto_rotate: bool | None = False
+    rotation_interval: str | None = None
+    last_rotation_at: datetime | None = None
+    key_rotation_at: datetime | None = None
+    router_settings: dict | None = None
+    budget_limits: list[dict] | None = None
     model_config = ConfigDict(protected_namespaces=())
 
 
 class LiteLLM_DeletedVerificationToken(LiteLLM_VerificationToken):
     """Audit record for deleted keys; mirrors the token plus deletion metadata."""
 
-    id: Optional[str] = None
-    deleted_at: Optional[datetime] = None
-    deleted_by: Optional[str] = None
-    deleted_by_api_key: Optional[str] = None
-    litellm_changed_by: Optional[str] = None
+    id: str | None = None
+    deleted_at: datetime | None = None
+    deleted_by: str | None = None
+    deleted_by_api_key: str | None = None
+    litellm_changed_by: str | None = None
 
     model_config = ConfigDict(protected_namespaces=())

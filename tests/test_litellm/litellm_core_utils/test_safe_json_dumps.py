@@ -1,12 +1,7 @@
 import json
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
 
@@ -172,6 +167,30 @@ def test_null_byte_stripped_in_fallback_str():
     out = safe_dumps({"obj": WithNullStr()})
     assert "\\u0000" not in out
     assert json.loads(out)["obj"] == "objrepr"
+
+
+def test_clean_strings_are_not_run_through_replace():
+    """Regression for LIT-3910.
+
+    safe_dumps must not call ``str.replace`` on NUL-free strings. Running the
+    NUL strip unconditionally on every value and dict key (the v1.89.x behavior)
+    added per-request serialization overhead that scaled with payload size and
+    showed up under ``store_prompts_in_spend_logs``. Clean strings, which are the
+    overwhelming majority, must be returned untouched.
+    """
+
+    class ReplaceForbidden(str):
+        def replace(self, *args, **kwargs):
+            raise AssertionError("safe_dumps ran str.replace on a NUL-free string")
+
+    data = {
+        ReplaceForbidden("clean_key"): ReplaceForbidden("clean_value"),
+        "nested": [ReplaceForbidden("a"), {"deep": ReplaceForbidden("b")}],
+    }
+    result = json.loads(safe_dumps(data))
+    assert result["clean_key"] == "clean_value"
+    assert result["nested"][0] == "a"
+    assert result["nested"][1]["deep"] == "b"
 
 
 def test_pydantic_base_model():

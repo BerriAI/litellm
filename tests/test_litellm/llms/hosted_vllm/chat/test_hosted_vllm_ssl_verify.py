@@ -8,15 +8,10 @@ Issue: ssl_verify parameter was being ignored because hosted_vllm fell through
 to the OpenAI catch-all path in main.py, which doesn't pass ssl_verify to the HTTP client.
 """
 
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 

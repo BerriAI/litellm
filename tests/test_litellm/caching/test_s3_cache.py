@@ -1,5 +1,3 @@
-import os
-import sys
 from unittest.mock import MagicMock, patch
 import json
 import datetime
@@ -7,9 +5,6 @@ import asyncio
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.caching.s3_cache import S3Cache
 
@@ -263,11 +258,9 @@ async def test_s3_cache_async_set_cache_pipeline(mock_s3_dependencies):
 
     # Verify each call
     calls = cache.s3_client.put_object.call_args_list
-    for i, (key, value) in enumerate(cache_list):
-        call_args = calls[i][1]
-        assert call_args["Bucket"] == "test-bucket"
-        assert call_args["Key"] == key
-        assert call_args["Body"] == json.dumps(value)
+    assert {(call.kwargs["Bucket"], call.kwargs["Key"], call.kwargs["Body"]) for call in calls} == {
+        ("test-bucket", key, json.dumps(value)) for key, value in cache_list
+    }
 
 
 @pytest.mark.asyncio
@@ -290,10 +283,12 @@ async def test_s3_cache_concurrent_async_operations(mock_s3_dependencies):
 
     # Verify each call had correct parameters
     calls = cache.s3_client.put_object.call_args_list
-    for i, call in enumerate(calls):
-        call_args = call[1]
-        assert call_args["Bucket"] == "test-bucket"
-        assert f"concurrent_key_{i}" == call_args["Key"]
+    assert {call.kwargs["Key"] for call in calls} == {f"concurrent_key_{i}" for i in range(5)}
+    for call in calls:
+        assert call.kwargs["Bucket"] == "test-bucket"
+        payload = json.loads(call.kwargs["Body"])
+        assert call.kwargs["Key"] == f"concurrent_key_{payload['id']}"
+        assert payload["data"] == f"test_data_{payload['id']}"
 
 
 @pytest.mark.asyncio

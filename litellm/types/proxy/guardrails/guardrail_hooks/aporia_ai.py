@@ -1,16 +1,14 @@
-from typing import Optional
-
 from pydantic import Field
 
 from .base import GuardrailConfigModel
 
 
 class AporiaGuardrailConfigModel(GuardrailConfigModel):
-    api_key: Optional[str] = Field(
+    api_key: str | None = Field(
         default=None,
         description="The API key for the Aporia guardrail. If not provided, the `APORIA_API_KEY` environment variable is checked.",
     )
-    api_base: Optional[str] = Field(
+    api_base: str | None = Field(
         default=None,
         description="The API base for the Aporia guardrail. If not provided, the `APORIA_API_BASE` environment variable is checked.",
     )

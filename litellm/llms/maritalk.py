@@ -1,4 +1,4 @@
-from typing import List, Optional, Union
+from typing import Final
 
 from httpx._models import Headers
 
@@ -11,7 +11,7 @@ class MaritalkError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: Optional[Union[dict, Headers]] = None,
+        headers: dict | Headers | None = None,
     ):
         super().__init__(status_code=status_code, message=message, headers=headers)
 
@@ -19,20 +19,20 @@ class MaritalkError(BaseLLMException):
 class MaritalkConfig(OpenAIGPTConfig):
     def __init__(
         self,
-        frequency_penalty: Optional[float] = None,
-        presence_penalty: Optional[float] = None,
-        top_p: Optional[float] = None,
-        top_k: Optional[int] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        n: Optional[int] = None,
-        stop: Optional[List[str]] = None,
-        stream: Optional[bool] = None,
-        stream_options: Optional[dict] = None,
-        tools: Optional[List[dict]] = None,
-        tool_choice: Optional[Union[str, dict]] = None,
+        frequency_penalty: float | None = None,
+        presence_penalty: float | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        n: int | None = None,
+        stop: list[str] | None = None,
+        stream: bool | None = None,
+        stream_options: dict | None = None,
+        tools: list[dict] | None = None,
+        tool_choice: str | dict | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -41,7 +41,7 @@ class MaritalkConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> List:
+    def get_supported_openai_params(self, model: str) -> list:
         return [
             "frequency_penalty",
             "presence_penalty",
@@ -57,9 +57,5 @@ class MaritalkConfig(OpenAIGPTConfig):
             "tool_choice",
         ]
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
-        return MaritalkError(
-            status_code=status_code, message=error_message, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+        return MaritalkError(status_code=status_code, message=error_message, headers=headers)

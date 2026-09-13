@@ -1,12 +1,20 @@
+import asyncio
+import inspect
 import json
-from typing import Any, Dict, Optional
-from unittest.mock import MagicMock
+import sys
+from datetime import datetime
+from typing import Any, Dict, Final, Optional
+from unittest.mock import AsyncMock, MagicMock
+
+if sys.version_info < (3, 11):  # BaseExceptionGroup is a builtin only from 3.11
+    from exceptiongroup import BaseExceptionGroup
 
 import httpx
 import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
+from litellm.constants import MCP_TOOL_LISTING_TIMEOUT
 from litellm.proxy._experimental.mcp_server import rest_endpoints
 from litellm.proxy._experimental.mcp_server.auth import (
     user_api_key_auth_mcp as auth_mcp,
@@ -17,7 +25,14 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.types.mcp import MCPAuth
+from litellm.types.mcp import MCPAuth, MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+
+def _rendered_log_message(call):
+    message = str(call.args[0])
+    values = call.args[1:]
+    return message % values if values else message
 
 
 def _build_request(
@@ -35,10 +50,7 @@ def _build_request(
         body_bytes = body
     else:
         body_bytes = b""
-    raw_headers = [
-        (key.lower().encode("latin-1"), value.encode("latin-1"))
-        for key, value in headers.items()
-    ]
+    raw_headers = [(key.lower().encode("latin-1"), value.encode("latin-1")) for key, value in headers.items()]
     scope = {
         "type": "http",
         "http_version": "1.1",
@@ -60,28 +72,140 @@ def _build_request(
 
 def _get_route(path: str, method: str):
     for route in rest_endpoints.router.routes:
-        if getattr(route, "path", None) == path and method in getattr(
-            route, "methods", set()
-        ):
+        if getattr(route, "path", None) == path and method in getattr(route, "methods", set()):
             return route
     raise AssertionError(f"Route {method} {path} not found")
 
 
 def _route_has_dependency(route, dependency) -> bool:
-    if any(
-        getattr(dep, "dependency", None) == dependency
-        for dep in getattr(route, "dependencies", [])
-    ):
+    if any(getattr(dep, "dependency", None) == dependency for dep in getattr(route, "dependencies", [])):
         return True
     dependant = getattr(route, "dependant", None)
     if dependant is None:
         return False
-    return any(
-        getattr(dep, "call", None) == dependency for dep in dependant.dependencies
-    )
+    return any(getattr(dep, "call", None) == dependency for dep in dependant.dependencies)
 
 
 class TestExecuteWithMcpClient:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("auth_type", "auth_value", "expected_auth"),
+        (
+            (MCPAuth.none, None, {}),
+            (MCPAuth.basic, "preview:correct", {"Authorization": "Basic cHJldmlldzpjb3JyZWN0"}),
+            (MCPAuth.basic, None, {"Authorization": "Basic cHJldmlldzpzdG9yZWQ="}),
+            (MCPAuth.bearer_token, "edited", {"Authorization": "Bearer edited"}),
+            (MCPAuth.api_key, "edited", {"X-API-Key": "edited"}),
+            (MCPAuth.token, "edited", {"Authorization": "token edited"}),
+            (MCPAuth.authorization, "Custom edited", {"Authorization": "Custom edited"}),
+        ),
+    )
+    async def test_static_preview_uses_edited_connection_instead_of_registered_server(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        auth_type: MCPAuth,
+        auth_value: str | None,
+        expected_auth: dict[str, str],
+    ) -> None:
+        from starlette.datastructures import Headers
+
+        from litellm.experimental_mcp_client.client import MCPClient
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+        from litellm.proxy.management_endpoints import mcp_management_endpoints
+
+        saved: Final = MCPServer(
+            server_id="saved-preview-server",
+            name="saved",
+            url="https://stored.example/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.basic,
+            authentication_token="preview:stored",
+        )
+        manager: Final = MCPServerManager()
+        manager.registry = {saved.server_id: saved}
+        monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+        monkeypatch.setattr(mcp_management_endpoints, "global_mcp_server_manager", manager)
+        payload: Final = NewMCPServerRequest(
+            server_id=saved.server_id,
+            server_name="edited",
+            url="https://stored.example/corrected-mcp",
+            transport=MCPTransport.sse,
+            auth_type=auth_type,
+            credentials={"auth_value": auth_value} if auth_value is not None else None,
+            static_headers={"X-Preview": "edited"},
+        )
+        staged: Final = rest_endpoints._stage_server_test(payload, Headers())
+
+        async def inspect_connection(client: MCPClient) -> dict[str, object]:
+            return {"url": client.server_url, "transport": client.transport_type, "headers": client._get_auth_headers()}
+
+        result: Final = await rest_endpoints._execute_with_mcp_client(
+            staged.request,
+            inspect_connection,
+            mcp_auth_header=staged.mcp_auth_header,
+            oauth2_headers=staged.oauth2_headers,
+        )
+        assert result == {
+            "url": "https://stored.example/corrected-mcp",
+            "transport": MCPTransport.sse,
+            "headers": {"X-Preview": "edited", **expected_auth},
+        }
+        assert manager.get_mcp_server_by_id(saved.server_id) is saved
+        assert saved.url == "https://stored.example/mcp"
+
+    @pytest.mark.parametrize(
+        ("saved_url", "url", "same_origin"),
+        (
+            ("https://stored.example/mcp", "https://other.example/mcp", False),
+            ("https://stored.example/mcp", "http://stored.example/mcp", False),
+            ("https://stored.example/mcp", "https://stored.example:8443/mcp", False),
+            ("https://stored.example/mcp", "https://stored.example:443/mcp", True),
+            ("http://stored.example/mcp", "http://stored.example:80/edited", True),
+            ("https://stored.example/mcp", "HTTPS://STORED.EXAMPLE/edited", True),
+            ("https://[::1]/mcp", "https://[::1]/edited", True),
+            ("https://[::1]/mcp", "https://[::1]:443/edited", True),
+            ("https://[::1]/mcp", "https://[::2]/edited", False),
+            ("https://stored.example/mcp", "https://stored.example:invalid/mcp", False),
+        ),
+    )
+    @pytest.mark.parametrize("explicit_credential", (None, "preview:explicit"))
+    def test_static_preview_respects_origin_when_inheriting_credentials(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        saved_url: str,
+        url: str,
+        same_origin: bool,
+        explicit_credential: str | None,
+    ) -> None:
+        from starlette.datastructures import Headers
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+        from litellm.proxy.management_endpoints import mcp_management_endpoints
+
+        saved: Final = MCPServer(
+            server_id="saved-preview-server",
+            name="saved",
+            url=saved_url,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.basic,
+            authentication_token="preview:stored",
+        )
+        manager: Final = MCPServerManager()
+        manager.registry = {saved.server_id: saved}
+        monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+        monkeypatch.setattr(mcp_management_endpoints, "global_mcp_server_manager", manager)
+        payload: Final = NewMCPServerRequest(
+            server_id=saved.server_id,
+            url=url,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.basic,
+            credentials={"auth_value": explicit_credential} if explicit_credential else None,
+        )
+        staged: Final = rest_endpoints._stage_server_test(payload, Headers())
+        expected: Final = explicit_credential or ("preview:stored" if same_origin else None)
+        assert staged.mcp_auth_header == expected
+        assert staged.request.credentials == ({"auth_value": expected} if expected else None)
+
     @pytest.mark.asyncio
     async def test_redacts_stack_trace(self, monkeypatch):
         async def fake_create_client(*args, **kwargs):
@@ -102,12 +226,105 @@ class TestExecuteWithMcpClient:
             auth_type=MCPAuth.none,
         )
 
-        result = await rest_endpoints._execute_with_mcp_client(
-            payload, failing_operation
-        )
+        result = await rest_endpoints._execute_with_mcp_client(payload, failing_operation)
 
         assert result["status"] == "error"
         assert "stack_trace" not in result
+
+    @pytest.mark.asyncio
+    async def test_timeout_caps_hanging_operation_and_names_origin(self, monkeypatch):
+        async def fake_create_client(*args, **kwargs):
+            return object()
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_create_mcp_client",
+            fake_create_client,
+        )
+
+        async def hanging_operation(client):
+            await asyncio.Event().wait()
+
+        payload = NewMCPServerRequest(
+            server_name="example",
+            url="https://mcp.example.com/mcp/",
+            auth_type=MCPAuth.none,
+        )
+
+        result = await asyncio.wait_for(
+            rest_endpoints._execute_with_mcp_client(payload, hanging_operation, timeout_seconds=0.05),
+            timeout=5,
+        )
+
+        assert result["error"] is True
+        assert "https://mcp.example.com" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_timeout_covers_client_creation(self, monkeypatch):
+        async def hanging_create_client(*args, **kwargs):
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_create_mcp_client",
+            hanging_create_client,
+        )
+
+        async def unreached_operation(client):
+            return {"status": "ok"}
+
+        payload = NewMCPServerRequest(
+            server_name="example",
+            url="https://mcp.example.com/mcp/",
+            auth_type=MCPAuth.none,
+        )
+
+        result = await asyncio.wait_for(
+            rest_endpoints._execute_with_mcp_client(payload, unreached_operation, timeout_seconds=0.05),
+            timeout=5,
+        )
+
+        assert result["error"] is True
+        assert "https://mcp.example.com" in result["message"]
+
+    def test_timeout_defaults_to_tool_listing_timeout(self):
+        default = inspect.signature(rest_endpoints._execute_with_mcp_client).parameters["timeout_seconds"].default
+        assert default == MCP_TOOL_LISTING_TIMEOUT
+
+    def test_connection_error_message_timeout_names_origin_and_budget(self):
+        message = rest_endpoints._connection_error_message(TimeoutError(), "https://api.example.com/mcp/", 30.0)
+        assert "https://api.example.com" in message
+        assert "30s" in message
+
+    def test_connection_error_message_hides_arbitrary_http_exception_detail(self):
+        message = rest_endpoints._connection_error_message(
+            HTTPException(status_code=500, detail="secret upstream detail"),
+            "https://api.example.com/mcp/",
+            30.0,
+        )
+
+        assert "secret upstream detail" not in message
+
+    @pytest.mark.asyncio
+    async def test_none_mode_url_credentials_returns_actionable_redacted_error(self):
+        async def unreached_operation(client):
+            raise AssertionError("operation must not run for an invalid server configuration")
+
+        payload = NewMCPServerRequest(
+            server_name="example",
+            url="https://lit-user:s3cr3t@upstream.example.com/mcp",
+            auth_type=MCPAuth.none,
+        )
+
+        result = await rest_endpoints._execute_with_mcp_client(payload, unreached_operation)
+
+        message = str(result["message"])
+        assert result["error"] is True
+        assert "Basic Auth" in message
+        assert "auth_type: basic" in message
+        assert "auth_value: username:password" in message
+        assert "lit-user" not in message
+        assert "s3cr3t" not in message
 
     @pytest.mark.asyncio
     async def test_forwards_static_headers(self, monkeypatch):
@@ -214,6 +431,46 @@ class TestExecuteWithMcpClient:
         assert server.scopes == ["read", "write"]
         assert server.has_client_credentials is True
 
+    async def test_preview_forwards_per_server_timeout_to_client_factory(self, monkeypatch):
+        """The request's per-server timeout must reach the temporary MCPServer model:
+        the client factory reads ``server.timeout`` for both the per-request timeout
+        and the preview's whole-walk listing deadline."""
+        captured: dict = {}
+
+        def fake_build_stdio_env(server, raw_headers):
+            return None
+
+        async def fake_create_client(*args, **kwargs):
+            captured["server"] = kwargs.get("server")
+            return object()
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_build_stdio_env",
+            fake_build_stdio_env,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_create_mcp_client",
+            fake_create_client,
+            raising=False,
+        )
+
+        async def ok_operation(client):
+            return {"status": "ok"}
+
+        payload = NewMCPServerRequest(
+            server_name="slow-catalog-server",
+            url="https://example.com",
+            timeout=120.5,
+        )
+
+        result = await rest_endpoints._execute_with_mcp_client(payload, ok_operation)
+
+        assert result["status"] == "ok"
+        assert captured["server"].timeout == 120.5
+
     @pytest.mark.asyncio
     async def test_m2m_drops_incoming_oauth2_headers(self, monkeypatch):
         """For M2M OAuth servers the incoming Authorization header (which carries
@@ -265,10 +522,156 @@ class TestExecuteWithMcpClient:
         assert result["status"] == "ok"
         # The incoming Authorization must be dropped — extra_headers should
         # contain no oauth2 headers (only static_headers, which are None here).
-        assert (
-            captured["extra_headers"] is None
-            or "Authorization" not in captured["extra_headers"]
+        assert captured["extra_headers"] is None or "Authorization" not in captured["extra_headers"]
+
+    @pytest.mark.asyncio
+    async def test_interactive_oauth_resolves_forwarded_token_via_presented_store(self, monkeypatch):
+        """Interactive authorization_code preview (oauth2, no client credentials): the forwarded
+        just-authorized token is resolved THROUGH the v2 resolver via a one-shot presented store
+        (cred_provider), not the caller-override path. The bare token (Bearer stripped) is the
+        upstream credential and is not also forwarded in extra_headers."""
+        captured: dict = {}
+
+        def fake_build_stdio_env(server, raw_headers):
+            return None
+
+        async def fake_create_client(*args, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_build_stdio_env",
+            fake_build_stdio_env,
+            raising=False,
         )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_create_mcp_client",
+            fake_create_client,
+            raising=False,
+        )
+
+        async def ok_operation(client):
+            return {"status": "ok"}
+
+        payload = NewMCPServerRequest(
+            server_name="linear",
+            url="https://mcp.linear.app/mcp",
+            auth_type=MCPAuth.oauth2,
+            authorization_url="https://mcp.linear.app/authorize",
+        )
+
+        result = await rest_endpoints._execute_with_mcp_client(
+            payload,
+            ok_operation,
+            oauth2_headers={"Authorization": "Bearer forwarded-user-token"},
+        )
+
+        assert result["status"] == "ok"
+        # Resolved via the v2 resolver, never the caller-override header
+        assert captured["mcp_auth_header"] is None
+        provider = captured["cred_provider"]
+        assert provider is not None
+        token = await provider._oauth_token_store.fetch("u", "s")
+        assert token is not None and token.access_token == "forwarded-user-token"
+        # The resolver supplies the bearer, so it is not also forwarded as a caller header
+        extra_headers = captured.get("extra_headers") or {}
+        assert not any(k.lower() == "authorization" for k in extra_headers)
+
+    @pytest.mark.asyncio
+    async def test_m2m_does_not_build_presented_store(self, monkeypatch):
+        """M2M (client_credentials): to_server_spec returns None, so no presented provider is built;
+        the auto-fetch path is unchanged (no cred_provider, the incoming header dropped as before).
+        """
+        captured: dict = {}
+
+        def fake_build_stdio_env(server, raw_headers):
+            return None
+
+        async def fake_create_client(*args, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_build_stdio_env",
+            fake_build_stdio_env,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_create_mcp_client",
+            fake_create_client,
+            raising=False,
+        )
+
+        async def ok_operation(client):
+            return {"status": "ok"}
+
+        payload = NewMCPServerRequest(
+            server_name="m2m-server",
+            url="https://example.com",
+            auth_type=MCPAuth.oauth2,
+            token_url="https://auth.example.com/token",
+            credentials={"client_id": "my-id", "client_secret": "my-secret"},
+        )
+
+        result = await rest_endpoints._execute_with_mcp_client(
+            payload,
+            ok_operation,
+            oauth2_headers={"Authorization": "Bearer sk-litellm-api-key"},
+        )
+
+        assert result["status"] == "ok"
+        assert captured.get("cred_provider") is None
+        assert captured["mcp_auth_header"] is None
+
+    @pytest.mark.asyncio
+    async def test_token_exchange_does_not_build_presented_store(self, monkeypatch):
+        """OBO / token-exchange (auth_type oauth2_token_exchange, not oauth2): excluded by the
+        auth_type == oauth2 guard, so no presented provider is built and the v1 exchange path runs.
+        """
+        captured: dict = {}
+
+        def fake_build_stdio_env(server, raw_headers):
+            return None
+
+        async def fake_create_client(*args, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_build_stdio_env",
+            fake_build_stdio_env,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_create_mcp_client",
+            fake_create_client,
+            raising=False,
+        )
+
+        async def ok_operation(client):
+            return {"status": "ok"}
+
+        payload = NewMCPServerRequest(
+            server_name="obo-server",
+            url="https://example.com",
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_url="https://auth.example.com/token",
+        )
+
+        result = await rest_endpoints._execute_with_mcp_client(
+            payload,
+            ok_operation,
+            oauth2_headers={"Authorization": "Bearer subject-jwt"},
+        )
+
+        assert result["status"] == "ok"
+        assert captured.get("cred_provider") is None
 
     @pytest.mark.asyncio
     async def test_catches_exception_group(self, monkeypatch):
@@ -280,9 +683,7 @@ class TestExecuteWithMcpClient:
             return None
 
         async def fake_create_client(*args, **kwargs):
-            raise BaseExceptionGroup(
-                "test group", [RuntimeError("Cancelled via cancel scope")]
-            )
+            raise BaseExceptionGroup("test group", [RuntimeError("Cancelled via cancel scope")])
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
@@ -310,7 +711,7 @@ class TestExecuteWithMcpClient:
 
         assert result["status"] == "error"
         assert result["error"] is True
-        assert "Failed to connect to MCP server" in result["message"]
+        assert "reference" in result["message"]
         # Error message must not leak raw exception details
         assert "cancel scope" not in result["message"]
 
@@ -319,6 +720,140 @@ class TestTestConnection:
     def test_requires_auth_dependency(self):
         route = _get_route("/mcp-rest/test/connection", "POST")
         assert _route_has_dependency(route, user_api_key_auth)
+
+    @staticmethod
+    def _capture_execute(monkeypatch) -> dict:
+        captured: dict = {}
+
+        async def fake_execute(
+            request,
+            operation,
+            mcp_auth_header=None,
+            oauth2_headers=None,
+            raw_headers=None,
+        ):
+            captured["request"] = request
+            captured["mcp_auth_header"] = mcp_auth_header
+            captured["oauth2_headers"] = oauth2_headers
+            return {"status": "ok"}
+
+        monkeypatch.setattr(rest_endpoints, "_execute_with_mcp_client", fake_execute, raising=False)
+        return captured
+
+    @staticmethod
+    def _oauth2_authorization_code_payload(**overrides) -> NewMCPServerRequest:
+        return NewMCPServerRequest(
+            server_name="github_mcp",
+            url="https://api.githubcopilot.com/mcp/",
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="authorization_code",
+            authorization_url="https://github.com/login/oauth/authorize",
+            token_url="https://github.com/login/oauth/access_token",
+            **overrides,
+        )
+
+    @pytest.mark.asyncio
+    async def test_forwards_staged_oauth2_bearer(self, monkeypatch):
+        """The just-authorized upstream token rides the request's Authorization header, exactly
+        as /test/tools/list receives it; dropping it makes every authorization_code server fail
+        the connection test that its tools preview passes."""
+        from litellm.proxy._types import LitellmUserRoles
+
+        captured = self._capture_execute(monkeypatch)
+        request = _build_request(
+            {"x-litellm-api-key": "sk-admin-session", "authorization": "Bearer upstream-oauth-token"},
+            path="/mcp-rest/test/connection",
+        )
+
+        result = await rest_endpoints.test_connection(
+            request,
+            self._oauth2_authorization_code_payload(),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result == {"status": "ok"}
+        assert captured["oauth2_headers"] == {"Authorization": "Bearer upstream-oauth-token"}
+        assert captured["mcp_auth_header"] is None
+
+    @pytest.mark.asyncio
+    async def test_forwards_staged_auth_value(self, monkeypatch):
+        from litellm.proxy._types import LitellmUserRoles
+
+        captured = self._capture_execute(monkeypatch)
+        request = _build_request({"x-litellm-api-key": "sk-admin-session"}, path="/mcp-rest/test/connection")
+        payload = NewMCPServerRequest(
+            server_name="example",
+            url="https://example.com/mcp",
+            auth_type=MCPAuth.bearer_token,
+            credentials={"auth_value": "upstream-static-token"},
+        )
+
+        result = await rest_endpoints.test_connection(
+            request,
+            payload,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result == {"status": "ok"}
+        assert captured["mcp_auth_header"] == "upstream-static-token"
+        assert captured["oauth2_headers"] is None
+
+    @pytest.mark.asyncio
+    async def test_inherits_stored_credentials_of_saved_server(self, monkeypatch):
+        """The edit form resends a saved server without its masked credential; the stored one
+        must be used, as /test/tools/list already does."""
+        from litellm.proxy._types import LitellmUserRoles
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        captured = self._capture_execute(monkeypatch)
+        saved = MCPServer(
+            server_id="saved-server-id",
+            name="example",
+            url="https://example.com/mcp",
+            transport="http",
+            auth_type=MCPAuth.bearer_token,
+            authentication_token="stored-upstream-token",
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: saved if server_id == "saved-server-id" else None,
+        )
+        request = _build_request({"x-litellm-api-key": "sk-admin-session"}, path="/mcp-rest/test/connection")
+        payload = NewMCPServerRequest(
+            server_id="saved-server-id",
+            server_name="example",
+            url="https://example.com/mcp",
+            auth_type=MCPAuth.bearer_token,
+        )
+
+        result = await rest_endpoints.test_connection(
+            request,
+            payload,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result == {"status": "ok"}
+        assert captured["mcp_auth_header"] == "stored-upstream-token"
+        assert captured["request"].credentials == {"auth_value": "stored-upstream-token"}
+
+    @pytest.mark.asyncio
+    async def test_does_not_forward_authorization_that_satisfied_admission(self, monkeypatch):
+        """With no x-litellm-api-key, the Authorization value is the caller's LiteLLM key and
+        must never reach the upstream."""
+        from litellm.proxy._types import LitellmUserRoles
+
+        captured = self._capture_execute(monkeypatch)
+        request = _build_request({"authorization": "Bearer sk-litellm-admission-key"}, path="/mcp-rest/test/connection")
+
+        result = await rest_endpoints.test_connection(
+            request,
+            self._oauth2_authorization_code_payload(),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result == {"status": "ok"}
+        assert captured["oauth2_headers"] is None
 
 
 class TestTestToolsList:
@@ -344,9 +879,7 @@ class TestTestToolsList:
                 "message": "Successfully retrieved tools",
             }
 
-        monkeypatch.setattr(
-            rest_endpoints, "_execute_with_mcp_client", fake_execute, raising=False
-        )
+        monkeypatch.setattr(rest_endpoints, "_execute_with_mcp_client", fake_execute, raising=False)
 
         oauth_call_counter = {"count": 0}
 
@@ -382,6 +915,131 @@ class TestTestToolsList:
         assert captured["oauth2_headers"] is None
         assert oauth_call_counter["count"] == 0
 
+    async def test_preview_tools_list_times_out_on_slow_pagination(self, monkeypatch):
+        """A preview whose upstream paginates past the listing deadline returns a
+        timeout error instead of holding the request open."""
+        monkeypatch.setattr(rest_endpoints, "MCP_CLIENT_TIMEOUT", 0.05, raising=False)
+        monkeypatch.setattr(rest_endpoints, "MCP_TOOL_LISTING_TIMEOUT", 0.05, raising=False)
+
+        class SlowClient:
+            async def list_tools(self, raise_on_error=False):
+                await asyncio.sleep(1)
+                return []
+
+        async def fake_execute(
+            request,
+            operation,
+            mcp_auth_header=None,
+            oauth2_headers=None,
+            raw_headers=None,
+        ):
+            return await operation(SlowClient())
+
+        monkeypatch.setattr(rest_endpoints, "_execute_with_mcp_client", fake_execute, raising=False)
+
+        from litellm.proxy._types import LitellmUserRoles
+
+        request = _build_request()
+        payload = NewMCPServerRequest(
+            server_name="example",
+            url="https://example.com",
+            auth_type=MCPAuth.api_key,
+            credentials={"auth_value": "secret-key"},
+        )
+
+        result = await rest_endpoints.test_tools_list(
+            request,
+            payload,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result["status"] == "error"
+        assert result["error"] is True
+        assert "Timed out listing tools" in result["message"]
+
+    async def test_preview_tools_list_succeeds_within_deadline(self, monkeypatch):
+        """The preview timeout scope passes a fast listing through untouched."""
+        from mcp.types import Tool as MCPTool
+
+        class QuickClient:
+            async def list_tools(self, raise_on_error=False):
+                return [MCPTool(name="quick_tool", description="q", inputSchema={})]
+
+        async def fake_execute(
+            request,
+            operation,
+            mcp_auth_header=None,
+            oauth2_headers=None,
+            raw_headers=None,
+        ):
+            return await operation(QuickClient())
+
+        monkeypatch.setattr(rest_endpoints, "_execute_with_mcp_client", fake_execute, raising=False)
+
+        from litellm.proxy._types import LitellmUserRoles
+
+        request = _build_request()
+        payload = NewMCPServerRequest(
+            server_name="example",
+            url="https://example.com",
+            auth_type=MCPAuth.api_key,
+            credentials={"auth_value": "secret-key"},
+        )
+
+        result = await rest_endpoints.test_tools_list(
+            request,
+            payload,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result["error"] is None
+        assert result["message"] == "Successfully retrieved tools"
+        assert [tool["name"] for tool in result["tools"]] == ["quick_tool"]
+
+    async def test_preview_tools_list_honors_per_server_timeout(self, monkeypatch):
+        """A per-server timeout above the global default extends the preview deadline."""
+        monkeypatch.setattr(rest_endpoints, "MCP_CLIENT_TIMEOUT", 0.05, raising=False)
+        monkeypatch.setattr(rest_endpoints, "MCP_TOOL_LISTING_TIMEOUT", 0.05, raising=False)
+
+        from mcp.types import Tool as MCPTool
+
+        class SlowConfiguredClient:
+            timeout = 1.0
+
+            async def list_tools(self, raise_on_error=False):
+                await asyncio.sleep(0.2)
+                return [MCPTool(name="slow_tool", description="s", inputSchema={})]
+
+        async def fake_execute(
+            request,
+            operation,
+            mcp_auth_header=None,
+            oauth2_headers=None,
+            raw_headers=None,
+        ):
+            return await operation(SlowConfiguredClient())
+
+        monkeypatch.setattr(rest_endpoints, "_execute_with_mcp_client", fake_execute, raising=False)
+
+        from litellm.proxy._types import LitellmUserRoles
+
+        request = _build_request()
+        payload = NewMCPServerRequest(
+            server_name="example",
+            url="https://example.com",
+            auth_type=MCPAuth.api_key,
+            credentials={"auth_value": "secret-key"},
+        )
+
+        result = await rest_endpoints.test_tools_list(
+            request,
+            payload,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result["error"] is None
+        assert [tool["name"] for tool in result["tools"]] == ["slow_tool"]
+
     async def test_extracts_oauth2_headers(self, monkeypatch):
         """Ensure oauth2 auth type pulls oauth headers and omits MCP auth header."""
 
@@ -402,9 +1060,7 @@ class TestTestToolsList:
                 "message": "Successfully retrieved tools",
             }
 
-        monkeypatch.setattr(
-            rest_endpoints, "_execute_with_mcp_client", fake_execute, raising=False
-        )
+        monkeypatch.setattr(rest_endpoints, "_execute_with_mcp_client", fake_execute, raising=False)
 
         oauth_headers = {"Authorization": "Bearer oauth"}
         oauth_call_counter = {"count": 0}
@@ -420,7 +1076,7 @@ class TestTestToolsList:
             raising=False,
         )
 
-        request = _build_request({"authorization": "Bearer incoming"})
+        request = _build_request({"authorization": "Bearer incoming", "x-litellm-api-key": "sk-admission"})
         payload = NewMCPServerRequest(
             server_name="example",
             url="https://example.com",
@@ -439,6 +1095,101 @@ class TestTestToolsList:
         assert captured["mcp_auth_header"] is None
         assert captured["oauth2_headers"] == oauth_headers
         assert oauth_call_counter["count"] == 1
+
+    @pytest.mark.parametrize("auth_type", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
+    async def test_extracts_oauth2_headers_for_client_forwarded_modes(self, monkeypatch, auth_type):
+        """The browser-only authorize flow sends the upstream token as Authorization; the preview
+        must thread it through for the client-forwarded token modes so the passthrough arm can
+        forward it, instead of probing the upstream unauthenticated."""
+
+        captured: dict = {}
+
+        async def fake_execute(
+            request,
+            operation,
+            mcp_auth_header=None,
+            oauth2_headers=None,
+            raw_headers=None,
+        ):
+            captured["mcp_auth_header"] = mcp_auth_header
+            captured["oauth2_headers"] = oauth2_headers
+            return {
+                "tools": [],
+                "error": None,
+                "message": "Successfully retrieved tools",
+            }
+
+        monkeypatch.setattr(rest_endpoints, "_execute_with_mcp_client", fake_execute, raising=False)
+
+        oauth_headers = {"Authorization": "Bearer upstream-token"}
+
+        monkeypatch.setattr(
+            auth_mcp.MCPRequestHandler,
+            "_get_oauth2_headers_from_headers",
+            staticmethod(lambda headers: oauth_headers),
+            raising=False,
+        )
+
+        request = _build_request({"authorization": "Bearer upstream-token", "x-litellm-api-key": "sk-admission"})
+        payload = NewMCPServerRequest(
+            server_name="example",
+            url="https://example.com",
+            auth_type=auth_type,
+        )
+
+        from litellm.proxy._types import LitellmUserRoles
+
+        result = await rest_endpoints.test_tools_list(
+            request,
+            payload,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result["message"] == "Successfully retrieved tools"
+        assert captured["mcp_auth_header"] is None
+        assert captured["oauth2_headers"] == oauth_headers
+
+    @pytest.mark.parametrize("auth_type", [MCPAuth.oauth2, MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
+    async def test_does_not_forward_authorization_that_satisfied_admission(self, monkeypatch, auth_type):
+        """Authorization is also the admission fallback: with no x-litellm-api-key on the request,
+        the Authorization value is the caller's LiteLLM key, so forwarding it would send the
+        admission credential to the upstream."""
+
+        captured: dict = {}
+
+        async def fake_execute(
+            request,
+            operation,
+            mcp_auth_header=None,
+            oauth2_headers=None,
+            raw_headers=None,
+        ):
+            captured["oauth2_headers"] = oauth2_headers
+            return {
+                "tools": [],
+                "error": None,
+                "message": "Successfully retrieved tools",
+            }
+
+        monkeypatch.setattr(rest_endpoints, "_execute_with_mcp_client", fake_execute, raising=False)
+
+        request = _build_request({"authorization": "Bearer sk-litellm-admission-key"})
+        payload = NewMCPServerRequest(
+            server_name="example",
+            url="https://example.com",
+            auth_type=auth_type,
+        )
+
+        from litellm.proxy._types import LitellmUserRoles
+
+        result = await rest_endpoints.test_tools_list(
+            request,
+            payload,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result["message"] == "Successfully retrieved tools"
+        assert captured["oauth2_headers"] is None
 
 
 class TestListToolsRestAPI:
@@ -465,16 +1216,16 @@ class TestListToolsRestAPI:
         )
 
         request = _build_request(path="/mcp-rest/tools/list", method="GET")
-        result = await rest_endpoints.list_tool_rest_api(
-            request,
-            server_id="server-1",
-            user_api_key_dict=UserAPIKeyAuth(),
-        )
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.list_tool_rest_api(
+                request,
+                server_id="server-1",
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
 
-        assert result["tools"] == []
-        assert result["error"] == "unexpected_error"
-        assert "access_denied" in result["message"]
-        assert "server server-1" in result["message"]
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail["error"] == "access_denied"
+        assert "server-1" in exc_info.value.detail["message"]
 
     async def test_lists_tools_for_allowed_server(self, monkeypatch):
         async def fake_contexts(user_api_key_auth):
@@ -544,7 +1295,291 @@ class TestListToolsRestAPI:
         assert captured["server"] is stub_server
         assert result["tools"] == ["tool-1"]
         assert result["error"] is None
+
+    async def test_non_admin_ui_session_resolves_as_admitted_subject(self, monkeypatch):
+        """LIT-4861: a non-admin dashboard session must act as the admitted subject on this
+        route, so server reachability AND tool ceilings bind to the user's grants exactly as
+        they do for a gateway session, never to the bare session key."""
+        from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+        session_auth = UserAPIKeyAuth(team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="grant-user", user_role="internal_user")
+        admitted_auth = UserAPIKeyAuth(user_id="grant-user", org_id="admitted-org")
+
+        async def fake_reload(user_id):
+            assert user_id == "grant-user"
+            return admitted_auth
+
+        monkeypatch.setattr(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
+            fake_reload,
+        )
+
+        seen_server_resolution_auths = []
+
+        async def fake_get_allowed_mcp_servers(user_api_key_auth=None, **kwargs):
+            seen_server_resolution_auths.append(user_api_key_auth)
+            return ["server-1"]
+
+        class StubServer:
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+        captured = {}
+
+        async def fake_get_tools(
+            server,
+            server_auth_header,
+            raw_headers=None,
+            user_api_key_auth=None,
+            extra_headers=None,
+            apply_tool_filters=True,
+        ):
+            captured["user_api_key_auth"] = user_api_key_auth
+            return ["tool-1"]
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id="server-1",
+            user_api_key_dict=session_auth,
+        )
+
+        resolved = [*seen_server_resolution_auths, captured["user_api_key_auth"]]
+        assert seen_server_resolution_auths
+        assert all(a.org_id == "admitted-org" and a.team_id is None for a in resolved)
+        assert result["tools"] == ["tool-1"]
         assert result["message"] == "Successfully retrieved tools"
+
+    async def test_toolset_scoped_request_keeps_the_caller_credential(self, monkeypatch):
+        """LIT-4861: the admitted subject resolves per grant source and a team source deliberately
+        carries none of the caller's own object_permission, so a toolset narrowing layered on top
+        would evaporate on every team-granted server. A toolset-scoped request therefore stays on
+        the caller's own credential, exactly as it did before the acting-as-user swap."""
+        from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        session_auth = UserAPIKeyAuth(team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="grant-user", user_role="internal_user")
+        scoped_auth = UserAPIKeyAuth(
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="toolset-scope",
+                mcp_servers=["toolset-server-1"],
+            )
+        )
+        reload_calls: list[str] = []
+        scope_inputs: list[UserAPIKeyAuth] = []
+
+        async def record_reload(user_id):
+            reload_calls.append(user_id)
+            return UserAPIKeyAuth(user_id=user_id)
+
+        class StubToolset:
+            toolset_id = "toolset-1"
+
+        class StubServer:
+            alias = "toolset-server-1"
+            server_name = "toolset-server-1"
+            name = "toolset-server-1"
+            allowed_tools = None
+            mcp_info = {"server_name": "toolset-server-1"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+
+        async def fake_get_toolset_by_name_cached(prisma_client, toolset_name):
+            return StubToolset()
+
+        async def fake_apply_toolset_scope(user_api_key_auth, toolset_id):
+            scope_inputs.append(user_api_key_auth)
+            return scoped_auth
+
+        async def fake_get_allowed_mcp_servers(user_api_key_auth=None, **kwargs):
+            assert user_api_key_auth is scoped_auth
+            return ["toolset-server-1"]
+
+        async def fake_get_tools(server, server_auth_header, *args, **kwargs):
+            return ["toolset-tool-1"]
+
+        monkeypatch.setattr(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
+            record_reload,
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.utils.get_prisma_client_or_throw",
+            lambda *args, **kwargs: MagicMock(),
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_toolset_by_name_cached",
+            fake_get_toolset_by_name_cached,
+            raising=False,
+        )
+        monkeypatch.setattr(rest_endpoints, "_apply_toolset_scope", fake_apply_toolset_scope, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "toolset-server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(rest_endpoints, "_get_tools_for_single_server", fake_get_tools, raising=False)
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id=None,
+            toolset_name="research_tools",
+            user_api_key_dict=session_auth,
+        )
+
+        assert result["tools"] == ["toolset-tool-1"]
+        assert scope_inputs == [session_auth]
+        assert reload_calls == []
+
+    async def test_single_server_response_includes_paginated_upstream_tools(
+        self,
+        monkeypatch,
+    ):
+        """The REST tools/list path should include tools beyond the upstream first page."""
+        import litellm.experimental_mcp_client.client as mcp_client_module
+        from mcp.types import ListToolsResult, PaginatedRequestParams
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        stub_server = MCPServer(
+            server_id="server-1",
+            name="stub",
+            server_name="stub",
+            alias="stub",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            mcp_info={"server_name": "stub"},
+        )
+        stub_server.available_on_public_internet = True
+
+        mock_transport_ctx = AsyncMock()
+        mock_transport_ctx.__aenter__ = AsyncMock(return_value=(MagicMock(), MagicMock()))
+        mock_transport_ctx.__aexit__ = AsyncMock(return_value=None)
+        monkeypatch.setattr(
+            mcp_client_module,
+            "streamable_http_client",
+            MagicMock(return_value=mock_transport_ctx),
+            raising=False,
+        )
+
+        mock_session_ctx = AsyncMock()
+        mock_session_instance = AsyncMock()
+        mock_session_instance.initialize = AsyncMock(return_value=None)
+        mock_session_instance.list_tools.side_effect = [
+            ListToolsResult(
+                tools=[
+                    MCPTool(
+                        name="first_page_tool",
+                        description="First page tool",
+                        inputSchema={},
+                    )
+                ],
+                nextCursor="page-2",
+            ),
+            ListToolsResult(
+                tools=[
+                    MCPTool(
+                        name="second_page_tool",
+                        description="Second page tool",
+                        inputSchema={},
+                    )
+                ]
+            ),
+        ]
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session_instance)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=None)
+        monkeypatch.setattr(
+            mcp_client_module,
+            "ClientSession",
+            MagicMock(return_value=mock_session_ctx),
+            raising=False,
+        )
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "filter_server_ids_by_ip_with_info",
+            lambda server_ids, client_ip: (server_ids, 0),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id="server-1",
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+        assert set(result.keys()) == {"tools", "error", "message"}
+        assert [tool.name for tool in result["tools"]] == [
+            "first_page_tool",
+            "second_page_tool",
+        ]
+        assert result["error"] is None
+        assert result["message"] == "Successfully retrieved tools"
+
+        assert mock_session_instance.list_tools.call_count == 2
+        second_call_params = mock_session_instance.list_tools.call_args_list[1].kwargs["params"]
+        assert isinstance(second_call_params, PaginatedRequestParams)
+        assert second_call_params.cursor == "page-2"
 
     async def test_include_disabled_tools_is_admin_only(self, monkeypatch):
         """include_disabled_tools skips the allowlist filter only for PROXY_ADMIN;
@@ -569,9 +1604,7 @@ class TestListToolsRestAPI:
         stub_server = StubServer()
         captured = {}
 
-        async def fake_get_tools(
-            server, server_auth_header, *args, apply_tool_filters=True, **kwargs
-        ):
+        async def fake_get_tools(server, server_auth_header, *args, apply_tool_filters=True, **kwargs):
             captured["apply_tool_filters"] = apply_tool_filters
             return ["tool-1"]
 
@@ -619,9 +1652,7 @@ class TestListToolsRestAPI:
         assert captured["apply_tool_filters"] is True
 
     @pytest.mark.parametrize("upstream_status", [401, 403])
-    async def test_upstream_auth_failure_surfaces_status_and_challenge(
-        self, monkeypatch, upstream_status
-    ):
+    async def test_upstream_auth_failure_surfaces_status_and_challenge(self, monkeypatch, upstream_status):
         """A single-server pass-through request whose upstream rejects the token
         must surface the upstream status (401 or 403) plus its WWW-Authenticate
         challenge, not collapse into a 200 ``unexpected_error`` body."""
@@ -689,6 +1720,143 @@ class TestListToolsRestAPI:
 
         assert exc_info.value.status_code == upstream_status
         assert exc_info.value.headers == {"www-authenticate": challenge}
+
+    async def test_single_server_upstream_fault_surfaces_truthful_status(self, monkeypatch):
+        """A single-server listing whose upstream breaks (5xx, timeout, unreachable) must answer
+        with the truthful gateway status instead of masking the failure as an empty-success
+        {"tools": [], "error": null} body a caller cannot distinguish from a toolless server."""
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPServerListError,
+        )
+        from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
+            ServerListFault,
+        )
+
+        class StubServer:
+            alias = "server-1"
+            server_name = "server-1"
+            name = "flaky"
+            allowed_tools = None
+            mcp_info = {"server_name": "flaky"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        async def fake_get_tools(*args, **kwargs):
+            raise MCPServerListError(ServerListFault(tag="upstream_error", status_code=503), "flaky")
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(rest_endpoints, "_get_tools_for_single_server", fake_get_tools, raising=False)
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.list_tool_rest_api(
+                request,
+                server_id="server-1",
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert exc_info.value.status_code == 502
+        assert exc_info.value.detail["error"] == "upstream_error"
+        assert "server-1" in exc_info.value.detail["message"]
+        assert "flaky" not in exc_info.value.detail["message"]
+
+    async def test_aggregate_list_absorbs_one_server_auth_failure(self, monkeypatch):
+        """The multi-server aggregate listing degrades a server whose upstream
+        rejects auth to an empty contribution and still returns the healthy
+        server's tools with a 200, rather than surfacing a 401. The absorbed
+        server must still show up as a classified per-server outcome so a REST
+        caller can tell "needs upstream auth" apart from "has no tools"."""
+        from pydantic import TypeAdapter
+
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPUpstreamAuthError,
+        )
+
+        class StubServer:
+            def __init__(self, name):
+                self.alias = name
+                self.server_name = name
+                self.name = name
+                self.allowed_tools = None
+                self.mcp_info = {"server_name": name}
+                self.available_on_public_internet = True
+
+        good = StubServer("good")
+        bad = StubServer("bad")
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["good", "bad"]
+
+        async def fake_get_tools(server, *args, **kwargs):
+            if server.server_name == "bad":
+                raise MCPUpstreamAuthError(
+                    status_code=401,
+                    www_authenticate='Bearer realm="x"',
+                    server_name="bad",
+                )
+            return ["good-tool"]
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: {"good": good, "bad": bad}.get(server_id),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id=None,
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+        assert result["tools"] == ["good-tool"]
+        assert result["error"] is None
+        wire_body = json.loads(TypeAdapter(dict).dump_json(result))
+        assert wire_body["server_outcomes"] == {
+            "good": {"status": "ok", "tool_count": 1},
+            "bad": {"status": "auth_required", "http_status": 401},
+        }
 
     async def test_name_resolution_finds_server_by_uuid(self, monkeypatch):
         """When server_id is a name string, it should be resolved to its UUID
@@ -817,15 +1985,301 @@ class TestListToolsRestAPI:
         )
 
         request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.list_tool_rest_api(
+                request,
+                server_id="restricted-server",
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail["error"] == "access_denied"
+
+    async def test_mcp_server_name_query_param_resolves_to_server(self, monkeypatch):
+        """mcp_server_name is a name-based alias for server_id: it should
+        resolve to the matching server and scope the response to it."""
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        stub_server = MCPServer(
+            server_id="uuid-abc-123",
+            name="my-server",
+            transport=MCPTransport.sse,
+        )
+        stub_server.alias = "my-server"
+        stub_server.server_name = "my-server"
+        stub_server.available_on_public_internet = True
+        stub_server.allowed_tools = None
+        stub_server.mcp_info = {"server_name": "my-server"}
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["uuid-abc-123"]
+
+        captured = {"called": False, "server_arg": None}
+
+        async def fake_get_tools(
+            server,
+            server_auth_header,
+            raw_headers=None,
+            user_api_key_auth=None,
+            extra_headers=None,
+            apply_tool_filters=True,
+        ):
+            captured["called"] = True
+            captured["server_arg"] = server
+            return ["tool-x"]
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_name",
+            lambda name: stub_server if name == "my-server" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda sid: stub_server if sid == "uuid-abc-123" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
         result = await rest_endpoints.list_tool_rest_api(
             request,
-            server_id="restricted-server",
+            server_id=None,
+            mcp_server_name="my-server",
             user_api_key_dict=UserAPIKeyAuth(),
         )
 
-        assert result["tools"] == []
-        assert result["error"] == "unexpected_error"
-        assert "access_denied" in result["message"]
+        assert captured["called"] is True
+        assert captured["server_arg"] is stub_server
+        assert result["tools"] == ["tool-x"]
+        assert result["error"] is None
+
+    async def test_mcp_server_name_filter_uses_real_catalog_with_tool_search(self, monkeypatch):
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+        from litellm.types.mcp import MCPTransport
+
+        stub_server = MCPServer(
+            server_id="uuid-search-123",
+            name="search-server",
+            transport=MCPTransport.sse,
+        )
+        stub_server.alias = "search-server"
+        stub_server.server_name = "search-server"
+        stub_server.available_on_public_internet = True
+        stub_server.allowed_tools = None
+        stub_server.mcp_info = {"server_name": "search-server"}
+        user_api_key_dict = UserAPIKeyAuth(
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="search-scope",
+                mcp_tool_search_enabled=True,
+                mcp_servers=["uuid-search-123"],
+            )
+        )
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["uuid-search-123"]
+
+        async def fake_get_tools(
+            server,
+            server_auth_header,
+            raw_headers=None,
+            user_api_key_auth=None,
+            extra_headers=None,
+            apply_tool_filters=True,
+        ):
+            return ["scoped-tool"]
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_name",
+            lambda name: stub_server if name == "search-server" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "uuid-search-123" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id=None,
+            mcp_server_name="search-server",
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert result["tools"] == ["scoped-tool"]
+        assert result["error"] is None
+
+    async def test_toolset_name_query_param_scopes_to_toolset_servers(self, monkeypatch):
+        """toolset_name should resolve the toolset, apply its scope to the
+        caller's UserAPIKeyAuth via _apply_toolset_scope, and only list tools
+        from servers the scoped auth is allowed to see."""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        scoped_auth = UserAPIKeyAuth(
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="toolset-scope",
+                mcp_tool_search_enabled=True,
+                mcp_servers=["toolset-server-1"],
+            )
+        )
+
+        class StubToolset:
+            toolset_id = "toolset-1"
+
+        class StubServer:
+            alias = "toolset-server-1"
+            server_name = "toolset-server-1"
+            name = "toolset-server-1"
+            allowed_tools = None
+            mcp_info = {"server_name": "toolset-server-1"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+
+        async def fake_get_toolset_by_name_cached(prisma_client, toolset_name):
+            assert toolset_name == "research_tools"
+            return StubToolset()
+
+        async def fake_apply_toolset_scope(user_api_key_auth, toolset_id):
+            assert toolset_id == "toolset-1"
+            return scoped_auth
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(**kwargs):
+            assert kwargs["user_api_key_auth"] is scoped_auth
+            return ["toolset-server-1"]
+
+        async def fake_get_tools(server, server_auth_header, *args, **kwargs):
+            return ["toolset-tool-1"]
+
+        monkeypatch.setattr(
+            "litellm.proxy.utils.get_prisma_client_or_throw",
+            lambda *args, **kwargs: MagicMock(),
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_toolset_by_name_cached",
+            fake_get_toolset_by_name_cached,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_apply_toolset_scope",
+            fake_apply_toolset_scope,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "toolset-server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id=None,
+            toolset_name="research_tools",
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+        assert result["tools"] == ["toolset-tool-1"]
+        assert result["error"] is None
+
+    async def test_toolset_name_not_found_returns_error(self, monkeypatch):
+        async def fake_get_toolset_by_name_cached(prisma_client, toolset_name):
+            return None
+
+        monkeypatch.setattr(
+            "litellm.proxy.utils.get_prisma_client_or_throw",
+            lambda *args, **kwargs: MagicMock(),
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_toolset_by_name_cached",
+            fake_get_toolset_by_name_cached,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.list_tool_rest_api(
+                request,
+                server_id=None,
+                toolset_name="does-not-exist",
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert exc_info.value.status_code == 404
+        assert "does-not-exist" in str(exc_info.value.detail)
 
     async def test_oauth2_user_token_injected_for_single_server(self, monkeypatch):
         """For a single-server OAuth2 request, _get_user_oauth_extra_headers is called
@@ -853,9 +2307,7 @@ class TestListToolsRestAPI:
 
         oauth_headers = {"Authorization": "Bearer user-oauth-token"}
 
-        async def fake_get_user_oauth_extra_headers(
-            server, user_api_key_dict, prefetched_creds=None
-        ):
+        async def fake_get_user_oauth_extra_headers(server, user_api_key_dict, prefetched_creds=None):
             return oauth_headers
 
         captured = {}
@@ -1047,6 +2499,13 @@ class TestCallToolRestAPI:
             fake_execute_mcp_tool,
             raising=False,
         )
+        fire_logging = AsyncMock(side_effect=RuntimeError("logging failed"))
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_fire_mcp_tool_call_logging",
+            fire_logging,
+            raising=False,
+        )
 
         request_payload = {
             "server_id": "server-1",
@@ -1068,6 +2527,571 @@ class TestCallToolRestAPI:
         assert captured["name"] == "demo-tool"
         assert captured["arguments"] == {"foo": "bar"}
         assert captured["allowed_mcp_servers"] == [stub_server]
+        fire_logging.assert_awaited_once()
+
+    async def test_returns_guardrail_rewritten_tool_result(self, monkeypatch):
+        """A post_mcp_call guardrail rewrite of the tool result must reach the REST caller,
+        not the raw result the upstream server returned."""
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            server_id = "server-1"
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+            auth_type = None
+
+        stub_server = StubServer()
+
+        async def fake_add_litellm_data_to_request(**kwargs):
+            return kwargs.get("data", {})
+
+        async def fake_execute_mcp_tool(**kwargs):
+            return {"content": [{"type": "text", "text": "jane@example.com"}]}
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.add_litellm_data_to_request",
+            fake_add_litellm_data_to_request,
+            raising=False,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", {}, raising=False)
+        monkeypatch.setattr(rest_endpoints, "execute_mcp_tool", fake_execute_mcp_tool, raising=False)
+        masked_result = {"content": [{"type": "text", "text": "<EMAIL_ADDRESS>"}]}
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_fire_mcp_tool_call_logging",
+            AsyncMock(return_value=masked_result),
+            raising=False,
+        )
+
+        request = _build_request(
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {}},
+        )
+
+        result = await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=UserAPIKeyAuth())
+
+        assert result == masked_result
+
+    async def test_success_logging_start_time_excludes_pre_call_processing(self, monkeypatch):
+        """Pre-call hook latency (guardrails, header resolution) must not inflate the tool call's
+        logged duration on success."""
+        from litellm.proxy import proxy_server
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            server_id = "server-1"
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+            auth_type = None
+
+        stub_server = StubServer()
+
+        async def fake_add_litellm_data_to_request(**kwargs):
+            return kwargs.get("data", {})
+
+        pre_call_finished_at = {}
+
+        async def slow_pre_call_hook(user_api_key_dict, data, call_type):
+            await asyncio.sleep(0.05)
+            pre_call_finished_at["value"] = datetime.now()
+            return data
+
+        captured = {}
+
+        async def fake_execute_mcp_tool(**kwargs):
+            captured.update(kwargs)
+            return {"result": "ok"}
+
+        fire_logging = AsyncMock(return_value={"result": "ok"})
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            proxy_server, "add_litellm_data_to_request", fake_add_litellm_data_to_request, raising=False
+        )
+        monkeypatch.setattr(proxy_server, "proxy_config", {}, raising=False)
+        monkeypatch.setattr(proxy_server.proxy_logging_obj, "pre_call_hook", slow_pre_call_hook)
+        monkeypatch.setattr(rest_endpoints, "execute_mcp_tool", fake_execute_mcp_tool, raising=False)
+        monkeypatch.setattr(rest_endpoints, "_fire_mcp_tool_call_logging", fire_logging, raising=False)
+
+        request = _build_request(
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {}},
+        )
+
+        await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=UserAPIKeyAuth())
+
+        logged_start_time = fire_logging.await_args.args[2]
+        assert captured["start_time"] >= pre_call_finished_at["value"]
+        assert logged_start_time == captured["start_time"]
+
+    async def test_success_logging_guardrail_rejection_propagates(self, monkeypatch):
+        """A guardrail rejecting the tool result must not be swallowed as a logging failure,
+        otherwise the unguarded result would still be returned to the caller."""
+        from litellm.exceptions import BlockedPiiEntityError
+
+        fire_logging = AsyncMock(
+            side_effect=BlockedPiiEntityError(entity_type="EMAIL_ADDRESS", guardrail_name="presidio-mcp")
+        )
+        monkeypatch.setattr(rest_endpoints, "_fire_mcp_tool_call_logging", fire_logging, raising=False)
+
+        with pytest.raises(BlockedPiiEntityError):
+            await rest_endpoints._safe_fire_mcp_tool_call_logging(
+                object(), {"result": "ok"}, datetime.now(), datetime.now()
+            )
+
+        fire_logging.assert_awaited_once()
+
+    @pytest.mark.parametrize("upstream_status", [401, 403])
+    async def test_call_tool_rest_relays_upstream_auth_failure(self, monkeypatch, upstream_status):
+        """A pass-through call that hits an upstream 401/403 (surfaced by the manager as
+        MCPUpstreamAuthError) must reach the REST caller as that status with the upstream
+        WWW-Authenticate preserved, so an MCP client can run the upstream OAuth flow, instead of the
+        generic 500 the catch-all would otherwise produce."""
+        from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            server_id = "server-1"
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+            auth_type = None
+
+        stub_server = StubServer()
+
+        async def fake_add_litellm_data_to_request(**kwargs):
+            return kwargs.get("data", {})
+
+        challenge = 'Bearer resource_metadata="https://gw.example.com/.well-known/oauth-protected-resource/mcp/stub"'
+
+        async def fake_execute_mcp_tool(**kwargs):
+            raise MCPUpstreamAuthError(
+                status_code=upstream_status,
+                www_authenticate=challenge,
+                server_name="stub",
+            )
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.add_litellm_data_to_request",
+            fake_add_litellm_data_to_request,
+            raising=False,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", {}, raising=False)
+        monkeypatch.setattr(rest_endpoints, "execute_mcp_tool", fake_execute_mcp_tool, raising=False)
+
+        mock_logger = MagicMock()
+        monkeypatch.setattr(rest_endpoints, "verbose_logger", mock_logger, raising=False)
+
+        request_payload = {
+            "server_id": "server-1",
+            "name": "demo-tool",
+            "arguments": {"foo": "bar"},
+        }
+        request = _build_request(
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body=request_payload,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.call_tool_rest_api(
+                request,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert exc_info.value.status_code == upstream_status
+        assert exc_info.value.headers is not None
+        assert exc_info.value.headers.get("www-authenticate") == challenge
+        # The expected caller-must-reauth signal is logged once, at info, and never at error, so
+        # error-rate alerts do not fire on normal pass-through re-authentication.
+        error_messages = [_rendered_log_message(c) for c in mock_logger.error.call_args_list if c.args]
+        assert not any("MCP tool call" in m for m in error_messages)
+        info_messages = [_rendered_log_message(c) for c in mock_logger.info.call_args_list if c.args]
+        assert sum(str(upstream_status) in m for m in info_messages) == 1
+
+    async def test_local_permission_denial_keeps_error_level_logging(self, monkeypatch):
+        """Only the relayed upstream 401 may be demoted to info; a locally generated HTTPException 403
+        (tool permission, server access, IP filtering) raised inside the call must stay at error level
+        so an authenticated user probing restrictions keeps full monitoring visibility, and must be
+        re-raised unchanged (not converted to a re-auth relay)."""
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            server_id = "server-1"
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+            auth_type = None
+
+        async def fake_add_litellm_data_to_request(**kwargs):
+            return kwargs.get("data", {})
+
+        async def fake_execute_mcp_tool(**kwargs):
+            raise HTTPException(status_code=403, detail="tool not allowed for key")
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: StubServer() if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.add_litellm_data_to_request", fake_add_litellm_data_to_request, raising=False
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", {}, raising=False)
+        monkeypatch.setattr(rest_endpoints, "execute_mcp_tool", fake_execute_mcp_tool, raising=False)
+        mock_logger = MagicMock()
+        monkeypatch.setattr(rest_endpoints, "verbose_logger", mock_logger, raising=False)
+
+        request = _build_request(
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {}},
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=UserAPIKeyAuth())
+
+        assert exc_info.value.status_code == 403
+        error_messages = [_rendered_log_message(c) for c in mock_logger.error.call_args_list if c.args]
+        assert any("HTTPException in MCP tool call" in m for m in error_messages)
+        info_messages = [_rendered_log_message(c) for c in mock_logger.info.call_args_list if c.args]
+        assert not any("relaying upstream" in m for m in info_messages)
+
+    @pytest.mark.parametrize("raise_site", ["pre_call_hook", "execute_mcp_tool"])
+    async def test_guardrail_block_runs_failure_logging_before_http_translation(self, monkeypatch, raise_site):
+        """A pre_mcp_call guardrail block, whether raised by the pre-call hook or from inside
+        execute_mcp_tool, must reach proxy_logging_obj.post_call_failure_hook (the only path that
+        writes the failure spend-log row) with the logging object's failure payload already built,
+        and the REST caller must still get the same 400 it got before."""
+        from litellm.proxy import proxy_server
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            server_id = "server-1"
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+            auth_type = None
+
+        async def fake_add_litellm_data_to_request(**kwargs):
+            return kwargs.get("data", {})
+
+        guardrail_error = HTTPException(
+            status_code=400,
+            detail={"error": "Content blocked: keyword 'confidential' detected", "keyword": "confidential"},
+        )
+
+        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+            return data
+
+        async def blocking_pre_call_hook(user_api_key_dict, data, call_type):
+            raise guardrail_error
+
+        async def fake_execute_mcp_tool(**kwargs):
+            raise guardrail_error
+
+        async def passthrough_execute_mcp_tool(**kwargs):
+            return []
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: StubServer() if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            proxy_server, "add_litellm_data_to_request", fake_add_litellm_data_to_request, raising=False
+        )
+        monkeypatch.setattr(proxy_server, "proxy_config", {}, raising=False)
+        monkeypatch.setattr(
+            proxy_server.proxy_logging_obj,
+            "pre_call_hook",
+            blocking_pre_call_hook if raise_site == "pre_call_hook" else passthrough_pre_call_hook,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "execute_mcp_tool",
+            fake_execute_mcp_tool if raise_site == "execute_mcp_tool" else passthrough_execute_mcp_tool,
+            raising=False,
+        )
+        post_call_failure_hook = AsyncMock(return_value=None)
+        monkeypatch.setattr(proxy_server.proxy_logging_obj, "post_call_failure_hook", post_call_failure_hook)
+
+        user_api_key_dict = UserAPIKeyAuth(api_key="hashed-key", request_route="/mcp-rest/tools/call")
+        request = _build_request(
+            headers={"x-mcp-deepwiki-authorization": "Bearer upstream-secret"},
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {"q": "confidential"}},
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=user_api_key_dict)
+
+        assert exc_info.value is guardrail_error
+
+        post_call_failure_hook.assert_awaited_once()
+        hook_kwargs = post_call_failure_hook.await_args.kwargs
+        assert hook_kwargs["original_exception"] is guardrail_error
+        assert hook_kwargs["user_api_key_dict"] is user_api_key_dict
+        assert hook_kwargs["route"] == "/mcp/call_tool"
+        request_data = hook_kwargs["request_data"]
+        assert "raw_headers" not in request_data
+        assert "mcp_server_auth_headers" not in request_data
+        standard_logging_object = request_data["litellm_logging_obj"].model_call_details["standard_logging_object"]
+        assert standard_logging_object["status"] == "failure"
+        assert standard_logging_object["error_str"] == str(guardrail_error)
+
+    async def test_failure_logging_error_does_not_replace_guardrail_error(self, monkeypatch):
+        from litellm.proxy import proxy_server
+
+        guardrail_error = HTTPException(status_code=400, detail={"error": "Content blocked"})
+
+        async def fake_add_litellm_data_to_request(**kwargs):
+            return kwargs.get("data", {})
+
+        async def blocking_pre_call_hook(user_api_key_dict, data, call_type):
+            raise guardrail_error
+
+        failure_logging = AsyncMock(side_effect=RuntimeError("spend log db down"))
+        monkeypatch.setattr(
+            proxy_server, "add_litellm_data_to_request", fake_add_litellm_data_to_request, raising=False
+        )
+        monkeypatch.setattr(proxy_server, "proxy_config", {}, raising=False)
+        monkeypatch.setattr(proxy_server.proxy_logging_obj, "pre_call_hook", blocking_pre_call_hook)
+        monkeypatch.setattr(rest_endpoints, "fire_mcp_tool_call_failure_logging", failure_logging, raising=False)
+
+        request = _build_request(
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {"q": "confidential"}},
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.call_tool_rest_api(
+                request, user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", request_route="/mcp-rest/tools/call")
+            )
+
+        assert exc_info.value is guardrail_error
+        failure_logging.assert_awaited_once()
+
+    async def test_success_logging_cancellation_propagates(self, monkeypatch):
+        fire_logging = AsyncMock(side_effect=asyncio.CancelledError())
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_fire_mcp_tool_call_logging",
+            fire_logging,
+            raising=False,
+        )
+
+        with pytest.raises(asyncio.CancelledError):
+            await rest_endpoints._safe_fire_mcp_tool_call_logging(
+                object(), {"result": "ok"}, datetime.now(), datetime.now()
+            )
+
+        fire_logging.assert_awaited_once()
+
+    @pytest.mark.parametrize("upstream_status", [401, 403])
+    async def test_virtual_mcp_tool_call_relays_upstream_auth_failure(self, monkeypatch, upstream_status):
+        """The virtual mcp_tool_call REST branch reaches execute_mcp_tool via handle_mcp_tool_call
+        without the direct branch's relay wrapper, so an MCPUpstreamAuthError from it must be relayed
+        by the endpoint-level handler (a real 401/403 + WWW-Authenticate) rather than falling through
+        the catch-all into a generic 500."""
+        import litellm.proxy._experimental.mcp_server.tool_search as tool_search_mod
+        from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        challenge = 'Bearer resource_metadata="https://gw.example.com/.well-known/oauth-protected-resource"'
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_handle_mcp_tool_call(**kwargs):
+            raise MCPUpstreamAuthError(status_code=upstream_status, www_authenticate=challenge, server_name="stub")
+
+        class _FakePreCall:
+            def __init__(self, data):
+                self.data = data
+
+            async def common_processing_pre_call_logic(self, **kwargs):
+                return None, MagicMock()
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(tool_search_mod, "handle_mcp_tool_call", fake_handle_mcp_tool_call, raising=False)
+        monkeypatch.setattr(
+            "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
+            _FakePreCall,
+            raising=False,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", {}, raising=False)
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {}, raising=False)
+
+        user_api_key_dict = UserAPIKeyAuth(
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="search-scope",
+                mcp_tool_search_enabled=True,
+            )
+        )
+        request = _build_request(
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body={"name": "mcp_tool_call", "arguments": {"tool_name": "x", "arguments": {}}},
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=user_api_key_dict)
+
+        assert exc_info.value.status_code == upstream_status
+        assert exc_info.value.headers is not None
+        assert exc_info.value.headers.get("www-authenticate") == challenge
+
+    async def test_virtual_mcp_tool_call_guardrail_block_runs_failure_logging(self, monkeypatch):
+        """A pre_mcp_call guardrail block on the virtual mcp_tool_call branch must write a failure
+        spend log, same as the direct tool call branch, and still raise the original error."""
+        from litellm.proxy import proxy_server
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        guardrail_error = HTTPException(status_code=400, detail={"error": "Content blocked"})
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_add_litellm_data_to_request(**kwargs):
+            return kwargs.get("data", {})
+
+        async def blocking_pre_call_hook(user_api_key_dict, data, call_type):
+            raise guardrail_error
+
+        failure_logging = AsyncMock()
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            proxy_server, "add_litellm_data_to_request", fake_add_litellm_data_to_request, raising=False
+        )
+        monkeypatch.setattr(proxy_server, "proxy_config", {}, raising=False)
+        monkeypatch.setattr(proxy_server, "general_settings", {}, raising=False)
+        monkeypatch.setattr(proxy_server.proxy_logging_obj, "pre_call_hook", blocking_pre_call_hook)
+        monkeypatch.setattr(rest_endpoints, "fire_mcp_tool_call_failure_logging", failure_logging, raising=False)
+
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            request_route="/mcp-rest/tools/call",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="search-scope",
+                mcp_tool_search_enabled=True,
+            ),
+        )
+        request = _build_request(
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body={"name": "mcp_tool_call", "arguments": {"tool_name": "x", "arguments": {"q": "confidential"}}},
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=user_api_key_dict)
+
+        assert exc_info.value is guardrail_error
+        failure_logging.assert_awaited_once()
+        logging_obj, exception, _start_time, user_api_key_auth, request_data = failure_logging.await_args.args
+        assert exception is guardrail_error
+        assert user_api_key_auth is user_api_key_dict
+        assert logging_obj is request_data.get("litellm_logging_obj")
+        assert logging_obj is not None
 
 
 class TestGetToolsForSingleServer:
@@ -1075,9 +3099,7 @@ class TestGetToolsForSingleServer:
 
     pytestmark = pytest.mark.asyncio
 
-    async def test_filters_tools_by_object_permission_mcp_tool_permissions(
-        self, monkeypatch
-    ):
+    async def test_filters_tools_by_object_permission_mcp_tool_permissions(self, monkeypatch):
         """Test that tools are filtered by user_api_key_auth.object_permission.mcp_tool_permissions"""
         from litellm.proxy._experimental.mcp_server.server import MCPServer
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
@@ -1240,9 +3262,7 @@ class TestGetToolsForSingleServer:
         # All tools should be returned
         assert len(result) == 2
 
-    async def test_no_filtering_when_server_not_in_mcp_tool_permissions(
-        self, monkeypatch
-    ):
+    async def test_no_filtering_when_server_not_in_mcp_tool_permissions(self, monkeypatch):
         """Test that all tools are returned when server is not in mcp_tool_permissions"""
         from litellm.proxy._experimental.mcp_server.server import MCPServer
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
@@ -1295,9 +3315,7 @@ class TestGetToolsForSingleServer:
         # All tools should be returned since server is not in permissions
         assert len(result) == 2
 
-    async def test_combines_server_allowed_tools_and_object_permission_filters(
-        self, monkeypatch
-    ):
+    async def test_combines_server_allowed_tools_and_object_permission_filters(self, monkeypatch):
         """Test that both server.allowed_tools and object_permission.mcp_tool_permissions filters are applied"""
         from litellm.proxy._experimental.mcp_server.server import MCPServer
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
@@ -1615,9 +3633,7 @@ class TestPreviewOpenAPITools:
                 "paths": {
                     "/repos/{owner}/{repo}/actions/jobs/{job_id}/logs": {
                         "get": {
-                            "operationId": (
-                                "actions/download-job-logs-for-workflow-run"
-                            ),
+                            "operationId": ("actions/download-job-logs-for-workflow-run"),
                             "summary": "Download job logs",
                         }
                     },
@@ -1660,9 +3676,7 @@ class TestPreviewOpenAPITools:
         names = [t["name"] for t in result["tools"]]
         anthropic_re = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
         for name in names:
-            assert anthropic_re.match(
-                name
-            ), f"preview tool name {name!r} violates ^[a-zA-Z0-9_-]+$"
+            assert anthropic_re.match(name), f"preview tool name {name!r} violates ^[a-zA-Z0-9_-]+$"
         assert "actions_download-job-logs-for-workflow-run" in names
         assert "pulls_list-files" in names
 
@@ -1719,9 +3733,7 @@ class TestPreviewOpenAPITools:
 
         registered_summary_to_name: dict = {}
 
-        def fake_create_tool_function(
-            path, method, operation, base_url
-        ):  # noqa: ANN001
+        def fake_create_tool_function(path, method, operation, base_url):  # noqa: ANN001
             def _f():
                 return None
 
@@ -1734,9 +3746,7 @@ class TestPreviewOpenAPITools:
         )
 
         class _StubRegistry:
-            def register_tool(
-                self, name, description, input_schema, handler
-            ):  # noqa: ANN001
+            def register_tool(self, name, description, input_schema, handler):  # noqa: ANN001
                 registered_summary_to_name[description] = name
 
         monkeypatch.setattr(
@@ -1745,9 +3755,7 @@ class TestPreviewOpenAPITools:
             _StubRegistry(),
         )
 
-        openapi_to_mcp_generator.register_tools_from_openapi(
-            spec, base_url="https://example.invalid"
-        )
+        openapi_to_mcp_generator.register_tools_from_openapi(spec, base_url="https://example.invalid")
 
         assert preview_summary_to_name == registered_summary_to_name, (
             f"preview {preview_summary_to_name} != "
@@ -1769,20 +3777,20 @@ class TestConnectionErrorMessage:
         secret = "Bearer sk-super-secret-token"
         exc = httpx.LocalProtocolError(f"Illegal header value b' {secret}'")
 
-        message = rest_endpoints._connection_error_message(exc)
+        message = rest_endpoints._connection_error_message(exc, "https://example.com", 30.0)
 
         assert "header" in message.lower()
         assert secret not in message
 
     def test_connect_error_points_at_reachability(self):
         message = rest_endpoints._connection_error_message(
-            httpx.ConnectError("All connection attempts failed")
+            httpx.ConnectError("All connection attempts failed"), "https://example.com", 30.0
         )
         assert "unreachable" in message.lower()
 
     def test_timeout_error_message(self):
         message = rest_endpoints._connection_error_message(
-            httpx.ConnectTimeout("timed out")
+            httpx.ConnectTimeout("timed out"), "https://example.com", 30.0
         )
         assert "unreachable" in message.lower()
 
@@ -1793,10 +3801,427 @@ class TestConnectionErrorMessage:
             request=httpx.Request("POST", "http://x/"),
             response=response,
         )
-        message = rest_endpoints._connection_error_message(exc)
+        message = rest_endpoints._connection_error_message(exc, "https://example.com", 30.0)
         assert "503" in message
 
+    @pytest.mark.parametrize(
+        "error_type", [httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError, ConnectionResetError]
+    )
+    def test_interrupted_connection_message_is_safe(self, error_type: type[Exception]) -> None:
+        message: Final = rest_endpoints._connection_error_message(
+            error_type("secret-transport-detail"), "https://example.com/?token=secret-query", 30
+        )
+        assert "connection was interrupted" in message
+        assert "secret" not in message
+
+    def test_closed_connection_explains_incomplete_request(self) -> None:
+        from mcp import McpError
+        from mcp.types import ErrorData
+
+        message: Final = rest_endpoints._connection_error_message(
+            McpError(ErrorData(code=-32000, message="Connection closed", data="secret-data")), None, 30
+        )
+        assert "connection was closed before the request completed" in message
+        assert "secret" not in message
+
+    def test_timeout_does_not_claim_the_server_sent_nothing(self) -> None:
+        message: Final = rest_endpoints._connection_error_message(TimeoutError(), None, 30)
+        assert "no valid MCP response received" in message
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("sdk_timeout", [True, False])
+    @pytest.mark.parametrize("read_timeout", [0, 1])
+    async def test_timeout_message_uses_the_deadline_that_expired(self, sdk_timeout: bool, read_timeout: int) -> None:
+        from mcp import McpError
+        from mcp.types import ErrorData
+
+        async def operation(client: rest_endpoints.MCPClient) -> dict[str, object]:
+            try:
+                raise TimeoutError("secret-timeout")
+            except TimeoutError as elapsed:
+                if not sdk_timeout:
+                    raise
+                try:
+                    raise McpError(ErrorData(code=408, message="secret-sdk-timeout")) from elapsed
+                except McpError as sdk_error:
+                    raise TimeoutError() from sdk_error
+
+        payload: Final = NewMCPServerRequest(
+            server_name="timeout", url="https://example.com", auth_type=MCPAuth.none, timeout=read_timeout
+        )
+        result: Final = await rest_endpoints._execute_with_mcp_client(payload, operation, timeout_seconds=30)
+        assert (f"within {read_timeout}s" if sdk_timeout else "within 30s") in result["message"]
+        assert "secret" not in result["message"]
+
     def test_unknown_error_falls_back_to_generic(self):
-        message = rest_endpoints._connection_error_message(RuntimeError("weird"))
+        message = rest_endpoints._connection_error_message(RuntimeError("weird"), "https://example.com", 30.0)
         assert "weird" not in message
-        assert "proxy logs" in message.lower()
+        assert "reference" in message.lower()
+
+    def test_sdk_session_terminated_explains_endpoint_and_retry(self) -> None:
+        from mcp.shared.exceptions import McpError
+        from mcp.types import ErrorData
+
+        message: Final = rest_endpoints._connection_error_message(
+            McpError(ErrorData(code=32600, message="Session terminated")), "https://example.com/mcp", 30.0
+        )
+
+        assert "session was terminated" in message
+        assert "MCP endpoint" in message
+        assert "transport" in message
+        assert "retry" in message
+        assert "404" not in message
+
+    @pytest.mark.parametrize("code", [-32700, -32601, -32602, -32603, -32000, 32600, 408])
+    def test_rpc_errors_include_code_without_echoing_upstream_data(self, code: int) -> None:
+        from mcp.shared.exceptions import McpError
+        from mcp.types import ErrorData
+
+        message: Final = rest_endpoints._connection_error_message(
+            McpError(ErrorData(code=code, message="secret-message", data={"token": "secret-data"})),
+            "https://example.com/secret-path?token=secret-query",
+            30.0,
+        )
+
+        assert f"JSON-RPC code {code}" in message
+        assert "secret" not in message
+        assert "timed out" not in message
+        assert "session was terminated" not in message
+
+    @pytest.mark.parametrize("status_code", [401, 403, 404, 405, 429, 503])
+    def test_wrapped_http_failures_preserve_status(self, status_code: int) -> None:
+        response: Final = httpx.Response(status_code, text="secret-body")
+        upstream: Final = httpx.HTTPStatusError(
+            "secret-exception",
+            request=httpx.Request("POST", "https://example.com/?token=secret-query"),
+            response=response,
+        )
+        wrapped: Final = BaseExceptionGroup(
+            "secret-group", [asyncio.CancelledError(), BaseExceptionGroup("nested", [upstream])]
+        )
+
+        message: Final = rest_endpoints._connection_error_message(wrapped, "https://example.com", 30.0)
+
+        assert f"HTTP {status_code}" in message
+        assert "secret" not in message
+
+    def test_explicit_cause_is_classified_before_incidental_context(self) -> None:
+        wrapped: Final = RuntimeError("secret-wrapper")
+        wrapped.__cause__ = httpx.ConnectError("secret-cause")
+        wrapped.__context__ = TimeoutError("secret-context")
+
+        message: Final = rest_endpoints._connection_error_message(wrapped, "https://example.com", 30.0)
+
+        assert "unreachable" in message
+        assert "secret" not in message
+
+    def test_timeout_url_redacts_credentials_path_query_and_fragment(self) -> None:
+        message: Final = rest_endpoints._connection_error_message(
+            TimeoutError("secret-error"),
+            "https://secret-user:secret-pass@example.com:8443/secret-path?token=secret-query#secret-fragment",
+            30.0,
+        )
+
+        assert "https://example.com:8443" in message
+        assert "30s" in message
+        assert "secret" not in message
+
+    def test_unknown_failure_reference_matches_safe_diagnostics(self, caplog: pytest.LogCaptureFixture) -> None:
+        import re
+
+        try:
+            raise RuntimeError("secret-exception-body")
+        except RuntimeError as exc:
+            message: Final = rest_endpoints._connection_error_message(
+                exc, "https://secret-user:secret-password@example.com/secret-path?token=secret-query", 30.0
+            )
+
+        reference: Final = re.search(r"reference ([a-f0-9]{32})", message)
+        assert reference is not None
+        diagnostics: Final = tuple(
+            record for record in caplog.records if "MCP connection test failed" in record.message
+        )
+        assert len(diagnostics) == 1
+        assert reference.group(1) in diagnostics[0].message
+        assert "RuntimeError" in diagnostics[0].message
+        assert "test_unknown_failure_reference_matches_safe_diagnostics" in diagnostics[0].message
+        assert diagnostics[0].exc_info is None
+        assert "secret" not in message + diagnostics[0].message
+
+    @pytest.mark.parametrize("exc", [ValueError("secret-config"), HTTPException(500, "secret-detail")])
+    def test_unrelated_errors_are_not_misreported_as_invalid_mcp(self, exc: Exception) -> None:
+        message: Final = rest_endpoints._connection_error_message(exc, "https://example.com", 30.0)
+
+        assert "reference" in message
+        assert "invalid MCP response" not in message
+        assert "secret" not in message
+
+    def test_configuration_validation_error_uses_unknown_fallback(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError) as caught:
+            NewMCPServerRequest.model_validate({"server_name": "example", "transport": "secret-invalid-transport"})
+
+        message: Final = rest_endpoints._connection_error_message(caught.value, "https://example.com", 30.0)
+        assert "reference" in message
+        assert "invalid MCP response" not in message
+        assert "secret" not in message
+
+    @pytest.mark.asyncio
+    async def test_connection_test_preserves_cancellation(self) -> None:
+        async def cancelled_operation(client: rest_endpoints.MCPClient) -> dict[str, object]:
+            raise asyncio.CancelledError
+
+        payload: Final = NewMCPServerRequest(server_name="cancelled", url="https://example.com", auth_type=MCPAuth.none)
+        with pytest.raises(asyncio.CancelledError):
+            await rest_endpoints._execute_with_mcp_client(payload, cancelled_operation)
+
+    @pytest.mark.asyncio
+    async def test_unknown_failure_preserves_response_contract(self) -> None:
+        async def failing_operation(client: rest_endpoints.MCPClient) -> dict[str, object]:
+            raise RuntimeError("secret-operation")
+
+        payload: Final = NewMCPServerRequest(server_name="unknown", url="https://example.com", auth_type=MCPAuth.none)
+        result: Final = await rest_endpoints._execute_with_mcp_client(payload, failing_operation)
+
+        assert result["error"] is True
+        assert result["status"] == "error"
+        assert "reference" in result["message"]
+        assert "secret" not in result["message"]
+        assert "stack_trace" not in result
+
+
+class TestGetServerAuthHeaderGroupDefault:
+    """``x-mcp-<access_group>-authorization`` is the default for group members, the per-server
+    header still wins, and servers outside the group never see the group credential."""
+
+    @staticmethod
+    def _server(alias: str, group: str) -> MCPServer:
+        return MCPServer(
+            server_id=f"server-{alias}",
+            name=alias,
+            server_name=alias,
+            alias=alias,
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            access_groups=[group],
+        )
+
+    def test_group_header_applies_to_members_and_per_server_header_overrides(self):
+        headers = {
+            "shared": {"Authorization": "Bearer group-token"},
+            "beta": {"Authorization": "Bearer beta-token"},
+        }
+        assert rest_endpoints._get_server_auth_header(self._server("alpha", "shared"), headers, None) == {
+            "Authorization": "Bearer group-token"
+        }
+        assert rest_endpoints._get_server_auth_header(self._server("beta", "shared"), headers, None) == {
+            "Authorization": "Bearer beta-token"
+        }
+
+    def test_group_header_falls_back_to_legacy_header_outside_group(self):
+        headers = {"shared": {"Authorization": "Bearer group-token"}}
+        assert rest_endpoints._get_server_auth_header(self._server("gamma", "other"), headers, None) is None
+        assert rest_endpoints._get_server_auth_header(self._server("gamma", "other"), headers, "legacy") == "legacy"
+
+
+class TestToolResponseMcpInfoEnrichment:
+    """The REST tools/list response must expose the user-facing alias and the
+    server_id alongside the internal server_name so clients (agent builder UIs)
+    can map the internal config key to a friendly name without needing the
+    mcp_routes-gated server listing.
+    """
+
+    def test_enriches_mcp_info_with_alias_and_server_id(self):
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        server = MCPServer(
+            server_id="a1b2c3d4",
+            name="mcpAtlassian",
+            alias="atlassian",
+            server_name="mcpAtlassian",
+            transport=MCPTransport.http,
+            mcp_info={"server_name": "mcpAtlassian"},
+        )
+        tools = [
+            MCPTool(
+                name="get_issue",
+                description="Fetch a Jira issue",
+                inputSchema={"type": "object"},
+            )
+        ]
+
+        result = rest_endpoints._create_tool_response_objects(tools, server)
+
+        assert result[0].mcp_info == {
+            "server_name": "mcpAtlassian",
+            "server_id": "a1b2c3d4",
+            "alias": "atlassian",
+        }
+
+    def test_alias_none_is_explicit_in_mcp_info(self):
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        server = MCPServer(
+            server_id="server-uuid",
+            name="no_alias_server",
+            alias=None,
+            server_name="no_alias_server",
+            transport=MCPTransport.http,
+            mcp_info={"server_name": "no_alias_server"},
+        )
+        tools = [
+            MCPTool(
+                name="ping",
+                description="Ping",
+                inputSchema={"type": "object"},
+            )
+        ]
+
+        result = rest_endpoints._create_tool_response_objects(tools, server)
+
+        assert result[0].mcp_info == {
+            "server_name": "no_alias_server",
+            "server_id": "server-uuid",
+            "alias": None,
+        }
+
+
+class TestRestListToolsetFiltering:
+    @pytest.mark.asyncio
+    async def test_rest_list_filters_toolset_only_key_to_toolset_tools(self, monkeypatch):
+        """A toolset-only key reaching a toolset server via REST list must see
+        only the toolset's tools; the raw catalog leaked every tool on the
+        server when the filter read object_permission directly instead of the
+        shared toolset-aware primitive"""
+        from unittest.mock import patch
+
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        stub_server = MCPServer(
+            server_id="server-a",
+            name="stubtools",
+            transport=MCPTransport.http,
+        )
+        stub_server.alias = "stubtools"
+        stub_server.server_name = "stubtools"
+        stub_server.allowed_tools = None
+        stub_server.disallowed_tools = None
+        stub_server.mcp_info = {"server_name": "stubtools"}
+
+        upstream_tools = [
+            MCPTool(name="lookup_status", inputSchema={"type": "object"}),
+            MCPTool(name="delete_everything", inputSchema={"type": "object"}),
+        ]
+
+        key_object_permission = MagicMock()
+        key_object_permission.mcp_servers = []
+        key_object_permission.mcp_access_groups = []
+        key_object_permission.mcp_tool_permissions = None
+        key_object_permission.mcp_toolsets = ["toolset-1"]
+
+        user_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+
+        mock_manager = MagicMock()
+        mock_manager.expand_tool_permissions = MagicMock(side_effect=lambda perms: perms or {})
+        mock_manager.resolve_toolset_tool_permissions = AsyncMock(return_value={"server-a": ["lookup_status"]})
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_get_tools_from_server",
+            AsyncMock(return_value=upstream_tools),
+        )
+
+        with (
+            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission),
+            patch.object(MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=None)),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            result = await rest_endpoints._get_tools_for_single_server(
+                server=stub_server,
+                server_auth_header=None,
+                raw_headers=None,
+                user_api_key_auth=user_auth,
+            )
+
+        assert [tool.name for tool in result] == ["lookup_status"]
+
+
+class TestV1ResolvedOauth2Gate:
+    """The REST surface must stop resolving per-user OAuth2 tokens for servers the v2 resolver owns.
+
+    ``_resolve_v2_auth`` drops any Authorization built here for an ``authorization_code`` server and
+    injects the resolver's own token, so the v1 lookup was a DB round-trip whose result was discarded.
+    A server that still defers to v1 (upstream-delegated oauth2) must keep resolving, which is what
+    makes these assertions non-vacuous.
+    """
+
+    @staticmethod
+    def _oauth2_server(*, delegate_auth_to_upstream: bool) -> Any:
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        return MCPServer(
+            server_id="oauth2-srv",
+            name="oauth2-srv",
+            url="https://upstream.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=delegate_auth_to_upstream,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "delegate_auth_to_upstream, expected_headers, expected_lookups",
+        [
+            (False, None, 0),
+            (True, {"Authorization": "Bearer stored-token"}, 1),
+        ],
+    )
+    async def test_user_oauth_headers_skip_v2_owned_servers(
+        self, delegate_auth_to_upstream, expected_headers, expected_lookups, monkeypatch
+    ):
+        from litellm.proxy._experimental.mcp_server import db as mcp_db
+
+        server = self._oauth2_server(delegate_auth_to_upstream=delegate_auth_to_upstream)
+        resolve_token = AsyncMock(return_value={"access_token": "stored-token"})
+        monkeypatch.setattr(mcp_db, "resolve_valid_user_oauth_token", resolve_token)
+
+        headers = await rest_endpoints._get_user_oauth_extra_headers(
+            server,
+            UserAPIKeyAuth(user_id="alice", api_key="sk-1234"),
+            prefetched_creds={"oauth2-srv": {"access_token": "stored-token"}},
+        )
+
+        assert headers == expected_headers
+        assert resolve_token.await_count == expected_lookups
+
+    def test_prefetch_preflight_only_counts_v1_resolved_servers(self, monkeypatch):
+        v2_owned = self._oauth2_server(delegate_auth_to_upstream=False)
+        v1_resolved = self._oauth2_server(delegate_auth_to_upstream=True)
+        v1_resolved.server_id = "delegate-srv"
+        registry = {"oauth2-srv": v2_owned, "delegate-srv": v1_resolved}
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: registry.get(server_id),
+        )
+
+        assert rest_endpoints._v1_resolved_oauth2_server_ids(["oauth2-srv"]) == set()
+        assert rest_endpoints._v1_resolved_oauth2_server_ids(["oauth2-srv", "delegate-srv"]) == {"delegate-srv"}

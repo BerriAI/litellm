@@ -66,9 +66,8 @@ class TestAPISerpentConfig:
         assert headers["X-API-Key"] == "test-api-key"
         assert headers["Content-Type"] == "application/json"
 
-    @patch("litellm.llms.apiserpent.search.transformation.get_secret_str")
-    def test_validate_environment_without_api_key(self, mock_get_secret):
-        mock_get_secret.return_value = None
+    def test_validate_environment_without_api_key(self, monkeypatch):
+        monkeypatch.delenv("APISERPENT_API_KEY", raising=False)
         with pytest.raises(ValueError, match="APISERPENT_API_KEY is not set"):
             APISerpentSearchConfig().validate_environment({})
 
@@ -240,8 +239,8 @@ class TestAPISerpentSearchIntegration:
         return mock_response
 
     @pytest.mark.asyncio
-    async def test_asearch_quick_default(self):
-        os.environ["APISERPENT_API_KEY"] = "test-api-key"
+    async def test_asearch_quick_default(self, monkeypatch):
+        monkeypatch.setenv("APISERPENT_API_KEY", "test-api-key")
         with patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get",
             new_callable=AsyncMock,
@@ -270,8 +269,8 @@ class TestAPISerpentSearchIntegration:
             assert response.results[0].title == "Test Result"
 
     @pytest.mark.asyncio
-    async def test_asearch_deep(self):
-        os.environ["APISERPENT_API_KEY"] = "test-api-key"
+    async def test_asearch_deep(self, monkeypatch):
+        monkeypatch.setenv("APISERPENT_API_KEY", "test-api-key")
         with patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get",
             new_callable=AsyncMock,

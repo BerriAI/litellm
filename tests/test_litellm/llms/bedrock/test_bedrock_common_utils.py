@@ -1,11 +1,6 @@
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
@@ -158,6 +153,68 @@ def test_deepseek_cris():
     assert bedrock_route == "converse"
 
 
+def test_application_inference_profile_arn_routes_to_converse():
+    """
+    Regression for #18258: a bare application-inference-profile ARN passed as
+    `bedrock/arn:...` must route to converse. The ARN ends in an opaque id with
+    no provider substring, so the invoke path cannot build a provider-native
+    body and raises "Unknown provider=None". Converse needs no provider, so it
+    is the correct route.
+    """
+    route = BedrockModelInfo.get_bedrock_route(
+        model="bedrock/arn:aws:bedrock:us-west-2:123412341234:application-inference-profile/a1b2c3"
+    )
+    assert route == "converse"
+
+
+def test_explicit_invoke_prefix_wins_over_application_inference_profile_arn():
+    """
+    An explicit invoke/ prefix is respected even for an application-inference-profile
+    ARN; only the bare `bedrock/arn:...` form is auto-routed to converse. The
+    explicit invoke path remains a dead end for these ARNs (no provider can be
+    derived, so completion raises "Unknown provider=None") by design: a caller
+    that explicitly asks for invoke gets invoke. The auto-route only rescues the
+    documented bare form.
+    """
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    model = "bedrock/invoke/arn:aws:bedrock:us-west-2:123412341234:application-inference-profile/a1b2c3"
+    assert BedrockModelInfo.get_bedrock_route(model) == "invoke"
+    assert BaseAWSLLM.get_bedrock_invoke_provider(model) is None
+
+
+def test_system_defined_inference_profile_arn_still_routes_to_converse():
+    """
+    A system-defined cross-region inference-profile ARN embeds a known model, so
+    get_base_model resolves it and it already routes to converse. Guards that the
+    application-inference-profile fix does not change this working case.
+    """
+    route = BedrockModelInfo.get_bedrock_route(
+        model="bedrock/arn:aws:bedrock:us-east-1:123:inference-profile/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+    )
+    assert route == "converse"
+
+
+def test_other_opaque_arn_types_still_route_to_invoke():
+    """
+    Only application-inference-profile ARNs are auto-routed to converse. Other
+    opaque ARNs (provisioned-model, imported-model, custom-model-deployment)
+    also yield no invoke provider, but they are frequently invoke-only with
+    provider-specific body formats, so routing them to converse could break
+    them. Guards the deliberate scope against an over-broad "any opaque ARN ->
+    converse" generalization.
+    """
+    for arn_segment in (
+        "provisioned-model/abcdefgh1234",
+        "imported-model/abcdefgh1234",
+        "custom-model-deployment/abcdefgh1234",
+    ):
+        route = BedrockModelInfo.get_bedrock_route(
+            model=f"bedrock/arn:aws:bedrock:us-east-1:123412341234:{arn_segment}"
+        )
+        assert route == "invoke", f"{arn_segment} should stay on invoke route"
+
+
 def test_govcloud_cross_region_inference_prefix():
     """
     Test that GovCloud models with cross-region inference prefix (us-gov.) are parsed correctly
@@ -263,3 +320,610 @@ def test_bundled_bedrock_opus_model_info_declares_output_config_effort_ceiling(
     model_info = GetModelCostMap.load_local_model_cost_map()[model]
 
     assert model_info["bedrock_output_config_effort_ceiling"] == expected_ceiling
+
+
+def test_route_prefix_matched_as_path_segment_not_substring():
+    """Route tokens like ``mantle/`` must match only at a path-segment boundary.
+
+    The ``bedrock_mantle/`` provider prefix contains the substring ``mantle/``;
+    a substring match misroutes ``bedrock_mantle/openai.gpt-5.5`` to the Claude
+    Mythos mantle config, whose request transform strips ``mantle/`` and mangles
+    the body model into ``bedrock_openai.gpt-5.5``. These assertions fail under
+    the old substring matching and pass once matching is anchored to ``startswith``
+    or a ``/`` boundary.
+    """
+    # The bedrock_mantle/ provider prefix must NOT be read as the mantle/ route.
+    assert (
+        BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.5") != "mantle"
+    )
+    assert (
+        BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.4") == "invoke"
+    )
+    assert (
+        BedrockModelInfo._explicit_mantle_route("bedrock_mantle/openai.gpt-5.5")
+        is False
+    )
+
+    # A genuine mantle route still resolves, via the startswith branch...
+    assert (
+        BedrockModelInfo.get_bedrock_route("mantle/anthropic.claude-mythos-preview")
+        == "mantle"
+    )
+    # ...and via the mid-path "/mantle/" branch (after the bedrock/ provider prefix).
+    assert (
+        BedrockModelInfo.get_bedrock_route(
+            "bedrock/mantle/anthropic.claude-mythos-preview"
+        )
+        == "mantle"
+    )
+
+
+def test_model_has_route_prefix_exercises_both_branches():
+    """``_model_has_route_prefix`` matches on ``startswith`` or a ``/`` boundary only."""
+    # startswith branch
+    assert (
+        BedrockModelInfo._model_has_route_prefix(
+            "mantle/anthropic.claude-mythos-preview", "mantle/"
+        )
+        is True
+    )
+    # f"/{prefix}" boundary branch
+    assert (
+        BedrockModelInfo._model_has_route_prefix(
+            "bedrock/mantle/anthropic.claude-mythos-preview", "mantle/"
+        )
+        is True
+    )
+    # neither branch: the token only appears glued to another segment
+    assert (
+        BedrockModelInfo._model_has_route_prefix(
+            "bedrock_mantle/openai.gpt-5.5", "mantle/"
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "route_method, token",
+    [
+        (BedrockModelInfo._explicit_converse_route, "converse"),
+        (BedrockModelInfo._explicit_converse_like_route, "converse_like"),
+        (BedrockModelInfo._explicit_invoke_route, "invoke"),
+        (BedrockModelInfo._explicit_async_invoke_route, "async_invoke"),
+        (BedrockModelInfo._explicit_agent_route, "agent"),
+        (BedrockModelInfo._explicit_agentcore_route, "agentcore"),
+        (BedrockModelInfo._explicit_claude_platform_route, "claude_platform"),
+        (BedrockModelInfo._explicit_openai_route, "openai"),
+    ],
+    ids=[
+        "converse",
+        "converse_like",
+        "invoke",
+        "async_invoke",
+        "agent",
+        "agentcore",
+        "claude_platform",
+        "openai",
+    ],
+)
+def test_explicit_route_helpers_match_token_only_as_path_segment(route_method, token):
+    """Each migrated ``_explicit_*_route`` matches its token only as a path segment.
+
+    A leading segment (start of the id or right after a ``/``) matches; the token
+    glued onto a preceding segment does not. Reverting any method to the old
+    ``"<token>/" in model`` substring check makes the non-segment case return True
+    and fails this test.
+    """
+    # leading-segment forms match
+    assert route_method(f"{token}/some-model") is True
+    assert route_method(f"bedrock/{token}/some-model") is True
+    # the token only as a non-segment substring must not match
+    assert route_method(f"x{token}/y") is False
+
+
+def test_explicit_invoke_route_does_not_match_async_invoke():
+    """``invoke/`` must not substring-match ``async_invoke/`` models.
+
+    This is the concrete improvement of the segment-boundary migration: the old
+    ``"invoke/" in model`` check wrongly classified async-invoke models as the
+    invoke route.
+    """
+    async_invoke_model = "async_invoke/twelvelabs.marengo-embed-2-7-v1:0"
+    assert BedrockModelInfo._explicit_invoke_route(async_invoke_model) is False
+    assert (
+        BedrockModelInfo._explicit_invoke_route(f"bedrock/{async_invoke_model}")
+        is False
+    )
+    # ...while async_invoke/ is still detected as its own route.
+    assert BedrockModelInfo._explicit_async_invoke_route(async_invoke_model) is True
+    assert (
+        BedrockModelInfo._explicit_async_invoke_route(f"bedrock/{async_invoke_model}")
+        is True
+    )
+
+
+def test_capability_lookups_fall_back_to_base_model_when_regional_entry_lacks_field(monkeypatch):
+    """
+    Regression test: a regional model_cost entry without the capability field
+    must not shadow a base entry that has it (`get(model) or get(base)` used to
+    short-circuit on the truthy regional dict and drop the capability).
+    """
+    import litellm
+    from litellm.llms.bedrock.common_utils import (
+        bedrock_converse_supports_parallel_tool_use_config,
+        is_claude_4_5_on_bedrock,
+    )
+
+    base = "anthropic.claude-fallback-test"
+    regional = f"eu.{base}"
+    monkeypatch.setitem(litellm.model_cost, regional, {"input_cost_per_token": 1e-06})
+    monkeypatch.setitem(
+        litellm.model_cost,
+        base,
+        {
+            "cache_creation_input_token_cost_above_1hr": 1e-05,
+            "supports_parallel_tool_use_config": True,
+        },
+    )
+
+    assert is_claude_4_5_on_bedrock(regional) is True
+    assert bedrock_converse_supports_parallel_tool_use_config(regional) is True
+
+
+def test_merge_bedrock_aws_request_params_strips_caller_identity_when_deployment_has_static_credentials():
+    from litellm.llms.bedrock.common_utils import merge_bedrock_aws_request_params
+
+    merged = merge_bedrock_aws_request_params(
+        litellm_params={
+            "aws_access_key_id": "deployment-key",
+            "aws_secret_access_key": "deployment-secret",
+            "aws_region_name": "us-west-2",
+            "s3_bucket_name": "deployment-bucket",
+        },
+        optional_params={
+            "aws_access_key_id": "caller-key",
+            "aws_profile_name": "caller-profile",
+            "aws_role_name": "arn:aws:iam::123456789012:role/caller",
+            "aws_session_token": "caller-token",
+            "aws_web_identity_token": "caller-web-identity",
+            "aws_session_tags": [{"Key": "team", "Value": "caller-chosen"}],
+            "timeout": 600,
+        },
+    )
+
+    assert merged["aws_access_key_id"] == "deployment-key"
+    assert merged["aws_secret_access_key"] == "deployment-secret"
+    assert merged["aws_region_name"] == "us-west-2"
+    assert merged["s3_bucket_name"] == "deployment-bucket"
+    assert merged["timeout"] == 600
+    for stripped in (
+        "aws_profile_name",
+        "aws_role_name",
+        "aws_session_token",
+        "aws_web_identity_token",
+        "aws_session_tags",
+    ):
+        assert stripped not in merged
+
+
+def test_merge_bedrock_aws_request_params_keeps_caller_credentials_without_static_deployment_credentials():
+    from litellm.llms.bedrock.common_utils import merge_bedrock_aws_request_params
+
+    merged = merge_bedrock_aws_request_params(
+        litellm_params={"aws_region_name": "us-west-2"},
+        optional_params={
+            "aws_access_key_id": "caller-key",
+            "aws_secret_access_key": "caller-secret",
+            "aws_session_token": "caller-token",
+        },
+    )
+
+    assert merged["aws_access_key_id"] == "caller-key"
+    assert merged["aws_secret_access_key"] == "caller-secret"
+    assert merged["aws_session_token"] == "caller-token"
+    assert merged["aws_region_name"] == "us-west-2"
+
+
+def test_strip_unsupported_output_config_keeps_format_drops_effort(local_model_cost_map):
+    """On a model with neither effort flag, only the ``format`` key survives."""
+    from litellm.llms.bedrock.common_utils import (
+        strip_unsupported_bedrock_invoke_output_config_keys,
+    )
+
+    schema_format = {"type": "json_schema", "schema": {"type": "object"}}
+    body = {"output_config": {"effort": "high", "format": schema_format}}
+
+    strip_unsupported_bedrock_invoke_output_config_keys(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        request_body=body,
+    )
+
+    assert body["output_config"] == {"format": schema_format}
+
+
+def test_apply_structured_output_prefers_legacy_output_format(local_model_cost_map):
+    """The legacy ``output_format`` wins over ``output_config.format`` when a
+    request carries both, matching the pre-existing precedence."""
+    from litellm.llms.bedrock.common_utils import (
+        apply_bedrock_invoke_structured_output,
+    )
+
+    legacy = {"type": "json_schema", "schema": {"type": "object", "properties": {"a": {"type": "string"}}}}
+    newer = {"type": "json_schema", "schema": {"type": "object", "properties": {"b": {"type": "string"}}}}
+    body = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "output_format": legacy,
+        "output_config": {"format": newer},
+    }
+
+    apply_bedrock_invoke_structured_output(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        request_body=body,
+    )
+
+    assert body["output_config"] == {"format": legacy}
+    assert "output_format" not in body
+
+
+def test_sign_aws_request_assumes_role_with_external_id(monkeypatch):
+    """A trust policy requiring sts:ExternalId must be satisfied when signing batch API requests."""
+    import datetime
+    from unittest.mock import patch
+
+    import boto3
+    from botocore.exceptions import ClientError
+
+    from litellm.llms.bedrock.common_utils import CommonBatchFilesUtils
+
+    monkeypatch.delenv("AWS_EXTERNAL_ID", raising=False)
+
+    class FakeSTSClient:
+        def get_caller_identity(self):
+            return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
+
+        def assume_role(self, **params):
+            if params.get("ExternalId") != "external-id-batch-sign":
+                raise ClientError(
+                    {"Error": {"Code": "AccessDenied", "Message": "is not authorized to perform: sts:AssumeRole"}},
+                    "AssumeRole",
+                )
+            return {
+                "Credentials": {
+                    "AccessKeyId": "ASIABATCHSIGNROLE",
+                    "SecretAccessKey": "assumed-secret",
+                    "SessionToken": "assumed-session-token",
+                    "Expiration": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=30),
+                }
+            }
+
+    optional_params = {
+        "aws_region_name": "us-east-1",
+        "aws_access_key_id": "AKIABATCHSIGNCALLER",
+        "aws_secret_access_key": "pod-caller-secret",
+        "aws_role_name": "arn:aws:iam::999999999999:role/litellm-batch-sign-role",
+        "aws_session_name": "litellm-batch-sign-session",
+        "aws_external_id": "external-id-batch-sign",
+    }
+
+    with patch.object(boto3, "client", return_value=FakeSTSClient()):
+        signed_headers, signed_data = CommonBatchFilesUtils().sign_aws_request(
+            service_name="bedrock",
+            data={"jobName": "litellm-batch-job"},
+            endpoint_url="https://bedrock.us-east-1.amazonaws.com/model-invocation-job",
+            optional_params=optional_params,
+        )
+
+    authorization = {key.lower(): value for key, value in signed_headers.items()}["authorization"]
+    assert "ASIABATCHSIGNROLE" in authorization
+    assert signed_data == b'{"jobName": "litellm-batch-job"}'
+
+
+def test_sign_aws_request_assumes_role_with_session_tags(monkeypatch):
+    """Batch and file signing must carry the deployment's session tags into the AssumeRole call too."""
+    import datetime
+    from unittest.mock import patch
+
+    import boto3
+    from botocore.exceptions import ClientError
+
+    from litellm.llms.bedrock.common_utils import CommonBatchFilesUtils
+
+    monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("AWS_ROLE_ARN", raising=False)
+    tags = [{"Key": "team", "Value": "genai"}]
+
+    class FakeSTSClient:
+        def get_caller_identity(self):
+            return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
+
+        def assume_role(self, **params):
+            if list(params.get("Tags", ())) != tags:
+                raise ClientError(
+                    {"Error": {"Code": "AccessDenied", "Message": "is not authorized to perform: sts:TagSession"}},
+                    "AssumeRole",
+                )
+            return {
+                "Credentials": {
+                    "AccessKeyId": "ASIABATCHSIGNTAGGED",
+                    "SecretAccessKey": "assumed-secret",
+                    "SessionToken": "assumed-session-token",
+                    "Expiration": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=30),
+                }
+            }
+
+    optional_params = {
+        "aws_region_name": "us-east-1",
+        "aws_access_key_id": "AKIABATCHSIGNCALLER",
+        "aws_secret_access_key": "pod-caller-secret",
+        "aws_role_name": "arn:aws:iam::999999999999:role/litellm-batch-sign-role",
+        "aws_session_name": "litellm-batch-sign-session",
+        "aws_session_tags": tags,
+    }
+
+    with patch.object(boto3, "client", return_value=FakeSTSClient()):
+        signed_headers, _signed_data = CommonBatchFilesUtils().sign_aws_request(
+            service_name="bedrock",
+            data={"jobName": "litellm-batch-job"},
+            endpoint_url="https://bedrock.us-east-1.amazonaws.com/model-invocation-job",
+            optional_params=optional_params,
+        )
+
+    authorization = {key.lower(): value for key, value in signed_headers.items()}["authorization"]
+    assert "Credential=ASIABATCHSIGNTAGGED/" in authorization
+
+
+# --------------------------------------------------------------------------- #
+# Provider error headers (LIT-5428)                                            #
+# --------------------------------------------------------------------------- #
+
+
+def _bedrock_chat_error_configs():
+    from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.llms.bedrock.chat.invoke_agent.transformation import AmazonInvokeAgentConfig
+    from litellm.llms.bedrock.chat.invoke_transformations.amazon_moonshot_transformation import (
+        AmazonMoonshotConfig,
+    )
+    from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
+        AmazonBedrockOpenAIConfig,
+    )
+    from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
+        AmazonInvokeConfig,
+    )
+
+    return [
+        AmazonInvokeConfig,
+        AmazonConverseConfig,
+        AmazonMoonshotConfig,
+        AmazonBedrockOpenAIConfig,
+        AmazonAgentCoreConfig,
+        AmazonInvokeAgentConfig,
+    ]
+
+
+@pytest.mark.parametrize("config", _bedrock_chat_error_configs())
+def test_bedrock_chat_get_error_class_keeps_provider_headers(config):
+    """Every Bedrock chat route must carry x-amzn-RequestId out to the caller (LIT-5428).
+
+    A config that drops the headers it is handed shadows the fix for its own models.
+    """
+    error = config().get_error_class(
+        error_message="Amazon Bedrock is unable to process your request.",
+        status_code=500,
+        headers={"x-amzn-RequestId": "req-chat-500"},
+    )
+
+    assert error.response.headers["x-amzn-requestid"] == "req-chat-500"
+
+
+def test_error_response_text_reads_a_read_response():
+    import httpx
+
+    from litellm.llms.bedrock.common_utils import error_response_text
+
+    response = httpx.Response(status_code=500, text="Amazon Bedrock is unable to process your request.")
+
+    assert error_response_text(response) == "Amazon Bedrock is unable to process your request."
+
+
+def test_error_response_text_falls_back_when_a_streamed_response_was_never_read():
+    """A retried streamed request raises HTTPStatusError over an unread body; reading it
+    throws ResponseNotRead and would lose the status and headers this fix preserves."""
+    import httpx
+
+    from litellm.llms.bedrock.common_utils import error_response_text
+
+    request = httpx.Request(method="POST", url="https://bedrock-runtime.amazonaws.com")
+    response = httpx.Response(
+        status_code=500,
+        headers={"x-amzn-RequestId": "req-unread-500"},
+        stream=httpx.ByteStream(b"never read"),
+        request=request,
+    )
+
+    with pytest.raises(httpx.ResponseNotRead):
+        _ = response.text
+
+    assert error_response_text(response) == "Internal Server Error"
+
+
+def test_bedrock_error_skips_header_values_httpx_cannot_carry():
+    """The shared HTTP handler copies an arbitrary exception's header values in verbatim,
+    so a non-str value must not take down the whole error (LIT-5428)."""
+    import httpx
+
+    from litellm.llms.bedrock.common_utils import BedrockError
+
+    error = BedrockError(
+        status_code=500,
+        message="boom",
+        headers={"x-amzn-RequestId": "req-mixed-500", "x-retry-count": 3, "x-nothing": None},
+    )
+
+    assert error.response.headers["x-amzn-requestid"] == "req-mixed-500"
+    assert "x-retry-count" not in error.response.headers
+    assert isinstance(error.response, httpx.Response)
+
+
+def test_bedrock_error_keeps_duplicate_httpx_header_values():
+    import httpx
+
+    from litellm.llms.bedrock.common_utils import BedrockError
+
+    error = BedrockError(
+        status_code=500,
+        message="boom",
+        headers=httpx.Headers([("x-amzn-RequestId", "req-dup-500"), ("set-cookie", "a=1"), ("set-cookie", "b=2")]),
+    )
+
+    assert error.response.headers.get_list("set-cookie") == ["a=1", "b=2"]
+
+
+def _bedrock_httpx_status_error_sites():
+    """Every `except httpx.HTTPStatusError as err` that raises a BedrockError, across bedrock."""
+    import ast
+    import pathlib
+
+    sites = []
+    for path in sorted(pathlib.Path("litellm/llms/bedrock").rglob("*.py")):
+        tree = ast.parse(path.read_text())
+        for handler in (n for n in ast.walk(tree) if isinstance(n, ast.ExceptHandler)):
+            caught = ast.unparse(handler.type) if handler.type is not None else ""
+            if "HTTPStatusError" not in caught or handler.name is None:
+                continue
+            for call in (
+                n
+                for n in ast.walk(handler)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "BedrockError"
+            ):
+                sites.append((str(path), call.lineno, handler.name, {k.arg for k in call.keywords}))
+    return sites
+
+
+def test_every_bedrock_httpx_status_error_site_keeps_provider_headers():
+    """A raise site holding the provider's failed response must hand its headers on (LIT-5428).
+
+    These sites are the only place x-amzn-RequestId still exists; a site that drops it
+    silently shadows the fix for that whole surface.
+    """
+    sites = _bedrock_httpx_status_error_sites()
+
+    assert len(sites) >= 12
+    dropped = [f"{path}:{lineno}" for path, lineno, _, kwargs in sites if "headers" not in kwargs]
+    assert dropped == []
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_bedrock_embedding_call_keeps_provider_headers(is_async):
+    """The embeddings surface raises from the same shape as chat and lost the same header."""
+    import httpx
+
+    from litellm.llms.bedrock.common_utils import BedrockError
+    from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
+    failure = httpx.Response(
+        status_code=500,
+        headers={"x-amzn-RequestId": "req-embed-500"},
+        text='{"message":"Amazon Bedrock is unable to process your request."}',
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/"),
+    )
+
+    class _SyncUpstream(HTTPHandler):
+        def post(self, *args, **kwargs):
+            return failure
+
+    class _AsyncUpstream(AsyncHTTPHandler):
+        async def post(self, *args, **kwargs):
+            return failure
+
+    async def _drive():
+        embedding = BedrockEmbedding()
+        kwargs = dict(
+            timeout=None,
+            api_base="https://bedrock-runtime.us-east-1.amazonaws.com/",
+            headers={},
+            data={},
+        )
+        if is_async:
+            return await embedding._make_async_call(client=_AsyncUpstream(), **kwargs)
+        return embedding._make_sync_call(client=_SyncUpstream(), **kwargs)
+
+    with pytest.raises(BedrockError) as exc_info:
+        await _drive()
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-embed-500"
+
+
+def _bedrock_mantle_error_configs():
+    from litellm.llms.bedrock_mantle.chat.transformation import BedrockMantleChatConfig
+    from litellm.llms.bedrock_mantle.responses.transformation import BedrockMantleResponsesAPIConfig
+
+    return [BedrockMantleChatConfig, BedrockMantleResponsesAPIConfig]
+
+
+@pytest.mark.parametrize("config", _bedrock_mantle_error_configs())
+def test_bedrock_mantle_get_error_class_keeps_provider_headers(config):
+    """bedrock_mantle rides the OpenAI-compatible surfaces, whose errors drop the headers.
+
+    A chat request for a responses-API model is bridged onto the responses config, so
+    fixing only the chat one leaves the model the customer actually calls uncovered.
+    """
+    error = config().get_error_class(
+        error_message="prompt tokens exceed model maximum",
+        status_code=400,
+        headers={"x-amzn-RequestId": "req-mantle-400"},
+    )
+
+    assert error.response.headers["x-amzn-requestid"] == "req-mantle-400"
+
+
+def _bedrock_configs_with_get_error_class():
+    import importlib
+    import inspect
+    import pathlib
+
+    import litellm
+
+    llms_root = pathlib.Path(inspect.getfile(litellm)).parent / "llms"
+    configs = []
+    for package in ("bedrock", "bedrock_mantle"):
+        for path in sorted((llms_root / package).rglob("*.py")):
+            module_name = "litellm.llms." + ".".join(path.relative_to(llms_root).with_suffix("").parts)
+            module = importlib.import_module(module_name)
+            for name, obj in vars(module).items():
+                if not inspect.isclass(obj) or obj.__module__ != module_name:
+                    continue
+                if getattr(obj, "get_error_class", None) is None:
+                    continue
+                configs.append(pytest.param(obj, id=f"{module_name}.{name}"))
+    return configs
+
+
+@pytest.mark.parametrize("config", _bedrock_configs_with_get_error_class())
+def test_every_bedrock_config_get_error_class_keeps_provider_headers(config):
+    """Every bedrock surface must classify errors through BedrockError, not a header-dropping base.
+
+    A config that inherits get_error_class from a provider-agnostic base builds a blank
+    response, so the request id is gone before the proxy ever reads it.
+    """
+    try:
+        instance = config()
+    except Exception:
+        instance = config.__new__(config)
+
+    try:
+        error = instance.get_error_class(
+            error_message="boom",
+            status_code=500,
+            headers={"x-amzn-RequestId": "req-audit-500"},
+        )
+    except Exception as raised:  # some bases raise the exception instead of returning it
+        error = raised
+
+    assert error.response.headers["x-amzn-requestid"] == "req-audit-500"
+
+
+def test_bedrock_get_error_class_audit_covers_every_surface():
+    assert len(_bedrock_configs_with_get_error_class()) >= 30

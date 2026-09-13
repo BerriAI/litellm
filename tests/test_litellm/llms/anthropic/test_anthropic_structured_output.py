@@ -46,9 +46,7 @@ class TestAnthropicStructuredOutput:
             "json_schema": json_schema["json_schema"],
         }
 
-        output_format = config.map_response_format_to_anthropic_output_format(
-            response_format
-        )
+        output_format = config.map_response_format_to_anthropic_output_format(response_format)
 
         # Verify that maxItems is filtered out for Anthropic
         assert output_format is not None
@@ -82,9 +80,7 @@ class TestAnthropicStructuredOutput:
             "json_schema": json_schema["json_schema"],
         }
 
-        output_format = config.map_response_format_to_anthropic_output_format(
-            response_format
-        )
+        output_format = config.map_response_format_to_anthropic_output_format(response_format)
 
         assert output_format is not None
         transformed_schema = output_format["schema"]
@@ -112,9 +108,7 @@ class TestAnthropicStructuredOutput:
             "json_schema": json_schema["json_schema"],
         }
 
-        output_format = config.map_response_format_to_anthropic_output_format(
-            response_format
-        )
+        output_format = config.map_response_format_to_anthropic_output_format(response_format)
 
         assert output_format is not None
         transformed_schema = output_format["schema"]
@@ -125,10 +119,7 @@ class TestAnthropicStructuredOutput:
         # Nested maxItems should also be removed
         if "$defs" in transformed_schema:
             nested_item_schema = transformed_schema["$defs"].get("NestedItem", {})
-            if (
-                "properties" in nested_item_schema
-                and "tags" in nested_item_schema["properties"]
-            ):
+            if "properties" in nested_item_schema and "tags" in nested_item_schema["properties"]:
                 assert "maxItems" not in nested_item_schema["properties"]["tags"]
 
     def test_other_constraints_preserved(self):
@@ -153,9 +144,7 @@ class TestAnthropicStructuredOutput:
             "json_schema": json_schema["json_schema"],
         }
 
-        output_format = config.map_response_format_to_anthropic_output_format(
-            response_format
-        )
+        output_format = config.map_response_format_to_anthropic_output_format(response_format)
 
         assert output_format is not None
         transformed_schema = output_format["schema"]
@@ -177,3 +166,41 @@ class TestAnthropicStructuredOutput:
         assert "description" in age_schema
         assert "minimum value: 0" in age_schema["description"]
         assert "maximum value: 150" in age_schema["description"]
+
+
+class TestAnthropicOutputFormatSchemaBudget:
+    """The $defs inlining in map_response_format_to_anthropic_output_format is byte-bounded."""
+
+    @staticmethod
+    def _response_format(schema: dict) -> dict:
+        return {"type": "json_schema", "json_schema": {"name": "out", "schema": schema}}
+
+    def test_schema_bomb_rejected(self):
+        """A compact request whose $defs expand past the byte budget raises instead of materialising."""
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        big = {"type": "string", "description": "x" * 200_000}
+        schema = {
+            "type": "object",
+            "$defs": {"Big": big},
+            "properties": {f"p{i}": {"$ref": "#/$defs/Big"} for i in range(60)},
+        }
+
+        with pytest.raises(ValueError, match="budget"):
+            AnthropicConfig().map_response_format_to_anthropic_output_format(self._response_format(schema))
+
+    def test_normal_defs_still_resolve(self):
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        schema = {
+            "type": "object",
+            "$defs": {"Item": {"type": "string", "description": "an item"}},
+            "properties": {"a": {"$ref": "#/$defs/Item"}, "b": {"$ref": "#/$defs/Item"}},
+        }
+
+        output_format = AnthropicConfig().map_response_format_to_anthropic_output_format(self._response_format(schema))
+        assert output_format is not None
+        resolved = output_format["schema"]["properties"]
+        assert resolved["a"]["type"] == "string"
+        assert resolved["b"]["type"] == "string"
+        assert "$ref" not in str(resolved)

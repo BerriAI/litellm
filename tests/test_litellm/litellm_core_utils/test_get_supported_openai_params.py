@@ -1,9 +1,6 @@
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
@@ -132,3 +129,87 @@ def test_azure_base_model_detection_preserved():
     assert params is not None
     assert "reasoning_effort" in params
     assert "tools" in params
+
+
+def test_sambanova_embeddings_request_returns_list_not_none():
+    """The sambanova embeddings branch resolved the config but dropped the result,
+    so embedding requests got ``None`` instead of the supported-params list while the
+    chat branch returned correctly. A list (the sambanova embeddings config exposes no
+    extra params, hence ``[]``) must reach the caller."""
+    embedding_params = get_supported_openai_params(
+        model="E5-Mistral-7B-Instruct",
+        custom_llm_provider="sambanova",
+        request_type="embeddings",
+    )
+
+    assert embedding_params == []
+
+
+def test_bedrock_converse_alias_resolves_like_bedrock():
+    """The ``bedrock_converse`` invocation alias must resolve through AmazonConverseConfig
+    just like ``bedrock`` (the codebase already pairs them, e.g. ``_strip_model_name``).
+    Before this mapping it returned ``None`` (unmapped), so callers gating on supported
+    params saw no Bedrock capabilities for a Converse model invoked via the alias."""
+    anthropic_model = "bedrock/converse/us.anthropic.claude-sonnet-4-6"
+
+    via_alias = get_supported_openai_params(
+        model=anthropic_model, custom_llm_provider="bedrock_converse"
+    )
+
+    assert via_alias is not None
+    assert via_alias == get_supported_openai_params(
+        model=anthropic_model, custom_llm_provider="bedrock"
+    )
+    assert "web_search_options" not in via_alias
+    assert "tools" in via_alias
+
+
+def test_bedrock_converse_alias_keeps_nova_web_search_options():
+    """Nova on the ``bedrock_converse`` alias still advertises web_search_options, proving the
+    alias routes through the model-aware config rather than a blanket Bedrock default."""
+    nova_params = get_supported_openai_params(
+        model="amazon.nova-pro-v1:0", custom_llm_provider="bedrock_converse"
+    )
+
+    assert nova_params is not None
+    assert "web_search_options" in nova_params
+
+
+class TestDeclaredAuthenticatingProvider:
+    """github_copilot and chatgpt run an OAuth device flow inside get_llm_provider, so every
+    metadata funnel must adopt a declared prefix instead of resolving it. A raising sentinel
+    cannot prove the lookup was skipped, because these callers swallow resolver errors."""
+
+    @pytest.mark.parametrize(
+        "model, provider, expected",
+        [
+            ("github_copilot/gpt-4o", None, "github_copilot"),
+            ("chatgpt/gpt-5", None, "chatgpt"),
+            ("gpt-4o", "github_copilot", "github_copilot"),
+            ("openai/gpt-4o", None, None),
+            ("gpt-4o", "openai", None),
+            ("github_copilot", None, None),
+            ("chatgpt", None, None),
+        ],
+    )
+    def test_names_only_the_providers_whose_resolution_authenticates(self, model, provider, expected):
+        from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+
+        assert declared_authenticating_provider(model, provider) == expected
+
+    @pytest.mark.parametrize("model", ["github_copilot/gpt-4o", "chatgpt/gpt-5"])
+    def test_supported_params_never_resolve_an_authenticating_prefix(self, model, monkeypatch):
+        import litellm
+
+        lookups: list = []
+
+        def _record(*args, **kwargs):
+            lookups.append((args, kwargs))
+            raise RuntimeError("provider resolution must not run for an authenticating provider")
+
+        monkeypatch.setattr(litellm, "get_llm_provider", _record)
+
+        params = get_supported_openai_params(model=model)
+
+        assert params is not None
+        assert lookups == []

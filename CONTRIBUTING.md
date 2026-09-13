@@ -13,8 +13,8 @@ Here are the core requirements for any PR submitted to LiteLLM:
 
 - [ ] **Add testing** - Adding at least 1 test is a hard requirement - [see details](#adding-testing)
 - [ ] **Ensure your PR passes all checks**:
-  - [ ] [Unit Tests](#running-unit-tests) - `make test-unit`
   - [ ] [Linting / Formatting](#running-linting-and-formatting-checks) - `make lint`
+  - [ ] [The tests covering your change](#running-unit-tests) pass, e.g. `uv run pytest tests/test_litellm/<your_test_file>.py -v`. CI runs the full unit test matrix, so you don't need to run the whole suite locally
 
 #### UI PRs
 
@@ -71,8 +71,8 @@ make format
 # Run all linting checks (matches CI exactly)
 make lint
 
-# Run unit tests to ensure nothing is broken
-make test-unit
+# Run the tests covering your change (CI runs the full suite)
+uv run pytest tests/test_litellm/<your_test_file>.py -v
 
 # Commit your changes (must follow Conventional Commits — see above)
 git add .
@@ -123,11 +123,12 @@ def test_your_feature():
 
 ### Running Unit Tests
 
-Run all unit tests (uses parallel execution for speed):
-
+Run the tests covering your change:
 ```bash
-make test-unit
+uv run pytest tests/test_litellm/test_your_file.py -v
 ```
+
+`tests/test_litellm` holds thousands of tests, so running all of it locally takes a long time. CI runs it as a parallel matrix (`make test-unit-llms`, `make test-unit-proxy-core`, and the other `test-unit-*` targets) on beefier boxes, so if, for whatever reason, you must run the whole suite, it's better to rely on CI to do that.
 
 If you're running broader test suites, proxy tests, or anything that touches PostgreSQL-backed fixtures/plugins, install the full local test environment first:
 
@@ -136,11 +137,6 @@ make install-test-deps
 ```
 
 This syncs the locked test environment used across the repo, including `psycopg` v3 plus `psycopg-binary` (used by `pytest-postgresql`), `psycopg2-binary` (used by some proxy E2E tests), and a generated Prisma client for DB-backed proxy tests, so pytest startup matches CI without manual package installs.
-
-Run specific test files:
-```bash
-uv run pytest tests/test_litellm/test_your_file.py -v
-```
 
 ### Running Linting and Formatting Checks
 
@@ -154,7 +150,7 @@ Individual linting commands:
 ```bash
 make format-check       # Check Black formatting
 make lint-ruff          # Run Ruff linting
-make lint-mypy          # Run MyPy type checking
+make lint-basedpyright  # Run basedpyright type checking
 make check-circular-imports    # Check for circular imports
 make check-import-safety       # Check import safety
 ```
@@ -216,7 +212,7 @@ LiteLLM follows the [Google Python Style Guide](https://google.github.io/stylegu
 Our automated quality checks include:
 - **Black** for consistent code formatting
 - **Ruff** for linting and code quality
-- **MyPy** for static type checking
+- **basedpyright** for static type checking
 - **Circular import detection**
 - **Import safety validation**
 
@@ -230,7 +226,7 @@ If `make lint` fails:
 
 1. **Formatting issues**: Run `make format` to auto-fix
 2. **Ruff issues**: Check the output and fix manually
-3. **MyPy issues**: Add proper type hints
+3. **basedpyright issues**: Add proper type hints
 4. **Circular imports**: Refactor import dependencies
 5. **Import safety**: Fix any unprotected imports
 
@@ -245,7 +241,7 @@ If `make test-unit` fails:
 
 ### 3. Common Development Tips
 
-- **Use type hints**: MyPy requires proper type annotations
+- **Use type hints**: basedpyright requires proper type annotations
 - **Write descriptive commit messages**: Help reviewers understand your changes
 - **Keep PRs focused**: One feature/fix per PR
 - **Test edge cases**: Don't just test the happy path
@@ -319,10 +315,12 @@ Ensure the UI builds successfully before submitting your PR:
 npm run build
 ```
 
+Local lint and budget checks follow origin's current default branch. They refresh it from the remote instead of trusting cached `origin/HEAD`. For an intentional comparison against another branch or commit, use `make check BASE_REF=<ref>` or the standalone gate's `--base <ref>` option. An explicit ref can also be used offline once it has been fetched locally. Without an override, unavailable remote metadata stops the check
+
 ## Submitting Your PR
 
 1. **Push your branch**: `git push origin your-feature-branch`
-2. **Create a PR**: Go to GitHub and create a pull request
+2. **Create a PR**: Go to GitHub and open a pull request against the repository's current default branch. Run `python3 scripts/default_branch.py --branch` to check its name
 3. **Fill out the PR template**: Provide clear description of changes
 4. **Wait for review**: Maintainers will review and provide feedback
 5. **Address feedback**: Make requested changes and push updates

@@ -21,22 +21,22 @@ import os
 import re
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Final
 
 import pytest
 from fastapi import HTTPException
 
-EVAL_DIR = os.path.join(os.path.dirname(__file__), "evals")
-RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
+EVAL_DIR: Final = os.path.join(os.path.dirname(__file__), "evals")
+RESULTS_DIR: Final = os.path.join(os.path.dirname(__file__), "results")
 
 
 # ── Helpers ───────────────────────────────────────────────────────
 
 
-def _load_jsonl(filename: str) -> List[dict]:
+def _load_jsonl(filename: str) -> list[dict]:
     """Load eval cases from a JSONL file. One JSON object per line."""
-    cases = []
-    path = os.path.join(EVAL_DIR, filename)
+    cases: Final = []
+    path: Final = os.path.join(EVAL_DIR, filename)
     with open(path, "r") as f:
         for line in f:
             line = line.strip()
@@ -60,7 +60,7 @@ def _run(checker, text: str) -> dict:
         return {"decision": "ALLOW", "score": 0.0, "matched_topic": None}
     except HTTPException as e:
         if e.status_code == 400:
-            detail: Dict[str, Any] = e.detail if isinstance(e.detail, dict) else {}
+            detail: Final[dict[str, Any]] = e.detail if isinstance(e.detail, dict) else {}
             return {
                 "decision": "BLOCK",
                 "score": detail.get("score", 1.0),
@@ -109,11 +109,11 @@ def _save_confusion_results(label: str, metrics: dict, wrong: list, rows: list) 
     # Build a short, filesystem-safe filename from the label.
     # Full label is preserved inside the JSON; filename just needs to be
     # unique and recognisable.  Format: {topic}_{method_abbrev}.json
-    parts = label.split("\u2014")
-    topic = parts[0].strip().lower().replace("block ", "").replace(" ", "_")
-    method_full = parts[1].strip() if len(parts) > 1 else ""
-    method_name = re.sub(r"\s*\(.*?\)", "", method_full).strip().lower()
-    qualifier_match = re.search(r"\(([^)]+)\)", method_full)
+    parts: Final = label.split("\u2014")
+    topic: Final = parts[0].strip().lower().replace("block ", "").replace(" ", "_")
+    method_full: Final = parts[1].strip() if len(parts) > 1 else ""
+    method_name: Final = re.sub(r"\s*\(.*?\)", "", method_full).strip().lower()
+    qualifier_match: Final = re.search(r"\(([^)]+)\)", method_full)
     qualifier = qualifier_match.group(1) if qualifier_match else ""
     qualifier = re.sub(r"\.[a-z]+$", "", qualifier)  # drop .yaml etc.
     if method_name == "contentfilter":
@@ -125,7 +125,7 @@ def _save_confusion_results(label: str, metrics: dict, wrong: list, rows: list) 
     safe_label = safe_label.replace(" ", "_")
     safe_label = re.sub(r"[^a-z0-9_.\-]", "", safe_label)
     safe_label = re.sub(r"_+", "_", safe_label).strip("_")
-    result = {
+    result: Final = {
         "label": label,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "total": metrics["total"],
@@ -143,18 +143,18 @@ def _save_confusion_results(label: str, metrics: dict, wrong: list, rows: list) 
         "wrong": wrong,
         "rows": rows,
     }
-    result_path = os.path.join(RESULTS_DIR, f"{safe_label}.json")
+    result_path: Final = os.path.join(RESULTS_DIR, f"{safe_label}.json")
     with open(result_path, "w") as f:
         json.dump(result, f, indent=2)
     return result
 
 
-def _confusion_matrix(checker, cases: List[dict], label: str):
+def _confusion_matrix(checker, cases: list[dict], label: str):
     """Run all cases, print confusion matrix, save results JSON."""
     tp = fp = tn = fn = 0
-    wrong = []
-    rows = []
-    latencies = []
+    wrong: Final = []
+    rows: Final = []
+    latencies: Final = []
 
     for case in cases:
         expected = case["expected"]
@@ -186,30 +186,24 @@ def _confusion_matrix(checker, cases: List[dict], label: str):
             tn += 1
         elif expected == "BLOCK" and actual == "ALLOW":
             fn += 1
-            wrong.append(
-                f"  FN (score={score:.3f}): {case['sentence']!r:60s} — {case['test']}"
-            )
+            wrong.append(f"  FN (score={score:.3f}): {case['sentence']!r:60s} — {case['test']}")
         elif expected == "ALLOW" and actual == "BLOCK":
             fp += 1
-            wrong.append(
-                f"  FP (score={score:.3f}): {case['sentence']!r:60s} — {case['test']}"
-            )
+            wrong.append(f"  FP (score={score:.3f}): {case['sentence']!r:60s} — {case['test']}")
 
-    total = tp + tn + fp + fn
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-    f1 = (
-        2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
-    )
-    accuracy = (tp + tn) / total if total > 0 else 0
+    total: Final = tp + tn + fp + fn
+    precision: Final = tp / (tp + fp) if (tp + fp) > 0 else 0
+    recall: Final = tp / (tp + fn) if (tp + fn) > 0 else 0
+    f1: Final = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+    accuracy: Final = (tp + tn) / total if total > 0 else 0
 
     # Latency stats
-    sorted_lat = sorted(latencies)
-    p50 = sorted_lat[len(sorted_lat) // 2] if sorted_lat else 0
-    p95 = sorted_lat[int(len(sorted_lat) * 0.95)] if sorted_lat else 0
-    avg_lat = sum(latencies) / len(latencies) if latencies else 0
+    sorted_lat: Final = sorted(latencies)
+    p50: Final = sorted_lat[len(sorted_lat) // 2] if sorted_lat else 0
+    p95: Final = sorted_lat[int(len(sorted_lat) * 0.95)] if sorted_lat else 0
+    avg_lat: Final = sum(latencies) / len(latencies) if latencies else 0
 
-    metrics = {
+    metrics: Final = {
         "total": total,
         "tp": tp,
         "tn": tn,
@@ -252,10 +246,10 @@ def _content_filter(category: str):
         ContentFilterGuardrail,
     )
 
-    guardrail = ContentFilterGuardrail(
+    guardrail: Final = ContentFilterGuardrail(
         guardrail_name=f"{category}_eval",
         categories=[
-            {  # type: ignore[list-item]
+            {
                 "category": category,
                 "enabled": True,
                 "action": "BLOCK",
@@ -498,7 +492,7 @@ class TestClaimsMedicalAdviceContentFilter:
 
 # ── LLM-as-judge baselines ───────────────────────────────────────
 
-LLM_JUDGE_SYSTEM_PROMPT = """\
+LLM_JUDGE_SYSTEM_PROMPT: Final = """\
 You are a content moderation classifier for an airline customer service chatbot.
 
 Your job: decide if a user message should be BLOCKED or ALLOWED.
@@ -529,7 +523,7 @@ class _LlmJudgeChecker:
         if not text or not text.strip():
             return text
 
-        response = litellm.completion(
+        response: Final = litellm.completion(
             model=self.model,
             messages=[
                 {"role": "system", "content": LLM_JUDGE_SYSTEM_PROMPT},
@@ -538,7 +532,7 @@ class _LlmJudgeChecker:
             temperature=0,
             max_tokens=5,
         )
-        decision = (response.choices[0].message.content or "").strip().upper()  # type: ignore[union-attr]
+        decision: Final = (response.choices[0].message.content or "").strip().upper()
 
         if "BLOCK" in decision:
             raise HTTPException(
@@ -593,6 +587,4 @@ class TestInvestmentLlmJudgeClaude:
         return _load_jsonl("block_investment.jsonl")
 
     def test_confusion_matrix(self, blocker, cases):
-        _confusion_matrix(
-            blocker, cases, "Block Investment — LLM Judge (claude-haiku-4.5)"
-        )
+        _confusion_matrix(blocker, cases, "Block Investment — LLM Judge (claude-haiku-4.5)")

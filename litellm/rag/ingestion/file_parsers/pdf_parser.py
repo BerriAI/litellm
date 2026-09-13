@@ -4,12 +4,10 @@ PDF text extraction utilities.
 Provides text extraction from PDF files using pypdf or PyPDF2.
 """
 
-from typing import Optional
-
 from litellm._logging import verbose_logger
 
 
-def extract_text_from_pdf(file_content: bytes) -> Optional[str]:
+def extract_text_from_pdf(file_content: bytes) -> str | None:
     """
     Extract text from PDF using pypdf if available.
 
@@ -37,9 +35,7 @@ def extract_text_from_pdf(file_content: bytes) -> Optional[str]:
 
             if text_parts:
                 extracted_text = "\n\n".join(text_parts)
-                verbose_logger.debug(
-                    f"Extracted {len(extracted_text)} characters from PDF using pypdf"
-                )
+                verbose_logger.debug("Extracted %s characters from PDF using pypdf", len(extracted_text))
                 return extracted_text
 
         except ImportError:
@@ -60,17 +56,13 @@ def extract_text_from_pdf(file_content: bytes) -> Optional[str]:
 
             if text_parts:
                 extracted_text = "\n\n".join(text_parts)
-                verbose_logger.debug(
-                    f"Extracted {len(extracted_text)} characters from PDF using PyPDF2"
-                )
+                verbose_logger.debug("Extracted %s characters from PDF using PyPDF2", len(extracted_text))
                 return extracted_text
 
         except ImportError:
-            verbose_logger.debug(
-                "PyPDF2 not available, PDF extraction requires OCR or pypdf/PyPDF2 library"
-            )
+            verbose_logger.debug("PyPDF2 not available, PDF extraction requires OCR or pypdf/PyPDF2 library")
 
     except Exception as e:
-        verbose_logger.debug(f"PDF text extraction failed: {e}")
+        verbose_logger.debug("PDF text extraction failed: %s", e)
 
     return None

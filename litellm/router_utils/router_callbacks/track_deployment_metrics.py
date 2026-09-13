@@ -9,7 +9,7 @@ get_deployment_failures_for_current_minute
 get_deployment_successes_for_current_minute
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -26,7 +26,7 @@ def increment_deployment_successes_for_current_minute(
     """
     In-Memory: Increments the number of successes for the current minute for a deployment_id
     """
-    key = f"{deployment_id}:successes"
+    key: Final = f"{deployment_id}:successes"
     litellm_router_instance.cache.increment_cache(
         local_only=True,
         key=key,
@@ -43,7 +43,7 @@ def increment_deployment_failures_for_current_minute(
     """
     In-Memory: Increments the number of failures for the current minute for a deployment_id
     """
-    key = f"{deployment_id}:fails"
+    key: Final = f"{deployment_id}:fails"
     litellm_router_instance.cache.increment_cache(
         local_only=True,
         key=key,
@@ -61,7 +61,7 @@ def get_deployment_successes_for_current_minute(
 
     Returns 0 if no value found
     """
-    key = f"{deployment_id}:successes"
+    key: Final = f"{deployment_id}:successes"
     return (
         litellm_router_instance.cache.get_cache(
             local_only=True,
@@ -80,7 +80,7 @@ def get_deployment_failures_for_current_minute(
 
     Returns 0 if no value found
     """
-    key = f"{deployment_id}:fails"
+    key: Final = f"{deployment_id}:fails"
     return (
         litellm_router_instance.cache.get_cache(
             local_only=True,

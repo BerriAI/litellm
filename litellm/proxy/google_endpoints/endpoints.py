@@ -1,3 +1,5 @@
+from typing import Final
+
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse
 
@@ -7,7 +9,7 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
 
-router = APIRouter(
+router: Final = APIRouter(
     tags=["google genai endpoints"],
 )
 
@@ -40,11 +42,11 @@ async def google_generate_content(
         version,
     )
 
-    data = await _read_request_body(request=request)
+    data: Final = await _read_request_body(request=request)
     if "model" not in data:
         data["model"] = model_name
 
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -101,14 +103,15 @@ async def google_stream_generate_content(
         version,
     )
 
-    data = await _read_request_body(request=request)
+    data: Final = await _read_request_body(request=request)
     if "model" not in data:
         data["model"] = model_name
     data["stream"] = True
     # google-genai SDK (?alt=sse) must not receive OpenAI's data: [DONE] terminator.
     data["_litellm_skip_openai_stream_done"] = True
+    data["_litellm_raw_sse_stream"] = True
 
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -166,32 +169,28 @@ async def google_count_tokens(request: Request, model_name: str):
     from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
     from litellm.proxy.proxy_server import token_counter as internal_token_counter
 
-    data = await _read_request_body(request=request)
-    contents = data.get("contents", [])
+    data: Final = await _read_request_body(request=request)
+    contents: Final = data.get("contents", [])
     # Create TokenCountRequest for the internal endpoint
     from litellm.proxy._types import TokenCountRequest
 
     # Translate contents to openai format messages using the adapter
-    messages = (
-        GoogleGenAIAdapter()
-        .translate_generate_content_to_completion(model_name, contents)
-        .get("messages", [])
-    )
+    messages = GoogleGenAIAdapter().translate_generate_content_to_completion(model_name, contents).get("messages", [])
 
-    token_request = TokenCountRequest(
+    token_request: Final = TokenCountRequest(
         model=model_name,
         contents=contents,
         messages=messages,  # compatibility when use openai-like endpoint
     )
 
     # Call the internal token counter function with direct request flag set to False
-    token_response = await internal_token_counter(
+    token_response: Final = await internal_token_counter(
         request=token_request,
         call_endpoint=True,
     )
     if token_response is not None:
         # cast the response to the well known format
-        original_response: dict = token_response.original_response or {}
+        original_response: Final[dict] = token_response.original_response or {}
         if original_response:
             return TokenCountDetailsResponse(
                 totalTokens=original_response.get("totalTokens", 0),
@@ -269,13 +268,13 @@ async def create_interaction(
         version,
     )
 
-    data = await _read_request_body(request=request)
+    data: Final = await _read_request_body(request=request)
 
     # Default to gemini provider for interactions
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = "gemini"
 
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -341,9 +340,9 @@ async def get_interaction(
         version,
     )
 
-    data = {"interaction_id": interaction_id, "custom_llm_provider": "gemini"}
+    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": "gemini"}
 
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -409,9 +408,9 @@ async def delete_interaction(
         version,
     )
 
-    data = {"interaction_id": interaction_id, "custom_llm_provider": "gemini"}
+    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": "gemini"}
 
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -477,9 +476,9 @@ async def cancel_interaction(
         version,
     )
 
-    data = {"interaction_id": interaction_id, "custom_llm_provider": "gemini"}
+    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": "gemini"}
 
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,

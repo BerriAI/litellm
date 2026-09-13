@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   unit-test:
     runs-on: ubuntu-latest
@@ -23,19 +27,28 @@ jobs:
         with:
           version: "3.11.1"
 
+      - name: Download and verify Helm Unit Test Plugin
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/helm-unittest.tgz" https://github.com/helm-unittest/helm-unittest/releases/download/v0.8.2/helm-unittest-linux-amd64-0.8.2.tgz
+          echo "56ab3091e6fa52a7c92ee951def9bed957f295d9ce98483aed404e748d7b3a94  $RUNNER_TEMP/helm-unittest.tgz" | sha256sum -c -
+
       - name: Install Helm Unit Test Plugin
         run: |
-          helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.4.4
-      - name: Verify Helm Unit Test Plugin integrity
-        run: |
-          EXPECTED_SHA="e251ba198448629678ff2168e1a469249d998155"
           PLUGIN_DIR="$(helm env HELM_PLUGINS)/helm-unittest"
-          ACTUAL_SHA="$(git -C "$PLUGIN_DIR" rev-parse HEAD)"
-          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
-            echo "::error::Helm unittest plugin checksum mismatch! Expected $EXPECTED_SHA but got $ACTUAL_SHA"
-            exit 1
-          fi
-          echo "Helm unittest plugin integrity verified: $ACTUAL_SHA"
+          mkdir -p "$PLUGIN_DIR"
+          tar -xzf "$RUNNER_TEMP/helm-unittest.tgz" -C "$PLUGIN_DIR"
+          helm plugin list
 
       - name: Run unit tests
-        run: helm unittest -f 'tests/*.yaml' deploy/charts/litellm-helm
+        run: |
+          for chart in helm/litellm-helm helm/litellm; do
+            declared="$(grep -h '^suite:' "$chart"/tests/*.yaml | wc -l | tr -d '[:space:]')"
+            output="$(mktemp)"
+            helm unittest -f 'tests/*.yaml' "$chart" | tee "$output"
+            executed="$(sed -n 's/^Test Suites:.*[[:space:]]\([0-9][0-9]*\) total$/\1/p' "$output")"
+            if [ "$declared" != "$executed" ]; then
+              echo "::error::$chart declares $declared test suites but helm-unittest ran $executed. Suites are being skipped silently, so their assertions never execute."
+              exit 1
+            fi
+            echo "$chart: all $declared declared test suites ran"
+          done

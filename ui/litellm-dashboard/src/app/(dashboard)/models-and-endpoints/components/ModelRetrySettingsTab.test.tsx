@@ -1,27 +1,7 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import React from "react";
 import { describe, expect, it, vi } from "vitest";
 import ModelRetrySettingsTab from "./ModelRetrySettingsTab";
-
-// TabPanel requires a parent Tabs context in Tremor. We stub it to render children
-// directly so the component can be tested in isolation.
-vi.mock("@tremor/react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tremor/react")>();
-  // Re-apply the global Button/Tooltip overrides from tests/setupTests.ts. A file-level
-  // vi.mock fully replaces the setup-level mock, so without this the real Tremor Button
-  // leaks through and its useTooltip(300) schedules a native setTimeout that can fire
-  // post-teardown -> "window is not defined".
-  return {
-    ...actual,
-    TabPanel: ({ children }: { children: React.ReactNode }) => React.createElement("div", null, children),
-    Button: React.forwardRef<HTMLButtonElement, any>(({ children, ...props }, ref) =>
-      React.createElement("button", { ...props, ref }, children),
-    ),
-    Tooltip: ({ children }: { children?: React.ReactNode }) => React.createElement(React.Fragment, null, children),
-    // Keep Select/SelectItem as the real implementation so scope-switching is testable
-  };
-});
 
 type GlobalRetryPolicy = { [key: string]: number };
 type ModelGroupRetryPolicy = { [key: string]: { [key: string]: number } | undefined };
@@ -71,7 +51,18 @@ describe("ModelRetrySettingsTab", () => {
     // All 6 spinbutton inputs should show the defaultRetry value
     const inputs = screen.getAllByRole("spinbutton");
     inputs.forEach((input) => {
-      expect(input).toHaveValue("3");
+      expect(input).toHaveValue(3);
+    });
+  });
+
+  it("should expose retry counts as nonnegative integer spinbuttons", () => {
+    render(<ModelRetrySettingsTab {...buildProps()} />);
+
+    screen.getAllByRole("spinbutton").forEach((input) => {
+      expect(input).toHaveAttribute("type", "number");
+      expect(input).toHaveAttribute("min", "0");
+      expect(input).toHaveAttribute("step", "1");
+      expect(input).toHaveAccessibleName(/retry count$/);
     });
   });
 
@@ -84,13 +75,13 @@ describe("ModelRetrySettingsTab", () => {
     // The RateLimitError row is the 4th entry in the map
     const inputs = screen.getAllByRole("spinbutton");
     const rateLimitInput = inputs[3]; // 0-indexed: Bad(0), Auth(1), Timeout(2), Rate(3)
-    expect(rateLimitInput).toHaveValue("5");
+    expect(rateLimitInput).toHaveValue(5);
 
     // Unset entries fall back to defaultRetry (0)
-    expect(inputs[0]).toHaveValue("0");
+    expect(inputs[0]).toHaveValue(0);
   });
 
-  it("should fall back to globalRetryPolicy when no model-specific value is set (model scope)", () => {
+  it("should leave model-scope rows empty with the inherited value as placeholder when there is no override", () => {
     const globalRetryPolicy: GlobalRetryPolicy = {
       TimeoutErrorRetries: 7,
     };
@@ -105,12 +96,100 @@ describe("ModelRetrySettingsTab", () => {
       />,
     );
 
-    // The TimeoutError row is 3rd (index 2)
+    // No override exists, so the input is empty and the inherited value is only
+    // a placeholder -- this is what keeps 0 ("zero retries") distinct from
+    // "inherit the global value".
     const inputs = screen.getAllByRole("spinbutton");
-    expect(inputs[2]).toHaveValue("7");
+    expect(inputs[2]).toHaveValue(null); // TimeoutError row
+    expect(inputs[2]).toHaveAttribute("placeholder", "7"); // inherited from global
+    expect(inputs[0]).toHaveValue(null); // BadRequestError row (no global)
+    expect(inputs[0]).toHaveAttribute("placeholder", "1"); // inherited from defaultRetry
+  });
 
-    // Rows without a global value fall back to defaultRetry
-    expect(inputs[0]).toHaveValue("1");
+  it("should clear a model-group override when Reset is clicked", async () => {
+    const user = userEvent.setup();
+    const setModelGroupRetryPolicy = vi.fn();
+    render(
+      <ModelRetrySettingsTab
+        {...buildProps({
+          selectedModelGroup: "gpt-4",
+          modelGroupRetryPolicy: { "gpt-4": { BadRequestErrorRetries: 5 } },
+          setModelGroupRetryPolicy,
+          defaultRetry: 0,
+        })}
+      />,
+    );
+
+    // Reset only renders for rows that actually have an override
+    const resetButtons = screen.getAllByRole("button", { name: /reset/i });
+    expect(resetButtons).toHaveLength(1);
+
+    await user.click(resetButtons[0]);
+
+    const updater = setModelGroupRetryPolicy.mock.calls.at(-1)![0];
+    const result = updater({ "gpt-4": { BadRequestErrorRetries: 5 } });
+    expect(result["gpt-4"]).not.toHaveProperty("BadRequestErrorRetries");
+  });
+
+  it("should clear a model-group override when its input is emptied", async () => {
+    const user = userEvent.setup();
+    const setModelGroupRetryPolicy = vi.fn();
+    const overrides = {
+      selectedModelGroup: "gpt-4",
+      modelGroupRetryPolicy: { "gpt-4": { BadRequestErrorRetries: 5 } },
+      setModelGroupRetryPolicy,
+      defaultRetry: 0,
+    };
+    render(<ModelRetrySettingsTab {...buildProps(overrides)} />);
+
+    await user.clear(screen.getAllByRole("spinbutton")[0]);
+
+    const updater = setModelGroupRetryPolicy.mock.calls.at(-1)![0];
+    const result = updater({ "gpt-4": { BadRequestErrorRetries: 5 } });
+    expect(result["gpt-4"]).not.toHaveProperty("BadRequestErrorRetries");
+  });
+
+  it.each(["abc", "-1", "1.5"])("should reject an invalid retry count of %s", (invalidValue) => {
+    const setGlobalRetryPolicy = vi.fn();
+    render(
+      <ModelRetrySettingsTab
+        {...buildProps({
+          selectedModelGroup: "global",
+          globalRetryPolicy: { BadRequestErrorRetries: 0 },
+          setGlobalRetryPolicy,
+        })}
+      />,
+    );
+
+    const input = screen.getAllByRole("spinbutton")[0];
+    input.setAttribute("type", "text");
+    fireEvent.change(input, { target: { value: invalidValue } });
+
+    expect(setGlobalRetryPolicy).not.toHaveBeenCalled();
+  });
+
+  it("should accept zero as a retry count", () => {
+    const setGlobalRetryPolicy = vi.fn();
+    render(
+      <ModelRetrySettingsTab
+        {...buildProps({
+          selectedModelGroup: "global",
+          globalRetryPolicy: { BadRequestErrorRetries: 3 },
+          setGlobalRetryPolicy,
+        })}
+      />,
+    );
+
+    fireEvent.change(screen.getAllByRole("spinbutton")[0], { target: { value: "0" } });
+
+    const updater = setGlobalRetryPolicy.mock.calls.at(-1)![0];
+    expect(updater({ BadRequestErrorRetries: 3 })).toMatchObject({ BadRequestErrorRetries: 0 });
+  });
+
+  it("should disable the Save button while a save is in flight", () => {
+    render(<ModelRetrySettingsTab {...buildProps({ isSaving: true })} />);
+
+    expect(screen.getByRole("button", { name: /save/i })).toBeDisabled();
   });
 
   it("should prefer model-specific retry count over the global value (model scope)", () => {
@@ -133,7 +212,7 @@ describe("ModelRetrySettingsTab", () => {
 
     // The model-specific value (9) should win over global (3)
     const inputs = screen.getAllByRole("spinbutton");
-    expect(inputs[3]).toHaveValue("9");
+    expect(inputs[3]).toHaveValue(9);
   });
 
   it("should show the global reference value text for each row in model-specific scope", () => {
@@ -184,7 +263,7 @@ describe("ModelRetrySettingsTab", () => {
 
     const inputs = screen.getAllByRole("spinbutton");
     await user.clear(inputs[0]);
-    await user.type(inputs[0], "4");
+    fireEvent.change(inputs[0], { target: { value: "4" } });
 
     // setGlobalRetryPolicy is called with a function updater
     expect(setGlobalRetryPolicy).toHaveBeenCalled();
@@ -212,7 +291,7 @@ describe("ModelRetrySettingsTab", () => {
 
     const inputs = screen.getAllByRole("spinbutton");
     await user.clear(inputs[0]);
-    await user.type(inputs[0], "2");
+    fireEvent.change(inputs[0], { target: { value: "2" } });
 
     expect(setModelGroupRetryPolicy).toHaveBeenCalled();
     const updater = setModelGroupRetryPolicy.mock.calls.at(-1)![0];
@@ -221,5 +300,17 @@ describe("ModelRetrySettingsTab", () => {
     // Calling the updater returns the merged model-group policy
     const result = updater({ "gpt-4": { BadRequestErrorRetries: 0 } });
     expect(result["gpt-4"]).toMatchObject({ BadRequestErrorRetries: 2 });
+  });
+
+  it("shows the global scope by its human label rather than the raw value", () => {
+    render(<ModelRetrySettingsTab {...buildProps()} />);
+
+    expect(screen.getByRole("combobox")).toHaveTextContent("Global Default");
+  });
+
+  it("shows a selected model group by its own name", () => {
+    render(<ModelRetrySettingsTab {...buildProps({ selectedModelGroup: "gpt-4" })} />);
+
+    expect(screen.getByRole("combobox")).toHaveTextContent("gpt-4");
   });
 });

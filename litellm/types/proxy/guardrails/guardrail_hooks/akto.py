@@ -1,4 +1,4 @@
-from typing import Optional, Literal
+from typing import Literal
 
 from pydantic import Field
 
@@ -14,7 +14,7 @@ class AktoConfigModel(GuardrailConfigModel):
       akto-ingest   (mode: post_call) -> ingest request+response data
     """
 
-    akto_base_url: Optional[str] = Field(
+    akto_base_url: str | None = Field(
         default=None,
         description="Akto Guardrail API Base URL. Env: AKTO_GUARDRAIL_API_BASE.",
         json_schema_extra={
@@ -25,17 +25,17 @@ class AktoConfigModel(GuardrailConfigModel):
         },
     )
 
-    akto_api_key: Optional[str] = Field(
+    akto_api_key: str | None = Field(
         default=None,
         description="API key for Akto. Env: AKTO_API_KEY.",
     )
 
-    akto_account_id: Optional[str] = Field(
+    akto_account_id: str | None = Field(
         default=None,
         description="Akto account ID for multi-tenant deployments. Env: AKTO_ACCOUNT_ID. Default: '1000000'.",
     )
 
-    akto_vxlan_id: Optional[str] = Field(
+    akto_vxlan_id: str | None = Field(
         default=None,
         description="Akto VXLAN ID. Env: AKTO_VXLAN_ID. Default: '0'.",
     )
@@ -45,7 +45,7 @@ class AktoConfigModel(GuardrailConfigModel):
         description="What to do when Akto is unreachable. 'fail_open' = allow, 'fail_closed' = block.",
     )
 
-    guardrail_timeout: Optional[int] = Field(
+    guardrail_timeout: int | None = Field(
         default=None,
         description="HTTP timeout in seconds. Default: 5.",
     )

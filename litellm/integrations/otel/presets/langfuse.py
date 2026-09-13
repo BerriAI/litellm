@@ -1,20 +1,41 @@
 """Langfuse-OTEL preset."""
 
+from typing import Final
+
 from litellm.integrations.langfuse.langfuse_otel import (
     LangfuseOtelLogger as _V1Langfuse,
 )
-from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
-from litellm.integrations.otel.presets.utils import ensure_mappers
+from litellm.integrations.otel.model.config import (
+    ExporterOwner,
+    ExporterSpec,
+    OpenTelemetryV2Config,
+)
+from litellm.integrations.otel.presets.utils import (
+    credential_gated_exporters,
+    ensure_mappers,
+)
 from litellm.types.utils import StandardCallbackDynamicParams
 
 
 def langfuse_preset(
     *,
     config_overrides: OpenTelemetryV2Config | None = None,
+    allow_missing_credentials: bool = False,
 ) -> OpenTelemetryV2Config:
-    cfg = _V1Langfuse.get_langfuse_otel_config()
-    kind = cfg.exporter if isinstance(cfg.exporter, str) else "otlp_http"
-    base = config_overrides or OpenTelemetryV2Config()
+    base: Final = config_overrides or OpenTelemetryV2Config()
+    mappers: Final = ensure_mappers(base.mapper_names, "langfuse")
+    try:
+        cfg: Final = _V1Langfuse.get_langfuse_otel_config()
+    except Exception:
+        if not allow_missing_credentials:
+            raise
+        return base.model_copy(
+            update={  # mutable-ok: pydantic model_copy takes a plain update mapping
+                "exporters": credential_gated_exporters(base.exporters, ExporterOwner.LANGFUSE_OTEL),
+                "mapper_names": mappers,
+            }
+        )
+    kind: Final = cfg.exporter if isinstance(cfg.exporter, str) else "otlp_http"
     return base.model_copy(
         update={
             "exporters": [
@@ -23,21 +44,20 @@ def langfuse_preset(
                     kind=kind,
                     endpoint=cfg.endpoint,
                     headers=cfg.headers,
+                    owner=ExporterOwner.LANGFUSE_OTEL,
                 ),
             ],
-            "mapper_names": ensure_mappers(base.mapper_names, "langfuse"),
+            "mapper_names": mappers,
         }
     )
 
 
 def langfuse_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str, str]:
     """Per-request Langfuse OTLP headers from team/key dynamic params."""
-    public_key = params.get("langfuse_public_key")
-    secret_key = params.get("langfuse_secret_key")
+    public_key: Final = params.get("langfuse_public_key")
+    secret_key: Final = params.get("langfuse_secret_key")
     if public_key and secret_key:
-        return {
-            "Authorization": _V1Langfuse._get_langfuse_authorization_header(
-                public_key=public_key, secret_key=secret_key
-            )
-        }
+        return _V1Langfuse._build_langfuse_otel_headers(
+            _V1Langfuse._get_langfuse_authorization_header(public_key=public_key, secret_key=secret_key)
+        )
     return {}

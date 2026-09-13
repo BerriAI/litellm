@@ -1,10 +1,11 @@
-from typing import AsyncIterator, Dict, Iterator, Literal, NamedTuple, Union
+from collections.abc import AsyncIterator, Iterator
+from typing import Literal, NamedTuple
 
 FileContentProvider = Literal[
-    "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "manus"
+    "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "anthropic", "manus"
 ]
 
 
 class FileContentStreamingResult(NamedTuple):
-    stream_iterator: Union[Iterator[bytes], AsyncIterator[bytes]]
-    headers: Dict[str, str]
+    stream_iterator: Iterator[bytes] | AsyncIterator[bytes]
+    headers: dict[str, str]

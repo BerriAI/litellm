@@ -2,56 +2,55 @@
 Project repository for database operations on LiteLLM_ProjectTable.
 """
 
-from typing import Any, Dict, List, Optional, Type
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.repositories.base_repository import BaseRepository
+from litellm.repositories.prisma_protocols import TableActions
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
 
 
 class ProjectRepository(BaseRepository[LiteLLM_ProjectTable]):
     """Repository for project database operations."""
 
     @property
-    def table(self) -> Any:
+    def table(self) -> TableActions["prisma_models.LiteLLM_ProjectTable"]:
         return self.prisma_client.db.litellm_projecttable
 
     @property
-    def model_class(self) -> Type[LiteLLM_ProjectTable]:
+    def model_class(self) -> type[LiteLLM_ProjectTable]:
         return LiteLLM_ProjectTable
 
-    async def find_by_id(
-        self, project_id: str, id_field: str = "project_id"
-    ) -> Optional[LiteLLM_ProjectTable]:
+    async def find_by_id(self, project_id: str, id_field: str = "project_id") -> LiteLLM_ProjectTable | None:
         return await super().find_by_id(project_id, id_field)
 
-    async def find_by_alias(self, project_alias: str) -> Optional[LiteLLM_ProjectTable]:
+    async def find_by_alias(self, project_alias: str) -> LiteLLM_ProjectTable | None:
         """Find a project by alias."""
-        records = await self.table.find_many(where={"project_alias": project_alias})
-        if records:
-            return self._to_model(records[0])
-        return None
+        projects: Final = await self.find_many(where={"project_alias": project_alias})
+        return projects[0] if projects else None
 
-    async def find_by_team_id(self, team_id: str) -> List[LiteLLM_ProjectTable]:
+    async def find_by_team_id(self, team_id: str) -> list[LiteLLM_ProjectTable]:
         """Find all projects belonging to a team."""
-        records = await self.table.find_many(where={"team_id": team_id})
-        return self._to_model_list(records)
+        return await self.find_many(where={"team_id": team_id})
 
     async def create_project(
         self,
         created_by: str,
-        project_id: Optional[str] = None,
-        project_alias: Optional[str] = None,
-        description: Optional[str] = None,
-        team_id: Optional[str] = None,
-        budget_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        models: Optional[List[str]] = None,
-        model_rpm_limit: Optional[Dict[str, int]] = None,
-        model_tpm_limit: Optional[Dict[str, int]] = None,
-        object_permission_id: Optional[str] = None,
+        project_id: str | None = None,
+        project_alias: str | None = None,
+        description: str | None = None,
+        team_id: str | None = None,
+        budget_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        models: list[str] | None = None,
+        model_rpm_limit: dict[str, int] | None = None,
+        model_tpm_limit: dict[str, int] | None = None,
+        object_permission_id: str | None = None,
     ) -> LiteLLM_ProjectTable:
         """Create a new project."""
-        data: Dict[str, Any] = {
+        data: Final[dict[str, Any]] = {
             "created_by": created_by,
             "updated_by": created_by,
         }
@@ -82,19 +81,19 @@ class ProjectRepository(BaseRepository[LiteLLM_ProjectTable]):
         self,
         project_id: str,
         updated_by: str,
-        project_alias: Optional[str] = None,
-        description: Optional[str] = None,
-        team_id: Optional[str] = None,
-        budget_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        models: Optional[List[str]] = None,
-        model_rpm_limit: Optional[Dict[str, int]] = None,
-        model_tpm_limit: Optional[Dict[str, int]] = None,
-        blocked: Optional[bool] = None,
-        object_permission_id: Optional[str] = None,
-    ) -> Optional[LiteLLM_ProjectTable]:
+        project_alias: str | None = None,
+        description: str | None = None,
+        team_id: str | None = None,
+        budget_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        models: list[str] | None = None,
+        model_rpm_limit: dict[str, int] | None = None,
+        model_tpm_limit: dict[str, int] | None = None,
+        blocked: bool | None = None,
+        object_permission_id: str | None = None,
+    ) -> LiteLLM_ProjectTable | None:
         """Update a project."""
-        data: Dict[str, Any] = {"updated_by": updated_by}
+        data: Final[dict[str, Any]] = {"updated_by": updated_by}
         if project_alias is not None:
             data["project_alias"] = project_alias
         if description is not None:
@@ -118,12 +117,10 @@ class ProjectRepository(BaseRepository[LiteLLM_ProjectTable]):
 
         return await self.update(project_id, data, id_field="project_id")
 
-    async def delete_project(self, project_id: str) -> Optional[LiteLLM_ProjectTable]:
+    async def delete_project(self, project_id: str) -> LiteLLM_ProjectTable | None:
         """Delete a project."""
         return await self.delete(project_id, id_field="project_id")
 
-    async def update_spend(
-        self, project_id: str, spend: float
-    ) -> Optional[LiteLLM_ProjectTable]:
+    async def update_spend(self, project_id: str, spend: float) -> LiteLLM_ProjectTable | None:
         """Update project spend."""
         return await self.update(project_id, {"spend": spend}, id_field="project_id")

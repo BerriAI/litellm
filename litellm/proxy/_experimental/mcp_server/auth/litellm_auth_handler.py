@@ -1,5 +1,3 @@
-from typing import Dict, List, Optional
-
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 
 from litellm.proxy._types import UserAPIKeyAuth
@@ -20,14 +18,14 @@ class MCPAuthenticatedUser(AuthenticatedUser):
 
     def __init__(
         self,
-        user_api_key_auth: Optional[UserAPIKeyAuth],
-        mcp_auth_header: Optional[str] = None,
-        mcp_servers: Optional[List[str]] = None,
-        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
-        oauth2_headers: Optional[Dict[str, str]] = None,
-        mcp_protocol_version: Optional[str] = None,
-        raw_headers: Optional[Dict[str, str]] = None,
-        client_ip: Optional[str] = None,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        mcp_auth_header: str | None = None,
+        mcp_servers: list[str] | None = None,
+        mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
+        oauth2_headers: dict[str, str] | None = None,
+        mcp_protocol_version: str | None = None,
+        raw_headers: dict[str, str] | None = None,
+        client_ip: str | None = None,
     ):
         self.user_api_key_auth = user_api_key_auth
         self.mcp_auth_header = mcp_auth_header

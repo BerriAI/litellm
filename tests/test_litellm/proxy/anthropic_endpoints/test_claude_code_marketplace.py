@@ -1,24 +1,37 @@
 """
 Unit tests for claude_code_marketplace.py source validation.
 
-Covers the git-subdir source type added alongside the existing github and url types.
+Covers the git-subdir and archive source types added alongside the existing github and url types.
 """
+
+import json
 
 import pytest
 from fastapi import HTTPException
 from unittest.mock import AsyncMock, MagicMock
 
 import litellm
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_ObjectPermissionTable, ProxyException, UserAPIKeyAuth
 from litellm.proxy.proxy_server import LitellmUserRoles
-from litellm.types.proxy.claude_code_endpoints import RegisterPluginRequest
+from litellm.types.proxy.claude_code_endpoints import (
+    RegisterPluginRequest,
+    UpdatePluginRequest,
+)
+from litellm.proxy.anthropic_endpoints.claude_code_endpoints import claude_code_marketplace
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
+    delete_plugin,
+    disable_plugin,
+    enable_plugin,
+    get_marketplace,
+    get_plugin,
+    list_plugins,
     register_plugin,
+    update_plugin,
 )
 
 
 def _make_mock_prisma():
-    """Stateful prisma mock that supports find_unique, create, and update."""
+    """Stateful prisma mock that supports find_unique, find_many, create, and update."""
     store: dict = {}
 
     mock_client = MagicMock()
@@ -28,6 +41,16 @@ def _make_mock_prisma():
     async def _find_unique(where):
         return store.get(where.get("name"))
 
+    def _matches(record, where) -> bool:
+        if "OR" in where:
+            return any(_matches(record, clause) for clause in where["OR"])
+        if "enabled" in where and record.enabled != where["enabled"]:
+            return False
+        return "name" not in where or record.name in where["name"]["in"]
+
+    async def _find_many(where=None):
+        return [r for r in store.values() if _matches(r, where or {})]
+
     async def _create(data):
         record = MagicMock()
         record.id = "test-id"
@@ -36,6 +59,8 @@ def _make_mock_prisma():
         record.description = data.get("description")
         record.manifest_json = data.get("manifest_json", "{}")
         record.enabled = data.get("enabled", True)
+        record.created_at = data.get("created_at")
+        record.updated_at = data.get("updated_at")
         store[data["name"]] = record
         return record
 
@@ -46,6 +71,7 @@ def _make_mock_prisma():
         return record
 
     mock_table.find_unique = AsyncMock(side_effect=_find_unique)
+    mock_table.find_many = AsyncMock(side_effect=_find_many)
     mock_table.create = AsyncMock(side_effect=_create)
     mock_table.update = AsyncMock(side_effect=_update)
     mock_client.db.litellm_claudecodeplugintable = mock_table
@@ -58,52 +84,283 @@ _USER = UserAPIKeyAuth(
     user_id="test-user",
 )
 
+_NON_ADMIN_USER = UserAPIKeyAuth(
+    user_role=LitellmUserRoles.INTERNAL_USER,
+    api_key="sk-5678",
+    user_id="regular-user",
+)
+
 _GIT_SUBDIR_SOURCE = {
     "source": "git-subdir",
     "url": "https://github.com/org/monorepo.git",
     "path": "plugins/my-plugin",
 }
 
+_ARCHIVE_SOURCE = {
+    "source": "archive",
+    "url": "https://skills-bucket.s3.us-east-1.amazonaws.com/plugins/s3-skill-1.0.0.zip",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+}
+
 
 @pytest.fixture(autouse=True)
 def _patch_proxy_globals(monkeypatch):
     """Scope prisma_client/master_key mutations to each test via monkeypatch."""
-    monkeypatch.setattr(
-        litellm.proxy.proxy_server, "prisma_client", _make_mock_prisma()
-    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", _make_mock_prisma())
     monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
 
 
 @pytest.mark.asyncio
 async def test_register_plugin_git_subdir_success():
     """git-subdir with both url and path fields registers successfully."""
-    request = RegisterPluginRequest(
-        name="my-monorepo-plugin", source=_GIT_SUBDIR_SOURCE
-    )
+    request = RegisterPluginRequest(name="my-monorepo-plugin", source=_GIT_SUBDIR_SOURCE)
 
     response = await register_plugin(request=request, user_api_key_dict=_USER)
 
-    assert response["status"] == "success"
-    assert response["action"] == "created"
-    assert response["plugin"]["source"]["source"] == "git-subdir"
-    assert response["plugin"]["source"]["path"] == "plugins/my-plugin"
+    assert response.status == "success"
+    assert response.action == "created"
+    assert response.plugin.source["source"] == "git-subdir"
+    assert response.plugin.source["path"] == "plugins/my-plugin"
+
+
+async def _read_stored_manifest(name: str) -> dict:
+    table = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
+    record = await table.find_unique(where={"name": name})
+    return json.loads(record.manifest_json)
 
 
 @pytest.mark.asyncio
-async def test_register_plugin_git_subdir_update():
-    """Registering the same git-subdir plugin twice returns action=updated."""
-    request = RegisterPluginRequest(
-        name="my-monorepo-plugin", source=_GIT_SUBDIR_SOURCE, version="1.0.0"
+async def test_register_plugin_duplicate_name_conflicts():
+    """A second POST with an existing name returns 409 and leaves the stored plugin untouched."""
+    name = "my-monorepo-plugin"
+    await register_plugin(
+        request=RegisterPluginRequest(name=name, source=_GIT_SUBDIR_SOURCE, version="1.0.0"),
+        user_api_key_dict=_USER,
     )
-    await register_plugin(request=request, user_api_key_dict=_USER)
 
-    request2 = RegisterPluginRequest(
-        name="my-monorepo-plugin", source=_GIT_SUBDIR_SOURCE, version="2.0.0"
+    stored_before = await _read_stored_manifest(name)
+    assert stored_before["version"] == "1.0.0"
+
+    conflicting = RegisterPluginRequest(
+        name=name,
+        source={
+            "source": "git-subdir",
+            "url": "https://github.com/org/other.git",
+            "path": "plugins/other-plugin",
+        },
+        version="2.0.0",
     )
-    response = await register_plugin(request=request2, user_api_key_dict=_USER)
+    with pytest.raises(HTTPException) as exc_info:
+        await register_plugin(request=conflicting, user_api_key_dict=_USER)
 
-    assert response["status"] == "success"
-    assert response["action"] == "updated"
+    assert exc_info.value.status_code == 409
+    assert "already exists" in exc_info.value.detail["error"]
+
+    stored_after = await _read_stored_manifest(name)
+    assert stored_after == stored_before
+    assert stored_after["version"] == "1.0.0"
+    assert stored_after["source"]["url"] == "https://github.com/org/monorepo.git"
+
+
+@pytest.mark.asyncio
+async def test_update_plugin_replaces_existing_source():
+    """PUT updates an existing plugin: action=updated and the stored source is replaced."""
+    name = "my-monorepo-plugin"
+    await register_plugin(
+        request=RegisterPluginRequest(name=name, source=_GIT_SUBDIR_SOURCE, version="1.0.0"),
+        user_api_key_dict=_USER,
+    )
+
+    new_source = {"source": "github", "repo": "org/replacement"}
+    response = await update_plugin(
+        plugin_name=name,
+        request=UpdatePluginRequest(source=new_source, version="2.0.0", description="updated"),
+        user_api_key_dict=_USER,
+    )
+
+    assert response.status == "success"
+    assert response.action == "updated"
+    assert response.plugin.version == "2.0.0"
+    assert response.plugin.source == new_source
+
+    stored = await _read_stored_manifest(name)
+    assert stored["source"] == new_source
+    assert stored["version"] == "2.0.0"
+
+
+@pytest.mark.asyncio
+async def test_update_plugin_not_found():
+    """PUT on a name that does not exist raises HTTP 404."""
+    with pytest.raises(HTTPException) as exc_info:
+        await update_plugin(
+            plugin_name="does-not-exist",
+            request=UpdatePluginRequest(source=_GIT_SUBDIR_SOURCE),
+            user_api_key_dict=_USER,
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_register_plugin_create_race_maps_unique_violation_to_409():
+    """A concurrent insert that slips past the find_unique pre-check (create raises
+    the unique-constraint error) is mapped to 409, not surfaced as a 500."""
+    from prisma.errors import UniqueViolationError
+
+    table = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
+    table.create = AsyncMock(side_effect=UniqueViolationError({}, message="duplicate name"))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await register_plugin(
+            request=RegisterPluginRequest(name="racy-plugin", source=_GIT_SUBDIR_SOURCE),
+            user_api_key_dict=_USER,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "already exists" in exc_info.value.detail["error"]
+
+
+@pytest.mark.asyncio
+async def test_update_plugin_db_error_maps_to_structured_500():
+    """A data-layer failure during the update (e.g. a dropped DB connection) is caught and
+    returned as a structured 500, not swallowed silently or leaked as an unhandled error."""
+    from prisma.errors import PrismaError
+
+    name = "my-monorepo-plugin"
+    await register_plugin(
+        request=RegisterPluginRequest(name=name, source=_GIT_SUBDIR_SOURCE, version="1.0.0"),
+        user_api_key_dict=_USER,
+    )
+
+    table = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
+    table.update = AsyncMock(side_effect=PrismaError("connection lost"))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await update_plugin(
+            plugin_name=name,
+            request=UpdatePluginRequest(source={"source": "github", "repo": "org/replacement"}),
+            user_api_key_dict=_USER,
+        )
+
+    assert exc_info.value.status_code == 500
+    assert "connection lost" in exc_info.value.detail["error"]
+
+
+@pytest.mark.asyncio
+async def test_update_plugin_deleted_mid_update_returns_404():
+    """A concurrent delete between the find_unique pre-check and the update makes prisma's
+    update return None; that must surface the same 404 as a plain miss, not an AttributeError."""
+    name = "my-monorepo-plugin"
+    await register_plugin(
+        request=RegisterPluginRequest(name=name, source=_GIT_SUBDIR_SOURCE, version="1.0.0"),
+        user_api_key_dict=_USER,
+    )
+
+    table = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
+    table.update = AsyncMock(return_value=None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await update_plugin(
+            plugin_name=name,
+            request=UpdatePluginRequest(source={"source": "github", "repo": "org/replacement"}),
+            user_api_key_dict=_USER,
+        )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == {"error": f"Plugin '{name}' not found"}
+
+
+@pytest.mark.asyncio
+async def test_get_marketplace_skips_plugin_with_null_manifest():
+    await register_plugin(
+        request=RegisterPluginRequest(name="good-plugin", source=_GIT_SUBDIR_SOURCE, version="1.0.0"),
+        user_api_key_dict=_USER,
+    )
+
+    table = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
+    await table.create(data={"name": "null-manifest-plugin", "manifest_json": None, "enabled": True})
+
+    response = await get_marketplace(request=MagicMock())
+
+    assert response.status_code == 200
+    body = json.loads(response.body)
+    assert [plugin["name"] for plugin in body["plugins"]] == ["good-plugin"]
+
+
+def _granted_user(skills: list[str]) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-granted",
+        user_id="granted-user",
+        object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="perm-1", skills=skills),
+    )
+
+
+async def _register_public_and_private_plugins() -> None:
+    for name, enabled in (("public-skill", True), ("private-skill", False)):
+        await register_plugin(
+            request=RegisterPluginRequest(name=name, source=_GIT_SUBDIR_SOURCE, version="1.0.0"),
+            user_api_key_dict=_USER,
+        )
+        if not enabled:
+            await disable_plugin(plugin_name=name, user_api_key_dict=_USER)
+
+
+async def _listed_names(user: UserAPIKeyAuth) -> set[str]:
+    response = await list_plugins(user_api_key_dict=user)
+    return {plugin.name for plugin in response.plugins}
+
+
+@pytest.mark.asyncio
+async def test_list_plugins_shows_disabled_plugin_only_to_granted_key_or_admin():
+    await _register_public_and_private_plugins()
+
+    assert await _listed_names(_NON_ADMIN_USER) == {"public-skill"}
+    assert await _listed_names(_granted_user(["other-skill"])) == {"public-skill"}
+    assert await _listed_names(_granted_user(["private-skill"])) == {"public-skill", "private-skill"}
+    assert await _listed_names(_USER) == {"public-skill", "private-skill"}
+
+
+@pytest.mark.asyncio
+async def test_get_plugin_returns_403_for_disabled_plugin_the_key_is_not_granted():
+    await _register_public_and_private_plugins()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_plugin(plugin_name="private-skill", user_api_key_dict=_NON_ADMIN_USER)
+    assert exc_info.value.status_code == 403
+
+    assert (await get_plugin(plugin_name="public-skill", user_api_key_dict=_NON_ADMIN_USER))["name"] == "public-skill"
+    granted = await get_plugin(plugin_name="private-skill", user_api_key_dict=_granted_user(["private-skill"]))
+    assert granted["name"] == "private-skill"
+    assert granted["enabled"] is False
+
+
+async def _marketplace_names(key: str | None) -> list[str]:
+    response = await get_marketplace(request=MagicMock(), key=key)
+    assert response.status_code == 200
+    return sorted(plugin["name"] for plugin in json.loads(response.body)["plugins"])
+
+
+@pytest.mark.asyncio
+async def test_get_marketplace_key_query_param_adds_granted_disabled_plugins(monkeypatch):
+    await _register_public_and_private_plugins()
+    keys = {"sk-granted": _granted_user(["private-skill"]), "sk-plain": _NON_ADMIN_USER}
+
+    async def _fake_auth(request, api_key: str) -> UserAPIKeyAuth:
+        token = api_key.removeprefix("Bearer ")
+        if token not in keys:
+            raise ProxyException(message="invalid key", type="auth_error", param="key", code=401)
+        return keys[token]
+
+    monkeypatch.setattr(claude_code_marketplace, "user_api_key_auth", _fake_auth)
+
+    assert await _marketplace_names(None) == ["public-skill"]
+    assert await _marketplace_names("sk-plain") == ["public-skill"]
+    assert await _marketplace_names("sk-granted") == ["private-skill", "public-skill"]
+
+    with pytest.raises(ProxyException) as exc_info:
+        await get_marketplace(request=MagicMock(), key="sk-bogus")
+    assert exc_info.value.code == "401"
 
 
 @pytest.mark.asyncio
@@ -211,3 +468,131 @@ async def test_register_plugin_unknown_source_type():
 
     assert exc_info.value.status_code == 400
     assert "git-subdir" in exc_info.value.detail["error"]
+    assert "archive" in exc_info.value.detail["error"]
+
+
+@pytest.mark.asyncio
+async def test_archive_source_registers_and_is_served_verbatim_in_marketplace():
+    response = await register_plugin(
+        request=RegisterPluginRequest(name="s3-skill", source=_ARCHIVE_SOURCE),
+        user_api_key_dict=_USER,
+    )
+
+    assert response.action == "created"
+    assert response.plugin.source == _ARCHIVE_SOURCE
+
+    marketplace = json.loads((await get_marketplace(request=MagicMock())).body)
+    assert marketplace["plugins"] == [{"name": "s3-skill", "source": _ARCHIVE_SOURCE, "version": "1.0.0"}]
+
+
+@pytest.mark.asyncio
+async def test_archive_source_without_sha256_is_accepted():
+    source = {"source": "archive", "url": "https://artifacts.example.com/plugin.zip"}
+
+    response = await register_plugin(
+        request=RegisterPluginRequest(name="unpinned-skill", source=source),
+        user_api_key_dict=_USER,
+    )
+
+    assert response.plugin.source == source
+
+
+@pytest.mark.asyncio
+async def test_update_plugin_to_archive_source():
+    name = "my-monorepo-plugin"
+    await register_plugin(
+        request=RegisterPluginRequest(name=name, source=_GIT_SUBDIR_SOURCE),
+        user_api_key_dict=_USER,
+    )
+
+    response = await update_plugin(
+        plugin_name=name,
+        request=UpdatePluginRequest(source=_ARCHIVE_SOURCE),
+        user_api_key_dict=_USER,
+    )
+
+    assert response.action == "updated"
+    assert (await _read_stored_manifest(name))["source"] == _ARCHIVE_SOURCE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source, expected_fragment",
+    [
+        ({"source": "archive"}, "url"),
+        ({"source": "archive", "url": ""}, "url"),
+        ({"source": "archive", "url": "http://artifacts.example.com/plugin.zip"}, "https"),
+        ({"source": "archive", "url": "s3://skills-bucket/plugin.zip"}, "https"),
+        ({"source": "archive", "url": "https://"}, "https"),
+        ({"source": "archive", "url": "https:///plugin.zip"}, "https"),
+        ({"source": "archive", "url": "https://[::1/plugin.zip"}, "https"),
+        ({"source": "archive", "url": "https://artifacts.example.com/plugin.zip", "sha256": "a" * 63}, "sha256"),
+        ({"source": "archive", "url": "https://artifacts.example.com/plugin.zip", "sha256": "a" * 65}, "sha256"),
+        ({"source": "archive", "url": "https://artifacts.example.com/plugin.zip", "sha256": "g" * 64}, "sha256"),
+    ],
+)
+async def test_register_plugin_archive_rejects_malformed_source(source, expected_fragment):
+    with pytest.raises(HTTPException) as exc_info:
+        await register_plugin(request=RegisterPluginRequest(name="bad-plugin", source=source), user_api_key_dict=_USER)
+
+    assert exc_info.value.status_code == 400
+    assert expected_fragment in exc_info.value.detail["error"]
+
+
+@pytest.mark.asyncio
+async def test_register_plugin_rejects_non_admin():
+    """A non-admin key cannot add an entry to the marketplace catalog."""
+    request = RegisterPluginRequest(name="attacker-plugin", source=_GIT_SUBDIR_SOURCE)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await register_plugin(request=request, user_api_key_dict=_NON_ADMIN_USER)
+
+    assert exc_info.value.status_code == 403
+
+    table = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
+    assert await table.find_unique(where={"name": "attacker-plugin"}) is None
+
+
+@pytest.mark.asyncio
+async def test_update_plugin_rejects_non_admin_overwrite():
+    """A non-admin key cannot overwrite an existing plugin's source."""
+    name = "trusted-plugin"
+    await register_plugin(
+        request=RegisterPluginRequest(name=name, source=_GIT_SUBDIR_SOURCE, version="1.0.0"),
+        user_api_key_dict=_USER,
+    )
+
+    malicious_source = {"source": "github", "repo": "attacker/malicious-repo"}
+    with pytest.raises(HTTPException) as exc_info:
+        await update_plugin(
+            plugin_name=name,
+            request=UpdatePluginRequest(source=malicious_source),
+            user_api_key_dict=_NON_ADMIN_USER,
+        )
+
+    assert exc_info.value.status_code == 403
+
+    stored = await _read_stored_manifest(name)
+    assert stored["source"] == _GIT_SUBDIR_SOURCE
+
+
+@pytest.mark.asyncio
+async def test_enable_disable_delete_plugin_reject_non_admin():
+    """Non-admin keys cannot enable, disable, or delete catalog entries."""
+    name = "trusted-plugin-2"
+    await register_plugin(
+        request=RegisterPluginRequest(name=name, source=_GIT_SUBDIR_SOURCE, version="1.0.0"),
+        user_api_key_dict=_USER,
+    )
+
+    for coro in (
+        enable_plugin(plugin_name=name, user_api_key_dict=_NON_ADMIN_USER),
+        disable_plugin(plugin_name=name, user_api_key_dict=_NON_ADMIN_USER),
+        delete_plugin(plugin_name=name, user_api_key_dict=_NON_ADMIN_USER),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await coro
+        assert exc_info.value.status_code == 403
+
+    table = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
+    assert (await table.find_unique(where={"name": name})).enabled is True

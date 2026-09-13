@@ -106,7 +106,9 @@ async def test_custom_auth_enforces_end_user_budget_when_common_checks_skipped()
         litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
     )
 
-    async def mock_get_current_spend(counter_key, fallback_spend):
+    async def mock_get_current_spend(
+        counter_key, fallback_spend, max_budget=None, **kwargs
+    ):
         if counter_key == "spend:end_user:customer-1":
             return 5.0
         return fallback_spend
@@ -169,6 +171,55 @@ async def test_custom_auth_defers_end_user_budget_to_common_checks_when_enabled(
             parent_otel_span=None,
         )
         mock_check.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_custom_auth_token_budget_still_loads_and_caches_unrestricted_end_user():
+    """
+    A token-supplied end_user_max_budget must leave the end-user row in cache.
+
+    Custom auth can set that budget for a customer whose own row carries no budget, block, region
+    or permission, which keeps the row out of the cached restricted-id registry that lets auth skip
+    the read. The end-user spend counter seeds from this cache entry, so skipping the read would
+    cold-start the counter at 0 and under-count a customer who has already spent 100.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.proxy.auth.user_api_key_auth import _lookup_end_user_and_apply_budget
+    from litellm.proxy.common_utils.user_api_key_cache import (
+        UserApiKeyCache,
+        end_user_cache_key,
+    )
+
+    end_user_row = MagicMock()
+    end_user_row.user_id = "customer-1"
+    end_user_row.dict = lambda: {
+        "user_id": "customer-1",
+        "blocked": False,
+        "spend": 100.0,
+    }
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=end_user_row)
+    cache = UserApiKeyCache()
+
+    _, end_user_object = await _lookup_end_user_and_apply_budget(
+        valid_token=UserAPIKeyAuth(
+            token="test_token",
+            end_user_id="customer-1",
+            end_user_max_budget=50.0,
+        ),
+        route="/v1/chat/completions",
+        parent_otel_span=None,
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert end_user_object is not None
+    assert end_user_object.spend == 100.0
+    assert await cache.async_get_cache(key=end_user_cache_key("customer-1")) is not None
 
 
 def test_update_valid_token_does_not_override_custom_auth_values_with_none():

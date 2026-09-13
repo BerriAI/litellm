@@ -5,13 +5,10 @@ Tests that mcp_info can accept arbitrary custom fields in addition to predefined
 """
 
 import pytest
-import sys
-import os
 from unittest.mock import Mock, patch
 from typing import Dict, Any
 
 # Add the path to find the modules
-sys.path.insert(0, os.path.abspath("../../../.."))  # Adjust the path as needed
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
 from litellm.types.mcp import MCPAuth

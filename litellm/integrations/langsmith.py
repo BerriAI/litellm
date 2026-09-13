@@ -6,10 +6,10 @@ import random
 import traceback
 import types
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Final
 
 import httpx
-from pydantic import BaseModel  # type: ignore
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
@@ -29,7 +29,7 @@ from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPa
 
 
 def is_serializable(value):
-    non_serializable_types = (
+    non_serializable_types: Final = (
         types.CoroutineType,
         types.FunctionType,
         types.GeneratorType,
@@ -41,11 +41,11 @@ def is_serializable(value):
 class LangsmithLogger(CustomBatchLogger):
     def __init__(
         self,
-        langsmith_api_key: Optional[str] = None,
-        langsmith_project: Optional[str] = None,
-        langsmith_base_url: Optional[str] = None,
-        langsmith_sampling_rate: Optional[float] = None,
-        langsmith_tenant_id: Optional[str] = None,
+        langsmith_api_key: str | None = None,
+        langsmith_project: str | None = None,
+        langsmith_base_url: str | None = None,
+        langsmith_sampling_rate: float | None = None,
+        langsmith_tenant_id: str | None = None,
         **kwargs,
     ):
         self.flush_lock = asyncio.Lock()
@@ -54,9 +54,7 @@ class LangsmithLogger(CustomBatchLogger):
 
         if self.is_mock_mode:
             create_mock_langsmith_client()
-            verbose_logger.debug(
-                "[LANGSMITH MOCK] LangSmith logger initialized in mock mode"
-            )
+            verbose_logger.debug("[LANGSMITH MOCK] LangSmith logger initialized in mock mode")
 
         self.default_credentials = self.get_credentials_from_env(
             langsmith_api_key=langsmith_api_key,
@@ -65,37 +63,26 @@ class LangsmithLogger(CustomBatchLogger):
             langsmith_tenant_id=langsmith_tenant_id,
         )
         self.sampling_rate: float = (
-            langsmith_sampling_rate
-            or float(os.getenv("LANGSMITH_SAMPLING_RATE"))  # type: ignore
+            langsmith_sampling_rate or float(os.getenv("LANGSMITH_SAMPLING_RATE"))
             if os.getenv("LANGSMITH_SAMPLING_RATE") is not None
-            and os.getenv("LANGSMITH_SAMPLING_RATE").strip().isdigit()  # type: ignore
+            and os.getenv("LANGSMITH_SAMPLING_RATE").strip().isdigit()
             else 1.0
         )
-        self.langsmith_default_run_name = os.getenv(
-            "LANGSMITH_DEFAULT_RUN_NAME", "LLMRun"
-        )
-        self.async_httpx_client = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.LoggingCallback
-        )
-        _batch_size = (
-            os.getenv("LANGSMITH_BATCH_SIZE", None) or litellm.langsmith_batch_size
-        )
+        self.langsmith_default_run_name = os.getenv("LANGSMITH_DEFAULT_RUN_NAME", "LLMRun")
+        self.async_httpx_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
+        _batch_size: Final = os.getenv("LANGSMITH_BATCH_SIZE", None) or litellm.langsmith_batch_size
 
         if _batch_size:
             self.batch_size = int(_batch_size)
-        self.log_queue: List[LangsmithQueueObject] = []
-        self._flush_task: Optional[asyncio.Task[Any]] = (
-            self._start_periodic_flush_task()
-        )
+        self.log_queue: list[LangsmithQueueObject] = []
+        self._flush_task: asyncio.Task[Any] | None = self._start_periodic_flush_task()
 
-    def _start_periodic_flush_task(self) -> Optional[asyncio.Task[Any]]:
+    def _start_periodic_flush_task(self) -> asyncio.Task[Any] | None:
         """Start the periodic flush task only when an event loop is already running."""
         try:
-            loop = asyncio.get_running_loop()
+            loop: Final = asyncio.get_running_loop()
         except RuntimeError:
-            verbose_logger.debug(
-                "Langsmith logger init: no running event loop, skipping periodic flush task startup"
-            )
+            verbose_logger.debug("Langsmith logger init: no running event loop, skipping periodic flush task startup")
             return None
 
         return loop.create_task(self.periodic_flush())
@@ -109,10 +96,10 @@ class LangsmithLogger(CustomBatchLogger):
 
     def get_credentials_from_env(
         self,
-        langsmith_api_key: Optional[str] = None,
-        langsmith_project: Optional[str] = None,
-        langsmith_base_url: Optional[str] = None,
-        langsmith_tenant_id: Optional[str] = None,
+        langsmith_api_key: str | None = None,
+        langsmith_project: str | None = None,
+        langsmith_base_url: str | None = None,
+        langsmith_tenant_id: str | None = None,
         allow_env_credentials: bool = True,
     ) -> LangsmithCredentialsObject:
         if allow_env_credentials is False and langsmith_base_url is not None:
@@ -122,19 +109,11 @@ class LangsmithLogger(CustomBatchLogger):
             _credentials_tenant_id = langsmith_tenant_id
         else:
             _credentials_api_key = langsmith_api_key or os.getenv("LANGSMITH_API_KEY")
-            _credentials_project = (
-                langsmith_project
-                or os.getenv("LANGSMITH_PROJECT")
-                or "litellm-completion"
-            )
+            _credentials_project = langsmith_project or os.getenv("LANGSMITH_PROJECT") or "litellm-completion"
             _credentials_base_url = (
-                langsmith_base_url
-                or os.getenv("LANGSMITH_BASE_URL")
-                or "https://api.smith.langchain.com"
+                langsmith_base_url or os.getenv("LANGSMITH_BASE_URL") or "https://api.smith.langchain.com"
             )
-            _credentials_tenant_id = langsmith_tenant_id or os.getenv(
-                "LANGSMITH_TENANT_ID"
-            )
+            _credentials_tenant_id = langsmith_tenant_id or os.getenv("LANGSMITH_TENANT_ID")
 
         return LangsmithCredentialsObject(
             LANGSMITH_API_KEY=_credentials_api_key,
@@ -143,13 +122,9 @@ class LangsmithLogger(CustomBatchLogger):
             LANGSMITH_TENANT_ID=_credentials_tenant_id,
         )
 
-    def _extract_metadata_fields(
-        self, metadata: dict, credentials: LangsmithCredentialsObject
-    ):
+    def _extract_metadata_fields(self, metadata: dict, credentials: LangsmithCredentialsObject):
         return {
-            "project_name": metadata.get(
-                "project_name", credentials["LANGSMITH_PROJECT"]
-            ),
+            "project_name": metadata.get("project_name", credentials["LANGSMITH_PROJECT"]),
             "run_name": metadata.get("run_name", self.langsmith_default_run_name),
             "run_id": metadata.get("id", metadata.get("run_id", None)),
             "parent_run_id": metadata.get("parent_run_id", None),
@@ -158,29 +133,28 @@ class LangsmithLogger(CustomBatchLogger):
             "dotted_order": metadata.get("dotted_order", None),
         }
 
-    def _build_extra_metadata(self, metadata: Dict):
-        extra_metadata = dict(metadata)
-        requester_metadata = extra_metadata.get("requester_metadata")
+    def _redact_metadata(self, metadata: dict) -> dict:
+        # helper is shallow; also scrub nested requester_metadata since
+        # LangSmith forwards the whole dict into the run
+        redacted: Final = redact_user_api_key_info(metadata=dict(metadata))
+        nested: Final = redacted.get("requester_metadata")
+        if isinstance(nested, dict):
+            redacted["requester_metadata"] = redact_user_api_key_info(metadata=nested)
+        return redacted
+
+    def _build_extra_metadata(self, metadata: dict):
+        extra_metadata: Final = dict(metadata)
+        requester_metadata: Final = extra_metadata.get("requester_metadata")
         if requester_metadata and isinstance(requester_metadata, dict):
             for key in ("session_id", "thread_id", "conversation_id"):
                 if key in requester_metadata and key not in extra_metadata:
                     extra_metadata[key] = requester_metadata[key]
 
-        # helper is shallow; also scrub nested requester_metadata since
-        # LangSmith forwards the whole dict into `extra`
-        extra_metadata = redact_user_api_key_info(metadata=extra_metadata)
-        nested = extra_metadata.get("requester_metadata")
-        if isinstance(nested, dict):
-            extra_metadata["requester_metadata"] = redact_user_api_key_info(
-                metadata=nested
-            )
-        return extra_metadata
+        return self._redact_metadata(extra_metadata)
 
-    def _build_outputs_with_usage(
-        self, payload: StandardLoggingPayload
-    ) -> Dict[str, Any]:
-        response = payload["response"]
-        outputs: Dict[str, Any]
+    def _build_outputs_with_usage(self, payload: StandardLoggingPayload) -> dict[str, Any]:
+        response: Final = payload["response"]
+        outputs: dict[str, Any]
         if isinstance(response, dict):
             outputs = {**response}
         else:
@@ -193,18 +167,21 @@ class LangsmithLogger(CustomBatchLogger):
         }
         return outputs
 
-    def _ensure_required_ids(self, data: dict, run_id: Optional[str]):
+    def _ensure_required_ids(self, data: dict, run_id: str | None):
+        resolved_id: Final = run_id or str(uuid.uuid4())
         if "id" not in data or data["id"] is None:
-            run_id = str(uuid.uuid4())
-            data["id"] = run_id
+            data["id"] = resolved_id
 
-        if "trace_id" not in data or data["trace_id"] is None:
-            if run_id is not None and isinstance(run_id, str):
-                data["trace_id"] = run_id
+        # LangSmith rejects the whole ingest batch unless a root run's trace_id
+        # equals the run id embedded in the first segment of dotted_order
+        posts_as_root: Final = ("parent_run_id" not in data or data["parent_run_id"] is None) and (
+            "dotted_order" not in data or data["dotted_order"] is None
+        )
+        if posts_as_root or "trace_id" not in data or data["trace_id"] is None:
+            data["trace_id"] = resolved_id
 
         if "dotted_order" not in data or data["dotted_order"] is None:
-            if run_id is not None and isinstance(run_id, str):
-                data["dotted_order"] = self.make_dot_order(run_id=run_id)
+            data["dotted_order"] = self.make_dot_order(run_id=resolved_id)
 
     def _prepare_log_data(
         self,
@@ -215,28 +192,32 @@ class LangsmithLogger(CustomBatchLogger):
         credentials: LangsmithCredentialsObject,
     ):
         try:
-            _litellm_params = kwargs.get("litellm_params", {}) or {}
+            _litellm_params: Final = kwargs.get("litellm_params", {}) or {}
             metadata = _litellm_params.get("metadata", {}) or {}
 
-            fields = self._extract_metadata_fields(metadata, credentials)
+            fields: Final = self._extract_metadata_fields(metadata, credentials)
+            # the proxy header fan-out mirrors one value into both keys, and LangSmith
+            # rejects the whole ingest batch when run-body session_id is not an
+            # existing tracer-session uuid
+            if fields["session_id"] == fields["trace_id"]:
+                fields["session_id"] = None
             verbose_logger.debug(
-                f"Langsmith Logging - project_name: {fields['project_name']}, run_name {fields['run_name']}"
+                "Langsmith Logging - project_name: %s, run_name %s", fields["project_name"], fields["run_name"]
             )
 
-            payload: Optional[StandardLoggingPayload] = kwargs.get(
-                "standard_logging_object", None
-            )
+            payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
             if payload is None:
                 raise Exception("Error logging request payload. Payload=none.")
 
             metadata = payload["metadata"]
-            extra_metadata = self._build_extra_metadata(dict(metadata))
-            outputs = self._build_outputs_with_usage(payload)
+            extra_metadata: Final = self._build_extra_metadata(dict(metadata))
+            inputs: Final = {**payload, "metadata": self._redact_metadata(dict(metadata))}
+            outputs: Final = self._build_outputs_with_usage(payload)
 
-            data = {
+            data: Final = {
                 "name": fields["run_name"],
                 "run_type": "llm",
-                "inputs": payload,
+                "inputs": inputs,
                 "outputs": outputs,
                 "session_name": fields["project_name"],
                 "start_time": payload["startTime"],
@@ -267,13 +248,11 @@ class LangsmithLogger(CustomBatchLogger):
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            sampling_rate = self._get_sampling_rate_to_use_for_request(kwargs=kwargs)
-            random_sample = random.random()
+            sampling_rate: Final = self._get_sampling_rate_to_use_for_request(kwargs=kwargs)
+            random_sample: Final = random.random()
             if random_sample > sampling_rate:
                 verbose_logger.info(
-                    "Skipping Langsmith logging. Sampling rate={}, random_sample={}".format(
-                        sampling_rate, random_sample
-                    )
+                    "Skipping Langsmith logging. Sampling rate=%s, random_sample=%s", sampling_rate, random_sample
                 )
                 return  # Skip logging
             verbose_logger.debug(
@@ -282,8 +261,8 @@ class LangsmithLogger(CustomBatchLogger):
                 response_obj,
             )
 
-            credentials = self._get_credentials_to_use_for_request(kwargs=kwargs)
-            data = self._prepare_log_data(
+            credentials: Final = self._get_credentials_to_use_for_request(kwargs=kwargs)
+            data: Final = self._prepare_log_data(
                 kwargs=kwargs,
                 response_obj=response_obj,
                 start_time=start_time,
@@ -296,9 +275,7 @@ class LangsmithLogger(CustomBatchLogger):
                     credentials=credentials,
                 )
             )
-            verbose_logger.debug(
-                f"Langsmith, event added to queue. Will flush in {self.flush_interval} seconds..."
-            )
+            verbose_logger.debug("Langsmith, event added to queue. Will flush in %s seconds...", self.flush_interval)
 
             if len(self.log_queue) >= self.batch_size:
                 self._send_batch()
@@ -309,13 +286,11 @@ class LangsmithLogger(CustomBatchLogger):
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
             self._ensure_periodic_flush_task()
-            sampling_rate = self._get_sampling_rate_to_use_for_request(kwargs=kwargs)
-            random_sample = random.random()
+            sampling_rate: Final = self._get_sampling_rate_to_use_for_request(kwargs=kwargs)
+            random_sample: Final = random.random()
             if random_sample > sampling_rate:
                 verbose_logger.info(
-                    "Skipping Langsmith logging. Sampling rate={}, random_sample={}".format(
-                        sampling_rate, random_sample
-                    )
+                    "Skipping Langsmith logging. Sampling rate=%s, random_sample=%s", sampling_rate, random_sample
                 )
                 return  # Skip logging
             verbose_logger.debug(
@@ -323,8 +298,8 @@ class LangsmithLogger(CustomBatchLogger):
                 kwargs,
                 response_obj,
             )
-            credentials = self._get_credentials_to_use_for_request(kwargs=kwargs)
-            data = self._prepare_log_data(
+            credentials: Final = self._get_credentials_to_use_for_request(kwargs=kwargs)
+            data: Final = self._prepare_log_data(
                 kwargs=kwargs,
                 response_obj=response_obj,
                 start_time=start_time,
@@ -345,25 +320,21 @@ class LangsmithLogger(CustomBatchLogger):
             if len(self.log_queue) >= self.batch_size:
                 await self.flush_queue()
         except Exception:
-            verbose_logger.exception(
-                "Langsmith Layer Error - error logging async success event."
-            )
+            verbose_logger.exception("Langsmith Layer Error - error logging async success event.")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
             self._ensure_periodic_flush_task()
-            sampling_rate = self._get_sampling_rate_to_use_for_request(kwargs=kwargs)
-            random_sample = random.random()
+            sampling_rate: Final = self._get_sampling_rate_to_use_for_request(kwargs=kwargs)
+            random_sample: Final = random.random()
             if random_sample > sampling_rate:
                 verbose_logger.info(
-                    "Skipping Langsmith logging. Sampling rate={}, random_sample={}".format(
-                        sampling_rate, random_sample
-                    )
+                    "Skipping Langsmith logging. Sampling rate=%s, random_sample=%s", sampling_rate, random_sample
                 )
                 return  # Skip logging
             verbose_logger.info("Langsmith Failure Event Logging!")
-            credentials = self._get_credentials_to_use_for_request(kwargs=kwargs)
-            data = self._prepare_log_data(
+            credentials: Final = self._get_credentials_to_use_for_request(kwargs=kwargs)
+            data: Final = self._prepare_log_data(
                 kwargs=kwargs,
                 response_obj=response_obj,
                 start_time=start_time,
@@ -384,9 +355,7 @@ class LangsmithLogger(CustomBatchLogger):
             if len(self.log_queue) >= self.batch_size:
                 await self.flush_queue()
         except Exception:
-            verbose_logger.exception(
-                "Langsmith Layer Error - error logging async failure event."
-            )
+            verbose_logger.exception("Langsmith Layer Error - error logging async failure event.")
 
     async def async_send_batch(self):
         """
@@ -408,16 +377,14 @@ class LangsmithLogger(CustomBatchLogger):
         if not self.log_queue:
             return
 
-        batch_groups = self._group_batches_by_credentials()
+        batch_groups: Final = self._group_batches_by_credentials()
         for batch_group in batch_groups.values():
             await self._log_batch_on_langsmith(
                 credentials=batch_group.credentials,
                 queue_objects=batch_group.queue_objects,
             )
 
-    def _add_endpoint_to_url(
-        self, url: str, endpoint: str, api_version: str = "/api/v1"
-    ) -> str:
+    def _add_endpoint_to_url(self, url: str, endpoint: str, api_version: str = "/api/v1") -> str:
         if api_version not in url:
             url = f"{url.rstrip('/')}{api_version}"
 
@@ -428,7 +395,7 @@ class LangsmithLogger(CustomBatchLogger):
     async def _log_batch_on_langsmith(
         self,
         credentials: LangsmithCredentialsObject,
-        queue_objects: List[LangsmithQueueObject],
+        queue_objects: list[LangsmithQueueObject],
     ):
         """
         Logs a batch of runs to Langsmith
@@ -442,24 +409,20 @@ class LangsmithLogger(CustomBatchLogger):
 
         Raises: Does not raise an exception, will only verbose_logger.exception()
         """
-        langsmith_api_base = credentials["LANGSMITH_BASE_URL"]
-        langsmith_api_key = credentials["LANGSMITH_API_KEY"]
-        langsmith_tenant_id = credentials.get("LANGSMITH_TENANT_ID")
-        url = self._add_endpoint_to_url(langsmith_api_base, "runs/batch")
-        headers = {"x-api-key": langsmith_api_key}
+        langsmith_api_base: Final = credentials["LANGSMITH_BASE_URL"]
+        langsmith_api_key: Final = credentials["LANGSMITH_API_KEY"]
+        langsmith_tenant_id: Final = credentials.get("LANGSMITH_TENANT_ID")
+        url: Final = self._add_endpoint_to_url(langsmith_api_base, "runs/batch")
+        headers: Final = {"x-api-key": langsmith_api_key}
         if langsmith_tenant_id:
             headers["x-tenant-id"] = langsmith_tenant_id
-        elements_to_log = [queue_object["data"] for queue_object in queue_objects]
+        elements_to_log: Final = [queue_object["data"] for queue_object in queue_objects]
 
         try:
-            verbose_logger.debug(
-                "Sending batch of %s runs to Langsmith", len(elements_to_log)
-            )
+            verbose_logger.debug("Sending batch of %s runs to Langsmith", len(elements_to_log))
             if self.is_mock_mode:
-                verbose_logger.debug(
-                    "[LANGSMITH MOCK] Mock mode enabled - API calls will be intercepted"
-                )
-            response = await self.async_httpx_client.post(
+                verbose_logger.debug("[LANGSMITH MOCK] Mock mode enabled - API calls will be intercepted")
+            response: Final = await self.async_httpx_client.post(
                 url=url,
                 json={"post": elements_to_log},
                 headers=headers,
@@ -467,38 +430,25 @@ class LangsmithLogger(CustomBatchLogger):
             response.raise_for_status()
 
             if response.status_code >= 300:
-                verbose_logger.error(
-                    f"Langsmith Error: {response.status_code} - {response.text}"
-                )
+                verbose_logger.error("Langsmith Error: %s - %s", response.status_code, response.text)
             else:
                 if self.is_mock_mode:
-                    verbose_logger.debug(
-                        f"[LANGSMITH MOCK] Batch of {len(elements_to_log)} runs successfully mocked"
-                    )
+                    verbose_logger.debug("[LANGSMITH MOCK] Batch of %s runs successfully mocked", len(elements_to_log))
                 else:
-                    verbose_logger.debug(
-                        f"Batch of {len(self.log_queue)} runs successfully created"
-                    )
+                    verbose_logger.debug("Batch of %s runs successfully created", len(self.log_queue))
         except httpx.HTTPStatusError as e:
-            verbose_logger.exception(
-                f"Langsmith HTTP Error: {e.response.status_code} - {e.response.text}"
-            )
+            verbose_logger.exception("Langsmith HTTP Error: %s - %s", e.response.status_code, e.response.text)
         except Exception:
-            verbose_logger.exception(
-                f"Langsmith Layer Error - {traceback.format_exc()}"
-            )
+            verbose_logger.exception("Langsmith Layer Error - %s", traceback.format_exc())
 
-    def _group_batches_by_credentials(self) -> Dict[CredentialsKey, BatchGroup]:
+    def _group_batches_by_credentials(self) -> dict[CredentialsKey, BatchGroup]:
         """Groups queue objects by credentials using a proper key structure"""
-        log_queue_by_credentials: Dict[CredentialsKey, BatchGroup] = {}
+        log_queue_by_credentials: Final[dict[CredentialsKey, BatchGroup]] = {}
 
         for queue_object in self.log_queue:
             credentials = queue_object["credentials"]
             # if credential missing, skip - log warning
-            if (
-                credentials["LANGSMITH_API_KEY"] is None
-                or credentials["LANGSMITH_PROJECT"] is None
-            ):
+            if credentials["LANGSMITH_API_KEY"] is None or credentials["LANGSMITH_PROJECT"] is None:
                 verbose_logger.warning(
                     "Langsmith Logging - credentials missing - api_key: %s, project: %s",
                     credentials["LANGSMITH_API_KEY"],
@@ -513,30 +463,24 @@ class LangsmithLogger(CustomBatchLogger):
             )
 
             if key not in log_queue_by_credentials:
-                log_queue_by_credentials[key] = BatchGroup(
-                    credentials=credentials, queue_objects=[]
-                )
+                log_queue_by_credentials[key] = BatchGroup(credentials=credentials, queue_objects=[])
 
             log_queue_by_credentials[key].queue_objects.append(queue_object)
 
         return log_queue_by_credentials
 
-    def _get_sampling_rate_to_use_for_request(self, kwargs: Dict[str, Any]) -> float:
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-            kwargs.get("standard_callback_dynamic_params", None)
+    def _get_sampling_rate_to_use_for_request(self, kwargs: dict[str, Any]) -> float:
+        standard_callback_dynamic_params: Final[StandardCallbackDynamicParams | None] = kwargs.get(
+            "standard_callback_dynamic_params", None
         )
         sampling_rate: float = self.sampling_rate
         if standard_callback_dynamic_params is not None:
-            _sampling_rate = standard_callback_dynamic_params.get(
-                "langsmith_sampling_rate"
-            )
+            _sampling_rate: Final = standard_callback_dynamic_params.get("langsmith_sampling_rate")
             if _sampling_rate is not None:
                 sampling_rate = float(_sampling_rate)
         return sampling_rate
 
-    def _get_credentials_to_use_for_request(
-        self, kwargs: Dict[str, Any]
-    ) -> LangsmithCredentialsObject:
+    def _get_credentials_to_use_for_request(self, kwargs: dict[str, Any]) -> LangsmithCredentialsObject:
         """
         Handles key/team based logging
 
@@ -544,27 +488,16 @@ class LangsmithLogger(CustomBatchLogger):
 
         Otherwise, use the default credentials.
         """
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-            kwargs.get("standard_callback_dynamic_params", None)
+        standard_callback_dynamic_params: Final[StandardCallbackDynamicParams | None] = kwargs.get(
+            "standard_callback_dynamic_params", None
         )
         if standard_callback_dynamic_params is not None:
             credentials = self.get_credentials_from_env(
-                langsmith_api_key=standard_callback_dynamic_params.get(
-                    "langsmith_api_key", None
-                ),
-                langsmith_project=standard_callback_dynamic_params.get(
-                    "langsmith_project", None
-                ),
-                langsmith_base_url=standard_callback_dynamic_params.get(
-                    "langsmith_base_url", None
-                ),
-                langsmith_tenant_id=standard_callback_dynamic_params.get(
-                    "langsmith_tenant_id", None
-                ),
-                allow_env_credentials=standard_callback_dynamic_params.get(
-                    "langsmith_base_url", None
-                )
-                is None,
+                langsmith_api_key=standard_callback_dynamic_params.get("langsmith_api_key", None),
+                langsmith_project=standard_callback_dynamic_params.get("langsmith_project", None),
+                langsmith_base_url=standard_callback_dynamic_params.get("langsmith_base_url", None),
+                langsmith_tenant_id=standard_callback_dynamic_params.get("langsmith_tenant_id", None),
+                allow_env_credentials=standard_callback_dynamic_params.get("langsmith_base_url", None) is None,
             )
         else:
             credentials = self.default_credentials
@@ -577,7 +510,7 @@ class LangsmithLogger(CustomBatchLogger):
 
         try:
             # Try to get the existing event loop
-            loop = asyncio.get_event_loop()
+            loop: Final = asyncio.get_event_loop()
             if loop.is_running():
                 # If we're already in an event loop, create a task
                 asyncio.create_task(self.async_send_batch())
@@ -589,15 +522,15 @@ class LangsmithLogger(CustomBatchLogger):
             asyncio.run(self.async_send_batch())
 
     def get_run_by_id(self, run_id):
-        langsmith_api_key = self.default_credentials["LANGSMITH_API_KEY"]
-        langsmith_api_base = self.default_credentials["LANGSMITH_BASE_URL"]
-        langsmith_tenant_id = self.default_credentials.get("LANGSMITH_TENANT_ID")
+        langsmith_api_key: Final = self.default_credentials["LANGSMITH_API_KEY"]
+        langsmith_api_base: Final = self.default_credentials["LANGSMITH_BASE_URL"]
+        langsmith_tenant_id: Final = self.default_credentials.get("LANGSMITH_TENANT_ID")
 
-        url = f"{langsmith_api_base}/runs/{run_id}"
-        headers = {"x-api-key": langsmith_api_key}
+        url: Final = f"{langsmith_api_base}/runs/{run_id}"
+        headers: Final = {"x-api-key": langsmith_api_key}
         if langsmith_tenant_id:
             headers["x-tenant-id"] = langsmith_tenant_id
-        response = litellm.module_level_client.get(
+        response: Final = litellm.module_level_client.get(
             url=url,
             headers=headers,
         )
@@ -605,6 +538,6 @@ class LangsmithLogger(CustomBatchLogger):
         return response.json()
 
     def make_dot_order(self, run_id: str):
-        st = datetime.now(timezone.utc)
-        id_ = run_id
+        st: Final = datetime.now(timezone.utc)
+        id_: Final = run_id
         return st.strftime("%Y%m%dT%H%M%S%fZ") + str(id_)

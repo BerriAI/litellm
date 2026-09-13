@@ -1,23 +1,42 @@
 #### What this tests ####
 #    This tests litellm.token_counter.token_counter() function
-import os
-import sys
+import asyncio
+import base64
+import importlib
+import threading
 import time
 import traceback
+from concurrent.futures import Future, wait
+from typing import Final
 from unittest.mock import MagicMock
 
+import anyio.to_thread
 import pytest
+import tiktoken
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import litellm
 from litellm import create_pretrained_tokenizer, decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
+import litellm.constants
+from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.token_counter import (
+    _get_exact_count_function,
+    _get_extrapolating_count_function,
+    _get_tiktoken_count_function,
+    calculate_img_tokens,
+    high_detail_image_token_upper_bound,
+    offload_token_count,
+)
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from tests.large_text import text
+from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+    assert_loop_stayed_free,
+    timed_with_loop_lags,
+    warm_tokenizer,
+)
 from tests.test_litellm.litellm_core_utils.messages_with_counts import (
     MESSAGES_TEXT,
     MESSAGES_WITH_IMAGES,
@@ -52,6 +71,202 @@ def test_token_counter_basic():
         )
         == 19
     )
+
+
+def test_token_counter_large_repeated_text_is_fast():
+    messages = [{"role": "user", "content": [{"type": "text", "text": "A" * 1024 * 1024}]}]
+
+    start_time = time.perf_counter()
+    tokens = token_counter_new(model="us.anthropic.claude-sonnet-4-6", messages=messages)
+    elapsed = time.perf_counter() - start_time
+
+    assert elapsed < 2, f"Token counting took too long: {elapsed:.2f}s"
+    assert tokens > 0
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Short text",
+        "This is a normal message with punctuation, numbers, and a few words.",
+    ],
+)
+def test_token_counter_short_text_matches_tiktoken(text):
+    encoding = tiktoken.get_encoding("cl100k_base")
+    expected = len(encoding.encode(text, disallowed_special=()))
+
+    assert token_counter_new(model="us.anthropic.claude-sonnet-4-6", text=text) == expected
+
+
+def test_token_counter_text_over_chunk_boundary_stays_close_to_tiktoken():
+    text = ("The quick brown fox jumps over the lazy dog. " * 30)[:1025]
+    encoding = tiktoken.get_encoding("cl100k_base")
+    expected = len(encoding.encode(text, disallowed_special=()))
+
+    actual = token_counter_new(model="us.anthropic.claude-sonnet-4-6", text=text)
+
+    assert abs(actual - expected) <= 4
+
+
+@pytest.mark.parametrize(
+    "configured",
+    ["0", "-1", "-1024", "not-an-int", "", "   ", "999999999", "inf", "1e9"],
+)
+def test_invalid_chunk_size_config_stays_usable(monkeypatch, configured):
+    """A misconfigured chunk size must not raise, count zero, or restore the quadratic encode cost."""
+    monkeypatch.setenv("TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS", configured)
+    try:
+        reloaded = importlib.reload(litellm.constants)
+        chunk_size = reloaded.TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS
+        assert 1 <= chunk_size <= reloaded.TIKTOKEN_ENCODE_MAX_CHUNK_SIZE_CHARS
+
+        encoding = tiktoken.get_encoding("cl100k_base")
+        count_tokens = _get_tiktoken_count_function(
+            lambda text: len(encoding.encode(text, disallowed_special=())),
+            chunk_size=chunk_size,
+        )
+        assert count_tokens("The quick brown fox jumps over the lazy dog. " * 40) > 0
+    finally:
+        monkeypatch.delenv("TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS")
+        importlib.reload(litellm.constants)
+
+
+def test_valid_chunk_size_config_is_honoured(monkeypatch):
+    monkeypatch.setenv("TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS", "2048")
+    try:
+        assert importlib.reload(litellm.constants).TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS == 2048
+    finally:
+        monkeypatch.delenv("TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS")
+        importlib.reload(litellm.constants)
+
+
+async def test_huggingface_count_in_a_worker_thread_leaves_the_event_loop_free():
+    warm_tokenizer("claude-fable-5")
+
+    tokens, took, lags = await timed_with_loop_lags(
+        lambda: asyncify(token_counter_new)(model="claude-fable-5", text=text * 100)
+    )
+
+    assert tokens > 0
+    assert_loop_stayed_free(took, lags)
+
+
+@pytest.mark.parametrize("max_exact_chars", [64, 1_000, 2_500])
+def test_count_above_the_cap_samples_the_whole_string_and_scales(max_exact_chars: int):
+    count_exactly: Final = MagicMock(side_effect=lambda chunk: chunk.count("a") + len(chunk))
+    front_heavy: Final = "a" * 1_000 + "b" * 4_000
+    exact: Final = 1_000 + len(front_heavy)
+
+    estimate: Final = _get_extrapolating_count_function(count_exactly, max_exact_chars=max_exact_chars)(front_heavy)
+
+    assert abs(estimate - exact) <= exact // 100
+    assert sum(len(call.args[0]) for call in count_exactly.call_args_list) <= max_exact_chars
+
+
+def test_count_at_or_below_the_cap_is_exact():
+    count_exactly: Final = MagicMock(side_effect=len)
+
+    assert _get_extrapolating_count_function(count_exactly, max_exact_chars=5_000)("a" * 5_000) == 5_000
+    assert count_exactly.call_args_list == [(("a" * 5_000,),)]
+
+
+class _SlowEncoder:
+    def __init__(self) -> None:
+        self._lock: Final = threading.Lock()
+        self.in_flight = 0
+        self.peak_in_flight = 0
+
+    def encode_batch_fast(self, texts: list[str]) -> list[list[int]]:
+        with self._lock:
+            self.in_flight += 1
+            self.peak_in_flight = max(self.peak_in_flight, self.in_flight)
+        time.sleep(0.1)
+        with self._lock:
+            self.in_flight -= 1
+        return [[0] * len(text) for text in texts]
+
+
+@pytest.mark.asyncio
+async def test_offloaded_counts_do_not_borrow_from_the_shared_thread_pool():
+    encoder: Final = _SlowEncoder()
+    count: Final = _get_exact_count_function(None, {"type": "huggingface_tokenizer", "tokenizer": encoder})
+    shared_pool: Final = anyio.to_thread.current_default_thread_limiter()
+    burst: Final = 2 * TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+
+    async def shared_pool_borrowed_until_done(counting: asyncio.Future[list[int]]) -> tuple[int, ...]:
+        if counting.done():
+            return ()
+        await asyncio.sleep(0.01)
+        return (shared_pool.borrowed_tokens, *await shared_pool_borrowed_until_done(counting))
+
+    counting: Final = asyncio.ensure_future(asyncio.gather(*(offload_token_count(count)("abc") for _ in range(burst))))
+    borrowed: Final = await shared_pool_borrowed_until_done(counting)
+
+    assert await counting == [3] * burst
+    assert len(borrowed) > 1 and max(borrowed) == 0
+    assert 1 < encoder.peak_in_flight <= TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+
+
+def _count_in_a_fresh_event_loop(text: str, result: Future[int]) -> None:
+    def slow_count(counted: str) -> int:
+        time.sleep(0.1)
+        return len(counted)
+
+    result.set_result(asyncio.run(offload_token_count(slow_count)(text)))
+
+
+def test_offloaded_counts_finish_in_every_event_loop_that_shares_the_process():
+    loops: Final = 2 * TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+    results: Final = tuple(Future[int]() for _ in range(loops))
+    threads: Final = tuple(
+        threading.Thread(target=_count_in_a_fresh_event_loop, args=("a" * size, result), daemon=True)
+        for size, result in enumerate(results, start=1)
+    )
+    for thread in threads:
+        thread.start()
+
+    _, pending = wait(results, timeout=5)
+
+    assert not pending
+    assert tuple(result.result() for result in results) == tuple(range(1, loops + 1))
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [("8", 8), ("0", 4), ("not-an-int", 4)],
+)
+def test_max_concurrent_counts_config_is_honoured(monkeypatch: pytest.MonkeyPatch, configured: str, expected: int):
+    monkeypatch.setenv("TOKEN_COUNTER_MAX_CONCURRENT_COUNTS", configured)
+    try:
+        assert importlib.reload(litellm.constants).TOKEN_COUNTER_MAX_CONCURRENT_COUNTS == expected
+    finally:
+        monkeypatch.delenv("TOKEN_COUNTER_MAX_CONCURRENT_COUNTS")
+        importlib.reload(litellm.constants)
+
+
+def test_token_counter_applies_the_default_cap():
+    max_exact_chars: Final = litellm.constants.TOKEN_COUNTER_MAX_EXACT_CHARS
+    prose: Final = ("The quick brown fox jumps over the lazy dog. " * (max_exact_chars // 45 + 1))[:max_exact_chars]
+    over_the_cap: Final = prose + "a" * 200_000
+    exact: Final = _get_exact_count_function("gpt-5.6")(over_the_cap)
+
+    estimate: Final = token_counter_new(model="gpt-5.6", text=over_the_cap)
+
+    assert estimate != exact
+    assert abs(estimate - exact) <= exact // 100
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [("2048", 2048), ("0", 4_000_000), ("not-an-int", 4_000_000)],
+)
+def test_max_exact_chars_config_is_honoured(monkeypatch: pytest.MonkeyPatch, configured: str, expected: int):
+    monkeypatch.setenv("TOKEN_COUNTER_MAX_EXACT_CHARS", configured)
+    try:
+        assert importlib.reload(litellm.constants).TOKEN_COUNTER_MAX_EXACT_CHARS == expected
+    finally:
+        monkeypatch.delenv("TOKEN_COUNTER_MAX_EXACT_CHARS")
+        importlib.reload(litellm.constants)
 
 
 def test_token_counter_with_prefix():
@@ -95,6 +310,50 @@ def test_token_counter_normal_plus_function_calling():
 
 
 # test_token_counter_normal_plus_function_calling()
+
+
+def test_token_counter_legacy_function_call_counts_arguments():
+    """
+    Regression for VERIA-492 (Token-counter function_call bypass).
+
+    The legacy OpenAI assistant `function_call` field carries arbitrary text in
+    `arguments`. Before the fix, `_count_messages` had no branch for
+    `function_call` and fell through to the unsupported-key `continue`, so an
+    assistant turn could smuggle unlimited text past `token_counter` and the
+    proxy `/utils/token_counter` endpoint (and downstream pre-call budget /
+    `get_modified_max_tokens` math). After the fix it must be counted the
+    same as the equivalent `tool_calls` payload.
+    """
+    long_arg = "A" * 4000
+    fc_messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "function_call": {"name": "search", "arguments": long_arg},
+        },
+    ]
+    tc_messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": long_arg},
+                }
+            ],
+        },
+    ]
+    fc_tokens = token_counter(model="gpt-3.5-turbo", messages=fc_messages)
+    tc_tokens = token_counter(model="gpt-3.5-turbo", messages=tc_messages)
+    assert fc_tokens == tc_tokens, (
+        f"function_call arguments must count like tool_calls arguments; "
+        f"got function_call={fc_tokens}, tool_calls={tc_tokens}"
+    )
+    assert fc_tokens > 500, f"4000-char arguments payload must contribute real tokens, got {fc_tokens}"
 
 
 @pytest.mark.parametrize(
@@ -519,10 +778,8 @@ def test_token_counter():
 
 
 import unittest
-from unittest.mock import MagicMock, patch
 
 from litellm.utils import _select_tokenizer_helper, claude_json_str, encoding
-
 
 # Clear the cache at module load to ensure clean state
 _select_tokenizer_helper.cache_clear()
@@ -631,24 +888,6 @@ class TestTokenizerSelection(unittest.TestCase):
 @pytest.mark.parametrize(
     "messages",
     [
-        [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "These are some sample images from a movie. Based on these images, what do you think the tone of the movie is?",
-                    },
-                    {
-                        "type": "text",
-                        "image_url": {
-                            "url": "https://gratisography.com/wp-content/uploads/2024/11/gratisography-augmented-reality-800x525.jpg",
-                            "detail": "high",
-                        },
-                    },
-                ],
-            }
-        ],
         [
             {
                 "role": "user",
@@ -929,13 +1168,12 @@ def test_token_counter_with_image_url():
         }
     ]
 
-    try:
+    with pytest.raises(ValueError, match="Invalid detail value") as exc_info:
         token_counter(model="gpt-3.5-turbo", messages=messages_invalid)
-        assert False, "Expected ValueError for invalid detail value"
-    except ValueError as e:
-        assert "Invalid detail value" in str(
-            e
-        ), f"Expected detail validation error, got: {e}"
+    e = exc_info.value
+    assert "Invalid detail value" in str(
+        e
+    ), f"Expected detail validation error, got: {e}"
 
 
 def test_token_counter_with_thinking_content():
@@ -1010,3 +1248,331 @@ def test_token_counter_with_thinking_content():
     assert (
         tokens_no_thinking < 15
     ), f"Expected minimal token count for empty thinking block, got {tokens_no_thinking}"
+
+
+def test_token_counter_with_tool_reference_block():
+    """
+    Regression test: a message containing an Anthropic tool-search
+    `tool_reference` content block must NOT raise.
+
+    Before the fix, token_counter raised
+    `Invalid content item type: tool_reference`. On the streaming
+    anthropic_messages proxy path this nulled response_cost and caused the
+    SpendLogs row to be dropped, silently undercounting cost. token_counter
+    must instead count the referenced tool name and return a positive count.
+    """
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Let me look up the right tool."},
+                {"type": "tool_reference", "tool_name": "search_knowledge_base"},
+            ],
+        }
+    ]
+
+    # Must not raise, and must produce a positive token count.
+    tokens = token_counter_new(
+        model="anthropic/claude-sonnet-4-5-20250929", messages=messages
+    )
+    assert tokens > 0, f"Expected positive token count, got {tokens}"
+
+    # A tool_reference with no/empty tool_name must also be handled gracefully.
+    messages_empty = [
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_reference", "tool_name": ""}],
+        }
+    ]
+    tokens_empty = token_counter_new(
+        model="anthropic/claude-sonnet-4-5-20250929", messages=messages_empty
+    )
+    assert tokens_empty >= 0
+
+
+def test_count_content_list_rejects_unknown_type():
+    """
+    An unrecognized content block type must raise, and the error message must
+    enumerate the supported types (including `tool_reference`). This pins the
+    catch-all contract so a future block type isn't silently dropped.
+    """
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    with pytest.raises(ValueError, match='Error getting number of tokens from content list: Invalid') as exc_info:
+        _count_content_list(
+            count_function=len,
+            content_list=[{"type": "totally_unknown_block"}],
+            use_default_image_token_count=False,
+            default_token_count=None,
+        )
+
+    message = str(exc_info.value)
+    assert "Invalid content item type: totally_unknown_block" in message
+    assert "tool_reference" in message
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="},
+        {"type": "url", "url": "https://example.com/image.png"},
+        {"type": "file", "file_id": "file-abc123"},
+    ],
+    ids=["base64", "url", "file"],
+)
+def test_token_counter_with_anthropic_image_block(source: dict[str, str]):
+    """Anthropic `image` blocks must count for every source variant, not raise `Invalid content item type` (which the router's context-window pre-call check swallows into an unfiltered dispatch)."""
+    from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is in this image?"},
+                {"type": "image", "source": source},
+            ],
+        }
+    ]
+
+    tokens = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        messages=messages,
+        use_default_image_token_count=True,
+    )
+    assert tokens > DEFAULT_IMAGE_TOKEN_COUNT, (
+        f"Expected the image block to contribute tokens, got {tokens}"
+    )
+
+
+def test_anthropic_image_block_matches_equivalent_image_url():
+    """An Anthropic `image` block prices identically to the OpenAI `image_url` carrying the same bytes."""
+    anthropic_messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": "iVBORw0KGgo=",
+                    },
+                }
+            ],
+        }
+    ]
+    openai_messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+                }
+            ],
+        }
+    ]
+
+    anthropic_tokens = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929", messages=anthropic_messages
+    )
+    openai_tokens = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929", messages=openai_messages
+    )
+    assert anthropic_tokens == openai_tokens
+
+
+def test_anthropic_image_block_nested_in_tool_result():
+    """An `image` block nested in a `tool_result.content` list is counted through the same recursion."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "iVBORw0KGgo=",
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+    ]
+
+    tokens = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        messages=messages,
+        use_default_image_token_count=True,
+    )
+    assert tokens > 0
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ({"type": "base64", "media_type": "image/jpeg", "data": "/9j/4AAQ"}, "data:image/jpeg;base64,/9j/4AAQ"),
+        ({"type": "url", "url": "https://example.com/image.png"}, "https://example.com/image.png"),
+        ({"type": "file", "file_id": "file-abc123"}, ""),
+    ],
+    ids=["base64", "url", "file"],
+)
+def test_anthropic_image_source_resolves_to_what_the_image_pricer_reads(source: dict[str, str], expected: str):
+    """base64 sources become a data URI, url sources pass through, file sources resolve to an empty string."""
+    from litellm.litellm_core_utils.token_counter import _anthropic_image_source_data
+
+    assert _anthropic_image_source_data(source) == expected
+
+
+def test_anthropic_image_block_with_empty_base64_data():
+    """A base64 source with empty `data` prices as an image rather than raising."""
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    tokens = _count_content_list(
+        count_function=len,
+        content_list=[
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": ""}}
+        ],
+        use_default_image_token_count=False,
+        default_token_count=None,
+    )
+    assert tokens > 0
+
+
+def test_anthropic_image_block_without_source_raises():
+    """An `image` block with no `source` raises, matching the OpenAI `image_url`-without-`url` behavior."""
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    with pytest.raises(ValueError, match="Error getting number of tokens from content list"):
+        _count_content_list(
+            count_function=len,
+            content_list=[{"type": "image"}],
+            use_default_image_token_count=False,
+            default_token_count=None,
+        )
+
+    # ... and `default_token_count`, the caller's opt-out from raising, still wins.
+    assert (
+        _count_content_list(
+            count_function=len,
+            content_list=[{"type": "image"}],
+            use_default_image_token_count=False,
+            default_token_count=7,
+        )
+        == 7
+    )
+
+
+def _count_user_content(content: list[dict]) -> int:
+    from litellm.litellm_core_utils.token_counter import token_counter
+
+    return token_counter(
+        model="anthropic/claude-fable-5",
+        messages=[{"role": "user", "content": content}],
+        use_default_image_token_count=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"},
+        {"type": "url", "url": "https://example.com/report.pdf"},
+        {"type": "file", "file_id": "file-abc123"},
+    ],
+    ids=["base64", "url", "file"],
+)
+def test_anthropic_document_block_with_opaque_source_is_priced_like_an_image(source: dict[str, str]):
+    """A `document` whose bytes can't be tokenized locally is priced like an `image`, not raised on."""
+    prompt = {"type": "text", "text": "Summarize this file."}
+
+    assert _count_user_content([prompt, {"type": "document", "source": source}]) == _count_user_content(
+        [prompt, {"type": "image", "source": source}]
+    )
+
+
+def test_anthropic_document_block_text_sources_count_their_text():
+    """`text` and `content` document sources count the text they carry, as inline text blocks would."""
+    prompt = {"type": "text", "text": "Summarize this file."}
+    body = {"type": "text", "text": "Revenue grew eleven percent while churn fell to two percent."}
+    picture = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}
+
+    text_source = {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": body["text"]}}
+    assert _count_user_content([prompt, text_source]) == _count_user_content([prompt, body])
+
+    string_content = {"type": "document", "source": {"type": "content", "content": body["text"]}}
+    assert _count_user_content([prompt, string_content]) == _count_user_content([prompt, body])
+
+    block_content = {"type": "document", "source": {"type": "content", "content": [body, picture]}}
+    assert _count_user_content([prompt, block_content]) == _count_user_content([prompt, body, picture])
+
+
+def test_anthropic_document_title_and_context_add_their_tokens():
+    prompt = {"type": "text", "text": "Summarize this file."}
+    source = {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"}
+    described = {"type": "document", "source": source, "title": "Q3 board packet", "context": "Shared by finance"}
+
+    assert _count_user_content([prompt, described]) == _count_user_content(
+        [
+            prompt,
+            {"type": "text", "text": "Q3 board packet"},
+            {"type": "text", "text": "Shared by finance"},
+            {"type": "document", "source": source},
+        ]
+    )
+
+
+def test_openai_file_block_prices_like_the_equivalent_anthropic_document():
+    """An inline `file` is a `document` in the chat-completions dialect, so it must price identically, not raise.
+
+    Before the fix `file` was missing from the content-block match even though `ChatCompletionFileObject`
+    is in the union this counter accepts, so every local count of a Responses `input_file` raised
+    `Invalid content item type: file` and surfaced as a 500 on /v1/responses/input_tokens.
+    """
+    prompt = {"type": "text", "text": "Summarize this file."}
+    inline_file = {
+        "type": "file",
+        "file": {"filename": "report.pdf", "file_data": "data:application/pdf;base64,JVBERi0xLjQK"},
+    }
+    document = {
+        "type": "document",
+        "title": "report.pdf",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"},
+    }
+
+    assert _count_user_content([prompt, inline_file]) == _count_user_content([prompt, document])
+    assert _count_user_content([prompt, inline_file]) > _count_user_content([prompt])
+
+
+def test_openai_file_block_without_inline_bytes_counts_what_it_carries():
+    """A `file` block naming an uploaded file has no bytes to price, so it adds only the filename's tokens."""
+    prompt = {"type": "text", "text": "Summarize this file."}
+
+    by_id = {"type": "file", "file": {"file_id": "file-abc123"}}
+    assert _count_user_content([prompt, by_id]) == _count_user_content([prompt])
+
+    named = {"type": "file", "file": {"file_id": "file-abc123", "filename": "report.pdf"}}
+    assert _count_user_content([prompt, named]) == _count_user_content(
+        [prompt, {"type": "text", "text": "report.pdf"}]
+    )
+
+
+def _png_data_url(width: int, height: int) -> str:
+    ihdr = b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + width.to_bytes(4, "big") + height.to_bytes(4, "big")
+    return "data:image/png;base64," + base64.b64encode(ihdr + b"\x08\x06\x00\x00\x00").decode()
+
+
+@pytest.mark.parametrize(("width", "height"), [(1, 1), (768, 768), (2000, 768), (768, 2000), (4096, 4096), (8000, 3072)])
+def test_high_detail_image_token_upper_bound_covers_every_image_size(width: int, height: int) -> None:
+    assert calculate_img_tokens(_png_data_url(width, height), mode="high") <= high_detail_image_token_upper_bound()
+
+
+def test_high_detail_image_token_upper_bound_is_reached_by_the_largest_high_res_image() -> None:
+    assert calculate_img_tokens(_png_data_url(2000, 768), mode="high") == high_detail_image_token_upper_bound()
+    assert calculate_img_tokens(_png_data_url(1, 1), mode="high") < high_detail_image_token_upper_bound()

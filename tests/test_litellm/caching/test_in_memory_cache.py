@@ -1,8 +1,8 @@
 import asyncio
 import json
-import os
-import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -10,12 +10,39 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock
 
 from litellm.caching.in_memory_cache import InMemoryCache
+
+
+class _SlowInt(int):
+    def __add__(self, value: int) -> "_SlowInt":
+        time.sleep(0.05)
+        return _SlowInt(int(self) + value)
+
+
+def test_increment_cache_is_atomic_under_thread_concurrency():
+    cache = InMemoryCache()
+    seed = 1000
+    cache.set_cache("counter", _SlowInt(seed))
+    thread_count = 8
+    barrier = threading.Barrier(thread_count)
+
+    def increment(_: int) -> float:
+        barrier.wait()
+        return cache.increment_cache("counter", 1)
+
+    with ThreadPoolExecutor(max_workers=thread_count) as executor:
+        tuple(executor.map(increment, range(thread_count)))
+
+    assert cache.get_cache("counter") == seed + thread_count
+
+
+async def test_async_increment_delegates_to_locked_sync_path():
+    cache = InMemoryCache()
+    assert await cache.async_increment("counter", 2) == 2
+    assert await cache.async_increment("counter", 3) == 5
+    assert cache.get_cache("counter") == 5
 
 
 def test_in_memory_openai_obj_cache():
@@ -223,3 +250,27 @@ def test_in_memory_cache_prunes_expired_heap_entries_below_capacity():
     assert len(in_memory_cache.cache_dict) == 5
     assert len(in_memory_cache.ttl_dict) == 5
     assert len(in_memory_cache.expiration_heap) == 5
+
+
+def test_in_memory_cache_injected_clock_controls_expiry_and_eviction() -> None:
+    class Clock:
+        now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+    cache = InMemoryCache(max_size_in_memory=2, default_ttl=60, clock=clock)
+    cache.set_cache("first", "original", ttl=10)
+    clock.now = 9.0
+    cache.set_cache("second", "survivor")
+    assert cache.get_cache("first") == "original"
+    clock.now = 10.001
+    assert cache.get_cache("first") is None
+    cache.set_cache("third", "replacement")
+    assert cache.get_cache("second") == "survivor"
+    clock.now = 69.001
+    cache.set_cache("fourth", "new")
+    assert cache.get_cache("second") is None
+    assert cache.get_cache("third") == "replacement"
+    assert cache.get_cache("fourth") == "new"

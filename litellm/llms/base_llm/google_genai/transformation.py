@@ -1,6 +1,6 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -48,7 +48,7 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         }
 
     @abstractmethod
-    def get_supported_generate_content_optional_params(self, model: str) -> List[str]:
+    def get_supported_generate_content_optional_params(self, model: str) -> list[str]:
         """
         Get the list of supported Google GenAI parameters for the model.
 
@@ -58,16 +58,27 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         Returns:
             List of supported parameter names
         """
-        raise NotImplementedError(
-            "get_supported_generate_content_optional_params is not implemented"
-        )
+        raise NotImplementedError("get_supported_generate_content_optional_params is not implemented")
+
+    def get_generate_content_request_top_level_fields(self) -> tuple[str, ...]:
+        """
+        Native Google ``GenerateContentRequest`` fields that sit at the top level
+        (siblings of ``generationConfig``) rather than inside it. The proxy forwards
+        these verbatim from a native request so ``generateContent`` is a drop-in for
+        Google's REST API.
+
+        Excludes ``contents``, ``model`` and ``tools`` (dedicated params),
+        ``systemInstruction`` (dedicated extraction) and ``generationConfig`` (mapped
+        to ``config``).
+        """
+        return ("safetySettings", "toolConfig", "cachedContent", "labels")
 
     @abstractmethod
     def map_generate_content_optional_params(
         self,
         generate_content_config_dict: GenerateContentConfigDict,
         model: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Map Google GenAI parameters to provider-specific format.
 
@@ -78,17 +89,15 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         Returns:
             Mapped parameters for the provider
         """
-        raise NotImplementedError(
-            "map_generate_content_optional_params is not implemented"
-        )
+        raise NotImplementedError("map_generate_content_optional_params is not implemented")
 
     @abstractmethod
     def validate_environment(
         self,
-        api_key: Optional[str],
-        headers: Optional[dict],
+        api_key: str | None,
+        headers: dict | None,
         model: str,
-        litellm_params: Optional[Union[GenericLiteLLMParams, dict]],
+        litellm_params: GenericLiteLLMParams | dict | None,
     ) -> dict:
         """
         Validate the environment and return headers for the request.
@@ -106,11 +115,11 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
 
     def sync_get_auth_token_and_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
         litellm_params: dict,
         stream: bool,
-    ) -> Tuple[dict, str]:
+    ) -> tuple[dict, str]:
         """
         Sync version of get_auth_token_and_url.
 
@@ -127,11 +136,11 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
 
     async def get_auth_token_and_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
         litellm_params: dict,
         stream: bool,
-    ) -> Tuple[dict, str]:
+    ) -> tuple[dict, str]:
         """
         Get the complete URL for the request.
 
@@ -150,9 +159,9 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         self,
         model: str,
         contents: GenerateContentContentListUnionDict,
-        tools: Optional[ToolConfigDict],
-        generate_content_config_dict: Dict,
-        system_instruction: Optional[Any] = None,
+        tools: ToolConfigDict | None,
+        generate_content_config_dict: dict,
+        system_instruction: Any | None = None,
     ) -> dict:
         """
         Transform the request parameters for the generate content API.
@@ -167,7 +176,6 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         Returns:
             Transformed request data
         """
-        pass
 
     @abstractmethod
     def transform_generate_content_response(
@@ -186,11 +194,8 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         Returns:
             Transformed response data
         """
-        pass
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> Exception:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> Exception:
         """
         Get the appropriate exception class for the error.
 

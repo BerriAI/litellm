@@ -2,7 +2,7 @@
 Types and field definitions for cache settings management endpoints
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Final
 
 from pydantic import BaseModel
 
@@ -13,18 +13,14 @@ class CacheSettingsField(BaseModel):
     field_value: Any
     field_description: str
     field_default: Any = None
-    options: Optional[List[str]] = (
-        None  # For fields with predefined options/enum values
-    )
+    options: list[str] | None = None  # For fields with predefined options/enum values
     ui_field_name: str  # User-friendly display name
-    link: Optional[str] = None  # Documentation link for the field
-    redis_type: Optional[str] = (
-        None  # Which Redis type this field applies to (node, cluster, sentinel)
-    )
+    link: str | None = None  # Documentation link for the field
+    redis_type: str | None = None  # Which Redis type this field applies to (node, cluster, sentinel)
 
 
 # Redis type descriptions
-REDIS_TYPE_DESCRIPTIONS: Dict[str, str] = {
+REDIS_TYPE_DESCRIPTIONS: Final[dict[str, str]] = {
     "node": "Standard Redis node/single instance",
     "cluster": "Redis Cluster mode for high availability and horizontal scaling",
     "sentinel": "Redis Sentinel mode for high availability with automatic failover",
@@ -32,7 +28,7 @@ REDIS_TYPE_DESCRIPTIONS: Dict[str, str] = {
 
 
 # Define all available cache settings fields
-CACHE_SETTINGS_FIELDS: List[CacheSettingsField] = [
+CACHE_SETTINGS_FIELDS: Final[list[CacheSettingsField]] = [
     CacheSettingsField(
         field_name="redis_type",
         field_type="String",
@@ -44,6 +40,15 @@ CACHE_SETTINGS_FIELDS: List[CacheSettingsField] = [
         redis_type=None,
     ),
     # Common fields for all Redis types
+    CacheSettingsField(
+        field_name="url",
+        field_type="String",
+        field_value=None,
+        field_description="Full Redis/Valkey connection URL (e.g. redis://:password@host:6379/1). When set, it takes precedence over Host, Port, Username, Password, and Database Index.",
+        field_default=None,
+        ui_field_name="Redis URL",
+        redis_type=None,
+    ),
     CacheSettingsField(
         field_name="host",
         field_type="String",
@@ -60,6 +65,15 @@ CACHE_SETTINGS_FIELDS: List[CacheSettingsField] = [
         field_description="Redis server port number",
         field_default="6379",
         ui_field_name="Port",
+        redis_type=None,
+    ),
+    CacheSettingsField(
+        field_name="db",
+        field_type="Integer",
+        field_value=None,
+        field_description="Logical database index to isolate the cache (e.g. 1 for redis://host:6379/1)",
+        field_default=None,
+        ui_field_name="Database Index",
         redis_type=None,
     ),
     CacheSettingsField(
@@ -173,6 +187,19 @@ CACHE_SETTINGS_FIELDS: List[CacheSettingsField] = [
         ui_field_name="Embedding Model",
         redis_type="semantic",
     ),
+    CacheSettingsField(
+        field_name="semantic_cache_scope",
+        field_type="String",
+        field_value=None,
+        field_description=(
+            "Isolation granularity for semantic cache hits. 'key' shares hits between all end users of a key/team/org."
+            " 'end_user' also isolates per end user; requests without an end user fall back to the key scope."
+        ),
+        field_default="key",
+        options=["key", "end_user"],
+        ui_field_name="Semantic Cache Scope",
+        redis_type="semantic",
+    ),
     # GCP IAM authentication fields
     CacheSettingsField(
         field_name="gcp_service_account",
@@ -208,6 +235,51 @@ CACHE_SETTINGS_FIELDS: List[CacheSettingsField] = [
         field_description="Enable SSL hostname verification",
         field_default=None,
         ui_field_name="SSL Check Hostname",
+        redis_type=None,
+    ),
+    CacheSettingsField(
+        field_name="aws_iam_auth",
+        field_type="Boolean",
+        field_value=None,
+        field_description="Enable AWS ElastiCache IAM authentication",
+        field_default=False,
+        ui_field_name="AWS IAM Authentication",
+        redis_type=None,
+    ),
+    CacheSettingsField(
+        field_name="aws_iam_user_name",
+        field_type="String",
+        field_value=None,
+        field_description="AWS ElastiCache IAM user name",
+        field_default=None,
+        ui_field_name="AWS IAM User Name",
+        redis_type=None,
+    ),
+    CacheSettingsField(
+        field_name="aws_iam_cache_name",
+        field_type="String",
+        field_value=None,
+        field_description="AWS ElastiCache cache name",
+        field_default=None,
+        ui_field_name="AWS IAM Cache Name",
+        redis_type=None,
+    ),
+    CacheSettingsField(
+        field_name="aws_iam_region",
+        field_type="String",
+        field_value=None,
+        field_description="AWS region for ElastiCache IAM authentication",
+        field_default=None,
+        ui_field_name="AWS IAM Region",
+        redis_type=None,
+    ),
+    CacheSettingsField(
+        field_name="aws_iam_serverless",
+        field_type="Boolean",
+        field_value=None,
+        field_description="The ElastiCache cache is serverless rather than a self-designed cluster",
+        field_default=False,
+        ui_field_name="AWS IAM Serverless Cache",
         redis_type=None,
     ),
 ]

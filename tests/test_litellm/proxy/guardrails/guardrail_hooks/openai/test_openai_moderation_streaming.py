@@ -161,19 +161,27 @@ async def test_openai_moderation_guardrail_streaming_harmful_content():
                 "metadata": {"guardrails": ["test-openai-moderation"]},
             }
 
-            # Should raise HTTPException
-            with pytest.raises(HTTPException) as exc_info:
-                async for (
-                    _
-                ) in unified_guardrail.async_post_call_streaming_iterator_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    response=mock_stream(),
-                    request_data=request_data,
-                ):
-                    pass
+            # Chunks have already been flushed by end-of-stream moderation, so
+            # the block surfaces as the in-stream error frame, not a raise.
+            import json as _json
 
-            assert exc_info.value.status_code == 400
-            assert "Violated OpenAI moderation policy" in str(exc_info.value.detail)
+            collected = []
+            async for (
+                chunk
+            ) in unified_guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=mock_stream(),
+                request_data=request_data,
+            ):
+                collected.append(chunk)
+
+            frame = collected[-1]
+            assert isinstance(frame, bytes)
+            text = frame.decode()
+            assert text.startswith("data: ")
+            assert "Violated OpenAI moderation policy" in text
+            payload = _json.loads(text[len("data: ") :])
+            assert payload["error"]["code"] == "400"
 
 
 @pytest.mark.asyncio
@@ -259,10 +267,15 @@ async def test_openai_moderation_streaming_end_of_stream_request_data_passthroug
             ):
                 pass
 
-        # Verify guardrail info reached the REAL request_data (not a throwaway)
-        guardrail_info_list = request_data["metadata"].get(
-            "standard_logging_guardrail_information"
+        # Verify guardrail info reached the REAL request_data (not a throwaway). The
+        # unified hook seeds litellm_metadata, so read the bucket the resolver names
+        # rather than assuming "metadata"; the spend log reads it the same way.
+        from litellm.litellm_core_utils.core_helpers import (
+            get_metadata_variable_name_from_kwargs,
         )
+
+        bucket = request_data[get_metadata_variable_name_from_kwargs(request_data)]
+        guardrail_info_list = bucket.get("standard_logging_guardrail_information")
         assert (
             guardrail_info_list is not None
         ), "Guardrail info should be in request_data after streaming"
@@ -297,8 +310,8 @@ def _make_stream_chunk(content: str, finish_reason=None):
 @pytest.mark.asyncio
 async def test_openai_moderation_streaming_default_uses_sampled_cadence():
     """Default config samples every 5th streamed chunk and runs a final aggregate
-    pass after the stream ends. 10 chunks → sampled at chunks 5 and 10 → 2 in-stream
-    calls, plus 1 final = 3 total.
+    pass after the stream ends. 10 chunks are sampled at 5 and 10; the end-of-stream
+    round is skipped because chunk 10 already scanned the full text, for 2 total calls
     """
     import litellm
 
@@ -357,8 +370,9 @@ async def test_openai_moderation_streaming_default_uses_sampled_cadence():
             ):
                 pass
 
-        assert patched_make_request.await_count == 3, (
-            f"Expected 3 moderation calls (2 sampled at chunks 5 / 10 + 1 final), "
+        assert patched_make_request.await_count == 2, (
+            f"Expected 2 moderation calls (2 sampled at chunks 5 / 10; "
+            f"the end-of-stream round is skipped because chunk 10 already scanned the full text), "
             f"got {patched_make_request.await_count}"
         )
 
@@ -435,7 +449,8 @@ async def test_openai_moderation_streaming_end_of_stream_only_opt_in_calls_moder
 @pytest.mark.asyncio
 async def test_openai_moderation_streaming_sampled_when_end_of_stream_only_disabled():
     """With streaming_end_of_stream_only=False and streaming_sampling_rate=2,
-    moderation runs every 2nd chunk during the stream, plus once more at end.
+    moderation runs every 2nd chunk during the stream. The terminal chunk scan covers
+    the final aggregate, for 3 total calls
     """
     import litellm
 
@@ -496,9 +511,8 @@ async def test_openai_moderation_streaming_sampled_when_end_of_stream_only_disab
             ):
                 pass
 
-        # 6 chunks, sampling_rate=2 → in-stream calls at chunks 2, 4, 6 (3 calls),
-        # plus the final aggregate pass after the stream ends (1 call) = 4 total.
-        assert patched_make_request.await_count == 4, (
-            f"Expected 4 moderation calls (3 sampled + 1 final aggregate), "
+        assert patched_make_request.await_count == 3, (
+            f"Expected 3 moderation calls (3 sampled; the end-of-stream round is skipped "
+            f"because chunk 6 already scanned the full text), "
             f"got {patched_make_request.await_count}"
         )

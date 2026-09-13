@@ -105,27 +105,35 @@ async def test_team_update_authz_matrix(
         assert row.team_alias != MARKER_ALIAS, "denied but team mutated"
 
 
-async def test_team_update_requires_proxy_admin_without_org_context(
+async def test_team_update_org_admin_resolved_from_team_without_org_context(
     proxy_client, prisma, scratch, world
 ):
-    """With no organization_id in the body the route gate has no org context
-    and falls back to proxy-admin-only: an org admin of the team's own org
-    is 401, PROXY_ADMIN is 200."""
+    """With no organization_id in the body the route gate resolves the target
+    team's org from team_id, so an org admin of the team's own org is allowed
+    (200), same as PROXY_ADMIN. A team admin of that same team stays denied
+    (401): the resolution grants org admins access, not team admins."""
     await _seed_target(prisma, world, "alpha", scratch.prefix)
 
-    denied = await proxy_client.post(
+    allowed_org_admin = await proxy_client.post(
         "/team/update",
         headers={"Authorization": f"Bearer {world.keys[Actor.ORG_ADMIN].cleartext}"},
         json={"team_id": scratch.prefix, "team_alias": MARKER_ALIAS},
     )
-    assert denied.status_code == 401, denied.text
+    assert allowed_org_admin.status_code == 200, allowed_org_admin.text
 
-    allowed = await proxy_client.post(
+    allowed_proxy_admin = await proxy_client.post(
         "/team/update",
         headers={"Authorization": f"Bearer {world.keys[Actor.PROXY_ADMIN].cleartext}"},
         json={"team_id": scratch.prefix, "team_alias": MARKER_ALIAS},
     )
-    assert allowed.status_code == 200, allowed.text
+    assert allowed_proxy_admin.status_code == 200, allowed_proxy_admin.text
+
+    denied_team_admin = await proxy_client.post(
+        "/team/update",
+        headers={"Authorization": f"Bearer {world.keys[Actor.TEAM_ADMIN].cleartext}"},
+        json={"team_id": scratch.prefix, "team_alias": MARKER_ALIAS},
+    )
+    assert denied_team_admin.status_code == 401, denied_team_admin.text
 
 
 # Relocation gate — moving a team to a different org. The scratch team starts

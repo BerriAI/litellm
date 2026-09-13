@@ -1,14 +1,14 @@
 """Helpers for unauthenticated logo / favicon endpoints."""
 
 import os
-from typing import Optional, Tuple
+from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 
-LOCAL_IMAGE_HEADER_BYTES = 512
+LOCAL_IMAGE_HEADER_BYTES: Final = 512
 
 
-def detect_local_image_media_type(header: bytes) -> Optional[str]:
+def detect_local_image_media_type(header: bytes) -> str | None:
     """Return a browser image media type for supported local image signatures."""
     if header[0:8] == b"\x89PNG\r\n\x1a\n":
         return "image/png"
@@ -23,12 +23,12 @@ def detect_local_image_media_type(header: bytes) -> Optional[str]:
     return None
 
 
-def resolve_validated_local_image_path(candidate: str) -> Optional[Tuple[str, str]]:
+def resolve_validated_local_image_path(candidate: str) -> tuple[str, str] | None:
     """Resolve ``candidate`` only when it is an existing supported image file."""
     if not candidate:
         return None
     try:
-        resolved = os.path.realpath(os.path.expanduser(candidate))
+        resolved: Final = os.path.realpath(os.path.expanduser(candidate))
     except (OSError, ValueError):
         return None
     if not os.path.isfile(resolved):
@@ -36,12 +36,12 @@ def resolve_validated_local_image_path(candidate: str) -> Optional[Tuple[str, st
 
     try:
         with open(resolved, "rb") as f:
-            header = f.read(LOCAL_IMAGE_HEADER_BYTES)
+            header: Final = f.read(LOCAL_IMAGE_HEADER_BYTES)
     except OSError as exc:
         verbose_proxy_logger.debug("Could not read local asset %r: %s", candidate, exc)
         return None
 
-    media_type = detect_local_image_media_type(header)
+    media_type: Final = detect_local_image_media_type(header)
     if media_type is None:
         verbose_proxy_logger.warning(
             "Local asset %r is not a supported image file; falling back to default.",

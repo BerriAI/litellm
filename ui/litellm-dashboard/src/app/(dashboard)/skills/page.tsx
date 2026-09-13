@@ -1,6 +1,6 @@
 "use client";
 
-import ClaudeCodePluginsPanel from "@/components/claude_code_plugins";
+import ClaudeCodePluginsPanel from "./_components/ClaudeCodePluginsPanel";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export default function Skills() {

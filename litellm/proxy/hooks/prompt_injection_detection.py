@@ -8,7 +8,7 @@
 
 
 from difflib import SequenceMatcher
-from typing import List, Literal, Optional
+from typing import Final, Literal
 
 from fastapi import HTTPException
 
@@ -26,13 +26,15 @@ from litellm.utils import get_formatted_prompt
 
 
 class _OPTIONAL_PromptInjectionDetection(CustomLogger):
+    enforces_request_content: bool = True
+
     # Class variables or attributes
     def __init__(
         self,
-        prompt_injection_params: Optional[LiteLLMPromptInjectionParams] = None,
+        prompt_injection_params: LiteLLMPromptInjectionParams | None = None,
     ):
         self.prompt_injection_params = prompt_injection_params
-        self.llm_router: Optional[Router] = None
+        self.llm_router: Router | None = None
 
         self.verbs = [
             "Ignore",
@@ -72,15 +74,12 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             verbose_proxy_logger.debug(print_statement)
 
         if litellm.set_verbose is True:
-            print(print_statement)  # noqa
+            print(print_statement)  # noqa: T201
 
-    def update_environment(self, router: Optional[Router] = None):
+    def update_environment(self, router: Router | None = None):
         self.llm_router = router
 
-        if (
-            self.prompt_injection_params is not None
-            and self.prompt_injection_params.llm_api_check is True
-        ):
+        if self.prompt_injection_params is not None and self.prompt_injection_params.llm_api_check is True:
             if self.llm_router is None:
                 raise Exception(
                     "PromptInjectionDetection: Model List not set. Required for Prompt Injection detection."
@@ -91,22 +90,19 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             )
             if (
                 self.prompt_injection_params.llm_api_name is None
-                or self.prompt_injection_params.llm_api_name
-                not in self.llm_router.model_names
+                or self.prompt_injection_params.llm_api_name not in self.llm_router.model_names
             ):
                 raise Exception(
                     "PromptInjectionDetection: Invalid LLM API Name. LLM API Name must be a 'model_name' in 'model_list'."
                 )
 
-    def generate_injection_keywords(self) -> List[str]:
-        combinations = []
+    def generate_injection_keywords(self) -> list[str]:
+        combinations: Final = []
         for verb in self.verbs:
             for adj in self.adjectives:
                 for prep in self.prepositions:
                     phrase = " ".join(filter(None, [verb, adj, prep])).strip()
-                    if (
-                        len(phrase.split()) > 2
-                    ):  # additional check to ensure more than 2 words
+                    if len(phrase.split()) > 2:  # additional check to ensure more than 2 words
                         combinations.append(phrase.lower())
         return combinations
 
@@ -115,8 +111,8 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
         user_input: str,
         similarity_threshold: float = DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD,
     ) -> bool:
-        user_input_lower = user_input.lower()
-        keywords = self.generate_injection_keywords()
+        user_input_lower: Final = user_input.lower()
+        keywords: Final = self.generate_injection_keywords()
 
         for keyword in keywords:
             # Calculate the length of the keyword to extract substrings of the same length from user input
@@ -164,37 +160,29 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                     f"Call Type - {call_type}, not in accepted list - ['completion','embeddings','image_generation','moderation','audio_transcription']"
                 )
                 return data
-            formatted_prompt = get_formatted_prompt(data=data, call_type=call_type)  # type: ignore
+            formatted_prompt: Final = get_formatted_prompt(data=data, call_type=call_type)
 
             is_prompt_attack = False
 
             if self.prompt_injection_params is not None:
                 # 1. check if heuristics check turned on
                 if self.prompt_injection_params.heuristics_check is True:
-                    is_prompt_attack = self.check_user_input_similarity(
-                        user_input=formatted_prompt
-                    )
+                    is_prompt_attack = self.check_user_input_similarity(user_input=formatted_prompt)
                     if is_prompt_attack is True:
                         raise HTTPException(
                             status_code=400,
-                            detail={
-                                "error": "Rejected message. This is a prompt injection attack."
-                            },
+                            detail={"error": "Rejected message. This is a prompt injection attack."},
                         )
                 # 2. check if vector db similarity check turned on [TODO] Not Implemented yet
                 if self.prompt_injection_params.vector_db_check is True:
                     pass
             else:
-                is_prompt_attack = self.check_user_input_similarity(
-                    user_input=formatted_prompt
-                )
+                is_prompt_attack = self.check_user_input_similarity(user_input=formatted_prompt)
 
             if is_prompt_attack is True:
                 raise HTTPException(
                     status_code=400,
-                    detail={
-                        "error": "Rejected message. This is a prompt injection attack."
-                    },
+                    detail={"error": "Rejected message. This is a prompt injection attack."},
                 )
 
             return data
@@ -203,7 +191,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             if (
                 e.status_code == 400
                 and isinstance(e.detail, dict)
-                and "error" in e.detail  # type: ignore
+                and "error" in e.detail
                 and self.prompt_injection_params is not None
                 and self.prompt_injection_params.reject_as_response
             ):
@@ -211,12 +199,10 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             raise e
         except Exception as e:
             verbose_proxy_logger.exception(
-                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {}".format(
-                    str(e)
-                )
+                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - %s", e
             )
 
-    async def async_moderation_hook(  # type: ignore
+    async def async_moderation_hook(
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
@@ -228,18 +214,16 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             "moderation",
             "audio_transcription",
         ],
-    ) -> Optional[bool]:
-        self.print_verbose(
-            f"IN ASYNC MODERATION HOOK - self.prompt_injection_params = {self.prompt_injection_params}"
-        )
+    ) -> bool | None:
+        self.print_verbose(f"IN ASYNC MODERATION HOOK - self.prompt_injection_params = {self.prompt_injection_params}")
 
         if self.prompt_injection_params is None:
             return None
 
-        formatted_prompt = get_formatted_prompt(data=data, call_type=call_type)  # type: ignore
+        formatted_prompt: Final = get_formatted_prompt(data=data, call_type=call_type)
         is_prompt_attack = False
 
-        prompt_injection_system_prompt = getattr(
+        prompt_injection_system_prompt: Final = getattr(
             self.prompt_injection_params,
             "llm_api_system_prompt",
             prompt_injection_detection_default_pt(),
@@ -252,7 +236,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             and self.llm_router is not None
         ):
             # make a call to the llm api
-            response = await self.llm_router.acompletion(
+            response: Final = await self.llm_router.acompletion(
                 model=self.prompt_injection_params.llm_api_name,
                 messages=[
                     {
@@ -264,21 +248,17 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             )
 
             self.print_verbose(f"Received LLM Moderation response: {response}")
-            self.print_verbose(
-                f"llm_api_fail_call_string: {self.prompt_injection_params.llm_api_fail_call_string}"
-            )
-            if isinstance(response, litellm.ModelResponse) and isinstance(
-                response.choices[0], litellm.Choices
-            ):
-                if self.prompt_injection_params.llm_api_fail_call_string in response.choices[0].message.content:  # type: ignore
+            self.print_verbose(f"llm_api_fail_call_string: {self.prompt_injection_params.llm_api_fail_call_string}")
+            if isinstance(response, litellm.ModelResponse) and isinstance(response.choices[0], litellm.Choices):
+                fail_call_string: Final = self.prompt_injection_params.llm_api_fail_call_string
+                content: Final = response.choices[0].message.content
+                if fail_call_string is not None and content is not None and fail_call_string in content:
                     is_prompt_attack = True
 
         if is_prompt_attack is True:
             raise HTTPException(
                 status_code=400,
-                detail={
-                    "error": "Rejected message. This is a prompt injection attack."
-                },
+                detail={"error": "Rejected message. This is a prompt injection attack."},
             )
 
         return is_prompt_attack

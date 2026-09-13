@@ -10,10 +10,12 @@ import; extracting the helper into a leaf module resolves the warning and
 keeps the parent module's import surface narrow.
 """
 
+from typing import Final
+
 # Keys inside ``output_config`` that Vertex AI Claude rejects regardless of
 # the target model. Add an entry only when a 400 "Extra inputs are not
 # permitted" is reproducible against the live Vertex endpoint for every model.
-VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS: frozenset = frozenset()
+VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS: Final[frozenset] = frozenset()
 
 
 def _model_accepts_output_config_effort(model: str) -> bool:
@@ -26,7 +28,7 @@ def _model_accepts_output_config_effort(model: str) -> bool:
     """
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-    return AnthropicConfig._model_supports_effort_param(model)
+    return AnthropicConfig._model_supports_effort_param(model, "vertex_ai")
 
 
 def sanitize_vertex_anthropic_output_params(data: dict, model: str) -> None:
@@ -46,14 +48,14 @@ def sanitize_vertex_anthropic_output_params(data: dict, model: str) -> None:
       * Non-dict values for ``output_config`` are dropped to avoid sending
         malformed payloads downstream.
     """
-    output_config = data.get("output_config")
+    output_config: Final = data.get("output_config")
     if output_config is None:
         return
     if not isinstance(output_config, dict):
         data.pop("output_config", None)
         return
 
-    drop_keys = set(VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS)
+    drop_keys: Final = set(VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS)
     if "effort" in output_config and not _model_accepts_output_config_effort(model):
         from litellm._logging import verbose_logger
 
@@ -64,7 +66,7 @@ def sanitize_vertex_anthropic_output_params(data: dict, model: str) -> None:
         )
         drop_keys.add("effort")
 
-    sanitized = {k: v for k, v in output_config.items() if k not in drop_keys}
+    sanitized: Final = {k: v for k, v in output_config.items() if k not in drop_keys}
     if sanitized:
         data["output_config"] = sanitized
     else:

@@ -53,6 +53,11 @@ data "aws_iam_policy_document" "secrets_access" {
       [aws_secretsmanager_secret.master_key.arn],
       aws_secretsmanager_secret.license[*].arn,
       aws_secretsmanager_secret.ui_password[*].arn,
+      aws_secretsmanager_secret.billing_metrics_client_cert[*].arn,
+      aws_secretsmanager_secret.billing_metrics_client_key[*].arn,
+      aws_secretsmanager_secret.billing_metrics_ca_cert[*].arn,
+      aws_secretsmanager_secret.database_url[*].arn,
+      aws_secretsmanager_secret.redis_url[*].arn,
       local.extra_secret_arns,
       var.otel_headers_secret_arn == "" ? [] : [var.otel_headers_secret_arn],
     )
@@ -76,6 +81,9 @@ resource "aws_iam_role_policy_attachment" "task_execution_secrets" {
 # Assumed by the running container. Gets `rds-db:connect` so the proxy can
 # mint IAM-signed Postgres tokens for the app user. Layer additional
 # policies here (e.g. Bedrock invoke, S3 read) when the proxy needs them.
+# IAM auth only applies to the Aurora cluster this module creates: an
+# existing database is reached with the credentials embedded in
+# var.database_url, so the policy is skipped there.
 
 resource "aws_iam_role" "task" {
   name               = "${local.name}-task"
@@ -87,24 +95,28 @@ resource "aws_iam_role" "task" {
 data "aws_caller_identity" "current" {}
 
 data "aws_iam_policy_document" "rds_iam_connect" {
+  count = var.create_database ? 1 : 0
+
   statement {
     actions = ["rds-db:connect"]
     resources = [
-      "arn:aws:rds-db:${var.region}:${data.aws_caller_identity.current.account_id}:dbuser:${aws_rds_cluster.this.cluster_resource_id}/${var.db_username}",
+      "arn:aws:rds-db:${var.region}:${data.aws_caller_identity.current.account_id}:dbuser:${aws_rds_cluster.this[0].cluster_resource_id}/${var.db_username}",
     ]
   }
 }
 
 resource "aws_iam_policy" "rds_iam_connect" {
+  count  = var.create_database ? 1 : 0
   name   = "${local.name}-rds-iam-connect"
-  policy = data.aws_iam_policy_document.rds_iam_connect.json
+  policy = data.aws_iam_policy_document.rds_iam_connect[0].json
 
   tags = local.tags
 }
 
 resource "aws_iam_role_policy_attachment" "task_rds_iam_connect" {
+  count      = var.create_database ? 1 : 0
   role       = aws_iam_role.task.name
-  policy_arn = aws_iam_policy.rds_iam_connect.arn
+  policy_arn = aws_iam_policy.rds_iam_connect[0].arn
 }
 
 # ---------- UI task role ----------

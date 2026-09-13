@@ -1,13 +1,8 @@
 import json
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.integrations.bitbucket import BitBucketPromptManager
@@ -88,39 +83,44 @@ def test_bitbucket_prompt_manager_error_handling(mock_client_class):
         "access_token": "test-token",
     }
 
+    manager = BitBucketPromptManager(config, prompt_id="test_prompt")
+
     with pytest.raises(
         Exception, match="Failed to load prompt 'test_prompt' from BitBucket"
     ):
-        manager = BitBucketPromptManager(config, prompt_id="test_prompt")
-        _ = manager.prompt_manager  # This triggers the error
+        _ = manager.prompt_manager
 
 
 def test_bitbucket_prompt_manager_config_validation():
     """Test BitBucketPromptManager configuration validation."""
     # Test missing required fields - validation happens when prompt_manager is accessed
-    with pytest.raises(
-        ValueError, match="workspace, repository, and access_token are required"
-    ):
-        manager = BitBucketPromptManager({})
-        _ = manager.prompt_manager  # This triggers validation
+    manager = BitBucketPromptManager({})
 
     with pytest.raises(
         ValueError, match="workspace, repository, and access_token are required"
     ):
-        manager = BitBucketPromptManager({"workspace": "test"})
-        _ = manager.prompt_manager  # This triggers validation
+        _ = manager.prompt_manager
+
+    manager = BitBucketPromptManager({"workspace": "test"})
 
     with pytest.raises(
         ValueError, match="workspace, repository, and access_token are required"
     ):
-        manager = BitBucketPromptManager({"repository": "test"})
-        _ = manager.prompt_manager  # This triggers validation
+        _ = manager.prompt_manager
+
+    manager = BitBucketPromptManager({"repository": "test"})
 
     with pytest.raises(
         ValueError, match="workspace, repository, and access_token are required"
     ):
-        manager = BitBucketPromptManager({"access_token": "test"})
-        _ = manager.prompt_manager  # This triggers validation
+        _ = manager.prompt_manager
+
+    manager = BitBucketPromptManager({"access_token": "test"})
+
+    with pytest.raises(
+        ValueError, match="workspace, repository, and access_token are required"
+    ):
+        _ = manager.prompt_manager
 
 
 @patch("litellm.integrations.bitbucket.bitbucket_prompt_manager.BitBucketClient")

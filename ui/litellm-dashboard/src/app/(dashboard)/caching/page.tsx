@@ -1,6 +1,6 @@
 "use client";
 
-import CacheDashboard from "./components/cache_dashboard";
+import CacheDashboard from "./_components/cache_dashboard";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export default function Caching() {

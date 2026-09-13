@@ -2,14 +2,11 @@
 Test the CloudZero dry run endpoint functionality
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import polars as pl
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
 

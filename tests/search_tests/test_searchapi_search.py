@@ -10,13 +10,11 @@ Tests the SearchAPI.io search provider implementation including:
 
 import json
 import os
-import sys
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.llms.searchapi.search.transformation import SearchAPIConfig
 from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
@@ -46,10 +44,9 @@ class TestSearchAPIConfig:
 
         assert result["Content-Type"] == "application/json"
 
-    @patch("litellm.llms.searchapi.search.transformation.get_secret_str")
-    def test_validate_environment_without_api_key(self, mock_get_secret):
+    def test_validate_environment_without_api_key(self, monkeypatch):
         """Test environment validation without API key raises error."""
-        mock_get_secret.return_value = None
+        monkeypatch.delenv("SEARCHAPI_API_KEY", raising=False)
         config = SearchAPIConfig()
         headers = {}
 

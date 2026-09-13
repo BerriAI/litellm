@@ -1,5 +1,6 @@
 import json
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
+from collections.abc import Coroutine
+from typing import Any, Final, Literal, cast, overload
 
 import litellm
 from litellm.constants import MIN_NON_ZERO_TEMPERATURE
@@ -16,40 +17,40 @@ class DeepInfraConfig(OpenAIGPTConfig):
     """
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "deepinfra"
 
-    frequency_penalty: Optional[int] = None
-    function_call: Optional[Union[str, dict]] = None
-    functions: Optional[list] = None
-    logit_bias: Optional[dict] = None
-    max_tokens: Optional[int] = None
-    n: Optional[int] = None
-    presence_penalty: Optional[int] = None
-    stop: Optional[Union[str, list]] = None
-    temperature: Optional[int] = None
-    top_p: Optional[int] = None
-    response_format: Optional[dict] = None
-    tools: Optional[list] = None
-    tool_choice: Optional[Union[str, dict]] = None
+    frequency_penalty: int | None = None
+    function_call: str | dict | None = None
+    functions: list | None = None
+    logit_bias: dict | None = None
+    max_tokens: int | None = None
+    n: int | None = None
+    presence_penalty: int | None = None
+    stop: str | list | None = None
+    temperature: int | None = None
+    top_p: int | None = None
+    response_format: dict | None = None
+    tools: list | None = None
+    tool_choice: str | dict | None = None
 
     def __init__(
         self,
-        frequency_penalty: Optional[int] = None,
-        function_call: Optional[Union[str, dict]] = None,
-        functions: Optional[list] = None,
-        logit_bias: Optional[dict] = None,
-        max_tokens: Optional[int] = None,
-        n: Optional[int] = None,
-        presence_penalty: Optional[int] = None,
-        stop: Optional[Union[str, list]] = None,
-        temperature: Optional[int] = None,
-        top_p: Optional[int] = None,
-        response_format: Optional[dict] = None,
-        tools: Optional[list] = None,
-        tool_choice: Optional[Union[str, dict]] = None,
+        frequency_penalty: int | None = None,
+        function_call: str | dict | None = None,
+        functions: list | None = None,
+        logit_bias: dict | None = None,
+        max_tokens: int | None = None,
+        n: int | None = None,
+        presence_penalty: int | None = None,
+        stop: str | list | None = None,
+        temperature: int | None = None,
+        top_p: int | None = None,
+        response_format: dict | None = None,
+        tools: list | None = None,
+        tool_choice: str | dict | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -59,7 +60,7 @@ class DeepInfraConfig(OpenAIGPTConfig):
         return super().get_config()
 
     def get_supported_openai_params(self, model: str):
-        supported_openai_params = [
+        supported_openai_params: Final = [
             "stream",
             "frequency_penalty",
             "function_call",
@@ -91,26 +92,20 @@ class DeepInfraConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_openai_params = self.get_supported_openai_params(model=model)
+        supported_openai_params: Final = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if (
-                param == "temperature"
-                and value == 0
-                and model == "mistralai/Mistral-7B-Instruct-v0.1"
+                param == "temperature" and value == 0 and model == "mistralai/Mistral-7B-Instruct-v0.1"
             ):  # this model does no support temperature == 0
                 value = MIN_NON_ZERO_TEMPERATURE  # close to 0
             if param == "tool_choice":
-                if (
-                    value != "auto" and value != "none"
-                ):  # https://deepinfra.com/docs/advanced/function_calling
+                if value != "auto" and value != "none":  # https://deepinfra.com/docs/advanced/function_calling
                     ## UNSUPPORTED TOOL CHOICE VALUE
                     if litellm.drop_params is True or drop_params is True:
                         value = None
                     else:
                         raise litellm.utils.UnsupportedParamsError(
-                            message="Deepinfra doesn't support tool_choice={}. To drop unsupported openai params from the call, set `litellm.drop_params = True`".format(
-                                value
-                            ),
+                            message=f"Deepinfra doesn't support tool_choice={value}. To drop unsupported openai params from the call, set `litellm.drop_params = True`",
                             status_code=400,
                         )
             elif param == "max_completion_tokens":
@@ -120,9 +115,7 @@ class DeepInfraConfig(OpenAIGPTConfig):
                     optional_params[param] = value
         return optional_params
 
-    def _transform_tool_message_content(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
+    def _transform_tool_message_content(self, messages: list[AllMessageValues]) -> list[AllMessageValues]:
         """
         Transform tool message content from array to string format for DeepInfra compatibility.
 
@@ -160,20 +153,20 @@ class DeepInfraConfig(OpenAIGPTConfig):
 
     @overload
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
+        self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
         self,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]: ...
+    ) -> list[AllMessageValues]: ...
 
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: bool = False
-    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
+        self, messages: list[AllMessageValues], model: str, is_async: bool = False
+    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
         """
         Transform messages for DeepInfra compatibility.
         Handles both sync and async transformations.
@@ -182,29 +175,25 @@ class DeepInfraConfig(OpenAIGPTConfig):
             # For async case, create an async function that awaits parent and applies our transformation
             async def _async_transform():
                 # Call parent with is_async=True (literal) for async case
-                parent_result = super(DeepInfraConfig, self)._transform_messages(
+                parent_result: Final = super(DeepInfraConfig, self)._transform_messages(
                     messages=messages, model=model, is_async=cast(Literal[True], True)
                 )
-                transformed_messages = await parent_result
+                transformed_messages: Final = await parent_result
                 return self._transform_tool_message_content(transformed_messages)
 
             return _async_transform()
         else:
             # Call parent with is_async=False (literal) for sync case
-            parent_result = super()._transform_messages(
+            parent_result: Final = super()._transform_messages(
                 messages=messages, model=model, is_async=cast(Literal[False], False)
             )
             # For sync case, parent_result is already the transformed messages
             return self._transform_tool_message_content(parent_result)
 
     def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
+        self, api_base: str | None, api_key: str | None
+    ) -> tuple[str | None, str | None]:
         # deepinfra is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
-        api_base = (
-            api_base
-            or get_secret_str("DEEPINFRA_API_BASE")
-            or "https://api.deepinfra.com/v1/openai"
-        )
-        dynamic_api_key = api_key or get_secret_str("DEEPINFRA_API_KEY")
+        api_base = api_base or get_secret_str("DEEPINFRA_API_BASE") or "https://api.deepinfra.com/v1/openai"
+        dynamic_api_key: Final = api_key or get_secret_str("DEEPINFRA_API_KEY")
         return api_base, dynamic_api_key

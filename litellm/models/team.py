@@ -8,7 +8,7 @@ budget-window value types and the team-model alias table). Re-exported from
 
 import json
 from datetime import datetime
-from typing import List, Literal, Optional, Union
+from typing import Final, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -17,11 +17,11 @@ from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 
 class MemberBase(LiteLLMPydanticObjectBase):
-    user_id: Optional[str] = Field(
+    user_id: str | None = Field(
         default=None,
         description="The unique ID of the user to add. Either user_id or user_email must be provided",
     )
-    user_email: Optional[str] = Field(
+    user_email: str | None = Field(
         default=None,
         description="The email address of the user to add. Either user_id or user_email must be provided",
     )
@@ -47,12 +47,12 @@ class BudgetLimitEntry(LiteLLMPydanticObjectBase):
 
     budget_duration: str
     max_budget: float
-    reset_at: Optional[datetime] = None
+    reset_at: datetime | None = None
 
 
 class LiteLLM_ModelTable(LiteLLMPydanticObjectBase):
-    id: Optional[int] = None
-    model_aliases: Optional[Union[str, dict]] = None
+    id: int | None = None
+    model_aliases: str | dict | None = None
     created_by: str
     updated_by: str
     team: Optional["LiteLLM_TeamTable"] = None
@@ -61,50 +61,50 @@ class LiteLLM_ModelTable(LiteLLMPydanticObjectBase):
 
 
 class TeamBase(LiteLLMPydanticObjectBase):
-    team_alias: Optional[str] = None
-    team_id: Optional[str] = None
-    organization_id: Optional[str] = None
-    admins: list = []
-    members: list = []
-    members_with_roles: List[Member] = []
-    team_member_permissions: Optional[List[str]] = None
-    metadata: Optional[dict] = None
-    tpm_limit: Optional[int] = None
-    rpm_limit: Optional[int] = None
-    max_budget: Optional[float] = None
-    soft_budget: Optional[float] = None
-    budget_duration: Optional[str] = None
-    budget_limits: Optional[List[BudgetLimitEntry]] = None
-    models: list = []
+    team_alias: str | None = None
+    team_id: str | None = None
+    organization_id: str | None = None
+    admins: list[str] = []
+    members: list[str] = []
+    members_with_roles: list[Member] = []
+    team_member_permissions: list[str] | None = None
+    metadata: dict | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    max_budget: float | None = None
+    soft_budget: float | None = None
+    budget_duration: str | None = None
+    budget_limits: list[BudgetLimitEntry] | None = None
+    models: list[str] = []
     blocked: bool = False
-    router_settings: Optional[dict] = None
-    access_group_ids: Optional[List[str]] = None
-    default_team_member_models: Optional[List[str]] = None
+    router_settings: dict | None = None
+    access_group_ids: list[str] | None = None
+    default_team_member_models: list[str] | None = None
 
 
 class LiteLLM_TeamTable(TeamBase):
-    team_id: str  # type: ignore
-    spend: Optional[float] = None
-    max_parallel_requests: Optional[int] = None
-    budget_duration: Optional[str] = None
-    budget_reset_at: Optional[datetime] = None
-    model_id: Optional[int] = None
-    model_spend: Optional[dict] = {}
-    model_max_budget: Optional[dict] = {}
-    policies: Optional[List[str]] = None
-    allow_team_guardrail_config: Optional[bool] = False
-    litellm_model_table: Optional[LiteLLM_ModelTable] = None
-    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
-    object_permission_id: Optional[str] = None
-    updated_at: Optional[datetime] = None
-    created_at: Optional[datetime] = None
+    team_id: str
+    spend: float | None = None
+    max_parallel_requests: int | None = None
+    budget_duration: str | None = None
+    budget_reset_at: datetime | None = None
+    model_id: int | None = None
+    model_spend: dict | None = {}
+    model_max_budget: dict | None = {}
+    policies: list[str] | None = None
+    allow_team_guardrail_config: bool | None = False
+    litellm_model_table: LiteLLM_ModelTable | None = None
+    object_permission: LiteLLM_ObjectPermissionTable | None = None
+    object_permission_id: str | None = None
+    updated_at: datetime | None = None
+    created_at: datetime | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
     @model_validator(mode="before")
     @classmethod
     def set_model_info(cls, values):
-        dict_fields = [
+        dict_fields: Final = [
             "metadata",
             "aliases",
             "config",
@@ -118,10 +118,7 @@ class LiteLLM_TeamTable(TeamBase):
         if isinstance(values, BaseModel):
             values = values.model_dump()
 
-        if (
-            isinstance(values.get("members_with_roles"), dict)
-            and not values["members_with_roles"]
-        ):
+        if isinstance(values.get("members_with_roles"), dict) and not values["members_with_roles"]:
             values["members_with_roles"] = []
 
         for field in dict_fields:
@@ -136,17 +133,17 @@ class LiteLLM_TeamTable(TeamBase):
 
 
 class LiteLLM_TeamTableCachedObj(LiteLLM_TeamTable):
-    last_refreshed_at: Optional[float] = None
+    last_refreshed_at: float | None = None
 
 
 class LiteLLM_DeletedTeamTable(LiteLLM_TeamTable):
     """Audit record for deleted teams; mirrors the team plus deletion metadata."""
 
-    id: Optional[str] = None
-    deleted_at: Optional[datetime] = None
-    deleted_by: Optional[str] = None
-    deleted_by_api_key: Optional[str] = None
-    litellm_changed_by: Optional[str] = None
+    id: str | None = None
+    deleted_at: datetime | None = None
+    deleted_by: str | None = None
+    deleted_by_api_key: str | None = None
+    litellm_changed_by: str | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 

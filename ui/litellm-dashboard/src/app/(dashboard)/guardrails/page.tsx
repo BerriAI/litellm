@@ -1,6 +1,6 @@
 "use client";
 
-import GuardrailsPanel from "@/components/guardrails";
+import GuardrailsPanel from "./_components/GuardrailsPanel";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export default function Guardrails() {

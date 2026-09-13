@@ -3,19 +3,22 @@ Unit tests for workflow management endpoints (/v1/workflows/runs/*).
 Uses FastAPI TestClient with a mocked prisma_client.
 """
 
-import os
-import sys
+import asyncio
 from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from fastapi import FastAPI
+import pytest
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from prisma.errors import UniqueViolationError
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
-from litellm.proxy.management_endpoints.workflow_management_endpoints import router
+from litellm.proxy.management_endpoints.workflow_management_endpoints import (
+    _read_scope_caller,
+    _require_run,
+    router,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +140,31 @@ def _override_auth_user_with_token(token: str = "tok-abc") -> Any:
 
     auth = UserAPIKeyAuth(api_key="sk-user", user_id="user-1")
     auth.token = token  # override the computed hash with a predictable value
+    return auth
+
+
+def _override_auth_admin_viewer(token: str = "tok-viewer") -> Any:
+    """Viewer carries a real token, so a re-scoped read path would be observable."""
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+    auth = UserAPIKeyAuth(
+        api_key="sk-viewer",
+        user_id="viewer-1",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    )
+    auth.token = token
+    return auth
+
+
+def _override_auth_internal_user(token: str = "tok-internal") -> Any:
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+    auth = UserAPIKeyAuth(
+        api_key="sk-internal",
+        user_id="user-2",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+    auth.token = token
     return auth
 
 
@@ -609,3 +637,100 @@ class TestTenantIsolation:
 
         resp = client.get("/v1/workflows/runs/run-1")
         assert resp.status_code == 200
+
+
+class TestAdminViewerReadParity:
+    """proxy_admin_viewer reads every run; write paths stay on the strict admin gate."""
+
+    def _make_app_with_auth(self, auth_fn):
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        self._prisma = _make_prisma_client()
+        app = _make_app()
+        app.dependency_overrides[user_api_key_auth] = auth_fn
+        return TestClient(app, raise_server_exceptions=True)
+
+    def test_read_scope_caller_drops_scope_for_admin_viewer_only(self):
+        """None means 'no ownership filter'; every other non-admin role keeps its caller."""
+        internal = _override_auth_internal_user()
+        assert _read_scope_caller(_override_auth_admin_viewer()) is None
+        assert _read_scope_caller(internal) is internal
+
+    @patch("litellm.proxy.proxy_server.prisma_client")
+    def test_admin_viewer_list_not_scoped(self, mock_pc):
+        client = self._make_app_with_auth(_override_auth_admin_viewer)
+        mock_pc.db = self._prisma.db
+        self._prisma.db.litellm_workflowrun.find_many = AsyncMock(return_value=[])
+
+        resp = client.get("/v1/workflows/runs")
+        assert resp.status_code == 200
+        call_kwargs = self._prisma.db.litellm_workflowrun.find_many.call_args[1]
+        assert "created_by" not in call_kwargs["where"]
+
+    @patch("litellm.proxy.proxy_server.prisma_client")
+    def test_admin_viewer_get_other_owners_run_succeeds(self, mock_pc):
+        client = self._make_app_with_auth(_override_auth_admin_viewer)
+        mock_pc.db = self._prisma.db
+        self._prisma.db.litellm_workflowrun.find_unique = AsyncMock(
+            return_value=_make_run(created_by="tok-other-owner")
+        )
+
+        resp = client.get("/v1/workflows/runs/run-1")
+        assert resp.status_code == 200
+
+    @patch("litellm.proxy.proxy_server.prisma_client")
+    def test_admin_viewer_lists_other_owners_events(self, mock_pc):
+        client = self._make_app_with_auth(_override_auth_admin_viewer)
+        mock_pc.db = self._prisma.db
+        self._prisma.db.litellm_workflowrun.find_unique = AsyncMock(
+            return_value=_make_run(created_by="tok-other-owner")
+        )
+        self._prisma.db.litellm_workflowevent.find_many = AsyncMock(
+            return_value=[_make_event(sequence_number=0)]
+        )
+
+        resp = client.get("/v1/workflows/runs/run-1/events")
+        assert resp.status_code == 200
+        assert resp.json()["count"] == 1
+
+    @patch("litellm.proxy.proxy_server.prisma_client")
+    def test_admin_viewer_lists_other_owners_messages(self, mock_pc):
+        client = self._make_app_with_auth(_override_auth_admin_viewer)
+        mock_pc.db = self._prisma.db
+        self._prisma.db.litellm_workflowrun.find_unique = AsyncMock(
+            return_value=_make_run(created_by="tok-other-owner")
+        )
+        self._prisma.db.litellm_workflowmessage.find_many = AsyncMock(
+            return_value=[_make_message(sequence_number=0)]
+        )
+
+        resp = client.get("/v1/workflows/runs/run-1/messages")
+        assert resp.status_code == 200
+        assert resp.json()["count"] == 1
+
+    @patch("litellm.proxy.proxy_server.prisma_client")
+    def test_admin_viewer_cannot_update_other_owners_run(self, mock_pc):
+        """Read parity must not become write parity: PATCH still passes the caller through."""
+        client = self._make_app_with_auth(_override_auth_admin_viewer)
+        mock_pc.db = self._prisma.db
+        self._prisma.db.litellm_workflowrun.find_unique = AsyncMock(
+            return_value=_make_run(created_by="tok-other-owner")
+        )
+        self._prisma.db.litellm_workflowrun.update = AsyncMock(
+            return_value=_make_run(status="completed")
+        )
+
+        resp = client.patch("/v1/workflows/runs/run-1", json={"status": "completed"})
+        assert resp.status_code == 404
+        self._prisma.db.litellm_workflowrun.update.assert_not_awaited()
+
+    def test_require_run_still_scopes_when_handed_a_viewer(self):
+        """Only read callers pass None; the helper itself never loosened."""
+        prisma = _make_prisma_client()
+        prisma.db.litellm_workflowrun.find_unique = AsyncMock(
+            return_value=_make_run(created_by="tok-other-owner")
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(_require_run(prisma, "run-1", _override_auth_admin_viewer()))
+        assert exc_info.value.status_code == 404

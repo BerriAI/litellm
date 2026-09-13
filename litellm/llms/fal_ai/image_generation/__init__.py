@@ -1,36 +1,40 @@
+from typing import Final
+
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
 
 from .bria_transformation import FalAIBriaConfig
+from .bytedance_transformation import (
+    FalAIBytedanceDreaminaV31Config,
+    FalAIBytedanceSeedreamV3Config,
+)
 from .flux_pro_v11_transformation import FalAIFluxProV11Config
 from .flux_pro_v11_ultra_transformation import FalAIFluxProV11UltraConfig
 from .flux_schnell_transformation import FalAIFluxSchnellConfig
+from .gpt_image_2_transformation import FalAIGPTImage2Config
+from .ideogram_v3_transformation import FalAIIdeogramV3Config
 from .imagen4_transformation import FalAIImagen4Config
 from .nano_banana_transformation import FalAINanoBananaConfig
 from .recraft_v3_transformation import FalAIRecraftV3Config
-from .ideogram_v3_transformation import FalAIIdeogramV3Config
 from .stable_diffusion_transformation import FalAIStableDiffusionConfig
 from .transformation import FalAIBaseConfig, FalAIImageGenerationConfig
-from .bytedance_transformation import (
-    FalAIBytedanceSeedreamV3Config,
-    FalAIBytedanceDreaminaV31Config,
-)
 
 __all__ = [
     "FalAIBaseConfig",
+    "FalAIBriaConfig",
+    "FalAIBytedanceDreaminaV31Config",
+    "FalAIBytedanceSeedreamV3Config",
+    "FalAIFluxProV11Config",
+    "FalAIFluxProV11UltraConfig",
+    "FalAIFluxSchnellConfig",
+    "FalAIGPTImage2Config",
+    "FalAIIdeogramV3Config",
     "FalAIImageGenerationConfig",
     "FalAIImagen4Config",
     "FalAINanoBananaConfig",
     "FalAIRecraftV3Config",
-    "FalAIBriaConfig",
-    "FalAIFluxProV11Config",
-    "FalAIFluxProV11UltraConfig",
-    "FalAIFluxSchnellConfig",
     "FalAIStableDiffusionConfig",
-    "FalAIBytedanceSeedreamV3Config",
-    "FalAIBytedanceDreaminaV31Config",
-    "FalAIIdeogramV3Config",
 ]
 
 
@@ -44,10 +48,12 @@ def get_fal_ai_image_generation_config(model: str) -> BaseImageGenerationConfig:
     Returns:
         The appropriate configuration class for the specified model
     """
-    model_lower = model.lower()
+    model_lower: Final = model.lower()
 
     # Map model names to their corresponding configuration classes
-    if "nano-banana" in model_lower or "gemini-25-flash-image" in model_lower:
+    if "gpt-image-2" in model_lower:
+        return FalAIGPTImage2Config()
+    elif "nano-banana" in model_lower or "gemini-25-flash-image" in model_lower:
         return FalAINanoBananaConfig()
     elif "imagen4" in model_lower or "imagen-4" in model_lower:
         return FalAIImagen4Config()
@@ -59,11 +65,7 @@ def get_fal_ai_image_generation_config(model: str) -> BaseImageGenerationConfig:
         if "ultra" in model_lower:
             return FalAIFluxProV11UltraConfig()
         return FalAIFluxProV11Config()
-    elif (
-        "flux/schnell" in model_lower
-        or "flux-schnell" in model_lower
-        or "schnell" in model_lower
-    ):
+    elif "flux/schnell" in model_lower or "flux-schnell" in model_lower or "schnell" in model_lower:
         return FalAIFluxSchnellConfig()
     elif "bytedance/seedream" in model_lower:
         return FalAIBytedanceSeedreamV3Config()

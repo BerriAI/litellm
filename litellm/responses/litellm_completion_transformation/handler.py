@@ -2,7 +2,8 @@
 Handler for transforming responses api requests to litellm.completion requests
 """
 
-from typing import Any, Coroutine, Dict, Optional, Union
+from collections.abc import Coroutine, Mapping
+from typing import Final
 
 import litellm
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
@@ -24,21 +25,19 @@ class LiteLLMCompletionTransformationHandler:
     def response_api_handler(
         self,
         model: str,
-        input: Union[str, ResponseInputParam],
+        input: str | ResponseInputParam,
         responses_api_request: ResponsesAPIOptionalRequestParams,
-        custom_llm_provider: Optional[str] = None,
+        custom_llm_provider: str | None = None,
         _is_async: bool = False,
-        stream: Optional[bool] = None,
-        extra_headers: Optional[Dict[str, Any]] = None,
+        stream: bool | None = None,
+        extra_headers: Mapping[str, object] | None = None,
         **kwargs,
-    ) -> Union[
-        ResponsesAPIResponse,
-        BaseResponsesAPIStreamingIterator,
-        Coroutine[
-            Any, Any, Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]
-        ],
-    ]:
-        litellm_completion_request: dict = (
+    ) -> (
+        ResponsesAPIResponse
+        | BaseResponsesAPIStreamingIterator
+        | Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]
+    ):
+        litellm_completion_request: Final[dict] = (
             LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
                 model=model,
                 input=input,
@@ -58,18 +57,17 @@ class LiteLLMCompletionTransformationHandler:
                 **kwargs,
             )
 
-        completion_args = {}
+        completion_args: Final = {}
         completion_args.update(kwargs)
         completion_args.update(litellm_completion_request)
+        completion_args["_skip_responses_api_bridge"] = True
 
-        litellm_completion_response: Union[
-            ModelResponse, litellm.CustomStreamWrapper
-        ] = litellm.completion(
+        litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
             **completion_args,
         )
 
         if isinstance(litellm_completion_response, ModelResponse):
-            responses_api_response: ResponsesAPIResponse = (
+            responses_api_response: Final[ResponsesAPIResponse] = (
                 LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
                     chat_completion_response=litellm_completion_response,
                     request_input=input,
@@ -88,38 +86,33 @@ class LiteLLMCompletionTransformationHandler:
                 custom_llm_provider=custom_llm_provider,
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
             )
-        raise ValueError(
-            f"Unexpected response type: {type(litellm_completion_response)}"
-        )
+        raise ValueError(f"Unexpected response type: {type(litellm_completion_response)}")
 
     async def async_response_api_handler(
         self,
         litellm_completion_request: dict,
-        request_input: Union[str, ResponseInputParam],
+        request_input: str | ResponseInputParam,
         responses_api_request: ResponsesAPIOptionalRequestParams,
         **kwargs,
-    ) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
-        previous_response_id: Optional[str] = responses_api_request.get(
-            "previous_response_id"
-        )
+    ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
+        previous_response_id: Final[str | None] = responses_api_request.get("previous_response_id")
         if previous_response_id:
             litellm_completion_request = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
                 previous_response_id=previous_response_id,
                 litellm_completion_request=litellm_completion_request,
             )
 
-        acompletion_args = {}
+        acompletion_args: Final = {}
         acompletion_args.update(kwargs)
         acompletion_args.update(litellm_completion_request)
+        acompletion_args["_skip_responses_api_bridge"] = True
 
-        litellm_completion_response: Union[
-            ModelResponse, litellm.CustomStreamWrapper
-        ] = await litellm.acompletion(
+        litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
             **acompletion_args,
         )
 
         if isinstance(litellm_completion_response, ModelResponse):
-            responses_api_response: ResponsesAPIResponse = (
+            responses_api_response: Final[ResponsesAPIResponse] = (
                 LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
                     chat_completion_response=litellm_completion_response,
                     request_input=request_input,
@@ -135,11 +128,7 @@ class LiteLLMCompletionTransformationHandler:
                 litellm_custom_stream_wrapper=litellm_completion_response,
                 request_input=request_input,
                 responses_api_request=responses_api_request,
-                custom_llm_provider=litellm_completion_request.get(
-                    "custom_llm_provider"
-                ),
+                custom_llm_provider=litellm_completion_request.get("custom_llm_provider"),
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
             )
-        raise ValueError(
-            f"Unexpected response type: {type(litellm_completion_response)}"
-        )
+        raise ValueError(f"Unexpected response type: {type(litellm_completion_response)}")

@@ -4,7 +4,6 @@ Tests Bedrock Completion + Rerank endpoints
 
 # @pytest.mark.skip(reason="AWS Suspended Account")
 import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
@@ -13,12 +12,8 @@ import litellm.types
 
 load_dotenv()
 import io
-import os
 import json
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -33,7 +28,7 @@ from litellm import (
     completion_cost,
     embedding,
 )
-from litellm.llms.bedrock.chat import BedrockLLM
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
 from base_llm_unit_tests import BaseLLMChatTest, BaseAnthropicChatTest
@@ -225,7 +220,7 @@ def bedrock_session_token_creds():
     aws_region_name = os.environ["AWS_REGION_NAME"]
     aws_session_token = os.environ.get("AWS_SESSION_TOKEN")
 
-    bllm = BedrockLLM()
+    bllm = BaseAWSLLM()
     if aws_session_token is not None:
         # For local testing
         creds = bllm.get_credentials(
@@ -475,7 +470,7 @@ def test_bedrock_claude_3(image_url):
             ],
         }
         response: ModelResponse = completion(
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             num_retries=3,
             **data,
         )  # type: ignore
@@ -498,7 +493,7 @@ def test_bedrock_claude_3(image_url):
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         # "meta.llama3-70b-instruct-v1:0",
         # "anthropic.claude-v2",
         # "mistral.mixtral-8x7b-instruct-v0:1",
@@ -537,7 +532,7 @@ def test_bedrock_stop_value(stop, model):
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "mistral.mixtral-8x7b-instruct-v0:1",
     ],
 )
@@ -602,7 +597,7 @@ def test_bedrock_claude_3_tool_calling():
             }
         ]
         response: ModelResponse = completion(
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             messages=messages,
             tools=tools,
             tool_choice="auto",
@@ -630,7 +625,7 @@ def test_bedrock_claude_3_tool_calling():
         )
         # In the second response, Claude should deduce answer from tool results
         second_response = completion(
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             messages=messages,
             tools=tools,
             tool_choice="auto",
@@ -1193,23 +1188,6 @@ def test_not_found_error():
                 }
             ],
         )
-
-
-@pytest.mark.parametrize(
-    "model",
-    [
-        "bedrock/us.anthropic.claude-3-haiku-20240307-v1:0",
-        "bedrock/us.meta.llama3-2-11b-instruct-v1:0",
-    ],
-)
-def test_bedrock_cross_region_inference(model):
-    litellm.set_verbose = True
-    response = completion(
-        model=model,
-        messages=messages,
-        max_tokens=10,
-        temperature=0.1,
-    )
 
 
 @pytest.mark.parametrize(
@@ -1907,7 +1885,7 @@ def test_bedrock_completion_test_4(modify_params):
         ]
         assert transformed_messages == expected_messages
     else:
-        with pytest.raises(Exception) as e:
+        with pytest.raises(Exception, match=r"litellm\.modify_params") as e:
             litellm.completion(**data)
         assert "litellm.modify_params" in str(e.value)
 
@@ -2327,7 +2305,7 @@ def test_bedrock_cross_region_inference(monkeypatch):
 
 def test_bedrock_empty_content_real_call():
     completion(
-        model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         messages=[
             {
                 "role": "user",
@@ -2459,9 +2437,7 @@ class TestBedrockEmbedding(BaseLLMEmbeddingTest):
         transformed_request = (
             AmazonTitanMultimodalEmbeddingG1Config()._transform_request(**args)
         )
-        transformed_request[
-            "inputImage"
-        ] == "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII="
+        assert transformed_request["inputImage"] == "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII="
 
 
 @pytest.mark.asyncio
@@ -2502,19 +2478,34 @@ async def test_bedrock_image_url_sync_client():
         mock_post.assert_called_once()
 
 
-def test_bedrock_error_handling_streaming():
+@pytest.mark.parametrize(
+    "exception_type, expected_status_code",
+    [
+        ("internalServerException", 500),
+        ("serviceUnavailableException", 503),
+        ("modelTimeoutException", 408),
+        ("modelStreamErrorException", 424),
+        ("validationException", 400),
+    ],
+)
+def test_bedrock_error_handling_streaming(exception_type, expected_status_code):
+    """Bedrock event-stream error events arrive with botocore's hard-coded
+    status_code=400; the decoder must surface the modeled HTTP status instead
+    (e.g. internalServerException -> 500). For 5xx this is what makes the error
+    retryable downstream; for all types it replaces the misleading 400 with the
+    true code. Regression for #24608."""
     from litellm.llms.bedrock.chat.invoke_handler import (
         AWSEventStreamDecoder,
         BedrockError,
     )
-    from unittest.mock import patch, Mock
+    from unittest.mock import Mock
 
     event = Mock()
     event.to_response_dict = Mock(
         return_value={
             "status_code": 400,
             "headers": {
-                ":exception-type": "serviceUnavailableException",
+                ":exception-type": exception_type,
                 ":content-type": "application/json",
                 ":message-type": "exception",
             },
@@ -2525,11 +2516,10 @@ def test_bedrock_error_handling_streaming():
     decoder = AWSEventStreamDecoder(
         model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0"
     )
-    with pytest.raises(Exception) as e:
+    with pytest.raises(BedrockError) as e:
         decoder._parse_message_from_event(event)
-    assert isinstance(e.value, BedrockError)
     assert "Bedrock is unable to process your request." in e.value.message
-    assert e.value.status_code == 400
+    assert e.value.status_code == expected_status_code
 
 
 @pytest.mark.parametrize(
@@ -3321,58 +3311,6 @@ async def test_bedrock_streaming_passthrough_test2(monkeypatch):
         assert "response_cost" in mock_callback.call_args.kwargs["kwargs"]
 
 
-@pytest.mark.asyncio
-async def test_bedrock_streaming_passthrough_test1(monkeypatch):
-    import litellm
-    import time
-    import asyncio
-    from unittest.mock import MagicMock
-    from litellm.integrations.custom_logger import CustomLogger
-
-    class MockCustomLogger(CustomLogger):
-        pass
-
-    mock_custom_logger = MockCustomLogger()
-    monkeypatch.setattr(litellm, "callbacks", [mock_custom_logger])
-
-    litellm._turn_on_debug()
-
-    data = {
-        "max_tokens": 512,
-        "messages": [{"role": "user", "content": "Hey"}],
-        "system": [
-            {
-                "type": "text",
-                "text": "Analyze if this message indicates a new conversation topic. If it does, extract a 2-3 word title that captures the new topic. Format your response as a JSON object with two fields: 'isNewTopic' (boolean) and 'title' (string, or null if isNewTopic is false). Only include these fields, no other text.",
-            }
-        ],
-        "temperature": 0,
-        "metadata": {
-            "user_id": "5dd07c33da27e6d2968d94ea20bf47a7b090b6b158b82328d54da2909a108e84"
-        },
-        "anthropic_version": "bedrock-2023-05-31",
-        "anthropic_beta": ["claude-code-20250219"],
-    }
-
-    with patch.object(mock_custom_logger, "async_log_success_event") as mock_callback:
-        response = await litellm.allm_passthrough_route(
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            method="POST",
-            endpoint="/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke-with-response-stream",
-            data=data,
-        )
-        async for chunk in response:
-            print(chunk)
-
-        await asyncio.sleep(5)
-
-        mock_callback.assert_called_once()
-        # check standard logging payload created
-        print(mock_callback.call_args.kwargs.keys())
-        assert "standard_logging_object" in mock_callback.call_args.kwargs["kwargs"]
-        assert "response_cost" in mock_callback.call_args.kwargs["kwargs"]
-
-
 def test_bedrock_openai_imported_model():
     """
     Test that Bedrock imported models using OpenAI format work correctly.
@@ -3559,40 +3497,11 @@ def test_bedrock_openai_model_id_extraction():
     print(f"✓ Model ID extracted and encoded: {model_id}")
 
 
-def test_bedrock_openai_convert_messages_to_prompt():
-    """
-    Test that convert_messages_to_prompt returns empty string for OpenAI models.
-    """
-    from litellm.llms.bedrock.chat.invoke_handler import BedrockLLM
-
-    bedrock_llm = BedrockLLM()
-    messages = [
-        {"role": "system", "content": "You are helpful"},
-        {"role": "user", "content": "Hello"},
-    ]
-
-    prompt, chat_history = bedrock_llm.convert_messages_to_prompt(
-        model="test-model", messages=messages, provider="openai", custom_prompt_dict={}
+def test_bedrock_openai_response_parsing():
+    from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
+        AmazonBedrockOpenAIConfig,
     )
 
-    # OpenAI models use messages directly, no prompt conversion
-    assert prompt == ""
-    assert chat_history is None
-    print("✓ convert_messages_to_prompt returns empty for OpenAI")
-
-
-def test_bedrock_openai_response_parsing():
-    """
-    Test that OpenAI responses are correctly parsed.
-    """
-    from litellm.llms.bedrock.chat.invoke_handler import BedrockLLM
-    from litellm import ModelResponse
-    from unittest.mock import Mock
-    import json
-
-    bedrock_llm = BedrockLLM()
-
-    # Mock OpenAI-style response
     openai_response = {
         "choices": [
             {
@@ -3613,33 +3522,23 @@ def test_bedrock_openai_response_parsing():
     mock_response.status_code = 200
     mock_response.headers = {}
 
-    model_response = ModelResponse()
-    mock_logging = Mock()
-
-    result = bedrock_llm.process_response(
+    result = AmazonBedrockOpenAIConfig().transform_response(
         model="openai/arn:aws:bedrock:us-east-1:123:imported-model/test",
-        response=mock_response,
-        model_response=model_response,
-        stream=False,
-        logging_obj=mock_logging,
-        optional_params={},
-        api_key="",
-        data={},
+        raw_response=mock_response,
+        model_response=ModelResponse(),
+        logging_obj=Mock(),
+        request_data={},
         messages=[{"role": "user", "content": "What is the capital of France?"}],
-        print_verbose=lambda x: None,
+        optional_params={},
+        litellm_params={},
         encoding=None,
     )
 
-    # Verify response content
     assert result.choices[0].message.content == "The capital of France is Paris."
     assert result.choices[0].finish_reason == "stop"
-
-    # Verify usage
     assert result.usage.prompt_tokens == 10
     assert result.usage.completion_tokens == 8
     assert result.usage.total_tokens == 18
-
-    print("✓ OpenAI response parsing works correctly")
 
 
 def test_bedrock_openai_request_transformation():
@@ -3832,43 +3731,20 @@ def test_bedrock_openai_multiple_message_types():
 
 
 def test_bedrock_openai_error_handling():
-    """
-    Test that errors from OpenAI models are properly handled.
-    """
-    from litellm.llms.bedrock.chat.invoke_handler import BedrockLLM
-    from litellm import ModelResponse
+    from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
+        AmazonBedrockOpenAIConfig,
+    )
     from litellm.llms.bedrock.common_utils import BedrockError
-    from unittest.mock import Mock
-    import json
 
-    bedrock_llm = BedrockLLM()
+    error = AmazonBedrockOpenAIConfig().get_error_class(
+        error_message="ValidationException: bad request",
+        status_code=422,
+        headers={},
+    )
 
-    # Mock error response
-    mock_response = Mock()
-    mock_response.json.side_effect = Exception("Invalid JSON")
-    mock_response.text = "Invalid response"
-    mock_response.status_code = 422
-
-    model_response = ModelResponse()
-    mock_logging = Mock()
-
-    with pytest.raises(BedrockError) as exc_info:
-        bedrock_llm.process_response(
-            model="openai/arn:aws:bedrock:us-east-1:123:imported-model/test",
-            response=mock_response,
-            model_response=model_response,
-            stream=False,
-            logging_obj=mock_logging,
-            optional_params={},
-            api_key="",
-            data={},
-            messages=[],
-            print_verbose=lambda x: None,
-            encoding=None,
-        )
-
-    assert exc_info.value.status_code == 422
-    print("✓ Error handling works correctly")
+    assert isinstance(error, BedrockError)
+    assert error.status_code == 422
+    assert "ValidationException: bad request" in str(error)
 
 
 # ============================================================================

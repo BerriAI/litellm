@@ -1,9 +1,12 @@
 import ast
+import base64
 import os
+import time
 import traceback
-from typing import Optional, Union
+from typing import Final
 
 import httpx
+from pydantic import BaseModel, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -14,9 +17,36 @@ from litellm.secret_managers.get_azure_ad_token_provider import (
 )
 from litellm.secret_managers.secret_manager_handler import get_secret_from_manager
 
-oidc_cache = DualCache()
+oidc_cache: Final = DualCache()
 
-_DEFAULT_OIDC_ALLOWED_CREDENTIAL_DIRS = ("/var/run/secrets", "/run/secrets")
+
+_OIDC_TOKEN_EXPIRY_MARGIN_SECONDS: Final = 60
+
+
+class _OidcTokenClaims(BaseModel):
+    exp: float | None = None
+
+
+def _oidc_token_cache_ttl(oidc_token: str, max_ttl: int) -> int:
+    """Cache TTL for a fetched OIDC token: ``max_ttl``, capped so the cache entry
+    never outlives the token's own ``exp`` claim (minus a safety margin).
+    Falls back to ``max_ttl`` when the token carries no readable ``exp``."""
+    segments: Final = oidc_token.split(".")
+    if len(segments) != 3:
+        return max_ttl
+    payload: Final = segments[1]
+    try:
+        decoded: Final = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
+        claims: Final = _OidcTokenClaims.model_validate_json(decoded)
+        if claims.exp is None:
+            return max_ttl
+        exp: Final = int(claims.exp)
+    except (ValueError, OverflowError, ValidationError):
+        return max_ttl
+    return min(max_ttl, exp - int(time.time()) - _OIDC_TOKEN_EXPIRY_MARGIN_SECONDS)
+
+
+_DEFAULT_OIDC_ALLOWED_CREDENTIAL_DIRS: Final = ("/var/run/secrets", "/run/secrets")
 
 
 def _get_oidc_allowed_credential_dirs() -> list[str]:
@@ -28,8 +58,8 @@ def _get_oidc_allowed_credential_dirs() -> list[str]:
     override via the ``LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS`` environment
     variable (comma-separated list of absolute paths).
     """
-    override = os.getenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS")
-    raw_dirs = (
+    override: Final = os.getenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS")
+    raw_dirs: Final = (
         [d.strip() for d in override.split(",") if d.strip()]
         if override
         else list(_DEFAULT_OIDC_ALLOWED_CREDENTIAL_DIRS)
@@ -48,7 +78,7 @@ def _resolve_oidc_file_path(requested_path: str) -> str:
             "'oidc/file//var/run/secrets/<name>' (note the leading slash "
             "after 'oidc/file/')."
         )
-    resolved = os.path.realpath(requested_path)
+    resolved: Final = os.path.realpath(requested_path)
     for allowed in _get_oidc_allowed_credential_dirs():
         try:
             if os.path.commonpath([resolved, allowed]) == allowed:
@@ -63,7 +93,7 @@ def _resolve_oidc_file_path(requested_path: str) -> str:
     )
 
 
-def _get_oidc_http_handler(timeout: Optional[httpx.Timeout] = None) -> HTTPHandler:
+def _get_oidc_http_handler(timeout: httpx.Timeout | None = None) -> HTTPHandler:
     """
     Factory function to create HTTPHandler for OIDC requests.
     This function can be mocked in tests.
@@ -82,7 +112,7 @@ def _get_oidc_http_handler(timeout: Optional[httpx.Timeout] = None) -> HTTPHandl
 ######### Secret Manager ############################
 # checks if user has passed in a secret manager client
 # if passed in then checks the secret there
-def str_to_bool(value: Optional[str]) -> Optional[bool]:
+def str_to_bool(value: str | None) -> bool | None:
     """
     Converts a string to a boolean if it's a recognized boolean string.
     Returns None if the string is not a recognized boolean value.
@@ -93,10 +123,10 @@ def str_to_bool(value: Optional[str]) -> Optional[bool]:
     if value is None:
         return None
 
-    true_values = {"true"}
-    false_values = {"false"}
+    true_values: Final = {"true"}
+    false_values: Final = {"false"}
 
-    value_lower = value.strip().lower()
+    value_lower: Final = value.strip().lower()
 
     if value_lower in true_values:
         return True
@@ -108,19 +138,19 @@ def str_to_bool(value: Optional[str]) -> Optional[bool]:
 
 def get_secret_str(
     secret_name: str,
-    default_value: Optional[Union[str, bool]] = None,
-) -> Optional[str]:
+    default_value: str | bool | None = None,
+) -> str | None:
     """
     Guarantees response from 'get_secret' is either string or none. Used for fixing linting errors.
     """
-    value = get_secret(secret_name=secret_name, default_value=default_value)
+    value: Final = get_secret(secret_name=secret_name, default_value=default_value)
     if value is not None and not isinstance(value, str):
         return None
 
     return value
 
 
-def normalize_nonempty_secret_str(val: Optional[str]) -> Optional[str]:
+def normalize_nonempty_secret_str(val: str | None) -> str | None:
     """
     Strip whitespace and treat None, '', and whitespace-only strings as unset.
 
@@ -129,14 +159,14 @@ def normalize_nonempty_secret_str(val: Optional[str]) -> Optional[str]:
     """
     if val is None:
         return None
-    stripped = val.strip()
+    stripped: Final = val.strip()
     return stripped if stripped else None
 
 
 def get_secret_bool(
     secret_name: str,
-    default_value: Optional[bool] = None,
-) -> Optional[bool]:
+    default_value: bool | None = None,
+) -> bool | None:
     """
     Guarantees response from 'get_secret' is either boolean or none. Used for fixing linting errors.
 
@@ -147,7 +177,7 @@ def get_secret_bool(
     Returns:
         The secret value as a boolean or None if the secret is not found.
     """
-    _secret_value = get_secret(secret_name, default_value)
+    _secret_value: Final = get_secret(secret_name, default_value)
     if _secret_value is None:
         return None
     elif isinstance(_secret_value, bool):
@@ -156,12 +186,12 @@ def get_secret_bool(
         return str_to_bool(_secret_value)
 
 
-def get_secret(  # noqa: PLR0915
+def get_secret(
     secret_name: str,
-    default_value: Optional[Union[str, bool]] = None,
+    default_value: str | bool | None = None,
 ):
-    key_management_system = litellm._key_management_system
-    key_management_settings = litellm._key_management_settings
+    key_management_system: Final = litellm._key_management_system
+    key_management_settings: Final = litellm._key_management_settings
     secret = None
 
     if secret_name.startswith("os.environ/"):
@@ -169,7 +199,7 @@ def get_secret(  # noqa: PLR0915
 
     # Example: oidc/google/https://bedrock-runtime.us-east-1.amazonaws.com/model/stability.stable-diffusion-xl-v1/invoke
     if secret_name.startswith("oidc/"):
-        secret_name_split = secret_name.replace("oidc/", "")
+        secret_name_split: Final = secret_name.replace("oidc/", "")
         oidc_provider, oidc_aud = secret_name_split.split("/", 1)
         oidc_aud = "/".join(secret_name_split.split("/")[1:])
         # TODO: Add caching for HTTP requests
@@ -187,7 +217,15 @@ def get_secret(  # noqa: PLR0915
             )
             if response.status_code == 200:
                 oidc_token = response.text
-                oidc_cache.set_cache(key=secret_name, value=oidc_token, ttl=3600 - 60)
+                ttl: Final = _oidc_token_cache_ttl(oidc_token, 3600 - 60)
+                if ttl > 0:
+                    oidc_cache.set_cache(key=secret_name, value=oidc_token, ttl=ttl)
+                else:
+                    verbose_logger.warning(
+                        "Google OIDC token for %s is already expired or expires within %ss; not caching it",
+                        secret_name,
+                        _OIDC_TOKEN_EXPIRY_MARGIN_SECONDS,
+                    )
                 return oidc_token
             else:
                 raise ValueError("Google OIDC provider failed")
@@ -205,12 +243,9 @@ def get_secret(  # noqa: PLR0915
             return env_secret
         elif oidc_provider == "github":
             # https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-cloud-providers#using-custom-actions
-            actions_id_token_request_url = os.getenv("ACTIONS_ID_TOKEN_REQUEST_URL")
-            actions_id_token_request_token = os.getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
-            if (
-                actions_id_token_request_url is None
-                or actions_id_token_request_token is None
-            ):
+            actions_id_token_request_url: Final = os.getenv("ACTIONS_ID_TOKEN_REQUEST_URL")
+            actions_id_token_request_token: Final = os.getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+            if actions_id_token_request_url is None or actions_id_token_request_token is None:
                 raise ValueError(
                     "ACTIONS_ID_TOKEN_REQUEST_URL or ACTIONS_ID_TOKEN_REQUEST_TOKEN not found in environment"
                 )
@@ -236,19 +271,19 @@ def get_secret(  # noqa: PLR0915
                 raise ValueError("Github OIDC provider failed")
         elif oidc_provider == "azure":
             # https://azure.github.io/azure-workload-identity/docs/quick-start.html
-            azure_federated_token_file = os.getenv("AZURE_FEDERATED_TOKEN_FILE")
+            azure_federated_token_file: Final = os.getenv("AZURE_FEDERATED_TOKEN_FILE")
             if azure_federated_token_file is None:
                 verbose_logger.warning(
                     "AZURE_FEDERATED_TOKEN_FILE not found in environment will use Azure AD token provider"
                 )
-                azure_token_provider = get_azure_ad_token_provider(azure_scope=oidc_aud)
+                azure_token_provider: Final = get_azure_ad_token_provider(azure_scope=oidc_aud)
                 try:
                     oidc_token = azure_token_provider()
                     if oidc_token is None:
                         raise ValueError("Azure OIDC provider returned None token")
                     return oidc_token
                 except Exception as e:
-                    error_msg = f"Azure OIDC provider failed: {str(e)}"
+                    error_msg: Final = f"Azure OIDC provider failed: {e}"
                     verbose_logger.error(error_msg)
                     raise ValueError(error_msg)
             with open(azure_federated_token_file, "r") as f:
@@ -256,7 +291,7 @@ def get_secret(  # noqa: PLR0915
                 return oidc_token
         elif oidc_provider == "file":
             # Load token from a file within an allowed credential directory.
-            safe_path = _resolve_oidc_file_path(oidc_aud)
+            safe_path: Final = _resolve_oidc_file_path(oidc_aud)
             with open(safe_path, "r") as f:
                 oidc_token = f.read()
                 return oidc_token
@@ -268,7 +303,7 @@ def get_secret(  # noqa: PLR0915
             return oidc_token
         elif oidc_provider == "env_path":
             # Load token from a file path specified in an environment variable
-            token_file_path = os.getenv(oidc_aud)
+            token_file_path: Final = os.getenv(oidc_aud)
             if token_file_path is None:
                 raise ValueError(f"Environment variable {oidc_aud} not found")
             with open(token_file_path, "r") as f:
@@ -278,12 +313,9 @@ def get_secret(  # noqa: PLR0915
             raise ValueError("Unsupported OIDC provider")
 
     try:
-        if (
-            _should_read_secret_from_secret_manager()
-            and litellm.secret_manager_client is not None
-        ):
+        if _should_read_secret_from_secret_manager() and litellm.secret_manager_client is not None:
             try:
-                client = litellm.secret_manager_client
+                client: Final = litellm.secret_manager_client
                 key_manager = "local"
                 if key_management_system is not None:
                     key_manager = key_management_system.value
@@ -304,7 +336,10 @@ def get_secret(  # noqa: PLR0915
                 )
             except Exception as e:  # check if it's in os.environ
                 verbose_logger.error(
-                    f"Defaulting to os.environ value for key={secret_name}. An exception occurred - {str(e)}.\n\n{traceback.format_exc()}"
+                    "Defaulting to os.environ value for key=%s. An exception occurred - %s.\n\n%s",
+                    secret_name,
+                    e,
+                    traceback.format_exc(),
                 )
                 secret = os.getenv(secret_name)
             try:
@@ -319,9 +354,7 @@ def get_secret(  # noqa: PLR0915
         else:
             secret = os.environ.get(secret_name)
             secret_value_as_bool = str_to_bool(secret) if secret is not None else None
-            if secret_value_as_bool is not None and isinstance(
-                secret_value_as_bool, bool
-            ):
+            if secret_value_as_bool is not None and isinstance(secret_value_as_bool, bool):
                 return secret_value_as_bool
             else:
                 return secret
@@ -332,6 +365,22 @@ def get_secret(  # noqa: PLR0915
             raise e
 
 
+def secret_manager_would_be_consulted(secret_name: str) -> bool:
+    """
+    Returns True if a `get_secret` read for `secret_name` would actually reach the hosted manager.
+
+    Mirrors the gating `get_secret` applies below: the manager has to be up and readable, and
+    `hosted_keys`, when set, is an allowlist of the names it is consulted for. Callers use this to
+    tell "the manager does not have this key" apart from "the manager was never asked".
+    """
+    if not _should_read_secret_from_secret_manager():
+        return False
+    key_management_settings: Final = litellm._key_management_settings
+    if key_management_settings is None or key_management_settings.hosted_keys is None:
+        return True
+    return secret_name.removeprefix("os.environ/") in key_management_settings.hosted_keys
+
+
 def _should_read_secret_from_secret_manager() -> bool:
     """
     Returns True if the secret manager should be used to read the secret, False otherwise
@@ -340,11 +389,7 @@ def _should_read_secret_from_secret_manager() -> bool:
     - If the `_key_management_settings` access mode is "read_only" or "read_and_write", return True
     - Otherwise, return False
     """
-    if litellm.secret_manager_client is not None:
-        if litellm._key_management_settings is not None:
-            if (
-                litellm._key_management_settings.access_mode == "read_only"
-                or litellm._key_management_settings.access_mode == "read_and_write"
-            ):
-                return True
-    return False
+    key_management_settings: Final = litellm._key_management_settings
+    if litellm.secret_manager_client is None or key_management_settings is None:
+        return False
+    return key_management_settings.access_mode in ("read_only", "read_and_write")

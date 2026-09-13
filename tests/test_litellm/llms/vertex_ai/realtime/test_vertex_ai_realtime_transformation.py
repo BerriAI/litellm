@@ -10,14 +10,10 @@ Validates:
 """
 
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import websockets.exceptions  # registers websockets.exceptions on the websockets namespace
-
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
 from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
@@ -112,7 +108,7 @@ def test_vertex_session_update_defaults_to_audio_modality():
 
     messages = cfg.transform_realtime_request(
         json.dumps(session_update),
-        "gemini-live-2.5-flash-native-audio",
+        "gemini-live-2.5-flash-preview-native-audio-09-2025",
         session_configuration_request=None,
     )
     assert len(messages) == 1
@@ -120,7 +116,50 @@ def test_vertex_session_update_defaults_to_audio_modality():
     assert setup_payload["generationConfig"]["responseModalities"] == ["AUDIO"]
 
 
-def test_vertex_session_update_normalizes_ga_remapped_fields():
+_NATIVE_AUDIO_MODEL = "gemini-live-2.5-flash-preview-native-audio-09-2025"
+
+
+@pytest.fixture(autouse=False)
+def patch_native_audio_cost_map_entry(monkeypatch):
+    """Inject gemini_native_audio into the cost map for the test model.
+
+    litellm.model_cost is fetched from main branch at import time, so in CI
+    the field may not exist yet. Patch it locally so these unit tests remain
+    self-contained and don't depend on the remote cost map state.
+    """
+    entry = dict(litellm.model_cost.get(_NATIVE_AUDIO_MODEL, {}))
+    entry["gemini_native_audio"] = True
+    monkeypatch.setitem(litellm.model_cost, _NATIVE_AUDIO_MODEL, entry)
+
+
+def test_vertex_audio_only_live_model_coerces_text_modality_to_audio(
+    patch_native_audio_cost_map_entry,
+):
+    """Regression: TEXT-only responseModalities causes 1007 on native-audio Live models."""
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1"
+    )
+    session_update = {
+        "type": "session.update",
+        "session": {
+            "modalities": ["text"],
+            "instructions": "You are a terse assistant.",
+        },
+    }
+
+    messages = cfg.transform_realtime_request(
+        json.dumps(session_update),
+        _NATIVE_AUDIO_MODEL,
+        session_configuration_request=None,
+    )
+
+    setup = json.loads(messages[0])["setup"]
+    assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
+
+
+def test_vertex_session_update_normalizes_ga_remapped_fields(
+    patch_native_audio_cost_map_entry,
+):
     """GA-format clients send ``output_modalities`` and nested
     ``audio.input.transcription`` / ``audio.input.turn_detection``. These must
     be normalised back to the flat beta keys before ``map_openai_params``
@@ -146,13 +185,13 @@ def test_vertex_session_update_normalizes_ga_remapped_fields():
 
     messages = cfg.transform_realtime_request(
         json.dumps(session_update),
-        "gemini-live-2.5-flash-native-audio",
+        _NATIVE_AUDIO_MODEL,
         session_configuration_request=None,
     )
     assert len(messages) == 1
     setup_payload = json.loads(messages[0])["setup"]
 
-    assert setup_payload["generationConfig"]["responseModalities"] == ["TEXT"]
+    assert setup_payload["generationConfig"]["responseModalities"] == ["AUDIO"]
     assert setup_payload["inputAudioTranscription"] == {}
     assert (
         setup_payload["realtimeInputConfig"]["automaticActivityDetection"][
@@ -238,7 +277,7 @@ async def test_vertex_realtime_text_in_text_out():
         SERVER_TURN_COMPLETE,
     ]
 
-    async def _backend_recv(decode=True):  # noqa: ARG001
+    async def _backend_recv(decode=True):
         if not upstream_messages:
             # Signal normal connection close so the loop exits cleanly
             raise websockets.exceptions.ConnectionClosedOK(None, None)  # type: ignore[arg-type]
@@ -309,7 +348,7 @@ def test_vertex_warns_when_dropping_guardrail_turn_detection_update(caplog):
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         result = cfg.transform_realtime_request(
             json.dumps(session_update),
-            "gemini-live-2.5-flash-native-audio",
+            "gemini-live-2.5-flash-preview-native-audio-09-2025",
             session_configuration_request=json.dumps({"setup": {"model": "x"}}),
         )
 
@@ -338,7 +377,7 @@ def test_vertex_does_not_warn_when_dropping_non_guardrail_session_update(caplog)
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         cfg.transform_realtime_request(
             json.dumps(session_update),
-            "gemini-live-2.5-flash-native-audio",
+            "gemini-live-2.5-flash-preview-native-audio-09-2025",
             session_configuration_request=json.dumps({"setup": {"model": "x"}}),
         )
 
@@ -346,3 +385,174 @@ def test_vertex_does_not_warn_when_dropping_non_guardrail_session_update(caplog)
         "Vertex AI Realtime" in record.message and "session.update" in record.message
         for record in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_does_not_forward_client_query_params_to_vertex_backend(
+    monkeypatch,
+):
+    """Regression: forwarding client ?model=/?intent= to the Vertex Live WSS URL causes 1007 errors.
+
+    Exercises ``async_realtime`` end-to-end so that re-adding ``_append_query_params``
+    (the reverted bug) would push ``model=``/``intent=`` onto the backend URL and fail here.
+    """
+    import websockets
+
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1"
+    )
+
+    captured: dict = {}
+
+    def fake_connect(url, *args, **kwargs):
+        captured["url"] = url
+        raise RuntimeError("stop before establishing the backend connection")
+
+    monkeypatch.setattr(websockets, "connect", fake_connect)
+
+    try:
+        await BaseLLMHTTPHandler().async_realtime(
+            model="gemini-live-2.5-flash-preview-native-audio-09-2025",
+            websocket=AsyncMock(),
+            logging_obj=MagicMock(),
+            provider_config=cfg,
+            headers={},
+            query_params={
+                "model": "gemini-live-2.5-flash-preview-native-audio-09-2025",
+                "intent": "chat",
+            },
+        )
+    except (RuntimeError, Exception):
+        pass
+
+    assert "url" in captured, "websockets.connect was never called"
+    assert "?" not in captured["url"]
+    assert "model=" not in captured["url"]
+    assert "intent=" not in captured["url"]
+
+
+def test_vertex_function_call_output_omits_id():
+    """Regression: Vertex Live rejects ``id`` on toolResponse.functionResponses (1007)."""
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1"
+    )
+    cfg._tool_call_id_to_name["call_abc123"] = "terminate_call"
+
+    messages = cfg.transform_realtime_request(
+        json.dumps(
+            {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "function_call_output",
+                    "call_id": "call_abc123",
+                    "output": '{"status": "ok"}',
+                },
+            }
+        ),
+        "gemini-live-2.5-flash-preview-native-audio-09-2025",
+        session_configuration_request="existing",
+    )
+
+    assert len(messages) == 1
+    payload = json.loads(messages[0])
+    function_response = payload["toolResponse"]["functionResponses"][0]
+    assert "id" not in function_response
+    assert function_response["name"] == "terminate_call"
+    assert function_response["response"] == {"status": "ok"}
+
+
+def test_vertex_native_audio_keeps_requested_voice(patch_native_audio_cost_map_entry):
+    """Regression: Vertex Live accepts speechConfig on native audio, so the client's voice must survive.
+
+    Stripping it silently dropped voice selection for every Vertex native-audio
+    session. TEXT is still coerced away, which Vertex does reject.
+    """
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1"
+    )
+    session_update = {
+        "type": "session.update",
+        "session": {
+            "output_modalities": ["text"],
+            "audio": {"output": {"voice": "Aoede"}},
+        },
+    }
+
+    messages = cfg.transform_realtime_request(
+        json.dumps(session_update),
+        _NATIVE_AUDIO_MODEL,
+        session_configuration_request=None,
+    )
+
+    generation_config = json.loads(messages[0])["setup"]["generationConfig"]
+    assert generation_config["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Aoede"
+    assert generation_config["responseModalities"] == ["AUDIO"]
+
+
+def test_google_ai_studio_native_audio_keeps_requested_voice(patch_native_audio_cost_map_entry):
+    """Regression: AI Studio native-audio Live accepts speechConfig too, so the voice survives on both providers."""
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    messages = GeminiRealtimeConfig().transform_realtime_request(
+        json.dumps(
+            {
+                "type": "session.update",
+                "session": {
+                    "output_modalities": ["audio"],
+                    "audio": {"output": {"voice": "Aoede"}},
+                },
+            }
+        ),
+        _NATIVE_AUDIO_MODEL,
+        session_configuration_request=None,
+    )
+
+    generation_config = json.loads(messages[0])["setup"]["generationConfig"]
+    assert generation_config["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Aoede"
+
+
+def test_vertex_native_audio_drops_openai_stock_voice(patch_native_audio_cost_map_entry):
+    """Regression: OpenAI stock voice names must be dropped, not forwarded verbatim.
+
+    Vertex Live closes the socket with 1007 on an unknown voice name, so a
+    client sending OpenAI's default voice would lose the session entirely.
+    Dropping the voice keeps the session alive on the model's default voice.
+    """
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1"
+    )
+    session_update = {
+        "type": "session.update",
+        "session": {"audio": {"output": {"voice": "alloy"}}},
+    }
+
+    messages = cfg.transform_realtime_request(
+        json.dumps(session_update),
+        _NATIVE_AUDIO_MODEL,
+        session_configuration_request=None,
+    )
+
+    generation_config = json.loads(messages[0])["setup"]["generationConfig"]
+    assert "speechConfig" not in generation_config
+
+
+def test_vertex_native_audio_unmapped_voice_passes_through(patch_native_audio_cost_map_entry):
+    """A voice name outside the OpenAI stock set is forwarded verbatim so Gemini-native names keep working."""
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1"
+    )
+    session_update = {
+        "type": "session.update",
+        "session": {"audio": {"output": {"voice": "Kore"}}},
+    }
+
+    messages = cfg.transform_realtime_request(
+        json.dumps(session_update),
+        _NATIVE_AUDIO_MODEL,
+        session_configuration_request=None,
+    )
+
+    generation_config = json.loads(messages[0])["setup"]["generationConfig"]
+    assert generation_config["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"

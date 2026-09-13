@@ -23,30 +23,56 @@ body:
       label: What happened?
       description: Also tell us, what did you expect to happen?
       placeholder: Tell us what you see!
-      value: "A bug happened!"
     validations:
       required: true
   - type: textarea
-    id: steps-to-reproduce
+    id: user-flow
     attributes:
-      label: Steps to Reproduce
-      description: Please provide detailed steps to reproduce this bug(A curl/python code to reproduce the bug)
+      label: User Flow
+      description: |
+        Two ordered lists, "Before a (hypothetical) fix" and "After a (hypothetical) fix", walking the same end user through the same task, written strictly from that user's seat. Every rule below applies.
+
+        - Describe the real application and the routes its users actually hit, not a generic scenario
+        - Lead each list with one plain sentence saying where the flow fails (before) or would succeed (after), then number the steps
+        - Every step is something the user does or observes: the HTTP method and full URL they hit, what they sent, and what visibly came back (status code, error text, the shape of an ID). UI steps name the page URL and what is on screen
+        - No LiteLLM internals: never name functions, files, DB tables, config classes, hooks, callbacks, or code paths. "The upload hands back an ID that looks like OpenAI's own `file-abc123` instead of the scrambled one the gateway returned" is right, "no managed-file row was registered" is wrong
+        - Keep the two lists step-for-step identical until they diverge, so the broken step is obvious
+        - If the bug has a security or authorization consequence, end each list with what another user can do that they shouldn't be able to, and what they could no longer do after a fix
       placeholder: |
-        1. config.yaml file/ .env file/ etc.
-        2. Run the following code...
-        3. Observe the error...
-      value: |
-        1. 
-        2. 
-        3. 
+        Before a (hypothetical) fix: a developer whose app streams chat completions gets no token counts back, so their cost dashboard reads zero
+
+        1. They send POST https://litellm-domain/v1/chat/completions with "stream": true and no stream_options
+        2. The last SSE chunk arrives with "usage": null, so their app records 0 prompt and 0 completion tokens
+        3. They open https://litellm-domain/ui/?page=logs and see the request logged at $0 spend
+
+        After a (hypothetical) fix: the same request comes back with real token counts, so the dashboard shows real spend
+
+        1. The proxy admin sets always_include_stream_usage: true and restarts the proxy
+        2. The developer sends the same POST https://litellm-domain/v1/chat/completions with "stream": true and no stream_options
+        3. The last SSE chunk now carries a usage object with real prompt and completion token counts
+        4. https://litellm-domain/ui/?page=logs shows that request at non-zero spend
     validations:
       required: true
   - type: textarea
-    id: logs
+    id: proof-of-bug
     attributes:
-      label: Relevant log output
-      description: Please copy and paste any relevant log output. This will be automatically formatted into code, so no need for backticks.
-      render: shell
+      label: Proof the bug occurs
+      description: |
+        The commands (e.g., curl) and their full output, screenshots, or a screen recording demonstrating that the bug happens. Every rule below applies.
+
+        - The proof must be completely e2e with no mocks, against a live proxy you ran yourself (e.g., `litellm --config config.yaml --detailed_debug` on localhost:4000), hitting real LLM provider APIs, costing real $ if needed, where the bug involves a provider call. `pytest` commands are not enough
+        - Show exactly what the end user sees or does, matching the User Flow above step for step
+        - Start with the config.yaml (or SDK setup) and any env vars the proxy ran with, then the exact version or commit hash the proof was captured at, so a maintainer can stand up the same proxy before running your commands. Keep the real values for env vars that aren't sensitive, they are often the reason the bug happens, and redact only the secrets: never paste a real API key, virtual key, database URL, or other credential, here or anywhere else in the issue
+        - If the bug applies to more than one of the LLM endpoints (/v1/responses, /v1/chat/completions, /v1/messages), include proof for every one of them, not just one
+        - For UI bugs: include screenshots and the page URLs you were on. Scrub keys and tokens out of screenshots too (for example, the virtual key is briefly shown in the panel right after you create a virtual key)
+      placeholder: |
+        Config / setup the proxy ran with:
+
+        Version or commit:
+
+        Commands and their full output:
+    validations:
+      required: true
   - type: dropdown
     id: component
     attributes:

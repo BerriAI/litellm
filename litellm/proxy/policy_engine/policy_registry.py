@@ -8,10 +8,22 @@ by policy_attachments (see AttachmentRegistry).
 """
 
 import json
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Literal,
+    Optional,
+    Protocol,
+    TypedDict,
+    Union,
+    cast,  # noqa: TID251  # prisma types the condition/pipeline Json columns as str, but reads return decoded values
+)
 
 from litellm._logging import verbose_proxy_logger
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import PolicyRepository
 from litellm.types.proxy.policy_engine import (
     GuardrailPipeline,
@@ -30,10 +42,101 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 # Prefix for policy version IDs in request body. Use policy_<uuid> to execute a specific version.
-POLICY_VERSION_ID_PREFIX = "policy_"
+POLICY_VERSION_ID_PREFIX: Final = "policy_"
 
 
-def _row_to_policy_db_response(row: Any) -> PolicyDBResponse:
+class _RawPipelineStep(TypedDict):
+    guardrail: str
+
+
+class _RawPipelineConfig(TypedDict, total=False):
+    mode: str
+    steps: Sequence[Union[PipelineStep, "_RawPipelineStep"]]
+
+
+class _PolicyRow(Protocol):
+    policy_id: str
+    policy_name: str
+    version_number: int
+    version_status: str
+    parent_version_id: str | None
+    is_latest: bool
+    published_at: datetime | None
+    production_at: datetime | None
+    inherit: str | None
+    description: str | None
+    guardrails_add: list[str] | None
+    guardrails_remove: list[str] | None
+    condition: dict[str, object] | None
+    pipeline: dict[str, object] | None
+    created_at: datetime
+    updated_at: datetime
+    created_by: str | None
+    updated_by: str | None
+
+
+class _PolicyVersionSourceRow(Protocol):
+    @property
+    def policy_id(self) -> str: ...
+
+    @property
+    def policy_name(self) -> str: ...
+
+    @property
+    def version_number(self) -> int: ...
+
+    @property
+    def inherit(self) -> str | None: ...
+
+    @property
+    def description(self) -> str | None: ...
+
+    @property
+    def guardrails_add(self) -> Sequence[str] | None: ...
+
+    @property
+    def guardrails_remove(self) -> Sequence[str] | None: ...
+
+    @property
+    def condition(self) -> Mapping[str, object] | str | None: ...
+
+    @property
+    def pipeline(self) -> Mapping[str, object] | str | None: ...
+
+
+class _PolicyTableClient(Protocol):
+    async def create(self, data: Mapping[str, object]) -> _PolicyRow: ...
+
+    async def find_unique(self, where: Mapping[str, object]) -> _PolicyRow | None: ...
+
+    async def find_many(
+        self,
+        where: Mapping[str, object] | None = None,
+        order: Mapping[str, str] | None = None,
+    ) -> Sequence[_PolicyRow]: ...
+
+    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> _PolicyRow: ...
+
+    async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int: ...
+
+    async def delete(self, where: Mapping[str, object]) -> _PolicyRow | None: ...
+
+    async def delete_many(self, where: Mapping[str, object]) -> int: ...
+
+
+def _policy_table(prisma_client: "PrismaClient") -> _PolicyTableClient:
+    table: Final = PolicyRepository(prisma_client).table
+    return cast(  # cast-ok: prisma types Json columns as str; the client hands back the decoded condition/pipeline
+        "_PolicyTableClient", table
+    )
+
+
+def _policy_version_source_table(prisma_client: "PrismaClient") -> "TableActions[_PolicyVersionSourceRow]":
+    table: Final[TableActions[_PolicyVersionSourceRow]] = PolicyRepository(prisma_client).table
+    return table
+
+
+def _row_to_policy_db_response(row: _PolicyRow) -> PolicyDBResponse:
     """Build PolicyDBResponse from a Prisma LiteLLM_PolicyTable row."""
     return PolicyDBResponse(
         policy_id=row.policy_id,
@@ -71,11 +174,13 @@ class PolicyRegistry:
     """
 
     def __init__(self):
-        self._policies: Dict[str, Policy] = {}
-        self._policies_by_id: Dict[str, Tuple[str, Policy]] = {}
+        self._policies: dict[str, Policy] = {}
+        self._config_policies: Mapping[str, Policy] = {}
+        self._sources: Mapping[str, Literal["db", "config"]] = {}
+        self._policies_by_id: dict[str, tuple[str, Policy]] = {}
         self._initialized: bool = False
 
-    def load_policies(self, policies_config: Dict[str, Any]) -> None:
+    def load_policies(self, policies_config: Mapping[str, dict[str, object]]) -> None:
         """
         Load policies from a configuration dictionary.
 
@@ -84,23 +189,25 @@ class PolicyRegistry:
                             This is the raw config from the YAML file.
         """
         self._policies = {}
+        self._config_policies = {}
+        self._sources = {}
         self._policies_by_id = {}
 
         for policy_name, policy_data in policies_config.items():
             try:
                 policy = self._parse_policy(policy_name, policy_data)
                 self._policies[policy_name] = policy
-                verbose_proxy_logger.debug(f"Loaded policy: {policy_name}")
+                verbose_proxy_logger.debug("Loaded policy: %s", policy_name)
             except Exception as e:
-                verbose_proxy_logger.error(
-                    f"Error loading policy '{policy_name}': {str(e)}"
-                )
-                raise ValueError(f"Invalid policy '{policy_name}': {str(e)}") from e
+                verbose_proxy_logger.error("Error loading policy '%s': %s", policy_name, e)
+                raise ValueError(f"Invalid policy '{policy_name}': {e}") from e
 
+        self._config_policies = dict(self._policies)
+        self._sources = {policy_name: "config" for policy_name in self._policies}
         self._initialized = True
-        verbose_proxy_logger.info(f"Loaded {len(self._policies)} policies")
+        verbose_proxy_logger.info("Loaded %s policies", len(self._policies))
 
-    def _parse_policy(self, policy_name: str, policy_data: Dict[str, Any]) -> Policy:
+    def _parse_policy(self, policy_name: str, policy_data: dict[str, Any]) -> Policy:
         """
         Parse a policy from raw configuration data.
 
@@ -112,7 +219,7 @@ class PolicyRegistry:
             Parsed Policy object
         """
         # Parse guardrails
-        guardrails_data = policy_data.get("guardrails", {})
+        guardrails_data: Final = policy_data.get("guardrails", {})
         if isinstance(guardrails_data, dict):
             guardrails = PolicyGuardrails(
                 add=guardrails_data.get("add"),
@@ -120,18 +227,16 @@ class PolicyRegistry:
             )
         else:
             # Handle legacy format where guardrails might be a list
-            guardrails = PolicyGuardrails(
-                add=guardrails_data if guardrails_data else None
-            )
+            guardrails = PolicyGuardrails(add=guardrails_data if guardrails_data else None)
 
         # Parse condition (simple model-based condition)
         condition = None
-        condition_data = policy_data.get("condition")
+        condition_data: Final = policy_data.get("condition")
         if condition_data:
             condition = PolicyCondition(model=condition_data.get("model"))
 
         # Parse pipeline (optional ordered guardrail execution)
-        pipeline = PolicyRegistry._parse_pipeline(policy_data.get("pipeline"))
+        pipeline: Final = PolicyRegistry._parse_pipeline(policy_data.get("pipeline"))
 
         return Policy(
             inherit=policy_data.get("inherit"),
@@ -143,24 +248,21 @@ class PolicyRegistry:
 
     @staticmethod
     def _parse_pipeline(
-        pipeline_data: Optional[Dict[str, Any]],
-    ) -> Optional[GuardrailPipeline]:
+        pipeline_data: Optional["_RawPipelineConfig"],
+    ) -> GuardrailPipeline | None:
         """Parse a pipeline configuration from raw data."""
         if pipeline_data is None:
             return None
 
-        steps_data = pipeline_data.get("steps", [])
-        steps = [
-            PipelineStep(**step_data) if isinstance(step_data, dict) else step_data
-            for step_data in steps_data
-        ]
+        steps_data: Final[Sequence[PipelineStep | _RawPipelineStep]] = pipeline_data.get("steps", [])
+        steps = [PipelineStep(**step_data) if isinstance(step_data, dict) else step_data for step_data in steps_data]
 
         return GuardrailPipeline(
             mode=pipeline_data.get("mode", "pre_call"),
             steps=steps,
         )
 
-    def get_policy(self, policy_name: str) -> Optional[Policy]:
+    def get_policy(self, policy_name: str) -> Policy | None:
         """
         Get a policy by name.
 
@@ -172,7 +274,7 @@ class PolicyRegistry:
         """
         return self._policies.get(policy_name)
 
-    def get_all_policies(self) -> Dict[str, Policy]:
+    def get_all_policies(self) -> dict[str, Policy]:
         """
         Get all loaded policies.
 
@@ -181,7 +283,7 @@ class PolicyRegistry:
         """
         return self._policies.copy()
 
-    def get_policy_names(self) -> List[str]:
+    def get_policy_names(self) -> list[str]:
         """
         Get list of all policy names.
 
@@ -216,23 +318,42 @@ class PolicyRegistry:
         Clear all policies from the registry.
         """
         self._policies = {}
+        self._config_policies = {}
+        self._sources = {}
         self._initialized = False
 
-    def add_policy(self, policy_name: str, policy: Policy) -> None:
+    def get_source(self, policy_name: str) -> Literal["db", "config"] | None:
+        """
+        Return the provenance of an in-memory policy, or None if unknown.
+        """
+        return self._sources.get(policy_name)
+
+    def list_config_policies(self) -> Mapping[str, Policy]:
+        """
+        Return the policies loaded from config.yaml, keyed by policy name.
+        """
+        return dict(self._config_policies)
+
+    def add_policy(self, policy_name: str, policy: Policy, source: Literal["db", "config"] = "db") -> None:
         """
         Add or update a single policy.
 
         Args:
             policy_name: Name of the policy
             policy: Policy object to add
+            source: Provenance of the policy ("db" or "config")
         """
         self._policies[policy_name] = policy
+        self._sources = {**self._sources, policy_name: source}
+        if source == "config":
+            self._config_policies = {**self._config_policies, policy_name: policy}
         self._initialized = True
-        verbose_proxy_logger.debug(f"Added/updated policy: {policy_name}")
+        verbose_proxy_logger.debug("Added/updated policy: %s", policy_name)
 
     def remove_policy(self, policy_name: str) -> bool:
         """
-        Remove a policy by name.
+        Remove a policy by name. If a config-defined policy shares the name,
+        it is restored immediately instead of waiting for the next DB sync.
 
         Args:
             policy_name: Name of the policy to remove
@@ -240,11 +361,18 @@ class PolicyRegistry:
         Returns:
             True if policy was removed, False if it didn't exist
         """
-        if policy_name in self._policies:
-            del self._policies[policy_name]
-            verbose_proxy_logger.debug(f"Removed policy: {policy_name}")
+        if policy_name not in self._policies:
+            return False
+        config_fallback: Final = self._config_policies.get(policy_name)
+        if config_fallback is not None:
+            self._policies[policy_name] = config_fallback
+            self._sources = {**self._sources, policy_name: "config"}
+            verbose_proxy_logger.debug("Removed policy: %s; restored config-defined version", policy_name)
             return True
-        return False
+        del self._policies[policy_name]
+        self._sources = {name: source for name, source in self._sources.items() if name != policy_name}
+        verbose_proxy_logger.debug("Removed policy: %s", policy_name)
+        return True
 
     # ─────────────────────────────────────────────────────────────────────────
     # Database CRUD Methods
@@ -254,7 +382,7 @@ class PolicyRegistry:
         self,
         policy_request: PolicyCreateRequest,
         prisma_client: "PrismaClient",
-        created_by: Optional[str] = None,
+        created_by: str | None = None,
     ) -> PolicyDBResponse:
         """
         Add a policy to the database.
@@ -268,9 +396,9 @@ class PolicyRegistry:
             PolicyDBResponse with the created policy
         """
         try:
-            now = datetime.now(timezone.utc)
+            now: Final = datetime.now(timezone.utc)
             # Build data dict; new policy is v1 production
-            data: Dict[str, Any] = {
+            data: Final[dict[str, object]] = {
                 "policy_name": policy_request.policy_name,
                 "version_number": 1,
                 "version_status": "production",
@@ -293,15 +421,13 @@ class PolicyRegistry:
             if policy_request.condition is not None:
                 data["condition"] = json.dumps(policy_request.condition.model_dump())
             if policy_request.pipeline is not None:
-                validated_pipeline = GuardrailPipeline(**policy_request.pipeline)
+                validated_pipeline: Final = GuardrailPipeline(**policy_request.pipeline)
                 data["pipeline"] = json.dumps(validated_pipeline.model_dump())
 
-            created_policy = await PolicyRepository(prisma_client).table.create(
-                data=data
-            )
+            created_policy: Final = await _policy_table(prisma_client).create(data=data)
 
             # Also add to in-memory registry
-            policy = self._parse_policy(
+            policy: Final = self._parse_policy(
                 policy_request.policy_name,
                 {
                     "inherit": policy_request.inherit,
@@ -310,11 +436,7 @@ class PolicyRegistry:
                         "add": policy_request.guardrails_add,
                         "remove": policy_request.guardrails_remove,
                     },
-                    "condition": (
-                        policy_request.condition.model_dump()
-                        if policy_request.condition
-                        else None
-                    ),
+                    "condition": (policy_request.condition.model_dump() if policy_request.condition else None),
                     "pipeline": policy_request.pipeline,
                 },
             )
@@ -322,15 +444,15 @@ class PolicyRegistry:
 
             return _row_to_policy_db_response(created_policy)
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error adding policy to DB: {e}")
-            raise Exception(f"Error adding policy to DB: {str(e)}")
+            verbose_proxy_logger.exception("Error adding policy to DB: %s", e)
+            raise Exception(f"Error adding policy to DB: {e}")
 
     async def update_policy_in_db(
         self,
         policy_id: str,
         policy_request: PolicyUpdateRequest,
         prisma_client: "PrismaClient",
-        updated_by: Optional[str] = None,
+        updated_by: str | None = None,
     ) -> PolicyDBResponse:
         """
         Update a policy in the database. Only draft versions can be updated.
@@ -348,19 +470,15 @@ class PolicyRegistry:
             Exception: If policy is not in draft status (only drafts are editable).
         """
         try:
-            existing = await PolicyRepository(prisma_client).table.find_unique(
-                where={"policy_id": policy_id}
-            )
+            existing: Final = await _policy_table(prisma_client).find_unique(where={"policy_id": policy_id})
             if existing is None:
                 raise Exception(f"Policy with ID {policy_id} not found")
-            version_status = getattr(existing, "version_status", "production")
+            version_status: Final = getattr(existing, "version_status", "production")
             if version_status != "draft":
-                raise Exception(
-                    f"Only draft versions can be updated. This policy has status '{version_status}'."
-                )
+                raise Exception(f"Only draft versions can be updated. This policy has status '{version_status}'.")
 
             # Build update data - only include fields that are set
-            update_data: Dict[str, Any] = {
+            update_data: Final[dict[str, object]] = {
                 "updated_at": datetime.now(timezone.utc),
                 "updated_by": updated_by,
             }
@@ -376,14 +494,12 @@ class PolicyRegistry:
             if policy_request.guardrails_remove is not None:
                 update_data["guardrails_remove"] = policy_request.guardrails_remove
             if policy_request.condition is not None:
-                update_data["condition"] = json.dumps(
-                    policy_request.condition.model_dump()
-                )
+                update_data["condition"] = json.dumps(policy_request.condition.model_dump())
             if policy_request.pipeline is not None:
-                validated_pipeline = GuardrailPipeline(**policy_request.pipeline)
+                validated_pipeline: Final = GuardrailPipeline(**policy_request.pipeline)
                 update_data["pipeline"] = json.dumps(validated_pipeline.model_dump())
 
-            updated_policy = await PolicyRepository(prisma_client).table.update(
+            updated_policy: Final = await _policy_table(prisma_client).update(
                 where={"policy_id": policy_id},
                 data=update_data,
             )
@@ -392,14 +508,14 @@ class PolicyRegistry:
 
             return _row_to_policy_db_response(updated_policy)
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error updating policy in DB: {e}")
-            raise Exception(f"Error updating policy in DB: {str(e)}")
+            verbose_proxy_logger.exception("Error updating policy in DB: %s", e)
+            raise Exception(f"Error updating policy in DB: {e}")
 
     async def delete_policy_from_db(
         self,
         policy_id: str,
         prisma_client: "PrismaClient",
-    ) -> Dict[str, Any]:
+    ) -> Mapping[str, str]:
         """
         Delete a policy version from the database.
 
@@ -414,43 +530,42 @@ class PolicyRegistry:
             Dict with "message" and optional "warning" if production was deleted.
         """
         try:
-            policy = await PolicyRepository(prisma_client).table.find_unique(
-                where={"policy_id": policy_id}
-            )
+            policy: Final = await _policy_table(prisma_client).find_unique(where={"policy_id": policy_id})
 
             if policy is None:
                 raise Exception(f"Policy with ID {policy_id} not found")
 
-            version_status = getattr(policy, "version_status", "production")
-            policy_name = policy.policy_name
+            version_status: Final = getattr(policy, "version_status", "production")
+            policy_name: Final = policy.policy_name
 
             # Delete from DB
-            await PolicyRepository(prisma_client).table.delete(
-                where={"policy_id": policy_id}
-            )
+            await _policy_table(prisma_client).delete(where={"policy_id": policy_id})
 
-            result: Dict[str, Any] = {
-                "message": f"Policy {policy_id} deleted successfully"
-            }
+            result: Final[dict[str, str]] = {"message": f"Policy {policy_id} deleted successfully"}
 
             # Remove from in-memory registry only if this was the production version
             if version_status == "production":
                 self.remove_policy(policy_name)
-                result["warning"] = (
-                    "Production version was deleted. No other version was promoted. "
-                    "Promote another version to production if this policy should remain active."
-                )
+                if self.get_source(policy_name) == "config":
+                    result["warning"] = (
+                        "Production version was deleted. The config-defined policy with the same name is active again."
+                    )
+                else:
+                    result["warning"] = (
+                        "Production version was deleted. No other version was promoted. "
+                        "Promote another version to production if this policy should remain active."
+                    )
 
             return result
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error deleting policy from DB: {e}")
-            raise Exception(f"Error deleting policy from DB: {str(e)}")
+            verbose_proxy_logger.exception("Error deleting policy from DB: %s", e)
+            raise Exception(f"Error deleting policy from DB: {e}")
 
     async def get_policy_by_id_from_db(
         self,
         policy_id: str,
         prisma_client: "PrismaClient",
-    ) -> Optional[PolicyDBResponse]:
+    ) -> PolicyDBResponse | None:
         """
         Get a policy by ID from the database.
 
@@ -462,21 +577,17 @@ class PolicyRegistry:
             PolicyDBResponse if found, None otherwise
         """
         try:
-            policy = await PolicyRepository(prisma_client).table.find_unique(
-                where={"policy_id": policy_id}
-            )
+            policy: Final = await _policy_table(prisma_client).find_unique(where={"policy_id": policy_id})
 
             if policy is None:
                 return None
 
             return _row_to_policy_db_response(policy)
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error getting policy from DB: {e}")
-            raise Exception(f"Error getting policy from DB: {str(e)}")
+            verbose_proxy_logger.exception("Error getting policy from DB: %s", e)
+            raise Exception(f"Error getting policy from DB: {e}")
 
-    def get_policy_by_id_for_request(
-        self, policy_id: str
-    ) -> Optional[Tuple[str, Policy]]:
+    def get_policy_by_id_for_request(self, policy_id: str) -> tuple[str, Policy] | None:
         """
         Return a policy version by ID from in-memory cache (no DB access).
 
@@ -495,8 +606,8 @@ class PolicyRegistry:
     async def get_all_policies_from_db(
         self,
         prisma_client: "PrismaClient",
-        version_status: Optional[str] = None,
-    ) -> List[PolicyDBResponse]:
+        version_status: str | None = None,
+    ) -> list[PolicyDBResponse]:
         """
         Get all policies from the database, optionally filtered by version_status.
 
@@ -509,19 +620,19 @@ class PolicyRegistry:
             List of PolicyDBResponse objects
         """
         try:
-            where: Dict[str, Any] = {}
+            where: Final[dict[str, str]] = {}
             if version_status is not None:
                 where["version_status"] = version_status
 
-            policies = await PolicyRepository(prisma_client).table.find_many(
+            policies: Final = await _policy_table(prisma_client).find_many(
                 where=where if where else None,
                 order={"created_at": "desc"},
             )
 
             return [_row_to_policy_db_response(p) for p in policies]
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error getting policies from DB: {e}")
-            raise Exception(f"Error getting policies from DB: {str(e)}")
+            verbose_proxy_logger.exception("Error getting policies from DB: %s", e)
+            raise Exception(f"Error getting policies from DB: {e}")
 
     async def sync_policies_from_db(
         self,
@@ -530,16 +641,14 @@ class PolicyRegistry:
         """
         Sync policies from the database to in-memory registry.
         - Production versions are loaded into _policies (by policy name) for resolution.
+        - Config-loaded policies are preserved; on a name conflict the DB version wins.
         - Draft and published versions are loaded into _policies_by_id so request-body
           policy_<uuid> overrides can be resolved without DB access in the hot path.
         """
         try:
-            self._policies = {}
-            production = await self.get_all_policies_from_db(
-                prisma_client, version_status="production"
-            )
-            for policy_response in production:
-                policy = self._parse_policy(
+            production: Final = await self.get_all_policies_from_db(prisma_client, version_status="production")
+            db_policies: Final = {
+                policy_response.policy_name: self._parse_policy(
                     policy_response.policy_name,
                     {
                         "inherit": policy_response.inherit,
@@ -552,10 +661,20 @@ class PolicyRegistry:
                         "pipeline": policy_response.pipeline,
                     },
                 )
-                self.add_policy(policy_response.policy_name, policy)
+                for policy_response in production
+            }
+            for policy_name in set(db_policies) & set(self._config_policies):
+                verbose_proxy_logger.warning(
+                    "Policy '%s' is defined in both config.yaml and the DB; the DB version takes precedence",
+                    policy_name,
+                )
+            config_sources: Mapping[str, Literal["db", "config"]] = {name: "config" for name in self._config_policies}
+            db_sources: Final[Mapping[str, Literal["db", "config"]]] = {name: "db" for name in db_policies}
+            self._policies = {**self._config_policies, **db_policies}
+            self._sources = {**config_sources, **db_sources}
 
             self._policies_by_id = {}
-            non_production = await PolicyRepository(prisma_client).table.find_many(
+            non_production: Final = await _policy_table(prisma_client).find_many(
                 where={"version_status": {"in": ["draft", "published"]}},
                 order={"created_at": "desc"},
             )
@@ -577,18 +696,20 @@ class PolicyRegistry:
 
             self._initialized = True
             verbose_proxy_logger.info(
-                f"Synced {len(production)} production policies and {len(non_production)} "
-                "draft/published (by ID) from DB to in-memory registry"
+                "Synced %s production policies and %s draft/published (by ID) from DB to in-memory registry (%s config-defined policies preserved)",
+                len(production),
+                len(non_production),
+                len(self._config_policies),
             )
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error syncing policies from DB: {e}")
-            raise Exception(f"Error syncing policies from DB: {str(e)}")
+            verbose_proxy_logger.exception("Error syncing policies from DB: %s", e)
+            raise Exception(f"Error syncing policies from DB: {e}")
 
     async def resolve_guardrails_from_db(
         self,
         policy_name: str,
         prisma_client: "PrismaClient",
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Resolve all guardrails for a policy from the database.
 
@@ -605,12 +726,10 @@ class PolicyRegistry:
 
         try:
             # Load only production versions so inheritance resolves against production
-            policies = await self.get_all_policies_from_db(
-                prisma_client, version_status="production"
-            )
+            policies: Final = await self.get_all_policies_from_db(prisma_client, version_status="production")
 
             # Build a temporary in-memory map for resolution
-            temp_policies = {}
+            temp_policies: Final = {}
             for policy_response in policies:
                 policy = self._parse_policy(
                     policy_response.policy_name,
@@ -628,7 +747,7 @@ class PolicyRegistry:
                 temp_policies[policy_response.policy_name] = policy
 
             # Use the existing PolicyResolver to resolve guardrails
-            resolved_policy = PolicyResolver.resolve_policy_guardrails(
+            resolved_policy: Final = PolicyResolver.resolve_policy_guardrails(
                 policy_name=policy_name,
                 policies=temp_policies,
                 context=None,  # No context needed for simple resolution
@@ -636,8 +755,8 @@ class PolicyRegistry:
 
             return sorted(resolved_policy.guardrails)
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error resolving guardrails from DB: {e}")
-            raise Exception(f"Error resolving guardrails from DB: {str(e)}")
+            verbose_proxy_logger.exception("Error resolving guardrails from DB: %s", e)
+            raise Exception(f"Error resolving guardrails from DB: {e}")
 
     async def get_versions_by_policy_name(
         self,
@@ -655,26 +774,26 @@ class PolicyRegistry:
             PolicyVersionListResponse with policy_name and list of versions
         """
         try:
-            rows = await PolicyRepository(prisma_client).table.find_many(
+            rows: Final = await _policy_table(prisma_client).find_many(
                 where={"policy_name": policy_name},
                 order={"version_number": "desc"},
             )
-            versions = [_row_to_policy_db_response(r) for r in rows]
+            versions: Final = [_row_to_policy_db_response(r) for r in rows]
             return PolicyVersionListResponse(
                 policy_name=policy_name,
                 versions=versions,
                 total_count=len(versions),
             )
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error getting versions: {e}")
-            raise Exception(f"Error getting versions: {str(e)}")
+            verbose_proxy_logger.exception("Error getting versions: %s", e)
+            raise Exception(f"Error getting versions: {e}")
 
     async def create_new_version(
         self,
         policy_name: str,
         prisma_client: "PrismaClient",
-        source_policy_id: Optional[str] = None,
-        created_by: Optional[str] = None,
+        source_policy_id: str | None = None,
+        created_by: str | None = None,
     ) -> PolicyDBResponse:
         """
         Create a new draft version of a policy. Copies all fields from the source.
@@ -691,44 +810,40 @@ class PolicyRegistry:
         """
         try:
             if source_policy_id is not None:
-                source = await PolicyRepository(prisma_client).table.find_unique(
+                source = await _policy_version_source_table(prisma_client).find_unique(
                     where={"policy_id": source_policy_id}
                 )
                 if source is None:
                     raise Exception(f"Source policy {source_policy_id} not found")
                 if source.policy_name != policy_name:
-                    raise Exception(
-                        f"Source policy name '{source.policy_name}' does not match '{policy_name}'"
-                    )
+                    raise Exception(f"Source policy name '{source.policy_name}' does not match '{policy_name}'")
             else:
                 # Find current production version for this policy_name
-                prod = await PolicyRepository(prisma_client).table.find_first(
+                prod: Final = await _policy_version_source_table(prisma_client).find_first(
                     where={
                         "policy_name": policy_name,
                         "version_status": "production",
                     }
                 )
                 if prod is None:
-                    raise Exception(
-                        f"No production version found for policy '{policy_name}'"
-                    )
+                    raise Exception(f"No production version found for policy '{policy_name}'")
                 source = prod
 
             # Next version number
-            latest = await PolicyRepository(prisma_client).table.find_first(
+            latest: Final = await _policy_version_source_table(prisma_client).find_first(
                 where={"policy_name": policy_name},
                 order={"version_number": "desc"},
             )
-            next_num = (latest.version_number + 1) if latest else 1
+            next_num: Final = (latest.version_number + 1) if latest else 1
 
-            now = datetime.now(timezone.utc)
+            now: Final = datetime.now(timezone.utc)
             # Set is_latest=False on all existing versions for this policy_name
-            await PolicyRepository(prisma_client).table.update_many(
+            await _policy_table(prisma_client).update_many(
                 where={"policy_name": policy_name},
                 data={"is_latest": False},
             )
 
-            data: Dict[str, Any] = {
+            data: Final[dict[str, object]] = {
                 "policy_name": policy_name,
                 "version_number": next_num,
                 "version_status": "draft",
@@ -748,29 +863,23 @@ class PolicyRegistry:
             # Prisma expects Json fields as JSON strings on create (same as add_policy_to_db)
             if source.condition is not None:
                 data["condition"] = (
-                    json.dumps(source.condition)
-                    if isinstance(source.condition, dict)
-                    else source.condition
+                    json.dumps(source.condition) if isinstance(source.condition, dict) else source.condition
                 )
             if source.pipeline is not None:
-                data["pipeline"] = (
-                    json.dumps(source.pipeline)
-                    if isinstance(source.pipeline, dict)
-                    else source.pipeline
-                )
+                data["pipeline"] = json.dumps(source.pipeline) if isinstance(source.pipeline, dict) else source.pipeline
 
-            created = await PolicyRepository(prisma_client).table.create(data=data)
+            created: Final = await _policy_table(prisma_client).create(data=data)
             return _row_to_policy_db_response(created)
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error creating new version: {e}")
-            raise Exception(f"Error creating new version: {str(e)}")
+            verbose_proxy_logger.exception("Error creating new version: %s", e)
+            raise Exception(f"Error creating new version: {e}")
 
     async def update_version_status(
         self,
         policy_id: str,
         new_status: str,
         prisma_client: "PrismaClient",
-        updated_by: Optional[str] = None,
+        updated_by: str | None = None,
     ) -> PolicyDBResponse:
         """
         Update a policy version's status. Valid transitions:
@@ -791,26 +900,20 @@ class PolicyRegistry:
         """
         try:
             if new_status not in ("published", "production"):
-                raise Exception(
-                    f"Invalid status '{new_status}'. Use 'published' or 'production'."
-                )
+                raise Exception(f"Invalid status '{new_status}'. Use 'published' or 'production'.")
 
-            row = await PolicyRepository(prisma_client).table.find_unique(
-                where={"policy_id": policy_id}
-            )
+            row: Final = await _policy_table(prisma_client).find_unique(where={"policy_id": policy_id})
             if row is None:
                 raise Exception(f"Policy with ID {policy_id} not found")
 
-            current = getattr(row, "version_status", "production")
-            policy_name = row.policy_name
-            now = datetime.now(timezone.utc)
+            current: Final = getattr(row, "version_status", "production")
+            policy_name: Final = row.policy_name
+            now: Final = datetime.now(timezone.utc)
 
             if new_status == "published":
                 if current != "draft":
-                    raise Exception(
-                        f"Only draft versions can be published. Current status: '{current}'."
-                    )
-                updated = await PolicyRepository(prisma_client).table.update(
+                    raise Exception(f"Only draft versions can be published. Current status: '{current}'.")
+                updated = await _policy_table(prisma_client).update(
                     where={"policy_id": policy_id},
                     data={
                         "version_status": "published",
@@ -828,12 +931,10 @@ class PolicyRegistry:
                 )
             # Plan: "draft -> production" NOT allowed
             if current == "draft":
-                raise Exception(
-                    "Cannot promote draft directly to production. Publish the version first."
-                )
+                raise Exception("Cannot promote draft directly to production. Publish the version first.")
 
             # Demote current production to published
-            await PolicyRepository(prisma_client).table.update_many(
+            await _policy_table(prisma_client).update_many(
                 where={
                     "policy_name": policy_name,
                     "version_status": "production",
@@ -846,7 +947,7 @@ class PolicyRegistry:
             )
 
             # Promote this version to production
-            updated = await PolicyRepository(prisma_client).table.update(
+            updated = await _policy_table(prisma_client).update(
                 where={"policy_id": policy_id},
                 data={
                     "version_status": "production",
@@ -858,7 +959,7 @@ class PolicyRegistry:
 
             # Update in-memory registry: remove old production (by name), add this one
             self.remove_policy(policy_name)
-            policy = self._parse_policy(
+            policy: Final = self._parse_policy(
                 policy_name,
                 {
                     "inherit": updated.inherit,
@@ -875,8 +976,8 @@ class PolicyRegistry:
 
             return _row_to_policy_db_response(updated)
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error updating version status: {e}")
-            raise Exception(f"Error updating version status: {str(e)}")
+            verbose_proxy_logger.exception("Error updating version status: %s", e)
+            raise Exception(f"Error updating version status: {e}")
 
     async def compare_versions(
         self,
@@ -896,30 +997,26 @@ class PolicyRegistry:
             PolicyVersionCompareResponse with both versions and field_diffs
         """
         try:
-            a = await PolicyRepository(prisma_client).table.find_unique(
-                where={"policy_id": policy_id_a}
-            )
-            b = await PolicyRepository(prisma_client).table.find_unique(
-                where={"policy_id": policy_id_b}
-            )
+            a: Final = await _policy_table(prisma_client).find_unique(where={"policy_id": policy_id_a})
+            b: Final = await _policy_table(prisma_client).find_unique(where={"policy_id": policy_id_b})
             if a is None:
                 raise Exception(f"Policy {policy_id_a} not found")
             if b is None:
                 raise Exception(f"Policy {policy_id_b} not found")
 
-            resp_a = _row_to_policy_db_response(a)
-            resp_b = _row_to_policy_db_response(b)
+            resp_a: Final = _row_to_policy_db_response(a)
+            resp_b: Final = _row_to_policy_db_response(b)
 
             # Compare fields that are part of policy content (not metadata)
-            compare_fields = [
+            compare_fields: Final = (
                 "inherit",
                 "description",
                 "guardrails_add",
                 "guardrails_remove",
                 "condition",
                 "pipeline",
-            ]
-            field_diffs: Dict[str, Dict[str, Any]] = {}
+            )
+            field_diffs: Final[dict[str, dict[str, object]]] = {}
             for field in compare_fields:
                 val_a = getattr(resp_a, field)
                 val_b = getattr(resp_b, field)
@@ -932,14 +1029,14 @@ class PolicyRegistry:
                 field_diffs=field_diffs,
             )
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error comparing versions: {e}")
-            raise Exception(f"Error comparing versions: {str(e)}")
+            verbose_proxy_logger.exception("Error comparing versions: %s", e)
+            raise Exception(f"Error comparing versions: {e}")
 
     async def delete_all_versions(
         self,
         policy_name: str,
         prisma_client: "PrismaClient",
-    ) -> Dict[str, str]:
+    ) -> Mapping[str, str]:
         """
         Delete all versions of a policy. Also removes from in-memory registry.
 
@@ -948,23 +1045,27 @@ class PolicyRegistry:
             prisma_client: The Prisma client instance
 
         Returns:
-            Dict with success message
+            Dict with "message" and optional "warning" if a config-defined policy took over.
         """
         try:
-            await PolicyRepository(prisma_client).table.delete_many(
-                where={"policy_name": policy_name}
-            )
+            await _policy_table(prisma_client).delete_many(where={"policy_name": policy_name})
             self.remove_policy(policy_name)
-            return {
-                "message": f"All versions of policy '{policy_name}' deleted successfully"
-            }
+            message: Final = f"All versions of policy '{policy_name}' deleted successfully"
+            if self.get_source(policy_name) == "config":
+                return {
+                    "message": message,
+                    "warning": (
+                        "All DB versions were deleted. The config-defined policy with the same name is active again."
+                    ),
+                }
+            return {"message": message}
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error deleting all versions: {e}")
-            raise Exception(f"Error deleting all versions: {str(e)}")
+            verbose_proxy_logger.exception("Error deleting all versions: %s", e)
+            raise Exception(f"Error deleting all versions: {e}")
 
 
 # Global singleton instance
-_policy_registry: Optional[PolicyRegistry] = None
+_policy_registry: PolicyRegistry | None = None
 
 
 def get_policy_registry() -> PolicyRegistry:

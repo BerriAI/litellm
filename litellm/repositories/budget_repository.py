@@ -2,42 +2,44 @@
 Budget repository for database operations on LiteLLM_BudgetTable.
 """
 
-from typing import Any, Dict, List, Optional, Type
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.repositories.base_repository import BaseRepository
+from litellm.repositories.prisma_protocols import TableActions
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
 
 
 class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
     """Repository for budget database operations."""
 
     @property
-    def table(self) -> Any:
+    def table(self) -> TableActions["prisma_models.LiteLLM_BudgetTable"]:
         return self.prisma_client.db.litellm_budgettable
 
     @property
-    def model_class(self) -> Type[LiteLLM_BudgetTable]:
+    def model_class(self) -> type[LiteLLM_BudgetTable]:
         return LiteLLM_BudgetTable
 
-    async def find_by_id(
-        self, budget_id: str, id_field: str = "budget_id"
-    ) -> Optional[LiteLLM_BudgetTable]:
+    async def find_by_id(self, budget_id: str, id_field: str = "budget_id") -> LiteLLM_BudgetTable | None:
         return await super().find_by_id(budget_id, id_field)
 
     async def create_budget(
         self,
         created_by: str,
-        max_budget: Optional[float] = None,
-        soft_budget: Optional[float] = None,
-        max_parallel_requests: Optional[int] = None,
-        tpm_limit: Optional[int] = None,
-        rpm_limit: Optional[int] = None,
-        model_max_budget: Optional[Dict[str, Any]] = None,
-        budget_duration: Optional[str] = None,
-        allowed_models: Optional[List[str]] = None,
+        max_budget: float | None = None,
+        soft_budget: float | None = None,
+        max_parallel_requests: int | None = None,
+        tpm_limit: int | None = None,
+        rpm_limit: int | None = None,
+        model_max_budget: dict[str, Any] | None = None,
+        budget_duration: str | None = None,
+        allowed_models: list[str] | None = None,
     ) -> LiteLLM_BudgetTable:
         """Create a new budget record."""
-        data: Dict[str, Any] = {
+        data: Final[dict[str, Any]] = {
             "created_by": created_by,
             "updated_by": created_by,
         }
@@ -64,17 +66,17 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
         self,
         budget_id: str,
         updated_by: str,
-        max_budget: Optional[float] = None,
-        soft_budget: Optional[float] = None,
-        max_parallel_requests: Optional[int] = None,
-        tpm_limit: Optional[int] = None,
-        rpm_limit: Optional[int] = None,
-        model_max_budget: Optional[Dict[str, Any]] = None,
-        budget_duration: Optional[str] = None,
-        allowed_models: Optional[List[str]] = None,
-    ) -> Optional[LiteLLM_BudgetTable]:
+        max_budget: float | None = None,
+        soft_budget: float | None = None,
+        max_parallel_requests: int | None = None,
+        tpm_limit: int | None = None,
+        rpm_limit: int | None = None,
+        model_max_budget: dict[str, Any] | None = None,
+        budget_duration: str | None = None,
+        allowed_models: list[str] | None = None,
+    ) -> LiteLLM_BudgetTable | None:
         """Update an existing budget record."""
-        data: Dict[str, Any] = {"updated_by": updated_by}
+        data: Final[dict[str, Any]] = {"updated_by": updated_by}
         if max_budget is not None:
             data["max_budget"] = max_budget
         if soft_budget is not None:
@@ -94,6 +96,6 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
 
         return await self.update(budget_id, data, id_field="budget_id")
 
-    async def delete_budget(self, budget_id: str) -> Optional[LiteLLM_BudgetTable]:
+    async def delete_budget(self, budget_id: str) -> LiteLLM_BudgetTable | None:
         """Delete a budget record."""
         return await self.delete(budget_id, id_field="budget_id")

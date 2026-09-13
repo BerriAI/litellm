@@ -181,7 +181,7 @@ def test_has_streaming_callbacks_error_when_resolution_fails(monkeypatch):
         "get_custom_logger_compatible_class",
         lambda *a, **kw: (_ for _ in ()).throw(ValueError("nope")),
     )
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="nope"):
         ProxyLogging.has_streaming_callbacks()
 
 
@@ -328,6 +328,13 @@ def test_get_combined_callback_list_matrix(proxy_logging):
         "none_dynamic_returns_global_copy": ["a", "b", "c"],
         "empty_both": [],
     }
+
+
+def test_get_combined_callback_list_preserves_insertion_order(proxy_logging):
+    assert proxy_logging.get_combined_callback_list(
+        dynamic_success_callbacks=["prometheus", "langfuse", "datadog", "otel", "s3"],
+        global_callbacks=["langfuse", "gcs_bucket", "arize", "logfire"],
+    ) == ["prometheus", "langfuse", "datadog", "otel", "s3", "gcs_bucket", "arize", "logfire"]
 
 
 def test_get_combined_callback_list_unhashable_dynamic_raises(proxy_logging):

@@ -1,9 +1,11 @@
 """Shared, OpenTelemetry-free helpers for the otel integration.
 
-Generic value coercion (for reading heterogeneous logging-payload dicts), time
-conversion, and header parsing — pulled out of the individual modules so they
-live in one place. Deliberately free of any ``opentelemetry`` import so the
-OTel-free sources of truth (payloads, semconv, spans, config) can use it too.
+Generic value coercion (for reading heterogeneous logging-payload dicts) and
+time conversion — pulled out of the individual modules so they live in one
+place. Deliberately free of any ``opentelemetry`` import so the OTel-free
+sources of truth (payloads, semconv, spans, config) can use it too. OTLP header
+parsing lives in :mod:`litellm.integrations.otel.plumbing.providers` instead,
+because it delegates to the OTel SDK's own W3C Baggage parser.
 """
 
 from datetime import datetime
@@ -63,7 +65,7 @@ def as_str_tuple(value: object) -> tuple[str, ...] | None:
     return None
 
 
-def to_ns(value: datetime | float | int | None) -> int | None:
+def to_ns(value: datetime | float | None) -> int | None:
     """Coerce a datetime / epoch value to integer nanoseconds."""
     if value is None:
         return None
@@ -74,7 +76,7 @@ def to_ns(value: datetime | float | int | None) -> int | None:
     return None
 
 
-def to_seconds(value: datetime | float | int | str | None) -> float | None:
+def to_seconds(value: datetime | float | str | None) -> float | None:
     """Coerce a datetime / epoch / formatted-string value to epoch seconds."""
     if value is None:
         return None
@@ -89,15 +91,3 @@ def to_seconds(value: datetime | float | int | str | None) -> float | None:
             except ValueError:
                 continue
     return None
-
-
-def parse_headers(raw: str | None) -> dict[str, str]:
-    """Parse an OTLP ``"k=v,k=v"`` header string into a dict."""
-    headers: dict[str, str] = {}
-    if not raw:
-        return headers
-    for pair in raw.split(","):
-        if "=" in pair:
-            key, _, value = pair.partition("=")
-            headers[key.strip()] = value.strip()
-    return headers

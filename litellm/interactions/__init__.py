@@ -66,18 +66,13 @@ from litellm.interactions.main import (
 )
 
 __all__ = [
-    # Create
-    "create",
-    "acreate",
-    # Get
-    "get",
-    "aget",
-    # Delete
-    "delete",
-    "adelete",
-    # Cancel
-    "cancel",
     "acancel",
-    # Sub-modules
+    "acreate",
+    "adelete",
     "agents",
+    "aget",
+    "cancel",
+    "create",
+    "delete",
+    "get",
 ]

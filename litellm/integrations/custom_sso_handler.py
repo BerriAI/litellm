@@ -1,3 +1,5 @@
+from typing import Final
+
 from fastapi import Request
 from fastapi_sso.sso.base import OpenID
 
@@ -29,7 +31,7 @@ class CustomSSOLoginHandler(CustomLogger):
             feature_name="Custom UI SSO",
         )
 
-        request_headers_dict = dict(request.headers)
+        request_headers_dict: Final = dict(request.headers)
         return OpenID(
             id=request_headers_dict.get("x-litellm-user-id"),
             email=request_headers_dict.get("x-litellm-user-email"),

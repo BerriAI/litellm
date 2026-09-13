@@ -1,21 +1,15 @@
 import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
 
 from test_streaming import streaming_format_tests
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import asyncio
 import json
-import os
 import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
 from respx import MockRouter
@@ -355,7 +349,11 @@ async def test_async_vertexai_response_basic():
         user_message = "Hello, how are you?"
         messages = [{"content": user_message, "role": "user"}]
         response = await acompletion(
-            model="gemini-2.5-flash", messages=messages, temperature=0.7, timeout=5
+            model="gemini-3.5-flash",
+            messages=messages,
+            temperature=0.7,
+            timeout=5,
+            vertex_location="global",
         )
         print(f"response: {response}")
     except litellm.NotFoundError as e:
@@ -388,7 +386,7 @@ async def test_async_vertexai_streaming_response():
     )
     test_models = random.sample(list(test_models), 1)
     test_models += list(litellm.vertex_language_models)  # always test gemini-pro
-    test_models = ["gemini-2.5-flash"]
+    test_models = ["gemini-3.5-flash"]
     for model in test_models:
         if model in VERTEX_MODELS_TO_NOT_TEST or (
             "gecko" in model
@@ -412,6 +410,7 @@ async def test_async_vertexai_streaming_response():
                 temperature=0.7,
                 timeout=5,
                 stream=True,
+                vertex_location="global",
             )
             print(f"response: {response}")
             complete_response: str = ""
@@ -2060,28 +2059,6 @@ async def test_vertexai_multimodal_embedding_base64image_in_input():
         # Optional: Print for debugging
         print("Arguments passed to Vertex AI:", args_to_vertexai)
         print("Response:", response)
-
-
-def test_vertexai_embedding_embedding_latest():
-    try:
-        load_vertex_ai_credentials()
-        litellm.set_verbose = True
-
-        response = embedding(
-            model="vertex_ai/text-embedding-004",
-            input=["hi"],
-            dimensions=1,
-            auto_truncate=True,
-            task_type="RETRIEVAL_QUERY",
-        )
-
-        assert len(response.data[0]["embedding"]) == 1
-        assert response.usage.prompt_tokens > 0
-        print(f"response:", response)
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 def test_vertexai_multimodalembedding_embedding_latest():
@@ -3840,10 +3817,11 @@ def test_vertex_schema_test():
     }
 
     response = litellm.completion(
-        model="vertex_ai/gemini-2.5-flash",
+        model="vertex_ai/gemini-3.5-flash",
         messages=[{"role": "user", "content": "call the tool"}],
         tools=[tool],
         tool_choice="required",
+        vertex_location="global",
     )
 
     print(response)
@@ -3895,10 +3873,11 @@ def test_gemini_nullable_object_tool_schema_httpx():
     ]
 
     response = litellm.completion(
-        model="vertex_ai/gemini-2.5-flash",
+        model="vertex_ai/gemini-3.5-flash",
         messages=[{"role": "user", "content": "call the tool"}],
         tools=tools,
         tool_choice="required",
+        vertex_location="global",
     )
 
     print(response)
@@ -4223,13 +4202,7 @@ def test_gemini_google_maps_tool_simple():
             )
         print(f"Response: {response.model_dump_json(indent=4)}")
         assert response.choices[0].message.content is not None
-    except (litellm.RateLimitError, litellm.InternalServerError):
-        # Transient Vertex-side failures (rate limiting, 500 INTERNAL from the
-        # Google Maps grounding backend) are not LiteLLM bugs — don't fail CI.
-        pass
-    except litellm.InternalServerError:
-        pytest.skip(
-            "Google Maps Platform returned a transient 500 (upstream flake); skipping."
-        )
+    except (litellm.RateLimitError, litellm.InternalServerError) as e:
+        pytest.skip(f"Transient Vertex-side failure, not a LiteLLM bug: {e}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")

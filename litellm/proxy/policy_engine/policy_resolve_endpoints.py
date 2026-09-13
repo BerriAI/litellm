@@ -6,6 +6,8 @@ Policy resolve and attachment impact estimation endpoints.
 """
 
 import json
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -29,25 +31,28 @@ from litellm.types.proxy.policy_engine import (
     PolicyResolveResponse,
 )
 
-router = APIRouter()
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
+router: Final = APIRouter()
 
 
-def _build_alias_where(field: str, patterns: list) -> dict:
+def _build_alias_where(field: str, patterns: Sequence[str]) -> dict[str, object]:
     """Build a Prisma ``where`` clause for alias patterns.
 
     Supports exact matches and suffix wildcards (``prefix*``).
     Returns something like:
         {"OR": [{"field": {"in": ["a","b"]}}, {"field": {"startsWith": "dev-"}}]}
     """
-    exact: list = []
-    prefix_conditions: list = []
+    exact: Final[list[str]] = []
+    prefix_conditions: Final[list[dict[str, object]]] = []
     for pat in patterns:
         if pat.endswith("*"):
             prefix_conditions.append({field: {"startsWith": pat[:-1]}})
         else:
             exact.append(pat)
 
-    conditions: list = []
+    conditions: Final[list[dict[str, object]]] = []
     if exact:
         conditions.append({field: {"in": exact}})
     conditions.extend(prefix_conditions)
@@ -73,35 +78,35 @@ def _parse_metadata(raw_metadata: object) -> dict:
 
 def _get_tags_from_metadata(metadata: object, json_metadata: object = None) -> list:
     """Extract tags list from a metadata field (or metadata_json fallback)."""
-    raw = json_metadata if json_metadata is not None else metadata
-    parsed = _parse_metadata(raw)
+    raw: Final = json_metadata if json_metadata is not None else metadata
+    parsed: Final = _parse_metadata(raw)
     return parsed.get("tags", []) or []
 
 
-async def _fetch_all_teams(prisma_client: object) -> list:
+async def _fetch_all_teams(prisma_client: object) -> "Sequence[prisma_models.LiteLLM_TeamTable]":
     """Fetch teams from DB once. Reuse the result across tag and alias lookups."""
-    return await TeamRepository(prisma_client).table.find_many(  # type: ignore
+    return await TeamRepository(prisma_client).table.find_many(
         where={},
         order={"created_at": "desc"},
         take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
     )
 
 
-def _filter_keys_by_tags(keys: list, tag_patterns: list) -> tuple:
+def _filter_keys_by_tags(
+    keys: "Sequence[prisma_models.LiteLLM_VerificationToken]", tag_patterns: Sequence[str]
+) -> tuple[list[str], int]:
     """Filter key rows whose metadata.tags match any of the given patterns.
 
     Returns (named_aliases, unnamed_count).
     """
 
-    affected: list = []
+    affected: Final[list[str]] = []
     unnamed_count = 0
     for key in keys:
         key_alias = key.key_alias or ""
-        key_tags = _get_tags_from_metadata(
-            key.metadata, getattr(key, "metadata_json", None)
-        )
+        key_tags = _get_tags_from_metadata(key.metadata, getattr(key, "metadata_json", None))
         if key_tags and any(
-            RouteChecks._route_matches_wildcard_pattern(route=tag, pattern=pat)
+            RouteChecks.route_matches_wildcard_pattern(route=tag, pattern=pat)
             for tag in key_tags
             for pat in tag_patterns
         ):
@@ -112,19 +117,21 @@ def _filter_keys_by_tags(keys: list, tag_patterns: list) -> tuple:
     return affected, unnamed_count
 
 
-def _filter_teams_by_tags(teams: list, tag_patterns: list) -> tuple:
+def _filter_teams_by_tags(
+    teams: "Sequence[prisma_models.LiteLLM_TeamTable]", tag_patterns: Sequence[str]
+) -> tuple[list[str], int]:
     """Filter pre-fetched team rows whose metadata.tags match any patterns.
 
     Returns (named_aliases, unnamed_count).
     """
 
-    affected: list = []
+    affected: Final[list[str]] = []
     unnamed_count = 0
     for team in teams:
         team_alias = team.team_alias or ""
         team_tags = _get_tags_from_metadata(team.metadata)
         if team_tags and any(
-            RouteChecks._route_matches_wildcard_pattern(route=tag, pattern=pat)
+            RouteChecks.route_matches_wildcard_pattern(route=tag, pattern=pat)
             for tag in team_tags
             for pat in tag_patterns
         ):
@@ -137,33 +144,32 @@ def _filter_teams_by_tags(teams: list, tag_patterns: list) -> tuple:
 
 async def _find_affected_by_team_patterns(
     prisma_client: object,
-    all_teams: list,
-    team_patterns: list,
-    existing_teams: list,
-    existing_keys: list,
-) -> tuple:
+    all_teams: "Sequence[prisma_models.LiteLLM_TeamTable]",
+    team_patterns: Sequence[str],
+    existing_teams: Sequence[str],
+    existing_keys: Sequence[str],
+) -> tuple[list[str], list[str], int]:
     """Filter pre-fetched teams by alias patterns, then fetch their keys.
 
     Returns (new_teams, new_keys, unnamed_keys_count).
     """
 
-    new_teams: list = []
-    matched_team_ids: list = []
+    new_teams: Final[list[str]] = []
+    matched_team_ids: Final[list[str]] = []
 
     for team in all_teams:
         team_alias = team.team_alias or ""
         if team_alias and any(
-            RouteChecks._route_matches_wildcard_pattern(route=team_alias, pattern=pat)
-            for pat in team_patterns
+            RouteChecks.route_matches_wildcard_pattern(route=team_alias, pattern=pat) for pat in team_patterns
         ):
             if team_alias not in existing_teams:
                 new_teams.append(team_alias)
                 matched_team_ids.append(str(team.team_id))
 
-    new_keys: list = []
+    new_keys: Final[list[str]] = []
     unnamed_keys_count = 0
     if matched_team_ids:
-        keys = await VerificationTokenRepository(prisma_client).table.find_many(  # type: ignore
+        keys: Final = await VerificationTokenRepository(prisma_client).table.find_many(
             where={"team_id": {"in": matched_team_ids}},
             order={"created_at": "desc"},
             take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
@@ -180,13 +186,13 @@ async def _find_affected_by_team_patterns(
 
 
 async def _find_affected_keys_by_alias(
-    prisma_client: object, key_patterns: list, existing_keys: list
-) -> list:
+    prisma_client: object, key_patterns: Sequence[str], existing_keys: Sequence[str]
+) -> list[str]:
     """Find keys whose alias matches the given patterns."""
 
-    affected: list = []
+    affected: Final[list[str]] = []
 
-    keys = await VerificationTokenRepository(prisma_client).table.find_many(  # type: ignore
+    keys: Final = await VerificationTokenRepository(prisma_client).table.find_many(
         where=_build_alias_where("key_alias", key_patterns),
         order={"created_at": "desc"},
         take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
@@ -194,8 +200,7 @@ async def _find_affected_keys_by_alias(
     for key in keys:
         key_alias = key.key_alias or ""
         if key_alias and any(
-            RouteChecks._route_matches_wildcard_pattern(route=key_alias, pattern=pat)
-            for pat in key_patterns
+            RouteChecks.route_matches_wildcard_pattern(route=key_alias, pattern=pat) for pat in key_patterns
         ):
             if key_alias not in existing_keys:
                 affected.append(key_alias)
@@ -252,7 +257,7 @@ async def resolve_policies_for_context(
             await get_attachment_registry().sync_attachments_from_db(prisma_client)
 
         # Build context from request
-        context = PolicyMatchContext(
+        context: Final = PolicyMatchContext(
             team_alias=request.team_alias,
             key_alias=request.key_alias,
             model=request.model,
@@ -260,9 +265,7 @@ async def resolve_policies_for_context(
         )
 
         # Get matching policies with reasons
-        match_results = get_attachment_registry().get_attached_policies_with_reasons(
-            context=context
-        )
+        match_results: Final = get_attachment_registry().get_attached_policies_with_reasons(context=context)
 
         if not match_results:
             return PolicyResolveResponse(
@@ -271,15 +274,15 @@ async def resolve_policies_for_context(
             )
 
         # Filter by conditions
-        policy_names = [r["policy_name"] for r in match_results]
-        applied_policy_names = PolicyMatcher.get_policies_with_matching_conditions(
+        policy_names: Final = [r["policy_name"] for r in match_results]
+        applied_policy_names: Final = PolicyMatcher.get_policies_with_matching_conditions(
             policy_names=policy_names,
             context=context,
         )
 
         # Resolve guardrails for each applied policy
-        matched_policies = []
-        all_guardrails: set = set()
+        matched_policies: Final = []
+        all_guardrails: Final[set] = set()
         for result in match_results:
             pname = result["policy_name"]
             if pname not in applied_policy_names:
@@ -306,7 +309,7 @@ async def resolve_policies_for_context(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error resolving policies: {e}")
+        verbose_proxy_logger.exception("Error resolving policies: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -356,22 +359,22 @@ async def estimate_attachment_impact(
                 sample_teams=["(global scope — affects all teams)"],
             )
 
-        affected_keys: list = []
-        affected_teams: list = []
+        affected_keys: list[str] = []
+        affected_teams: list[str] = []
         unnamed_keys = 0
         unnamed_teams = 0
 
-        tag_patterns = request.tags or []
-        team_patterns = request.teams or []
+        tag_patterns: Final = request.tags or []
+        team_patterns: Final = request.teams or []
 
         # Fetch teams once — reused by both tag-based and alias-based lookups
-        all_teams: list = []
+        all_teams: Sequence[prisma_models.LiteLLM_TeamTable] = []
         if tag_patterns or team_patterns:
             all_teams = await _fetch_all_teams(prisma_client)
 
         # Tag-based impact
         if tag_patterns:
-            keys = await VerificationTokenRepository(prisma_client).table.find_many(  # type: ignore
+            keys: Final = await VerificationTokenRepository(prisma_client).table.find_many(
                 where={},
                 order={"created_at": "desc"},
                 take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
@@ -396,7 +399,7 @@ async def estimate_attachment_impact(
             unnamed_keys += new_unnamed
 
         # Key-based impact (direct alias matching)
-        key_patterns = request.keys or []
+        key_patterns: Final = request.keys or []
         if key_patterns:
             new_keys = await _find_affected_keys_by_alias(
                 prisma_client,
@@ -416,5 +419,5 @@ async def estimate_attachment_impact(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error estimating attachment impact: {e}")
+        verbose_proxy_logger.exception("Error estimating attachment impact: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

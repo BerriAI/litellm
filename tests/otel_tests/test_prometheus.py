@@ -6,14 +6,9 @@ import pytest
 import aiohttp
 import asyncio
 from litellm._uuid import uuid
-import os
-import sys
 from openai import AsyncOpenAI
 from typing import Dict, Any
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 END_USER_ID = "my-test-user-34"
 

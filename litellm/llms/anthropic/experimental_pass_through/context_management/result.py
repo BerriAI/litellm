@@ -6,7 +6,7 @@ attach ``iterations`` to ``usage``.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Final
 
 from litellm.types.llms.anthropic import (
     AppliedEdit,
@@ -19,13 +19,13 @@ from .constants import COMPACT_EDIT_TYPE
 
 @dataclass
 class PolyfillResult:
-    messages: List[Dict[str, Any]]
-    system: Optional[Union[str, List[Dict[str, Any]]]]
-    applied_edits: List[AppliedEdit] = field(default_factory=list)
-    compaction_block: Optional[CompactionBlock] = None
-    iterations_usage: Optional[List[UsageIteration]] = None
+    messages: list[dict[str, Any]]
+    system: str | list[dict[str, Any]] | None
+    applied_edits: list[AppliedEdit] = field(default_factory=list)
+    compaction_block: CompactionBlock | None = None
+    iterations_usage: list[UsageIteration] | None = None
 
-    def applied_edits_for_response(self) -> Optional[List[AppliedEdit]]:
+    def applied_edits_for_response(self) -> list[AppliedEdit] | None:
         """``applied_edits`` to attach on the client-visible response.
 
         ``compact_20260112`` is included when a new compaction block was
@@ -39,14 +39,10 @@ class PolyfillResult:
         (no block, no error, no warnings) are omitted. Other edit types are
         included when the editor returned an ``AppliedEdit``.
         """
-        visible: List[AppliedEdit] = []
+        visible: Final[list[AppliedEdit]] = []
         for edit in self.applied_edits:
             if edit.get("type") == COMPACT_EDIT_TYPE:
-                if (
-                    self.compaction_block is not None
-                    or edit.get("error")
-                    or edit.get("warnings")
-                ):
+                if self.compaction_block is not None or edit.get("error") or edit.get("warnings"):
                     visible.append(edit)
             else:
                 visible.append(edit)

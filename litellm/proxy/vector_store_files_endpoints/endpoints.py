@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING, Final, Optional
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse
@@ -17,6 +17,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     handle_model_based_routing,
     prepare_data_with_credentials,
 )
+from litellm.proxy.rag_endpoints.upload_security import safe_download_headers
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
     is_allowed_to_call_vector_store_files_endpoint,
@@ -27,15 +28,17 @@ from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 if TYPE_CHECKING:
     from litellm.router import Router
 
-router = APIRouter()
+router: Final = APIRouter()
 
 
-def _update_request_data_with_managed_file_id(
-    data: Dict,
+async def _update_request_data_with_managed_file_id(
+    data: dict,
     file_id: str,
     request: Request,
+    user_api_key_dict: UserAPIKeyAuth,
+    managed_files_obj: object | None,
     llm_router: Optional["Router"] = None,
-) -> tuple[Dict, Optional[str]]:
+) -> tuple[dict, str | None]:
     """
     Update request data with model routing information from managed file ID.
 
@@ -65,44 +68,54 @@ def _update_request_data_with_managed_file_id(
         is_base64_encoded_unified_id,
         parse_unified_id,
     )
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        validate_managed_id_requirement,
+    )
+
+    await validate_managed_id_requirement(
+        resource_id=file_id,
+        resource_kind="file",
+        user_api_key_dict=user_api_key_dict,
+        managed_files_obj=managed_files_obj,
+    )
 
     # First, check if this is a unified managed file ID (base64 encoded)
-    decoded_id = is_base64_encoded_unified_id(file_id)
+    decoded_id: Final = is_base64_encoded_unified_id(file_id)
 
     if decoded_id:
         # This is a unified managed file ID
-        verbose_logger.debug(f"Processing unified managed file ID: {file_id}")
+        verbose_logger.debug("Processing unified managed file ID: %s", file_id)
 
         # Parse the unified ID to extract components
-        parsed_id = parse_unified_id(file_id)
+        parsed_id: Final = parse_unified_id(file_id)
 
         if parsed_id:
-            target_model_names = parsed_id.get("target_model_names", [])
+            target_model_names: Final = parsed_id.get("target_model_names", [])
 
             # Extract the actual provider file ID from llm_output_file_id field
             # Format: litellm_proxy:...;llm_output_file_id,{actual_file_id};...
             llm_output_file_id = None
             try:
-                match = re.search(r"llm_output_file_id,([^;]+)", decoded_id)
+                match: Final = re.search(r"llm_output_file_id,([^;]+)", decoded_id)
                 if match:
                     llm_output_file_id = match.group(1).strip()
             except Exception:
                 pass
 
             verbose_logger.debug(
-                f"Decoded unified file ID - target_model_names: {target_model_names}, llm_output_file_id: {llm_output_file_id}"
+                "Decoded unified file ID - target_model_names: %s, llm_output_file_id: %s",
+                target_model_names,
+                llm_output_file_id,
             )
 
             # Set the model for routing
             if target_model_names and len(target_model_names) > 0:
-                routing_model = target_model_names[0]
+                routing_model: Final = target_model_names[0]
                 data["model"] = routing_model
 
                 # Get credentials for the model
                 if llm_router:
-                    credentials = llm_router.get_deployment_credentials_with_provider(
-                        model_id=routing_model
-                    )
+                    credentials = llm_router.get_deployment_credentials_with_provider(model_id=routing_model)
                     if credentials:
                         prepare_data_with_credentials(
                             data=data,
@@ -110,16 +123,17 @@ def _update_request_data_with_managed_file_id(
                             file_id=llm_output_file_id,  # Use the actual provider file ID
                         )
                         verbose_logger.info(
-                            f"Routing vector store file operation to model: {routing_model}, file_id: {file_id} -> {llm_output_file_id}"
+                            "Routing vector store file operation to model: %s, file_id: %s -> %s",
+                            routing_model,
+                            file_id,
+                            llm_output_file_id,
                         )
                         return data, file_id  # Return original managed file ID
 
             # If we extracted the provider file ID but no routing, still use it
             if llm_output_file_id:
                 data["file_id"] = llm_output_file_id
-                verbose_logger.debug(
-                    f"Replaced unified file ID with provider file ID: {llm_output_file_id}"
-                )
+                verbose_logger.debug("Replaced unified file ID with provider file ID: %s", llm_output_file_id)
                 return data, file_id  # Return original managed file ID
 
         return data, file_id if decoded_id else None
@@ -142,17 +156,13 @@ def _update_request_data_with_managed_file_id(
         # Use model-based routing with credentials from config
         prepare_data_with_credentials(
             data=data,
-            credentials=credentials,  # type: ignore
+            credentials=credentials,
             file_id=original_file_id,  # Use decoded file ID if from encoded ID
         )
 
         verbose_logger.debug(
             f"Routing vector store file operation using model: {model_used}"
-            + (
-                f", file_id: {file_id} -> {original_file_id}"
-                if original_file_id
-                else ""
-            )
+            + (f", file_id: {file_id} -> {original_file_id}" if original_file_id else "")
         )
         return data, file_id  # Return original file ID for response replacement
 
@@ -196,12 +206,12 @@ async def _authorize_model_routing_hint(
     *,
     model: str,
     llm_router: Optional["Router"],
-    user_api_key_dict: Optional[UserAPIKeyAuth],
+    user_api_key_dict: UserAPIKeyAuth | None,
 ) -> None:
     if user_api_key_dict is None:
         return
 
-    key_models = getattr(user_api_key_dict, "models", None)
+    key_models: Final = getattr(user_api_key_dict, "models", None)
     if not (isinstance(key_models, list) and "all-team-models" in key_models):
         await can_key_call_model(
             model=model,
@@ -210,7 +220,7 @@ async def _authorize_model_routing_hint(
             llm_router=llm_router,
         )
 
-    team_models = getattr(user_api_key_dict, "team_models", None)
+    team_models: Final = getattr(user_api_key_dict, "team_models", None)
     if isinstance(team_models, list) and len(team_models) > 0:
         _can_object_call_model(
             model=model,
@@ -223,21 +233,19 @@ async def _authorize_model_routing_hint(
 
 
 async def _update_request_data_with_model_routing_hint(
-    data: Dict,
+    data: dict,
     request: Request,
     llm_router: Optional["Router"] = None,
-    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
-) -> Dict:
+    user_api_key_dict: UserAPIKeyAuth | None = None,
+) -> dict:
     if data.get("api_key") is not None or data.get("api_base") is not None:
         return data
 
-    user_controlled_model_hint = request.query_params.get(
-        "model"
-    ) or request.headers.get("x-litellm-model")
-    model_hint = data.get("model") or user_controlled_model_hint
-    should_authorize_model_hint = (
-        isinstance(model_hint, str) and model_hint == user_controlled_model_hint
-    )
+    user_controlled_model_hint: Final = request.query_params.get("model") or request.headers.get("x-litellm-model")
+    model_hint: Final = data.get("model") or user_controlled_model_hint
+    should_authorize_model_hint: Final = isinstance(model_hint, str) and model_hint == user_controlled_model_hint
+
+    caller_team_id: Final = getattr(user_api_key_dict, "team_id", None) if user_api_key_dict else None
 
     should_route = False
     credentials = None
@@ -250,7 +258,7 @@ async def _update_request_data_with_model_routing_hint(
                     user_api_key_dict=user_api_key_dict,
                 )
             credentials = llm_router.get_deployment_credentials_with_provider(
-                model_id=model_hint
+                model_id=model_hint, team_id=caller_team_id
             )
             should_route = credentials is not None
     else:
@@ -283,11 +291,11 @@ async def _update_request_data_with_model_routing_hint(
     if llm_router is None or user_api_key_dict is None:
         return data
 
-    team_models = getattr(user_api_key_dict, "team_models", None) or []
+    team_models: Final = getattr(user_api_key_dict, "team_models", None) or []
     if not isinstance(team_models, list):
         return data
 
-    model_names_to_check = []
+    model_names_to_check: Final = []
     for model_name in team_models:
         if not isinstance(model_name, str) or model_name in {
             "all-team-models",
@@ -299,9 +307,7 @@ async def _update_request_data_with_model_routing_hint(
 
     openai_credentials = None
     for model_name in model_names_to_check:
-        credentials = llm_router.get_deployment_credentials_with_provider(
-            model_id=model_name
-        )
+        credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_name, team_id=caller_team_id)
         if credentials is None:
             continue
 
@@ -335,12 +341,12 @@ async def _update_request_data_with_model_routing_hint(
 
 
 def _update_request_data_with_litellm_managed_vector_store_registry(
-    data: Dict,
+    data: dict,
     vector_store_id: str,
     llm_router: Optional["Router"] = None,
-    managed_vector_store: Optional[LiteLLM_ManagedVectorStore] = None,
+    managed_vector_store: LiteLLM_ManagedVectorStore | None = None,
     should_lookup_registry: bool = True,
-) -> Dict:
+) -> dict:
     """
     Update request data with model routing information from managed vector store.
 
@@ -369,21 +375,24 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
     )
 
     # Check if this is a managed vector store ID (base64 encoded unified ID)
-    decoded_id = is_base64_encoded_unified_id(vector_store_id)
+    decoded_id: Final = is_base64_encoded_unified_id(vector_store_id)
 
     if decoded_id:
         # This is a managed vector store - decode and extract routing information
-        verbose_logger.debug(f"Processing managed vector store ID: {vector_store_id}")
+        verbose_logger.debug("Processing managed vector store ID: %s", vector_store_id)
 
-        parsed_id = parse_unified_id(vector_store_id)
+        parsed_id: Final = parse_unified_id(vector_store_id)
 
         if parsed_id:
-            model_id = parsed_id.get("model_id")
-            provider_resource_id = parsed_id.get("provider_resource_id")
-            target_model_names = parsed_id.get("target_model_names", [])
+            model_id: Final = parsed_id.get("model_id")
+            provider_resource_id: Final = parsed_id.get("provider_resource_id")
+            target_model_names: Final = parsed_id.get("target_model_names", [])
 
             verbose_logger.debug(
-                f"Decoded vector store - model_id: {model_id}, provider_resource_id: {provider_resource_id}, target_model_names: {target_model_names}"
+                "Decoded vector store - model_id: %s, provider_resource_id: %s, target_model_names: %s",
+                model_id,
+                provider_resource_id,
+                target_model_names,
             )
 
             # Set the model for routing - this tells the router which deployment to use
@@ -396,26 +405,20 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
 
             if routing_model:
                 data["model"] = routing_model
-                verbose_logger.info(
-                    f"Routing vector store files operation to model: {routing_model}"
-                )
+                verbose_logger.info("Routing vector store files operation to model: %s", routing_model)
 
             # Replace unified vector store ID with provider resource ID
             if provider_resource_id:
                 data["vector_store_id"] = provider_resource_id
                 verbose_logger.debug(
-                    f"Replaced unified vector store ID with provider resource ID: {provider_resource_id}"
+                    "Replaced unified vector store ID with provider resource ID: %s", provider_resource_id
                 )
 
         return data
 
     # Legacy path: Check vector store registry for non-managed vector stores.
     vector_store_to_run = managed_vector_store
-    if (
-        vector_store_to_run is None
-        and should_lookup_registry
-        and litellm.vector_store_registry is not None
-    ):
+    if vector_store_to_run is None and should_lookup_registry and litellm.vector_store_registry is not None:
         vector_store_to_run = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
             vector_store_id=vector_store_id
         )
@@ -424,11 +427,9 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
         if "custom_llm_provider" in vector_store_to_run:
             data["custom_llm_provider"] = vector_store_to_run.get("custom_llm_provider")
         if "litellm_credential_name" in vector_store_to_run:
-            data["litellm_credential_name"] = vector_store_to_run.get(
-                "litellm_credential_name"
-            )
+            data["litellm_credential_name"] = vector_store_to_run.get("litellm_credential_name")
         if "litellm_params" in vector_store_to_run:
-            litellm_params = vector_store_to_run.get("litellm_params", {}) or {}
+            litellm_params: Final = vector_store_to_run.get("litellm_params", {}) or {}
             data.update(litellm_params)
 
     return data
@@ -436,9 +437,9 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
 
 async def _resolve_provider(
     *,
-    data: Dict,
+    data: dict,
     request: Request,
-) -> Optional[LlmProviders]:
+) -> LlmProviders | None:
     provider = (
         data.get("custom_llm_provider")
         or get_custom_llm_provider_from_request_headers(request=request)
@@ -459,18 +460,16 @@ async def _resolve_provider(
 
 def _maybe_check_permissions(
     *,
-    provider: Optional[LlmProviders],
+    provider: LlmProviders | None,
     vector_store_id: str,
     request: Request,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     if provider is None:
         return
-    metadata = user_api_key_dict.metadata or {}
-    team_metadata = user_api_key_dict.team_metadata or {}
-    if not metadata.get("allowed_vector_store_indexes") and not team_metadata.get(
-        "allowed_vector_store_indexes"
-    ):
+    metadata: Final = user_api_key_dict.metadata or {}
+    team_metadata: Final = user_api_key_dict.team_metadata or {}
+    if not metadata.get("allowed_vector_store_indexes") and not team_metadata.get("allowed_vector_store_indexes"):
         return
     is_allowed_to_call_vector_store_files_endpoint(
         provider=provider,
@@ -515,7 +514,7 @@ async def vector_store_file_create(
 
     data = await _read_request_body(request=request)
     data["vector_store_id"] = vector_store_id
-    managed_vector_store = await assert_user_can_access_vector_store_id(
+    managed_vector_store: Final = await assert_user_can_access_vector_store_id(
         vector_store_id=vector_store_id,
         user_api_key_dict=user_api_key_dict,
     )
@@ -523,8 +522,13 @@ async def vector_store_file_create(
     # Handle managed file IDs if present in request body
     original_managed_file_id = None
     if "file_id" in data:
-        data, original_managed_file_id = _update_request_data_with_managed_file_id(
-            data=data, file_id=data["file_id"], request=request, llm_router=llm_router
+        data, original_managed_file_id = await _update_request_data_with_managed_file_id(
+            data=data,
+            file_id=data["file_id"],
+            request=request,
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+            llm_router=llm_router,
         )
 
     # Then handle managed vector store IDs
@@ -536,7 +540,7 @@ async def vector_store_file_create(
         should_lookup_registry=False,
     )
 
-    provider_enum = await _resolve_provider(data=data, request=request)
+    provider_enum: Final = await _resolve_provider(data=data, request=request)
 
     _maybe_check_permissions(
         provider=provider_enum,
@@ -547,7 +551,7 @@ async def vector_store_file_create(
     if provider_enum is not None and "custom_llm_provider" not in data:
         data["custom_llm_provider"] = provider_enum.value
 
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         response = await processor.base_process_llm_request(
             request=request,
@@ -614,11 +618,11 @@ async def vector_store_file_list(
         version,
     )
 
-    query_params = dict(request.query_params)
-    data: Dict[str, Optional[str]] = {"vector_store_id": vector_store_id}
+    query_params: Final = dict(request.query_params)
+    data: dict[str, str | None] = {"vector_store_id": vector_store_id}
     data.update(query_params)
     data["vector_store_id"] = vector_store_id
-    managed_vector_store = await assert_user_can_access_vector_store_id(
+    managed_vector_store: Final = await assert_user_can_access_vector_store_id(
         vector_store_id=vector_store_id,
         user_api_key_dict=user_api_key_dict,
     )
@@ -638,7 +642,7 @@ async def vector_store_file_list(
         user_api_key_dict=user_api_key_dict,
     )
 
-    provider_enum = await _resolve_provider(data=data, request=request)
+    provider_enum: Final = await _resolve_provider(data=data, request=request)
 
     _maybe_check_permissions(
         provider=provider_enum,
@@ -649,7 +653,7 @@ async def vector_store_file_list(
     if provider_enum is not None and "custom_llm_provider" not in data:
         data["custom_llm_provider"] = provider_enum.value
 
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
             request=request,
@@ -711,18 +715,23 @@ async def vector_store_file_retrieve(
         version,
     )
 
-    data: Dict[str, str] = {
+    data: dict[str, str] = {
         "vector_store_id": vector_store_id,
         "file_id": file_id,
     }
-    managed_vector_store = await assert_user_can_access_vector_store_id(
+    managed_vector_store: Final = await assert_user_can_access_vector_store_id(
         vector_store_id=vector_store_id,
         user_api_key_dict=user_api_key_dict,
     )
 
     # Handle managed file IDs first
-    data, original_managed_file_id = _update_request_data_with_managed_file_id(
-        data=data, file_id=file_id, request=request, llm_router=llm_router
+    data, original_managed_file_id = await _update_request_data_with_managed_file_id(
+        data=data,
+        file_id=file_id,
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        llm_router=llm_router,
     )
 
     # Then handle managed vector store IDs
@@ -734,7 +743,7 @@ async def vector_store_file_retrieve(
         should_lookup_registry=False,
     )
 
-    provider_enum = await _resolve_provider(data=data, request=request)
+    provider_enum: Final = await _resolve_provider(data=data, request=request)
 
     _maybe_check_permissions(
         provider=provider_enum,
@@ -745,7 +754,7 @@ async def vector_store_file_retrieve(
     if provider_enum is not None and "custom_llm_provider" not in data:
         data["custom_llm_provider"] = provider_enum.value
 
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         response = await processor.base_process_llm_request(
             request=request,
@@ -813,18 +822,23 @@ async def vector_store_file_content(
         version,
     )
 
-    data: Dict[str, str] = {
+    data: dict[str, str] = {
         "vector_store_id": vector_store_id,
         "file_id": file_id,
     }
-    managed_vector_store = await assert_user_can_access_vector_store_id(
+    managed_vector_store: Final = await assert_user_can_access_vector_store_id(
         vector_store_id=vector_store_id,
         user_api_key_dict=user_api_key_dict,
     )
 
     # Handle managed file IDs first
-    data, original_managed_file_id = _update_request_data_with_managed_file_id(
-        data=data, file_id=file_id, request=request, llm_router=llm_router
+    data, original_managed_file_id = await _update_request_data_with_managed_file_id(
+        data=data,
+        file_id=file_id,
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        llm_router=llm_router,
     )
 
     # Then handle managed vector store IDs
@@ -836,7 +850,7 @@ async def vector_store_file_content(
         should_lookup_registry=False,
     )
 
-    provider_enum = await _resolve_provider(data=data, request=request)
+    provider_enum: Final = await _resolve_provider(data=data, request=request)
 
     _maybe_check_permissions(
         provider=provider_enum,
@@ -847,7 +861,7 @@ async def vector_store_file_content(
     if provider_enum is not None and "custom_llm_provider" not in data:
         data["custom_llm_provider"] = provider_enum.value
 
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         response = await processor.base_process_llm_request(
             request=request,
@@ -871,6 +885,9 @@ async def vector_store_file_content(
         # Replace provider file ID with original managed file ID in response
         if original_managed_file_id:
             response = _replace_file_id_in_response(response, original_managed_file_id)
+
+        for header_name, header_value in safe_download_headers(file_id).items():
+            fastapi_response.headers[header_name] = header_value
 
         return response
     except Exception as e:  # noqa: BLE001
@@ -919,14 +936,19 @@ async def vector_store_file_update(
     data = await _read_request_body(request=request)
     data["vector_store_id"] = vector_store_id
     data["file_id"] = file_id
-    managed_vector_store = await assert_user_can_access_vector_store_id(
+    managed_vector_store: Final = await assert_user_can_access_vector_store_id(
         vector_store_id=vector_store_id,
         user_api_key_dict=user_api_key_dict,
     )
 
     # Handle managed file IDs first
-    data, original_managed_file_id = _update_request_data_with_managed_file_id(
-        data=data, file_id=file_id, request=request, llm_router=llm_router
+    data, original_managed_file_id = await _update_request_data_with_managed_file_id(
+        data=data,
+        file_id=file_id,
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        llm_router=llm_router,
     )
 
     # Then handle managed vector store IDs
@@ -938,7 +960,7 @@ async def vector_store_file_update(
         should_lookup_registry=False,
     )
 
-    provider_enum = await _resolve_provider(data=data, request=request)
+    provider_enum: Final = await _resolve_provider(data=data, request=request)
 
     _maybe_check_permissions(
         provider=provider_enum,
@@ -949,7 +971,7 @@ async def vector_store_file_update(
     if provider_enum is not None and "custom_llm_provider" not in data:
         data["custom_llm_provider"] = provider_enum.value
 
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         response = await processor.base_process_llm_request(
             request=request,
@@ -1017,18 +1039,23 @@ async def vector_store_file_delete(
         version,
     )
 
-    data: Dict[str, str] = {
+    data: dict[str, str] = {
         "vector_store_id": vector_store_id,
         "file_id": file_id,
     }
-    managed_vector_store = await assert_user_can_access_vector_store_id(
+    managed_vector_store: Final = await assert_user_can_access_vector_store_id(
         vector_store_id=vector_store_id,
         user_api_key_dict=user_api_key_dict,
     )
 
     # Handle managed file IDs first
-    data, original_managed_file_id = _update_request_data_with_managed_file_id(
-        data=data, file_id=file_id, request=request, llm_router=llm_router
+    data, original_managed_file_id = await _update_request_data_with_managed_file_id(
+        data=data,
+        file_id=file_id,
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        llm_router=llm_router,
     )
 
     # Then handle managed vector store IDs
@@ -1040,7 +1067,7 @@ async def vector_store_file_delete(
         should_lookup_registry=False,
     )
 
-    provider_enum = await _resolve_provider(data=data, request=request)
+    provider_enum: Final = await _resolve_provider(data=data, request=request)
 
     _maybe_check_permissions(
         provider=provider_enum,
@@ -1051,7 +1078,7 @@ async def vector_store_file_delete(
     if provider_enum is not None and "custom_llm_provider" not in data:
         data["custom_llm_provider"] = provider_enum.value
 
-    processor = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         response = await processor.base_process_llm_request(
             request=request,
