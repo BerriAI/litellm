@@ -1190,6 +1190,17 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
         return v
 
 
+KeyTeamLimitField = Literal["rpm_limit", "tpm_limit", "max_parallel_requests", "max_budget"]
+
+
+class KeyTeamLimitWarning(TypedDict):
+    """Non-blocking warning when a key limit exceeds its team's effective cap."""
+
+    field: ReadOnly[KeyTeamLimitField]
+    requested: ReadOnly[float | int]
+    effective_team_cap: ReadOnly[float | int]
+
+
 class AllowedVectorStoreIndexItem(LiteLLMPydanticObjectBase):
     index_name: str
     index_permissions: list[Literal["read", "write"]]
@@ -1267,6 +1278,7 @@ class GenerateKeyResponse(KeyRequestBase):
     updated_by: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    warnings: list[KeyTeamLimitWarning] | None = None
 
     @model_validator(mode="before")
     @classmethod
