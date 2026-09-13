@@ -15,6 +15,7 @@ import { AgentBadge, AgentIcon, BatchBadge, LlmBadge, McpBadge, SparkleIcon, Wre
 export interface RequestLogsTableColumnsDeps {
   onKeyHashClick: (keyHash: string) => void;
   onSessionClick: (log: LogEntry) => void;
+  resolveUserEmail?: (userId: string) => string | undefined;
 }
 
 const readMetaString = (metadata: Record<string, unknown> | undefined, key: string): string | undefined => {
@@ -32,14 +33,25 @@ const readMcpLogoUrl = (metadata: Record<string, unknown> | undefined): string |
 const getLogoUrl = (row: LogEntry, provider: string): string =>
   readMcpLogoUrl(row.metadata) ?? (provider ? getProviderLogoAndName(provider).logo : "");
 
-function TruncatedText({ value }: { value: string | undefined }) {
+function TruncatedText({ value, tooltip }: { value: string | undefined; tooltip?: string }) {
   const display = value ?? "-";
-  return <CellTooltip content={display} trigger={<span className="max-w-[15ch] truncate block">{display}</span>} />;
+  return (
+    <CellTooltip
+      content={tooltip ?? display}
+      trigger={<span className="max-w-[15ch] truncate block">{display}</span>}
+    />
+  );
+}
+
+function UserCell({ userId, email }: { userId: string | undefined; email: string | undefined }) {
+  if (!userId || !email || email === userId) return <TruncatedText value={userId} />;
+  return <TruncatedText value={email} tooltip={`${email} (${userId})`} />;
 }
 
 export const getRequestLogsTableColumns = ({
   onKeyHashClick,
   onSessionClick,
+  resolveUserEmail = () => undefined,
 }: RequestLogsTableColumnsDeps): ColumnDef<LogEntry>[] => [
   {
     id: "startTime",
@@ -313,7 +325,12 @@ export const getRequestLogsTableColumns = ({
     header: "Internal User",
     size: 150,
     enableSorting: false,
-    cell: ({ row }) => <TruncatedText value={row.original.user} />,
+    cell: ({ row }) => (
+      <UserCell
+        userId={row.original.user}
+        email={row.original.user ? resolveUserEmail(row.original.user) : undefined}
+      />
+    ),
   },
   {
     id: "end_user",

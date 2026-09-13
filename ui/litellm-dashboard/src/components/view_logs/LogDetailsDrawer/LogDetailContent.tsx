@@ -56,6 +56,7 @@ export interface LogDetailContentProps {
   /** When true, log details (messages/response) are still being lazy-loaded. */
   isLoadingDetails?: boolean;
   accessToken?: string | null;
+  userEmail?: string;
 }
 
 /**
@@ -66,7 +67,12 @@ export interface LogDetailContentProps {
  * Designed to be placed inside LogDetailsDrawer's right panel so it can
  * be reused for both single-log and session-mode views.
  */
-export function LogDetailContent({ logEntry, isLoadingDetails = false, accessToken }: LogDetailContentProps) {
+export function LogDetailContent({
+  logEntry,
+  isLoadingDetails = false,
+  accessToken,
+  userEmail,
+}: LogDetailContentProps) {
   const metadata = logEntry.metadata || {};
   const hasError = metadata.status === "failure";
   const errorInfo = hasError ? metadata.error_information : null;
@@ -142,6 +148,11 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
               <DescriptionItem label="Model">{logEntry.model}</DescriptionItem>
               <DescriptionItem label="Provider">{logEntry.custom_llm_provider || "-"}</DescriptionItem>
               <DescriptionItem label="Call Type">{logEntry.call_type}</DescriptionItem>
+              {logEntry.user && (
+                <DescriptionItem label="User">
+                  <UserIdentity userId={logEntry.user} email={userEmail} />
+                </DescriptionItem>
+              )}
               <DescriptionItem label="Model ID">
                 <TruncatedValue value={logEntry.model_id} />
               </DescriptionItem>
@@ -330,6 +341,16 @@ function TagsSection({ tags }: { tags: Record<string, any> }) {
         ))}
       </div>
     </div>
+  );
+}
+
+function UserIdentity({ userId, email }: { userId: string; email?: string }) {
+  if (!email || email === userId) return <TruncatedValue value={userId} />;
+  return (
+    <span className="inline-flex items-center gap-2">
+      <span>{email}</span>
+      <TruncatedValue value={userId} />
+    </span>
   );
 }
 
