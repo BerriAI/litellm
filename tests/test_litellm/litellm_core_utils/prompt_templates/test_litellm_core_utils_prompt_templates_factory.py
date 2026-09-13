@@ -2,7 +2,7 @@ import base64
 import json
 import logging
 import os
-from typing import Final
+from typing import Final, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -53,6 +53,48 @@ def test_ollama_pt_simple_messages():
     assert isinstance(result, dict)
     assert result["prompt"] == expected_prompt
     assert result["images"] == []
+
+
+def test_bedrock_converse_tool_reference_result_keeps_empty_result():
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "toolu_01",
+                    "type": "function",
+                    "function": {"name": "ToolSearch", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_01",
+            "content": [{"type": "tool_reference", "tool_name": "mcp__deferred__search"}],
+        },
+    ]
+
+    translated: Final[list[dict[str, object]]] = cast(
+        list[dict[str, object]], _bedrock_converse_messages_pt(messages=messages, model="", llm_provider="")
+    )
+
+    assert translated[1]["content"] == [{"toolResult": {"content": [{"text": ""}], "toolUseId": "toolu_01"}}]
+
+
+def test_bedrock_converse_tool_reference_result_preserves_text_content():
+    message = {
+        "role": "tool",
+        "tool_call_id": "toolu_01",
+        "content": [
+            {"type": "text", "text": "loaded"},
+            {"type": "tool_reference", "tool_name": "mcp__deferred__search"},
+        ],
+    }
+
+    result: Final[dict[str, object]] = cast(dict[str, object], _convert_to_bedrock_tool_call_result(message))
+
+    assert result == {"toolResult": {"content": [{"text": "loaded"}], "toolUseId": "toolu_01"}}
 
 
 def test_ollama_pt_consecutive_user_messages():
