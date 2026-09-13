@@ -118,6 +118,7 @@ class CloudflareRerankConfig(BaseRerankConfig):
         model: str,
         api_key: str | None = None,
         optional_params: Mapping[str, object] | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> Mapping[str, object]:
         api_key = api_key or get_secret_str("CLOUDFLARE_API_KEY")
         if api_key is None:
