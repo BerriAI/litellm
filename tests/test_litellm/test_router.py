@@ -5625,6 +5625,41 @@ def test_get_deployment_credentials_with_provider_preserves_aws_auth_params():
         assert credentials.get(key) == value, key
 
 
+def test_get_deployment_credentials_preserves_azure_entra_id_params():
+    entra_params = {
+        "tenant_id": "deployment-tenant",
+        "client_id": "deployment-client",
+        "client_secret": "deployment-client-secret",
+        "azure_scope": "https://cognitiveservices.azure.us/.default",
+        "azure_username": "deployment-user",
+        "azure_password": "deployment-password",
+    }
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "azure-entra-model",
+                "litellm_params": {
+                    "model": "azure/gpt-5.4",
+                    "api_base": "https://example.openai.azure.com/",
+                    "api_version": "2024-10-21",
+                    **entra_params,
+                },
+                "model_info": {"id": "azure-entra-model-id"},
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials(model_id="azure-entra-model-id")
+    credentials_with_provider = router.get_deployment_credentials_with_provider(model_id="azure-entra-model-id")
+
+    assert credentials is not None
+    assert credentials_with_provider is not None
+    assert "api_key" not in credentials
+    for key, value in entra_params.items():
+        assert credentials.get(key) == value, key
+        assert credentials_with_provider.get(key) == value, key
+
+
 def _team_wildcard_model(api_key: str, model_id: str = "team-wildcard-id") -> dict:
     return {
         "model_name": f"model_name_team-1_{model_id}",
