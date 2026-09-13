@@ -297,9 +297,15 @@ def _base64_run_pattern(min_chars: int) -> "re.Pattern[str]":
     return re.compile(rf"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{{{min_chars},}}={{0,2}}")
 
 
+_LOWER_HEX_DIGITS: Final = "0123456789abcdef"
+_UPPER_HEX_DIGITS: Final = "0123456789ABCDEF"
+
+
 def _looks_like_base64(run: str) -> bool:
     unpadded: Final = run.rstrip("=")
-    return not (unpadded.isdigit() or unpadded.islower() or unpadded.isupper())
+    is_hex_or_decimal: Final = not unpadded.strip(_LOWER_HEX_DIGITS) or not unpadded.strip(_UPPER_HEX_DIGITS)
+    is_one_repeated_char: Final = not unpadded.strip(unpadded[0])
+    return not is_hex_or_decimal or is_one_repeated_char
 
 
 def _replace_base64_run(match: "re.Match[str]") -> str:
@@ -320,11 +326,12 @@ class StdoutLogTruncationFilter(logging.Filter):
     request writes hundreds of KB to stdout, repeatedly as the exception propagates from
     the router to the proxy handler and into its traceback, all inline on the event loop.
 
-    At every level, in the message and in the traceback alike, a mixed-case base64 run
-    longer than MAX_BASE64_LENGTH_STDOUT_LOG collapses to a size placeholder first: a
-    multi-megabyte document upload otherwise costs seconds of event-loop time per DEBUG
-    line in the secret regex alone. Single-case runs (hex digests, numeric ids, padding)
-    are left alone. The text around a run stays, since dumping payloads is the point of
+    At every level, in the message and in the traceback alike, a base64 run longer than
+    MAX_BASE64_LENGTH_STDOUT_LOG collapses to a size placeholder first: a multi-megabyte
+    document upload otherwise costs seconds of event-loop time per DEBUG line in the
+    secret regex alone. Hex and decimal runs (digests, numeric ids) are left alone unless
+    they are one repeated character, which is what a zero-filled payload encodes to.
+    The text around a run stays, since dumping payloads is the point of
     `--detailed_debug`, and logging callbacks (OTEL, Datadog, etc.) don't run through
     logging filters at all, so they still get the untouched record.
     """

@@ -17,6 +17,20 @@ from litellm._logging import (
     _COLOR_LOG_FORMAT,
     _MAX_SCRUBBED_ACCESS_ARG,
     _PLAIN_LOG_FORMAT,
+    _get_uvicorn_json_log_config,
+    _initialize_loggers_with_handler,
+    _parse_json_logs_env,
+    _plain_log_format,
+    _stdout_truncation_marker,
+    _turn_on_json,
+    format_base64_size,
+    session_id_var,
+    set_session_id,
+    set_trace_id,
+    trace_id_var,
+    verbose_logger,
+    verbose_proxy_logger,
+    verbose_router_logger,
     ALL_LOGGERS,
     AccessLogRedactionFilter,
     CorrelationContextFilter,
@@ -25,19 +39,6 @@ from litellm._logging import (
     LevelRoutingStreamHandler,
     SecretRedactionFilter,
     StdoutLogTruncationFilter,
-    _get_uvicorn_json_log_config,
-    _initialize_loggers_with_handler,
-    _parse_json_logs_env,
-    _plain_log_format,
-    _stdout_truncation_marker,
-    _turn_on_json,
-    session_id_var,
-    set_session_id,
-    set_trace_id,
-    trace_id_var,
-    verbose_logger,
-    verbose_proxy_logger,
-    verbose_router_logger,
 )
 from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
 from litellm.integrations.custom_logger import CustomLogger
@@ -778,7 +779,7 @@ def test_oversized_traceback_is_truncated(monkeypatch):
     """verbose_proxy_logger.exception() re-logs the payload inside the traceback too."""
     monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
     try:
-        raise ValueError("payload " + "p" * 100_000)
+        raise ValueError("payload " + _OVERSIZED_TEXT)
     except ValueError:
         exc_info = sys.exc_info()
     record = _make_record(logging.ERROR, "Exception occured", exc_info=exc_info)
@@ -807,7 +808,7 @@ def test_secret_filter_keeps_truncated_traceback(monkeypatch):
     traceback instead of reformatting the full one from exc_info."""
     monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
     try:
-        raise ValueError("sk-1234567890abcdefghij payload " + "p" * 100_000)
+        raise ValueError("sk-1234567890abcdefghij payload " + _OVERSIZED_TEXT)
     except ValueError:
         exc_info = sys.exc_info()
     record = _make_record(logging.ERROR, "Exception occured", exc_info=exc_info)
@@ -904,17 +905,34 @@ def test_info_record_collapses_base64_before_truncating(monkeypatch):
 
 @pytest.mark.parametrize(
     "run",
-    (_SHA256_HEX * 80, "0123456789" * 512, "ABCDEFGHIJKLMNOP" * 320, "abcdefghijklmnop" * 320, "A" * 4097 + "=="),
-    ids=("hex", "digits", "upper", "lower", "padded_upper"),
+    (_SHA256_HEX * 80, _SHA256_HEX.upper() * 80, "0123456789" * 512, "0f" * 2100),
+    ids=("hex", "upper_hex", "digits", "two_char_hex_dump"),
 )
-def test_single_case_runs_are_not_mistaken_for_base64(run):
-    """A long hex digest, numeric id, or padding run stays in the log line: base64 of any
-    real payload mixes cases, so only mixed-case runs are collapsed and labeled base64."""
+def test_hex_and_decimal_runs_are_not_mistaken_for_base64(run):
+    """A long hex dump or numeric id stays in the log line even past the limit, since it
+    is not a payload and the operator asked for the full debug output."""
     record = _make_record(logging.DEBUG, "checksum %s", (run,))
 
     assert StdoutLogTruncationFilter().filter(record) is True
 
     assert record.getMessage() == f"checksum {run}"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (bytes(6000), b"\x01" * 6000, b"\x55" * 6000, b"\xaa" * 6000),
+    ids=("zero_filled", "0x01_filled", "0x55_filled", "0xaa_filled"),
+)
+def test_constant_byte_payloads_still_collapse(payload):
+    """A zero-filled buffer encodes to one repeated character, and other constant bytes to
+    a single-case cycle: neither is a digest or an id, so the secret regex never sees them
+    in full and the event loop is not blocked by a degenerate upload."""
+    encoded = base64.b64encode(payload).decode()
+    record = _make_record(logging.DEBUG, "upload %s", (encoded,))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert record.getMessage() == f"upload [base64_data truncated: {format_base64_size(len(encoded))}]"
 
 
 def test_debug_traceback_collapses_base64_runs():
