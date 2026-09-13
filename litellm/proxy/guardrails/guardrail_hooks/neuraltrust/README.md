@@ -34,6 +34,7 @@ Each evaluate call carries `session_id` from the LiteLLM session and `consumer_i
 | TrustGuard `status` | LiteLLM |
 | --- | --- |
 | `block` | HTTP 400 (trace_id / request_id only; findings are not echoed) |
+| `ask` | HTTP 400 like `block`: a proxy has no approval flow, so the response names `verdict: ask` |
 | `transform` | rewrite the last user message / last text from `transformed_payload` |
 | `report` / `allow` | pass through (`report` is logged by trace_id) |
 

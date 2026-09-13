@@ -231,12 +231,13 @@ class TestNeuralTrustGuardrail:
         assert "collector_key" not in mock_post.call_args.kwargs["json"]
 
     @pytest.mark.asyncio
-    async def test_block_raises_without_findings(self) -> None:
+    @pytest.mark.parametrize("status", ["block", "ask"])
+    async def test_block_and_ask_raise_without_findings(self, status: str) -> None:
         guardrail = _guardrail()
         mock_post = AsyncMock(
             return_value=_response(
                 {
-                    "status": "block",
+                    "status": status,
                     "trace_id": "tr-1",
                     "findings": [{"outcome": {"action": "block"}, "evidence": "ssn 123-45-6789"}],
                 }
@@ -256,6 +257,7 @@ class TestNeuralTrustGuardrail:
         assert "findings" not in detail
         assert "evidence" not in str(detail)
         assert detail["trace_id"] == "tr-1"
+        assert detail["verdict"] == status
 
     @pytest.mark.asyncio
     async def test_transform_rewrites_texts(self) -> None:

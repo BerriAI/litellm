@@ -43,10 +43,12 @@ CONSUMER_ID_KEYS: Final = (
 METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 EMPTY_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 STATUS_BLOCK: Final = "block"
+STATUS_ASK: Final = "ask"
 STATUS_TRANSFORM: Final = "transform"
 STATUS_REPORT: Final = "report"
 STATUS_ALLOW: Final = "allow"
-KNOWN_STATUSES: Final = frozenset({STATUS_ALLOW, STATUS_BLOCK, STATUS_TRANSFORM, STATUS_REPORT})
+BLOCKING_STATUSES: Final = frozenset({STATUS_BLOCK, STATUS_ASK})
+KNOWN_STATUSES: Final = frozenset({STATUS_ALLOW, STATUS_TRANSFORM, STATUS_REPORT, *BLOCKING_STATUSES})
 UNREACHABLE_HTTP_STATUSES: Final = frozenset({502, 504})
 TRANSFORM_MISSING: Final = "TrustGuard transform missing payload"
 
@@ -245,12 +247,13 @@ class NeuralTrustGuardrail(CustomGuardrail):
             return self._handle_unreachable(inputs, exc)
 
         status: Final = result["status"]
-        if status == STATUS_BLOCK:
+        if status in BLOCKING_STATUSES:
             raise HTTPException(
                 status_code=400,
                 detail={  # mutable-ok: FastAPI HTTPException.detail is a JSON object
                     "error": "Violated guardrail policy",
                     "neuraltrust_guardrail_response": "Blocked by NeuralTrust TrustGuard.",
+                    "verdict": status,
                     "trace_id": result.get("trace_id"),
                     "request_id": result.get("request_id"),
                 },
