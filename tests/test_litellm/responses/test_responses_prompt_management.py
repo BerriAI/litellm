@@ -320,7 +320,7 @@ class TestResponsesAPIPromptManagement:
     def test_cache_control_hook_preserves_reasoning_items(self):
         original_input, merged_messages, reasoning_item = _make_cache_control_case()
         logging_obj = _make_logging_obj(
-            merged_model="azure/prompt-management-test-model",
+            merged_model="azure/gpt-5-codex",
             merged_messages=merged_messages,
         )
 
@@ -330,7 +330,7 @@ class TestResponsesAPIPromptManagement:
 
             litellm.responses(
                 input=original_input,
-                model="azure/prompt-management-test-model",
+                model="azure/gpt-5-codex",
                 litellm_logging_obj=logging_obj,
                 cache_control_injection_points=[{"location": "message", "role": "system"}],
             )
@@ -516,7 +516,7 @@ class TestAsyncResponsesAPIPromptManagement:
     async def test_async_cache_control_hook_preserves_reasoning_items(self):
         original_input, merged_messages, reasoning_item = _make_cache_control_case()
         logging_obj = _make_logging_obj(
-            merged_model="azure/prompt-management-test-model",
+            merged_model="azure/gpt-5-codex",
             merged_messages=merged_messages,
         )
 
@@ -526,7 +526,7 @@ class TestAsyncResponsesAPIPromptManagement:
 
             await litellm.aresponses(
                 input=original_input,
-                model="azure/prompt-management-test-model",
+                model="azure/gpt-5-codex",
                 litellm_logging_obj=logging_obj,
                 cache_control_injection_points=[{"location": "message", "role": "system"}],
             )

@@ -52,7 +52,6 @@ from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import LlmProviders
 from litellm.utils import (
     ProviderConfigManager,
     client,
@@ -467,9 +466,7 @@ def _resolve_responses_api_provider_config(
     provider_config: Final = ProviderConfigManager.get_provider_responses_api_config(
         model=model, provider=custom_llm_provider
     )
-    if provider_config is not None or not _deployment_supports_native_responses(
-        model_info, model=model, custom_llm_provider=custom_llm_provider
-    ):
+    if provider_config is not None or not _deployment_supports_native_responses(model_info):
         return provider_config
     return OpenAILikeResponsesConfig()
 
@@ -2296,13 +2293,5 @@ async def _aresponses_websocket(
     )
 
 
-def _deployment_supports_native_responses(
-    model_info: object, model: str | None, custom_llm_provider: str | None
-) -> bool:
-    if _deployment_passes_through_responses(model_info):
-        return True
-    if model is None or custom_llm_provider not in tuple(provider.value for provider in LlmProviders):
-        return False
-    from litellm.utils import model_supports_native_endpoint
-
-    return model_supports_native_endpoint("/v1/responses", model, LlmProviders(custom_llm_provider))
+def _deployment_supports_native_responses(model_info: object) -> bool:
+    return _deployment_passes_through_responses(model_info)

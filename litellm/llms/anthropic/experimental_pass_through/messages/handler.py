@@ -31,7 +31,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import CallTypes, LlmProviders
+from litellm.types.utils import CallTypes
 from litellm.utils import ProviderConfigManager, client
 
 from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler
@@ -567,7 +567,7 @@ def anthropic_messages_handler(
             provider=litellm.LlmProviders(custom_llm_provider),
         )
     if anthropic_messages_provider_config is None and _deployment_supports_native_anthropic_messages(
-        kwargs.get("model_info"), model=model, custom_llm_provider=custom_llm_provider
+        kwargs.get("model_info")
     ):
         from litellm.llms.openai_like.messages.transformation import (
             OpenAILikeAnthropicMessagesConfig,
@@ -666,13 +666,5 @@ def anthropic_messages_handler(
     )
 
 
-def _deployment_supports_native_anthropic_messages(
-    model_info: object, model: str | None, custom_llm_provider: str | None
-) -> bool:
-    if _deployment_passes_through_anthropic_messages(model_info):
-        return True
-    if model is None or custom_llm_provider not in tuple(provider.value for provider in LlmProviders):
-        return False
-    from litellm.utils import model_supports_native_endpoint
-
-    return model_supports_native_endpoint("/v1/messages", model, LlmProviders(custom_llm_provider))
+def _deployment_supports_native_anthropic_messages(model_info: object) -> bool:
+    return _deployment_passes_through_anthropic_messages(model_info)

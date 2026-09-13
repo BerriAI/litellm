@@ -5,9 +5,6 @@ import httpx
 import pytest
 
 import litellm
-from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
-    _deployment_supports_native_anthropic_messages,
-)
 from litellm.llms.bedrock.chat.openai_chat_completions_transformation import (
     AmazonBedrockOpenAIChatCompletionsConfig,
 )
@@ -17,7 +14,6 @@ from litellm.llms.bedrock.messages.native_transformation import (
     mantle_native_messages_config,
 )
 from litellm.llms.bedrock.responses.transformation import AmazonBedrockResponsesAPIConfig
-from litellm.responses.main import _deployment_supports_native_responses
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, model_supports_native_endpoint
 
@@ -263,21 +259,6 @@ def test_native_responses_selection_and_url(monkeypatch):
     assert ProviderConfigManager.get_provider_responses_api_config(
         LlmProviders.BEDROCK, "native-model"
     ) is None
-
-
-def test_generic_endpoint_helpers_read_cost_map(monkeypatch):
-    monkeypatch.setitem(
-        litellm.model_cost,
-        "hosted_vllm/native-model",
-        {"supported_endpoints": ["/v1/messages", "/v1/responses"]},  # mutable-ok: provider interface
-    )
-
-    assert _deployment_supports_native_anthropic_messages(
-        None, model="native-model", custom_llm_provider="hosted_vllm"
-    )
-    assert _deployment_supports_native_responses(
-        None, model="native-model", custom_llm_provider="hosted_vllm"
-    )
 
 
 def test_completion_forwards_native_chat_body(monkeypatch):
