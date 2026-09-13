@@ -145,6 +145,52 @@ async def test_get_agent_card_forwards_signature_verifier():
     assert received["signature_verifier"] is verifier
 
 
+@pytest.mark.asyncio
+async def test_get_agent_card_forwards_signature_verifier_when_trying_well_known_paths():
+    received = {}
+
+    async def mock_parent_get_agent_card(
+        self, relative_card_path=None, http_kwargs=None, signature_verifier=None
+    ):
+        received["signature_verifier"] = signature_verifier
+        return MagicMock()
+
+    def verifier(card):
+        return None
+
+    with patch.object(
+        LiteLLMA2ACardResolver.__bases__[0],
+        "get_agent_card",
+        mock_parent_get_agent_card,
+    ):
+        resolver = LiteLLMA2ACardResolver(
+            httpx_client=MagicMock(), base_url="http://test-agent:8000"
+        )
+        await resolver.get_agent_card(signature_verifier=verifier)
+
+    assert received["signature_verifier"] is verifier
+
+
+def test_a2a_card_resolver_base_is_object_when_a2a_sdk_is_missing(monkeypatch):
+    import builtins
+    import sys
+
+    from litellm.a2a_protocol.card_resolver import a2a_card_resolver_base
+
+    for name in [name for name in sys.modules if name == "a2a" or name.startswith("a2a.")]:
+        monkeypatch.delitem(sys.modules, name, raising=False)
+
+    real_import = builtins.__import__
+
+    def block_a2a(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "a2a" or name.startswith("a2a."):
+            raise ImportError(f"No module named '{name}'")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", block_a2a)
+    assert a2a_card_resolver_base() is object
+
+
 def test_is_localhost_or_internal_url():
     """Test that localhost/internal URLs are correctly detected."""
     # Should return True for localhost variants

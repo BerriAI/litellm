@@ -11,14 +11,20 @@ from typing import TYPE_CHECKING, Final
 from litellm._logging import verbose_logger
 from litellm.constants import LOCALHOST_URL_PATTERNS
 
+
+def a2a_card_resolver_base() -> type[object]:
+    try:
+        from a2a.client import A2ACardResolver as resolver_base
+    except ImportError:
+        return object
+    return resolver_base
+
+
 if TYPE_CHECKING:
     from a2a.client import A2ACardResolver as _A2ACardResolver
     from a2a.types import AgentCard
 else:
-    try:
-        from a2a.client import A2ACardResolver as _A2ACardResolver
-    except ImportError:
-        _A2ACardResolver = object
+    _A2ACardResolver = a2a_card_resolver_base()
 
 # Runtime imports with availability check
 AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent-card.json"
