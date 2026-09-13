@@ -8,8 +8,8 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import React, { useState } from "react";
 import { formatNumberWithCommas } from "../../../../utils/dataUtils";
-import { transformKeyInfo } from "../../../key_team_helpers/transform_key_info";
-import { keyInfoV1Call } from "../../../networking";
+import type { KeyResponse } from "../../../key_team_helpers/key_list";
+import { keyListCall } from "../../../networking";
 import KeyInfoView from "../../../templates/key_info_view";
 import { TagUsage } from "../../types";
 
@@ -47,10 +47,14 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
     if (!accessToken) return;
 
     try {
-      const keyInfo = await keyInfoV1Call(accessToken, item.api_key);
-      const transformedKeyData = transformKeyInfo(keyInfo);
+      const keyList = await keyListCall(accessToken, null, null, null, null, item.api_key, 1, 1, null, null, "user");
+      const expandedKey = keyList.keys[0] as KeyResponse | undefined;
+      if (!expandedKey) return;
 
-      setKeyData(transformedKeyData);
+      setKeyData({
+        ...expandedKey,
+        user_email: expandedKey.user?.user_email ?? expandedKey.user_email,
+      });
       setSelectedKey(item.api_key);
       setIsModalOpen(true); // Open modal when key is clicked
     } catch (error) {
