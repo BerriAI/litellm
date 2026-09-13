@@ -1528,7 +1528,6 @@ def _collect_key_team_limit_warnings(
     )
 
 
-
 def _maybe_add_key_team_limit_warnings(
     payload: dict[str, object],
     data: GenerateKeyRequest | UpdateKeyRequest,
