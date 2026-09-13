@@ -221,6 +221,13 @@ def _status_code_for_error_fields(error_type: str | None, error_code: str | None
     )
 
 
+def _mid_stream_fallback_eligible(mapped_exception: Exception) -> bool:
+    if isinstance(mapped_exception, (litellm.ContentPolicyViolationError, litellm.ContextWindowExceededError)):
+        return True
+    status_code: Final = getattr(mapped_exception, "status_code", None)
+    return not isinstance(status_code, int) or status_code >= 500 or status_code == 429
+
+
 class BaseResponsesAPIStreamingIterator:
     """
     Base class for streaming iterators that process responses from the Responses API.
@@ -521,15 +528,8 @@ class BaseResponsesAPIStreamingIterator:
             getattr(self.completed_response, "response", None) if self.completed_response else None
         )
         error_info: Final = getattr(response_obj, "error", None) if response_obj else None
-        error_message, error_type, error_code = _error_event_fields(error_info)
         self._record_failed_response_usage(response_obj)
-        exception: Final = litellm.APIError(
-            status_code=_status_code_for_error_fields(error_type, error_code),
-            message=error_message,
-            llm_provider=self.custom_llm_provider or "",
-            model=self.model or "",
-        )
-        self._handle_failure(exception)
+        self._handle_failure(self._map_error_event_exception(error_info))
 
     def _record_failed_response_usage(self, response_obj: ResponsesAPIResponse | None) -> None:
         if response_obj is None or self.logging_obj is None:
@@ -551,6 +551,28 @@ class BaseResponsesAPIStreamingIterator:
             self.logging_obj._response_cost_calculator(result=response_obj) or 0.0
         )
 
+    def _map_error_event_exception(self, error_obj: object) -> Exception:
+        from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+        error_message, error_type, error_code = _error_event_fields(error_obj)
+        status_code: Final = _status_code_for_error_fields(error_type, error_code)
+        error_body: Final = {"message": error_message, "type": error_type, "code": error_code}
+        provider_exception: Final = BaseLLMException(
+            status_code=status_code,
+            message=f"Error code: {status_code} - {{'error': {error_body}}}",
+            body=error_body,
+        )
+        try:
+            return litellm.exception_type(
+                model=self.model or "",
+                custom_llm_provider=self.custom_llm_provider or "",
+                original_exception=provider_exception,
+                completion_kwargs={},
+                extra_kwargs={},
+            )
+        except Exception as mapped_exception:
+            return mapped_exception
+
     def _maybe_raise_for_error_event(self, result: object) -> None:
         chunk_type: Final = getattr(result, "type", None)
         if chunk_type not in ("error", "response.failed"):
@@ -562,15 +584,8 @@ class BaseResponsesAPIStreamingIterator:
             else getattr(result, "error", None)
         )
 
-        error_message, error_type, error_code = _error_event_fields(error_obj)
-        status_code: Final = _status_code_for_error_fields(error_type, error_code)
-        mapped_exception: Final = litellm.APIError(
-            status_code=status_code,
-            message=error_message,
-            llm_provider=self.custom_llm_provider or "",
-            model=self.model or "",
-        )
-        if 400 <= status_code < 500 and status_code != 429:
+        mapped_exception: Final = self._map_error_event_exception(error_obj)
+        if not _mid_stream_fallback_eligible(mapped_exception):
             raise mapped_exception
         raise MidStreamFallbackError(
             message=str(mapped_exception),
