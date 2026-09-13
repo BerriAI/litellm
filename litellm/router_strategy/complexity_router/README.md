@@ -195,6 +195,40 @@ model_list:
         session_affinity_ttl_seconds: 300
 ```
 
+## Custom dimensions
+
+Add `custom_dimensions` under `complexity_router_config` to give domain keywords or regex patterns their own weighted signal
+
+```yaml
+custom_dimensions:
+  - name: internalFrameworks
+    weight: 0.9
+    keywords: [orbitmesh, fluxgate]
+  - name: sqlMigration
+    weight: 0.7
+    patterns: ['\b(create|alter|drop)\s{1,4}table\b']
+  - name: dataPipeline
+    weight: 0.4
+    scoring_mode: match_count
+    keywords: [airflow, dbt, snowflake]
+```
+
+Each dimension contributes its weight once when any matcher hits the current ask. Repeated matches do not increase it. The built-in score and tier boundaries are unchanged, and the total score is not renormalized. Keywords use the existing case-insensitive word-boundary and CJK rules. Regexes search the first 2048 characters case-insensitively and compile during configuration validation and router initialization, never per request
+
+`scoring_mode` is optional and defaults to `binary`, the behavior above. `match_count` grades the dimension by how many distinct matchers hit: none scores 0 and emits no signal, one scores half the weight, two or more score the full weight. Repeated occurrences of one matcher never raise the count, keywords are distinct case-insensitively, patterns are distinct by source, and a keyword and a pattern are always distinct from each other. Matching stops as soon as the selected mode's maximum is reached, so a binary dimension still stops at its first hit. Existing configurations without the field keep binary scoring and the same tuning fingerprint, so the field only counts as a tuning change when set to `match_count`
+
+### Weights through the API versus the dashboard
+
+The API and YAML store exactly the weights written. A `dimension_weights` map and inline custom weights are read literally, missing recognized built-in names score zero, and nothing renormalizes the vector, so a total other than 1 is legal and scores accordingly. The dashboard's heuristic scoring editor is the one place that rebalances: editing one weight there holds it and redistributes the remainder across the other active dimensions in the draft, then Save sends the resulting explicit values, which the backend stores and scores as written. Opening a router, applying a preset, editing matchers, changing `scoring_mode`, or saving unrelated fields never normalizes existing weights
+
+Only `heuristic`, `heuristic_first` and `hybrid` accept custom dimensions. Each name must be a unique ASCII identifier starting with a letter, at most 64 characters, and cannot reuse a built-in dimension name or a key in `dimension_weights`. Set its weight inline, greater than zero and at most one
+
+Patterns are checked at configuration time against a grammar whose worst case stays a few milliseconds on 2048 characters. Every quantifier needs an explicit upper bound of at most 64 and must repeat a single character or character class, so `\s{1,4}` is accepted while `\s+`, `(a|aa){0,12}` and `(?:ab){0,64}` are refused. Backreferences, lookarounds, atomic groups and possessive quantifiers are refused as well. Each pattern is then costed: alternation branches and repeat lengths multiply the ways the engine can retry, and every later piece of the pattern is charged once per path that can reach it, so `a?a?a?a?a?a?a?a?` followed by a long fixed tail is refused even though each quantifier is small. The budget is 2048 work units per pattern and 8192 across the router. An invalid or over-budget pattern fails the write with a message naming the pattern and the rule it broke
+
+Limits are 16 dimensions, 32 combined keywords/patterns per dimension, 256 characters per matcher and 4096 matcher characters per dimension. Matching runs inline on the request path with no timeout and no worker thread, because the grammar is what bounds the cost. These are routing hints, not security enforcement rules
+
+The existing heuristic-v1 tuning quota covers custom dimensions, their weights and their scoring mode: one changed router without an auto-router license, unlimited with the entitlement. Omitting `custom_dimensions` preserves existing scoring. Routing decisions and spend logs include signals such as `custom (sqlMigration)` without recording the configured pattern or matched text. The field is configured through YAML, the model API, or the dashboard's heuristic scoring editor
+
 ## Usage
 
 Once configured, use the model name like any other:
@@ -236,6 +270,18 @@ change or default takeover records `cause: modality_escalation` with the displac
 pinned by session affinity, and by default a KEPT session pin bypasses the gate: a session pinned
 to a text-only model keeps it even when an image arrives.
 
+Context-window and modality recovery take priority over the default model. If a compatible tier
+cannot serve, the router checks the remaining compatible recovery tiers before using `default_model`.
+A capacity failure without those constraints tries the selected tier's peers, then the default
+
+The default must fit the context and accept the request's modality. It cannot bypass routing plugins
+or a plan-mode floor. Context fit uses the auto-router's existing buffer even when Router-wide pre-call
+checks are off. Missing context metadata retains the existing unknown-window behavior
+
+Health fallback records `cause: health_default_fallback` and `health_displaced:<MODEL>` in `signals`.
+It does not replace the session's tier pin. Adaptive feedback retains the model that actually served,
+but a default outside the adaptive candidate pool does not become a normal candidate
+
 Add `modality_pin_override: true` to lift that last exemption. The image turn is then re-placed
 the same way every other decision is, and records `cause: modality_pin_override` whether or not
 the tier moved, since the model left the pin either way. The pin itself is untouched: the session
@@ -246,6 +292,58 @@ unless `modality_routing` is also on.
 ### Session pin retention
 
 `session_affinity_ttl_seconds` is the idle window for both the model pin selected by session affinity and the deployment pin. Every request that reuses a pin refreshes its TTL, so a session actively sending requests stays pinned. After the window passes with no pin reuse, the next request classifies again and creates a fresh pin. Omit the setting to track the default of 3600 seconds.
+
+### Mid-task stall escalation
+
+A weak model working an agentic task can get stuck: it keeps calling the same tool with the
+same arguments, or the same call keeps erroring, when a stronger model would have broken the
+loop. `stall_escalation_enabled: true` catches this and bumps the request one tier higher, the
+automatic counterpart to a user typing an escalation keyword:
+
+```yaml
+model_list:
+  - model_name: smart-router
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_config:
+        stall_escalation_enabled: true
+        stall_escalation_window: 6
+        stall_escalation_repeat_threshold: 3
+        tiers:
+          SIMPLE: gpt-4o-mini
+          MEDIUM: gpt-4o
+          COMPLEX: claude-sonnet-4
+          REASONING: o1-preview
+```
+
+Detection looks at the assistant's own tool calls, not the human's messages. The task counts as
+stalled when the NEWEST tool call is still part of a stuck pattern: it repeats, or it errored, at
+least `stall_escalation_repeat_threshold` times across the last `stall_escalation_window` calls.
+The tier is then bumped one step by the same `_escalate_tier` ladder `escalation_keywords` uses,
+capped at the highest configured tier. It reads both tool-call shapes: Anthropic Messages
+`tool_use`/`tool_result` blocks (including `is_error`) and chat-completions `tool_calls`/`tool`
+messages (which carry no standard error flag, so those calls are judged on repetition alone).
+
+Anchoring on the newest call is what keeps a recovered task from being escalated on stale
+evidence. A model that tried the same command three times and then moved on still has those
+three calls sitting in the window for a few turns, and counting whichever pattern is most common
+in the window would escalate a request that is already making progress again. Anchoring still
+leaves room between the matches, so a retry loop broken up by an unrelated lookup counts.
+
+There is no state to expire or leak: detection reruns on every classified turn from that
+request's own message list, so the bump lasts only as long as the recent tool calls still look
+stuck and lifts on its own the moment they don't. This also means it reads the whole
+conversation rather than only the turns since the newest human ask, so a plain follow-up like
+"try again" does not discard evidence from before it. Escalation records `stall_escalation` in
+`routing_decision.signals`; unlike `escalation_keywords`, it does not set the
+`escalated`/`escalation_keyword` pair, which is reserved for the keyword mechanism specifically.
+
+`stall_escalation_enabled` cannot be combined with `session_affinity` or
+`classification_mode: user_turn`: both replay a held routing decision on most turns instead of
+classifying, so detection would never see the tool calls it needs to look at. It is also
+rejected together with `tier_definitions`, for the same reason `escalation_keywords` is: both
+rely on the built-in tier severity order, which a custom tier set does not define. Off by
+default.
 
 ### Heuristic-first chaining
 
@@ -274,6 +372,28 @@ model_list:
 `classifier_llm_config.reasoning_effort` applies only to the internal classifier call. Omit it to
 keep the classifier deployment or provider default, or set a supported value such as `none` or
 `low` to override that call.
+
+When the current ask is a Responses API `agent_message` containing `encrypted_content`, LLM
+classification preserves the encrypted task and uses native Responses. This also bypasses the
+local scoring shortcut in `heuristic_first` and `hybrid` modes. The configured classifier must use
+a native OpenAI or Azure OpenAI Responses deployment with access to the encrypted content. The
+provider handles the encrypted task, and the classifier still chooses the tier dynamically
+
+Compatibility is checked after normal deployment selection. A paused incompatible member of the
+classifier group does not prevent an eligible compatible deployment from classifying the task
+
+Unsupported classifier deployments and provider decryption errors use the existing
+`classifier_fallback` policy. No fixed tier is introduced for encrypted tasks. Plaintext asks and
+requests carrying only historical encrypted reasoning retain the existing classifier path
+
+Classifier calls have a one-attempt hard deadline. After a timeout, the router opens a process-local
+circuit for that classifier and sends every session through `classifier_fallback` for
+`classifier_llm_config.circuit_breaker_cooldown_seconds` (30 seconds by default). When the cooldown
+expires, one request probes the classifier while concurrent requests continue through the fallback.
+A successful probe closes the circuit; a failed probe restarts the cooldown. The circuit breaker is
+on by default; set `classifier_llm_config.circuit_breaker_enabled: false` to disable it. The default
+fallback is the local heuristic scorer, so a classifier outage does not repeat its timeout across
+every turn or session handled by the router process.
 
 A request short-circuits, meaning it routes on the scorer's own tier with no classifier call, when
 two things hold: the scorer landed at or below `heuristic_first_max_tier`, and it produced at least
@@ -347,11 +467,26 @@ If 2+ reasoning markers are detected in the user message, the request is promote
 
 Reasoning markers in the system prompt do **not** trigger the reasoning override. This prevents system prompts like "Think step by step before answering" from forcing all requests to the reasoning tier.
 
+For requests identified by a `claude-cli/` or `claude-code/` user agent, the LLM classifier omits caller system
+text to avoid classifying environment, agent, and skill catalogs. The current ask, configured prior-turn context,
+and trajectory signal remain unchanged. The routed completion still receives the original system text. This
+also excludes genuine task constraints supplied only in Claude Code system messages. Other clients keep the
+existing system-context behavior. The browser routing preview has no client-identity field and retains that
+generic behavior; use the real client when checking Claude Code routing.
+
 ### Harness Reminder Blocks
 
 Agent harnesses inject their own context into the conversation as ordinary message text. That text is plumbing, not something a human asked for, so the router strips complete reminder blocks before classifying and picking a tier. A turn that is nothing but a reminder block strips to empty and is skipped, and the router falls back to the last real ask instead
 
-By default a block is anything between `<system-reminder>` and `</system-reminder>`. `reminder_markers` replaces that with your harness's own delimiters. Many harnesses use a different envelope per agent type, so list every pair you emit:
+By default the router strips complete `<system-reminder>` blocks. For requests with a Codex user agent, it also strips complete `<environment_context>`, `<recommended_plugins>`, `<user_instructions>`, and `<environments_instructions>` blocks, plus repository instructions from the fixed heading prefix `# AGENTS.md instructions for ` through `</INSTRUCTIONS>`, regardless of the repository path. Other clients keep those tags and their contents
+
+The proxy records the incoming user agent in request metadata. SDK callers can supply `metadata.user_agent` (or `litellm_metadata.user_agent` on Responses requests), or configure `reminder_markers` explicitly when their client identity is unavailable
+
+The Codex `Message Type: NEW_TASK` wrapper and its delegated-task payload remain available for classification. Cleanup applies to the current ask and quoted prior turns; the routed request retains its original content
+
+In `classification_mode: user_turn`, complete text-only reminder tails leave the preceding fresh ask eligible for classification. Assistant turns and tool results still mark continuations, including tool results carried alongside reminder text
+
+`reminder_markers` replaces these defaults with your harness's own delimiters. Many harnesses use a different envelope per agent type, so list every pair you emit:
 
 ```yaml
 model_list:
@@ -366,7 +501,7 @@ model_list:
             close: "[[SUBAGENT_CONTEXT_END]]"
 ```
 
-Setting `reminder_markers` replaces the built-in `<system-reminder>` pair rather than adding to it, so list that pair too if your harness also emits it. Matching is case-insensitive. Blocks that nest or overlap across pairs are stripped whole. An unclosed delimiter is not a block and is left in place, which keeps prose that merely mentions a delimiter from being eaten
+Setting `reminder_markers` replaces all built-in pairs, including the Codex heading pair, so include every default your harness still needs. Matching is case-insensitive. Blocks that nest or overlap across pairs are stripped whole. An unclosed delimiter is not a block and is left in place, which keeps prose that merely mentions a delimiter from being eaten
 
 ### Code Detection
 

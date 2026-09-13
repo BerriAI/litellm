@@ -68,6 +68,27 @@ def test_explicit_region_and_non_mantle_api_base_are_kept(no_ambient_aws):
     assert base_url == vpc_endpoint
 
 
+@pytest.mark.parametrize(
+    "lookalike_host",
+    [
+        "https://bedrock-mantle.us-east-1.api.aws.internal.example.com",
+        "https://bedrock-mantle.us-gov-west-1.api.aws-int.example.com",
+        "https://bedrock-mantle.us-east-1.api.aws:8443",
+    ],
+)
+def test_lookalike_mantle_host_api_base_is_kept(no_ambient_aws, lookalike_host):
+    url, base_url = BedrockMantlePassthroughConfig().get_complete_url(
+        api_base=lookalike_host,
+        api_key=None,
+        model="us.openai.gpt-5.6-sol",
+        endpoint=INVOKE_ENDPOINT,
+        request_query_params=None,
+        litellm_params={"api_base": lookalike_host},
+    )
+    assert str(url) == f"{lookalike_host}/{INVOKE_ENDPOINT}"
+    assert base_url == lookalike_host
+
+
 def test_region_falls_back_to_the_mantle_default_without_any_hint(no_ambient_aws):
     url, _ = BedrockMantlePassthroughConfig().get_complete_url(
         api_base=None,

@@ -73,6 +73,7 @@ const PromptTable: React.FC<PromptTableProps> = ({
   return (
     <DataTable
       data={promptsList}
+      paginationMode="client"
       columns={columns}
       getRowId={(prompt, index) =>
         prompt.prompt_id ? `${prompt.prompt_id}::${prompt.environment || "development"}` : String(index)

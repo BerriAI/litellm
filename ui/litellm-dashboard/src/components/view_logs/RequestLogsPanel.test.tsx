@@ -148,13 +148,61 @@ describe("RequestLogsPanel", () => {
   });
 
   describe("server-grouped session pagination (#38060)", () => {
-    it("requests session-grouped pages of 10 rows by default without a cursor", async () => {
+    it("requests session-grouped pages of 25 rows by default without a cursor", async () => {
       renderPanel();
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
       expect(lastCall()?.params?.group_by_session).toBe(true);
       expect(lastCall()?.params?.session_cursor).toBeUndefined();
-      expect(lastCall()?.page_size).toBe(10);
+      expect(lastCall()?.page_size).toBe(25);
+    });
+
+    it("offers the same page sizes as the other tables", async () => {
+      const user = userEvent.setup();
+      respondWith([logEntry({ request_id: "req-a" })]);
+      renderPanel();
+
+      await waitFor(() => expect(row("req-a")).not.toBeNull());
+      await user.click(screen.getByTestId("pagination-page-size"));
+
+      const options = await screen.findAllByRole("option");
+      expect(options.map((option) => option.textContent)).toEqual(["25", "50", "100"]);
+    });
+
+    it("counts the rendered rows in the footer instead of the server's session total", async () => {
+      const lastPage = {
+        data: [logEntry({ request_id: "req-a" }), logEntry({ request_id: "req-b" }), logEntry({ request_id: "req-c" })],
+        total: 40,
+        page: 1,
+        page_size: 25,
+        total_pages: 2,
+        next_session_cursor: null,
+        has_more: false,
+      };
+      vi.mocked(uiSpendLogsCall).mockResolvedValue(lastPage);
+      renderPanel();
+
+      await waitFor(() => expect(row("req-a")).not.toBeNull());
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-3 of 3");
+      expect(screen.getByTestId("pagination-next")).toBeDisabled();
+    });
+
+    it("keeps Next enabled from the server total while more session pages remain", async () => {
+      const firstPage = {
+        data: Array.from({ length: 25 }, (_, index) => logEntry({ request_id: `req-${index}` })),
+        total: 80,
+        page: 1,
+        page_size: 25,
+        total_pages: 4,
+        next_session_cursor: "2026-07-07 09:50:13|key-1|sess-1",
+        has_more: true,
+      };
+      vi.mocked(uiSpendLogsCall).mockResolvedValue(firstPage);
+      renderPanel();
+
+      await waitFor(() => expect(row("req-0")).not.toBeNull());
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-25 of 80");
+      expect(screen.getByTestId("pagination-next")).toBeEnabled();
     });
 
     it("renders every row the server returns without client-side collapsing", async () => {
@@ -208,6 +256,44 @@ describe("RequestLogsPanel", () => {
         expect(call?.params?.session_cursor).toBe("2026-07-07 09:50:13|key-1|sess-1");
         expect(call?.page).toBe(2);
       });
+    });
+
+    it("jumps straight to the last page without a cursor when the last-page button is clicked", async () => {
+      const firstPage = Array.from({ length: 25 }, (_, index) => logEntry({ request_id: `req-${index}` }));
+      const lastPage = Array.from({ length: 10 }, (_, index) => logEntry({ request_id: `req-last-${index}` }));
+      vi.mocked(uiSpendLogsCall).mockImplementation(async ({ page }) =>
+        page === 3
+          ? {
+              data: lastPage,
+              total: 60,
+              page: 3,
+              page_size: 25,
+              total_pages: 3,
+              next_session_cursor: null,
+              has_more: false,
+            }
+          : {
+              data: firstPage,
+              total: 60,
+              page: 1,
+              page_size: 25,
+              total_pages: 3,
+              next_session_cursor: "2026-07-07 09:50:13|key-1|sess-1",
+              has_more: true,
+            },
+      );
+      renderPanel();
+
+      await waitFor(() => expect(row("req-0")).not.toBeNull());
+      expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 3");
+      fireEvent.click(screen.getByTestId("pagination-last"));
+
+      await waitFor(() => expect(row("req-last-0")).not.toBeNull());
+      expect(lastCall()?.page).toBe(3);
+      expect(lastCall()?.params?.session_cursor).toBeUndefined();
+      expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 3 of 3");
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 51-60 of 60");
+      expect(vi.mocked(uiSpendLogsCall).mock.calls.filter(([options]) => options.page === 2)).toHaveLength(0);
     });
 
     it("drops the cursor and returns to the first page when a filter changes", async () => {
@@ -489,6 +575,49 @@ describe("RequestLogsPanel", () => {
       expect(byIdCall.page).toBe(1);
       expect(byIdCall.page_size).toBe(1);
       expect(byIdCall.params?.group_by_session).toBeUndefined();
+    });
+
+    it("opens the drawer when ?log_id= is the log's litellm_call_id rather than its request_id", async () => {
+      respondWith([logEntry({ request_id: "chatcmpl-provider", litellm_call_id: "call-1" })]);
+      renderPanel("?log_id=call-1");
+
+      await waitFor(() => {
+        expect(drawer()).toHaveTextContent("open");
+      });
+      expect(drawer()).toHaveAttribute("data-log-id", "chatcmpl-provider");
+    });
+
+    it("fetches by litellm_call_id and opens the drawer when that log is not in the loaded page", async () => {
+      vi.mocked(uiSpendLogsCall).mockImplementation(async ({ params }) =>
+        params?.request_id === "call-old"
+          ? {
+              data: [logEntry({ request_id: "chatcmpl-old", litellm_call_id: "call-old" })],
+              total: 1,
+              page: 1,
+              page_size: 1,
+              total_pages: 1,
+            }
+          : { data: [], total: 0, page: 1, page_size: 50, total_pages: 0 },
+      );
+      renderPanel("?log_id=call-old");
+
+      await waitFor(() => {
+        expect(drawer()).toHaveTextContent("open");
+      });
+      expect(drawer()).toHaveAttribute("data-log-id", "chatcmpl-old");
+    });
+
+    it("opens the exact request_id row when another log in the page carries that id as its litellm_call_id", async () => {
+      respondWith([
+        logEntry({ request_id: "chatcmpl-other", litellm_call_id: "victim-req" }),
+        logEntry({ request_id: "victim-req", litellm_call_id: "victim-call" }),
+      ]);
+      renderPanel("?log_id=victim-req");
+
+      await waitFor(() => {
+        expect(drawer()).toHaveTextContent("open");
+      });
+      expect(drawer()).toHaveAttribute("data-log-id", "victim-req");
     });
 
     it("closing the drawer removes ?log_id= from the URL and closes the drawer", async () => {

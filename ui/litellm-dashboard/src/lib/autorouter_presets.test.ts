@@ -13,6 +13,7 @@ import {
   buildModelAvailability,
   deploymentRefsFromModelInfo,
   normalizeModelName,
+  resolveAvailableModels,
 } from "./autorouter_presets";
 import { DEFAULT_MATCH_THRESHOLD } from "@/components/add_model/SemanticKeywordMatching";
 import { DEFAULT_ESCALATION_KEYWORDS } from "@/components/add_model/EscalationKeywords";
@@ -87,6 +88,19 @@ describe("autorouter_presets", () => {
     }
   });
 
+  it("keeps every preset free of custom dimensions, so applying one never adds scoring rows", () => {
+    for (const { complexity_router_config: config } of getAllPresets()) {
+      expect(config.custom_dimensions).toBeUndefined();
+    }
+    const config = getPresetByKey("anthropic_family")!.complexity_router_config;
+    expect(buildPresetPrefill(config, groupsOnly([])).complexityRouterConfig.custom_dimensions).toBeUndefined();
+  });
+
+  it("resets both scoring overrides when the form falls back to an empty prefill", () => {
+    expect(buildEmptyPrefill().complexityRouterConfig.custom_dimensions).toBeUndefined();
+    expect(buildEmptyPrefill().complexityRouterConfig.dimension_weights).toBeUndefined();
+  });
+
   it("carries a preset's session affinity idle window into the prefilled form state", () => {
     const config = getPresetByKey("anthropic_family")!.complexity_router_config;
     const prefill = buildPresetPrefill({ ...config, session_affinity_ttl_seconds: 300 }, groupsOnly([]));
@@ -94,6 +108,21 @@ describe("autorouter_presets", () => {
     expect(
       buildPresetPrefill(config, groupsOnly([])).complexityRouterConfig.session_affinity_ttl_seconds,
     ).toBeUndefined();
+  });
+
+  it("carries a preset's stored weights and custom dimensions into the prefill without rebalancing them", () => {
+    const config = getPresetByKey("anthropic_family")!.complexity_router_config;
+    const weights = { codePresence: 0.4 };
+    const dimension = { name: "domain", weight: 0.9, keywords: ["orbitmesh"] };
+    const prefill = buildPresetPrefill(
+      { ...config, dimension_weights: weights, custom_dimensions: [dimension] },
+      groupsOnly([]),
+    ).complexityRouterConfig;
+    expect(prefill.dimension_weights).toEqual(weights);
+    expect(prefill.custom_dimensions).toEqual([{ ...dimension, id: "stored-0" }]);
+    const plain = buildPresetPrefill(config, groupsOnly([])).complexityRouterConfig;
+    expect(plain.dimension_weights).toBeUndefined();
+    expect(plain.custom_dimensions).toBeUndefined();
   });
 
   it("keeps the model-family presets on the heuristic classifier", () => {
@@ -121,13 +150,12 @@ describe("autorouter_presets", () => {
     );
   });
 
-  // Opus serves both tiers, so the effort is all that separates them and losing it fails silently.
-  it("pins the anthropic preset's reasoning tier to Opus at high thinking", () => {
+  it("pins the anthropic preset's reasoning tier to Fable 5.1 at high thinking", () => {
     const config = getPresetByKey("anthropic_family")!.complexity_router_config;
     expect(config.tiers.COMPLEX).toEqual(["claude-opus-5"]);
-    expect(config.tiers.REASONING).toEqual(["claude-opus-5"]);
+    expect(config.tiers.REASONING).toEqual(["claude-fable-5-1"]);
     expect(config.tier_model_configs).toEqual({
-      REASONING: [{ model_name: "claude-opus-5", litellm_params: { reasoning_effort: "high" } }],
+      REASONING: [{ model_name: "claude-fable-5-1", litellm_params: { reasoning_effort: "high" } }],
     });
   });
 
@@ -186,7 +214,7 @@ describe("autorouter_presets", () => {
     const preset = getPresetByKey("anthropic_family")!;
     const prefill = buildPresetPrefill(preset.complexity_router_config, groupsOnly(getRequiredModelsInPreset(preset)));
     expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
-      REASONING: { "claude-opus-5": { reasoning_effort: "high" } },
+      REASONING: { "claude-fable-5-1": { reasoning_effort: "high" } },
     });
   });
 
@@ -199,30 +227,30 @@ describe("autorouter_presets", () => {
     });
   });
 
-  it("pins the OpenAI preset to the Luna, Terra, and Sol progression", () => {
+  it("pins the OpenAI preset to the Luna, Terra, Sol, and Astra progression", () => {
     const preset = getPresetByKey("openai_family")!;
     const expectedTiers = {
       SIMPLE: ["gpt-5.6-luna"],
       MEDIUM: ["gpt-5.6-terra"],
       COMPLEX: ["gpt-5.6-sol"],
-      REASONING: ["gpt-5.6-sol"],
+      REASONING: ["gpt-6-astra"],
     };
     expect(preset.complexity_router_config.tiers).toEqual(expectedTiers);
     expect(preset.complexity_router_config.tier_model_configs).toEqual({
-      REASONING: [{ model_name: "gpt-5.6-sol", litellm_params: { reasoning_effort: "xhigh" } }],
+      REASONING: [{ model_name: "gpt-6-astra", litellm_params: { reasoning_effort: "xhigh" } }],
     });
     const prefill = buildPresetPrefill(preset.complexity_router_config, groupsOnly(getRequiredModelsInPreset(preset)));
     expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
-      REASONING: { "gpt-5.6-sol": { reasoning_effort: "xhigh" } },
+      REASONING: { "gpt-6-astra": { reasoning_effort: "xhigh" } },
     });
   });
 
-  it("pins the 1M context preset to Luna, Terra, and Opus at high thinking", () => {
+  it("pins the 1M context preset to Luna, Terra, Sol, and Opus at high thinking", () => {
     const preset = getPresetByKey("1m_context")!;
     const expectedTiers = {
       SIMPLE: ["gpt-5.6-luna"],
       MEDIUM: ["gpt-5.6-terra"],
-      COMPLEX: ["claude-opus-5"],
+      COMPLEX: ["gpt-5.6-sol"],
       REASONING: ["claude-opus-5"],
     };
     expect(preset.complexity_router_config.classifier_type).toBe("heuristic_v2");
@@ -351,6 +379,18 @@ describe("autorouter_presets", () => {
         [{ modelGroup: "orphan-group", underlyingModels: ["anthropic/claude-opus-5"] }],
       );
       expect(availability.underlyingIndex.size).toBe(0);
+    });
+
+    it("returns every configured group serving the same underlying model", () => {
+      const availability = buildModelAvailability(
+        ["z-group", "a-group"],
+        [
+          { modelGroup: "z-group", underlyingModels: ["anthropic/claude-sonnet-5"] },
+          { modelGroup: "a-group", underlyingModels: ["bedrock/us.anthropic.claude-sonnet-5-v1:0"] },
+        ],
+      );
+
+      expect(resolveAvailableModels("anthropic/claude-sonnet-5", availability)).toEqual(["a-group", "z-group"]);
     });
 
     it("breaks ties between groups serving the same model deterministically, alphabetically", () => {

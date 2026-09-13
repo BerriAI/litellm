@@ -246,3 +246,94 @@ async def test_lazy_store_invalidate_works_after_redis_chain_is_built() -> None:
 
     assert build_calls == 1
     assert redis_store.invalidations == [("u", "s")]
+
+
+@pytest.mark.asyncio
+async def test_enforcement_invalidates_cached_legacy_credentials_before_use():
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding, MCPServer
+
+    server = MCPServer(
+        server_id="srv",
+        name="srv",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth_identity_binding=MCPOAuthIdentityBinding(
+            mode="enforce",
+            issuer="https://idp.example.com",
+            audiences=["client"],
+        ),
+    )
+    cached = _RecordingStore("belongs-to-bob")
+
+    store = LazyPerUserOAuthTokenStore(
+        lambda server_id: server,
+        store_builder=lambda lookup: (cached, False),
+        redis_available=lambda: False,
+    )
+    assert await store.fetch("alice", "srv") is None
+    assert cached.calls == [("alice", "srv")]
+    assert cached.invalidations == [("alice", "srv")]
+
+
+@pytest.mark.asyncio
+async def test_enforced_cache_hit_avoids_credential_read_and_rejects_changed_policy(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._experimental.mcp_server.oauth_identity_binding import current_binding_proof
+    from litellm.proxy._experimental.mcp_server.outbound_credentials import per_user_oauth_store as module
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="srv",
+        name="srv",
+        transport="http",
+        auth_type="oauth2",
+        oauth_identity_binding={
+            "mode": "enforce",
+            "issuer": "https://idp.example",
+            "audiences": ["client"],
+            "caller_field": "user_id",
+            "principal_claim": "sub",
+        },
+    )
+    proof = await current_binding_proof(server.oauth_identity_binding, "alice", "srv")
+    read = AsyncMock(return_value={"access_token": "alice-token", "identity_binding_proof": proof})
+    monkeypatch.setattr(module, "_read_credential", read)
+    monkeypatch.setattr(module, "_runtime_backend_and_coordinator", lambda: (None, None, False))
+    store = LazyPerUserOAuthTokenStore(lambda _: server, redis_available=lambda: False)
+    assert (await store.fetch("alice", "srv")).access_token == "alice-token"
+    assert (await store.fetch("alice", "srv")).access_token == "alice-token"
+    read.assert_awaited_once_with("alice", "srv")
+    server.oauth_identity_binding = server.oauth_identity_binding.model_copy(update={"audiences": ["changed"]})
+    assert await store.fetch("alice", "srv") is None
+    read.assert_awaited_once()
+    assert await store.fetch("alice", "srv") is None
+    assert read.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_expired_unverified_credential_never_reaches_refresh(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._experimental.mcp_server.outbound_credentials import per_user_oauth_store as module
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="srv",
+        name="srv",
+        transport="http",
+        auth_type="oauth2",
+        token_url="https://idp.example/token",
+        oauth_identity_binding={"mode": "enforce", "issuer": "https://idp.example", "audiences": ["client"]},
+    )
+    read = AsyncMock(
+        return_value={"access_token": "bob", "refresh_token": "bob-refresh", "expires_at": "2000-01-01T00:00:00Z"}
+    )
+    post = AsyncMock()
+    monkeypatch.setattr(module, "_read_credential", read)
+    monkeypatch.setattr(module, "_post_token_endpoint", post)
+    monkeypatch.setattr(module, "_runtime_backend_and_coordinator", lambda: (None, None, False))
+    store = LazyPerUserOAuthTokenStore(lambda _: server, redis_available=lambda: False)
+    assert await store.fetch("alice", "srv") is None
+    post.assert_not_awaited()

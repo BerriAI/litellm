@@ -2,6 +2,7 @@ import os
 import sys
 import types
 import json
+import logging
 from contextlib import ExitStack
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -3840,6 +3841,155 @@ class TestAddMCPServerAtomicity:
         mock_manager.reload_servers_from_database.assert_not_awaited()
 
 
+class TestIdJagRegistrationWarnsAboutTheSSOGap:
+    """An `oauth2_id_jag` server only ever works when the login path captures an IdP identity
+    assertion, and only the generic OIDC arm does. Registering one under Google or Microsoft
+    succeeds and then fails for every user on every call, so the mismatch has to be said at
+    registration time, while the admin is still looking at the configuration."""
+
+    @staticmethod
+    def _clear_sso_env(monkeypatch):
+        for name in (
+            "GOOGLE_CLIENT_ID",
+            "MICROSOFT_CLIENT_ID",
+            "GENERIC_CLIENT_ID",
+            "SAML_IDP_METADATA_URL",
+            "SAML_IDP_METADATA_XML",
+        ):
+            monkeypatch.delenv(name, raising=False)
+
+    @staticmethod
+    def _id_jag_warnings(caplog) -> list[str]:
+        return [
+            record.getMessage()
+            for record in caplog.records
+            if record.levelno == logging.WARNING and "oauth2_id_jag" in record.getMessage()
+        ]
+
+    @staticmethod
+    def _server_record(auth_type) -> LiteLLM_MCPServerTable:
+        record = generate_mock_mcp_server_db_record(server_id="ema-1", alias="ema")
+        record.auth_type = auth_type
+        return record
+
+    async def _run_create(self, monkeypatch, provider_env, auth_type, caplog):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            add_mcp_server,
+        )
+
+        self._clear_sso_env(monkeypatch)
+        for name, value in provider_env.items():
+            monkeypatch.setenv(name, value)
+
+        mock_manager = MagicMock()
+        mock_manager.add_server = AsyncMock()
+        mock_manager.reload_servers_from_database = AsyncMock()
+
+        with (
+            patch(  # test-quality-ok: endpoint test stubs the Prisma client lookup
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(  # test-quality-ok: endpoint test stubs MCP server creation
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server",
+                AsyncMock(return_value=self._server_record(auth_type)),
+            ),
+            patch(  # test-quality-ok: endpoint reads the global MCP manager
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+                await add_mcp_server(
+                    payload=NewMCPServerRequest(
+                        alias="ema",
+                        url="https://ema.example.com/mcp",
+                        transport=MCPTransport.http,
+                    ),
+                    user_api_key_dict=generate_mock_user_api_key_auth(
+                        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user"
+                    ),
+                )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "provider_env, expected_fragment",
+        [
+            ({"GOOGLE_CLIENT_ID": "cid"}, "google"),
+            ({"MICROSOFT_CLIENT_ID": "cid"}, "microsoft"),
+            ({"SAML_IDP_METADATA_URL": "https://idp.example.com/metadata"}, "saml"),
+            ({}, "no SSO provider is configured"),
+        ],
+    )
+    async def test_create_warns_under_a_provider_that_captures_nothing(
+        self, monkeypatch, caplog, provider_env, expected_fragment
+    ):
+        await self._run_create(monkeypatch, provider_env, MCPAuth.oauth2_id_jag, caplog)
+        warnings = self._id_jag_warnings(caplog)
+        assert len(warnings) == 1
+        assert expected_fragment in str(warnings[0])
+        assert "ema-1" in str(warnings[0])
+
+    @pytest.mark.asyncio
+    async def test_create_is_silent_under_generic_oidc(self, monkeypatch, caplog):
+        await self._run_create(monkeypatch, {"GENERIC_CLIENT_ID": "cid"}, MCPAuth.oauth2_id_jag, caplog)
+        assert self._id_jag_warnings(caplog) == []
+
+    @pytest.mark.asyncio
+    async def test_create_is_silent_for_other_auth_types(self, monkeypatch, caplog):
+        """Nothing but the id_jag arm sources credentials from a stored SSO assertion, so no
+        other server registered under Google has anything to warn about."""
+        await self._run_create(monkeypatch, {"GOOGLE_CLIENT_ID": "cid"}, MCPAuth.api_key, caplog)
+        assert self._id_jag_warnings(caplog) == []
+
+    @pytest.mark.asyncio
+    async def test_update_to_id_jag_warns(self, monkeypatch, caplog):
+        """Switching an existing server onto id_jag opens the same gap a create does."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            edit_mcp_server,
+        )
+
+        self._clear_sso_env(monkeypatch)
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+
+        mock_manager = MagicMock()
+        mock_manager.update_server = AsyncMock()
+        mock_manager.reload_servers_from_database = AsyncMock()
+        with (
+            patch(  # test-quality-ok: endpoint test stubs the Prisma client lookup
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(  # test-quality-ok: endpoint test stubs the MCP server lookup
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=self._server_record(MCPAuth.api_key)),
+            ),
+            patch(  # test-quality-ok: endpoint test stubs MCP server updates
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.update_mcp_server",
+                AsyncMock(return_value=self._server_record(MCPAuth.oauth2_id_jag)),
+            ),
+            patch(  # test-quality-ok: endpoint test stubs credential cleanup
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.purge_user_oauth_credentials_for_server",
+                AsyncMock(return_value=0),
+            ),
+            patch(  # test-quality-ok: endpoint reads the global MCP manager
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+                await edit_mcp_server(
+                    payload=UpdateMCPServerRequest(server_id="ema-1", auth_type=MCPAuth.oauth2_id_jag),
+                    user_api_key_dict=generate_mock_user_api_key_auth(
+                        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user"
+                    ),
+                )
+
+        warnings = self._id_jag_warnings(caplog)
+        assert len(warnings) == 1
+        assert "google" in str(warnings[0])
+
+
 class TestHealthCheckServers:
     """Test suite for health check servers endpoint"""
 
@@ -4650,6 +4800,72 @@ async def test_store_mcp_oauth_user_credential_returns_status():
     assert result.server_id == server_id
     # expires_at should come from the stored record, not be recomputed
     assert result.expires_at == "2099-01-01T00:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_store_mcp_oauth_user_credential_blocked_when_identity_binding_enforced():
+    """The direct opaque-token POST must be closed for enforce-mode identity-bound servers,
+    otherwise it bypasses the token-relay principal check."""
+    from litellm.proxy._types import MCPOAuthUserCredentialRequest
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding, MCPServer
+
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager as manager_module
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        store_mcp_oauth_user_credential,
+    )
+
+    server_id = "srv-binding-1"
+    bound_server = MCPServer(
+        server_id=server_id,
+        name=server_id,
+        url="https://mcp.example.com",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth_identity_binding=MCPOAuthIdentityBinding(
+            mode="enforce",
+            issuer="https://idp.example.com",
+            audiences=["litellm-client"],
+        ),
+    )
+    store_mock = AsyncMock(return_value=None)
+
+    with (
+        patch(  # test-quality-ok: mirrors the existing store-credential tests in this file
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=_make_prisma_client(),
+        ),
+        patch(  # test-quality-ok: mirrors the existing store-credential tests in this file
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+            new=AsyncMock(return_value=generate_mock_mcp_server_db_record(server_id=server_id)),
+        ),
+        patch(  # test-quality-ok: mirrors the existing store-credential tests in this file
+            "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+            return_value=True,
+        ),
+        patch.object(  # test-quality-ok: registry is a module-level singleton; injecting it would change the endpoint signature
+            manager_module.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            return_value=bound_server,
+        ),
+        patch(  # test-quality-ok: asserting the DB write is never reached is the point of the test
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.store_user_oauth_credential",
+            new=store_mock,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await store_mcp_oauth_user_credential(
+                server_id=server_id,
+                payload=MCPOAuthUserCredentialRequest(access_token="opaque-tok", expires_in=3600),
+                user_api_key_dict=_make_user_auth("user-123"),
+            )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["error"] == "oauth_identity_binding_enforced"
+    store_mock.assert_not_called()
 
 
 @pytest.mark.asyncio

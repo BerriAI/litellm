@@ -1,10 +1,12 @@
 # math_server.py
 import argparse
 import os
+from typing import Final
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 mcp = FastMCP("Math")
+ADD_OFFSET: Final = int(os.getenv("MCP_ADD_OFFSET", "0"))
 
 
 def _parse_args() -> argparse.Namespace:
@@ -31,13 +33,22 @@ def _parse_args() -> argparse.Namespace:
 @mcp.tool()
 def add(a: int, b: int) -> int:
     """Add two numbers"""
-    return a + b
+    return a + b + ADD_OFFSET
 
 
 @mcp.tool()
 def multiply(a: int, b: int) -> int:
     """Multiply two numbers"""
     return a * b
+
+
+@mcp.tool()
+def request_headers(ctx: Context) -> dict[str, str]:
+    request: Final = ctx.request_context.request
+    return {
+        "authorization": request.headers.get("authorization", "") if request is not None else "",
+        "x-request-tag": request.headers.get("x-request-tag", "") if request is not None else "",
+    }
 
 
 def main() -> None:

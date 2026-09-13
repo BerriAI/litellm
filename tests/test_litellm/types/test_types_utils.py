@@ -3,7 +3,7 @@ from typing import Final
 import pytest
 
 
-from litellm.types.utils import HiddenParams, all_litellm_params
+from litellm.types.utils import HiddenParams, all_litellm_params, text_tokens_without_nested_reasoning
 
 
 def test_rust_is_a_known_litellm_param():
@@ -768,3 +768,32 @@ def test_image_response_keeps_background():
     response = ImageResponse(created=1, data=[{"b64_json": "aGk="}], background="transparent", output_format="png")
     assert response.background == "transparent"
     assert response.model_dump()["background"] == "transparent"
+
+
+@pytest.mark.parametrize(
+    ("completion_tokens", "text_tokens", "reasoning_tokens", "other_modality_tokens", "expected_text_tokens"),
+    (
+        pytest.param(50, 30, 20, 0, 30, id="details_sum_to_completion_is_a_no_op"),
+        pytest.param(34, 30, 24, 0, 10, id="strip_is_capped_at_the_over_sum"),
+        pytest.param(100, 100, 10, 70, 90, id="only_the_reasoning_share_is_stripped_when_text_over_reports_further"),
+        pytest.param(10, 5, 20, 0, 0, id="text_never_goes_negative_when_reasoning_exceeds_it"),
+    ),
+)
+def test_text_tokens_without_nested_reasoning_clamps(
+    completion_tokens: int,
+    text_tokens: int,
+    reasoning_tokens: int,
+    other_modality_tokens: int,
+    expected_text_tokens: int,
+) -> None:
+    """The strip never exceeds the reasoning share, the reported text, or the over-sum past completion_tokens."""
+
+    assert (
+        text_tokens_without_nested_reasoning(
+            completion_tokens=completion_tokens,
+            text_tokens=text_tokens,
+            reasoning_tokens=reasoning_tokens,
+            other_modality_tokens=other_modality_tokens,
+        )
+        == expected_text_tokens
+    )

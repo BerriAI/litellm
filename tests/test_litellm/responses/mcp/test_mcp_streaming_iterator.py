@@ -258,3 +258,81 @@ async def test_initial_call_failure_is_stashed_for_eager_reraise(monkeypatch):
 
     assert iterator._initial_creation_error is not None
     assert "initial boom" in str(iterator._initial_creation_error)
+
+
+def _reasoning_item(encrypted_content: str):
+    return {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": encrypted_content}
+
+
+@pytest.mark.asyncio
+async def test_streaming_follow_up_replays_reasoning_when_store_is_false(monkeypatch):
+    """
+    Regression test (LIT-5427): with store=false the provider persisted nothing, so the
+    streaming follow-up must replay the reasoning item (carrying reasoning.encrypted_content).
+    The caller's own previous_response_id was valid for the first call and stays on the follow-up.
+    """
+    _mock_mcp_environment(monkeypatch)
+
+    aresponses_mock = AsyncMock(side_effect=[_text_only_stream("done")])
+    monkeypatch.setattr(responses_main_module, "aresponses", aresponses_mock)
+
+    iterator = MCPEnhancedStreamingIterator(
+        base_iterator=_FakeAsyncStream(
+            [
+                _output_item_added_chunk(),
+                _completed_chunk([_reasoning_item("gAAAAA-opaque-blob"), _function_call("call_1", "read_wiki_contents")]),
+            ]
+        ),
+        mcp_events=[],
+        tool_server_map={"read_wiki_contents": "deepwiki"},
+        mcp_tools_with_litellm_proxy=[{"require_approval": "never"}],
+        user_api_key_auth=None,
+        original_request_params={
+            "model": "gpt-5",
+            "input": "what is berriai/litellm?",
+            "tools": [{"type": "mcp"}],
+            "store": False,
+            "previous_response_id": "resp_prev",
+        },
+    )
+
+    _ = [chunk async for chunk in iterator]
+
+    assert aresponses_mock.call_count == 1
+    follow_up_kwargs = aresponses_mock.call_args_list[0].kwargs
+    assert follow_up_kwargs["previous_response_id"] == "resp_prev"
+    assert _reasoning_item("gAAAAA-opaque-blob") in follow_up_kwargs["input"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_follow_up_keeps_previous_response_id_when_stored(monkeypatch):
+    """The stateful default is unchanged: previous_response_id still links the follow-up."""
+    _mock_mcp_environment(monkeypatch)
+
+    aresponses_mock = AsyncMock(side_effect=[_text_only_stream("done")])
+    monkeypatch.setattr(responses_main_module, "aresponses", aresponses_mock)
+
+    iterator = MCPEnhancedStreamingIterator(
+        base_iterator=_FakeAsyncStream(
+            [
+                _output_item_added_chunk(),
+                _completed_chunk([_reasoning_item("gAAAAA-opaque-blob"), _function_call("call_1", "read_wiki_contents")]),
+            ]
+        ),
+        mcp_events=[],
+        tool_server_map={"read_wiki_contents": "deepwiki"},
+        mcp_tools_with_litellm_proxy=[{"require_approval": "never"}],
+        user_api_key_auth=None,
+        original_request_params={
+            "model": "gpt-5",
+            "input": "what is berriai/litellm?",
+            "tools": [{"type": "mcp"}],
+            "previous_response_id": "resp_prev",
+        },
+    )
+
+    _ = [chunk async for chunk in iterator]
+
+    follow_up_kwargs = aresponses_mock.call_args_list[0].kwargs
+    assert follow_up_kwargs["previous_response_id"] == "resp_prev"
+    assert not [item for item in follow_up_kwargs["input"] if item.get("type") == "reasoning"]

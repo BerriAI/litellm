@@ -1,5 +1,6 @@
 """HTTP client for making requests to the LiteLLM proxy server."""
 
+from collections.abc import Mapping
 from typing import Any, Final
 
 import requests
@@ -25,8 +26,8 @@ class HTTPClient:
         method: str,
         uri: str,
         *,
-        data: dict[str, Any] | list | bytes | None = None,
-        json: dict[str, Any] | list | None = None,
+        data: Mapping[str, object] | list | bytes | None = None,
+        json: Mapping[str, object] | list | None = None,
         headers: dict[str, str] | None = None,
         **kwargs: Any,
     ) -> Any:

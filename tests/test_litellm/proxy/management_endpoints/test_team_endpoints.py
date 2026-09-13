@@ -651,6 +651,7 @@ async def test_new_team_with_mcp_tool_permissions(mock_db_client, mock_admin_aut
 
     mock_db_client.db.litellm_objectpermissiontable = MagicMock()
     mock_db_client.db.litellm_objectpermissiontable.create = mock_obj_perm_create
+    mock_db_client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
 
     # Mock model table
     mock_db_client.db.litellm_modeltable = MagicMock()
@@ -2202,6 +2203,50 @@ async def test_team_model_add_delete_refresh_team_cache(endpoint_name):
             mock_prisma_client.db.litellm_teamtable.update.call_args.kwargs
         )
         assert update_call_kwargs.get("include", {}).get("object_permission") is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint_name", ["team_model_add", "team_model_delete"])
+async def test_team_model_add_delete_keep_model_aliases_in_team_cache(endpoint_name, monkeypatch):
+    """LIT-5858: Prisma only returns `litellm_model_table` when the `update` asks for it, so the refreshed
+    cache entry lost the team's model aliases and JWT alias requests 403'd until the next DB read."""
+    from litellm.proxy._types import TeamModelAddRequest, TeamModelDeleteRequest
+    from litellm.proxy.auth.team_grants import team_model_aliases
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.team_endpoints import team_model_add, team_model_delete
+
+    columns = {"team_id": "team-1234", "models": ["gpt-4o", "openai/*"]}
+    alias_table = {"id": 1, "model_aliases": '{"fast": "gpt-4o"}', "created_by": "admin", "updated_by": "admin"}
+
+    async def update(where, data, include=None):
+        row = {**columns, "litellm_model_table": alias_table} if (include or {}).get("litellm_model_table") else columns
+        return SimpleNamespace(team_id="team-1234", model_dump=lambda: row)
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=SimpleNamespace(model_dump=lambda: columns))
+    prisma_client.db.litellm_teamtable.update = AsyncMock(side_effect=update)
+    prisma_client.db.execute_raw = AsyncMock(return_value=None)
+    cache = UserApiKeyCache()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
+
+    admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+    if endpoint_name == "team_model_add":
+        await team_model_add(
+            data=TeamModelAddRequest(team_id="team-1234", models=["team-byok-1"]),
+            http_request=MagicMock(),
+            user_api_key_dict=admin,
+        )
+    else:
+        await team_model_delete(
+            data=TeamModelDeleteRequest(team_id="team-1234", models=["openai/*"]),
+            http_request=MagicMock(),
+            user_api_key_dict=admin,
+        )
+
+    cached_team = await cache.async_get_cache(key="team_id:team-1234", model_type=LiteLLM_TeamTableCachedObj)
+    assert team_model_aliases(cached_team) == {"fast": "gpt-4o"}
 
 
 @pytest.mark.asyncio
@@ -4860,6 +4905,302 @@ async def test_team_member_delete_by_email_the_user_row_does_not_carry(
 
     mock_db_client.db.litellm_teammembership.delete_many.assert_awaited_once_with(
         where={"team_id": test_team_id, "user_id": test_user_id}
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_member_delete_clears_team_left_on_the_user_row_without_a_roster_entry(
+    mock_db_client, mock_admin_auth
+):
+    """
+    A user row can keep a team (several times over, from older duplicate-prone adds) after the
+    roster entry is gone, which leaves the team listed on the user, offered in the key creation
+    dropdown, and rejected by key creation itself. Reporting "User not found in team" left that
+    residue unremovable, so the delete now cleans every copy of the team off the user row.
+    """
+    from litellm.proxy._types import TeamMemberDeleteRequest
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_delete
+
+    test_team_id = "team-del-orphan-123"
+    test_user_id = "user-del-orphan-123"
+
+    mock_team_row = MagicMock()
+    mock_team_row.model_dump.return_value = {
+        "team_id": test_team_id,
+        "members_with_roles": [],
+        "team_member_permissions": [],
+        "metadata": {},
+        "models": [],
+        "spend": 0.0,
+    }
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=mock_team_row
+    )
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=mock_team_row)
+
+    mock_user_row = MagicMock()
+    mock_user_row.user_id = test_user_id
+    mock_user_row.user_email = None
+    mock_user_row.teams = [test_team_id, "other-team", test_team_id]
+    mock_db_client.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[mock_user_row]
+    )
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    mock_db_client.db.litellm_teammembership = MagicMock()
+    mock_db_client.db.litellm_teammembership.delete_many = AsyncMock(
+        return_value=MagicMock()
+    )
+
+    mock_db_client.db.litellm_verificationtoken = MagicMock()
+    mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_db_client.db.litellm_verificationtoken.delete_many = AsyncMock(
+        return_value=MagicMock()
+    )
+
+    _wire_member_delete_tx(mock_db_client)
+
+    await team_member_delete(
+        data=TeamMemberDeleteRequest(team_id=test_team_id, user_id=test_user_id),
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    mock_db_client.db.litellm_usertable.update.assert_awaited_once_with(
+        where={"user_id": test_user_id},
+        data={"teams": {"set": ["other-team"]}},
+    )
+    mock_db_client.db.litellm_teammembership.delete_many.assert_awaited_once_with(
+        where={"team_id": test_team_id, "user_id": test_user_id}
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_member_delete_still_rejects_a_user_the_team_has_no_trace_of(
+    mock_db_client, mock_admin_auth
+):
+    from litellm.proxy._types import TeamMemberDeleteRequest
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_delete
+
+    test_team_id = "team-del-absent-123"
+    test_user_id = "user-del-absent-123"
+
+    mock_team_row = MagicMock()
+    mock_team_row.model_dump.return_value = {
+        "team_id": test_team_id,
+        "members_with_roles": [],
+        "team_member_permissions": [],
+        "metadata": {},
+        "models": [],
+        "spend": 0.0,
+    }
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=mock_team_row
+    )
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=mock_team_row)
+
+    mock_user_row = MagicMock()
+    mock_user_row.user_id = test_user_id
+    mock_user_row.user_email = None
+    mock_user_row.teams = ["other-team"]
+    mock_db_client.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[mock_user_row]
+    )
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    mock_db_client.db.litellm_teammembership = MagicMock()
+    mock_db_client.db.litellm_teammembership.delete_many = AsyncMock(
+        return_value=MagicMock()
+    )
+
+    _wire_member_delete_tx(mock_db_client)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await team_member_delete(
+            data=TeamMemberDeleteRequest(team_id=test_team_id, user_id=test_user_id),
+            user_api_key_dict=mock_admin_auth,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == {"error": "User not found in team"}
+    mock_db_client.db.litellm_usertable.update.assert_not_awaited()
+    mock_db_client.db.litellm_teammembership.delete_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_team_member_delete_leaves_a_bystander_named_by_a_conflicting_user_id_alone(
+    mock_db_client, mock_admin_auth
+):
+    """
+    A request can carry a user_id and a user_email that point at two different people, and only the
+    email matches a roster entry. Cleaning up both ids would strip the team, the membership row and
+    the keys off the bystander the roster never listed, so the user_id only widens the cleanup when
+    the roster came back empty.
+    """
+    from litellm.proxy._types import TeamMemberDeleteRequest
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_delete
+
+    test_team_id = "team-del-conflict-123"
+    roster_user_id = "user-del-conflict-roster"
+    bystander_user_id = "user-del-conflict-bystander"
+    roster_email = "roster@example.com"
+
+    mock_team_row = MagicMock()
+    mock_team_row.model_dump.return_value = {
+        "team_id": test_team_id,
+        "members_with_roles": [
+            {"user_id": roster_user_id, "user_email": roster_email, "role": "user"}
+        ],
+        "team_member_permissions": [],
+        "metadata": {},
+        "models": [],
+        "spend": 0.0,
+    }
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=mock_team_row
+    )
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=mock_team_row)
+
+    roster_user_row = MagicMock()
+    roster_user_row.user_id = roster_user_id
+    roster_user_row.user_email = roster_email
+    roster_user_row.teams = [test_team_id]
+
+    bystander_user_row = MagicMock()
+    bystander_user_row.user_id = bystander_user_id
+    bystander_user_row.user_email = "bystander@example.com"
+    bystander_user_row.teams = [test_team_id]
+
+    rows_by_user_id = {
+        roster_user_id: roster_user_row,
+        bystander_user_id: bystander_user_row,
+    }
+
+    async def find_user_rows(where):
+        user_id_filter = where.get("user_id")
+        if isinstance(user_id_filter, dict):
+            return [
+                rows_by_user_id[uid]
+                for uid in user_id_filter.get("in", [])
+                if uid in rows_by_user_id
+            ]
+        return [
+            row
+            for row in rows_by_user_id.values()
+            if row.user_email == where.get("user_email")
+        ]
+
+    mock_db_client.db.litellm_usertable.find_many = AsyncMock(
+        side_effect=find_user_rows
+    )
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    mock_db_client.db.litellm_teammembership = MagicMock()
+    mock_db_client.db.litellm_teammembership.delete_many = AsyncMock(
+        return_value=MagicMock()
+    )
+
+    mock_db_client.db.litellm_verificationtoken = MagicMock()
+    mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_db_client.db.litellm_verificationtoken.delete_many = AsyncMock(
+        return_value=MagicMock()
+    )
+
+    _wire_member_delete_tx(mock_db_client)
+
+    await team_member_delete(
+        data=TeamMemberDeleteRequest(
+            team_id=test_team_id,
+            user_id=bystander_user_id,
+            user_email=roster_email,
+        ),
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    mock_db_client.db.litellm_usertable.update.assert_awaited_once_with(
+        where={"user_id": roster_user_id},
+        data={"teams": {"set": []}},
+    )
+    mock_db_client.db.litellm_teammembership.delete_many.assert_awaited_once_with(
+        where={"team_id": test_team_id, "user_id": roster_user_id}
+    )
+    mock_db_client.db.litellm_verificationtoken.delete_many.assert_awaited_once_with(
+        where={"user_id": {"in": [roster_user_id]}, "team_id": test_team_id}
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_member_delete_by_email_only_touches_the_row_carrying_the_stale_team(
+    mock_db_client, mock_admin_auth
+):
+    """
+    user_email is not unique, so an email delete against an empty roster can match several user
+    rows. Only the row that actually carries the team is stale; the namesake keeps its team, its
+    membership row and its keys.
+    """
+    from litellm.proxy._types import TeamMemberDeleteRequest
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_delete
+
+    test_team_id = "team-del-shared-email-123"
+    stale_user_id = "user-del-shared-email-stale"
+    namesake_user_id = "user-del-shared-email-namesake"
+    shared_email = "shared@example.com"
+
+    mock_team_row = MagicMock()
+    mock_team_row.model_dump.return_value = {
+        "team_id": test_team_id,
+        "members_with_roles": [],
+        "team_member_permissions": [],
+        "metadata": {},
+        "models": [],
+        "spend": 0.0,
+    }
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=mock_team_row
+    )
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=mock_team_row)
+
+    stale_user_row = MagicMock()
+    stale_user_row.user_id = stale_user_id
+    stale_user_row.user_email = shared_email
+    stale_user_row.teams = [test_team_id]
+
+    namesake_user_row = MagicMock()
+    namesake_user_row.user_id = namesake_user_id
+    namesake_user_row.user_email = shared_email
+    namesake_user_row.teams = ["other-team"]
+
+    mock_db_client.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[stale_user_row, namesake_user_row]
+    )
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    mock_db_client.db.litellm_teammembership = MagicMock()
+    mock_db_client.db.litellm_teammembership.delete_many = AsyncMock(
+        return_value=MagicMock()
+    )
+
+    mock_db_client.db.litellm_verificationtoken = MagicMock()
+    mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_db_client.db.litellm_verificationtoken.delete_many = AsyncMock(
+        return_value=MagicMock()
+    )
+
+    _wire_member_delete_tx(mock_db_client)
+
+    await team_member_delete(
+        data=TeamMemberDeleteRequest(team_id=test_team_id, user_email=shared_email),
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    mock_db_client.db.litellm_usertable.update.assert_awaited_once_with(
+        where={"user_id": stale_user_id},
+        data={"teams": {"set": []}},
+    )
+    mock_db_client.db.litellm_teammembership.delete_many.assert_awaited_once_with(
+        where={"team_id": test_team_id, "user_id": stale_user_id}
+    )
+    mock_db_client.db.litellm_verificationtoken.delete_many.assert_awaited_once_with(
+        where={"user_id": {"in": [stale_user_id]}, "team_id": test_team_id}
     )
 
 
@@ -10879,13 +11220,14 @@ async def test_team_info_returns_model_aliases():
 
 
 @pytest.mark.asyncio
-async def test_team_info_hydrates_member_emails_from_the_user_table():
-    """/team/info must fill in emails missing from the members_with_roles snapshot.
+async def test_team_info_hydrates_member_names_and_emails_from_the_user_table():
+    """/team/info must attach each member's display name and fill in emails missing
+    from the members_with_roles snapshot.
 
-    members_with_roles is written at add-time, so a member added by user_id alone
-    carries user_email=None forever. Without this join the Admin UI's member table
-    shows "-" for a user that has an email on their user row. A stored email is left
-    exactly as-is.
+    members_with_roles is written at add-time, so it never carries user_alias and a
+    member added by user_id alone carries user_email=None forever. Without this join
+    the Admin UI's member table can only show emails. A stored email is left exactly
+    as-is.
     """
     from fastapi import Request
 
@@ -10905,13 +11247,8 @@ async def test_team_info_hydrates_member_emails_from_the_user_table():
 
     find_many = AsyncMock(
         return_value=[
-            LiteLLM_UserTable(
-                user_id="no-email-on-roster",
-                user_email="real@example.com",
-                max_budget=None,
-                spend=0.0,
-                models=[],
-            )
+            _user_row("no-email-on-roster", "real@example.com", "Real Person"),
+            _user_row("already-stored", "current@example.com", "Stored Person"),
         ]
     )
 
@@ -10929,12 +11266,12 @@ async def test_team_info_hydrates_member_emails_from_the_user_table():
         )
 
     members = response["team_info"].members_with_roles
-    assert [(m.user_id, m.user_email) for m in members] == [
-        ("no-email-on-roster", "real@example.com"),
-        ("already-stored", "stored@example.com"),
+    assert [(m.user_id, m.user_email, m.user_alias) for m in members] == [
+        ("no-email-on-roster", "real@example.com", "Real Person"),
+        ("already-stored", "stored@example.com", "Stored Person"),
     ]
-    # only the member actually missing an email is looked up
-    assert find_many.await_args.kwargs["where"] == {"user_id": {"in": ["no-email-on-roster"]}}
+    find_many.assert_awaited_once()
+    assert find_many.await_args.kwargs["where"] == {"user_id": {"in": ["already-stored", "no-email-on-roster"]}}
 
 
 @pytest.mark.asyncio
@@ -12131,89 +12468,93 @@ async def test_resolve_existing_member_user_ids_skips_the_query_when_no_user_ids
     repo.return_value.table.find_many.assert_not_awaited()
 
 
-def _user_row(user_id: str, user_email: str | None) -> LiteLLM_UserTable:
+def _user_row(user_id: str, user_email: str | None, user_alias: str | None = None) -> LiteLLM_UserTable:
     return LiteLLM_UserTable(
-        user_id=user_id, user_email=user_email, max_budget=None, spend=0.0, models=[]
+        user_id=user_id, user_email=user_email, user_alias=user_alias, max_budget=None, spend=0.0, models=[]
     )
 
 
 @pytest.mark.asyncio
-async def test_hydrate_member_emails_fills_in_emails_the_roster_snapshot_never_captured():
-    """A member added by user_id alone has user_email=None on the stored roster entry.
-
-    /team/info has to fill it in from the user row, or the UI renders "-" for a user
-    that plainly has an email.
+async def test_hydrate_member_user_details_attaches_alias_and_fills_in_missing_email():
+    """The stored roster never carries a display name, and a member added by user_id
+    alone has user_email=None. /team/info has to fill both in from the user row so the
+    UI can show and search by a human-readable name instead of only an email.
     """
-    from litellm.proxy.management_endpoints.team_endpoints import _hydrate_member_emails
+    from litellm.proxy.management_endpoints.team_endpoints import _hydrate_member_user_details
 
-    find_many = AsyncMock(return_value=[_user_row("by-id", "found@example.com")])
+    find_many = AsyncMock(return_value=[_user_row("by-id", "found@example.com", "Found Person")])
 
     with patch("litellm.proxy.management_endpoints.team_endpoints.UserRepository") as repo:
         repo.return_value.table.find_many = find_many
 
-        hydrated = await _hydrate_member_emails(
+        hydrated = await _hydrate_member_user_details(
             prisma_client=MagicMock(),
             members=[Member(user_id="by-id", role="admin")],
         )
 
-    assert [(m.user_id, m.user_email, m.role) for m in hydrated] == [("by-id", "found@example.com", "admin")]
+    assert [(m.user_id, m.user_email, m.user_alias, m.role) for m in hydrated] == [
+        ("by-id", "found@example.com", "Found Person", "admin")
+    ]
     find_many.assert_awaited_once()
     assert find_many.await_args.kwargs["where"] == {"user_id": {"in": ["by-id"]}}
 
 
 @pytest.mark.asyncio
-async def test_hydrate_member_emails_never_overwrites_a_stored_email():
-    """The snapshot wins wherever it has a value - hydration only fills blanks.
-
-    Overwriting would be a real behavior change to /team/info; filling a null is not.
-    """
-    from litellm.proxy.management_endpoints.team_endpoints import _hydrate_member_emails
-
-    find_many = AsyncMock(return_value=[_user_row("has-email", "current@example.com")])
+async def test_hydrate_member_user_details_never_overwrites_a_stored_email():
+    """The snapshot wins wherever it has a value - hydration only fills blanks."""
+    from litellm.proxy.management_endpoints.team_endpoints import _hydrate_member_user_details
 
     with patch("litellm.proxy.management_endpoints.team_endpoints.UserRepository") as repo:
-        repo.return_value.table.find_many = find_many
+        repo.return_value.table.find_many = AsyncMock(
+            return_value=[_user_row("has-email", "current@example.com", "Current Name")]
+        )
 
-        hydrated = await _hydrate_member_emails(
+        hydrated = await _hydrate_member_user_details(
             prisma_client=MagicMock(),
             members=[Member(user_id="has-email", user_email="stored@example.com", role="user")],
         )
 
-    assert hydrated[0].user_email == "stored@example.com"
-    # nothing was missing, so no round-trip either
-    find_many.assert_not_awaited()
+    assert (hydrated[0].user_email, hydrated[0].user_alias) == ("stored@example.com", "Current Name")
 
 
 @pytest.mark.asyncio
-async def test_hydrate_member_emails_leaves_members_alone_when_the_user_row_has_no_email():
-    """A user row with no email leaves the member as-is rather than inventing one."""
-    from litellm.proxy.management_endpoints.team_endpoints import _hydrate_member_emails
+async def test_hydrate_member_user_details_leaves_blanks_when_the_user_row_is_bare_or_missing():
+    """A user row with no email or alias, or no user row at all, must not invent values."""
+    from litellm.proxy.management_endpoints.team_endpoints import _hydrate_member_user_details
 
     with patch("litellm.proxy.management_endpoints.team_endpoints.UserRepository") as repo:
-        repo.return_value.table.find_many = AsyncMock(return_value=[_user_row("no-email", None)])
+        repo.return_value.table.find_many = AsyncMock(return_value=[_user_row("bare", None)])
 
-        hydrated = await _hydrate_member_emails(
+        hydrated = await _hydrate_member_user_details(
             prisma_client=MagicMock(),
-            members=[Member(user_id="no-email", role="user"), Member(user_email="e@example.com", role="user")],
+            members=[
+                Member(user_id="bare", role="user"),
+                Member(user_id="deleted", user_email="gone@example.com", role="user"),
+                Member(user_email="e@example.com", role="user"),
+            ],
         )
 
-    assert [m.user_email for m in hydrated] == [None, "e@example.com"]
+    assert [(m.user_id, m.user_email, m.user_alias) for m in hydrated] == [
+        ("bare", None, None),
+        ("deleted", "gone@example.com", None),
+        (None, "e@example.com", None),
+    ]
 
 
 @pytest.mark.asyncio
-async def test_hydrate_member_emails_skips_the_query_when_every_member_has_one():
-    """No blanks means /team/info pays for no extra query."""
-    from litellm.proxy.management_endpoints.team_endpoints import _hydrate_member_emails
+async def test_hydrate_member_user_details_skips_the_query_when_no_member_has_a_user_id():
+    """Email-only roster entries give nothing to look up, so /team/info pays for no query."""
+    from litellm.proxy.management_endpoints.team_endpoints import _hydrate_member_user_details
 
     with patch("litellm.proxy.management_endpoints.team_endpoints.UserRepository") as repo:
         repo.return_value.table.find_many = AsyncMock()
 
-        hydrated = await _hydrate_member_emails(
+        hydrated = await _hydrate_member_user_details(
             prisma_client=MagicMock(),
-            members=[Member(user_id="a", user_email="a@example.com", role="user")],
+            members=[Member(user_email="a@example.com", role="user")],
         )
 
-    assert hydrated[0].user_email == "a@example.com"
+    assert [(m.user_email, m.user_alias) for m in hydrated] == [("a@example.com", None)]
     repo.return_value.table.find_many.assert_not_awaited()
 
 
@@ -13598,3 +13939,221 @@ async def test_team_member_update_skips_invalidation_when_no_budget_fields_sent(
 
     assert await real_cache.async_get_cache(key="team-1_member-1") == "still-fresh-membership"
     assert real_spend_counter_cache.in_memory_cache.get_cache(key="spend:team_member:member-1:team-1") == 1.5
+
+
+@pytest.mark.asyncio
+async def test_evict_created_membership_caches_drops_the_negative_sentinel():
+    """
+    Regression: a membership-create path (/team/member_add, the /team/update budget backfill) must
+    evict any cached "no membership" sentinel a prior session-token read left, so a per-member budget
+    attached at create time is enforced on the next request instead of after the membership cache TTL.
+    Uses a real cache so the assertion is that the sentinel is actually gone, not that a mock was called.
+    """
+    from litellm.proxy.common_utils.user_api_key_cache import (
+        NO_TEAM_MEMBERSHIP_SENTINEL,
+        UserApiKeyCache,
+        team_membership_reservation_cache_key,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import _evict_created_membership_caches
+
+    cache = UserApiKeyCache()
+    kept_key = team_membership_reservation_cache_key(user_id="carol", team_id="team-eviction")
+    evicted_key = team_membership_reservation_cache_key(user_id="bob", team_id="team-eviction")
+    await cache.async_set_cache(key=kept_key, value=NO_TEAM_MEMBERSHIP_SENTINEL)
+    await cache.async_set_cache(key=evicted_key, value=NO_TEAM_MEMBERSHIP_SENTINEL)
+
+    await _evict_created_membership_caches(user_ids=("bob",), team_id="team-eviction", user_api_key_cache=cache)
+
+    assert await cache.async_get_cache(key=evicted_key) is None
+    assert await cache.async_get_cache(key=kept_key) == NO_TEAM_MEMBERSHIP_SENTINEL
+
+
+def test_member_user_ids_keeps_only_string_user_ids():
+    """
+    The /team/update backfill feeds Prisma-deserialized member dicts here; a row can be missing
+    user_id or carry a non-string value. Only real string ids may reach invalidate_team_member_spend_state,
+    so those get eviction and the malformed rows are dropped rather than crashing the update.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import _member_user_ids
+
+    members = [
+        {"user_id": "alice", "role": "admin"},
+        {"role": "user"},
+        {"user_id": None, "role": "user"},
+        {"user_id": 123, "role": "user"},
+        {"user_id": "bob", "role": "user"},
+    ]
+
+    assert _member_user_ids(members) == ("alice", "bob")
+
+
+def _team_spend_by_user_team(team_id: str, team_alias: str, member: Member, permissions: list[str]) -> MagicMock:
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.team_id = team_id
+    team.team_alias = team_alias
+    team.members_with_roles = [member]
+    team.team_member_permissions = permissions
+    team.model_dump.return_value = {
+        "team_id": team_id,
+        "team_alias": team_alias,
+        "members_with_roles": [{"user_id": member.user_id, "role": member.role}],
+        "team_member_permissions": permissions,
+    }
+    return team
+
+
+def _team_spend_by_user_caller(user_id: str, teams: list[str]) -> LiteLLM_UserTable:
+    return LiteLLM_UserTable(
+        user_id=user_id, user_email=f"{user_id}@example.com", teams=teams, user_role="internal_user"
+    )
+
+
+def _team_spend_by_user_db_row(team_id: str, user_id: str, spend: float, requests: int) -> dict:
+    return {
+        "team_id": team_id,
+        "user_id": user_id,
+        "user_email": f"{user_id}@example.com",
+        "user_alias": None,
+        "spend": spend,
+        "prompt_tokens": 10 * requests,
+        "completion_tokens": 5 * requests,
+        "total_tokens": 15 * requests,
+        "api_requests": requests,
+        "successful_requests": requests - 1,
+        "failed_requests": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_team_spend_by_user_admin_groups_spend_logs_by_team_and_user(mock_db_client):
+    from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
+
+    admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    alpha = _team_spend_by_user_team("team-alpha", "Team Alpha", Member(user_id="alice", role="admin"), [])
+    beta = _team_spend_by_user_team("team-beta", "Team Beta", Member(user_id="alice", role="user"), [])
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[alpha, beta])
+    mock_db_client.db.query_raw = AsyncMock(
+        return_value=[
+            _team_spend_by_user_db_row("team-alpha", "alice", 0.5, 3),
+            _team_spend_by_user_db_row("team-alpha", "bob", 0.25, 2),
+            _team_spend_by_user_db_row("team-beta", "alice", 0.1, 1),
+        ]
+    )
+
+    response = await get_team_spend_by_user(
+        user_api_key_dict=admin,
+        team_ids="team-alpha,team-beta",
+        start_date="2026-09-01",
+        end_date="2026-09-04",
+    )
+
+    sql, *params = mock_db_client.db.query_raw.call_args.args
+    assert params == ["2026-09-01", "2026-09-04", "team-alpha", "team-beta"]
+    assert 'FROM "LiteLLM_SpendLogs" sl' in sql
+    assert 'sl."startTime" >= $1::timestamp' in sql
+    assert "sl.\"startTime\" < $2::timestamp + INTERVAL '1 day'" in sql
+    assert "sl.team_id IN ($3, $4)" in sql
+    assert 'GROUP BY sl.team_id, sl."user"' in sql
+    assert 'sl."user" = $' not in sql
+
+    assert response.start_date == "2026-09-01"
+    assert response.end_date == "2026-09-04"
+    assert [(r.team_id, r.team_alias, r.user_id, r.user_email, r.spend, r.api_requests) for r in response.results] == [
+        ("team-alpha", "Team Alpha", "alice", "alice@example.com", 0.5, 3),
+        ("team-alpha", "Team Alpha", "bob", "bob@example.com", 0.25, 2),
+        ("team-beta", "Team Beta", "alice", "alice@example.com", 0.1, 1),
+    ]
+    assert (response.results[0].successful_requests, response.results[0].failed_requests) == (2, 1)
+    assert (response.results[0].prompt_tokens, response.results[0].completion_tokens) == (30, 15)
+
+
+@pytest.mark.asyncio
+async def test_get_team_spend_by_user_team_admin_sees_every_member(mock_db_client):
+    from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
+
+    caller = UserAPIKeyAuth(user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER)
+    alpha = _team_spend_by_user_team("team-alpha", "Team Alpha", Member(user_id="alice", role="admin"), [])
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[alpha])
+    mock_db_client.db.query_raw = AsyncMock(return_value=[])
+    mock_db_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=_team_spend_by_user_caller("alice", ["team-alpha"])
+    )
+
+    await get_team_spend_by_user(
+        user_api_key_dict=caller, team_ids="team-alpha", start_date="2026-09-01", end_date="2026-09-04"
+    )
+
+    sql, *params = mock_db_client.db.query_raw.call_args.args
+    assert params == ["2026-09-01", "2026-09-04", "team-alpha"]
+    assert 'sl."user" = $' not in sql
+
+
+@pytest.mark.asyncio
+async def test_get_team_spend_by_user_plain_member_only_sees_own_row(mock_db_client):
+    from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
+
+    caller = UserAPIKeyAuth(user_id="bob", user_role=LitellmUserRoles.INTERNAL_USER)
+    alpha = _team_spend_by_user_team("team-alpha", "Team Alpha", Member(user_id="bob", role="user"), ["/key/info"])
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[alpha])
+    mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_db_client.db.query_raw = AsyncMock(return_value=[_team_spend_by_user_db_row("team-alpha", "bob", 0.25, 2)])
+    mock_db_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=_team_spend_by_user_caller("bob", ["team-alpha"])
+    )
+
+    response = await get_team_spend_by_user(
+        user_api_key_dict=caller, team_ids="team-alpha", start_date="2026-09-01", end_date="2026-09-04"
+    )
+
+    sql, *params = mock_db_client.db.query_raw.call_args.args
+    assert params == ["2026-09-01", "2026-09-04", "team-alpha", "bob"]
+    assert "sl.team_id IN ($3)" in sql
+    assert 'AND sl."user" = $4' in sql
+    assert [(r.user_id, r.spend) for r in response.results] == [("bob", 0.25)]
+
+
+@pytest.mark.asyncio
+async def test_get_team_spend_by_user_member_of_other_team_gets_404(mock_db_client):
+    from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
+
+    caller = UserAPIKeyAuth(user_id="bob", user_role=LitellmUserRoles.INTERNAL_USER)
+    mock_db_client.db.query_raw = AsyncMock(return_value=[])
+    mock_db_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=_team_spend_by_user_caller("bob", ["team-alpha"])
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_team_spend_by_user(
+            user_api_key_dict=caller, team_ids="team-beta", start_date="2026-09-01", end_date="2026-09-04"
+        )
+
+    assert exc_info.value.status_code == 404
+    mock_db_client.db.query_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "team_ids,start_date,end_date,expected_error",
+    [
+        (None, "2026-09-01", "2026-09-04", "team_ids"),
+        ("", "2026-09-01", "2026-09-04", "team_ids"),
+        ("team-alpha", None, "2026-09-04", "start_date and end_date"),
+        ("team-alpha", "2026-09-04", "2026-09-01", "on or after"),
+        ("team-alpha", "2020-01-01", "2026-12-31", "at most 400 days"),
+        ("team-alpha", "nope", "2026-09-04", "valid YYYY-MM-DD"),
+    ],
+)
+async def test_get_team_spend_by_user_rejects_bad_input(mock_db_client, team_ids, start_date, end_date, expected_error):
+    from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
+
+    mock_db_client.db.query_raw = AsyncMock(return_value=[])
+    admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_team_spend_by_user(
+            user_api_key_dict=admin, team_ids=team_ids, start_date=start_date, end_date=end_date
+        )
+
+    assert exc_info.value.status_code == 400
+    assert expected_error in str(exc_info.value.detail)
+    mock_db_client.db.query_raw.assert_not_called()

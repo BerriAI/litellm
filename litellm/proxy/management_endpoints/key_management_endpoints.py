@@ -54,6 +54,7 @@ from litellm.proxy._types import Litellm_EntityType, LiteLLM_VerificationToken, 
 from litellm.proxy.auth.auth_checks import (
     _delete_cache_key_object,
     can_team_access_model,
+    get_jwt_key_mapping_cache_keys_for_token,
     get_org_object,
     get_project_object,
     get_team_object,
@@ -65,6 +66,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    evict_and_broadcast,
     publish_auth_cache_invalidation,
 )
 from litellm.proxy.common_utils.callback_config_validation import logging_metadata_config_error
@@ -192,6 +194,38 @@ class _ModelParamsUpdate(TypedDict):
 
 class _ModelRowWhere(TypedDict):
     model_id: ReadOnly[str]
+
+
+class _KeyUpdateResult(TypedDict):
+    token: ReadOnly[str]
+    data: ReadOnly[Mapping[str, object]]
+
+
+class _KeyRowWhere(TypedDict):
+    token: ReadOnly[str]
+
+
+class _BudgetRowWhere(TypedDict):
+    budget_id: ReadOnly[str]
+
+
+class _BudgetRowSoftBudgetUpdate(TypedDict):
+    soft_budget: ReadOnly[float | None]
+    updated_by: ReadOnly[str]
+
+
+class _BudgetRowSoftBudgetCreate(TypedDict):
+    soft_budget: ReadOnly[float]
+    created_by: ReadOnly[str]
+    updated_by: ReadOnly[str]
+
+
+class _KeyUpdateTx(Protocol):
+    @property
+    def litellm_verificationtoken(self) -> "TableActions[prisma_models.LiteLLM_VerificationToken]": ...
+
+    @property
+    def litellm_budgettable(self) -> "TableActions[prisma_models.LiteLLM_BudgetTable]": ...
 
 
 class _ConfigTableActions(Protocol):
@@ -1810,11 +1844,7 @@ async def generate_key_fn(
                 status_code=400,
                 detail={"error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"},
             )
-        if data.soft_budget is not None and (not math.isfinite(data.soft_budget) or data.soft_budget < 0):
-            raise HTTPException(
-                status_code=400,
-                detail={"error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"},
-            )
+        _validate_soft_budget_value(data.soft_budget)
 
         custom_key_generate_hook: Final[Callable[..., Awaitable[Mapping[str, object]]] | None] = (
             _custom_key_generate_hook(proxy_server)
@@ -2117,6 +2147,88 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
 
     non_default_values["metadata"] = encrypt_callback_vars(casted_metadata)
     return non_default_values
+
+
+def _validate_soft_budget_value(soft_budget: float | None) -> None:
+    if soft_budget is not None and (not math.isfinite(soft_budget) or soft_budget < 0):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"soft_budget must be a non-negative finite number. Received: {soft_budget}"},
+        )
+
+
+async def _update_key_soft_budget(
+    db: _KeyUpdateTx,
+    existing_key_row: LiteLLM_VerificationToken,
+    soft_budget: float | None,
+    changed_by: str,
+) -> str | None:
+    existing_budget_id: Final = existing_key_row.budget_id
+    if existing_budget_id is not None:
+        budget_update: Final[_BudgetRowSoftBudgetUpdate] = {"soft_budget": soft_budget, "updated_by": changed_by}
+        budget_where: Final[_BudgetRowWhere] = {"budget_id": existing_budget_id}
+        await db.litellm_budgettable.update(where=budget_where, data=budget_update)
+        return existing_budget_id
+    if soft_budget is None:
+        return None
+    budget_create: Final[_BudgetRowSoftBudgetCreate] = {
+        "soft_budget": soft_budget,
+        "created_by": changed_by,
+        "updated_by": changed_by,
+    }
+    created_budget: Final = await db.litellm_budgettable.create(data=budget_create)
+    return created_budget.budget_id
+
+
+async def _apply_soft_budget_update(
+    data: UpdateKeyRequest,
+    non_default_values: Mapping[str, object],
+    db: _KeyUpdateTx,
+    existing_key_row: LiteLLM_VerificationToken,
+    changed_by: str,
+) -> Mapping[str, object]:
+    remaining: Final = MappingProxyType({k: v for k, v in non_default_values.items() if k != "soft_budget"})
+    updated_budget_id: Final = await _update_key_soft_budget(
+        db=db,
+        existing_key_row=existing_key_row,
+        soft_budget=data.soft_budget,
+        changed_by=changed_by,
+    )
+    if updated_budget_id is not None and existing_key_row.budget_id is None:
+        return MappingProxyType({**remaining, "budget_id": updated_budget_id})
+    return remaining
+
+
+async def _update_key_row_with_soft_budget(
+    prisma_client: PrismaClient,
+    key: str,
+    data: UpdateKeyRequest,
+    non_default_values: Mapping[str, object],
+    existing_key_row: LiteLLM_VerificationToken,
+    changed_by: str,
+) -> _KeyUpdateResult:
+    hashed_token: Final = _hash_token_if_needed(key)
+    key_where: Final[_KeyRowWhere] = {"token": hashed_token}
+    tx: _KeyUpdateTx
+    async with prisma_client.tx() as tx:
+        update_values: Final = await _apply_soft_budget_update(
+            data=data,
+            non_default_values=non_default_values,
+            db=tx,
+            existing_key_row=existing_key_row,
+            changed_by=changed_by,
+        )
+        updated_row: Final = await tx.litellm_verificationtoken.update(
+            where=key_where,
+            data=with_settings_updated_at(
+                prisma_client.jsonify_object(MappingProxyType({**update_values, "token": hashed_token}))
+            ),
+        )
+    updated_data: Final[Mapping[str, object]] = (
+        updated_row.model_dump() if updated_row is not None else MappingProxyType({})
+    )
+    result: Final[_KeyUpdateResult] = {"token": hashed_token, "data": updated_data}
+    return result
 
 
 async def prepare_key_update_data(
@@ -2606,6 +2718,12 @@ async def _validate_update_key_data(
         user_api_key_dict=user_api_key_dict,
     )
 
+    if data.project_id is not None and data.project_id != existing_key_row.project_id:
+        raise HTTPException(
+            status_code=400, detail="Project reassignment is not supported. Use null to detach the key."
+        )
+    is_project_change: Final = "project_id" in data.model_fields_set and data.project_id != existing_key_row.project_id
+
     common_key_access_checks(
         user_api_key_dict=user_api_key_dict,
         data=data,
@@ -2657,6 +2775,7 @@ async def _validate_update_key_data(
         (data.max_budget is not None and data.max_budget != existing_key_row.max_budget)
         or data.spend is not None
         or "budget_limits" in data.model_fields_set
+        or "soft_budget" in data.model_fields_set
     )
 
     _existing_metadata: Final = getattr(existing_key_row, "metadata", None)
@@ -2697,7 +2816,9 @@ async def _validate_update_key_data(
     # non-budget change means the caller was authorized — skip the redundant
     # _check_key_admin_access that would otherwise require team/org admin status.
     _key_is_team_key: Final = getattr(existing_key_row, "team_id", None) is not None
-    can_skip_admin_check: Final = (caller_is_creator or _key_is_team_key) and not _is_budget_change
+    can_skip_admin_check: Final = (caller_is_creator or _key_is_team_key) and not (
+        _is_budget_change or is_project_change
+    )
     if (not _is_proxy_admin) and not can_skip_admin_check:
         hashed_key: Final = existing_key_row.token
         await _check_key_admin_access(
@@ -2740,7 +2861,9 @@ async def _validate_update_key_data(
     )
 
     # Validate key against project limits if project_id is being set
-    _project_id_to_check: Final = getattr(data, "project_id", None) or getattr(existing_key_row, "project_id", None)
+    _project_id_to_check: Final = (
+        data.project_id if "project_id" in data.model_fields_set else existing_key_row.project_id
+    )
     if _project_id_to_check is not None and (data.models is not None or data.max_budget is not None):
         await _check_project_key_limits(
             project_id=_project_id_to_check,
@@ -2838,12 +2961,18 @@ async def update_key_fn(
     """
     Update an existing API key's parameters.
 
+    The body is a merge patch: a field left out keeps its stored value, and on the key's own columns
+    an explicit null clears it. The metadata-backed fields below are the exception, merging into the
+    stored metadata instead: passing one as null leaves it unchanged, while `metadata` itself
+    replaces the stored metadata wholesale.
+
     Parameters:
     - key: Optional[str] - The key to update. Either key or key_alias must be provided.
     - key_alias: Optional[str] - User-friendly key alias. If key is omitted, also identifies the key to update (must match exactly one key, same as /key/delete's key_aliases)
     - user_id: Optional[str] - User ID associated with key
     - team_id: Optional[str] - Team ID associated with key
     - agent_id: Optional[str] - The agent id associated with the key.
+    - project_id: Optional[str] - Omit to retain the project, or send null to detach. A different project ID is rejected.
     - organization_id: Optional[str] - The organization id of the key.
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
     - models: Optional[list] - Model_name's a user is allowed to call
@@ -2855,7 +2984,7 @@ async def update_key_fn(
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
-    - soft_budget: Optional[float] - [TODO] Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
+    - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached. Set to null to remove the soft budget.
     - max_parallel_requests: Optional[int] - Rate limit for parallel requests
     - metadata: Optional[dict] - Metadata for key. Example {"team": "core-infra", "app": "app2"}
     - tpm_limit: Optional[int] - Tokens per minute limit
@@ -2911,6 +3040,7 @@ async def update_key_fn(
     """
     from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import (
+        litellm_proxy_admin_name,
         llm_router,
         premium_user,
         prisma_client,
@@ -2925,6 +3055,8 @@ async def update_key_fn(
                 status_code=400,
                 detail={"error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"},
             )
+
+        _validate_soft_budget_value(data.soft_budget)
 
         # get the row from db
         existing_key_row: Final = await _get_and_validate_existing_key(
@@ -2982,10 +3114,22 @@ async def update_key_fn(
             existing_key_alias=existing_key_row.key_alias,
         )
 
-        _data: Final = {**non_default_values, "token": key}
         if prisma_client is None:
             raise Exception("Not connected to DB!")
-        response: Final = await prisma_client.update_data(token=key, data=_data)
+
+        changed_by: Final = user_api_key_dict.user_id or litellm_proxy_admin_name
+        response: Final = (
+            await _update_key_row_with_soft_budget(
+                prisma_client=prisma_client,
+                key=key,
+                data=data,
+                non_default_values=non_default_values,
+                existing_key_row=existing_key_row,
+                changed_by=changed_by,
+            )
+            if "soft_budget" in data.model_fields_set
+            else await prisma_client.update_data(token=key, data=MappingProxyType({**non_default_values, "token": key}))
+        )
 
         # Delete - key from cache, since it's been updated!
         # key updated - a new model could have been added to this key. it should not block requests after this is done
@@ -3596,7 +3740,7 @@ async def delete_key_fn(
             )
 
         verbose_proxy_logger.debug(
-            "/keys/delete - cache after delete: %s", user_api_key_cache.in_memory_cache.cache_dict
+            "/keys/delete - cache after delete: %s", user_api_key_cache.key_object_cache.in_memory_cache.cache_dict
         )
 
         asyncio.create_task(
@@ -4426,6 +4570,23 @@ async def delete_verification_tokens(
                 litellm_changed_by=litellm_changed_by,
             )
 
+            # Snapshot before the delete: the FK cascade drops the mapping rows, but their
+            # cached jwt_key_mapping entries still resolve to the now-dead token (LIT-5380).
+            jwt_mapping_cache_keys: Final[tuple[str, ...]] = tuple(
+                cache_key
+                for keys_for_token in await asyncio.gather(
+                    *(
+                        get_jwt_key_mapping_cache_keys_for_token(
+                            hashed_token=key.token,
+                            prisma_client=prisma_client,
+                        )
+                        for key in authorized_keys
+                        if key.token is not None
+                    )
+                )
+                for cache_key in keys_for_token
+            )
+
             if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
                 deleted_tokens = await prisma_client.delete_data(tokens=tokens)
                 if deleted_tokens is not None and len(deleted_tokens) != len(tokens):
@@ -4437,6 +4598,8 @@ async def delete_verification_tokens(
                 deleted_tokens = [key.token for key in authorized_keys]
                 if len(deleted_tokens) != len(tokens):
                     failed_tokens = [token for token in tokens if token not in deleted_tokens]
+
+            await evict_and_broadcast(cache_keys=jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
 
         else:
             raise Exception("DB not connected. prisma_client is None")
@@ -4975,6 +5138,13 @@ async def _execute_virtual_key_regeneration(
     update_data.update(non_default_values)
     jsonified_update_data: Final[Mapping[str, object]] = prisma_client.jsonify_object(data=update_data)
 
+    # Snapshot before the token update: the FK cascade rewrites mapping rows to the new hash,
+    # but their cached jwt_key_mapping entries still point at the old token (LIT-5379).
+    jwt_mapping_cache_keys: Final = await get_jwt_key_mapping_cache_keys_for_token(
+        hashed_token=hashed_api_key,
+        prisma_client=prisma_client,
+    )
+
     # If grace period set, insert deprecated key so old key remains valid
     await _insert_deprecated_key(
         prisma_client=prisma_client,
@@ -4999,6 +5169,8 @@ async def _execute_virtual_key_regeneration(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
+
+    await evict_and_broadcast(cache_keys=jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
 
     # After credential invalidation, so a failure here can never keep the old key alive.
     await sync_key_regeneration_access_group_membership(
@@ -5799,7 +5971,7 @@ async def list_keys(
     key_hash: str | None = Query(None, description="Filter keys by key hash"),
     key_alias: str | None = Query(
         None,
-        description="Filter keys by key alias. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching.",
+        description="Filter keys by key alias. Exact match by default; set substring_matching=true for case-insensitive substring matching.",
     ),
     search: str | None = Query(
         None,
@@ -5820,7 +5992,7 @@ async def list_keys(
     agent_id: str | None = Query(None, description="Filter keys by agent ID"),
     substring_matching: bool = Query(
         False,
-        description="If true (proxy admins only), match user_id/key_alias as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id/key_alias filter must never return another user's keys.",
+        description="If true, match key_alias (any caller) and user_id (proxy admins only) as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id filter must never return another user's keys.",
     ),
     expires: str | None = Query(
         None,
@@ -5914,13 +6086,14 @@ async def list_keys(
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
         ]
 
-        # Substring matching is opt-in (admin-only). /key/list matched user_id and
-        # key_alias exactly before substring search was added; auto-applying a
-        # substring match to every admin call broke that contract and let a caller
-        # passing an exact user_id (e.g. an integration scoping to one user with an
-        # admin key) receive other users' keys (user_id="alice" -> "alice2"). Exact
-        # by default restores the prior behavior; the dashboard opts in explicitly.
+        # Substring matching is opt-in. /key/list matched user_id and key_alias
+        # exactly before substring search was added; auto-applying a substring
+        # match to every admin call broke that contract and let a caller passing
+        # an exact user_id (e.g. an integration scoping to one user with an admin
+        # key) receive other users' keys (user_id="alice" -> "alice2"). Exact by
+        # default restores the prior behavior; the dashboard opts in explicitly.
         use_substring_matching: Final = substring_matching and is_proxy_admin
+        use_key_alias_substring_matching: Final = substring_matching
 
         # Admins may omit user_id to list all keys; non-admins are scoped to self.
         if not user_id and not is_proxy_admin:
@@ -5947,6 +6120,7 @@ async def list_keys(
             access_group_id=access_group_id,
             agent_id=agent_id,
             use_substring_matching=use_substring_matching,
+            use_key_alias_substring_matching=use_key_alias_substring_matching,
             expires_filter=expires if isinstance(expires, str) else None,
             search=search,
         )
@@ -6192,6 +6366,7 @@ def _build_key_filter_conditions(
     access_group_id: str | None = None,
     agent_id: str | None = None,
     use_substring_matching: bool = False,
+    use_key_alias_substring_matching: bool = False,
     expires_filter: str | None = None,
     search: str | None = None,
 ) -> Mapping[str, object]:
@@ -6287,7 +6462,7 @@ def _build_key_filter_conditions(
         *(
             (
                 {"key_alias": {"contains": key_alias, "mode": "insensitive"}}
-                if use_substring_matching
+                if use_key_alias_substring_matching
                 else {"key_alias": key_alias},
             )
             if key_alias and isinstance(key_alias, str)
@@ -6333,6 +6508,7 @@ async def _list_key_helper(
     access_group_id: str | None = None,
     agent_id: str | None = None,
     use_substring_matching: bool = False,
+    use_key_alias_substring_matching: bool = False,
     expires_filter: str | None = None,
     search: str | None = None,
 ) -> KeyListResponseObject:
@@ -6372,6 +6548,7 @@ async def _list_key_helper(
         access_group_id=access_group_id,
         agent_id=agent_id,
         use_substring_matching=use_substring_matching,
+        use_key_alias_substring_matching=use_key_alias_substring_matching,
         expires_filter=expires_filter,
         search=search,
     )
@@ -6416,7 +6593,7 @@ async def _list_key_helper(
                     {"token": "desc"},  # fallback sort
                 ]
             ),
-            include={"object_permission": True},
+            include={"object_permission": True, "litellm_budget_table": True},
         )
 
     verbose_proxy_logger.debug("Fetched %s keys", len(keys))

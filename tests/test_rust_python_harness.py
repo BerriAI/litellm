@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Final
 
 import pytest
@@ -13,6 +14,7 @@ mapping_validator = importlib.import_module("tests.rust-python-harness.strategie
 mappings = importlib.import_module("tests.rust-python-harness.strategies.unit_tests_mapping.mappings")
 ocr_mapping = importlib.import_module("tests.rust-python-harness.strategies.unit_tests_mapping.cases.ocr")
 cli = importlib.import_module("tests.rust-python-harness.cli")
+native_build = importlib.import_module("tests.rust-python-harness.shared.native_build")
 
 audit_mapping = mapping_validator.audit_mapping
 UNIT_TEST_CONTRACTS = mappings.UNIT_TEST_CONTRACTS
@@ -119,7 +121,47 @@ def test_should_leave_functions_without_mapping_contracts_unimplemented() -> Non
     assert "messages" not in UNIT_TEST_CONTRACTS
 
 
+def test_should_report_a_bridge_that_cannot_be_imported() -> None:
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(native_build, "get_native_bridge", lambda: None)
+        message: Final = native_build.trace_bridge_error()
+
+    assert message is not None
+    assert "not importable" in message
+
+
+def test_should_report_a_bridge_built_without_the_trace_feature() -> None:
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(native_build, "get_native_bridge", lambda: SimpleNamespace(_trace=None))
+        message: Final = native_build.trace_bridge_error()
+
+    assert message is not None
+    assert native_build.BRIDGE_FEATURE in message
+
+
+def test_should_accept_a_bridge_built_with_the_trace_feature() -> None:
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(native_build, "get_native_bridge", lambda: SimpleNamespace(_trace=object()))
+
+        assert native_build.trace_bridge_error() is None
+
+
+def test_should_not_rebuild_the_bridge_while_reporting_its_state() -> None:
+    def forbidden_rebuild(repo_root: object) -> tuple[bool, str]:
+        raise AssertionError("trace_bridge_error must not rebuild the native bridge")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(native_build, "_rebuild", forbidden_rebuild)
+        patch.setattr(native_build, "get_native_bridge", lambda: None)
+
+        assert native_build.trace_bridge_error() is not None
+
+
 def test_should_derive_ocr_mapping_status_from_live_tests() -> None:
+    bridge_error: Final = native_build.trace_bridge_error()
+    if bridge_error is not None:
+        pytest.skip(bridge_error)
+
     report = audit_mapping(OCR_CONTRACT, repo_root=REPO_ROOT)
 
     assert report.is_valid, (

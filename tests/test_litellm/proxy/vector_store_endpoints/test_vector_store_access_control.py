@@ -244,3 +244,65 @@ async def test_list_vector_stores_dashboard_session_resolves_real_teams(
         ),
     ):
         assert await _listed_ids(alice) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("user_team_ids", "expected_status"),
+    [
+        (["team_a"], 200),
+        (["team_b"], 403),
+        ([], 403),
+    ],
+)
+async def test_get_vector_store_info_dashboard_session_resolves_real_teams(
+    user_team_ids: list[str], expected_status: int
+):
+    """Regression for LIT-7132: /vector_store/info must grant a dashboard session the same team-owned stores
+    /vector_store/list shows it, instead of judging the session's reserved litellm-dashboard team id."""
+    from litellm.models.team import LiteLLM_TeamTableCachedObj
+    from litellm.proxy.vector_store_endpoints.management_endpoints import (
+        get_vector_store_info,
+    )
+    from litellm.types.vector_stores import VectorStoreInfoRequest
+
+    alice = UserAPIKeyAuth(
+        team_id="litellm-dashboard",
+        user_id="alice",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    async def fake_get_team_object(team_id: str, **_kwargs: object) -> LiteLLM_TeamTableCachedObj:
+        return LiteLLM_TeamTableCachedObj(team_id=team_id)
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
+        return_value=MagicMock(model_dump=lambda: dict(_TEAM_A_OWNED))
+    )
+
+    async def outcome() -> int:
+        try:
+            response = await get_vector_store_info(
+                data=VectorStoreInfoRequest(vector_store_id="vs_team_a"), user_api_key_dict=alice
+            )
+        except HTTPException as exc:
+            return exc.status_code
+        assert response["vector_store"]["vector_store_id"] == "vs_team_a"
+        return 200
+
+    with (
+        patch(  # test-quality-ok: the endpoint reads the store row through the module-level prisma client, no injection seam
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ),
+        patch(  # test-quality-ok: the endpoint consults the module-level registry before the DB, no injection seam
+            "litellm.vector_store_registry", None
+        ),
+        patch(  # test-quality-ok: team rows come from the module-level prisma client, no injection seam
+            "litellm.proxy.auth.auth_checks.get_team_object", new=fake_get_team_object
+        ),
+        patch(  # test-quality-ok: the user row comes from the module-level prisma client, no injection seam
+            "litellm.proxy.vector_store_endpoints.utils.resolve_ui_session_team_ids",
+            new=AsyncMock(return_value=user_team_ids),
+        ),
+    ):
+        assert await outcome() == expected_status

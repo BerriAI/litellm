@@ -1,6 +1,9 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+
+import { selectOption } from "./testUtils";
 
 import MCPServerEdit from "./mcp_server_edit";
 import * as networking from "@/components/networking";
@@ -25,10 +28,6 @@ vi.mock("@/hooks/useMcpOAuthFlow", () => ({
 
 vi.mock("./mcp_server_cost_config", () => ({
   default: () => <div data-testid="mcp-cost-config" />,
-}));
-
-vi.mock("./mcp_tool_configuration", () => ({
-  default: () => <div data-testid="mcp-tool-config" />,
 }));
 
 const BASE: MCPServer = {
@@ -367,5 +366,107 @@ describe("mcp_server_edit save payload contract", () => {
     ]) {
       expect(payload).not.toHaveProperty(leaked);
     }
+  });
+});
+
+describe("MCPServerEdit live tool preview", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(networking.listMCPTools).mockResolvedValue({
+      tools: [],
+      error: "connection_error",
+      message: "Saved credentials rejected",
+    });
+    vi.mocked(networking.testMCPToolsListRequest).mockResolvedValue({
+      tools: [
+        { name: "echo", description: "Echo the supplied message", inputSchema: { type: "object", properties: {} } },
+      ],
+    });
+  });
+
+  const renderEditor = (server: MCPServer = BASE) =>
+    render(
+      <MCPServerEdit
+        mcpServer={server}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+  it("replaces the saved connection failure with tools after correcting Basic Auth without saving", async () => {
+    renderEditor();
+    expect(await screen.findByText("Saved credentials rejected")).toBeInTheDocument();
+    await selectOption("Authentication", "Basic Auth");
+    fireEvent.change(screen.getByLabelText("Authentication Value"), { target: { value: "preview:correct" } });
+    expect(screen.queryByText("Saved credentials rejected")).not.toBeInTheDocument();
+    expect(screen.getByText("Loading tools...")).toBeInTheDocument();
+    expect(networking.testMCPToolsListRequest).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button", { name: "Flat List" }));
+    expect(screen.getByText("echo")).toBeInTheDocument();
+    const expectedConfig = {
+      server_id: BASE.server_id,
+      url: BASE.url,
+      auth_type: "basic",
+      credentials: { auth_value: "preview:correct" },
+    };
+    expect(networking.testMCPToolsListRequest).toHaveBeenCalledExactlyOnceWith(
+      "access-token",
+      expect.objectContaining(expectedConfig),
+    );
+    expect(networking.updateMCPServer).not.toHaveBeenCalled();
+  });
+
+  it("refreshes tools when a static header is corrected", async () => {
+    renderEditor({ ...BASE, static_headers: { "X-Preview-Key": "wrong" } });
+    expect(await screen.findByText("Saved credentials rejected")).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("Header value"), { target: { value: "correct" } });
+    fireEvent.click(await screen.findByRole("button", { name: "Flat List" }));
+    expect(screen.getByText("echo")).toBeInTheDocument();
+    expect(networking.testMCPToolsListRequest).toHaveBeenCalledExactlyOnceWith(
+      "access-token",
+      expect.objectContaining({ static_headers: { "X-Preview-Key": "correct" } }),
+    );
+  });
+
+  it("coalesces URL edits and ignores an older failed preview after the latest preview succeeds", async () => {
+    const user = userEvent.setup();
+    const older = Promise.withResolvers<{ tools: never[]; error: string; message: string }>();
+    vi.mocked(networking.testMCPToolsListRequest).mockImplementationOnce(() => older.promise);
+    renderEditor();
+    expect(await screen.findByText("Saved credentials rejected")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("MCP Server URL"), { target: { value: "https://first.example/mcp" } });
+    await waitFor(() => expect(networking.testMCPToolsListRequest).toHaveBeenCalledTimes(1));
+    await user.clear(screen.getByLabelText("MCP Server URL"));
+    await user.type(screen.getByLabelText("MCP Server URL"), "https://latest.example/mcp");
+    expect(networking.testMCPToolsListRequest).toHaveBeenCalledTimes(1);
+    fireEvent.click(await screen.findByRole("button", { name: "Flat List" }));
+    expect(screen.getByText("echo")).toBeInTheDocument();
+    expect(networking.testMCPToolsListRequest).toHaveBeenCalledTimes(2);
+    expect(networking.testMCPToolsListRequest).toHaveBeenLastCalledWith(
+      "access-token",
+      expect.objectContaining({ url: "https://latest.example/mcp" }),
+    );
+    await act(async () => older.resolve({ tools: [], error: "connection_error", message: "Older request failed" }));
+    expect(screen.getByText("echo")).toBeInTheDocument();
+    expect(screen.queryByText("Older request failed")).not.toBeInTheDocument();
+  });
+
+  it("ignores a saved-record response after editing and restores saved discovery when changes are reverted", async () => {
+    const saved = Promise.withResolvers<{ tools: never[]; error: string; message: string }>();
+    vi.mocked(networking.listMCPTools).mockImplementationOnce(() => saved.promise);
+    renderEditor();
+    await waitFor(() => expect(networking.listMCPTools).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByLabelText("MCP Server URL"), { target: { value: "https://correct.example/mcp" } });
+    fireEvent.click(await screen.findByRole("button", { name: "Flat List" }));
+    expect(screen.getByText("echo")).toBeInTheDocument();
+    await act(async () => saved.resolve({ tools: [], error: "connection_error", message: "Stale saved response" }));
+    expect(screen.getByText("echo")).toBeInTheDocument();
+    expect(screen.queryByText("Stale saved response")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("MCP Server URL"), { target: { value: BASE.url } });
+    expect(await screen.findByText("Saved credentials rejected")).toBeInTheDocument();
+    expect(networking.listMCPTools).toHaveBeenCalledTimes(2);
   });
 });

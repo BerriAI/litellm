@@ -16,6 +16,7 @@ TraceFailureSource = Literal["python", "rust", "harness"]
 class RouteFixture:
     kwargs: dict[str, object]
     provider_responses: tuple[RecordedHttpResponse, ...]
+    expected_failure: bool = False
 
 
 @dataclass(frozen=True, slots=True)

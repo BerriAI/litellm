@@ -72,6 +72,7 @@ const AgentsTable: React.FC<AgentsTableProps> = ({
   return (
     <DataTable
       data={filteredAgents}
+      paginationMode="client"
       columns={columns}
       getRowId={(agent, index) => agent.agent_id || String(index)}
       sortingMode="client"

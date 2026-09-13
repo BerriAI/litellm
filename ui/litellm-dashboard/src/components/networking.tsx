@@ -48,22 +48,36 @@ export const getAutoRouterClassifierDefaultPromptCall = async (
   }
 };
 
-export const getAutoRouterCustomTierPromptCall = async (
+export type AssembledPromptTierSource =
+  | { tierDefinitions: { name: string; description?: string }[] }
+  | { tierLabels?: Record<string, string>; classificationRubric?: string };
+
+export const getAutoRouterAssembledPromptCall = async (
   accessToken: string,
   contextWindowSize: number,
-  tierDefinitions: { name: string; description?: string }[],
-  classificationPrompt?: string,
+  source: AssembledPromptTierSource,
+  sections: { classificationPrompt?: string; classificationExamples?: string } = {},
 ): Promise<string> => {
+  const { classificationPrompt, classificationExamples } = sections;
   /**
-   * Assembled by the proxy, because a built-in name with no description inherits criteria that live
-   * only in the backend. POSTed so the operator's prompt does not reach access logs through a URL.
+   * Assembled by the proxy, because tier criteria live only in the backend: a built-in tier name
+   * with no description inherits them, and the built-in rubric derives its bullets from them.
+   * POSTed so the operator's prompt does not reach access logs through a URL.
    */
   const response = await apiClient.post<{ system_prompt: string }>(`/auto_router/classifier/default_prompt`, {
     accessToken,
     body: {
       context_window_size: contextWindowSize,
-      tier_definitions: tierDefinitions,
+      ...("tierDefinitions" in source
+        ? { tier_definitions: source.tierDefinitions }
+        : {
+            ...(source.tierLabels && Object.keys(source.tierLabels).length > 0
+              ? { tier_labels: source.tierLabels }
+              : {}),
+            ...(source.classificationRubric ? { classification_rubric: source.classificationRubric } : {}),
+          }),
       ...(classificationPrompt?.trim() ? { classification_prompt: classificationPrompt } : {}),
+      ...(classificationExamples?.trim() ? { classification_examples: classificationExamples } : {}),
     },
   });
   return response.system_prompt;
@@ -81,6 +95,7 @@ import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./e
 import type { SkillRegisterRequest } from "./claude_code_plugins/types";
 import type { ModelBudgetUsage, ModelMaxBudget } from "./key_team_helpers/ModelMaxBudgetEditor";
 import type { ObjectPermission } from "./object_permission_types";
+import type { components } from "@/lib/http/schema";
 import { jsonFields } from "./common_components/check_openapi_schema";
 import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
 import type {
@@ -125,7 +140,7 @@ const resolveDefaultBase = (fallback: string | null): string | null =>
 const defaultProxyBaseUrl = resolveDefaultBase(null);
 const WORKER_URL_KEY = "litellm_worker_url";
 // If a worker URL is in localStorage, use it as the initial proxyBaseUrl.
-// This survives page navigation and the sessionStorage.clear() in user_dashboard.
+// This survives page navigation.
 const _rawWorkerUrl = typeof window !== "undefined" ? window.localStorage.getItem(WORKER_URL_KEY) : null;
 // Validate stored worker URL — reject non-HTTP schemes to prevent exfiltration
 const _initialWorkerUrl = (() => {
@@ -180,10 +195,9 @@ export const getProxyBaseUrl = (): string => {
 
 /**
  * Switch API calls to point at a worker (or back to the control plane).
- * Persists to localStorage so it survives page navigation and the
- * sessionStorage.clear() in user_dashboard. Also updates the module-level
- * proxyBaseUrl so in-flight code in this JS execution sees the new value
- * immediately.
+ * Persists to localStorage so it survives page navigation. Also updates the
+ * module-level proxyBaseUrl so in-flight code in this JS execution sees the
+ * new value immediately.
  */
 function isValidHttpUrl(url: string): boolean {
   try {
@@ -1535,6 +1549,23 @@ export const teamDailyActivityAggregatedCall = async (
   }
 };
 
+export type TeamUserSpendResponse = components["schemas"]["TeamUserSpendResponse"];
+
+export const teamSpendByUserCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  teamIds: string[],
+): Promise<TeamUserSpendResponse> =>
+  apiClient.get<TeamUserSpendResponse>(`/team/spend/by_user`, {
+    accessToken,
+    query: {
+      start_date: formatDate(startTime),
+      end_date: formatDate(endTime),
+      team_ids: teamIds.join(","),
+    },
+  });
+
 export const organizationDailyActivityCall = async (
   accessToken: string,
   startTime: Date,
@@ -1692,6 +1723,8 @@ export const modelInfoCall = async (
   sortOrder?: string,
   excludeAutoRouters?: boolean,
   modelName?: string,
+  accessGroup?: string,
+  wildcardOnly?: boolean,
 ) => {
   /**
    * Get all models on proxy
@@ -1722,6 +1755,12 @@ export const modelInfoCall = async (
     }
     if (excludeAutoRouters) {
       params.append("exclude_auto_routers", "true");
+    }
+    if (accessGroup && accessGroup.trim()) {
+      params.append("access_group", accessGroup.trim());
+    }
+    if (wildcardOnly) {
+      params.append("wildcard_only", "true");
     }
     if (params.toString()) {
       url += `?${params.toString()}`;
@@ -2907,6 +2946,7 @@ export interface Member {
   role: string;
   user_id: string | null;
   user_email?: string | null;
+  user_alias?: string | null;
   max_budget_in_team?: number | null;
   tpm_limit?: number | null;
   rpm_limit?: number | null;
@@ -3924,63 +3964,6 @@ export const rejectGuardrailSubmission = async (
 };
 
 // Guardrails / Policies usage (dashboard)
-export const getGuardrailsUsageOverview = async (accessToken: string, startDate?: string, endDate?: string) => {
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/usage/overview` : `/guardrails/usage/overview`;
-    const params = new URLSearchParams();
-    if (startDate) params.append("start_date", startDate);
-    if (endDate) params.append("end_date", endDate);
-    if (params.toString()) url += `?${params.toString()}`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(deriveErrorMessage(errorData));
-    }
-    return response.json();
-  } catch (error) {
-    console.error("Failed to get guardrails usage overview:", error);
-    throw error;
-  }
-};
-
-export const getGuardrailsUsageDetail = async (
-  accessToken: string,
-  guardrailId: string,
-  startDate?: string,
-  endDate?: string,
-) => {
-  try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/guardrails/usage/detail/${encodeURIComponent(guardrailId)}`
-      : `/guardrails/usage/detail/${encodeURIComponent(guardrailId)}`;
-    const params = new URLSearchParams();
-    if (startDate) params.append("start_date", startDate);
-    if (endDate) params.append("end_date", endDate);
-    if (params.toString()) url += `?${params.toString()}`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(deriveErrorMessage(errorData));
-    }
-    return response.json();
-  } catch (error) {
-    console.error("Failed to get guardrails usage detail:", error);
-    throw error;
-  }
-};
-
 export const getGuardrailsUsageLogs = async (
   accessToken: string,
   options: {
@@ -4935,6 +4918,24 @@ export const fetchDiscoverableMCPServers = async (accessToken: string) => {
     throw error;
   }
 };
+
+export interface ConnectFlowStatus {
+  state: "unscoped" | "interactive" | "m2m" | "stale";
+  client_origin: string;
+  server_id: string | null;
+  server_name: string | null;
+  connected: boolean | null;
+}
+
+/**
+ * What the gateway says about one in-flight connect flow, read from the sealed HttpOnly
+ * flow cookie rather than from the address bar (LIT-7075): the client asking, the server
+ * the flow is scoped to, and whether that server's vendor OAuth is already done. Sent with
+ * no access token; the flow and session cookies are the credential, exactly as they are for
+ * the finish form this page posts.
+ */
+export const fetchConnectFlow = async (flowHandle: string): Promise<ConnectFlowStatus> =>
+  apiClient.get(`/authorize/flow`, { query: { flow: flowHandle }, credentials: "include" });
 
 export const fetchMCPServers = async (accessToken: string, teamId?: string | null, connectedAppView?: boolean) => {
   try {
@@ -6261,6 +6262,7 @@ export const patchAgentCall = async (
     agent_name?: string;
     litellm_params?: Record<string, any>;
     agent_card_params?: Record<string, any>;
+    object_permission?: Record<string, any>;
     tpm_limit?: number | null;
     rpm_limit?: number | null;
     session_tpm_limit?: number | null;
@@ -6896,13 +6898,14 @@ export const buildMcpOAuthAuthorizeUrl = ({
   const base = getProxyBaseUrl();
   const normalizedServerId = encodeURIComponent(serverId.trim());
   const url = `${base}/v1/mcp/server/oauth/${normalizedServerId}/authorize`;
-  const params = new URLSearchParams({
+  const authorizeParams = {
     redirect_uri: redirectUri,
     state,
     response_type: "code",
     code_challenge: codeChallenge,
     code_challenge_method: "S256",
-  });
+  };
+  const params = new URLSearchParams(authorizeParams);
   if (clientId && clientId.trim().length > 0) {
     params.set("client_id", clientId);
   }

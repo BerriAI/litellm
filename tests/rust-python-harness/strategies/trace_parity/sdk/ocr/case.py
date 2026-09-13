@@ -19,6 +19,20 @@ COMMON_MAPPINGS: Final = (
     mapping(rust_span="http_request", python_frame=r"AsyncHTTPHandler\.post$|HTTPHandler\.post$"),
 )
 
+SUCCESS_CALLBACK_SYNC_MAPPING: Final = mapping(
+    rust_span="success_callback",
+    python_frame=r"BoundedLoggingThreadPoolExecutor\.submit$",
+)
+SUCCESS_CALLBACK_ASYNC_MAPPING: Final = mapping(
+    rust_span="success_callback",
+    python_frame=r"Logging\.async_success_handler$",
+)
+FAILURE_CALLBACK_MAPPING: Final = mapping(
+    rust_span="failure_callback",
+    python_frame=r"Logging\.(?:async_)?failure_handler$",
+)
+IGNORED_SUCCESS_CALLBACK_MAPPING: Final = mapping(rust_span="success_callback")
+
 SYNC_MAPPINGS: Final = (
     *COMMON_MAPPINGS,
     mapping(rust_span="execute_ocr_provider_call", python_frame=r"BaseLLMHTTPHandler\.ocr$"),
@@ -38,6 +52,21 @@ ASYNC_MAPPINGS: Final = (
         python_frame=r"MistralOCRConfig\.transform_ocr_response$",
     ),
 )
+
+CALLBACK_SUCCESS_SYNC_MAPPINGS: Final = (*SYNC_MAPPINGS, SUCCESS_CALLBACK_SYNC_MAPPING)
+CALLBACK_SUCCESS_ASYNC_MAPPINGS: Final = (*ASYNC_MAPPINGS, SUCCESS_CALLBACK_ASYNC_MAPPING)
+CALLBACK_FAILURE_SYNC_MAPPINGS: Final = (
+    *COMMON_MAPPINGS,
+    mapping(rust_span="execute_ocr_provider_call", python_frame=r"BaseLLMHTTPHandler\.ocr$"),
+    FAILURE_CALLBACK_MAPPING,
+)
+CALLBACK_FAILURE_ASYNC_MAPPINGS: Final = (
+    *COMMON_MAPPINGS,
+    mapping(span="python_ocr_wrapper", python_frame=r"BaseLLMHTTPHandler\.ocr$"),
+    mapping(rust_span="execute_ocr_provider_call", python_frame=r"BaseLLMHTTPHandler\.async_ocr$"),
+    FAILURE_CALLBACK_MAPPING,
+)
+
 
 AZURE_COMMON_MAPPINGS: Final = (
     *COMMON_MAPPINGS[:7],
@@ -97,6 +126,34 @@ def _fixture(engine: Engine, model: str, document: dict[str, str] | None = None)
 
 def _mistral_fixture(engine: Engine, _base_url: str) -> RouteFixture:
     return _fixture(engine, "mistral/mistral-ocr-latest")
+
+
+def _callback_fixture(engine: Engine, *, failure: bool) -> RouteFixture:
+    fixture: Final = _fixture(engine, "mistral/mistral-ocr-latest")
+    provider_responses: Final = (
+        (
+            RecordedHttpResponse.from_bytes(
+                400,
+                (HttpHeader(name="content-type", value="application/json"),),
+                b'{"message":"trace callback provider failure"}',
+            ),
+        )
+        if failure
+        else fixture.provider_responses
+    )
+    return RouteFixture(
+        kwargs=fixture.kwargs,
+        provider_responses=provider_responses,
+        expected_failure=failure,
+    )
+
+
+def _mistral_callback_success_fixture(engine: Engine, _base_url: str) -> RouteFixture:
+    return _callback_fixture(engine, failure=False)
+
+
+def _mistral_callback_failure_fixture(engine: Engine, _base_url: str) -> RouteFixture:
+    return _callback_fixture(engine, failure=True)
 
 
 def _azure_fixture(engine: Engine, _base_url: str) -> RouteFixture:
@@ -304,36 +361,50 @@ TRACE_SUITE: Final = TraceSuite(
             name="mistral",
             fixture=_mistral_fixture,
             mappings=COMMON_MAPPINGS,
-            sync_mappings=SYNC_MAPPINGS,
-            async_mappings=ASYNC_MAPPINGS,
+            sync_mappings=(*SYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
+            async_mappings=(*ASYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
+        ),
+        TraceScenario(
+            name="mistral-callback-success",
+            fixture=_mistral_callback_success_fixture,
+            mappings=COMMON_MAPPINGS,
+            sync_mappings=CALLBACK_SUCCESS_SYNC_MAPPINGS,
+            async_mappings=CALLBACK_SUCCESS_ASYNC_MAPPINGS,
+        ),
+        TraceScenario(
+            name="mistral-callback-failure",
+            fixture=_mistral_callback_failure_fixture,
+            mappings=(*COMMON_MAPPINGS, FAILURE_CALLBACK_MAPPING),
+            sync_mappings=CALLBACK_FAILURE_SYNC_MAPPINGS,
+            async_mappings=CALLBACK_FAILURE_ASYNC_MAPPINGS,
         ),
         TraceScenario(
             name="azure-ai",
             fixture=_azure_fixture,
             mappings=AZURE_COMMON_MAPPINGS,
-            sync_mappings=AZURE_SYNC_MAPPINGS,
-            async_mappings=AZURE_ASYNC_MAPPINGS,
+            sync_mappings=(*AZURE_SYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
+            async_mappings=(*AZURE_ASYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
         ),
         TraceScenario(
             name="azure-document-intelligence",
             fixture=_azure_document_intelligence_fixture,
             mappings=DOCUMENT_INTELLIGENCE_COMMON_MAPPINGS,
-            sync_mappings=DOCUMENT_INTELLIGENCE_SYNC_MAPPINGS,
-            async_mappings=DOCUMENT_INTELLIGENCE_ASYNC_MAPPINGS,
+            sync_mappings=(*DOCUMENT_INTELLIGENCE_SYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
+            async_mappings=(*DOCUMENT_INTELLIGENCE_ASYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
         ),
         TraceScenario(
             name="vertex-ai",
             fixture=_vertex_fixture,
             mappings=VERTEX_COMMON_MAPPINGS,
-            sync_mappings=VERTEX_SYNC_MAPPINGS,
-            async_mappings=VERTEX_ASYNC_MAPPINGS,
+            sync_mappings=(*VERTEX_SYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
+            async_mappings=(*VERTEX_ASYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
         ),
         TraceScenario(
             name="vertex-deepseek",
             fixture=_vertex_deepseek_fixture,
             mappings=DEEPSEEK_COMMON_MAPPINGS,
-            sync_mappings=DEEPSEEK_SYNC_MAPPINGS,
-            async_mappings=DEEPSEEK_ASYNC_MAPPINGS,
+            sync_mappings=(*DEEPSEEK_SYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
+            async_mappings=(*DEEPSEEK_ASYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
         ),
     ),
 )

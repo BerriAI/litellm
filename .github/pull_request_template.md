@@ -47,6 +47,10 @@ After: the same request comes back with real token counts, so the dashboard show
 
 <!-- e.g., "Fixes #000" -->
 
+## Affected release
+
+<!-- Only for a fix to a regression in a released or rc version (perf, memory, crash, or behavior): name the version it regressed in, e.g. "regression in v1.100.0" or "since v1.101.0-rc.1", and add the `backport-stable` label so the fix is cherry-picked onto the rc line before the stable is tagged. Leave the section blank otherwise -->
+
 ## Linear ticket
 
 <!-- if you are an internal contributor, add "Resolves " followed by the Linear ticket e.g., "Resolves LIT-1234" to link the Linear ticket to the GitHub PR. If you don't have one, leave the section blank rather than guessing -->
@@ -127,6 +131,8 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
      - Low: anything else worth noting: naming, cleanup, an edge case nobody hits
      Nest bullets as deep as helps: hierarchy beats one long line when it makes things clearer to a
      human reader
+     If you assumed something instead of testing it, e.g. "only reproduces with X on" or "no
+     user-observable behavior difference", list it here too with what breaks if it is wrong
      Leave this section empty if there are none -->
 
 ## QA runbook
@@ -152,3 +158,4 @@ Example checklists:
 ## Final Attestation
 
 - [ ] The tests check the right things, including the edge cases, and regressions in the respective real-world customer use-cases are not possible after this PR
+

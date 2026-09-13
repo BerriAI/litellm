@@ -12,8 +12,12 @@ empty result. External reads go through ``e2e_http``.
 
 from __future__ import annotations
 
+import math
+import random
 import time
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from typing import Final
 
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
@@ -27,17 +31,33 @@ from e2e_config import (
     DD_SITE,
     POLL_TIMEOUT,
 )
-from e2e_http import URL, Headers, RateLimitedError, Success, post
+from e2e_http import URL, Headers, StreamingResponse, send
 
-#: How many rate-limited responses in a row one search tolerates before the
-#: hard fail; each retry sleeps a full search interval, so this rides out a
-#: burst from a concurrent consumer of the org-wide search budget.
-_RATE_LIMIT_RETRIES = 5
+type SearchCall = Callable[[str, float], StreamingResponse]
+
+
+def _seconds(value: str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        seconds: Final = float(value)
+    except ValueError:
+        return None
+    return seconds if math.isfinite(seconds) and seconds >= 0 else None
+
+
+def _rate_limit_delay(headers: Mapping[str, str]) -> float:
+    delays: Final = tuple(
+        delay
+        for name in ("x-ratelimit-reset", "retry-after")
+        if (delay := _seconds(headers.get(name))) is not None
+    )
+    return max(1.0, max(delays, default=DD_SEARCH_INTERVAL))
 
 
 class _DdAuthHeaders(Headers):
-    api_key: str = Field(serialization_alias="DD-API-KEY")
-    app_key: str = Field(serialization_alias="DD-APPLICATION-KEY")
+    api_key: str = Field(serialization_alias="DD-API-KEY", repr=False)
+    app_key: str = Field(serialization_alias="DD-APPLICATION-KEY", repr=False)
 
 
 class _SearchFilter(BaseModel):
@@ -88,8 +108,12 @@ class _SearchResponse(BaseModel):
 @dataclass(frozen=True, slots=True)
 class DdLogsReader:
     site: str
-    api_key: str
-    app_key: str
+    api_key: str = field(repr=False)
+    app_key: str = field(repr=False)
+    search: SearchCall | None = field(default=None, repr=False)
+    now: Callable[[], float] = field(default=time.monotonic, repr=False)
+    sleep: Callable[[float], None] = field(default=time.sleep, repr=False)
+    jitter: Callable[[], float] = field(default=random.random, repr=False)
 
     def events_for_marker(self, marker: str) -> list[DdLogEvent]:
         """Every ingested event whose attributes carry the marker. DataDog
@@ -108,25 +132,28 @@ class DdLogsReader:
         a single event. A 429 backs off and retries - the search budget is
         org-wide, so another consumer can empty it under us - while any other
         failure stays a hard fail."""
-        for _ in range(_RATE_LIMIT_RETRIES):
-            result = post(
-                URL(f"https://api.{self.site}/api/v2/logs/events/search"),
-                headers=_DdAuthHeaders(api_key=self.api_key, app_key=self.app_key),
-                json=_SearchRequest(filter=_SearchFilter(query=query)),
-                response_type=_SearchResponse,
-                timeout=30.0,
-            )
-            match result:
-                case Success(data=page):
-                    return [event.attributes for event in page.data]
-                case RateLimitedError(retry_after_seconds=retry_after):
-                    time.sleep(retry_after if retry_after else DD_SEARCH_INTERVAL)
-                case failure:
-                    pytest.fail(f"DataDog Logs Search API at api.{self.site} failed: {failure}")
+        return self._events_for_query(query, self.now() + POLL_TIMEOUT)
+
+    def _events_for_query(self, query: str, deadline: float) -> list[DdLogEvent]:
+        search: Final = self.search or self._search_page
+        while (remaining := deadline - self.now()) > 0:
+            if (result := search(query, min(30.0, remaining))).ok:
+                return [event.attributes for event in _SearchResponse.model_validate_json(result.body).data]
+            if result.status_code != 429:
+                pytest.fail(f"DataDog Logs Search API at api.{self.site} failed with HTTP {result.status_code}")
+            if (delay := min(_rate_limit_delay(result.headers) + self.jitter(), deadline - self.now())) > 0:
+                self.sleep(delay)
         pytest.fail(
-            f"DataDog Logs Search API at api.{self.site} still rate-limited after "
-            f"{_RATE_LIMIT_RETRIES} retries {DD_SEARCH_INTERVAL}s apart - the org-wide "
-            "logs_public_search_api budget (2 requests per 10s) is exhausted by another consumer"
+            f"DataDog Logs Search API at api.{self.site} remained rate-limited for {POLL_TIMEOUT}s; "
+            "the org-wide logs_public_search_api budget is exhausted"
+        )
+
+    def _search_page(self, query: str, timeout: float) -> StreamingResponse:
+        return send(
+            URL(f"https://api.{self.site}/api/v2/logs/events/search"),
+            headers=_DdAuthHeaders(api_key=self.api_key, app_key=self.app_key),
+            json=_SearchRequest(filter=_SearchFilter(query=query)),
+            timeout=timeout,
         )
 
     def poll_events_for_marker(self, marker: str) -> list[DdLogEvent]:
@@ -140,33 +167,42 @@ class DdLogsReader:
         hide from the exactly-one assertion - real-DataDog jitter can surface
         one call's two events tens of seconds apart. Searches pace at
         DD_SEARCH_INTERVAL, not POLL_INTERVAL, to respect the search API's
-        request budget. At the deadline the last result is returned as-is."""
-        deadline = time.monotonic() + POLL_TIMEOUT
-        while time.monotonic() < deadline:
-            events = self.events_for_query(query)
+        request budget. Discovery, quota retries, and duplicate detection share
+        one POLL_TIMEOUT deadline; an incomplete settle window fails closed."""
+        deadline: Final = self.now() + POLL_TIMEOUT
+        while (remaining := deadline - self.now()) > 0:
+            events = self._events_for_query(query, deadline)
             if events:
-                return self._settled_events_for_query(query, events)
-            time.sleep(DD_SEARCH_INTERVAL)
-        return self.events_for_query(query)
+                return self._settled_events_for_query(query, events, deadline)
+            if (remaining := deadline - self.now()) > 0:
+                self.sleep(min(DD_SEARCH_INTERVAL, remaining))
+        return []
 
-    def _settled_events_for_query(self, query: str, events: list[DdLogEvent]) -> list[DdLogEvent]:
+    def _settled_events_for_query(self, query: str, events: list[DdLogEvent], deadline: float) -> list[DdLogEvent]:
         """Re-read at every search interval until the settle window closes; a
         duplicate ends the watch early because more waiting cannot clear it.
 
         Keep the last non-empty result: a transient empty search (index lag)
         must not erase events already confirmed earlier in the settle window.
+        A successful final search must reach the full settle window before the
+        shared read-back deadline; otherwise duplicate detection is incomplete.
         """
-        settle_deadline = time.monotonic() + DD_SETTLE_SECONDS
+        settle_deadline: Final = self.now() + DD_SETTLE_SECONDS
         last_nonempty = events
-        while time.monotonic() < settle_deadline:
-            time.sleep(DD_SEARCH_INTERVAL)
-            latest = self.events_for_query(query)
-            if not latest:
-                continue
+        if len(events) > 1:
+            return events
+        while (remaining := deadline - self.now()) > 0:
+            self.sleep(min(DD_SEARCH_INTERVAL, remaining))
+            if self.now() >= deadline:
+                break
+            latest = self._events_for_query(query, deadline)
             if len(latest) > 1:
                 return latest
-            last_nonempty = latest
-        return last_nonempty
+            if latest:
+                last_nonempty = latest
+            if self.now() >= settle_deadline:
+                return last_nonempty
+        pytest.fail(f"DataDog log delivery could not complete its duplicate-detection window within {POLL_TIMEOUT}s")
 
 
 def build_dd_logs_reader() -> DdLogsReader:

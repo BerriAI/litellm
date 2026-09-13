@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildBody, settingsToForm } from "./mapper";
-import type { DefaultUserSettingsFormValues } from "./schema";
+import type { DefaultUserSettingsSubmitValues } from "./schema";
 
 const CONFIGURED_SETTINGS = {
   user_role: "internal_user",
@@ -59,13 +59,13 @@ describe("settingsToForm", () => {
 
   it("degrades an unrecognisable team entry to a blank row instead of throwing", () => {
     expect(settingsToForm({ teams: [{ max_budget_in_team: 5 }, 7] }).teams).toStrictEqual([
-      { team_id: "", max_budget_in_team: "", user_role: "user" },
-      { team_id: "", max_budget_in_team: "", user_role: "user" },
+      { team_id: null, max_budget_in_team: "", user_role: "user" },
+      { team_id: null, max_budget_in_team: "", user_role: "user" },
     ]);
   });
 });
 
-const formValues = (overrides: Partial<DefaultUserSettingsFormValues> = {}): DefaultUserSettingsFormValues => ({
+const formValues = (overrides: Partial<DefaultUserSettingsSubmitValues> = {}): DefaultUserSettingsSubmitValues => ({
   user_role: "internal_user",
   max_budget: "100",
   budget_duration: "30d",

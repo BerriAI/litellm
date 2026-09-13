@@ -1,12 +1,23 @@
 import json
+from copy import deepcopy
+from typing import Final, Literal
 
 import pytest
+from openai.types.responses.response_function_web_search import (
+    ActionFind,
+    ActionOpenPage,
+    ActionSearch,
+    ActionSearchSource,
+    ResponseFunctionWebSearch,
+)
 
-
+import litellm
+from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.responses.litellm_completion_transformation.transformation import (
     TOOL_CALLS_CACHE,
     LiteLLMCompletionResponsesConfig,
 )
+from litellm.types.responses.main import build_web_search_call
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
@@ -1421,6 +1432,88 @@ class TestToolChoiceTransformation:
         )
         assert result == "required"
 
+    @pytest.mark.parametrize(
+        "request_tool_choice,expected",
+        [
+            ({"type": "function", "name": "run_command"}, {"type": "function", "name": "run_command"}),
+            ({"type": "function", "function": {"name": "run_command"}}, {"type": "function", "name": "run_command"}),
+            ({"type": "custom", "name": "ApplyPatch"}, {"type": "custom", "name": "ApplyPatch"}),
+            ({"type": "custom", "custom": {"name": "ApplyPatch"}}, {"type": "custom", "name": "ApplyPatch"}),
+            ({"type": "function"}, "required"),
+            ({"type": "tool"}, "required"),
+            ({"type": "auto"}, "auto"),
+            ("required", "required"),
+            ("none", "none"),
+            (None, "auto"),
+            ("any", "auto"),
+            ("run_command", "auto"),
+            ({"name": "run_command"}, "auto"),
+        ],
+    )
+    def test_transform_tool_choice_for_responses_api_response(
+        self, request_tool_choice: object, expected: str | dict[str, str]
+    ) -> None:
+        result: Final = LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(
+            request_tool_choice
+        )
+        assert result == expected
+
+    def test_non_streamed_response_echoes_named_tool_choice_in_responses_api_shape(self) -> None:
+        chat_completion_response: Final = ModelResponse(
+            id="chatcmpl-named-tool-choice",
+            created=1748575031,
+            model="claude-haiku-4-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="tool_calls",
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_pwd",
+                                type="function",
+                                function=Function(name="run_command", arguments='{"command":"pwd"}'),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Run the command pwd.",
+            responses_api_request={"tool_choice": {"type": "function", "name": "run_command"}},
+            chat_completion_response=chat_completion_response,
+        )
+
+        assert responses_api_response.tool_choice == {"type": "function", "name": "run_command"}
+
+    def test_non_streamed_response_with_unrecognized_tool_choice_echoes_auto(self) -> None:
+        chat_completion_response: Final = ModelResponse(
+            id="chatcmpl-unrecognized-tool-choice",
+            created=1748575031,
+            model="claude-haiku-4-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="stop",
+                    message=Message(role="assistant", content="/Users/dev"),
+                )
+            ],
+        )
+
+        responses_api_response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Run the command pwd.",
+            responses_api_request={"tool_choice": "any"},
+            chat_completion_response=chat_completion_response,
+        )
+
+        assert responses_api_response.tool_choice == "auto"
+
 
 class TestContentTypeTransformation:
     """Test content type transformation from Responses API to Chat Completion format"""
@@ -2434,6 +2527,180 @@ class TestToolTransformation:
             "type": "object",
         }
 
+    @pytest.mark.parametrize(
+        "model, custom_llm_provider",
+        [
+            ("bedrock/converse/global.anthropic.claude-sonnet-5", "bedrock_converse"),
+            ("anthropic.claude-sonnet-4-5-20250929-v1:0", "bedrock"),
+            ("claude-sonnet-5", "vertex_ai"),
+            ("gemini-3.1-pro-preview", "vertex_ai"),
+            ("moonshotai.kimi-k2-thinking", "bedrock_mantle"),
+        ],
+    )
+    def test_reasoning_summary_still_yields_a_string_reasoning_effort(self, model, custom_llm_provider):
+        """
+        A Responses request carrying ``reasoning.summary`` must still reach a chat provider as a
+        plain ``reasoning_effort`` string. ``summary`` is Responses-only, and forwarding the whole
+        object turns reasoning off: Bedrock Converse and Vertex silently discard a non-string
+        ``reasoning_effort``, and Bedrock Mantle rejects the request outright.
+        """
+        responses_api_request = {"reasoning": {"effort": "medium", "summary": "auto"}}
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="hi",
+            responses_api_request=responses_api_request,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        assert result["reasoning_effort"] == "medium"
+
+    @pytest.mark.parametrize(
+        "model, custom_llm_provider",
+        [
+            ("gpt-5.4-pro", "azure_ai"),
+            ("gpt-5", "openai"),
+            ("gpt-5.1", "openai"),
+            ("gpt-5", "azure"),
+        ],
+    )
+    def test_bridged_model_carries_the_summary_as_an_alias(self, model, custom_llm_provider):
+        """
+        ``summary`` reaches a bridged model through the ``reasoning_summary`` alias, never smuggled
+        inside ``reasoning_effort``. ``litellm.completion`` reads that alias back with
+        ``peek_reasoning_summary_aliases`` and reassembles ``{effort, summary}``, so the far end
+        gets the same object it always did while no chat provider ever sees a non-string effort.
+        """
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="hi",
+            responses_api_request={"reasoning": {"effort": "medium", "summary": "auto"}},
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        assert result["reasoning_effort"] == "medium"
+        assert result["reasoning_summary"] == "auto"
+
+    @pytest.mark.parametrize(
+        "model, custom_llm_provider",
+        [
+            ("gpt-5", "openai"),
+            ("gpt-5.1", "openai"),
+            ("gpt-5", "azure"),
+        ],
+    )
+    def test_gpt_5_summary_survives_the_bridge_it_claims_to_take(self, model, custom_llm_provider):
+        """
+        Regression for the probe disagreeing with the real decision. The transform asked
+        ``responses_api_bridge_check`` with ``reasoning_summary`` taken straight off the Responses
+        object, but ``litellm.completion`` reads it from ``optional_params`` via
+        ``peek_reasoning_summary_aliases``, which the bridged request never populated. So these
+        models answered "bridging" to the probe and "not bridging" for real, and the object landed
+        on Chat Completions, which only takes a string. Emitting the alias makes the two agree.
+        """
+        from litellm.main import responses_api_bridge_check
+        from litellm.utils import get_optional_params, peek_reasoning_summary_aliases
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="hi",
+            responses_api_request={"reasoning": {"effort": "medium", "summary": "auto"}},
+            custom_llm_provider=custom_llm_provider,
+        )
+        optional_params = get_optional_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            reasoning_effort=result["reasoning_effort"],
+            reasoning_summary=result["reasoning_summary"],
+        )
+        model_info, _ = responses_api_bridge_check(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            reasoning_effort=result["reasoning_effort"],
+            reasoning_summary=peek_reasoning_summary_aliases(optional_params),
+        )
+
+        assert model_info.get("mode") == "responses"
+
+    def test_a_failing_bridge_probe_falls_back_to_the_string_effort(self, monkeypatch):
+        """
+        The probe is a capability question, so a model-info lookup blowing up must not fail the
+        request. It degrades to the chat-safe form: a string effort and no alias.
+        """
+        import litellm.main
+
+        def _boom(**_kwargs):
+            raise RuntimeError("model info unavailable")
+
+        monkeypatch.setattr(litellm.main, "responses_api_bridge_check", _boom)
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="gpt-5.4-pro",
+            input="hi",
+            responses_api_request={"reasoning": {"effort": "medium", "summary": "auto"}},
+            custom_llm_provider="azure_ai",
+        )
+
+        assert result["reasoning_effort"] == "medium"
+        assert "reasoning_summary" not in result
+
+    @pytest.mark.parametrize(
+        "reasoning, expected",
+        [
+            ({"effort": "high"}, "high"),
+            ("low", "low"),
+            ({"summary": "auto"}, None),
+            ({}, None),
+            (None, None),
+        ],
+    )
+    def test_reasoning_param_shapes_map_to_reasoning_effort(self, reasoning, expected):
+        """
+        An object without ``effort`` carries nothing Chat Completions can use, so no
+        ``reasoning_effort`` is sent at all (the bridge drops None-valued params).
+        """
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            input="hi",
+            responses_api_request={"reasoning": reasoning},
+            custom_llm_provider="bedrock",
+        )
+
+        assert result.get("reasoning_effort") == expected
+        assert ("reasoning_effort" in result) is (expected is not None)
+
+    @pytest.mark.parametrize(
+        "model, expected_thinking",
+        [
+            ("global.anthropic.claude-sonnet-5", {"type": "adaptive"}),
+            (
+                "anthropic.claude-sonnet-4-5-20250929-v1:0",
+                {"type": "enabled", "budget_tokens": 2048},
+            ),
+        ],
+    )
+    def test_reasoning_summary_still_enables_thinking_on_bedrock(self, model, expected_thinking):
+        """
+        End to end through Bedrock Converse's own param mapping: the effort a Responses request asks
+        for must survive into ``thinking``, whether the model takes an adaptive effort or a legacy
+        token budget. Forwarding the object instead leaves ``thinking`` unset and the model never
+        reasons, which is the failure this guards.
+        """
+        from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+        bridged = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="hi",
+            responses_api_request={"reasoning": {"effort": "medium", "summary": "auto"}},
+            custom_llm_provider="bedrock",
+        )
+
+        mapped = AmazonConverseConfig().map_openai_params(
+            {"reasoning_effort": bridged["reasoning_effort"]}, {}, model, True
+        )
+
+        assert expected_thinking.items() <= mapped["thinking"].items()
+
     def test_bedrock_anthropic_responses_tools_yield_only_function_toolspec(self):
         """
         End-to-end (no network) of the LIT-3858 acceptance criterion: the mixed tools array
@@ -3430,6 +3697,8 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._custom_tool_names = set()
         iterator.responses_api_request = {}
         iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(None)
+        iterator._web_search_calls = {}
+        iterator._queued_web_search_call_ids = set()
         return iterator
 
     def _make_text_chunk(self):
@@ -3934,6 +4203,211 @@ def test_function_call_tool_id_falls_back_to_unique_id_for_degenerate_call_id():
     assert convert(openai)["id"] == "call_tokyo"
 
 
+class TestHostedWebSearchReplay:
+    def test_emitted_hosted_search_output_round_trips_with_client_tool_result(self) -> None:
+        search_result: Final = {
+            "type": "web_search_tool_result",
+            "tool_use_id": "srvtoolu_round_trip_search",
+            "content": [{"type": "web_search_result", "url": "https://example.com/forecast"}],
+        }
+        search: Final = build_web_search_call(
+            tool_id="srvtoolu_round_trip_search", tool_input={"query": "Paris forecast"}, result=search_result
+        )
+        message: Final = Message(
+            role="assistant",
+            content="I found a forecast source.",
+            tool_calls=[
+                ChatCompletionMessageToolCall(
+                    id="srvtoolu_round_trip_search",
+                    type="function",
+                    function=Function(name="web_search", arguments='{"query":"Paris forecast"}'),
+                ),
+                ChatCompletionMessageToolCall(
+                    id="call_round_trip_weather",
+                    type="function",
+                    function=Function(name="get_weather", arguments='{"city":"Paris"}'),
+                ),
+            ],
+            provider_specific_fields={"web_search_calls": [search], "web_search_results": [search_result]},
+        )
+        response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Find a forecast source and check the weather in Paris.",
+            responses_api_request={
+                "tools": [
+                    {"type": "web_search"},
+                    {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
+                ]
+            },
+            chat_completion_response=_bridged_chat_completion_response(
+                choices=[Choices(index=0, finish_reason="tool_calls", message=message)]
+            ),
+        )
+        assert [item for item in response.output if item.type == "web_search_call"] == [search]
+        assert [item.call_id for item in response.output if item.type == "function_call"] == ["call_round_trip_weather"]
+        history: Final = [
+            {"role": "user", "content": "Find a forecast source and check the weather in Paris."},
+            *(item.model_dump(exclude_none=True) for item in response.output),
+            {"type": "function_call_output", "call_id": "call_round_trip_weather", "output": "Paris is sunny."},
+        ]
+        original: Final = deepcopy(history)
+
+        messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=history, responses_api_request={}
+        )
+
+        assert [item.get("role") for item in messages] == ["user", "assistant", "tool"]
+        assistant: Final = messages[1]
+        assert [call["id"] for call in assistant["tool_calls"]] == ["call_round_trip_weather"]
+        assert [call["function"]["name"] for call in assistant["tool_calls"]] == ["get_weather"]
+        content: Final = assistant["content"]
+        assert isinstance(content, list)
+        text_parts: Final = tuple(block["text"] for block in content if block.get("type") == "text")
+        assert text_parts[0] == "I found a forecast source."
+        replayed_searches: Final = tuple(
+            ResponseFunctionWebSearch.model_validate_json(text[text.index("{"):])
+            for text in text_parts
+            if "web_search_call" in text
+        )
+        assert replayed_searches == (search,)
+        assert messages[2]["tool_call_id"] == "call_round_trip_weather"
+        assert messages[2]["content"] == "Paris is sunny."
+        assert history == original
+
+    @pytest.mark.parametrize(
+        "action",
+        (
+            ActionSearch(
+                type="search",
+                query="hosted search history",
+                queries=["hosted search history", "search replay"],
+                sources=[ActionSearchSource(type="url", url="https://example.com/search-result")],
+            ),
+            ActionOpenPage(type="open_page", url="https://example.com/opened-page"),
+            ActionFind(type="find_in_page", url="https://example.com/find-page", pattern="search history"),
+        ),
+        ids=("search", "open_page", "find"),
+    )
+    @pytest.mark.parametrize("status", ("completed", "failed"))
+    def test_replays_typed_search_action_without_client_tool_call(
+        self,
+        action: ActionSearch | ActionOpenPage | ActionFind,
+        status: Literal["completed", "failed"],
+    ) -> None:
+        search: Final = ResponseFunctionWebSearch(
+            id="ws_replayed_search", type="web_search_call", status=status, action=action
+        )
+        input_item: Final = search.model_dump(exclude_none=True)
+        original: Final = deepcopy(input_item)
+
+        messages: Final = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+            input_item=input_item
+        )
+
+        assert len(messages) == 1
+        assert messages[0]["role"] == "assistant"
+        assert not messages[0].get("tool_calls")
+        content: Final = messages[0].get("content")
+        assert isinstance(content, str)
+        replayed: Final = ResponseFunctionWebSearch.model_validate_json(content[content.index("{"):])
+        assert replayed == search
+        assert input_item == original
+
+    @pytest.mark.parametrize("order", ((0, 1, 2, 3), (1, 0, 3, 2), (1, 3, 0, 2)))
+    @pytest.mark.parametrize("modify_params", (False, True))
+    @pytest.mark.parametrize("structured_content", (False, True))
+    def test_search_replay_preserves_client_tool_result_adjacency(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        order: tuple[int, int, int, int],
+        modify_params: bool,
+        structured_content: bool,
+    ) -> None:
+        monkeypatch.setattr(litellm, "modify_params", modify_params)
+        searches: Final = tuple(
+            ResponseFunctionWebSearch(
+                id=f"ws_search_{index}",
+                type="web_search_call",
+                status="completed",
+                action=ActionSearch(
+                    type="search",
+                    query=f"search query {index}",
+                    queries=[f"search query {index}"],
+                    sources=[ActionSearchSource(type="url", url=f"https://example.com/result-{index}")],
+                ),
+            )
+            for index in (1, 2)
+        )
+        replay_items: Final = (
+            {
+                "type": "function_call",
+                "name": "get_weather",
+                "call_id": "call_weather",
+                "arguments": '{"city":"Paris"}',
+            },
+            searches[0].model_dump(exclude_none=True),
+            {"type": "function_call", "name": "get_time", "call_id": "call_time", "arguments": "{}"},
+            searches[1].model_dump(exclude_none=True),
+        )
+        history: Final = [
+            {"role": "user", "content": "Research the forecast and call get_weather."},
+            {
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "I will check the forecast."}]
+                if structured_content
+                else "I will check the forecast.",
+            },
+            *(replay_items[index] for index in order),
+            {"role": "assistant", "content": [{"type": "output_text", "text": "I found two sources."}]},
+            {"type": "function_call_output", "call_id": "call_weather", "output": "Paris is sunny."},
+            {"type": "function_call_output", "call_id": "call_time", "output": "12:00"},
+        ]
+        original: Final = deepcopy(history)
+
+        messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=history, responses_api_request={}
+        )
+
+        assert [message.get("role") for message in messages] == ["user", "assistant", "tool", "tool"]
+        assistant: Final = messages[1]
+        assert [call["id"] for call in assistant["tool_calls"]] == ["call_weather", "call_time"]
+        assert [call["function"]["name"] for call in assistant["tool_calls"]] == ["get_weather", "get_time"]
+        assert messages[2]["tool_call_id"] == "call_weather"
+        assert messages[2]["content"] == "Paris is sunny."
+        assert messages[3]["tool_call_id"] == "call_time"
+        assert messages[3]["content"] == "12:00"
+        content: Final = assistant["content"]
+        assert isinstance(content, list)
+        text_parts: Final = tuple(block["text"] for block in content if block.get("type") == "text")
+        assert text_parts[0] == "I will check the forecast."
+        assert text_parts[-1] == "I found two sources."
+        replayed_searches: Final = tuple(
+            ResponseFunctionWebSearch.model_validate_json(text[text.index("{"):])
+            for text in text_parts
+            if "web_search_call" in text
+        )
+        assert replayed_searches == searches
+        assert history == original
+
+        provider_messages: Final = anthropic_messages_pt(
+            messages=messages, model="claude-fable-5-1", llm_provider="anthropic"
+        )
+
+        assert [message["role"] for message in provider_messages] == ["user", "assistant", "user"]
+        assistant_blocks: Final = provider_messages[1]["content"]
+        result_blocks: Final = provider_messages[2]["content"]
+        assert [block["id"] for block in assistant_blocks if block.get("type") == "tool_use"] == [
+            "call_weather", "call_time"
+        ]
+        assert [block["tool_use_id"] for block in result_blocks if block.get("type") == "tool_result"] == [
+            "call_weather", "call_time"
+        ]
+        assert [block["content"] for block in result_blocks if block.get("type") == "tool_result"] == [
+            "Paris is sunny.", "12:00"
+        ]
+        assert [block["text"] for block in assistant_blocks if block.get("type") == "text"] == list(text_parts)
+        assert history == original
+
+
 BRIDGED_CHAT_COMPLETION_ID = "chatcmpl-dfa2da3a-1586-4ff7-b64e-f59c692a5d11"
 
 
@@ -3974,6 +4448,105 @@ class TestBridgedOutputItemIdPrefixes:
             responses_api_request={},
             chat_completion_response=chat_completion_response,
         )
+
+    @pytest.mark.parametrize(
+        "tool_type,result_kind,expected_sources",
+        [
+            (
+                "web_search",
+                "valid",
+                {"srvtoolu_01Search": ["https://example.com/one"], "srvtoolu_02Search": ["https://example.com/two"]},
+            ),
+            (
+                "web_search_preview",
+                "valid",
+                {"srvtoolu_01Search": ["https://example.com/one"], "srvtoolu_02Search": ["https://example.com/two"]},
+            ),
+            ("function", "valid", {}),
+            ("web_search", "unpaired", {"srvtoolu_01Search": ["https://example.com/one"]}),
+            ("web_search", "web_fetch", {"srvtoolu_02Search": ["https://example.com/two"]}),
+            ("web_search", "error", {"srvtoolu_01Search": [], "srvtoolu_02Search": ["https://example.com/two"]}),
+        ],
+    )
+    def test_anthropic_web_search_output_mapping(self, tool_type, result_kind, expected_sources):
+        call_ids: Final = ("srvtoolu_01Search", "srvtoolu_02Search")
+        valid_results: Final = (
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": call_ids[0],
+                "content": [{"type": "web_search_result", "url": "https://example.com/one"}],
+            },
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": call_ids[1],
+                "content": [{"type": "web_search_result", "url": "https://example.com/two"}],
+            },
+        )
+        first_result: Final = (
+            {**valid_results[0], "type": "web_fetch_tool_result"}
+            if result_kind == "web_fetch"
+            else {**valid_results[0], "content": {"type": "web_search_tool_result_error", "error_code": "unavailable"}}
+            if result_kind == "error"
+            else valid_results[0]
+        )
+        results: Final = (first_result,) if result_kind == "unpaired" else (first_result, valid_results[1])
+        message: Final = Message(
+            role="assistant",
+            content="answer",
+            tool_calls=[
+                ChatCompletionMessageToolCall(
+                    id=call_id,
+                    type="function",
+                    function=Function(name="web_search", arguments=json.dumps({"query": query})),
+                )
+                for call_id, query in zip(call_ids, ("one", "two"), strict=True)
+            ]
+            + [
+                ChatCompletionMessageToolCall(
+                    id="toolu_regular",
+                    type="function",
+                    function=Function(name="get_weather", arguments='{"city":"Paris"}'),
+                )
+            ],
+            provider_specific_fields={
+                "web_search_results": results,
+                "web_search_calls": [
+                    build_web_search_call(
+                        tool_id=result["tool_use_id"],
+                        tool_input={"query": "one" if result["tool_use_id"].endswith("01Search") else "two"},
+                        result=result,
+                    )
+                    for result in results
+                    if tool_type != "function" and result["type"] == "web_search_tool_result"
+                ],
+            },
+        )
+        request_tools: Final = (
+            [{"type": "function", "name": "web_search", "parameters": {"type": "object"}}]
+            if tool_type == "function"
+            else [{"type": tool_type}]
+        )
+        response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="search",
+            responses_api_request={"tools": request_tools},
+            chat_completion_response=_bridged_chat_completion_response(
+                choices=[Choices(index=0, finish_reason="stop", message=message)]
+            ),
+        )
+        search_items: Final = {
+            item.id.removeprefix("ws_"): item for item in response.output if item.type == "web_search_call"
+        }
+        function_ids: Final = {item.call_id for item in response.output if item.type == "function_call"}
+
+        assert set(search_items) == set(expected_sources)
+        assert function_ids == set(call_ids).difference(expected_sources) | {"toolu_regular"}
+        assert [item.content[0].text for item in response.output if item.type == "message"] == ["answer"]
+        for call_id, item in search_items.items():
+            assert item.status == ("failed" if result_kind == "error" and call_id.endswith("01Search") else "completed")
+            assert item.action.type == "search"
+            assert item.action.query == ("one" if call_id.endswith("01Search") else "two")
+            assert item.action.queries == [item.action.query]
+            assert [source.url for source in item.action.sources] == expected_sources[call_id]
 
     def test_message_item_id_uses_msg_prefix(self):
         response = self._transform(_bridged_chat_completion_response())

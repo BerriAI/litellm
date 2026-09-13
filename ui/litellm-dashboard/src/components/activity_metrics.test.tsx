@@ -101,7 +101,7 @@ const createMockDailyData = (
 });
 
 const createMockKeyMetricWithMetadata = (
-  metadata: { key_alias: string | null; team_id: string | null },
+  metadata: { key_alias: string | null; team_id: string | null; user_email?: string | null },
   metrics: typeof EMPTY_SPEND_METRICS = EMPTY_SPEND_METRICS,
 ): KeyMetricWithMetadata => ({
   metrics,
@@ -653,6 +653,23 @@ describe("processActivityData", () => {
 
     expect(result).toHaveProperty("key1");
     expect(result["key1"].label).toBe("test-key-1 (team_id: team1)");
+  });
+
+  it("retains the api key metadata so key activity can be searched by user", () => {
+    const metadata = { key_alias: "test-key-1", team_id: "team1", user_id: "user-1", user_email: "user1@example.com" };
+    const withUser: { results: DailyData[] } = {
+      results: [
+        createMockDailyData("2025-01-01", mockDailyActivity.results[0].metrics, {
+          ...EMPTY_BREAKDOWN,
+          api_keys: { key1: createMockKeyMetricWithMetadata(metadata, mockDailyActivity.results[0].metrics) },
+        }),
+      ],
+    };
+
+    const result = processActivityData(withUser, "api_keys", MOCK_TEAMS);
+
+    expect(result["key1"].key_metadata).toEqual(metadata);
+    expect(processActivityData(withUser, "models")["key1"]).toBeUndefined();
   });
 
   it("should process data for models key with data", () => {
@@ -1448,6 +1465,17 @@ describe("formatKeyLabel", () => {
 
     const result = formatKeyLabel(modelData, "actual-key", MOCK_TEAMS);
     expect(result).toBe("key-hash-actual-key (team: Test Team 1)");
+  });
+
+  it("should use user_email when key_alias is null", () => {
+    const modelData = createMockKeyMetricWithMetadata({
+      key_alias: null,
+      team_id: "team1",
+      user_email: "alice@example.com",
+    });
+
+    const result = formatKeyLabel(modelData, "actual-key", MOCK_TEAMS);
+    expect(result).toBe("alice@example.com (team: Test Team 1)");
   });
 
   it("should return key_alias with team_id when teams array is empty", () => {

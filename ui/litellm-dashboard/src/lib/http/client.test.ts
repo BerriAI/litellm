@@ -41,6 +41,15 @@ describe("createApiClient", () => {
     expect(init.body).toBeUndefined();
   });
 
+  it("forwards the browser credential policy", async () => {
+    const fetchImpl = vi.fn(async () => okResponse({}));
+    const client = createApiClient({ getBaseUrl: () => "https://proxy.example", fetchImpl });
+
+    await client.get("/authorize/flow", { credentials: "include" });
+
+    expect(fetchImpl.mock.calls[0][1].credentials).toBe("include");
+  });
+
   it("JSON-serializes the body for writes", async () => {
     const fetchImpl = vi.fn(async () => okResponse({}));
     const client = createApiClient({ getBaseUrl: () => "", fetchImpl });

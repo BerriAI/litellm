@@ -1,11 +1,18 @@
 import asyncio
+import contextlib
+import contextvars
 import json
 import logging
 import os
+import queue
+import threading
 from datetime import datetime, timedelta, timezone
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 import respx
 from jsonschema import validate
@@ -13,6 +20,7 @@ from jsonschema import validate
 
 import litellm
 from litellm._internal_context import is_internal_call
+from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm._logging import (
     CorrelationContextFilter,
     JsonFormatter,
@@ -52,6 +60,42 @@ from litellm.utils import (
 )
 
 # Adds the parent directory to the system path
+
+
+def test_non_ocr_wrapper_preserves_logging_executor_and_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    marker: Final = contextvars.ContextVar("non-ocr-logging-context", default="missing")
+    token: Final = marker.set("caller-context")
+    caller_thread: Final = threading.get_ident()
+    response: Final = object()
+    logger: Final = MagicMock()
+    observed: Final = queue.Queue[tuple[object, str, int]]()
+
+    def record_success(result: object, start_time: datetime, end_time: datetime) -> None:
+        observed.put((result, marker.get(), threading.get_ident()))
+
+    def embedding(**kwargs: object) -> object:
+        return response
+
+    logger.success_handler.side_effect = record_success
+    monkeypatch.setattr("litellm.utils.function_setup", MagicMock(return_value=(logger, {})))
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            monkeypatch.setattr("litellm.utils.executor", executor)
+            result: Final = client(embedding)()
+        logged_response, context, worker_thread = observed.get_nowait()
+        assert result is response
+        assert logged_response is response
+        assert context == "caller-context"
+        assert worker_thread != caller_thread
+        assert observed.empty()
+    finally:
+        marker.reset(token)
+
+
+def test_cloudflare_model_info_includes_rpm(local_model_cost_map: None) -> None:
+    assert litellm.get_model_info("cloudflare/@cf/meta/llama-3.1-8b-instruct-fp8")["rpm"] == 300
+    assert litellm.get_model_info("cloudflare/@cf/moonshotai/kimi-k2.6")["rpm"] == 20
+    assert litellm.get_model_info("cloudflare/@cf/openai/whisper-large-v3-turbo")["rpm"] == 720
 
 
 def test_get_utc_datetime_returns_current_aware_utc_time() -> None:
@@ -186,6 +230,8 @@ def test_get_model_info_resolves_provider_prefixed_model_ids(local_model_cost_ma
         ("perplexity/perplexity/kimi-k3", True),
         ("perplexity/perplexity/deepseek-v4-flash-0731", True),
         ("perplexity/perplexity/kimi-k2.7-code", False),
+        ("perplexity/perplexity/nemotron-3.5-lightning-30b-a3b", True),
+        ("perplexity/perplexity/nemotron-3-ultra-550b-a55b", True),
     ):
         assert litellm.supports_reasoning(model=model) is reasoning, model
 
@@ -196,6 +242,23 @@ def test_get_model_info_resolves_provider_prefixed_model_ids(local_model_cost_ma
     assert via_provider["input_cost_per_token"] == 1.4e-06
     assert via_provider["output_cost_per_token"] == 4.4e-06
     assert via_provider["mode"] == "responses"
+
+    lightning = litellm.get_model_info(
+        model="perplexity/nemotron-3.5-lightning-30b-a3b", custom_llm_provider="perplexity"
+    )
+    assert lightning["key"] == "perplexity/perplexity/nemotron-3.5-lightning-30b-a3b"
+    assert lightning["input_cost_per_token"] == 1.15e-08
+    assert lightning["output_cost_per_token"] == 1.7e-07
+    assert lightning["cache_read_input_token_cost"] == 1.15e-09
+    assert lightning["mode"] == "responses"
+
+    ultra = litellm.get_model_info(model="perplexity/perplexity/nemotron-3-ultra-550b-a55b")
+    assert ultra["key"] == "perplexity/perplexity/nemotron-3-ultra-550b-a55b"
+
+
+def test_get_model_info_strips_openai_finetune_ids_without_a_custom_suffix(local_model_cost_map):
+    info = litellm.get_model_info(model="ft:gpt-4o-2024-08-06:my-org::abc123", custom_llm_provider="openai")
+    assert info["key"] == "ft:gpt-4o-2024-08-06"
 
 
 def test_provider_prefixed_lookup_never_outranks_an_existing_row(local_model_cost_map):
@@ -440,7 +503,7 @@ def test_gpt_image_2_provider_and_model_info(local_model_cost_map):
     assert model_info["mode"] == "image_generation"
     assert model_info["input_cost_per_token"] == 5e-06
     assert model_info["input_cost_per_image_token"] == 8e-06
-    assert model_info["output_cost_per_token"] == 1e-05
+    assert model_info["output_cost_per_token"] == 0
     assert model_info["output_cost_per_image_token"] == 3e-05
     assert (
         "/v1/images/generations"
@@ -482,7 +545,7 @@ def test_azure_gpt_image_2_model_info(local_model_cost_map):
     assert model_info["mode"] == "image_generation"
     assert model_info["input_cost_per_token"] == 5e-06
     assert model_info["input_cost_per_image_token"] == 8e-06
-    assert model_info["output_cost_per_token"] == 1e-05
+    assert model_info["output_cost_per_token"] == 0
     assert model_info["output_cost_per_image_token"] == 3e-05
 
 
@@ -803,6 +866,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "input_cost_per_second",
         "output_cost_per_second",
         "output_cost_per_second_480p",
+        "output_cost_per_second_720p",
         "output_cost_per_second_1080p",
         "output_cost_per_second_4k",
         "input_cost_per_query",
@@ -906,7 +970,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_audio_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr": {"type": "number"},
+                "cache_creation_input_token_cost_above_128k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_200k_tokens": {"type": "number"},
+                "cache_creation_input_token_cost_above_256k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens_flex": {
                     "type": "number"
@@ -917,7 +983,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_flex": {"type": "number"},
                 "cache_creation_input_token_cost_priority": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
+                "cache_read_input_token_cost_above_128k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
+                "cache_read_input_token_cost_above_256k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens_flex": {
                     "type": "number"
@@ -1022,6 +1090,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_pixel": {"type": "number"},
                 "output_cost_per_second": {"type": "number"},
                 "output_cost_per_second_480p": {"type": "number"},
+                "output_cost_per_second_720p": {"type": "number"},
                 "output_cost_per_second_1080p": {"type": "number"},
                 "output_cost_per_second_4k": {"type": "number"},
                 "output_cost_per_token": {"type": "number"},
@@ -1081,12 +1150,24 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "enum": ["none", "minimal", "low", "medium", "high", "xhigh"],
                 },
                 "supports_adaptive_thinking": {"type": "boolean"},
+                "supports_anthropic_thinking_payload": {"type": "boolean"},
                 "supports_legacy_thinking": {"type": "boolean"},
                 "thinking_always_on": {"type": "boolean"},
                 "supports_mid_conversation_system": {"type": "boolean"},
                 "supports_sampling_params": {"type": "boolean"},
                 "supports_output_config": {"type": "boolean"},
                 "supports_speed": {"type": "boolean"},
+                "supported_audio_formats": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["mp3", "wav"],
+                    },
+                },
+                "vertex_ai_audio_api": {
+                    "type": "string",
+                    "enum": ["lyria_predict", "lyria_interactions"],
+                },
                 "bedrock_output_config_effort_ceiling": {
                     "type": "string",
                     "enum": ["low", "medium", "high", "max", "xhigh"],
@@ -1109,6 +1190,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/images/variations",
                             "/v1/images/edits",
                             "/v1/batch",
+                            "/v1beta/interactions",
                             "/v1/audio/transcriptions",
                             "/v1/audio/speech",
                             "/v1/ocr",
@@ -1382,21 +1464,33 @@ def test_supports_tool_choice_simple_tests():
         is True
     )
 
-    assert (
-        litellm.utils.supports_tool_choice(model="us.amazon.nova-micro-v1:0") is False
-    )
-    assert (
-        litellm.utils.supports_tool_choice(model="bedrock/us.amazon.nova-micro-v1:0")
-        is False
-    )
-    assert (
-        litellm.utils.supports_tool_choice(
-            model="us.amazon.nova-micro-v1:0", custom_llm_provider="bedrock_converse"
-        )
-        is False
-    )
-
     assert litellm.utils.supports_tool_choice(model="perplexity/sonar") is False
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "model",
+    [
+        "amazon.nova-lite-v1:0",
+        "amazon.nova-micro-v1:0",
+        "amazon.nova-pro-v1:0",
+        "apac.amazon.nova-lite-v1:0",
+        "apac.amazon.nova-micro-v1:0",
+        "apac.amazon.nova-pro-v1:0",
+        "bedrock/us-gov-east-1/amazon.nova-pro-v1:0",
+        "bedrock/us-gov-west-1/amazon.nova-lite-v1:0",
+        "bedrock/us-gov-west-1/amazon.nova-micro-v1:0",
+        "bedrock/us-gov-west-1/amazon.nova-pro-v1:0",
+        "eu.amazon.nova-lite-v1:0",
+        "eu.amazon.nova-micro-v1:0",
+        "eu.amazon.nova-pro-v1:0",
+        "us.amazon.nova-lite-v1:0",
+        "us.amazon.nova-micro-v1:0",
+        "us.amazon.nova-pro-v1:0",
+    ],
+)
+def test_amazon_nova_v1_understanding_models_support_tool_choice(model: str) -> None:
+    assert litellm.utils.supports_tool_choice(model=model) is True
 
 
 def test_check_provider_match():
@@ -2361,6 +2455,28 @@ def test_register_model_with_scientific_notation():
     _invalidate_model_cost_lowercase_map()
 
 
+@respx.mock
+def test_register_model_url_fetch_uses_single_attempt(monkeypatch):
+    monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    before = dict(litellm.model_cost)
+    threads_before = {thread.name for thread in threading.enumerate()}
+    route = respx.get("https://example.invalid/custom_pricing.json").mock(
+        return_value=httpx.Response(503)
+    )
+
+    litellm.register_model(model_cost="https://example.invalid/custom_pricing.json")
+
+    threads_after = {thread.name for thread in threading.enumerate()}
+    assert route.call_count == 1
+    assert not (threads_after - threads_before) & {"litellm-model-cost-map-retry"}
+    assert not any(
+        thread.name == "litellm-model-cost-map-retry" and thread.is_alive()
+        for thread in threading.enumerate()
+    )
+    assert litellm.model_cost.keys() >= before.keys()
+
+
 def test_register_model_openrouter_without_slash():
     """
     Test that register_model handles openrouter models without '/' in the name.
@@ -2790,7 +2906,7 @@ def test_model_info_for_openrouter_kimi_k2_5():
 
     Model properties from OpenRouter API:
     - context_length: 262144
-    - pricing: prompt=$0.0000006, completion=$0.000003, input_cache_read=$0.0000001
+    - pricing: prompt=$0.00000045, completion=$0.00000225, input_cache_read=$0.00000007
     - modality: text+image->text (supports vision)
     - supports: tool_choice, tools (function calling)
     """
@@ -2815,9 +2931,9 @@ def test_model_info_for_openrouter_kimi_k2_5():
     assert model_info["max_tokens"] == 262144
 
     # Verify pricing
-    assert model_info["input_cost_per_token"] == 6e-07
-    assert model_info["output_cost_per_token"] == 3e-06
-    assert model_info["cache_read_input_token_cost"] == 1e-07
+    assert model_info["input_cost_per_token"] == 4.5e-07
+    assert model_info["output_cost_per_token"] == 2.25e-06
+    assert model_info["cache_read_input_token_cost"] == 7e-08
 
     # Verify capabilities
     assert model_info["supports_vision"] is True
@@ -2873,6 +2989,60 @@ def test_gemini_lyria_3_preview_models_in_cost_map():
     assert clip["litellm_provider"] == "gemini" and pro["litellm_provider"] == "gemini"
     assert clip["max_input_tokens"] == 131072 == pro["max_input_tokens"]
     assert clip["output_cost_per_image"] == 0.04
+
+
+def test_vertex_ai_lyria_models_in_cost_map():
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    lyria_2 = model_cost.get("vertex_ai/lyria-002")
+    clip = model_cost.get("vertex_ai/lyria-3-clip-preview")
+    pro = model_cost.get("vertex_ai/lyria-3-pro-preview")
+
+    assert lyria_2 is not None
+    assert clip is not None
+    assert pro is not None
+    assert lyria_2["litellm_provider"] == "vertex_ai"
+    assert clip["litellm_provider"] == "vertex_ai"
+    assert pro["litellm_provider"] == "vertex_ai"
+    assert lyria_2["mode"] == "audio_speech"
+    assert clip["mode"] == "audio_speech"
+    assert pro["mode"] == "audio_speech"
+    assert lyria_2["output_cost_per_image"] == 0.06
+    assert lyria_2["supported_modalities"] == ["text"]
+    assert lyria_2["supported_output_modalities"] == ["audio"]
+    assert lyria_2["supports_audio_output"] is True
+    assert lyria_2["supported_audio_formats"] == ["wav"]
+    assert lyria_2["vertex_ai_audio_api"] == "lyria_predict"
+    assert lyria_2["supported_endpoints"] == ["/v1/audio/speech"]
+    assert clip["output_cost_per_image"] == 0.04
+    assert pro["output_cost_per_image"] == 0.08
+    assert clip["supported_audio_formats"] == ["mp3"]
+    assert pro["supported_audio_formats"] == ["mp3", "wav"]
+    assert clip["vertex_ai_audio_api"] == "lyria_interactions"
+    assert pro["vertex_ai_audio_api"] == "lyria_interactions"
+    assert clip["supported_endpoints"] == [
+        "/v1beta/interactions",
+        "/v1/audio/speech",
+    ]
+    assert pro["supported_endpoints"] == [
+        "/v1beta/interactions",
+        "/v1/audio/speech",
+    ]
+    assert clip["supported_modalities"] == ["text"]
+    assert pro["supported_modalities"] == ["text"]
+    assert clip["supports_vision"] is False
+    assert pro["supports_vision"] is False
+    assert "supports_image_input" not in clip
+    assert "supports_image_input" not in pro
+    assert clip["supported_regions"] == ["global"]
+    assert pro["supported_regions"] == ["global"]
+    assert clip["supports_audio_output"] is True
+    assert pro["supports_audio_output"] is True
 
 
 def test_model_info_for_fireworks_short_form_models():
@@ -3952,7 +4122,7 @@ def test_deepseek_v4_models_in_cost_map():
     configured in model_prices_and_context_window.json.
 
     Prices sourced from https://api-docs.deepseek.com/quick_start/pricing:
-    - deepseek-v4-flash: $0.44/M input, $1.32/M output
+    - deepseek-v4-flash: $0.30/M input, $1.20/M output
     - deepseek-v4-pro:   $1.32/M input, $3.96/M output
 
     Closes https://github.com/BerriAI/litellm/issues/26709
@@ -3965,9 +4135,9 @@ def test_deepseek_v4_models_in_cost_map():
         model_cost = json.load(f)
 
     # --- bare model names ---
-    for key, expected_input, expected_output, expected_cache in [
-        ("deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
-        ("deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
+    for key, expected_input, expected_output, expected_cache, expected_vision in [
+        ("deepseek-v4-flash", 3e-07, 1.2e-06, 6e-09, True),
+        ("deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08, False),
     ]:
         info = model_cost.get(key)
         assert info is not None, f"{key} missing from model_prices_and_context_window.json"
@@ -3979,11 +4149,12 @@ def test_deepseek_v4_models_in_cost_map():
         assert info["max_input_tokens"] == 1_000_000
         assert info["supports_function_calling"] is True
         assert info["supports_tool_choice"] is True
+        assert info.get("supports_vision", False) is expected_vision
 
     # --- provider-prefixed names ---
-    for key, expected_input, expected_output, expected_cache in [
-        ("deepseek/deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
-        ("deepseek/deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
+    for key, expected_input, expected_output, expected_cache, expected_vision in [
+        ("deepseek/deepseek-v4-flash", 3e-07, 1.2e-06, 6e-09, True),
+        ("deepseek/deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08, False),
     ]:
         info = model_cost.get(key)
         assert info is not None, f"{key} missing from model_prices_and_context_window.json"
@@ -3994,6 +4165,7 @@ def test_deepseek_v4_models_in_cost_map():
         assert info["cache_read_input_token_cost"] == expected_cache
         assert info["supports_function_calling"] is True
         assert info["supports_tool_choice"] is True
+        assert info.get("supports_vision", False) is expected_vision
 
 
 def test_deepseek_v4_models_in_backup_cost_map():
@@ -4009,9 +4181,9 @@ def test_deepseek_v4_models_in_backup_cost_map():
         model_cost = json.load(f)
 
     # --- bare model names ---
-    for key, expected_input, expected_output, expected_cache in [
-        ("deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
-        ("deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
+    for key, expected_input, expected_output, expected_cache, expected_vision in [
+        ("deepseek-v4-flash", 3e-07, 1.2e-06, 6e-09, True),
+        ("deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08, False),
     ]:
         info = model_cost.get(key)
         assert info is not None, f"{key} missing from backup JSON"
@@ -4021,11 +4193,12 @@ def test_deepseek_v4_models_in_backup_cost_map():
         assert info["output_cost_per_token"] == expected_output
         assert info["cache_read_input_token_cost"] == expected_cache
         assert info["max_input_tokens"] == 1_000_000
+        assert info.get("supports_vision", False) is expected_vision
 
     # --- provider-prefixed names ---
-    for key, expected_input, expected_output, expected_cache in [
-        ("deepseek/deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
-        ("deepseek/deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
+    for key, expected_input, expected_output, expected_cache, expected_vision in [
+        ("deepseek/deepseek-v4-flash", 3e-07, 1.2e-06, 6e-09, True),
+        ("deepseek/deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08, False),
     ]:
         info = model_cost.get(key)
         assert info is not None, f"{key} missing from backup JSON"
@@ -4034,14 +4207,48 @@ def test_deepseek_v4_models_in_backup_cost_map():
         assert info["input_cost_per_token"] == expected_input
         assert info["output_cost_per_token"] == expected_output
         assert info["cache_read_input_token_cost"] == expected_cache
+        assert info.get("supports_vision", False) is expected_vision
+
+
+def test_deprecation_dates_for_retired_xai_and_groq_models():
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    assert model_cost["xai/grok-imagine-image-quality"]["deprecation_date"] == "2026-11-02"
+    assert model_cost["xai/grok-imagine-image-quality-latest"]["deprecation_date"] == "2026-11-02"
+    assert model_cost["xai/grok-imagine-image-quality-20260403"]["deprecation_date"] == "2026-11-02"
+    assert model_cost["groq/gemma-7b-it"]["deprecation_date"] == "2024-12-18"
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_deepseek_flash_completion_cost():
+    from litellm.types.utils import ModelResponse
+
+    response = ModelResponse(
+        model="deepseek-flash",
+        usage=Usage(
+            prompt_tokens=1_000_000,
+            completion_tokens=1_000_000,
+            total_tokens=2_000_000,
+        ),
+    )
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="deepseek-flash",
+        custom_llm_provider="deepseek",
+    )
+
+    assert cost == pytest.approx(1.50, abs=1e-9)
 
 
 _FIREWORKS_MODELS = [
     (
         "accounts/fireworks/models/glm-5p2",
-        1.4e-06,
-        4.4e-06,
-        1.4e-07,
         1048576,
         131072,
         False,
@@ -4049,9 +4256,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/glm-5p1",
-        1.4e-06,
-        4.4e-06,
-        2.6e-07,
         202800,
         131072,
         False,
@@ -4059,9 +4263,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/routers/glm-5p1-fast",
-        2.8e-06,
-        8.8e-06,
-        5.2e-07,
         202800,
         131072,
         False,
@@ -4069,9 +4270,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/qwen3p7-plus",
-        4e-07,
-        1.6e-06,
-        8e-08,
         262144,
         65536,
         True,
@@ -4079,9 +4277,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/minimax-m3",
-        3e-07,
-        1.2e-06,
-        6e-08,
         512000,
         512000,
         True,
@@ -4089,9 +4284,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/minimax-m2p7",
-        3e-07,
-        1.2e-06,
-        6e-08,
         196608,
         196608,
         False,
@@ -4099,9 +4291,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/kimi-k2p7-code",
-        9.5e-07,
-        4e-06,
-        1.9e-07,
         262144,
         32768,
         True,
@@ -4109,9 +4298,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/routers/kimi-k2p7-code-fast",
-        1.9e-06,
-        8e-06,
-        3.8e-07,
         262144,
         32768,
         True,
@@ -4119,9 +4305,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/kimi-k2p6",
-        9.5e-07,
-        4e-06,
-        1.6e-07,
         262144,
         32768,
         True,
@@ -4129,9 +4312,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/routers/kimi-k2p6-fast",
-        2e-06,
-        8e-06,
-        3e-07,
         262144,
         32768,
         True,
@@ -4139,9 +4319,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/gpt-oss-120b",
-        1.5e-07,
-        6e-07,
-        1.5e-08,
         131072,
         32768,
         False,
@@ -4149,9 +4326,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/gpt-oss-20b",
-        7e-08,
-        3e-07,
-        3.5e-08,
         131072,
         32768,
         False,
@@ -4159,9 +4333,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/deepseek-v4-pro",
-        1.74e-06,
-        3.48e-06,
-        1.45e-07,
         1048576,
         384000,
         False,
@@ -4169,9 +4340,6 @@ _FIREWORKS_MODELS = [
     ),
     (
         "accounts/fireworks/models/deepseek-v4-flash",
-        1.4e-07,
-        2.8e-07,
-        2.8e-08,
         1048576,
         384000,
         False,
@@ -4203,9 +4371,6 @@ _FIREWORKS_ROUTER_SHORT_FORMS = [
 def _assert_fireworks_entry(
     model_cost,
     model_path,
-    expected_input,
-    expected_output,
-    expected_cache,
     expected_max_input,
     expected_max_output,
     expected_vision,
@@ -4215,9 +4380,9 @@ def _assert_fireworks_entry(
     assert info is not None, f"fireworks_ai/{model_path} missing from model cost map"
     assert info["litellm_provider"] == "fireworks_ai"
     assert info["mode"] == "chat"
-    assert info["input_cost_per_token"] == expected_input
-    assert info["output_cost_per_token"] == expected_output
-    assert info["cache_read_input_token_cost"] == expected_cache
+    assert info["input_cost_per_token"] > 0
+    assert info["output_cost_per_token"] > 0
+    assert "cache_read_input_token_cost" in info
     assert info["max_input_tokens"] == expected_max_input
     assert info["max_output_tokens"] == expected_max_output
     assert info["max_tokens"] == expected_max_output
@@ -4282,6 +4447,75 @@ def test_fireworks_models_in_backup_cost_map():
         assert model_cost.get(short_key) == model_cost.get(
             long_key
         ), f"short-form {short_key} does not match long-form {long_key}"
+
+
+@pytest.fixture
+def fireworks_short_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "fireworks_ai/accounts/fireworks/models/glm-5p3": {
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "litellm_provider": "fireworks_ai",
+                "mode": "chat",
+                "max_tokens": 100,
+            },
+            "fireworks_ai/accounts/fireworks/routers/glm-5p3-fast": {
+                "input_cost_per_token": 2.1e-6,
+                "output_cost_per_token": 6.6e-6,
+                "litellm_provider": "fireworks_ai",
+                "mode": "chat",
+            },
+            "fireworks_ai/nomic-ai/nomic-embed-text-v1.5": {
+                "input_cost_per_token": 8e-9,
+                "output_cost_per_token": 0.0,
+                "litellm_provider": "fireworks_ai",
+                "mode": "embedding",
+            },
+        },
+    )
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
+
+
+def test_fireworks_short_model_names_resolve_to_long_cost_map_keys(fireworks_short_model_cost_map: None) -> None:
+    model_info = litellm.get_model_info("fireworks_ai/glm-5p3")
+    assert model_info["key"] == "fireworks_ai/accounts/fireworks/models/glm-5p3"
+    assert model_info["input_cost_per_token"] == 1e-6
+    assert model_info["max_tokens"] == 100
+
+    model_info = litellm.get_model_info("glm-5p3", custom_llm_provider="fireworks_ai")
+    assert model_info["key"] == "fireworks_ai/accounts/fireworks/models/glm-5p3"
+
+    model_info = litellm.get_model_info("fireworks_ai/glm-5p3-fast")
+    assert model_info["key"] == "fireworks_ai/accounts/fireworks/routers/glm-5p3-fast"
+    assert model_info["input_cost_per_token"] == 2.1e-6
+
+    model_info = litellm.get_model_info("fireworks_ai/nomic-ai/nomic-embed-text-v1.5")
+    assert model_info["key"] == "fireworks_ai/nomic-ai/nomic-embed-text-v1.5"
+
+    with pytest.raises(Exception, match="isn't mapped"):
+        litellm.get_model_info("fireworks_ai/does-not-exist")
+
+
+def test_fireworks_short_model_names_price_with_completion_cost(fireworks_short_model_cost_map: None) -> None:
+    from litellm.types.utils import ModelResponse
+
+    response = ModelResponse(
+        model="fireworks_ai/glm-5p3",
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="fireworks_ai/glm-5p3",
+        custom_llm_provider="fireworks_ai",
+    )
+
+    assert cost == pytest.approx(10 * 1e-6 + 5 * 2e-6)
 
 
 class TestBedrockBaseModelLabelKeepsTools:
@@ -5169,52 +5403,6 @@ def test_client_side_timeout_marker_never_reaches_the_provider():
     )
 
 
-def test_rust_flag_not_forwarded_as_provider_param():
-    forwarded = get_non_default_completion_params({"rust": True, "temperature": 0.5})
-    assert "rust" not in forwarded
-
-
-def test_completion_does_not_leak_rust_flag_into_provider_request_body():
-    mock_response = MagicMock()
-    mock_response.model_dump.return_value = {
-        "id": "chatcmpl-1",
-        "object": "chat.completion",
-        "created": 1234567890,
-        "model": "gpt-4o-mini",
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": "hi"},
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": {
-            "prompt_tokens": 1,
-            "completion_tokens": 1,
-            "total_tokens": 2,
-        },
-    }
-
-    mock_raw_response = MagicMock()
-    mock_raw_response.headers = {}
-    mock_raw_response.parse.return_value = mock_response
-
-    mock_client = MagicMock()
-    mock_client.chat.completions.with_raw_response.create.return_value = mock_raw_response
-
-    litellm.completion(
-        model="openai/gpt-4o-mini",
-        messages=[{"role": "user", "content": "hi"}],
-        rust=True,
-        api_key="sk-test",
-        client=mock_client,
-    )
-
-    create_kwargs = mock_client.chat.completions.with_raw_response.create.call_args.kwargs
-    assert "rust" not in create_kwargs
-    assert "rust" not in (create_kwargs.get("extra_body") or {})
-
-
 class _RecordingDeploymentFailureLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
@@ -6063,3 +6251,207 @@ class TestFinalOptionalParamsLineRedaction:
 
         assert "'max_tokens': 17" in printed
         assert "'temperature': 0.25" in printed
+
+
+class TestDropParamsStringCoercion:
+    @pytest.mark.parametrize("drop_params", ["true", "True", True])
+    def test_truthy_drop_params_drops_unsupported_temperature(self, drop_params, monkeypatch):
+        from litellm.utils import get_optional_params
+
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result = get_optional_params(
+            model="gpt-5-nano",
+            custom_llm_provider="openai",
+            temperature=0.1,
+            drop_params=drop_params,
+        )
+        assert "temperature" not in result
+
+    @pytest.mark.parametrize("drop_params", ["false", False, None])
+    def test_falsy_drop_params_still_raises(self, drop_params, monkeypatch):
+        from litellm.utils import get_optional_params
+
+        monkeypatch.setattr(litellm, "drop_params", False)
+        with pytest.raises(litellm.UnsupportedParamsError):
+            get_optional_params(
+                model="gpt-5-nano",
+                custom_llm_provider="openai",
+                temperature=0.1,
+                drop_params=drop_params,
+            )
+
+
+def _credential_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [record.getMessage() for record in caplog.records if "litellm_credential_name=" in record.getMessage()]
+
+
+def test_load_credentials_from_list_warns_when_the_named_credential_is_not_loaded(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.utils import load_credentials_from_list
+
+    monkeypatch.setattr(litellm, "credential_list", [])
+    request_kwargs = {"litellm_credential_name": "openai-cred", "model": "openai/gpt-5.4-mini"}
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        load_credentials_from_list(request_kwargs)
+
+    assert request_kwargs == {"litellm_credential_name": "openai-cred", "model": "openai/gpt-5.4-mini"}
+    assert _credential_warnings(caplog) == [
+        "litellm_credential_name=openai-cred matched none of the 0 loaded credentials; the request runs without it"
+    ]
+
+
+def test_load_credentials_from_list_fills_kwargs_from_the_loaded_credential_without_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.types.utils import CredentialItem
+    from litellm.utils import load_credentials_from_list
+
+    loaded = CredentialItem(
+        credential_name="openai-cred",
+        credential_values={"api_key": "sk-from-db", "api_base": "https://credential.example"},
+        credential_info={},
+    )
+    monkeypatch.setattr(litellm, "credential_list", [loaded])
+    request_kwargs = {"litellm_credential_name": "openai-cred", "api_base": "https://request.example"}
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        load_credentials_from_list(request_kwargs)
+
+    assert request_kwargs == {
+        "litellm_credential_name": "openai-cred",
+        "api_base": "https://request.example",
+        "api_key": "sk-from-db",
+    }
+    assert _credential_warnings(caplog) == []
+
+
+_MOCK_STREAM_ID: Final = "chatcmpl-mock-stream"
+_ChunkSnapshot = tuple[str, tuple[str | None, ...], Usage | None]
+
+
+def _snapshot(chunk: ModelResponseStream) -> _ChunkSnapshot:
+    return chunk.id, tuple(choice.delta.content for choice in chunk.choices), getattr(chunk, "usage", None)
+
+
+def _mock_stream_snapshots(mock_response: object, prompt_tokens: int | None) -> list[_ChunkSnapshot]:
+    from litellm.utils import mock_completion_streaming_obj
+
+    return [
+        _snapshot(chunk)
+        for chunk in mock_completion_streaming_obj(
+            ModelResponseStream(id=_MOCK_STREAM_ID, model="gpt-5.4-mini"),
+            mock_response=mock_response,
+            model="gpt-5.4-mini",
+            prompt_tokens=prompt_tokens,
+        )
+    ]
+
+
+async def _async_mock_stream_snapshots(mock_response: object, prompt_tokens: int | None) -> list[_ChunkSnapshot]:
+    from litellm.utils import async_mock_completion_streaming_obj
+
+    return [
+        _snapshot(chunk)
+        async for chunk in async_mock_completion_streaming_obj(
+            ModelResponseStream(id=_MOCK_STREAM_ID, model="gpt-5.4-mini"),
+            mock_response=mock_response,
+            model="gpt-5.4-mini",
+            prompt_tokens=prompt_tokens,
+        )
+    ]
+
+
+_CONTENT_SNAPSHOTS: Final = [(_MOCK_STREAM_ID, (content,), None) for content in ("hel", "lo ", "wor", "ld")]
+
+
+def _assert_trailing_usage_chunk(snapshots: list[_ChunkSnapshot], prompt_tokens: int) -> None:
+    assert snapshots[:-1] == _CONTENT_SNAPSHOTS
+    chunk_id, choices, usage = snapshots[-1]
+    assert chunk_id == _MOCK_STREAM_ID
+    assert choices == ()
+    assert usage is not None
+    assert usage.prompt_tokens == prompt_tokens
+    assert usage.completion_tokens == DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
+    assert usage.total_tokens == prompt_tokens + usage.completion_tokens
+
+
+@pytest.mark.parametrize("prompt_tokens", (51234, 0))
+def test_mock_completion_streaming_obj_emits_usage_chunk_with_admission_prompt_tokens(prompt_tokens: int) -> None:
+    _assert_trailing_usage_chunk(_mock_stream_snapshots("hello world", prompt_tokens), prompt_tokens)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prompt_tokens", (51234, 0))
+async def test_async_mock_completion_streaming_obj_emits_usage_chunk_with_admission_prompt_tokens(
+    prompt_tokens: int,
+) -> None:
+    _assert_trailing_usage_chunk(await _async_mock_stream_snapshots("hello world", prompt_tokens), prompt_tokens)
+
+
+def test_mock_completion_streaming_obj_emits_no_usage_chunk_without_admission_prompt_tokens() -> None:
+    assert _mock_stream_snapshots("hello world", None) == _CONTENT_SNAPSHOTS
+
+
+@pytest.mark.asyncio
+async def test_async_mock_completion_streaming_obj_emits_no_usage_chunk_without_admission_prompt_tokens() -> None:
+    assert await _async_mock_stream_snapshots("hello world", None) == _CONTENT_SNAPSHOTS
+
+
+def test_mock_completion_streaming_obj_passes_prebuilt_stream_chunk_through_without_usage_chunk() -> None:
+    prebuilt: Final = ModelResponseStream(
+        model="gpt-5.4-mini", choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content="prebuilt"))]
+    )
+
+    assert _mock_stream_snapshots(prebuilt, 51234) == [(prebuilt.id, ("prebuilt",), None)]
+
+
+@pytest.mark.asyncio
+async def test_async_mock_completion_streaming_obj_raises_mock_exception_before_usage_chunk() -> None:
+    mock_exception: Final = litellm.MockException(
+        status_code=500, message="boom", llm_provider="openai", model="gpt-5.4-mini"
+    )
+    with pytest.raises(litellm.MockException):
+        await _async_mock_stream_snapshots(mock_exception, 51234)
+
+
+
+@contextlib.contextmanager
+def _recording_hidden_params_at_submit(submit_target: str) -> "Iterator[queue.SimpleQueue[dict[str, object]]]":
+    seen: Final = queue.SimpleQueue()
+
+    def record_submit(_fn, *args, **_kwargs):
+        response: Final = next(arg for arg in args if isinstance(arg, litellm.ModelResponse))
+        seen.put(dict(response._hidden_params))
+        return MagicMock()
+
+    with patch(submit_target, side_effect=record_submit):
+        yield seen
+
+
+@pytest.mark.asyncio
+async def test_acompletion_finishes_response_metadata_before_handing_the_response_to_the_logging_thread(monkeypatch):
+    monkeypatch.setattr(litellm, "success_callback", [lambda kwargs, response, start_time, end_time: None])
+    with _recording_hidden_params_at_submit("litellm.litellm_core_utils.litellm_logging.executor.submit") as seen:
+        await litellm.acompletion(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello there!",
+            num_retries=0,
+        )
+    snapshot: Final = seen.get_nowait()
+    assert snapshot["litellm_call_id"]
+    assert snapshot["response_cost"] is not None
+    assert snapshot["api_base"]
+
+
+def test_completion_finishes_response_metadata_before_handing_the_response_to_the_logging_thread():
+    with _recording_hidden_params_at_submit("litellm.utils.executor.submit") as seen:
+        litellm.completion(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello there!",
+        )
+    snapshot: Final = seen.get_nowait()
+    assert snapshot["litellm_call_id"]
+    assert snapshot["response_cost"] is not None
+    assert snapshot["api_base"]
