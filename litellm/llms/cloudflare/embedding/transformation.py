@@ -1,5 +1,4 @@
 from collections.abc import Mapping
-from typing import Union
 
 import httpx
 
@@ -26,6 +25,6 @@ class CloudflareEmbeddingConfig(VercelAIGatewayEmbeddingConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: Union[Mapping[object, object], httpx.Headers],
+        headers: Mapping[object, object] | httpx.Headers,
     ) -> CloudflareError:
         return CloudflareError(status_code=status_code, message=error_message)
