@@ -127,6 +127,8 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
      - Low: anything else worth noting: naming, cleanup, an edge case nobody hits
      Nest bullets as deep as helps: hierarchy beats one long line when it makes things clearer to a
      human reader
+     If you assumed something instead of testing it, e.g. "only reproduces with X on" or "no
+     user-observable behavior difference", list it here too with what breaks if it is wrong
      Leave this section empty if there are none -->
 
 ## QA runbook

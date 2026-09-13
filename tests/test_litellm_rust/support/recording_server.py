@@ -58,7 +58,9 @@ def recording_service() -> Iterator[RecordingServer]:
         def _handle(self) -> None:
             content_length: Final = int(self.headers.get("Content-Length", "0"))
             raw_body: Final = self.rfile.read(content_length) if content_length else b""
-            body: Final = json.loads(raw_body) if raw_body else None
+            body: Final = (
+                json.loads(raw_body) if raw_body and self.headers.get_content_type() == "application/json" else None
+            )
             requests.append(
                 RecordedRequest(
                     method=self.command,
@@ -84,6 +86,7 @@ def recording_service() -> Iterator[RecordingServer]:
                 pass
 
         do_POST = _handle
+        do_GET = _handle
 
         def log_message(self, format: str, *args: object) -> None:
             pass

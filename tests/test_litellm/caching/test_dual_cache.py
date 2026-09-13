@@ -677,3 +677,30 @@ async def test_a_real_redis_failure_still_logs_an_error(caplog):
     errors = [record for record in caplog.records if record.levelno == logging.ERROR]
     assert [record.getMessage() for record in errors] == ["LiteLLM Cache: exception in async_get_cache: redis is down"]
     assert errors[0].exc_info is not None
+
+
+def _dual_cache_with_open_breaker_and_a_memory_hit() -> DualCache:
+    in_memory = InMemoryCache()
+    in_memory.set_cache("k1", "v1")
+    return DualCache(in_memory_cache=in_memory, redis_cache=_OpenBreakerRedis(), default_redis_batch_cache_expiry=10)  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+
+
+def test_open_breaker_keeps_sync_batch_read_memory_hits_and_releases_reservations():
+    """A refused Redis batch read must still answer with the in-memory hits and hold no reservation.
+
+    The refusal was logged and turned into a bare None, so a caller lost its in-memory hits
+    for as long as the breaker stayed open, and the reserved keys stayed throttled until
+    the batch expiry passed even though nothing was ever read for them.
+    """
+    cache = _dual_cache_with_open_breaker_and_a_memory_hit()
+
+    assert list(cache.batch_get_cache(["k1", "k2"])) == ["v1", None]
+    assert "k2" not in cache.last_redis_batch_access_time
+
+
+@pytest.mark.asyncio
+async def test_open_breaker_keeps_async_batch_read_memory_hits_and_releases_reservations():
+    cache = _dual_cache_with_open_breaker_and_a_memory_hit()
+
+    assert list(await cache.async_batch_get_cache(["k1", "k2"])) == ["v1", None]
+    assert "k2" not in cache.last_redis_batch_access_time

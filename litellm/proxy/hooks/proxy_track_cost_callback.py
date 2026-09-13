@@ -1,6 +1,6 @@
 import asyncio
 import traceback
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -23,6 +23,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.db.db_spend_update_writer import (
+    DBSpendUpdateWriter,
     debitable_model_access_groups,
     get_llm_router,
 )
@@ -81,6 +82,12 @@ _CAPTURED_IDENTITY_CALL_TYPES: Final[frozenset[str]] = frozenset(
 )
 
 
+def _proxy_spend_writer() -> DBSpendUpdateWriter:
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    return proxy_logging_obj.db_spend_update_writer
+
+
 class _ProxyDBLogger(CustomLogger):
     def __init__(
         self,
@@ -88,9 +95,11 @@ class _ProxyDBLogger(CustomLogger):
         *,
         turn_off_message_logging: bool = False,
         message_logging: bool = True,
+        spend_writer: Callable[[], DBSpendUpdateWriter] = _proxy_spend_writer,
     ) -> None:
         super().__init__(turn_off_message_logging=turn_off_message_logging, message_logging=message_logging)
         self.spend_event_producer = spend_event_producer
+        self._spend_writer: Final = spend_writer
 
     async def async_log_success_event(
         self, kwargs: ObjectMapping, response_obj: object, start_time: datetime, end_time: datetime
@@ -150,8 +159,6 @@ class _ProxyDBLogger(CustomLogger):
         ):
             return
 
-        from litellm.proxy.proxy_server import proxy_logging_obj
-
         _metadata = dict(
             LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict)
         )
@@ -173,7 +180,7 @@ class _ProxyDBLogger(CustomLogger):
         # here because the input above is constructed non-None.
         _error_information = cast(
             StandardLoggingPayloadErrorInformation,
-            _sanitize_error_information_for_spend_logs(_error_information),
+            _sanitize_error_information_for_spend_logs(_error_information, original_exception=original_exception),
         )
         _metadata["error_information"] = _error_information
 
@@ -227,13 +234,12 @@ class _ProxyDBLogger(CustomLogger):
             if request_data.get("litellm_trace_id") is None:
                 request_data["litellm_trace_id"] = getattr(_litellm_logging_obj, "litellm_trace_id", None)
 
-        # Use the actual request start time from the logging object so that
-        # failed requests record the real duration instead of 0.
-        actual_start_time = datetime.now()
-        if _litellm_logging_obj is not None:
-            obj_start: Final = getattr(_litellm_logging_obj, "start_time", None)
-            if obj_start is not None:
-                actual_start_time = obj_start
+        lifted_start_time: Final = request_data.get("start_time")
+        actual_start_time: Final = (
+            lifted_start_time
+            if isinstance(lifted_start_time, datetime)
+            else getattr(_litellm_logging_obj, "start_time", None) or datetime.now()
+        )
 
         # A stream that broke mid-flight still billed the provider for the
         # chunks already delivered. ``post_call_failure_hook`` lifts that
@@ -249,7 +255,7 @@ class _ProxyDBLogger(CustomLogger):
             existing_metadata.get("standard_logging_guardrail_information")
         )
 
-        await proxy_logging_obj.db_spend_update_writer.update_database(
+        await self._spend_writer().update_database(
             token=user_api_key_dict.api_key,
             response_cost=recovered_response_cost,
             user_id=user_api_key_dict.user_id,
