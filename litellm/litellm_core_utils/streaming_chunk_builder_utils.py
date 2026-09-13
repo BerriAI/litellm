@@ -427,7 +427,7 @@ class ChunkProcessor:
                 if not delta:
                     continue
                 choice_index = choice.get("index", 0)
-                for tool_call in delta.get("tool_calls", ()):
+                for tool_call in delta.get("tool_calls") or ():
                     if not tool_call:
                         continue
                     if isinstance(tool_call, dict):
@@ -478,7 +478,7 @@ class ChunkProcessor:
             choices = chunk["choices"]
             for choice in choices:
                 delta = choice.get("delta", {})
-                tool_calls = delta.get("tool_calls", [])
+                tool_calls = delta.get("tool_calls") or ()
                 choice_index = choice.get("index", 0)
 
                 for tool_call in tool_calls:
