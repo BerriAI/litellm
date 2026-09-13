@@ -14,7 +14,7 @@ router: Final = APIRouter()
 @router.get("/.well-known/litellm-ui-config", response_model=UiDiscoveryEndpoints)
 @router.get("/litellm/.well-known/litellm-ui-config", response_model=UiDiscoveryEndpoints)  # if mounted at root path
 async def get_ui_config():
-    from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+    from litellm.proxy.auth.auth_utils import has_user_setup_sso
     from litellm.proxy.proxy_server import general_settings
     from litellm.proxy.utils import get_proxy_base_url, get_server_root_path
 
@@ -28,7 +28,7 @@ async def get_ui_config():
         or general_settings.get("hide_default_credentials_hint", False) is True
     )
 
-    sso_configured: Final = _has_user_setup_sso()
+    sso_configured: Final = has_user_setup_sso()
 
     from litellm.proxy.proxy_server import proxy_config
 

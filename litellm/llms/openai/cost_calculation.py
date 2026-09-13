@@ -109,15 +109,16 @@ def cost_per_second(model: str, custom_llm_provider: str | None, duration: float
     prompt_cost = 0.0
     completion_cost = 0.0
     ## Speech / Audio cost calculation
-    if "output_cost_per_second" in model_info and model_info["output_cost_per_second"] is not None:
+    output_cost_per_second: Final = model_info.get("output_cost_per_second")
+    if output_cost_per_second is not None and output_cost_per_second > 0:
         verbose_logger.debug(
             "For model=%s - output_cost_per_second: %s; duration: %s",
             model,
-            model_info.get("output_cost_per_second"),
+            output_cost_per_second,
             duration,
         )
         ## COST PER SECOND ##
-        completion_cost = model_info["output_cost_per_second"] * duration
+        completion_cost = output_cost_per_second * duration
     elif "input_cost_per_second" in model_info and model_info["input_cost_per_second"] is not None:
         verbose_logger.debug(
             "For model=%s - input_cost_per_second: %s; duration: %s",
@@ -133,14 +134,7 @@ def cost_per_second(model: str, custom_llm_provider: str | None, duration: float
 
 
 def _video_resolution_to_cost_field_suffix(resolution: str) -> str | None:
-    """
-    Map usage resolution to a safe suffix for ``output_cost_per_second_<suffix>`` keys.
-
-    Note: Currently only ``output_cost_per_second_1080p`` is explicitly declared in
-    ModelInfo (types/utils.py). Other resolution tiers (e.g., 720p, 4k) can be added
-    to model_prices_and_context_window.json but are not exposed via get_model_info()
-    until added to the ModelInfo TypedDict.
-    """
+    """Map usage resolution to a safe suffix for ``output_cost_per_second_<suffix>`` keys."""
     r: Final = resolution.strip().lower()
     if not r:
         return None

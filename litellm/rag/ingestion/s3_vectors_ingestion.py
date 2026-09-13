@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -35,8 +36,30 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 
 if TYPE_CHECKING:
+    import httpx
+
     from litellm import Router
     from litellm.types.rag import RAGIngestOptions
+
+
+class S3VectorDataPayload(TypedDict):
+    float32: Sequence[float]
+
+
+class S3VectorEntry(TypedDict):
+    key: str
+    data: S3VectorDataPayload
+    metadata: Mapping[str, str]
+
+
+class S3VectorsQueryMatch(TypedDict, total=False):
+    key: str
+    distance: float
+    metadata: Mapping[str, str]
+
+
+class S3VectorsQueryResponse(TypedDict, total=False):
+    vectors: Sequence[S3VectorsQueryMatch]
 
 
 class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
@@ -66,10 +89,10 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         BaseAWSLLM.__init__(self)
 
         # Extract config
-        self.vector_bucket_name = self.vector_store_config["vector_bucket_name"]
-        self.index_name = self.vector_store_config.get("index_name")
-        self.distance_metric = self.vector_store_config.get("distance_metric", S3_VECTORS_DEFAULT_DISTANCE_METRIC)
-        self.non_filterable_metadata_keys = self.vector_store_config.get(
+        self.vector_bucket_name: str = self.vector_store_config["vector_bucket_name"]
+        self.index_name: str | None = self.vector_store_config.get("index_name")
+        self.distance_metric: str = self.vector_store_config.get("distance_metric", S3_VECTORS_DEFAULT_DISTANCE_METRIC)
+        self.non_filterable_metadata_keys: Sequence[str] = self.vector_store_config.get(
             "non_filterable_metadata_keys",
             S3_VECTORS_DEFAULT_NON_FILTERABLE_METADATA_KEYS,
         )
@@ -78,7 +101,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         self.dimension = self._get_dimension_from_config()
 
         # Get AWS region using BaseAWSLLM method
-        _aws_region: Final = self.vector_store_config.get("aws_region_name")
+        _aws_region: Final[str | None] = self.vector_store_config.get("aws_region_name")
         self.aws_region_name = self.get_aws_region_name_for_non_llm_api_calls(
             aws_region_name=str(_aws_region) if _aws_region else None
         )
@@ -135,7 +158,8 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         Returns None if dimension should be auto-detected.
         """
         if "dimension" in self.vector_store_config:
-            return int(self.vector_store_config["dimension"])
+            configured_dimension: Final[int] = self.vector_store_config["dimension"]
+            return int(configured_dimension)
         return None
 
     async def _ensure_config_initialized(self):
@@ -258,7 +282,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         get_body: Final = safe_dumps({"vectorBucketName": self.vector_bucket_name})
 
         try:
-            response = await self._sign_and_execute_request("POST", get_url, data=get_body)
+            response: httpx.Response = await self._sign_and_execute_request("POST", get_url, data=get_body)
             if response.status_code == 200:
                 verbose_logger.debug("Vector bucket %s exists", self.vector_bucket_name)
                 return
@@ -294,7 +318,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         get_body: Final = safe_dumps({"vectorBucketName": self.vector_bucket_name, "indexName": self.index_name})
 
         try:
-            response = await self._sign_and_execute_request("POST", get_url, data=get_body)
+            response: httpx.Response = await self._sign_and_execute_request("POST", get_url, data=get_body)
             if response.status_code == 200:
                 verbose_logger.debug("Vector index %s exists", self.index_name)
                 return
@@ -311,7 +335,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             )
 
             # Prepare index configuration per AWS API docs
-            index_config: Final = {
+            index_config: Final[dict[str, object]] = {
                 "vectorBucketName": self.vector_bucket_name,
                 "indexName": self.index_name,
                 "dataType": "float32",
@@ -336,7 +360,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             verbose_logger.exception("Error creating vector index: %s", e)
             raise
 
-    async def _put_vectors(self, vectors: list[dict[str, Any]]):
+    async def _put_vectors(self, vectors: Sequence[S3VectorEntry]):
         """
         Call PutVectors API to store vectors in S3 Vectors.
 
@@ -355,7 +379,9 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         }
 
         try:
-            response: Final = await self._sign_and_execute_request("POST", url, data=safe_dumps(request_body))
+            response: Final[httpx.Response] = await self._sign_and_execute_request(
+                "POST", url, data=safe_dumps(request_body)
+            )
 
             if response.status_code in (200, 201):
                 verbose_logger.info("Successfully stored %s vectors in index %s", len(vectors), self.index_name)
@@ -442,24 +468,18 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             raise ValueError(error_msg)
 
         # Prepare vectors for PutVectors API
-        vectors: Final = []
-        for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-            # Build metadata dict
-            metadata: dict[str, str] = {
-                "source_text": chunk,  # Non-filterable (for reference)
-                "chunk_index": str(i),  # Filterable
-            }
-
-            if filename:
-                metadata["filename"] = filename  # Filterable
-
-            vector_obj = {
-                "key": f"{filename}_{i}" if filename else f"chunk_{i}",
-                "data": {"float32": embedding},
-                "metadata": metadata,
-            }
-
-            vectors.append(vector_obj)
+        vectors: Final = [
+            S3VectorEntry(
+                key=f"{filename}_{i}" if filename else f"chunk_{i}",
+                data=S3VectorDataPayload(float32=embedding),
+                metadata=(
+                    {"source_text": chunk, "chunk_index": str(i), "filename": filename}
+                    if filename
+                    else {"source_text": chunk, "chunk_index": str(i)}
+                ),
+            )
+            for i, (chunk, embedding) in enumerate(zip(chunks, embeddings))
+        ]
 
         # Call PutVectors API
         await self._put_vectors(vectors)
@@ -468,7 +488,9 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         vector_store_id: Final = f"{self.vector_bucket_name}:{self.index_name}"
         return vector_store_id, filename
 
-    async def query_vector_store(self, vector_store_id: str, query: str, top_k: int = 5) -> dict[str, Any] | None:
+    async def query_vector_store(
+        self, vector_store_id: str, query: str, top_k: int = 5
+    ) -> S3VectorsQueryResponse | None:
         """
         Query S3 Vectors using QueryVectors API.
 
@@ -489,7 +511,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         embedding_model: Final = self.embedding_config.get("model", "text-embedding-3-small")
 
         response = await litellm.aembedding(model=embedding_model, input=[query])
-        query_embedding: Final = response.data[0]["embedding"]
+        query_embedding: Final[Sequence[float]] = response.data[0]["embedding"]
 
         # Call QueryVectors API
         url: Final = f"https://s3vectors.{self.aws_region_name}.api.aws/QueryVectors"
@@ -504,15 +526,18 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         }
 
         try:
-            response = await self._sign_and_execute_request("POST", url, data=safe_dumps(request_body))
+            query_response: Final[httpx.Response] = await self._sign_and_execute_request(
+                "POST", url, data=safe_dumps(request_body)
+            )
 
-            if response.status_code == 200:
-                results: Final = response.json()
+            if query_response.status_code == 200:
+                results: Final[S3VectorsQueryResponse] = query_response.json()
+                matches: Final = results.get("vectors")
                 verbose_logger.debug("Query returned %s results", len(results.get("vectors", [])))
 
                 # Check if query terms appear in results
-                if results.get("vectors"):
-                    for result in results["vectors"]:
+                if matches:
+                    for result in matches:
                         metadata = result.get("metadata", {})
                         source_text = metadata.get("source_text", "")
                         if query.lower() in source_text.lower():
@@ -521,7 +546,9 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
                 # Return results even if exact match not found
                 return results
             else:
-                verbose_logger.error("QueryVectors failed with status %s: %s", response.status_code, response.text)
+                verbose_logger.error(
+                    "QueryVectors failed with status %s: %s", query_response.status_code, query_response.text
+                )
                 return None
         except Exception as e:
             verbose_logger.exception("Error querying vectors: %s", e)

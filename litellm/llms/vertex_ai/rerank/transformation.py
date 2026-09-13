@@ -4,6 +4,7 @@ Translates from Cohere's `/v1/rerank` input format to Vertex AI Discovery Engine
 Why separate file? Make it easy to see how transformation works
 """
 
+from collections.abc import Mapping
 from typing import Any, Final
 
 import httpx
@@ -74,14 +75,15 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         """
         Validate and set up authentication for Vertex AI Discovery Engine API
         """
         # Get credentials and project info from optional_params (which contains vertex_credentials, etc.)
-        litellm_params: Final = optional_params.copy() if optional_params else {}
-        vertex_credentials: Final = self.safe_get_vertex_ai_credentials(litellm_params)
-        vertex_project: Final = self.safe_get_vertex_ai_project(litellm_params)
+        vertex_params: Final = optional_params.copy() if optional_params else {}
+        vertex_credentials: Final = self.safe_get_vertex_ai_credentials(vertex_params)
+        vertex_project: Final = self.safe_get_vertex_ai_project(vertex_params)
 
         # Get access token using the base class method
         access_token, project_id = self._ensure_access_token(

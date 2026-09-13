@@ -217,7 +217,7 @@ class _CompletionDispatchContext:
     headers: dict
     hf_model_name: str | None
     kwargs: dict
-    litellm_params: dict
+    litellm_params: dict[str, object]
     logger_fn: Callable | None
     logging: LiteLLMLoggingObj
     max_retries: int | None
