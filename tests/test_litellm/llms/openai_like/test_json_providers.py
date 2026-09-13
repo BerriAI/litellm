@@ -574,6 +574,9 @@ class TestCoralBricksPricing:
             assert row["input_cost_per_token"] == inp
             assert row["output_cost_per_token"] == out
             assert row["cache_read_input_token_cost"] == 0.0
+            # The gateway reports first-time prompt tokens as cache writes and
+            # bills them at the regular input rate.
+            assert row["cache_creation_input_token_cost"] == inp
             assert row["mode"] == "chat"
 
     def test_completion_cost_with_free_cached_reads(self):
@@ -607,6 +610,42 @@ class TestCoralBricksPricing:
         cost = completion_cost(completion_response=resp)
         # 200 uncached input tokens at full rate + 800 cached at 0 + output.
         expected = 200 * inp + 800 * 0.0 + 100 * out
+        assert abs(cost - expected) < 1e-12, (cost, expected)
+
+    def test_completion_cost_bills_cache_writes_as_input(self):
+        """First-time prompt tokens come back as cache writes; they cost the
+        regular input rate, so input is never priced at zero."""
+        from litellm import ModelResponse, Usage, completion_cost
+
+        model = "coralbricks/glm-5.3-flash-fp4"
+        inp, out = self.EXPECTED[model]
+        litellm.register_model(
+            {
+                model: {
+                    "litellm_provider": "coralbricks",
+                    "mode": "chat",
+                    "input_cost_per_token": inp,
+                    "output_cost_per_token": out,
+                    "cache_read_input_token_cost": 0.0,
+                    "cache_creation_input_token_cost": inp,
+                }
+            }
+        )
+        resp = ModelResponse(
+            model=model,
+            usage=Usage(
+                prompt_tokens=1000,
+                completion_tokens=100,
+                prompt_tokens_details={
+                    "cached_tokens": 0,
+                    "cache_write_tokens": 1000,
+                    "cache_creation_tokens": 1000,
+                },
+            ),
+        )
+        resp._hidden_params["custom_llm_provider"] = "coralbricks"
+        cost = completion_cost(completion_response=resp)
+        expected = 1000 * inp + 100 * out
         assert abs(cost - expected) < 1e-12, (cost, expected)
 
     def test_add_known_models_registers_coralbricks(self):

@@ -65272,6 +65272,7 @@
         "supports_vision": false
     },
     "coralbricks/glm-5.3-flash-fp4": {
+        "cache_creation_input_token_cost": 1.5e-07,
         "cache_read_input_token_cost": 0.0,
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "coralbricks",
@@ -65291,6 +65292,7 @@
         "supports_vision": true
     },
     "coralbricks/glm-5.3-fp4": {
+        "cache_creation_input_token_cost": 1.12e-06,
         "cache_read_input_token_cost": 0.0,
         "input_cost_per_token": 1.12e-06,
         "litellm_provider": "coralbricks",
@@ -65310,6 +65312,7 @@
         "supports_vision": false
     },
     "coralbricks/gpt-oss-120b": {
+        "cache_creation_input_token_cost": 1.2e-07,
         "cache_read_input_token_cost": 0.0,
         "input_cost_per_token": 1.2e-07,
         "litellm_provider": "coralbricks",
@@ -65329,6 +65332,7 @@
         "supports_vision": false
     },
     "coralbricks/kimi-k3": {
+        "cache_creation_input_token_cost": 3e-06,
         "cache_read_input_token_cost": 0.0,
         "input_cost_per_token": 3e-06,
         "litellm_provider": "coralbricks",
