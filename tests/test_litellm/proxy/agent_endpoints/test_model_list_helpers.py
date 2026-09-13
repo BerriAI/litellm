@@ -4,15 +4,15 @@ Test appending A2A agents to model lists.
 Maps to: litellm/proxy/agent_endpoints/model_list_helpers.py
 """
 
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+    RestrictedAgentAccess,
+)
 from litellm.proxy.agent_endpoints.model_list_helpers import (
     append_agents_to_model_group,
     append_agents_to_model_info,
@@ -37,14 +37,14 @@ async def test_append_agents_to_model_group():
     )
 
     # Mock AgentRequestHandler at its source location
-    mock_get_allowed_agents = AsyncMock(return_value=["test-agent-id"])
+    mock_get_allowed_agents = AsyncMock(return_value=RestrictedAgentAccess(frozenset({"test-agent-id"})))
 
     # Mock global_agent_registry
     mock_registry = Mock()
     mock_registry.get_agent_by_id = Mock(return_value=mock_agent)
 
     with patch(
-        "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.get_allowed_agents",
+        "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.resolve_agent_access",
         mock_get_allowed_agents,
     ):
         with patch(
@@ -80,14 +80,14 @@ async def test_append_agents_to_model_info():
     )
 
     # Mock AgentRequestHandler at its source location
-    mock_get_allowed_agents = AsyncMock(return_value=["agent-123"])
+    mock_get_allowed_agents = AsyncMock(return_value=RestrictedAgentAccess(frozenset({"agent-123"})))
 
     # Mock global_agent_registry
     mock_registry = Mock()
     mock_registry.get_agent_by_id = Mock(return_value=mock_agent)
 
     with patch(
-        "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.get_allowed_agents",
+        "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.resolve_agent_access",
         mock_get_allowed_agents,
     ):
         with patch(

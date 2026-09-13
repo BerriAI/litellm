@@ -1,5 +1,3 @@
-import os
-import sys
 import pytest
 import asyncio
 from typing import Optional
@@ -13,7 +11,6 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 from litellm.types.utils import ModelResponse
 
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 import json
@@ -24,7 +21,6 @@ from litellm.types.llms.openai import (
     ResponseAPIUsage,
     IncompleteDetails,
 )
-import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from base_responses_api import BaseResponsesAPITest
 from openai.types.responses.function_tool import FunctionTool

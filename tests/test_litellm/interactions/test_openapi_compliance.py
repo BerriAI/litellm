@@ -167,17 +167,39 @@ class TestRequestCompliance:
         assert text_schema["properties"]["type"].get("const") == "text"
         print("✓ TextContent schema is correct")
 
-    def test_turn_schema(self, spec_dict):
-        """Verify Turn schema for multi-turn conversations."""
-        turn_schema = spec_dict["components"]["schemas"]["Turn"]
+    def test_step_schema(self, spec_dict):
+        """Verify step-based multi-turn input.
 
-        assert "role" in turn_schema["properties"]
-        assert "content" in turn_schema["properties"]
+        Google replaced the role-carrying `Turn` schema with typed steps
+        (spec update of Aug 13, 2026): conversation history is now a `Step[]`
+        where `UserInputStep`/`ModelOutputStep` pin `type` values that our
+        transformations read to recover the role. Assert exactly what our code
+        depends on: `InteractionsInput` accepts a Step array, both step kinds
+        are part of the `Step` union, each pins its `type` const, and each
+        carries a `Content[]` content field.
+        """
+        input_schema = spec_dict["components"]["schemas"]["InteractionsInput"]
+        step_array_items = [
+            option["items"]["$ref"].split("/")[-1]
+            for option in input_schema["oneOf"]
+            if option.get("type") == "array" and "$ref" in option.get("items", {})
+        ]
+        assert "Step" in step_array_items, f"InteractionsInput should accept Step[], got arrays of {step_array_items}"
 
-        # Content can be string or Content[]
-        content_prop = turn_schema["properties"]["content"]
-        assert "oneOf" in content_prop
-        print("✓ Turn schema supports role + content")
+        step_variants = {
+            option["$ref"].split("/")[-1]
+            for option in spec_dict["components"]["schemas"]["Step"]["oneOf"]
+            if "$ref" in option
+        }
+        assert {"UserInputStep", "ModelOutputStep"} <= step_variants, f"Step union is missing role steps: {step_variants}"
+
+        for step_name, type_value in [("UserInputStep", "user_input"), ("ModelOutputStep", "model_output")]:
+            step_schema = spec_dict["components"]["schemas"][step_name]
+            assert step_schema["properties"]["type"].get("const") == type_value
+            assert "type" in step_schema["required"]
+            content_items = step_schema["properties"]["content"]["items"]
+            assert content_items["$ref"].split("/")[-1] == "Content"
+            print(f"✓ {step_name} pins type '{type_value}' with Content[] content")
 
 
 class TestResponseCompliance:

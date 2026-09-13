@@ -9,14 +9,15 @@ API Reference: https://docs.bfl.ai/
 
 import base64
 import time
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from httpx._types import RequestFiles
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-from litellm.litellm_core_utils.url_utils import safe_get
+from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -35,6 +36,22 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+_BFL_REQUEST_PARAMS: Final = (
+    "seed",
+    "output_format",
+    "safety_tolerance",
+    "prompt_upsampling",
+    "aspect_ratio",
+    "steps",
+    "guidance",
+    "grow_mask",
+    "top",
+    "bottom",
+    "left",
+    "right",
+)
 
 
 class BlackForestLabsImageEditConfig(BaseImageEditConfig):
@@ -84,35 +101,11 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
 
         BFL-specific params are passed through directly.
         """
-        optional_params: dict[str, Any] = {}
-
-        # Pass through BFL-specific params
-        bfl_params = [
-            "seed",
-            "output_format",
-            "safety_tolerance",
-            "prompt_upsampling",
-            # Kontext-specific
-            "aspect_ratio",
-            # Fill/Inpaint-specific
-            "steps",
-            "guidance",
-            "grow_mask",
-            # Expand-specific
-            "top",
-            "bottom",
-            "left",
-            "right",
-        ]
-
-        # Convert TypedDict to regular dict for access
-        params_dict = dict(image_edit_optional_params)
-
-        for param in bfl_params:
-            if param in params_dict:
-                value = params_dict[param]
-                if value is not None:
-                    optional_params[param] = value
+        optional_params: Final[dict[str, object]] = {}
+        params: Final[Mapping[str, object]] = image_edit_optional_params
+        for param in _BFL_REQUEST_PARAMS:
+            if (value := params.get(param)) is not None:
+                optional_params[param] = value
 
         # Set default output format
         if "output_format" not in optional_params:
@@ -133,7 +126,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
 
         BFL uses x-key header for authentication.
         """
-        final_api_key: str | None = (
+        final_api_key: Final[str | None] = (
             api_key or get_secret_str("BFL_API_KEY") or get_secret_str("BLACK_FOREST_LABS_API_KEY")
         )
 
@@ -184,7 +177,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         base_url: str = api_base or get_secret_str("BFL_API_BASE") or DEFAULT_API_BASE
         base_url = base_url.rstrip("/")
 
-        endpoint = self._get_model_endpoint(model)
+        endpoint: Final = self._get_model_endpoint(model)
         return f"{base_url}{endpoint}"
 
     def _read_image_bytes(
@@ -205,7 +198,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
             return self._read_image_bytes(image[0], depth=depth + 1, max_depth=max_depth)
         elif isinstance(image, str):
             if image.startswith(("http://", "https://")):
-                response = safe_get(litellm.module_level_client, image, timeout=60.0)
+                response: Final = safe_get(litellm.module_level_client, image, timeout=60.0)
                 response.raise_for_status()
                 return response.content
             else:
@@ -215,10 +208,10 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
                 )
         elif hasattr(image, "read"):
             # File-like object
-            pos = getattr(image, "tell", lambda: 0)()
+            pos: Final = getattr(image, "tell", lambda: 0)()
             if hasattr(image, "seek"):
                 image.seek(0)
-            data = image.read()
+            data: Final = image.read()
             if hasattr(image, "seek"):
                 image.seek(pos)
             return data
@@ -242,42 +235,59 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         BFL uses JSON body with base64-encoded images, not multipart/form-data.
         """
         # Read and encode image
-        image_bytes = self._read_image_bytes(image)
-        b64_image = base64.b64encode(image_bytes).decode("utf-8")
+        image_bytes: Final = self._read_image_bytes(image)
+        b64_image: Final = base64.b64encode(image_bytes).decode("utf-8")
 
         # Build request body
-        request_body: dict[str, Any] = {
+        request_body: Final[dict[str, object]] = {
             "prompt": prompt,
             "input_image": b64_image,
         }
 
-        # Add optional params (only BFL-recognized parameters)
-        bfl_request_params = [
-            "seed",
-            "output_format",
-            "safety_tolerance",
-            "prompt_upsampling",
-            "aspect_ratio",
-            "steps",
-            "guidance",
-            "grow_mask",
-            "top",
-            "bottom",
-            "left",
-            "right",
-        ]
         for key, value in image_edit_optional_request_params.items():
-            if key in bfl_request_params and value is not None:
+            if key in _BFL_REQUEST_PARAMS and value is not None:
                 request_body[key] = value
 
         # Handle mask if provided (for inpainting)
         if "mask" in image_edit_optional_request_params:
-            mask = image_edit_optional_request_params["mask"]
-            mask_bytes = self._read_image_bytes(mask)
+            mask: Final = image_edit_optional_request_params["mask"]
+            mask_bytes: Final = self._read_image_bytes(mask)
             request_body["mask"] = base64.b64encode(mask_bytes).decode("utf-8")
 
         # BFL uses JSON, not multipart - return empty files
-        return request_body, []
+        return request_body, ()
+
+    async def async_transform_image_edit_request(
+        self,
+        model: str,
+        prompt: str | None,
+        image: FileTypes | None,
+        image_edit_optional_request_params: Mapping[str, object],
+        litellm_params: GenericLiteLLMParams,
+        headers: Mapping[str, str],
+    ) -> tuple[dict, RequestFiles]:
+        downloaded_image: Final = await self._fetch_remote_image(image)
+        downloaded_mask: Final = await self._fetch_remote_image(image_edit_optional_request_params.get("mask"))
+        return self.transform_image_edit_request(
+            model=model,
+            prompt=prompt,
+            image=image if downloaded_image is None else downloaded_image,
+            image_edit_optional_request_params=(
+                dict(image_edit_optional_request_params)
+                if downloaded_mask is None
+                else {**image_edit_optional_request_params, "mask": downloaded_mask}
+            ),
+            litellm_params=litellm_params,
+            headers=dict(headers),
+        )
+
+    async def _fetch_remote_image(self, image: object) -> bytes | None:
+        candidate: Final = image[0] if isinstance(image, list) and image else image
+        if not isinstance(candidate, str) or not candidate.startswith(("http://", "https://")):
+            return None
+        response: Final = await async_safe_get(litellm.module_level_aclient, candidate, timeout=60.0)
+        response.raise_for_status()
+        return response.content
 
     def transform_image_edit_response(
         self,
@@ -292,7 +302,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         The response contains: {"status": "Ready", "result": {"sample": "https://..."}}
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=raw_response.status_code,
@@ -300,7 +310,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
             )
 
         # Get image URL from result
-        image_url = response_data.get("result", {}).get("sample")
+        image_url: Final = response_data.get("result", {}).get("sample")
         if not image_url:
             raise BlackForestLabsError(
                 status_code=500,

@@ -11,7 +11,7 @@ brand_self so all other major airlines are treated as competitors.
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.competitor_intent.base import (
     BaseCompetitorIntentChecker,
@@ -22,7 +22,7 @@ from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.competitor_
 
 # Location/travel context: prepositions, travel verbs, booking nouns, entry/geo nouns.
 # No place-name list; these patterns detect "destination context" generically.
-AIRLINE_OTHER_MEANING_SIGNALS = [
+AIRLINE_OTHER_MEANING_SIGNALS: Final = [
     # Travel verb + preposition (e.g. "fly to", "layover in")
     r"\b(fly|flying|travel|traveling|going|visit|visiting|transit|layover|stopover)\b.{0,12}\b(to|from|via|in|at|through|into)\b",
     # Booking + preposition
@@ -53,7 +53,7 @@ AIRLINE_OTHER_MEANING_SIGNALS = [
 
 # Airline context: carrier/airline language, cabin, loyalty, operations.
 # If ambiguous token appears near these → treat as COMPETITOR.
-AIRLINE_COMPETITOR_SIGNALS = [
+AIRLINE_COMPETITOR_SIGNALS: Final = [
     r"\bairways?\b",
     r"\bairline\b",
     r"\bcarrier\b",
@@ -88,7 +88,7 @@ AIRLINE_COMPETITOR_SIGNALS = [
 
 # Operational-only: baggage, lounge, check-in, refund (no comparison language).
 # When only these appear with ambiguous token → treat as product query (OTHER_MEANING).
-AIRLINE_OPERATIONAL_SIGNALS = [
+AIRLINE_OPERATIONAL_SIGNALS: Final = [
     r"\bbaggage\s+allowance\b",
     r"\blounge\b",
     r"\bcheck[- ]?in\b",
@@ -96,7 +96,7 @@ AIRLINE_OPERATIONAL_SIGNALS = [
     r"\bpremium\s+lounge\b",
 ]
 # Comparison language: if present with competitor signals → COMPETITOR.
-AIRLINE_COMPARISON_SIGNALS = [
+AIRLINE_COMPARISON_SIGNALS: Final = [
     r"\bbetter\b",
     r"\bbest\b",
     r"\bvs\.?\b",
@@ -105,12 +105,12 @@ AIRLINE_COMPARISON_SIGNALS = [
 ]
 
 # Explicit markers: strong override when present.
-AIRLINE_EXPLICIT_COMPETITOR_MARKER = r"\b(airways?|airline|carrier)\b"
-AIRLINE_EXPLICIT_OTHER_MEANING_MARKER = (
+AIRLINE_EXPLICIT_COMPETITOR_MARKER: Final = r"\b(airways?|airline|carrier)\b"
+AIRLINE_EXPLICIT_OTHER_MEANING_MARKER: Final = (
     r"\b(fly|travel|going|visit|layover|stopover|transit)\b.{0,12}\b(to|in|via|from)\b.{0,8}\b"
 )
 
-_MAJOR_AIRLINES_PATH = Path(__file__).resolve().parent / "major_airlines.json"
+_MAJOR_AIRLINES_PATH: Final = Path(__file__).resolve().parent / "major_airlines.json"
 
 
 def _load_competitors_excluding_brand(brand_self: list[str]) -> list[str]:
@@ -119,15 +119,15 @@ def _load_competitors_excluding_brand(brand_self: list[str]) -> list[str]:
     Exclude any airline whose id or match variants overlap with brand_self.
     Returns a flat list of match variants (pipe-separated values) from non-excluded airlines.
     """
-    brand_set = {b.lower().strip() for b in brand_self if b}
+    brand_set: Final = {b.lower().strip() for b in brand_self if b}
     if not _MAJOR_AIRLINES_PATH.exists():
         return []
     try:
         with open(_MAJOR_AIRLINES_PATH, encoding="utf-8") as f:
-            airlines = json.load(f)
+            airlines: Final = json.load(f)
     except (json.JSONDecodeError, OSError):
         return []
-    result: list[str] = []
+    result: Final[list[str]] = []
     for entry in airlines:
         if not isinstance(entry, dict):
             continue
@@ -150,7 +150,7 @@ class AirlineCompetitorIntentChecker(BaseCompetitorIntentChecker):
     """
 
     def __init__(self, config: dict[str, Any]) -> None:
-        merged: dict[str, Any] = dict(config)
+        merged: Final[dict[str, Any]] = dict(config)
         if not merged.get("other_meaning_signals"):
             merged["other_meaning_signals"] = AIRLINE_OTHER_MEANING_SIGNALS
         if not merged.get("competitor_signals"):
@@ -175,7 +175,7 @@ class AirlineCompetitorIntentChecker(BaseCompetitorIntentChecker):
 
     def _classify_ambiguous(self, text: str, token: str) -> tuple[str, float]:
         """Other meaning vs competitor using airline signals and explicit markers."""
-        text_lower = text.lower()
+        text_lower: Final = text.lower()
         if (
             self._explicit_competitor_marker
             and self._explicit_competitor_marker.search(text_lower)
@@ -185,20 +185,20 @@ class AirlineCompetitorIntentChecker(BaseCompetitorIntentChecker):
         if self._explicit_other_meaning_marker and self._explicit_other_meaning_marker.search(text_lower):
             return "OTHER_MEANING", 0.85
         # Operational-only: baggage/lounge/check-in/refund with no comparison → product query
-        has_comparison = _count_signals(text_lower, AIRLINE_COMPARISON_SIGNALS) > 0
-        operational_count = _count_signals(text_lower, AIRLINE_OPERATIONAL_SIGNALS)
+        has_comparison: Final = _count_signals(text_lower, AIRLINE_COMPARISON_SIGNALS) > 0
+        operational_count: Final = _count_signals(text_lower, AIRLINE_OPERATIONAL_SIGNALS)
         if not has_comparison and operational_count > 0:
             return "OTHER_MEANING", 0.85
         # Score: location/travel context vs airline context (no place-name list)
         other_count = _count_signals(text_lower, self._other_meaning_signals)
         if self._other_meaning_anchors:
             other_count += _count_signals(text_lower, self._other_meaning_anchors)
-        comp_count = _count_signals(text_lower, self._competitor_signals)
-        total = other_count + comp_count
+        comp_count: Final = _count_signals(text_lower, self._competitor_signals)
+        total: Final = other_count + comp_count
         if total == 0:
             return "OTHER_MEANING", 0.5
-        other_ratio = other_count / total
-        comp_ratio = comp_count / total
+        other_ratio: Final = other_count / total
+        comp_ratio: Final = comp_count / total
         if other_ratio >= 0.6:
             return "OTHER_MEANING", min(0.9, 0.5 + 0.4 * other_ratio)
         if comp_ratio >= 0.6:

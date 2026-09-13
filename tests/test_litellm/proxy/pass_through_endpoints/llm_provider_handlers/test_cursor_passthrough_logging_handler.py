@@ -1,12 +1,9 @@
-import os
-import sys
 from datetime import datetime
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.cursor_passthrough_logging_handler import (
     CursorPassthroughLoggingHandler,

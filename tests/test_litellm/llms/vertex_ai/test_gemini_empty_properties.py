@@ -1,9 +1,6 @@
 """Test for Gemini schema handling with empty properties."""
 
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.llms.vertex_ai.common_utils import add_object_type
 

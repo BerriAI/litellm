@@ -1,74 +1,81 @@
 import type { RoleMappings as RoleMappingsType } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
-import { Card, Divider, Table, Tag, Typography } from "antd";
+import type { ColumnDef } from "@tanstack/react-table";
+import { DataTable } from "@/components/shared/DataTable";
+import { StatusBadge } from "@/components/shared/table_cells/status_badge";
+import { Card, CardContent } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
 import { Users } from "lucide-react";
 import { defaultRoleDisplayNames } from "./constants";
-const { Title, Text } = Typography;
+
+const inlineCodeClass = "rounded-sm border border-border bg-muted px-1 py-0.5 font-mono text-xs";
+
+interface RoleMappingRow {
+  role: string;
+  groups: string[];
+}
 
 export default function RoleMappings({ roleMappings }: { roleMappings: RoleMappingsType | undefined }) {
   if (!roleMappings) {
     return null;
   }
 
-  const roleMappingsColumns = [
+  const roleMappingsColumns: ColumnDef<RoleMappingRow>[] = [
     {
-      title: "Role",
-      dataIndex: "role",
-      key: "role",
-      render: (text: string) => <Text strong>{defaultRoleDisplayNames[text]}</Text>,
+      id: "role",
+      accessorKey: "role",
+      header: "Role",
+      cell: ({ row }) => <strong className="font-semibold">{defaultRoleDisplayNames[row.original.role]}</strong>,
     },
     {
-      title: "Mapped Groups",
-      dataIndex: "groups",
-      key: "groups",
-      render: (groups: string[]) => (
-        <>
-          {groups.length > 0 ? (
-            groups.map((group, index) => (
-              <Tag key={index} color="blue">
-                {group}
-              </Tag>
-            ))
-          ) : (
-            <Text className="text-gray-400 italic">No groups mapped</Text>
-          )}
-        </>
-      ),
+      id: "groups",
+      accessorKey: "groups",
+      header: "Mapped Groups",
+      cell: ({ row }) =>
+        row.original.groups.length > 0 ? (
+          <div className="flex flex-wrap gap-1">
+            {row.original.groups.map((group, index) => (
+              <StatusBadge key={index} tone="info" label={group} />
+            ))}
+          </div>
+        ) : (
+          <span className="text-muted-foreground italic">No groups mapped</span>
+        ),
     },
   ];
   return (
     <Card>
-      <div className="flex items-center gap-3">
-        <Users className="w-6 h-6 text-gray-400 mb-2" />
-        <Title level={3}>Role Mappings</Title>
-      </div>
-      <div className="space-y-8">
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <Title level={5}>Group Claim</Title>
-            <div>
-              <Text code>{roleMappings.group_claim}</Text>
-            </div>
-          </div>
-          <div>
-            <Title level={5}>Default Role</Title>
-            <div>
-              <Text strong>{defaultRoleDisplayNames[roleMappings.default_role]}</Text>
-            </div>
-          </div>
+      <CardContent>
+        <div className="flex items-center gap-3">
+          <Users className="w-6 h-6 text-muted-foreground mb-2" />
+          <h3 className="mb-2 text-2xl font-semibold text-foreground">Role Mappings</h3>
         </div>
-        <Divider />
-        <Table
-          columns={roleMappingsColumns}
-          dataSource={Object.entries(roleMappings.roles).map(([role, groups]) => ({
-            role,
-            groups,
-          }))}
-          pagination={false}
-          bordered
-          size="small"
-          className="w-full"
-        />
-      </div>
+        <div className="space-y-8">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <h5 className="mb-2 text-base font-semibold text-foreground">Group Claim</h5>
+              <div>
+                <code className={inlineCodeClass}>{roleMappings.group_claim}</code>
+              </div>
+            </div>
+            <div>
+              <h5 className="mb-2 text-base font-semibold text-foreground">Default Role</h5>
+              <div>
+                <strong className="font-semibold">{defaultRoleDisplayNames[roleMappings.default_role]}</strong>
+              </div>
+            </div>
+          </div>
+          <Separator className="my-6" />
+          <DataTable
+            columns={roleMappingsColumns}
+            data={Object.entries(roleMappings.roles).map(([role, groups]) => ({
+              role,
+              groups,
+            }))}
+            getRowId={(row) => row.role}
+            size="compact"
+          />
+        </div>
+      </CardContent>
     </Card>
   );
 }

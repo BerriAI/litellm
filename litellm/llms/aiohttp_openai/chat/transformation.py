@@ -7,7 +7,7 @@ https://github.com/BerriAI/litellm/issues/6592
 New config to ensure we introduce this without causing breaking changes for users
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from aiohttp import ClientResponse
 
@@ -16,6 +16,8 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, ModelResponse
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -56,7 +58,7 @@ class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
     ) -> dict:
         return {"Authorization": f"Bearer {api_key}"}
 
-    async def transform_response(  # type: ignore
+    async def transform_response(
         self,
         model: str,
         raw_response: ClientResponse,
@@ -66,11 +68,11 @@ class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        _json_response = await raw_response.json()
+        _json_response: Final = await raw_response.json()
         model_response.id = _json_response.get("id")
         model_response.choices = [Choices(**choice) for choice in _json_response.get("choices")]
         model_response.created = _json_response.get("created")

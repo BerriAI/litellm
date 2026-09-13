@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Final
 
 import requests
 
@@ -6,16 +6,18 @@ from .exceptions import UnauthorizedError
 
 
 class CredentialsManagementClient:
-    def __init__(self, base_url: str, api_key: str | None = None):
+    def __init__(self, base_url: str, api_key: str | None = None, timeout: int = 30):
         """
         Initialize the CredentialsManagementClient.
 
         Args:
             base_url (str): The base URL of the LiteLLM proxy server (e.g., "http://localhost:8000")
             api_key (Optional[str]): API key for authentication. If provided, it will be sent as a Bearer token.
+            timeout (int): Request timeout in seconds (default: 30)
         """
         self._base_url = base_url.rstrip("/")  # Remove trailing slash if present
         self._api_key = api_key
+        self._timeout = timeout
 
     def _get_headers(self) -> dict[str, str]:
         """
@@ -24,7 +26,7 @@ class CredentialsManagementClient:
         Returns:
             Dict[str, str]: Headers to use for API requests
         """
-        headers = {"Content-Type": "application/json"}
+        headers: Final = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
@@ -47,16 +49,16 @@ class CredentialsManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/credentials"
+        url: Final = f"{self._base_url}/credentials"
 
-        request = requests.Request("GET", url, headers=self._get_headers())
+        request: Final = requests.Request("GET", url, headers=self._get_headers())
 
         if return_request:
             return request
 
-        session = requests.Session()
+        session: Final = requests.Session()
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
@@ -88,22 +90,22 @@ class CredentialsManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/credentials"
+        url: Final = f"{self._base_url}/credentials"
 
-        data = {
+        data: Final = {
             "credential_name": credential_name,
             "credential_info": credential_info,
             "credential_values": credential_values,
         }
 
-        request = requests.Request("POST", url, headers=self._get_headers(), json=data)
+        request: Final = requests.Request("POST", url, headers=self._get_headers(), json=data)
 
         if return_request:
             return request
 
-        session = requests.Session()
+        session: Final = requests.Session()
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
@@ -131,16 +133,16 @@ class CredentialsManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/credentials/{credential_name}"
+        url: Final = f"{self._base_url}/credentials/{credential_name}"
 
-        request = requests.Request("DELETE", url, headers=self._get_headers())
+        request: Final = requests.Request("DELETE", url, headers=self._get_headers())
 
         if return_request:
             return request
 
-        session = requests.Session()
+        session: Final = requests.Session()
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
@@ -168,16 +170,16 @@ class CredentialsManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/credentials/by_name/{credential_name}"
+        url: Final = f"{self._base_url}/credentials/by_name/{credential_name}"
 
-        request = requests.Request("GET", url, headers=self._get_headers())
+        request: Final = requests.Request("GET", url, headers=self._get_headers())
 
         if return_request:
             return request
 
-        session = requests.Session()
+        session: Final = requests.Session()
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:

@@ -18,6 +18,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
+from litellm.proxy.db.gateway_request_tracking import GatewayRequestAccumulator
 from litellm.proxy.middleware.billable_request_metrics_middleware import (
     BillableCategory,
     BillableRequestMetricsMiddleware,
@@ -112,6 +113,9 @@ def test_is_pure_asgi_not_base_http_middleware():
         ("/cohere/v2/chat", (BillableCategory.LLM, "/cohere")),
         # Passthrough inference bills under its provider prefix
         ("/anthropic/v1/messages", (BillableCategory.LLM, "/anthropic")),
+        # Bare AWS-SDK-shaped route carries the operation in X-Amz-Target and writes SpendLogs
+        ("/comprehendmedical", (BillableCategory.LLM, "/comprehendmedical")),
+        ("/comprehendmedical/DetectEntitiesV2", (BillableCategory.LLM, "/comprehendmedical")),
         ("/mcp", (BillableCategory.MCP, "/mcp")),
         ("/mcp/", (BillableCategory.MCP, "/mcp")),
         ("/mcp/tools/list", (BillableCategory.MCP, "/mcp")),
@@ -456,3 +460,128 @@ def test_billable_middleware_is_registered_inside_the_in_flight_tracker():
 
     classes = [middleware.cls for middleware in proxy_app.user_middleware]
     assert classes.index(InFlightRequestsMiddleware) < classes.index(BillableRequestMetricsMiddleware)
+
+
+# ── gateway request sink (SGR) ────────────────────────────────────────────────
+
+
+class FakeSink:
+    def __init__(self) -> None:
+        self.calls: List[dict] = []
+
+    def record(self, *, category: BillableCategory, route: str, status_code: int) -> None:
+        self.calls.append({"category": category, "route": route, "status_code": status_code})
+
+
+def _make_sink_app(
+    recorder: Optional[FakeRecorder],
+    sink: Optional[FakeSink],
+    status_code: int = 200,
+    model_id: Optional[str] = None,
+) -> Starlette:
+    app = _make_app(None, status_code=status_code, model_id=model_id)
+    app.user_middleware.clear()
+    app.add_middleware(BillableRequestMetricsMiddleware, recorder=recorder, sink=sink)
+    return app
+
+
+def test_sink_records_on_2xx():
+    sink = FakeSink()
+    TestClient(_make_sink_app(None, sink, status_code=200, model_id="m-1")).post("/v1/chat/completions")
+    assert sink.calls == [{"category": BillableCategory.LLM, "route": "/chat/completions", "status_code": 200}]
+
+
+def test_varying_model_ids_fold_into_a_single_persisted_key():
+    """
+    The deployment that served a request reaches the middleware as the
+    x-litellm-model-id header, and a caller has some say in which deployment
+    that is. The SGR key is persisted, so it must not carry that dimension: a
+    caller who could vary it could mint an unbounded number of table rows.
+    """
+    accumulator = GatewayRequestAccumulator()
+    for model_id in ("deploy-1", "deploy-2", "deploy-3"):
+        client = TestClient(_make_sink_app(None, accumulator, status_code=200, model_id=model_id))
+        client.post("/v1/chat/completions")
+
+    snapshot = accumulator.drain()
+    assert len(snapshot) == 1
+    assert next(iter(snapshot.values())).successful_requests == 3
+
+
+@pytest.mark.parametrize("status_code", [400, 429, 500, 503])
+def test_sink_records_failures_that_billing_ignores(status_code: int):
+    """SGR needs failed_requests, so the sink sees non-2xx. Billing must not."""
+    sink, recorder = FakeSink(), FakeRecorder()
+    TestClient(_make_sink_app(recorder, sink, status_code=status_code)).post("/v1/chat/completions")
+    assert [call["status_code"] for call in sink.calls] == [status_code]
+    assert recorder.calls == []
+
+
+def test_sink_runs_when_billing_recorder_is_absent():
+    """The OSS case. Billing is license-gated; the SGR dashboard is not, so an
+    absent recorder must not switch off the sink."""
+    sink = FakeSink()
+    TestClient(_make_sink_app(None, sink, status_code=200)).post("/v1/chat/completions")
+    assert len(sink.calls) == 1
+
+
+def test_billing_recorder_still_2xx_only_when_sink_present():
+    sink, recorder = FakeSink(), FakeRecorder()
+    client = TestClient(_make_sink_app(recorder, sink, status_code=200))
+    client.post("/v1/chat/completions")
+    assert len(recorder.calls) == 1
+    assert len(sink.calls) == 1
+
+
+def test_sink_ignores_non_billable_paths():
+    sink = FakeSink()
+    TestClient(_make_sink_app(None, sink, status_code=200)).post("/health")
+    assert sink.calls == []
+
+
+def test_sink_raising_does_not_fail_the_request_or_block_billing():
+    class ExplodingSink:
+        def record(self, *, category, route, status_code):
+            raise RuntimeError("db gone")
+
+    recorder = FakeRecorder()
+    app = _make_app(None, status_code=200)
+    app.user_middleware.clear()
+    app.add_middleware(BillableRequestMetricsMiddleware, recorder=recorder, sink=ExplodingSink())
+    response = TestClient(app).post("/v1/chat/completions")
+    assert response.status_code == 200
+    assert len(recorder.calls) == 1
+
+
+def test_passthrough_only_when_both_recorder_and_sink_are_none():
+    response = TestClient(_make_sink_app(None, None, status_code=200)).post("/v1/chat/completions")
+    assert response.status_code == 200
+
+
+def test_sink_factory_not_called_at_init():
+    calls = []
+
+    def factory():
+        calls.append(1)
+        return FakeSink()
+
+    BillableRequestMetricsMiddleware(_make_app(None), sink_factory=factory)
+    assert calls == []
+
+
+def test_sink_factory_resolved_once_across_requests():
+    sink = FakeSink()
+    calls = []
+
+    def factory():
+        calls.append(1)
+        return sink
+
+    app = _make_app(None, status_code=200)
+    app.user_middleware.clear()
+    app.add_middleware(BillableRequestMetricsMiddleware, sink_factory=factory)
+    client = TestClient(app)
+    client.post("/v1/chat/completions")
+    client.post("/v1/chat/completions")
+    assert calls == [1]
+    assert len(sink.calls) == 2

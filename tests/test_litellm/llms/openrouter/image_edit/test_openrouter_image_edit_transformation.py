@@ -1,16 +1,11 @@
 import base64
 import json
-import os
-import sys
 from io import BytesIO
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.openrouter.common_utils import OpenRouterException
 from litellm.llms.openrouter.image_edit.transformation import (

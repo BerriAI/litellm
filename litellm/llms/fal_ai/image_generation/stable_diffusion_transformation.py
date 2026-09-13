@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -8,6 +8,8 @@ from litellm.types.utils import ImageObject, ImageResponse
 from .transformation import FalAIBaseConfig
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -88,10 +90,10 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
         - response_format -> output_format (jpeg or png)
         - size -> image_size (can be preset or custom width/height)
         """
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
 
         # Map OpenAI params to Stable Diffusion params
-        param_mapping = {
+        param_mapping: Final = {
             "n": "num_images",
             "response_format": "output_format",
             "size": "image_size",
@@ -139,7 +141,7 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
         - landscape_16_9
         """
         # Map common OpenAI sizes to Stable Diffusion presets
-        size_mapping = {
+        size_mapping: Final = {
             "1024x1024": "square_hd",
             "512x512": "square",
             "768x1024": "portrait_4_3",
@@ -190,7 +192,7 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
         - negative_prompt: Negative prompt string (default: "")
         - enable_safety_checker: Enable safety checker (default: true)
         """
-        stable_diffusion_request_body = {
+        stable_diffusion_request_body: Final = {
             "prompt": prompt,
             **optional_params,
         }
@@ -206,7 +208,7 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -230,7 +232,7 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
         }
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -242,7 +244,7 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
             model_response.data = []
 
         # Handle Stable Diffusion response format
-        images = response_data.get("images", [])
+        images: Final = response_data.get("images", [])
         if isinstance(images, list):
             for image_data in images:
                 if isinstance(image_data, dict):

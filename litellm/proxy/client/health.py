@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Final
 
 from .http_client import HTTPClient
 
@@ -39,5 +39,5 @@ class HealthManagementClient:
         Returns:
             Optional[str]: The server version if available, otherwise None.
         """
-        readiness = self.get_readiness()
+        readiness: Final = self.get_readiness()
         return readiness.get("litellm_version")

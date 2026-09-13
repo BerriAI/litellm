@@ -1,14 +1,13 @@
 import os
-import sys
 import pytest
 import asyncio
+import subprocess
+import sys
+from pathlib import Path
 from typing import Optional
 from unittest.mock import AsyncMock, patch
 
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.types.utils import StandardLoggingPayload
 from litellm.integrations.custom_logger import CustomLogger
@@ -28,12 +27,20 @@ from mcp.types import Tool as MCPTool, CallToolResult, TextContent
 class TestMCPLogger(CustomLogger):
     def __init__(self):
         self.standard_logging_payload = None
+        self.mcp_tool_call_payloads = []
         super().__init__()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         print("success event")
-        self.standard_logging_payload = kwargs.get("standard_logging_object", None)
-        print(f"Captured standard_logging_payload: {self.standard_logging_payload}")
+        payload = kwargs.get("standard_logging_object", None)
+        self.standard_logging_payload = payload
+        # Async success events from other calls (e.g. a mocked acompletion whose
+        # log task is delivered late) race with the MCP event for the single
+        # last-writer slot; keep MCP tool calls in their own list so assertions
+        # are order-independent.
+        if payload is not None and payload.get("call_type") == "call_mcp_tool":
+            self.mcp_tool_call_payloads.append(payload)
+        print(f"Captured standard_logging_payload: {payload}")
 
 
 def _set_authorized_user(server_ids):
@@ -142,7 +149,11 @@ async def test_mcp_cost_tracking():
             # wait 1-2 seconds for logging to be processed
             await asyncio.sleep(2)
 
-            logged_standard_logging_payload = test_logger.standard_logging_payload
+            logged_standard_logging_payload = (
+                test_logger.mcp_tool_call_payloads[-1]
+                if test_logger.mcp_tool_call_payloads
+                else None
+            )
             print("logged_standard_logging_payload", logged_standard_logging_payload)
 
             # Add assertions
@@ -281,7 +292,11 @@ async def test_mcp_cost_tracking_per_tool():
             # wait for logging to be processed
             await asyncio.sleep(2)
 
-            logged_standard_logging_payload_1 = test_logger.standard_logging_payload
+            logged_standard_logging_payload_1 = (
+                test_logger.mcp_tool_call_payloads[-1]
+                if test_logger.mcp_tool_call_payloads
+                else None
+            )
             print(
                 "logged_standard_logging_payload_1", logged_standard_logging_payload_1
             )
@@ -294,6 +309,7 @@ async def test_mcp_cost_tracking_per_tool():
 
             # Reset logger for second test
             test_logger.standard_logging_payload = None
+            test_logger.mcp_tool_call_payloads.clear()
 
             # Test 2: Call cheap_tool - should cost 0.1
             response2 = await mcp_server_tool_call(
@@ -304,7 +320,11 @@ async def test_mcp_cost_tracking_per_tool():
             # wait for logging to be processed
             await asyncio.sleep(2)
 
-            logged_standard_logging_payload_2 = test_logger.standard_logging_payload
+            logged_standard_logging_payload_2 = (
+                test_logger.mcp_tool_call_payloads[-1]
+                if test_logger.mcp_tool_call_payloads
+                else None
+            )
             print(
                 "logged_standard_logging_payload_2", logged_standard_logging_payload_2
             )
@@ -333,16 +353,7 @@ async def test_mcp_cost_tracking_per_tool():
             assert mock_client.call_tool.call_count == 2
 
 
-class MCPLoggerHook(CustomLogger):
-    def __init__(self):
-        self.standard_logging_payload = None
-        super().__init__()
-
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        print("success event")
-        self.standard_logging_payload = kwargs.get("standard_logging_object", None)
-        print(f"Captured standard_logging_payload: {self.standard_logging_payload}")
-
+class MCPLoggerHook(TestMCPLogger):
     async def async_post_mcp_tool_call_hook(
         self, kwargs, response_obj: MCPPostCallResponseObject, start_time, end_time
     ) -> Optional[MCPPostCallResponseObject]:
@@ -440,9 +451,55 @@ async def test_mcp_tool_call_hook():
             await asyncio.sleep(2)
 
             # check logged standard logging payload
-            logged_standard_logging_payload = test_logger.standard_logging_payload
+            logged_standard_logging_payload = (
+                test_logger.mcp_tool_call_payloads[-1]
+                if test_logger.mcp_tool_call_payloads
+                else None
+            )
             print("logged_standard_logging_payload", logged_standard_logging_payload)
             assert (
                 logged_standard_logging_payload is not None
             ), "Standard logging payload should not be None"
             assert logged_standard_logging_payload["response_cost"] == 1.42
+
+
+_QUEUED_LOGGING_OUTLIVES_TEST = '''
+import time
+
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+ran_at = []
+
+
+async def _record_run():
+    ran_at.append(time.monotonic())
+
+
+async def test_1_leaves_logging_queued_behind_a_stopped_worker():
+    GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(_record_run())
+    await GLOBAL_LOGGING_WORKER.stop()
+    assert ran_at == []
+
+
+async def test_2_starts_after_the_previous_tests_logging_ran():
+    started_at = time.monotonic()
+    GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(_record_run())
+    await GLOBAL_LOGGING_WORKER.flush()
+    assert [t < started_at for t in ran_at] == [True, False]
+'''
+
+
+def test_logging_queued_by_one_test_is_drained_before_the_next(tmp_path: Path):
+    """Regression: a logging coroutine queued by one test must not run inside a later test (it would log into that
+    test's callbacks, which is how test_mcp_tool_call_hook captured a gpt-4o-mini payload under xdist)."""
+    (tmp_path / "conftest.py").write_text((Path(__file__).parent / "conftest.py").read_text())
+    (tmp_path / "pyproject.toml").write_text('[tool.pytest.ini_options]\nasyncio_mode = "auto"\n')
+    (tmp_path / "test_queued_logging.py").write_text(_QUEUED_LOGGING_OUTLIVES_TEST)
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "test_queued_logging.py"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

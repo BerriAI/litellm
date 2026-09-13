@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import { CheckCircle2, Info } from "lucide-react";
+import { formatGuardrailMode } from "@/app/(dashboard)/guardrails/_components/guardrail_info_helpers";
 
 interface GuardrailInfo {
   guardrail_name: string;
@@ -112,7 +113,7 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
               <div className="text-sm">
                 <span className="font-medium">{guardrailsInfo.length} total guardrails</span>
                 <span className="mx-2 text-muted-foreground">•</span>
-                <span className="font-medium text-green-600">{newGuardrailsCount} new</span>
+                <span className="font-medium text-success">{newGuardrailsCount} new</span>
                 {existingCount > 0 && (
                   <>
                     <span className="mx-2 text-muted-foreground">•</span>
@@ -145,7 +146,7 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
                 <div className="flex items-start gap-3">
                   <div className="shrink-0 pt-0.5">
                     {guardrail.alreadyExists ? (
-                      <CheckCircle2 className="size-4 text-green-600" />
+                      <CheckCircle2 className="size-4 text-success" />
                     ) : (
                       <Checkbox
                         checked={selectedGuardrails.has(guardrail.guardrail_name)}
@@ -163,7 +164,9 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
                     {/* Show guardrail type and mode */}
                     <div className="flex gap-2 mt-2">
                       <Badge variant="outline">{guardrail.definition?.litellm_params?.guardrail || "unknown"}</Badge>
-                      <Badge variant="secondary">{guardrail.definition?.litellm_params?.mode || "unknown"}</Badge>
+                      <Badge variant="secondary">
+                        {formatGuardrailMode(guardrail.definition?.litellm_params?.mode) || "unknown"}
+                      </Badge>
                       {guardrail.definition?.litellm_params?.patterns && (
                         <Badge variant="secondary">
                           {guardrail.definition.litellm_params.patterns.length} pattern(s)
@@ -223,9 +226,9 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
                 {selectedCount > 1 ? "s" : ""} will be created
               </p>
             ) : existingCount > 0 ? (
-              <p className="text-green-600">All guardrails already exist. You can proceed to use this template.</p>
+              <p className="text-success">All guardrails already exist. You can proceed to use this template.</p>
             ) : (
-              <p className="text-amber-600">
+              <p className="text-warning">
                 Select at least one guardrail to create, or click &quot;Use Template&quot; to proceed without creating
                 new guardrails.
               </p>

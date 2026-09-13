@@ -36,6 +36,17 @@ The base URL is resolved in this order of precedence:
 3. `base_url` from `~/.litellm/config.json`
 4. `http://localhost:4000`
 
+### Hiding commands from the listings
+
+Deployments that hand `lite` to end users often want to advertise only part of it. Store the commands to keep out of the listings, comma separated:
+
+```bash
+lite config set hidden_commands codex,opencode
+lite config unset hidden_commands   # list everything again
+```
+
+Hidden commands drop out of both `lite --help` and the interactive shell's "Available commands" block, and stay runnable so existing scripts keep working
+
 ## Global Options
 
 - `--version`, `-v`: Print the LiteLLM Proxy client and server version and exit.
@@ -467,6 +478,7 @@ Launch a coding agent with all of its LLM traffic routed through your LiteLLM pr
 lite claude
 lite codex
 lite opencode
+lite pi
 ```
 
 Anything you type after the agent name is forwarded to it untouched, so the usual flags keep working:
@@ -478,25 +490,27 @@ lite codex exec "summarize the repo"
 
 Each command resolves your LiteLLM key (logging in via SSO when none is stored and you are at a terminal; otherwise it expects `LITELLM_PROXY_API_KEY` or `--api-key`), checks the key against the proxy so bad credentials fail immediately instead of deep inside the agent, exports the environment variables the agent reads, then replaces itself with the agent process.
 
-The right variables are picked per agent. Claude Code gets `ANTHROPIC_BASE_URL` (the proxy root, so it appends `/v1/messages`) and `ANTHROPIC_AUTH_TOKEN`, with any stray `ANTHROPIC_API_KEY` cleared so the proxy token wins. Codex and OpenCode get `OPENAI_BASE_URL` (the proxy plus `/v1`) and `OPENAI_API_KEY`. Codex ignores `OPENAI_BASE_URL`, so it is additionally pointed at the proxy through a custom provider passed as `-c` config overrides (HTTP/SSE Responses transport, since the proxy does not speak the Responses WebSocket protocol).
+The right variables are picked per agent. Claude Code gets `ANTHROPIC_BASE_URL` (the proxy root, so it appends `/v1/messages`) and `ANTHROPIC_AUTH_TOKEN`, with any stray `ANTHROPIC_API_KEY` cleared so the proxy token wins, and `ENABLE_TOOL_SEARCH=true` (unless you already set it) so Claude Code keeps tool search on even though the base URL is a proxy rather than a first-party Anthropic host. It also gets `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` (again unless you already set it) so Claude Code v2.1.129+ fills its `/model` picker from the proxy's `/v1/models`; Claude Code only lists entries whose id contains `claude` or `anthropic`, so the proxy lists every other group to Claude Code as `claude-router-<UTF-8 hex of the group name>` and marks a group whose input window reaches 1M with `[1m]`, and a request on such an id is served by the group. Older Claude Code versions ignore the variable. Export it as `0` to turn discovery off. Codex and OpenCode get `OPENAI_BASE_URL` (the proxy plus `/v1`) and `OPENAI_API_KEY`. Codex ignores `OPENAI_BASE_URL`, so it is additionally pointed at the proxy through a custom provider passed as `-c` config overrides (HTTP/SSE Responses transport, since the proxy does not speak the Responses WebSocket protocol). OpenCode additionally gets `OPENCODE_CONFIG_CONTENT` holding a generated `litellm` provider (`@ai-sdk/openai-compatible`, the proxy `/v1` URL, `{env:OPENAI_API_KEY}`) with one model entry per chat model your key can see on `/v1/models`, so its model picker mirrors the proxy without a hand-maintained `opencode.json`; OpenCode merges that over your own config files, and if you already export `OPENCODE_CONFIG_CONTENT` yours is left alone. When the list cannot be fetched, `lite opencode` says so on stderr and launches anyway.
+
+pi ignores base-URL environment variables entirely, so `lite pi` (kept out of the `lite --help` command listing for now, but fully functional) wires it up differently: before handoff it fetches the models your key can use from the proxy's `/v1/models` (plus each model's context window and output cap from `/model_group/info`, when available) and syncs them into a `litellm` provider entry in pi's `~/.pi/agent/models.json` (honoring `PI_CODING_AGENT_DIR`), then starts pi on that provider's first model via an injected `--model litellm/<id>`. Only that one provider entry is rewritten; the rest of the file, including any other custom providers, is left alone. The entry references the key as `$LITELLM_PROXY_API_KEY`, which the wrapper exports for the session, so the token itself never lands on disk and plain `pi` outside the wrapper simply shows the litellm models as unavailable. Your own flags come after the injected pin, so `lite pi --model litellm/<other-id>` wins, and inside the TUI the `/model` picker lists every synced litellm model.
 
 Options (these belong to the wrapper, so put them before the agent's own flags):
 
 - `--skip-verify`: Skip the pre-launch key check (useful offline or with non-standard auth).
 
-To pin the model, pass the agent's own model flag (for example `lite claude --model my-proxy-model` or `lite codex -m my-proxy-model`), or export the variable the agent reads (`ANTHROPIC_MODEL` / `ANTHROPIC_SMALL_FAST_MODEL` for Claude Code); the wrapper preserves anything you already have set. Whatever model the agent ends up requesting must exist on the proxy, since requests land on the proxy's `/v1/messages` (Anthropic) or `/v1/chat/completions` and `/v1/responses` (OpenAI) endpoints.
+To pin the model, pass the agent's own model flag (for example `lite claude --model my-proxy-model`, `lite codex -m my-proxy-model`, or `lite pi --model my-proxy-model`), or export the variable the agent reads (`ANTHROPIC_MODEL` / `ANTHROPIC_SMALL_FAST_MODEL` for Claude Code); the wrapper preserves anything you already have set. Whatever model the agent ends up requesting must exist on the proxy, since requests land on the proxy's `/v1/messages` (Anthropic) or `/v1/chat/completions` and `/v1/responses` (OpenAI) endpoints.
 
 #### About the `lite login` credential
 
 The token minted by `lite login` is a short-lived, per-session agent credential, not a managed virtual key. It is scoped to the user and team you authenticated as, inherits that user's and team's models and budgets, and is enforced on the proxy exactly like a virtual key on the same team (guardrails, routing, logging, spend). Spend is tracked against the shared team and user budgets, so running several agents (or logging in more than once) does not hand each session its own separate budget; they all draw down the same team/user allowance. There is no separate per-session cap, so sustained agent use is not capped at a small chat-session limit.
 
-The credential is short-lived by design (default 24h, configurable via `LITELLM_CLI_JWT_EXPIRATION_HOURS`); run `lite login` again to refresh it, which also re-reads your latest team and user settings. It does not appear in the Keys UI and cannot be rotated or revoked mid-session. `lite auth print-token` (usable as Claude Code's `apiKeyHelper`) prints it while it's still fresh and fails once it expires -- there is no silent renewal, so a long-running session needs a fresh `lite login` once a day. `lite claude`, `lite codex`, and `lite opencode` work with it on a default deployment; `EXPERIMENTAL_UI_LOGIN` is not required. If you need a long-lived, rotatable key that shows up in the Keys UI, create a dedicated virtual key in the dashboard and pass it via `--api-key` or `LITELLM_PROXY_API_KEY` instead.
+The credential is short-lived by design (default 24h, configurable via `LITELLM_CLI_JWT_EXPIRATION_HOURS`); run `lite login` again to refresh it, which also re-reads your latest team and user settings. It does not appear in the Keys UI and cannot be rotated or revoked mid-session. `lite auth print-token` (usable as Claude Code's `apiKeyHelper`) prints it while it's still fresh and fails once it expires -- there is no silent renewal, so a long-running session needs a fresh `lite login` once a day. `lite claude`, `lite codex`, `lite opencode`, and `lite pi` work with it on a default deployment; `EXPERIMENTAL_UI_LOGIN` is not required. `lite login --pkce` is the exception to the daily re-login: it signs in through your system browser with OAuth authorization code and PKCE and stores a refresh token next to the key, so every `lite` command and `lite auth print-token` renew the key on their own shortly before it expires, `lite whoami` shows when the current key expires, and `lite logout` revokes the refresh token on the proxy (it needs a proxy that serves `/.well-known/litellm-cli-auth`; see [Browser sign-in with PKCE](https://docs.litellm.ai/docs/proxy/cli_sso#browser-sign-in-with-pkce)). When a renewal is refused, for example after a `lite logout` run from another copy of the credential, the command prints why on stderr and, once the key has run out, tells you to run `lite login --pkce` again. Only the holder can end a `--pkce` session early, with `lite logout`; an admin has no button for it, but every renewal re-reads the user on the proxy, so deactivating the user or removing them from the team makes the next renewal fail and the key runs out within `LITELLM_CLI_JWT_EXPIRATION_HOURS`. On a proxy with more than one worker or replica, configure Redis (`litellm_settings.cache` with Redis `cache_params`, or `general_settings.coordination_redis`) so a refresh token stays single-use and `lite logout` holds on every worker; without Redis each worker keeps its own record. If you need a long-lived, rotatable key that shows up in the Keys UI, create a dedicated virtual key in the dashboard and pass it via `--api-key` or `LITELLM_PROXY_API_KEY` instead.
 
 ### Route Every Claude Code Session Through the Proxy
 
-`lite claude` wraps a single invocation, but `lite up` goes further: it patches `~/.claude/settings.json`, Claude Code's own config file, so that every Claude Code session started afterward -- from any terminal, launched normally with just `claude`, no wrapper needed -- routes through your LiteLLM proxy. It sets `env.ANTHROPIC_BASE_URL` to the proxy URL and `apiKeyHelper` to a `lite auth print-token` invocation, drops any stray static `ANTHROPIC_API_KEY` so the helper-issued token wins, and leaves every other setting in the file untouched. It backs up the original file before patching it.
+`lite claude` wraps a single invocation, but `lite up` goes further: it patches `~/.claude/settings.json`, Claude Code's own config file, so that every Claude Code session started afterward -- from any terminal, launched normally with just `claude`, no wrapper needed -- routes through your LiteLLM proxy. It sets `env.ANTHROPIC_BASE_URL` to the proxy URL, `env.ENABLE_TOOL_SEARCH` to `true` and `env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` to `1` when those keys are missing, writes the key it resolved (your fresh `lite login`, or an explicit `--api-key`) into `env.ANTHROPIC_AUTH_TOKEN` as a static token, drops any stray `ANTHROPIC_API_KEY` or `apiKeyHelper` so nothing fights that token, and leaves every other setting in the file untouched. It backs up the original file before patching it. Nothing here writes an `apiKeyHelper`: Claude Code would spawn `lite` (and its keychain check) on every credential refresh, so the key is copied in instead and `lite up` restores the file when it stops.
 
-Two things need to already be true: you've run `lite login`, since the apiKeyHelper depends on that stored token, and the proxy is already reachable, since `lite up` does not start one for you.
+Two things need to already be true: you've run `lite login` (or passed a key), and the proxy is already reachable, since `lite up` does not start one for you.
 
 ```bash
 lite login
@@ -509,6 +523,71 @@ lite up
 This is a one-time file patch and restore, not a live traffic interceptor. A Claude Code session already running before `lite up` started keeps whatever `ANTHROPIC_BASE_URL` and token it loaded at its own startup, and a session still running when `lite up` stops keeps routing through the proxy until it exits; only sessions *started* while the patch is in effect are affected, and only *new* sessions after a restore go back to Anthropic directly.
 
 Cursor is not supported: it has no equivalent file-based config to hot-patch this way, since its model routing lives in its own app storage and is configured through its GUI.
+
+#### Making It Permanent at Login
+
+`lite up` holds its patch only for as long as it runs. To wire Claude Code up at login and leave it that way, pass `--config-claude` to `lite login`:
+
+```bash
+lite --base-url https://your-proxy.example.com login --config-claude
+```
+
+It writes the same settings `lite up` does, `env.ANTHROPIC_BASE_URL`, `env.ENABLE_TOOL_SEARCH`, `env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`, and the key this login minted as `env.ANTHROPIC_AUTH_TOKEN`, but persistently: no foreground process to keep alive, and `lite unconfigure claude` restores what it changed (see below). Every other key in `~/.claude/settings.json` is preserved, the file is created if it does not exist, and it is written atomically with owner-only permissions. Plain `lite login` is unchanged; nothing happens to your Claude Code config unless you pass the flag
+
+The key in the file is the login's own, so it expires with it (24h by default): run `lite login --config-claude` again after that, which rewrites the key in place. Earlier versions wrote an `apiKeyHelper` that ran `lite auth print-token` instead, so a later login refreshed Claude Code by itself; that meant Claude Code spawning a full `lite` start, keychain check included, on every credential refresh, so the helper is no longer written and a stale one is stripped by the next `--config-claude` or `configure claude`. Like `lite up`, the flag refuses to run while a `lite up` session holds a backup, and tells you to run `lite down` first
+
+#### Configuring Claude Code or Codex Once, With a Virtual Key
+
+Run the setup wizard with your gateway URL and a long-lived virtual key:
+
+```bash
+lite configure --api-key sk-... --gateway-url https://your-proxy.example.com
+```
+
+Select Claude Code, Codex, or both, then choose a gateway model for each selected agent. The wizard validates the key and reads the models your key can access before changing settings. Start either configured agent normally with `claude` or `codex`; the gateway connection persists across terminals without a wrapper or exported API key
+
+`--gateway-url` also accepts a deployment path prefix and a trailing `/v1`. `--base-url` is an alias. If omitted, setup uses `lite --base-url`, `LITELLM_PROXY_URL`, or the saved CLI URL; the wizard asks for a URL when none was provided
+
+For a scripted setup, name the agent and model:
+
+```bash
+lite configure --gateway-url https://your-proxy.example.com codex --api-key sk-... --model my-coding-model
+lite unconfigure codex
+```
+
+Codex setup requires an installed stable Codex version of [0.129.0 or newer](https://github.com/openai/codex/releases/tag/rust-v0.129.0), which prevents repository settings from redirecting requests carrying your saved key. Setup checks `codex --version` before fetching models or changing either selected agent's settings. Undo remains available without Codex installed
+
+Codex setup updates `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`) with the selected model and a LiteLLM Responses provider. The gateway key lives in that provider's static Authorization header, in a file written atomically with owner-only permissions. Other providers, hooks, MCP servers and comments are preserved. A default profile selection is removed so it cannot override the gateway settings; its contents are preserved, and undo restores the selection. Explicit Codex flags and supported project settings still follow Codex's normal precedence
+
+The Codex undo receipt is kept in a private `.litellm` directory beside the resolved config file. `lite unconfigure codex` restores only values still holding what configure wrote, preserving later edits. The provider URL and credential are restored together. Symlinks are followed and their targets become owner-only; keep these credential-bearing files out of version control
+
+`lite configure claude` wires Claude Code up persistently with a long-lived virtual key, a pinned model and an undo, and `lite unconfigure claude` puts things back:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/install.sh | sh
+lite --base-url https://your-proxy.example.com configure claude --api-key sk-... --model claude-auto
+claude
+```
+
+The key comes from `--api-key` (or `lite --api-key` / `LITELLM_PROXY_API_KEY`) and is written into `env.ANTHROPIC_AUTH_TOKEN`; without one the command refuses, since a `lite login` credential expires within a day and keeping it fresh would mean Claude Code running `lite` through `apiKeyHelper` on every credential refresh. The command checks the key against `GET /v1/models`, then patches `~/.claude/settings.json`: `env.ANTHROPIC_BASE_URL`, the credential, and `env.ENABLE_TOOL_SEARCH` and `env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` when those are missing, so Claude Code's `/model` picker lists the proxy's models (under `claude-router-<UTF-8 hex of the group name>` for a group whose id contains neither `claude` nor `anthropic`, since Claude Code lists only those) and you pick between them as usual. Claude Code keeps its own default model until you switch, so that id has to exist on the proxy for the first message to go through; `--model` (or the interactive prompt below) sets the model Claude Code starts on instead, as the top-level `model` key and as `env.ANTHROPIC_MODEL`, both of which have to be on `/v1/models` for the key. The second one matters for `claude -c` and `claude --resume`: a resumed session otherwise re-sends the model its transcript recorded, which behind an auto-router with `return_raw_model_name: true` is the tier model that answered, and a key scoped to the router alias gets a 403 for it; `ANTHROPIC_MODEL` outranks the transcript on resume. Nothing forces Claude Code's sub-agent or background tiers onto a proxy model, so those built-in ids need to exist on the proxy too; `lite autoroute up` is the mode that pins every tier to one group. Claude Code treats a name it does not know as an unknown model: it prints a one-line `unrecognized_model` note, assumes a 200k context window (the proxy appends `[1m]` for a group whose configured or known input window reaches 1M) and sends no thinking parameters for it, so name the group like a Claude model id to change that. The other credential slots (`env.ANTHROPIC_API_KEY`, a stale `env.ANTHROPIC_AUTH_TOKEN` or `apiKeyHelper`) are removed so they cannot fight the one written. Every other setting is preserved and the file is written atomically with owner-only permissions; if `settings.json` is a symlink into a dotfiles repository, the key is written through to that target and the command says so, so keep it out of version control
+
+Plain `lite configure`, with no agent named, asks which agents to wire and which gateway model each starts on, picked from `/v1/models` with a type-to-filter prompt. All choices and selected config files are checked before the first settings write. If a later filesystem write fails, the output identifies each agent already configured and its undo command
+
+What the command changed is recorded in `~/.litellm/claude_configure_state.json` (previous values plus fingerprints of what was written, never a second copy of the key). `lite unconfigure claude` restores each of those keys only if it still holds what `configure` wrote, so anything you changed since is left alone and named in the output; a `settings.json` or `env` object that only existed because of `configure` is removed again. Ownership moves only by a write: running `configure` again (a re-login is one) refreshes the record only for the keys its merge changed, keeps the original snapshot of a key that still holds what it wrote, and snapshots afresh a key you changed in between, so `unconfigure` brings back whatever the repeat displaced and never adopts your edit as its own. A credential (`env.ANTHROPIC_API_KEY`, `env.ANTHROPIC_AUTH_TOKEN`, `apiKeyHelper`) is put back only when the restored file points at the `ANTHROPIC_BASE_URL` it was captured next to; otherwise it stays removed, the output says which server it belonged to, and the receipt is kept so pointing the URL back and running `unconfigure` again finishes the job. It also undoes `lite login --config-claude`, which writes through the same path. Both refuse to run while a `lite up` or `lite autoroute up` session holds a backup, and that check comes before any request
+
+#### Routed model and savings in the status line
+
+`lite configure claude`, `lite login --config-claude`, `lite up` and `lite autoroute up` also install a status line (`~/.litellm/statusline.py`, registered as `statusLine` in `~/.claude/settings.json` unless you already run one) that shows which model the auto-router actually served the last turn and, once the proxy has recorded the session, what the session cost against the router's savings baseline:
+
+```
+claude-auto · Routed to: claude-haiku-4-5  -63% vs Claude Opus 5
+LiteLLM       ████████░░░░░░░░░░░░░░░░  $0.14
+Claude Opus 5 ████████████████████████  $0.38
+```
+
+The routed model comes from Claude Code's own transcript, so it only names the tier model when the auto-router deployment sets `return_raw_model_name: true` (the `lite autoroute` wizard does); otherwise it shows the alias you requested. The cost lines come from `GET /auto_router/session?session_id=...`, which any virtual key may call for its own sessions, and are cached for five seconds under a per-user `$TMPDIR/litellm-statusline-<uid>` directory. The baseline is the priciest model in the router's hardest tier, the same counterfactual the auto-router's savings reports use. `lite unconfigure claude` removes the `statusLine` entry only while it still points at that script.
+
+`lite codex` registers the same script as a Codex `Stop` hook for the launch, so after each turn Codex prints the same block as a system message. Codex asks once to trust the hook; the answer is remembered for later launches.
 
 ### QA Complexity-Based Auto-Routing Against Your Real Proxy
 
@@ -556,7 +635,7 @@ An interactive wizard. It runs the same model-group discovery as above, splits t
 
 The wizard writes the result to `~/.litellm/autorouter/config.yaml` with `0600` permissions, since the file embeds your real proxy API key. Every model referenced anywhere in that config -- tier targets, the classifier model, the embedding model -- becomes its own `litellm_proxy/<model-name>` deployment whose `api_base` and `api_key` point back at your real proxy. That is the trick that keeps your real proxy's config untouched: every actual network call this generates, whether it is the routed completion, an LLM-classifier call, or an embedding call, forwards transparently through your real, already-running proxy with your real key.
 
-You do not need to tell Claude Code to request `autorouter` by name yourself: `lite autoroute up` also sets `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, and `ANTHROPIC_DEFAULT_OPUS_MODEL` to `autorouter` in `~/.claude/settings.json`, so every one of Claude Code's own model tiers requests it directly regardless of `/model` or whatever it defaults to otherwise. (A bare `model_name: "*"` deployment looks like the obvious way to catch any request instead, but litellm's Router looks up auto-router deployments by the literal requested model string with no wildcard resolution, so a `"*"` entry would never actually match real traffic -- these env var overrides are what makes it work.)
+You do not need to tell Claude Code to request `autorouter` by name yourself: `lite autoroute up` also sets the top-level `model` and `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL` and `ANTHROPIC_DEFAULT_FABLE_MODEL` to `autorouter` in `~/.claude/settings.json` (and `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` to `1` when missing, like every other wiring), so every one of Claude Code's own model tiers requests it directly regardless of `/model` or whatever it defaults to otherwise. (A bare `model_name: "*"` deployment looks like the obvious way to catch any request instead, but litellm's Router looks up auto-router deployments by the literal requested model string with no wildcard resolution, so a `"*"` entry would never actually match real traffic -- these env var overrides are what makes it work.)
 
 You must run `configure` at least once before `up`; running `up` first fails with a clear error telling you to configure first.
 

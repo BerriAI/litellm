@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Final
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
@@ -30,9 +30,9 @@ class ChatGPTConfig(OpenAIConfig):
         api_key: str | None,
         custom_llm_provider: str,
     ) -> tuple[str | None, str | None, str]:
-        dynamic_api_base = self.authenticator.get_api_base()
+        dynamic_api_base: Final = self.authenticator.get_api_base()
         try:
-            dynamic_api_key = self.authenticator.get_access_token()
+            dynamic_api_key: Final = self.authenticator.get_access_token()
         except GetAccessTokenError as e:
             raise AuthenticationError(
                 model=model,
@@ -51,13 +51,13 @@ class ChatGPTConfig(OpenAIConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        validated_headers = super().validate_environment(
+        validated_headers: Final = super().validate_environment(
             headers, model, messages, optional_params, litellm_params, api_key, api_base
         )
 
-        account_id = self.authenticator.get_account_id()
-        session_id = ensure_chatgpt_session_id(litellm_params)
-        default_headers = get_chatgpt_default_headers(api_key or "", account_id, session_id)
+        account_id: Final = self.authenticator.get_account_id()
+        session_id: Final = ensure_chatgpt_session_id(litellm_params)
+        default_headers: Final = get_chatgpt_default_headers(api_key or "", account_id, session_id)
         return {**default_headers, **validated_headers}
 
     def post_stream_processing(self, stream: Any) -> Any:

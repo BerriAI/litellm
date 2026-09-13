@@ -47,14 +47,12 @@ from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 from litellm.proxy.policy_engine.policy_validator import PolicyValidator
 
 __all__ = [
-    # Registries
-    "PolicyRegistry",
-    "get_policy_registry",
     "AttachmentRegistry",
-    "get_attachment_registry",
-    # Core components
+    "ConditionEvaluator",
     "PolicyMatcher",
+    "PolicyRegistry",
     "PolicyResolver",
     "PolicyValidator",
-    "ConditionEvaluator",
+    "get_attachment_registry",
+    "get_policy_registry",
 ]

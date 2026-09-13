@@ -2,17 +2,21 @@
 Organization repository for database operations on LiteLLM_OrganizationTable.
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.repositories.base_repository import BaseRepository
+from litellm.repositories.prisma_protocols import TableActions
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
 
 
 class OrganizationRepository(BaseRepository[LiteLLM_OrganizationTable]):
     """Repository for organization database operations."""
 
     @property
-    def table(self) -> Any:
+    def table(self) -> TableActions["prisma_models.LiteLLM_OrganizationTable"]:
         return self.prisma_client.db.litellm_organizationtable
 
     @property
@@ -26,7 +30,7 @@ class OrganizationRepository(BaseRepository[LiteLLM_OrganizationTable]):
 
     async def find_by_alias(self, organization_alias: str) -> LiteLLM_OrganizationTable | None:
         """Find an organization by alias."""
-        organizations = await self.find_many(where={"organization_alias": organization_alias})
+        organizations: Final = await self.find_many(where={"organization_alias": organization_alias})
         return organizations[0] if organizations else None
 
     async def create_organization(
@@ -40,7 +44,7 @@ class OrganizationRepository(BaseRepository[LiteLLM_OrganizationTable]):
         object_permission_id: str | None = None,
     ) -> LiteLLM_OrganizationTable:
         """Create a new organization."""
-        data: dict[str, Any] = {
+        data: Final[dict[str, Any]] = {
             "organization_alias": organization_alias,
             "budget_id": budget_id,
             "created_by": created_by,
@@ -68,7 +72,7 @@ class OrganizationRepository(BaseRepository[LiteLLM_OrganizationTable]):
         object_permission_id: str | None = None,
     ) -> LiteLLM_OrganizationTable | None:
         """Update an organization."""
-        data: dict[str, Any] = {"updated_by": updated_by}
+        data: Final[dict[str, Any]] = {"updated_by": updated_by}
         if organization_alias is not None:
             data["organization_alias"] = organization_alias
         if budget_id is not None:

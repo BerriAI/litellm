@@ -1,103 +1,13 @@
 import React from "react";
-import { Button, TextInput } from "@tremor/react";
-import { MCPTool, InputSchema, InputSchemaProperty } from "@/components/mcp_tools/types";
+import { CircleHelp, X } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { MCPTool, InputSchema } from "@/components/mcp_tools/types";
 import { resolveLogoSrc } from "@/lib/assetPaths";
-import { Form, Select, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import NotificationsManager from "@/components/molecules/notifications_manager";
-
-const isPlainObject = (value: unknown): value is Record<string, any> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-function buildArrayItems(items?: InputSchemaProperty | InputSchemaProperty[]): any[] {
-  if (!items) {
-    return [];
-  }
-
-  if (Array.isArray(items)) {
-    return items.map((item) => buildDefaultValue(item)).filter((value) => value !== undefined);
-  }
-
-  const itemDefault = buildDefaultValue(items);
-  if (itemDefault === undefined) {
-    return [];
-  }
-
-  return [itemDefault];
-}
-
-function buildDefaultValue(prop?: InputSchemaProperty, overrideDefault?: any): any {
-  if (!prop) {
-    return undefined;
-  }
-
-  const effectiveDefault = overrideDefault !== undefined ? overrideDefault : prop.default;
-
-  if (prop.type === "object") {
-    const base = isPlainObject(effectiveDefault) ? { ...effectiveDefault } : {};
-
-    if (prop.properties) {
-      Object.entries(prop.properties).forEach(([childKey, childProp]) => {
-        base[childKey] = buildDefaultValue(childProp, base[childKey]);
-      });
-    }
-
-    return base;
-  }
-
-  if (prop.type === "array") {
-    if (Array.isArray(effectiveDefault)) {
-      const itemSchema = prop.items;
-      if (!itemSchema) {
-        return effectiveDefault;
-      }
-
-      if (effectiveDefault.length === 0) {
-        const sample = buildArrayItems(itemSchema);
-        return sample.length ? sample : effectiveDefault;
-      }
-
-      if (Array.isArray(itemSchema)) {
-        return effectiveDefault.map((value, index) => {
-          const schema = itemSchema[index] ?? itemSchema[itemSchema.length - 1];
-          return buildDefaultValue(schema, value);
-        });
-      }
-
-      return effectiveDefault.map((value) => buildDefaultValue(itemSchema, value));
-    }
-
-    if (effectiveDefault !== undefined) {
-      return effectiveDefault;
-    }
-
-    return buildArrayItems(prop.items);
-  }
-
-  if (effectiveDefault !== undefined) {
-    return effectiveDefault;
-  }
-
-  switch (prop.type) {
-    case "integer":
-    case "number":
-      return 0;
-    case "boolean":
-      return false;
-    case "string":
-    default:
-      return "";
-  }
-}
-
-const getInitialValueForField = (prop: InputSchemaProperty): any => {
-  const defaultValue = buildDefaultValue(prop);
-  if (prop.type === "object" || prop.type === "array") {
-    const fallback = prop.type === "array" ? [] : {};
-    return JSON.stringify(defaultValue ?? fallback, null, 2);
-  }
-  return defaultValue;
-};
+import { toast } from "@/lib/toast";
+import { ToolArgumentsForm } from "./ToolArgumentsForm";
+import { ToolArgumentField, argumentsFormKey, hasNestedParamsSchema, toolArgumentFields } from "./toolCallArguments";
 
 export function ToolTestPanel({
   tool,
@@ -114,7 +24,6 @@ export function ToolTestPanel({
   error: Error | null;
   onClose: () => void;
 }) {
-  const [form] = Form.useForm();
   const [viewMode, setViewMode] = React.useState<"formatted" | "json">("formatted");
   const [startTime, setStartTime] = React.useState<number | null>(null);
   const [duration, setDuration] = React.useState<number | null>(null);
@@ -155,87 +64,17 @@ export function ToolTestPanel({
     return schema;
   }, [schema]);
 
-  React.useEffect(() => {
-    form.resetFields();
+  const argumentFields: readonly ToolArgumentField[] = React.useMemo(
+    () => toolArgumentFields(actualSchema),
+    [actualSchema],
+  );
+  const wrapInParams = React.useMemo(() => hasNestedParamsSchema(schema), [schema]);
+  const formKey = React.useMemo(() => `${tool.name}:${argumentsFormKey(actualSchema)}`, [tool.name, actualSchema]);
 
-    if (!actualSchema.properties) {
-      return;
-    }
-
-    const initialValues: Record<string, any> = {};
-    Object.entries(actualSchema.properties).forEach(([key, prop]) => {
-      initialValues[key] = getInitialValueForField(prop);
-    });
-
-    form.setFieldsValue(initialValues);
-  }, [form, actualSchema, tool]);
-
-  const handleSubmit = (values: Record<string, any>) => {
-    const start = Date.now();
-    setStartTime(start);
+  const runToolCall = (args: Record<string, unknown>) => {
+    setStartTime(Date.now());
     setDuration(null);
-
-    // Convert form values to proper types based on schema
-    const convertedValues: Record<string, any> = {};
-    const schemaToUse = actualSchema;
-
-    Object.entries(values).forEach(([key, value]) => {
-      const prop = schemaToUse.properties?.[key];
-      // Strip leading/trailing whitespace from string inputs before submitting
-      const normalizedValue = typeof value === "string" ? value.trim() : value;
-      if (prop && normalizedValue !== null && normalizedValue !== undefined && normalizedValue !== "") {
-        switch (prop.type) {
-          case "boolean":
-            convertedValues[key] = normalizedValue === "true" || normalizedValue === true;
-            break;
-          case "number":
-          case "integer": {
-            const numericValue = Number(normalizedValue);
-            convertedValues[key] = Number.isNaN(numericValue)
-              ? normalizedValue
-              : prop.type === "integer"
-                ? Math.trunc(numericValue)
-                : numericValue;
-            break;
-          }
-          case "object":
-          case "array": {
-            try {
-              const parsed = typeof normalizedValue === "string" ? JSON.parse(normalizedValue) : normalizedValue;
-              const isValidObject =
-                prop.type === "object" && parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
-              const isValidArray = prop.type === "array" && Array.isArray(parsed);
-              if ((prop.type === "object" && isValidObject) || (prop.type === "array" && isValidArray)) {
-                convertedValues[key] = parsed;
-              } else {
-                convertedValues[key] = normalizedValue;
-              }
-            } catch (err) {
-              convertedValues[key] = normalizedValue;
-            }
-            break;
-          }
-          case "string":
-            convertedValues[key] = String(normalizedValue);
-            break;
-          default:
-            convertedValues[key] = normalizedValue;
-        }
-      } else if (normalizedValue !== null && normalizedValue !== undefined && normalizedValue !== "") {
-        convertedValues[key] = normalizedValue;
-      }
-    });
-
-    // If this was a nested params structure, wrap the values back in params
-    const submitValues =
-      schema.properties &&
-      schema.properties.params &&
-      schema.properties.params.type === "object" &&
-      schema.properties.params.properties
-        ? { params: convertedValues }
-        : convertedValues;
-
-    onSubmit(submitValues);
+    onSubmit(wrapInParams ? { params: args } : args);
   };
 
   // Track when result changes to calculate duration
@@ -279,25 +118,25 @@ export function ToolTestPanel({
   const handleCopyResult = async () => {
     const success = await copyToClipboard(JSON.stringify(result, null, 2));
     if (success) {
-      NotificationsManager.success("Result copied to clipboard");
+      toast.success("Result copied to clipboard");
     } else {
-      NotificationsManager.fromBackend("Failed to copy result");
+      toast.fromError("Failed to copy result");
     }
   };
 
   const handleCopyToolName = async () => {
     const success = await copyToClipboard(tool.name);
     if (success) {
-      NotificationsManager.success("Tool name copied to clipboard");
+      toast.success("Tool name copied to clipboard");
     } else {
-      NotificationsManager.fromBackend("Failed to copy tool name");
+      toast.fromError("Failed to copy tool name");
     }
   };
 
   return (
     <div className="space-y-4 h-full">
       {/* Compact Header */}
-      <div className="flex items-center justify-between pb-3 border-b border-gray-200">
+      <div className="flex items-center justify-between pb-3 border-b border-border">
         <div className="flex items-center space-x-3">
           {tool.mcp_info.logo_url && (
             // eslint-disable-next-line @next/next/no-img-element
@@ -309,15 +148,15 @@ export function ToolTestPanel({
           )}
           <div className="flex-1 min-w-0">
             <div className="flex items-center space-x-2 mb-1">
-              <h2 className="text-lg font-semibold text-gray-900">Test Tool:</h2>
+              <h2 className="text-lg font-semibold text-foreground">Test Tool:</h2>
               <div
-                className="group inline-flex items-center space-x-1 bg-slate-50 hover:bg-slate-100 px-3 py-1 rounded-md cursor-pointer transition-colors border border-slate-200"
+                className="group inline-flex items-center space-x-1 bg-muted hover:bg-accent px-3 py-1 rounded-md cursor-pointer transition-colors border border-border"
                 onClick={handleCopyToolName}
                 title="Click to copy tool name"
               >
-                <span className="font-mono text-slate-700 font-medium text-sm">{tool.name}</span>
+                <span className="font-mono text-foreground font-medium text-sm">{tool.name}</span>
                 <svg
-                  className="w-3 h-3 text-slate-400 group-hover:text-slate-600 transition-colors"
+                  className="w-3 h-3 text-muted-foreground group-hover:text-foreground transition-colors"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -331,225 +170,65 @@ export function ToolTestPanel({
                 </svg>
               </div>
             </div>
-            <p className="text-xs text-gray-600">{tool.description}</p>
-            <p className="text-xs text-gray-500">Provider: {tool.mcp_info.server_name}</p>
+            <p className="text-xs text-muted-foreground">{tool.description}</p>
+            <p className="text-xs text-muted-foreground">Provider: {tool.mcp_info.server_name}</p>
           </div>
         </div>
-        <Button onClick={onClose} variant="light" size="sm" className="text-gray-500 hover:text-gray-700">
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-          </svg>
+        <Button
+          onClick={onClose}
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Close"
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <X className="size-4" />
         </Button>
       </div>
 
       {/* Two Column Layout - Always Side by Side */}
       <div className="grid grid-cols-2 gap-4 h-full">
         {/* Left Column - Input Parameters */}
-        <div className="bg-white border border-gray-200 rounded-lg">
-          <div className="border-b border-gray-100 px-4 py-2">
+        <div className="bg-card border border-border rounded-lg">
+          <div className="border-b border-border px-4 py-2">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-gray-900">Input Parameters</h3>
-              <Tooltip title="Configure the input parameters for this tool call">
-                <InfoCircleOutlined className="text-gray-400 hover:text-gray-600" />
-              </Tooltip>
+              <h3 className="text-sm font-semibold text-foreground">Input Parameters</h3>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={<CircleHelp className="size-4 cursor-help text-muted-foreground hover:text-foreground" />}
+                  />
+                  <TooltipContent>Configure the input parameters for this tool call</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
           </div>
 
           <div className="p-4">
-            <Form form={form} onFinish={handleSubmit} layout="vertical" className="space-y-3">
-              {typeof tool.inputSchema === "string" ? (
-                <div className="space-y-3">
-                  <Form.Item
-                    label={
-                      <span className="text-sm font-medium text-gray-700">
-                        Input <span className="text-red-500">*</span>
-                      </span>
-                    }
-                    name="input"
-                    rules={[{ required: true, message: "Please enter input for this tool" }]}
-                    className="mb-3"
-                  >
-                    <TextInput
-                      placeholder="Enter input for this tool"
-                      className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                    />
-                  </Form.Item>
-                </div>
-              ) : actualSchema.properties === undefined ? (
-                <div className="text-center py-6 bg-gray-50 rounded-lg border border-gray-200">
-                  <div className="max-w-sm mx-auto">
-                    <h4 className="text-sm font-medium text-gray-900 mb-1">No Parameters Required</h4>
-                    <p className="text-xs text-gray-500">This tool can be called without any input parameters.</p>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {Object.entries(actualSchema.properties).map(([key, prop]) => {
-                    const initialValue = getInitialValueForField(prop);
-                    const fieldKey = `${tool.name}-${key}`;
-                    return (
-                      <Form.Item
-                        key={fieldKey}
-                        label={
-                          <span className="text-sm font-medium text-gray-700 flex items-center">
-                            {key} {actualSchema.required?.includes(key) && <span className="text-red-500">*</span>}
-                            {prop.description && (
-                              <Tooltip title={prop.description}>
-                                <InfoCircleOutlined className="ml-2 text-gray-400 hover:text-gray-600" />
-                              </Tooltip>
-                            )}
-                          </span>
-                        }
-                        name={key}
-                        initialValue={initialValue}
-                        rules={[
-                          {
-                            required: actualSchema.required?.includes(key),
-                            message: `Please enter ${key}`,
-                          },
-                          ...(prop.type === "object" || prop.type === "array"
-                            ? [
-                                {
-                                  validator: (_rule: any, value: any) => {
-                                    if (
-                                      (value === undefined || value === null || value === "") &&
-                                      !actualSchema.required?.includes(key)
-                                    ) {
-                                      return Promise.resolve();
-                                    }
-
-                                    try {
-                                      const parsed = typeof value === "string" ? JSON.parse(value) : value;
-                                      const isValidObject =
-                                        prop.type === "object" &&
-                                        parsed !== null &&
-                                        typeof parsed === "object" &&
-                                        !Array.isArray(parsed);
-                                      const isValidArray = prop.type === "array" && Array.isArray(parsed);
-
-                                      if (
-                                        (prop.type === "object" && isValidObject) ||
-                                        (prop.type === "array" && isValidArray)
-                                      ) {
-                                        return Promise.resolve();
-                                      }
-
-                                      return Promise.reject(
-                                        new Error(
-                                          prop.type === "object"
-                                            ? "Please enter a JSON object"
-                                            : "Please enter a JSON array",
-                                        ),
-                                      );
-                                    } catch (error) {
-                                      return Promise.reject(new Error("Invalid JSON"));
-                                    }
-                                  },
-                                },
-                              ]
-                            : []),
-                        ]}
-                        className="mb-3"
-                      >
-                        {prop.type === "string" && prop.enum && (
-                          <select
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-xs focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm transition-colors"
-                            defaultValue={(initialValue as string) ?? ""}
-                          >
-                            {!actualSchema.required?.includes(key) && <option value="">Select {key}</option>}
-                            {prop.enum.map((value) => (
-                              <option key={value} value={value}>
-                                {value}
-                              </option>
-                            ))}
-                          </select>
-                        )}
-
-                        {prop.type === "string" && !prop.enum && (
-                          <TextInput
-                            placeholder={prop.description || `Enter ${key}`}
-                            defaultValue={(initialValue as string) ?? ""}
-                            className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                          />
-                        )}
-
-                        {(prop.type === "number" || prop.type === "integer") && (
-                          <input
-                            type="number"
-                            step={prop.type === "integer" ? 1 : "any"}
-                            placeholder={prop.description || `Enter ${key}`}
-                            defaultValue={initialValue ?? 0}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-xs focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm transition-colors"
-                          />
-                        )}
-
-                        {prop.type === "boolean" && (
-                          <Select
-                            placeholder={`Select ${key}`}
-                            allowClear={!actualSchema.required?.includes(key)}
-                            className="w-full"
-                          >
-                            <Select.Option value={true}>True</Select.Option>
-                            <Select.Option value={false}>False</Select.Option>
-                          </Select>
-                        )}
-
-                        {(prop.type === "object" || prop.type === "array") && (
-                          <div className="space-y-2">
-                            <textarea
-                              rows={prop.type === "object" ? 6 : 4}
-                              placeholder={
-                                prop.description ||
-                                (prop.type === "object"
-                                  ? `Enter JSON object for ${key}`
-                                  : `Enter JSON array for ${key}`)
-                              }
-                              defaultValue={(initialValue as string) ?? (prop.type === "object" ? "{}" : "[]")}
-                              spellCheck={false}
-                              data-testid={`textarea-${key}`}
-                              className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-xs focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm font-mono"
-                            />
-                            <p className="text-xs text-gray-500">
-                              {prop.type === "object" ? "Provide a valid JSON object." : "Provide a valid JSON array."}
-                            </p>
-                          </div>
-                        )}
-                      </Form.Item>
-                    );
-                  })}
-                </div>
-              )}
-
-              <div className="pt-3 border-t border-gray-100">
-                <Button
-                  type="button"
-                  onClick={() => form.submit()}
-                  disabled={isLoading}
-                  variant="primary"
-                  className="w-full"
-                  loading={isLoading}
-                >
-                  {isLoading ? "Calling Tool..." : result || error ? "Call Again" : "Call Tool"}
-                </Button>
-              </div>
-            </Form>
+            <ToolArgumentsForm
+              key={formKey}
+              fields={argumentFields}
+              singleInputFallback={typeof tool.inputSchema === "string"}
+              isLoading={isLoading}
+              hasRun={Boolean(result || error)}
+              onRun={runToolCall}
+            />
           </div>
         </div>
 
         {/* Right Column - Tool Result */}
-        <div className="bg-white border border-gray-200 rounded-lg">
-          <div className="border-b border-gray-100 px-4 py-2">
-            <h3 className="text-sm font-semibold text-gray-900">Tool Result</h3>
+        <div className="bg-card border border-border rounded-lg">
+          <div className="border-b border-border px-4 py-2">
+            <h3 className="text-sm font-semibold text-foreground">Tool Result</h3>
           </div>
 
           <div className="p-4">
             {!result && !error && !isLoading ? (
               /* Empty State */
-              <div className="flex flex-col justify-center items-center h-48 text-gray-500">
+              <div className="flex flex-col justify-center items-center h-48 text-muted-foreground">
                 <div className="text-center max-w-sm">
                   <div className="mb-3">
                     <svg
-                      className="mx-auto h-12 w-12 text-gray-300"
+                      className="mx-auto h-12 w-12 text-muted-foreground"
                       fill="none"
                       viewBox="0 0 24 24"
                       stroke="currentColor"
@@ -562,8 +241,8 @@ export function ToolTestPanel({
                       />
                     </svg>
                   </div>
-                  <h4 className="text-sm font-medium text-gray-900 mb-1">Ready to Call Tool</h4>
-                  <p className="text-xs text-gray-500 leading-relaxed">
+                  <h4 className="text-sm font-medium text-foreground mb-1">Ready to Call Tool</h4>
+                  <p className="text-xs text-muted-foreground leading-relaxed">
                     Configure the input parameters and click &quot;Call Tool&quot; to see the results here.
                   </p>
                 </div>
@@ -572,10 +251,10 @@ export function ToolTestPanel({
               <div className="space-y-3">
                 {/* Result Control Bar */}
                 {result && !isLoading && !error && (
-                  <div className="p-2 bg-green-50 border border-green-200 rounded-lg">
+                  <div className="p-2 bg-success/10 border border-success/20 rounded-lg">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center space-x-2">
-                        <svg className="h-4 w-4 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <svg className="h-4 w-4 text-success" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path
                             strokeLinecap="round"
                             strokeLinejoin="round"
@@ -583,20 +262,20 @@ export function ToolTestPanel({
                             d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
                           />
                         </svg>
-                        <h4 className="text-xs font-medium text-green-900">Tool executed successfully</h4>
+                        <h4 className="text-xs font-medium text-success">Tool executed successfully</h4>
                         {duration !== null && (
-                          <span className="text-xs text-green-600 ml-1">• {(duration / 1000).toFixed(2)}s</span>
+                          <span className="text-xs text-success ml-1">• {(duration / 1000).toFixed(2)}s</span>
                         )}
                       </div>
 
                       <div className="flex items-center space-x-1">
-                        <div className="flex bg-white rounded-sm border border-green-300 p-0.5">
+                        <div className="flex bg-card rounded-sm border border-success/30 p-0.5">
                           <button
                             onClick={() => setViewMode("formatted")}
                             className={`px-2 py-1 text-xs font-medium rounded transition-colors ${
                               viewMode === "formatted"
-                                ? "bg-green-100 text-green-800"
-                                : "text-green-600 hover:text-green-800"
+                                ? "bg-success/15 text-success"
+                                : "text-success hover:text-success/80"
                             }`}
                           >
                             Formatted
@@ -604,9 +283,7 @@ export function ToolTestPanel({
                           <button
                             onClick={() => setViewMode("json")}
                             className={`px-2 py-1 text-xs font-medium rounded transition-colors ${
-                              viewMode === "json"
-                                ? "bg-green-100 text-green-800"
-                                : "text-green-600 hover:text-green-800"
+                              viewMode === "json" ? "bg-success/15 text-success" : "text-success hover:text-success/80"
                             }`}
                           >
                             JSON
@@ -615,7 +292,7 @@ export function ToolTestPanel({
 
                         <button
                           onClick={handleCopyResult}
-                          className="p-1 hover:bg-green-100 rounded-sm text-green-700"
+                          className="p-1 hover:bg-success/15 rounded-sm text-success"
                           title="Copy response"
                         >
                           <svg
@@ -640,21 +317,26 @@ export function ToolTestPanel({
 
                 <div className="max-h-96 overflow-y-auto">
                   {isLoading && (
-                    <div className="flex flex-col justify-center items-center h-48 text-gray-500">
+                    <div className="flex flex-col justify-center items-center h-48 text-muted-foreground">
                       <div className="relative">
-                        <div className="animate-spin rounded-full h-8 w-8 border-2 border-gray-200"></div>
-                        <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-600 border-t-transparent absolute top-0"></div>
+                        <div className="animate-spin rounded-full h-8 w-8 border-2 border-border"></div>
+                        <div className="animate-spin rounded-full h-8 w-8 border-2 border-info border-t-transparent absolute top-0"></div>
                       </div>
                       <p className="text-sm font-medium mt-3">Calling tool...</p>
-                      <p className="text-xs text-gray-400 mt-1">Please wait while we process your request</p>
+                      <p className="text-xs text-muted-foreground mt-1">Please wait while we process your request</p>
                     </div>
                   )}
 
                   {error && (
-                    <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                    <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-3">
                       <div className="flex items-start space-x-2">
                         <div className="shrink-0">
-                          <svg className="h-4 w-4 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <svg
+                            className="h-4 w-4 text-destructive"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                          >
                             <path
                               strokeLinecap="round"
                               strokeLinejoin="round"
@@ -665,13 +347,13 @@ export function ToolTestPanel({
                         </div>
                         <div className="flex-1">
                           <div className="flex items-center space-x-2 mb-1">
-                            <h4 className="text-xs font-medium text-red-900">Tool Call Failed</h4>
+                            <h4 className="text-xs font-medium text-destructive">Tool Call Failed</h4>
                             {duration !== null && (
-                              <span className="text-xs text-red-600">• {(duration / 1000).toFixed(2)}s</span>
+                              <span className="text-xs text-destructive">• {(duration / 1000).toFixed(2)}s</span>
                             )}
                           </div>
-                          <div className="bg-white border border-red-200 rounded-sm p-2 max-h-48 overflow-y-auto">
-                            <pre className="text-xs whitespace-pre-wrap text-red-700 font-mono">
+                          <div className="bg-card border border-destructive/20 rounded-sm p-2 max-h-48 overflow-y-auto">
+                            <pre className="text-xs whitespace-pre-wrap text-destructive font-mono">
                               {(() => {
                                 return error.message;
                               })()}
@@ -687,16 +369,16 @@ export function ToolTestPanel({
                       {viewMode === "formatted" ? (
                         // Formatted View
                         result.map((content: any, idx: number) => (
-                          <div key={idx} className="border border-gray-200 rounded-lg overflow-hidden">
+                          <div key={idx} className="border border-border rounded-lg overflow-hidden">
                             {content.type === "text" && (
                               <div>
-                                <div className="bg-gray-50 px-3 py-1 border-b border-gray-200">
-                                  <span className="text-xs font-medium text-gray-700 uppercase tracking-wide">
+                                <div className="bg-muted px-3 py-1 border-b border-border">
+                                  <span className="text-xs font-medium text-foreground uppercase tracking-wide">
                                     Text Response
                                   </span>
                                 </div>
                                 <div className="p-3">
-                                  <div className="bg-white rounded-sm border border-gray-200 max-h-64 overflow-y-auto">
+                                  <div className="bg-card rounded-sm border border-border max-h-64 overflow-y-auto">
                                     <div className="p-3 space-y-2">
                                       {content.text
                                         .split("\n\n")
@@ -707,8 +389,8 @@ export function ToolTestPanel({
                                           if (section.startsWith("##")) {
                                             const headerText = section.replace(/^#+\s/, "");
                                             return (
-                                              <div key={sectionIndex} className="border-b border-gray-200 pb-1 mb-2">
-                                                <h3 className="text-sm font-semibold text-gray-900">{headerText}</h3>
+                                              <div key={sectionIndex} className="border-b border-border pb-1 mb-2">
+                                                <h3 className="text-sm font-semibold text-foreground">{headerText}</h3>
                                               </div>
                                             );
                                           }
@@ -720,9 +402,9 @@ export function ToolTestPanel({
                                             return (
                                               <div
                                                 key={sectionIndex}
-                                                className="bg-blue-50 border border-blue-200 rounded-sm p-2"
+                                                className="bg-info/10 border border-info/20 rounded-sm p-2"
                                               >
-                                                <div className="text-xs text-gray-700 leading-relaxed whitespace-pre-wrap">
+                                                <div className="text-xs text-foreground leading-relaxed whitespace-pre-wrap">
                                                   {parts.map((part, partIndex) => {
                                                     if (urlRegex.test(part)) {
                                                       return (
@@ -731,7 +413,7 @@ export function ToolTestPanel({
                                                           href={part}
                                                           target="_blank"
                                                           rel="noopener noreferrer"
-                                                          className="text-blue-600 hover:text-blue-800 underline break-all"
+                                                          className="text-info hover:text-info/80 underline break-all"
                                                         >
                                                           {part}
                                                         </a>
@@ -749,9 +431,9 @@ export function ToolTestPanel({
                                             return (
                                               <div
                                                 key={sectionIndex}
-                                                className="bg-green-50 border-l-4 border-green-400 p-2 rounded-r"
+                                                className="bg-success/10 border-l-4 border-success p-2 rounded-r"
                                               >
-                                                <p className="text-xs text-green-800 font-medium whitespace-pre-wrap">
+                                                <p className="text-xs text-success font-medium whitespace-pre-wrap">
                                                   {section}
                                                 </p>
                                               </div>
@@ -762,9 +444,9 @@ export function ToolTestPanel({
                                           return (
                                             <div
                                               key={sectionIndex}
-                                              className="bg-gray-50 rounded-sm p-2 border border-gray-200"
+                                              className="bg-muted rounded-sm p-2 border border-border"
                                             >
-                                              <div className="text-xs text-gray-700 leading-relaxed whitespace-pre-wrap font-mono">
+                                              <div className="text-xs text-foreground leading-relaxed whitespace-pre-wrap font-mono">
                                                 {section}
                                               </div>
                                             </div>
@@ -779,13 +461,13 @@ export function ToolTestPanel({
 
                             {content.type === "image" && content.url && (
                               <div>
-                                <div className="bg-gray-50 px-3 py-1 border-b border-gray-200">
-                                  <span className="text-xs font-medium text-gray-700 uppercase tracking-wide">
+                                <div className="bg-muted px-3 py-1 border-b border-border">
+                                  <span className="text-xs font-medium text-foreground uppercase tracking-wide">
                                     Image Response
                                   </span>
                                 </div>
                                 <div className="p-3">
-                                  <div className="bg-gray-50 rounded-sm p-3 border border-gray-200">
+                                  <div className="bg-muted rounded-sm p-3 border border-border">
                                     {/* eslint-disable-next-line @next/next/no-img-element */}
                                     <img
                                       src={content.url}
@@ -799,16 +481,16 @@ export function ToolTestPanel({
 
                             {content.type === "embedded_resource" && (
                               <div>
-                                <div className="bg-gray-50 px-3 py-1 border-b border-gray-200">
-                                  <span className="text-xs font-medium text-gray-700 uppercase tracking-wide">
+                                <div className="bg-muted px-3 py-1 border-b border-border">
+                                  <span className="text-xs font-medium text-foreground uppercase tracking-wide">
                                     Embedded Resource
                                   </span>
                                 </div>
                                 <div className="p-3">
-                                  <div className="flex items-center space-x-2 p-3 bg-blue-50 border border-blue-200 rounded-sm">
+                                  <div className="flex items-center space-x-2 p-3 bg-info/10 border border-info/20 rounded-sm">
                                     <div className="shrink-0">
                                       <svg
-                                        className="h-5 w-5 text-blue-500"
+                                        className="h-5 w-5 text-info"
                                         fill="none"
                                         viewBox="0 0 24 24"
                                         stroke="currentColor"
@@ -822,7 +504,7 @@ export function ToolTestPanel({
                                       </svg>
                                     </div>
                                     <div className="flex-1">
-                                      <p className="text-xs font-medium text-blue-900">
+                                      <p className="text-xs font-medium text-info">
                                         Resource Type: {content.resource_type}
                                       </p>
                                       {content.url && (
@@ -830,7 +512,7 @@ export function ToolTestPanel({
                                           href={content.url}
                                           target="_blank"
                                           rel="noopener noreferrer"
-                                          className="inline-flex items-center text-xs text-blue-600 hover:text-blue-800 hover:underline mt-1 transition-colors"
+                                          className="inline-flex items-center text-xs text-info hover:underline mt-1"
                                         >
                                           View Resource
                                           <svg className="ml-1 h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
@@ -848,9 +530,9 @@ export function ToolTestPanel({
                         ))
                       ) : (
                         // JSON View
-                        <div className="bg-white rounded-sm border border-gray-200">
-                          <div className="p-3 overflow-auto max-h-80 bg-gray-50">
-                            <pre className="text-xs font-mono whitespace-pre-wrap break-all text-gray-800">
+                        <div className="bg-card rounded-sm border border-border">
+                          <div className="p-3 overflow-auto max-h-80 bg-muted">
+                            <pre className="text-xs font-mono whitespace-pre-wrap break-all text-foreground">
                               {JSON.stringify(result, null, 2)}
                             </pre>
                           </div>

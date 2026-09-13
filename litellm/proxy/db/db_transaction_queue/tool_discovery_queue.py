@@ -7,6 +7,8 @@ cycle (~30s). The seen-set is cleared on every flush so that call_count
 increments in subsequent cycles rather than stopping after the first flush.
 """
 
+from typing import Final
+
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ToolDiscoveryQueueItem
 
@@ -28,7 +30,7 @@ class ToolDiscoveryQueue:
 
     def add_update(self, item: ToolDiscoveryQueueItem) -> None:
         """Enqueue a tool discovery item if tool_name has not been seen before."""
-        tool_name = item.get("tool_name", "")
+        tool_name: Final = item.get("tool_name", "")
         if not tool_name:
             return
         if tool_name in self._seen_tool_names:

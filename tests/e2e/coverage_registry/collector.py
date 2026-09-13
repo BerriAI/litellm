@@ -105,6 +105,8 @@ def collect_markers(e2e_dir: Path = E2E_DIR) -> CollectedMarkers:
                 "--continue-on-collection-errors",
                 "-p",
                 "no:cacheprovider",
+                "-p",
+                "no:pytest-retry",
                 str(e2e_dir),
             ],
             plugins=[sink],

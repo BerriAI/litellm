@@ -1,11 +1,8 @@
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 # Adds the parent directory to the system path
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
 from litellm.llms.gdc.chat.transformation import GDCGeminiConfig
@@ -303,6 +300,25 @@ class TestGDCGeminiConfig:
             with pytest.raises(
                 Exception, match="Failed to load service account credentials"
             ):
+                config.validate_environment(
+                    headers={},
+                    model=TEST_MODEL,
+                    messages=[],
+                    optional_params={},
+                    litellm_params={"vertex_project": TEST_PROJECT},
+                    api_key=TEST_API_KEY,
+                    api_base=TEST_API_BASE,
+                )
+
+    def test_validate_environment_credentials_missing_audience_binding_are_named(self):
+        config = GDCGeminiConfig()
+        creds_without_audience_binding = MagicMock(spec=[])
+
+        with patch(
+            "google.auth.load_credentials_from_dict",
+            return_value=(creds_without_audience_binding, None),
+        ):
+            with pytest.raises(AttributeError, match="must expose with_gdch_audience"):
                 config.validate_environment(
                     headers={},
                     model=TEST_MODEL,

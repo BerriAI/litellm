@@ -104,3 +104,30 @@ tests:
             periodSeconds: 15
             timeoutSeconds: 4
             failureThreshold: 3
+
+  - it: no startupProbe by default, so existing installs are unchanged
+    templates:
+      - gateway/deployment.yaml
+      - backend/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].startupProbe
+
+  - it: startupProbe renders verbatim when configured, gating a slow cold start
+    template: gateway/deployment.yaml
+    set:
+      gateway.startupProbe:
+        httpGet: { path: /health/readiness, port: http }
+        failureThreshold: 30
+        periodSeconds: 10
+        timeoutSeconds: 5
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe
+          value:
+            httpGet:
+              path: /health/readiness
+              port: http
+            failureThreshold: 30
+            periodSeconds: 10
+            timeoutSeconds: 5

@@ -8,7 +8,7 @@ or cloud). The search response uses the Firecrawl-compatible envelope
 fastCRW API Reference: https://fastcrw.com/docs/rest-api
 """
 
-from typing import TypedDict
+from typing import Final, TypedDict
 
 import httpx
 
@@ -112,7 +112,7 @@ class FastCRWSearchConfig(BaseSearchConfig):
             # fastCRW only supports single string queries, join with spaces
             query = " ".join(query)
 
-        request_data: FastCRWSearchRequest = {
+        request_data: Final[FastCRWSearchRequest] = {
             "query": query,
         }
 
@@ -121,7 +121,7 @@ class FastCRWSearchConfig(BaseSearchConfig):
             request_data["limit"] = optional_params["max_results"]
 
         # Convert to dict before dynamic key assignments
-        result_data = dict(request_data)
+        result_data: Final = dict(request_data)
 
         # pass through all other parameters as-is
         for param, value in optional_params.items():
@@ -157,11 +157,11 @@ class FastCRWSearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
-        results = []
+        results: Final = []
 
-        data = response_json.get("data", [])
+        data: Final = response_json.get("data", [])
 
         if isinstance(data, list):
             for result in data:

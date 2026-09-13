@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React, { ReactNode } from "react";
-import { useInfiniteUsers } from "./useUsers";
+import { useInfiniteUsers, useUserLookup } from "./useUsers";
 import { userListCall } from "@/components/networking";
 import type { UserListResponse } from "@/components/networking";
 
@@ -283,5 +283,55 @@ describe("useInfiniteUsers", () => {
     });
 
     expect(userListCall).toHaveBeenCalledWith("test-access-token", null, 1, 50, null);
+  });
+});
+
+describe("useUserLookup", () => {
+  let queryClient: QueryClient;
+
+  beforeEach(() => {
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    vi.clearAllMocks();
+    mockUseAuthorized.mockReturnValue(DEFAULT_AUTH);
+  });
+
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+  it("fetches exactly the requested user by id", async () => {
+    vi.mocked(userListCall).mockResolvedValue(buildUserListResponse(1, 1, 1));
+
+    const { result } = renderHook(() => useUserLookup("user-1-0"), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(userListCall).toHaveBeenCalledWith("test-access-token", ["user-1-0"], 1, 1);
+    expect(result.current.data?.user_id).toBe("user-1-0");
+  });
+
+  it("resolves to null when the proxy returns a different user than requested", async () => {
+    vi.mocked(userListCall).mockResolvedValue(buildUserListResponse(1, 1, 1));
+
+    const { result } = renderHook(() => useUserLookup("someone-else"), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toBeNull();
+  });
+
+  it("does not query without a user id", async () => {
+    const { result } = renderHook(() => useUserLookup(null), { wrapper });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(userListCall).not.toHaveBeenCalled();
+  });
+
+  it("does not query for a non-admin role", async () => {
+    mockUseAuthorized.mockReturnValue({ ...DEFAULT_AUTH, userRole: "Internal User" });
+
+    const { result } = renderHook(() => useUserLookup("user-1-0"), { wrapper });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(userListCall).not.toHaveBeenCalled();
   });
 });

@@ -10,7 +10,8 @@ Convers
 Docs - https://docs.cohere.com/v2/reference/embed
 """
 
-from typing import Any, cast
+from collections.abc import Sized
+from typing import Final, Protocol, cast
 
 import httpx
 
@@ -28,6 +29,12 @@ from litellm.types.utils import EmbeddingResponse, PromptTokensDetailsWrapper, U
 from litellm.utils import is_base64_encoded
 
 from ..common_utils import CohereError
+
+
+class _SupportsEncode(Protocol):
+    """Tokenizer handle: the embedding usage path only encodes text to measure its token length."""
+
+    def encode(self, text: str, /) -> Sized: ...
 
 
 class CohereEmbeddingConfig(BaseEmbeddingConfig):
@@ -68,7 +75,7 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        default_headers = {
+        default_headers: Final = {
             "Content-Type": "application/json",
         }
         if api_key:
@@ -111,7 +118,7 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
             )
 
         for k, v in inference_params.items():
-            transformed_request[k] = v  # type: ignore
+            transformed_request[k] = v
 
         return transformed_request
 
@@ -133,12 +140,12 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
             ),
         )
 
-    def _calculate_usage(self, input: list[str], encoding: Any, meta: dict) -> Usage:
+    def _calculate_usage(self, input: list[str], encoding: _SupportsEncode, meta: dict) -> Usage:
         input_tokens = 0
 
-        text_tokens: int | None = meta.get("billed_units", {}).get("input_tokens")
+        text_tokens: Final[int | None] = meta.get("billed_units", {}).get("input_tokens")
 
-        image_tokens: int | None = meta.get("billed_units", {}).get("images")
+        image_tokens: Final[int | None] = meta.get("billed_units", {}).get("images")
 
         prompt_tokens_details: PromptTokensDetailsWrapper | None = None
         if image_tokens is None and text_tokens is None:
@@ -169,10 +176,10 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         data: dict | CohereEmbeddingRequest,
         model_response: EmbeddingResponse,
         model: str,
-        encoding: Any,
+        encoding: _SupportsEncode,
         input: list,
     ) -> EmbeddingResponse:
-        response_json = response.json()
+        response_json: Final = response.json()
         ## LOGGING
         logging_obj.post_call(
             input=input,
@@ -191,8 +198,8 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
                 'usage'
             }
         """
-        embeddings = response_json["embeddings"]
-        output_data = []
+        embeddings: Final = response_json["embeddings"]
+        output_data: Final = []
         for k, embedding_list in embeddings.items():
             for idx, embedding in enumerate(embedding_list):
                 output_data.append({"object": "embedding", "index": idx, "embedding": embedding})

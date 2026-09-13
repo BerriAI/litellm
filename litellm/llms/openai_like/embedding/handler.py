@@ -3,6 +3,7 @@
 ## Allows jina ai embedding calls - which don't allow 'encoding_format' in payload.
 
 import json
+from typing import Final
 
 import httpx
 
@@ -47,11 +48,11 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
                     api_base,
                     headers=headers,
                     data=json.dumps(data),
-                )  # type: ignore
+                )
 
                 response.raise_for_status()
 
-                response_json = response.json()
+                response_json: Final = response.json()
             except httpx.HTTPStatusError as e:
                 raise OpenAILikeError(
                     status_code=e.response.status_code,
@@ -102,8 +103,8 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
             custom_endpoint=custom_endpoint,
         )
         model = model
-        filtered_optional_params = {k: v for k, v in optional_params.items() if v not in (None, "")}
-        data = {"model": model, "input": input, **filtered_optional_params}
+        filtered_optional_params: Final = {k: v for k, v in optional_params.items() if v not in (None, "")}
+        data: Final = {"model": model, "input": input, **filtered_optional_params}
 
         ## LOGGING
         logging_obj.pre_call(
@@ -123,23 +124,23 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
                 timeout=timeout,
                 client=client,
                 headers=headers,
-            )  # type: ignore
+            )
         if client is None or isinstance(client, AsyncHTTPHandler):
-            self.client = HTTPHandler(timeout=timeout)  # type: ignore
+            self.client = HTTPHandler(timeout=timeout)
         else:
             self.client = client
 
         ## EMBEDDING CALL
         try:
-            response = self.client.post(
+            response: Final = self.client.post(
                 api_base,
                 headers=headers,
                 data=json.dumps(data),
-            )  # type: ignore
+            )
 
-            response.raise_for_status()  # type: ignore
+            response.raise_for_status()
 
-            response_json = response.json()  # type: ignore
+            response_json: Final = response.json()
         except httpx.HTTPStatusError as e:
             raise OpenAILikeError(
                 status_code=e.response.status_code,

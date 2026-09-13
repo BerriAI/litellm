@@ -1,4 +1,5 @@
 import types
+from typing import Final
 
 import litellm
 
@@ -35,7 +36,7 @@ class AmazonAnthropicConfig(AmazonInvokeConfig):
         top_p: int | None = None,
         anthropic_version: str | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)

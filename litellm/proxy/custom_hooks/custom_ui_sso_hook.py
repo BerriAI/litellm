@@ -1,3 +1,5 @@
+from typing import Final
+
 from fastapi import Request
 from fastapi_sso.sso.base import OpenID
 
@@ -20,7 +22,7 @@ class CustomSSOLoginHandler(CustomLogger):
         self,
         request: Request,
     ) -> OpenID:
-        request_headers_dict = _safe_get_request_headers(request)
+        request_headers_dict: Final = _safe_get_request_headers(request)
         verbose_logger.debug("inside custom ui sso sign in hook...")
         return OpenID(
             id=request_headers_dict.get("x-litellm-user-id") or "123",
@@ -33,4 +35,4 @@ class CustomSSOLoginHandler(CustomLogger):
         )
 
 
-custom_ui_sso_sign_in_handler = CustomSSOLoginHandler()
+custom_ui_sso_sign_in_handler: Final = CustomSSOLoginHandler()

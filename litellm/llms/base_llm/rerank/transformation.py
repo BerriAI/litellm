@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -24,6 +25,7 @@ class BaseRerankConfig(ABC):
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         pass
 
@@ -124,11 +126,11 @@ class BaseRerankConfig(ABC):
         ):
             return 0.0, 0.0
 
-        search_units = billed_units.get("search_units")
+        search_units: Final = billed_units.get("search_units")
 
         if search_units is None:
             return 0.0, 0.0
 
-        prompt_cost = model_info["input_cost_per_query"] * search_units
+        prompt_cost: Final = model_info["input_cost_per_query"] * search_units
 
         return prompt_cost, 0.0

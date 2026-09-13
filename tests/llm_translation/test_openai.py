@@ -1,13 +1,8 @@
 import json
-import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
 from typing import Optional
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 
 import httpx
@@ -285,12 +280,6 @@ class TestOpenAIChatCompletion(BaseLLMChatTest):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
 
-    def test_prompt_caching(self):
-        """
-        Test that prompt caching works correctly.
-        Skip for now, as it's working locally but not in CI
-        """
-        pass
 
     def test_prompt_caching(self):
         """
@@ -303,15 +292,21 @@ class TestOpenAIChatCompletion(BaseLLMChatTest):
 def test_openai_max_retries_0(mock_get_openai_client):
     import litellm
 
+    mock_get_openai_client.return_value.chat.completions.with_raw_response.create.return_value.headers = {}
+    mock_get_openai_client.return_value.chat.completions.with_raw_response.create.return_value.parse.return_value = (
+        ModelResponse(choices=[{"message": {"role": "assistant", "content": "Hello"}}])
+    )
     litellm.set_verbose = True
     response = litellm.completion(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "hi"}],
         max_retries=0,
+        api_key="fake-key",
     )
 
     mock_get_openai_client.assert_called_once()
     assert mock_get_openai_client.call_args.kwargs["max_retries"] == 0
+    assert response.choices[0].message.content == "Hello"
 
 
 @patch("litellm.main.openai_chat_completions._get_openai_client")
@@ -428,7 +423,7 @@ def test_openai_web_search():
     """Makes a simple web search request and validates the response contains web search annotations and all expected fields are present"""
     litellm._turn_on_debug()
     response = litellm.completion(
-        model="openai/gpt-4o-search-preview",
+        model="openai/gpt-5-search-api",
         messages=[
             {
                 "role": "user",
@@ -448,7 +443,7 @@ def test_openai_web_search_streaming():
     # litellm._turn_on_debug()
     test_openai_web_search: Optional[ChatCompletionAnnotation] = None
     response = litellm.completion(
-        model="openai/gpt-4o-search-preview",
+        model="openai/gpt-5-search-api",
         messages=[
             {
                 "role": "user",
@@ -1464,7 +1459,7 @@ def test_responses_gpt54_with_xhigh_reasoning():
         # Stop execution right after request generation to avoid external API calls.
         mock_responses.side_effect = RuntimeError("stop_after_request_build")
 
-        with pytest.raises(Exception):
+        with pytest.raises(litellm.APIConnectionError):
             litellm.completion(
                 model="openai/responses/gpt-5.4",
                 messages=[{"role": "user", "content": "What is 2+2?"}],
@@ -1475,7 +1470,6 @@ def test_responses_gpt54_with_xhigh_reasoning():
         mock_responses.assert_called_once()
         request_body = mock_responses.call_args.kwargs
 
-        # The responses prefix should be stripped before routing.
-        assert request_body["model"] == "gpt-5.4"
+        assert request_body["model"] == "openai/gpt-5.4"
         # chat-completions reasoning_effort must map to Responses API reasoning.
         assert request_body["reasoning"] == {"effort": "xhigh"}

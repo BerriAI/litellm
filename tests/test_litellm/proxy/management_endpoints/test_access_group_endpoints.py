@@ -2,8 +2,6 @@
 Tests for access group management endpoints.
 """
 
-import os
-import sys
 import types
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -14,14 +12,12 @@ from fastapi.testclient import TestClient
 from prisma.errors import PrismaError
 
 import litellm.proxy.proxy_server as ps
-from litellm.proxy.proxy_server import app
 from litellm.proxy._types import (
     CommonProxyErrors,
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
-
-sys.path.insert(0, os.path.abspath("../../../"))
+from litellm.proxy.proxy_server import app
 
 
 def _make_access_group_record(
@@ -59,6 +55,22 @@ def _make_access_group_record(
     record.dict = lambda: data
     record.model_dump = lambda: data
     return record
+
+
+def _make_team_record(team_id: str, access_group_ids: list[str] | None = None, team_alias: str | None = None):
+    return types.SimpleNamespace(team_id=team_id, access_group_ids=access_group_ids or [], team_alias=team_alias)
+
+
+def _make_mcp_server_record(server_id: str, alias: str | None = None, server_name: str | None = None):
+    return types.SimpleNamespace(server_id=server_id, alias=alias, server_name=server_name)
+
+
+def _make_agent_record(agent_id: str, agent_name: str):
+    return types.SimpleNamespace(agent_id=agent_id, agent_name=agent_name)
+
+
+def _make_key_record(token: str, key_alias: str | None = None):
+    return types.SimpleNamespace(token=token, key_alias=key_alias)
 
 
 @pytest.fixture
@@ -109,6 +121,12 @@ def client_and_mocks(monkeypatch):
     mock_key_table.find_unique = AsyncMock(return_value=None)
     mock_key_table.update = AsyncMock(return_value=None)
 
+    mock_mcp_server_table = MagicMock()
+    mock_mcp_server_table.find_many = AsyncMock(return_value=[])
+
+    mock_agents_table = MagicMock()
+    mock_agents_table.find_many = AsyncMock(return_value=[])
+
     @asynccontextmanager
     async def mock_tx():
         tx = types.SimpleNamespace(
@@ -122,6 +140,8 @@ def client_and_mocks(monkeypatch):
         litellm_accessgrouptable=mock_access_group_table,
         litellm_teamtable=mock_team_table,
         litellm_verificationtoken=mock_key_table,
+        litellm_mcpservertable=mock_mcp_server_table,
+        litellm_agentstable=mock_agents_table,
         tx=mock_tx,
     )
     mock_prisma.db = mock_db
@@ -188,7 +208,8 @@ ACCESS_GROUP_PATHS = ["/v1/access_group", "/v1/unified_access_group"]
 )
 def test_create_access_group_success(client_and_mocks, base_path, payload):
     """Create access group with various payloads returns 201."""
-    client, _, mock_table, *_ = client_and_mocks
+    client, mock_prisma, mock_table, *_ = client_and_mocks
+    mock_prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=[_make_team_record("team-1")])
 
     resp = client.post(base_path, json=payload)
     assert resp.status_code == 201
@@ -280,13 +301,45 @@ def test_create_access_group_500_on_non_constraint_prisma_error(client_and_mocks
 
 @pytest.mark.parametrize("base_path", ACCESS_GROUP_PATHS)
 def test_list_access_groups_success_empty(client_and_mocks, base_path):
-    """List access groups returns empty list when none exist."""
-    client, _, mock_table, *_ = client_and_mocks
+    """List access groups returns empty list when none exist, without querying teams."""
+    client, mock_prisma, mock_table, *_ = client_and_mocks
 
     resp = client.get(base_path)
     assert resp.status_code == 200
     assert resp.json() == []
     mock_table.find_many.assert_awaited_once()
+    mock_prisma.db.litellm_teamtable.find_many.assert_not_awaited()
+
+
+@pytest.mark.parametrize("base_path", ACCESS_GROUP_PATHS)
+def test_list_access_groups_attributes_teams_per_group_with_one_query(client_and_mocks, base_path):
+    """List derives each group's teams from the team table in a single query, attributed per group."""
+    client, mock_prisma, mock_table, *_ = client_and_mocks
+    mock_team_table = mock_prisma.db.litellm_teamtable
+
+    records = [
+        _make_access_group_record(access_group_id="ag-1", access_group_name="group-1"),
+        _make_access_group_record(access_group_id="ag-2", access_group_name="group-2"),
+    ]
+    mock_table.find_many = AsyncMock(return_value=records)
+    mock_team_table.find_many = AsyncMock(
+        return_value=[
+            _make_team_record("team-x", ["ag-1"]),
+            _make_team_record("team-y", ["ag-2"]),
+            _make_team_record("team-z", ["ag-1", "ag-2"]),
+        ]
+    )
+
+    resp = client.get(base_path)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body[0]["assigned_team_ids"] == ["team-x", "team-z"]
+    assert body[1]["assigned_team_ids"] == ["team-y", "team-z"]
+
+    mock_team_table.find_many.assert_awaited_once()
+    carrying, listed = mock_team_table.find_many.call_args.kwargs["where"]["OR"]
+    assert list(carrying["access_group_ids"]["hasSome"]) == ["ag-1", "ag-2"]
+    assert list(listed["team_id"]["in"]) == []
 
 
 @pytest.mark.parametrize("base_path", ACCESS_GROUP_PATHS)
@@ -374,6 +427,43 @@ def test_get_access_group_success(client_and_mocks, base_path, access_group_id):
     resp = client.get(f"{base_path}/{access_group_id}")
     assert resp.status_code == 200
     assert resp.json()["access_group_id"] == access_group_id
+
+
+@pytest.mark.parametrize("base_path", ACCESS_GROUP_PATHS)
+def test_get_access_group_derives_assigned_teams_from_team_table(client_and_mocks, base_path):
+    """Get drops ghost ids from the stored column and adds teams that carry the group but were never mirrored."""
+    client, mock_prisma, mock_table, *_ = client_and_mocks
+    mock_team_table = mock_prisma.db.litellm_teamtable
+
+    record = _make_access_group_record(access_group_id="ag-123", assigned_team_ids=["team-a", "ghost-team"])
+    mock_table.find_unique = AsyncMock(return_value=record)
+    mock_team_table.find_many = AsyncMock(
+        return_value=[
+            _make_team_record("team-a", ["ag-123"]),
+            _make_team_record("team-b", ["ag-123"]),
+            _make_team_record("team-c", ["ag-123"]),
+        ]
+    )
+
+    resp = client.get(f"{base_path}/ag-123")
+    assert resp.status_code == 200
+    assert resp.json()["assigned_team_ids"] == ["team-a", "team-b", "team-c"]
+
+    carrying, listed = mock_team_table.find_many.call_args.kwargs["where"]["OR"]
+    assert list(carrying["access_group_ids"]["hasSome"]) == ["ag-123"]
+    assert list(listed["team_id"]["in"]) == ["team-a", "ghost-team"]
+
+
+def test_get_access_group_empty_column_and_no_teams_returns_empty(client_and_mocks):
+    """Get returns [] when the column is empty and no team carries the group."""
+    client, mock_prisma, mock_table, *_ = client_and_mocks
+
+    mock_table.find_unique = AsyncMock(return_value=_make_access_group_record(access_group_id="ag-123"))
+    mock_prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+
+    resp = client.get("/v1/access_group/ag-123")
+    assert resp.status_code == 200
+    assert resp.json()["assigned_team_ids"] == []
 
 
 def test_get_access_group_not_found(client_and_mocks):
@@ -988,6 +1078,28 @@ def test_record_to_access_group_table():
     assert result.access_agent_ids == ["agent-1"]
 
 
+def test_attached_team_ids_by_group_keeps_column_order_then_appends_unmirrored_teams():
+    """Stored ids that resolve keep their order, ghosts drop, carriers the mirror missed append once, per group."""
+    from litellm.proxy.management_endpoints.access_group_endpoints import (
+        _attached_team_ids_by_group,
+    )
+
+    records = [
+        _make_access_group_record(access_group_id="ag-1", assigned_team_ids=["team-b", "ghost", "team-a"]),
+        _make_access_group_record(access_group_id="ag-2", assigned_team_ids=[]),
+    ]
+    teams = [
+        _make_team_record("team-a", ["ag-1"]),
+        _make_team_record("team-b", []),
+        _make_team_record("team-c", ["ag-1"]),
+        _make_team_record("team-d", ["ag-2"]),
+    ]
+
+    result = _attached_team_ids_by_group(records, teams)
+
+    assert dict(result) == {"ag-1": ("team-b", "team-a", "team-c"), "ag-2": ("team-d",)}
+
+
 # ---------------------------------------------------------------------------
 # Sync tests: CREATE
 # ---------------------------------------------------------------------------
@@ -1000,9 +1112,8 @@ def test_create_access_group_syncs_assigned_teams(client_and_mocks):
     )
     mock_team_table = mock_prisma.db.litellm_teamtable
 
-    team_record = MagicMock()
-    team_record.team_id = "team-1"
-    team_record.access_group_ids = []
+    team_record = _make_team_record("team-1")
+    mock_team_table.find_many = AsyncMock(return_value=[team_record])
     mock_team_table.find_unique = AsyncMock(return_value=team_record)
 
     resp = client.post(
@@ -1046,20 +1157,22 @@ def test_create_access_group_syncs_assigned_keys(client_and_mocks):
     assert "ag-new" in call_kwargs["data"]["access_group_ids"]
 
 
-def test_create_access_group_skips_sync_for_nonexistent_team(client_and_mocks):
-    """Create skips updating a team that doesn't exist in DB."""
-    client, mock_prisma, _, mock_cache, mock_proxy_logging = client_and_mocks
+def test_create_access_group_rejects_nonexistent_team(client_and_mocks):
+    """Create refuses to store a team id that does not resolve to a team row."""
+    client, mock_prisma, mock_access_group_table, *_ = client_and_mocks
     mock_team_table = mock_prisma.db.litellm_teamtable
-    mock_team_table.find_unique = AsyncMock(return_value=None)
+    mock_team_table.find_many = AsyncMock(return_value=[_make_team_record("team-real")])
 
     resp = client.post(
         "/v1/access_group",
         json={
             "access_group_name": "new-group",
-            "assigned_team_ids": ["nonexistent-team"],
+            "assigned_team_ids": ["team-real", "nonexistent-team", "also-missing"],
         },
     )
-    assert resp.status_code == 201
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Unknown team ids: also-missing, nonexistent-team"
+    mock_access_group_table.create.assert_not_awaited()
     mock_team_table.update.assert_not_awaited()
 
 
@@ -1068,9 +1181,8 @@ def test_create_access_group_idempotent_team_sync(client_and_mocks):
     client, mock_prisma, _, mock_cache, mock_proxy_logging = client_and_mocks
     mock_team_table = mock_prisma.db.litellm_teamtable
 
-    team_record = MagicMock()
-    team_record.team_id = "team-1"
-    team_record.access_group_ids = ["ag-new"]  # already synced
+    team_record = _make_team_record("team-1", ["ag-new"])
+    mock_team_table.find_many = AsyncMock(return_value=[team_record])
     mock_team_table.find_unique = AsyncMock(return_value=team_record)
 
     resp = client.post(
@@ -1098,9 +1210,8 @@ def test_update_access_group_syncs_added_teams(client_and_mocks):
     )
     mock_access_group_table.find_unique = AsyncMock(return_value=existing)
 
-    team_record = MagicMock()
-    team_record.team_id = "team-new"
-    team_record.access_group_ids = []
+    team_record = _make_team_record("team-new")
+    mock_team_table.find_many = AsyncMock(return_value=[_make_team_record("team-existing", ["ag-update"]), team_record])
     mock_team_table.find_unique = AsyncMock(return_value=team_record)
 
     resp = client.put(
@@ -1116,6 +1227,25 @@ def test_update_access_group_syncs_added_teams(client_and_mocks):
     assert "ag-update" in call_kwargs["data"]["access_group_ids"]
 
 
+def test_update_access_group_rejects_nonexistent_team(client_and_mocks):
+    """Update refuses to store a team id that does not resolve to a team row and leaves the group untouched."""
+    client, mock_prisma, mock_access_group_table, *_ = client_and_mocks
+    mock_team_table = mock_prisma.db.litellm_teamtable
+
+    existing = _make_access_group_record(access_group_id="ag-update", assigned_team_ids=["team-existing"])
+    mock_access_group_table.find_unique = AsyncMock(return_value=existing)
+    mock_team_table.find_many = AsyncMock(return_value=[_make_team_record("team-existing", ["ag-update"])])
+
+    resp = client.put(
+        "/v1/access_group/ag-update",
+        json={"assigned_team_ids": ["team-existing", "team-ghost"]},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Unknown team ids: team-ghost"
+    mock_access_group_table.update.assert_not_awaited()
+    mock_team_table.update.assert_not_awaited()
+
+
 def test_update_access_group_syncs_removed_teams(client_and_mocks):
     """Update removes access_group_id from de-assigned teams."""
     client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = (
@@ -1128,9 +1258,8 @@ def test_update_access_group_syncs_removed_teams(client_and_mocks):
     )
     mock_access_group_table.find_unique = AsyncMock(return_value=existing)
 
-    team_to_remove = MagicMock()
-    team_to_remove.team_id = "team-remove"
-    team_to_remove.access_group_ids = ["ag-update"]
+    team_to_remove = _make_team_record("team-remove", ["ag-update"])
+    mock_team_table.find_many = AsyncMock(return_value=[_make_team_record("team-keep", ["ag-update"]), team_to_remove])
     mock_team_table.find_unique = AsyncMock(return_value=team_to_remove)
 
     resp = client.put(
@@ -1146,6 +1275,28 @@ def test_update_access_group_syncs_removed_teams(client_and_mocks):
     call_kwargs = mock_team_table.update.call_args.kwargs
     assert call_kwargs["where"] == {"team_id": "team-remove"}
     assert "ag-update" not in call_kwargs["data"]["access_group_ids"]
+
+
+def test_update_access_group_detaches_team_the_mirror_missed(client_and_mocks):
+    """Update removes the group from a team that carries it but was never written to the stored column."""
+    client, mock_prisma, mock_access_group_table, *_ = client_and_mocks
+    mock_team_table = mock_prisma.db.litellm_teamtable
+
+    existing = _make_access_group_record(access_group_id="ag-update", assigned_team_ids=["team-keep"])
+    mock_access_group_table.find_unique = AsyncMock(return_value=existing)
+
+    unmirrored = _make_team_record("team-unmirrored", ["ag-update", "ag-other"])
+    mock_team_table.find_many = AsyncMock(return_value=[_make_team_record("team-keep", ["ag-update"]), unmirrored])
+    mock_team_table.find_unique = AsyncMock(return_value=unmirrored)
+
+    resp = client.put("/v1/access_group/ag-update", json={"assigned_team_ids": ["team-keep"]})
+    assert resp.status_code == 200
+
+    mock_team_table.find_unique.assert_awaited_once_with(where={"team_id": "team-unmirrored"})
+    mock_team_table.update.assert_awaited_once()
+    call_kwargs = mock_team_table.update.call_args.kwargs
+    assert call_kwargs["where"] == {"team_id": "team-unmirrored"}
+    assert call_kwargs["data"]["access_group_ids"] == ["ag-other"]
 
 
 def test_update_access_group_no_team_sync_when_ids_not_in_payload(client_and_mocks):
@@ -1316,3 +1467,169 @@ def test_update_access_group_null_assigned_ids_treated_as_empty(client_and_mocks
     update_call_kwargs = mock_table.update.call_args.kwargs
     assert update_call_kwargs["data"]["assigned_team_ids"] == []
     assert update_call_kwargs["data"]["assigned_key_ids"] == []
+
+
+# ---------------------------------------------------------------------------
+# Resolved resource names (LIT-6594)
+# ---------------------------------------------------------------------------
+
+
+def _mock_resource_tables(mock_prisma, *, mcp_servers=(), agents=(), teams=(), keys=()):
+    mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=list(mcp_servers))
+    mock_prisma.db.litellm_agentstable.find_many = AsyncMock(return_value=list(agents))
+    mock_prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=list(teams))
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=list(keys))
+
+
+@pytest.mark.parametrize("base_path", ACCESS_GROUP_PATHS)
+def test_get_access_group_resolves_resource_names(client_and_mocks, base_path):
+    """Every id list gets a sibling list of {id, name}; name is null when the id has no alias or no longer resolves."""
+    client, mock_prisma, mock_table, *_ = client_and_mocks
+    mock_table.find_unique = AsyncMock(
+        return_value=_make_access_group_record(
+            access_group_id="ag-123",
+            access_mcp_server_ids=["mcp-a", "mcp-b", "mcp-ghost"],
+            access_agent_ids=["agent-a", "agent-ghost"],
+            assigned_team_ids=["team-a", "team-b"],
+            assigned_key_ids=["key-a", "key-b"],
+        )
+    )
+    _mock_resource_tables(
+        mock_prisma,
+        mcp_servers=[
+            _make_mcp_server_record("mcp-a", alias="GitHub"),
+            _make_mcp_server_record("mcp-b", server_name="jira_tools"),
+        ],
+        agents=[_make_agent_record("agent-a", "support-bot")],
+        teams=[
+            _make_team_record("team-a", ["ag-123"], team_alias="Platform"),
+            _make_team_record("team-b", ["ag-123"]),
+        ],
+        keys=[_make_key_record("key-a", key_alias="ci-key"), _make_key_record("key-b")],
+    )
+
+    resp = client.get(f"{base_path}/ag-123")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["access_mcp_servers"] == [
+        {"id": "mcp-a", "name": "GitHub"},
+        {"id": "mcp-b", "name": "jira_tools"},
+        {"id": "mcp-ghost", "name": None},
+    ]
+    assert body["access_agents"] == [{"id": "agent-a", "name": "support-bot"}, {"id": "agent-ghost", "name": None}]
+    assert body["assigned_teams"] == [{"id": "team-a", "name": "Platform"}, {"id": "team-b", "name": None}]
+    assert body["assigned_keys"] == [{"id": "key-a", "name": "ci-key"}, {"id": "key-b", "name": None}]
+    assert body["access_mcp_server_ids"] == ["mcp-a", "mcp-b", "mcp-ghost"]
+    assert body["assigned_team_ids"] == ["team-a", "team-b"]
+
+    mcp_where = mock_prisma.db.litellm_mcpservertable.find_many.call_args.kwargs["where"]
+    assert sorted(mcp_where["server_id"]["in"]) == ["mcp-a", "mcp-b", "mcp-ghost"]
+    agent_where = mock_prisma.db.litellm_agentstable.find_many.call_args.kwargs["where"]
+    assert sorted(agent_where["agent_id"]["in"]) == ["agent-a", "agent-ghost"]
+    key_where = mock_prisma.db.litellm_verificationtoken.find_many.call_args.kwargs["where"]
+    assert sorted(key_where["token"]["in"]) == ["key-a", "key-b"]
+
+
+def test_list_access_groups_resolves_names_with_one_query_per_table(client_and_mocks):
+    """List batches every group's ids into one lookup per table and attributes names back to the right group."""
+    client, mock_prisma, mock_table, *_ = client_and_mocks
+    mock_table.find_many = AsyncMock(
+        return_value=[
+            _make_access_group_record(
+                access_group_id="ag-1", access_mcp_server_ids=["mcp-a"], access_agent_ids=["agent-a"], assigned_key_ids=["key-a"]
+            ),
+            _make_access_group_record(
+                access_group_id="ag-2", access_mcp_server_ids=["mcp-b"], access_agent_ids=["agent-b"], assigned_key_ids=["key-b"]
+            ),
+        ]
+    )
+    _mock_resource_tables(
+        mock_prisma,
+        mcp_servers=[_make_mcp_server_record("mcp-a", alias="A"), _make_mcp_server_record("mcp-b", alias="B")],
+        agents=[_make_agent_record("agent-a", "Agent A"), _make_agent_record("agent-b", "Agent B")],
+        keys=[_make_key_record("key-a", key_alias="Key A"), _make_key_record("key-b", key_alias="Key B")],
+    )
+
+    resp = client.get("/v1/access_group")
+    assert resp.status_code == 200
+    first, second = resp.json()
+    assert first["access_mcp_servers"] == [{"id": "mcp-a", "name": "A"}]
+    assert first["access_agents"] == [{"id": "agent-a", "name": "Agent A"}]
+    assert first["assigned_keys"] == [{"id": "key-a", "name": "Key A"}]
+    assert second["access_mcp_servers"] == [{"id": "mcp-b", "name": "B"}]
+    assert second["access_agents"] == [{"id": "agent-b", "name": "Agent B"}]
+    assert second["assigned_keys"] == [{"id": "key-b", "name": "Key B"}]
+
+    for table, column in (
+        (mock_prisma.db.litellm_mcpservertable, "server_id"),
+        (mock_prisma.db.litellm_agentstable, "agent_id"),
+        (mock_prisma.db.litellm_verificationtoken, "token"),
+    ):
+        table.find_many.assert_awaited_once()
+        assert len(table.find_many.call_args.kwargs["where"][column]["in"]) == 2
+
+
+def test_list_access_groups_skips_lookups_when_nothing_to_resolve(client_and_mocks):
+    """Groups with no MCP servers, agents or keys must not trigger an empty IN () query per table."""
+    client, mock_prisma, mock_table, *_ = client_and_mocks
+    mock_table.find_many = AsyncMock(
+        return_value=[_make_access_group_record(access_group_id="ag-1"), _make_access_group_record(access_group_id="ag-2")]
+    )
+
+    resp = client.get("/v1/access_group")
+    assert resp.status_code == 200
+    assert all(group["access_mcp_servers"] == [] and group["assigned_keys"] == [] for group in resp.json())
+
+    mock_prisma.db.litellm_mcpservertable.find_many.assert_not_awaited()
+    mock_prisma.db.litellm_agentstable.find_many.assert_not_awaited()
+    mock_prisma.db.litellm_verificationtoken.find_many.assert_not_awaited()
+
+
+def test_create_access_group_response_carries_resolved_names(client_and_mocks):
+    """The create response already shows names so the UI never has to refetch to label what it just saved."""
+    client, mock_prisma, *_ = client_and_mocks
+    team_record = _make_team_record("team-1", team_alias="Platform")
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_record)
+    _mock_resource_tables(
+        mock_prisma,
+        mcp_servers=[_make_mcp_server_record("mcp-a", alias="GitHub")],
+        agents=[_make_agent_record("agent-a", "support-bot")],
+        teams=[team_record],
+    )
+
+    resp = client.post(
+        "/v1/access_group",
+        json={
+            "access_group_name": "new-group",
+            "access_mcp_server_ids": ["mcp-a"],
+            "access_agent_ids": ["agent-a"],
+            "assigned_team_ids": ["team-1"],
+        },
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["access_mcp_servers"] == [{"id": "mcp-a", "name": "GitHub"}]
+    assert body["access_agents"] == [{"id": "agent-a", "name": "support-bot"}]
+    assert body["assigned_teams"] == [{"id": "team-1", "name": "Platform"}]
+
+
+def test_update_access_group_response_carries_resolved_names(client_and_mocks):
+    """The update response reflects the new ids with their names, not the pre-update state."""
+    client, mock_prisma, mock_table, *_ = client_and_mocks
+    mock_table.find_unique = AsyncMock(
+        return_value=_make_access_group_record(access_group_id="ag-update", access_mcp_server_ids=["mcp-old"])
+    )
+    _mock_resource_tables(
+        mock_prisma,
+        mcp_servers=[_make_mcp_server_record("mcp-new", alias="Linear")],
+        agents=[_make_agent_record("agent-a", "support-bot")],
+    )
+
+    resp = client.put(
+        "/v1/access_group/ag-update", json={"access_mcp_server_ids": ["mcp-new"], "access_agent_ids": ["agent-a"]}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["access_mcp_servers"] == [{"id": "mcp-new", "name": "Linear"}]
+    assert body["access_agents"] == [{"id": "agent-a", "name": "support-bot"}]
+    assert body["access_mcp_server_ids"] == ["mcp-new"]

@@ -1,3 +1,5 @@
+from typing import Final
+
 import httpx
 
 import litellm
@@ -61,20 +63,20 @@ class VLLMModelInfo(BaseLLMModelInfo):
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         api_base = VLLMModelInfo.get_api_base(api_base)
         api_key = VLLMModelInfo.get_api_key(api_key)
-        endpoint = "/v1/models"
+        endpoint: Final = "/v1/models"
         if api_base is None or api_key is None:
             raise ValueError(
                 "VLLM_API_BASE or VLLM_API_KEY is not set. Please set the environment variable, to query VLLM's `/models` endpoint."
             )
 
-        url = _add_path_to_api_base(api_base, endpoint)
-        response = litellm.module_level_client.get(
+        url: Final = _add_path_to_api_base(api_base, endpoint)
+        response: Final = litellm.module_level_client.get(
             url=url,
         )
 
         response.raise_for_status()
 
-        models = response.json()["data"]
+        models: Final = response.json()["data"]
 
         return [model["id"] for model in models]
 

@@ -5,6 +5,8 @@ Transform request from OpenAI format to Morph format.
 https://docs.morphllm.com/quickstart
 """
 
+from typing import Final
+
 from litellm.secret_managers.main import get_secret_str
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
@@ -25,7 +27,7 @@ class MorphChatConfig(OpenAILikeChatConfig):
         api_base = (
             api_base or get_secret_str("MORPH_API_BASE") or "https://api.morphllm.com/v1"  # default api base
         )
-        dynamic_api_key = api_key or get_secret_str("MORPH_API_KEY")
+        dynamic_api_key: Final = api_key or get_secret_str("MORPH_API_KEY")
         return api_base, dynamic_api_key
 
     def get_supported_openai_params(self, model: str) -> list:

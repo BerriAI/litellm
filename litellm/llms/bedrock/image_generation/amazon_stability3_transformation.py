@@ -1,4 +1,5 @@
 import types
+from typing import Final
 
 from openai.types.image import Image
 
@@ -69,7 +70,7 @@ class AmazonStability3Config:
         """
         Transform the request body for the Stability 3 models
         """
-        data = AmazonStability3TextToImageRequest(prompt=text, **optional_params)
+        data: Final = AmazonStability3TextToImageRequest(prompt=text, **optional_params)
         return data
 
     @classmethod
@@ -89,14 +90,14 @@ class AmazonStability3Config:
         Transform the response dict to the OpenAI response
         """
 
-        stability_3_response = AmazonStability3TextToImageResponse(**response_dict)
+        stability_3_response: Final = AmazonStability3TextToImageResponse(**response_dict)
 
         finish_reasons = stability_3_response.get("finish_reasons", [])
         finish_reasons = [reason for reason in finish_reasons if reason]
         if len(finish_reasons) > 0:
             raise BedrockError(status_code=400, message="; ".join(finish_reasons))
 
-        openai_images: list[Image] = []
+        openai_images: Final[list[Image]] = []
         for _img in stability_3_response.get("images", []):
             openai_images.append(Image(b64_json=_img))
 
@@ -111,13 +112,13 @@ class AmazonStability3Config:
         size: str | None = None,
         optional_params: dict | None = None,
     ) -> float:
-        get_model_info = get_cached_model_info()
-        model_info = get_model_info(
+        get_model_info: Final = get_cached_model_info()
+        model_info: Final = get_model_info(
             model=model,
             custom_llm_provider="bedrock",
         )
 
-        output_cost_per_image: float = model_info.get("output_cost_per_image") or 0.0
+        output_cost_per_image: Final[float] = model_info.get("output_cost_per_image") or 0.0
         num_images: int = 0
         if image_response.data:
             num_images = len(image_response.data)

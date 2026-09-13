@@ -10,6 +10,8 @@ Model name format:
 - Agent: ragflow/agent/{agent_id}/{model_name}
 """
 
+from typing import Final
+
 import litellm
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.openai.openai import OpenAIConfig
@@ -39,7 +41,7 @@ class RAGFlowConfig(OpenAIConfig):
         Raises:
             ValueError: If model format is invalid
         """
-        parts = model.split("/")
+        parts: Final = model.split("/")
         if len(parts) < 4:
             raise ValueError(
                 f"Invalid RAGFlow model format: {model}. "
@@ -49,12 +51,12 @@ class RAGFlowConfig(OpenAIConfig):
         if parts[0] != "ragflow":
             raise ValueError(f"Invalid RAGFlow model format: {model}. Must start with 'ragflow/'")
 
-        endpoint_type = parts[1]
+        endpoint_type: Final = parts[1]
         if endpoint_type not in ["chat", "agent"]:
             raise ValueError(f"Invalid RAGFlow endpoint type: {endpoint_type}. Must be 'chat' or 'agent'")
 
-        entity_id = parts[2]
-        model_name = "/".join(parts[3:])  # Handle model names that might contain slashes
+        entity_id: Final = parts[2]
+        model_name: Final = "/".join(parts[3:])  # Handle model names that might contain slashes
 
         return endpoint_type, entity_id, model_name
 
@@ -110,7 +112,7 @@ class RAGFlowConfig(OpenAIConfig):
             api_base = api_base[:-3]  # Remove /v1
 
         # Construct the RAGFlow-specific path
-        encoded_entity_id = encode_url_path_segment(entity_id, field_name="entity_id")
+        encoded_entity_id: Final = encode_url_path_segment(entity_id, field_name="entity_id")
         if endpoint_type == "chat":
             path = f"/api/v1/chats_openai/{encoded_entity_id}/chat/completions"
         else:  # agent
@@ -146,12 +148,12 @@ class RAGFlowConfig(OpenAIConfig):
         _, _, actual_model = self._parse_ragflow_model(model)
 
         # Get api_base from multiple sources: input param, environment, or global litellm setting
-        dynamic_api_base = (
+        dynamic_api_base: Final = (
             api_base or litellm.api_base or get_secret("RAGFLOW_API_BASE") or get_secret_str("RAGFLOW_API_BASE")
         )
 
         # Get api_key from multiple sources: input param, environment, or global litellm setting
-        dynamic_api_key = api_key or litellm.api_key or get_secret_str("RAGFLOW_API_KEY")
+        dynamic_api_key: Final = api_key or litellm.api_key or get_secret_str("RAGFLOW_API_KEY")
 
         return dynamic_api_base, dynamic_api_key, custom_llm_provider
 

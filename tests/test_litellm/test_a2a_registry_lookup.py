@@ -4,10 +4,7 @@ Test A2A provider registry lookup functionality.
 Maps to: litellm/llms/a2a/chat/transformation.py
 """
 
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import pytest
 
@@ -65,9 +62,8 @@ def test_a2a_registry_integration():
             )
         except Exception as e:
             # Should use registry URL (connection error expected)
-            assert "registry-url.example.com" in str(e) or "APIConnectionError" in str(
-                type(e).__name__
-            )
+            if "registry-url.example.com" not in str(e) and "APIConnectionError" not in type(e).__name__:
+                raise
         finally:
             global_agent_registry.agent_list = original_agents
 

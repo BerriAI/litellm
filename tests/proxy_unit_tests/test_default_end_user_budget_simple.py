@@ -5,14 +5,11 @@ Tests the core scenarios where litellm.max_end_user_budget_id applies
 a default budget to end users without explicit budgets.
 """
 
-import sys
-import os
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_EndUserTable

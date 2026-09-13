@@ -1,28 +1,41 @@
+import { Info } from "lucide-react";
 import React from "react";
-import { Form, Input, Select, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { SimpleTooltip } from "@/components/ui/tooltip";
+
+import { MountedFormField } from "@/components/common_components/MountedFormField";
+import UpstreamTokenHeaderField from "./UpstreamTokenHeaderField";
+import { requiredRule } from "@/components/common_components/formRules";
+import { MultiSelect } from "@/components/shared/MultiSelect";
+import { PasswordInput } from "@/components/shared/PasswordInput";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { requiredUnlessSiblingSet, tagsControl, textControl } from "./mcpFieldRules";
 
 interface IdJagFormFieldsProps {
   isEditing?: boolean;
 }
 
-const fieldClassName = "rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500";
+const fieldClassName = "rounded-lg border-border focus:border-info focus:ring-ring";
 
 const FieldLabel: React.FC<{ label: string; tooltip: string }> = ({ label, tooltip }) => (
-  <span className="text-sm font-medium text-gray-700 flex items-center">
+  <span className="text-sm font-medium text-foreground flex items-center">
     {label}
-    <Tooltip title={tooltip}>
-      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-    </Tooltip>
+    <SimpleTooltip content={tooltip}>
+      <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+    </SimpleTooltip>
   </span>
 );
 
+const PRIVATE_KEY_PATH = ["credentials", "client_private_key"] as const;
+
 const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) => {
   const placeholderSuffix = isEditing ? " (leave blank to keep existing)" : "";
+  const requiredWhenCreating = (message: string) =>
+    isEditing ? undefined : { validate: { required: requiredRule(message) } };
 
   return (
     <>
-      <Form.Item
+      <MountedFormField
         label={
           <FieldLabel
             label="Org Token Endpoint (leg 1)"
@@ -30,11 +43,18 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
           />
         }
         name="token_exchange_endpoint"
-        rules={[{ required: !isEditing, message: "The org token endpoint is required for ID-JAG" }]}
+        required={!isEditing}
+        rules={requiredWhenCreating("The org token endpoint is required for ID-JAG")}
       >
-        <Input placeholder="https://your-org.okta.com/oauth2/v1/token" className={fieldClassName} />
-      </Form.Item>
-      <Form.Item
+        {(control) => (
+          <Input
+            {...textControl(control)}
+            placeholder="https://your-org.okta.com/oauth2/v1/token"
+            className={fieldClassName}
+          />
+        )}
+      </MountedFormField>
+      <MountedFormField
         label={
           <FieldLabel
             label="Resource Token Endpoint (leg 2)"
@@ -42,18 +62,32 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
           />
         }
         name={["credentials", "id_jag_resource_token_endpoint"]}
-        rules={[{ required: !isEditing, message: "The resource token endpoint is required for ID-JAG" }]}
+        required={!isEditing}
+        rules={requiredWhenCreating("The resource token endpoint is required for ID-JAG")}
       >
-        <Input placeholder="https://upstream.example.com/oauth2/token" className={fieldClassName} />
-      </Form.Item>
-      <Form.Item
+        {(control) => (
+          <Input
+            {...textControl(control)}
+            placeholder="https://upstream.example.com/oauth2/token"
+            className={fieldClassName}
+          />
+        )}
+      </MountedFormField>
+      <MountedFormField
         label={<FieldLabel label="Client ID" tooltip="OAuth2 client ID LiteLLM authenticates as on both legs." />}
         name={["credentials", "client_id"]}
-        rules={[{ required: !isEditing, message: "Client ID is required for ID-JAG" }]}
+        required={!isEditing}
+        rules={requiredWhenCreating("Client ID is required for ID-JAG")}
       >
-        <Input.Password placeholder={`Enter OAuth client ID${placeholderSuffix}`} className={fieldClassName} />
-      </Form.Item>
-      <Form.Item
+        {(control) => (
+          <PasswordInput
+            {...textControl(control)}
+            placeholder={`Enter OAuth client ID${placeholderSuffix}`}
+            groupClassName={fieldClassName}
+          />
+        )}
+      </MountedFormField>
+      <MountedFormField
         label={
           <FieldLabel
             label="Client Secret"
@@ -61,36 +95,47 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
           />
         }
         name={["credentials", "client_secret"]}
-        dependencies={[["credentials", "client_private_key"]]}
-        rules={[
-          ({ getFieldValue }) => ({
-            validator: (_, value) => {
-              if (isEditing || value || getFieldValue(["credentials", "client_private_key"])) {
-                return Promise.resolve();
+        rules={
+          isEditing
+            ? undefined
+            : {
+                deps: ["credentials.client_private_key"],
+                validate: {
+                  secretOrPrivateKey: requiredUnlessSiblingSet(
+                    PRIVATE_KEY_PATH,
+                    "Provide either a client secret or a client private key",
+                  ),
+                },
               }
-              return Promise.reject(new Error("Provide either a client secret or a client private key"));
-            },
-          }),
-        ]}
+        }
       >
-        <Input.Password placeholder={`Enter OAuth client secret${placeholderSuffix}`} className={fieldClassName} />
-      </Form.Item>
-      <Form.Item
+        {(control) => (
+          <PasswordInput
+            {...textControl(control)}
+            placeholder={`Enter OAuth client secret${placeholderSuffix}`}
+            groupClassName={fieldClassName}
+          />
+        )}
+      </MountedFormField>
+      <MountedFormField
         label={
           <FieldLabel
             label="Client Private Key (PEM)"
             tooltip="PEM private key signing the RFC 7523 private_key_jwt client assertion. Okta Cross App Access normally requires this. When set it takes precedence over the client secret."
           />
         }
-        name={["credentials", "client_private_key"]}
+        name={PRIVATE_KEY_PATH}
       >
-        <Input.TextArea
-          rows={3}
-          placeholder={`-----BEGIN PRIVATE KEY-----${placeholderSuffix}`}
-          className={fieldClassName}
-        />
-      </Form.Item>
-      <Form.Item
+        {(control) => (
+          <Textarea
+            {...textControl(control)}
+            rows={3}
+            placeholder={`-----BEGIN PRIVATE KEY-----${placeholderSuffix}`}
+            className={fieldClassName}
+          />
+        )}
+      </MountedFormField>
+      <MountedFormField
         label={
           <FieldLabel
             label="Private Key ID (optional)"
@@ -99,9 +144,9 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
         }
         name={["credentials", "client_private_key_id"]}
       >
-        <Input placeholder="my-signing-key-1" className={fieldClassName} />
-      </Form.Item>
-      <Form.Item
+        {(control) => <Input {...textControl(control)} placeholder="my-signing-key-1" className={fieldClassName} />}
+      </MountedFormField>
+      <MountedFormField
         label={
           <FieldLabel
             label="Client Assertion Signing Algorithm (optional)"
@@ -110,9 +155,9 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
         }
         name={["credentials", "client_assertion_signing_alg"]}
       >
-        <Input placeholder="RS256" className={fieldClassName} />
-      </Form.Item>
-      <Form.Item
+        {(control) => <Input {...textControl(control)} placeholder="RS256" className={fieldClassName} />}
+      </MountedFormField>
+      <MountedFormField
         label={
           <FieldLabel
             label="Audience (optional)"
@@ -121,9 +166,11 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
         }
         name="audience"
       >
-        <Input placeholder="https://upstream.example.com" className={fieldClassName} />
-      </Form.Item>
-      <Form.Item
+        {(control) => (
+          <Input {...textControl(control)} placeholder="https://upstream.example.com" className={fieldClassName} />
+        )}
+      </MountedFormField>
+      <MountedFormField
         label={
           <FieldLabel
             label="Resource Indicator (optional)"
@@ -132,9 +179,11 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
         }
         name={["credentials", "id_jag_resource"]}
       >
-        <Input placeholder="https://upstream.example.com/mcp" className={fieldClassName} />
-      </Form.Item>
-      <Form.Item
+        {(control) => (
+          <Input {...textControl(control)} placeholder="https://upstream.example.com/mcp" className={fieldClassName} />
+        )}
+      </MountedFormField>
+      <MountedFormField
         label={
           <FieldLabel
             label="Subject Token Type (optional)"
@@ -143,14 +192,21 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
         }
         name="subject_token_type"
       >
-        <Input placeholder="urn:ietf:params:oauth:token-type:id_token" className={fieldClassName} />
-      </Form.Item>
-      <Form.Item
+        {(control) => (
+          <Input
+            {...textControl(control)}
+            placeholder="urn:ietf:params:oauth:token-type:id_token"
+            className={fieldClassName}
+          />
+        )}
+      </MountedFormField>
+      <MountedFormField
         label={<FieldLabel label="Scopes (optional)" tooltip="Scopes requested on leg 1 of the exchange." />}
         name={["credentials", "scopes"]}
       >
-        <Select mode="tags" tokenSeparators={[","]} placeholder="Add scopes" className="rounded-lg" size="large" />
-      </Form.Item>
+        {(control) => <MultiSelect {...tagsControl(control)} placeholder="Add scopes" className="rounded-lg" />}
+      </MountedFormField>
+      <UpstreamTokenHeaderField />
     </>
   );
 };

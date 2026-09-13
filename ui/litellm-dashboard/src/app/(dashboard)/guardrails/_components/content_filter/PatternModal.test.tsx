@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import PatternModal from "./PatternModal";
 
@@ -10,25 +10,25 @@ describe("PatternModal", () => {
   const mockOnActionChange = vi.fn();
 
   const mockPrebuiltPatterns = [
-    { name: "us_ssn", category: "PII Patterns", description: "US Social Security Number" },
-    { name: "email", category: "PII Patterns", description: "Email addresses" },
-    { name: "visa", category: "Financial Patterns", description: "Visa credit card numbers" },
-    { name: "aws_access_key", category: "Credential Patterns", description: "AWS Access Keys" },
+    {
+      name: "us_ssn",
+      display_name: "US Social Security Number",
+      category: "PII Patterns",
+      description: "US Social Security Number",
+    },
+    { name: "email", display_name: "Email address", category: "PII Patterns", description: "Email addresses" },
+    { name: "visa", display_name: "Visa card", category: "Financial Patterns", description: "Visa credit cards" },
+    {
+      name: "aws_access_key",
+      display_name: "AWS access key",
+      category: "Credential Patterns",
+      description: "AWS Access Keys",
+    },
   ];
 
   const mockCategories = ["PII Patterns", "Financial Patterns", "Credential Patterns"];
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("should show dropdown with prebuilt pattern options grouped by category", async () => {
-    /**
-     * Tests that the modal displays a dropdown with prebuilt patterns
-     * organized by category. This verifies the pattern selection UI is working.
-     */
-    const user = userEvent.setup();
-
+  const renderModal = () =>
     render(
       <PatternModal
         visible={true}
@@ -43,49 +43,112 @@ describe("PatternModal", () => {
       />,
     );
 
-    // Wait for modal to be visible
-    await waitFor(() => {
-      expect(screen.getByText("Add prebuilt pattern")).toBeInTheDocument();
-    });
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
-    // Find the pattern type dropdown by looking for the first combobox input
-    const comboboxes = screen.getAllByRole("combobox");
-    const dropdown = comboboxes[0]; // First combobox is the pattern selector
-    expect(dropdown).toBeInTheDocument();
+  it("should show prebuilt pattern options grouped by category and report the picked pattern", async () => {
+    const user = userEvent.setup();
+    renderModal();
 
-    // Click to open the dropdown
-    await user.click(dropdown);
+    expect(await screen.findByText("Add prebuilt pattern")).toBeInTheDocument();
 
-    // Verify that pattern options are available in the dropdown
-    // Ant Design renders Select options in a portal, so we need to query the whole document
-    await waitFor(() => {
-      const options = document.querySelectorAll(".ant-select-item-option");
-      expect(options.length).toBeGreaterThan(0);
-    });
+    await user.click(screen.getAllByRole("combobox")[0]);
 
-    // Verify categories are shown as group labels
-    await waitFor(() => {
-      expect(document.body).toHaveTextContent("PII Patterns");
-      expect(document.body).toHaveTextContent("Financial Patterns");
-      expect(document.body).toHaveTextContent("Credential Patterns");
-    });
+    expect(await screen.findByText("PII Patterns")).toBeInTheDocument();
+    expect(screen.getByText("Financial Patterns")).toBeInTheDocument();
+    expect(screen.getByText("Credential Patterns")).toBeInTheDocument();
 
-    // Verify pattern options are available
-    expect(document.body).toHaveTextContent("us_ssn");
-    expect(document.body).toHaveTextContent("email");
-    expect(document.body).toHaveTextContent("visa");
-    expect(document.body).toHaveTextContent("aws_access_key");
+    expect(screen.getByText("Email address")).toBeInTheDocument();
+    expect(screen.getByText("Visa card")).toBeInTheDocument();
+    expect(screen.getByText("AWS access key")).toBeInTheDocument();
 
-    // Select a pattern by clicking on its option element
-    const ssnOption = Array.from(document.querySelectorAll(".ant-select-item-option")).find(
-      (el) => el.textContent === "us_ssn",
-    ) as HTMLElement;
-    await user.click(ssnOption);
+    const ssnOptions = await screen.findAllByText("US Social Security Number");
+    await user.click(ssnOptions[ssnOptions.length - 1]);
 
-    // Verify the change handler was called with the pattern name
-    // Note: Ant Design Select calls onChange with (value, option), so we check if it was called
     expect(mockOnPatternNameChange).toHaveBeenCalled();
-    const callArgs = mockOnPatternNameChange.mock.calls[0];
-    expect(callArgs[0]).toBe("us_ssn");
+    expect(mockOnPatternNameChange.mock.calls[0][0]).toBe("us_ssn");
+  });
+
+  it("should narrow the pattern options to the typed search text", async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    expect(await screen.findByText("Add prebuilt pattern")).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("combobox")[0]);
+    await user.keyboard("visa");
+
+    expect(await screen.findByText("Visa card")).toBeInTheDocument();
+    expect(screen.queryByText("Email address")).not.toBeInTheDocument();
+    expect(screen.queryByText("AWS access key")).not.toBeInTheDocument();
+  });
+
+  it("should match the internal pattern name when it is absent from the display name", async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    expect(await screen.findByText("Add prebuilt pattern")).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("combobox")[0]);
+    await user.keyboard("ssn");
+
+    expect(await screen.findByText("US Social Security Number")).toBeInTheDocument();
+    expect(screen.queryByText("Email address")).not.toBeInTheDocument();
+    expect(screen.queryByText("Visa card")).not.toBeInTheDocument();
+  });
+
+  it("should report the chosen action", async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    expect(await screen.findByText("Add prebuilt pattern")).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("combobox")[1]);
+    const maskOptions = await screen.findAllByText("Mask");
+    await user.click(maskOptions[maskOptions.length - 1]);
+
+    expect(mockOnActionChange).toHaveBeenCalled();
+    expect(mockOnActionChange.mock.calls[0][0]).toBe("MASK");
+  });
+
+  it("should add and cancel through the footer buttons", async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    expect(await screen.findByText("Add prebuilt pattern")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Add" }));
+    expect(mockOnAdd).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(mockOnCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("should not render its content when not visible", () => {
+    render(
+      <PatternModal
+        visible={false}
+        prebuiltPatterns={mockPrebuiltPatterns}
+        categories={mockCategories}
+        selectedPatternName=""
+        patternAction="BLOCK"
+        onPatternNameChange={mockOnPatternNameChange}
+        onActionChange={mockOnActionChange}
+        onAdd={mockOnAdd}
+        onCancel={mockOnCancel}
+      />,
+    );
+
+    expect(screen.queryByText("Add prebuilt pattern")).not.toBeInTheDocument();
+  });
+
+  it("should not raise the dialog above the portalled popup layer its pattern combobox renders into", async () => {
+    renderModal();
+    await screen.findByText("Add prebuilt pattern");
+
+    const content = document.querySelector('[data-slot="dialog-content"]');
+    expect(content).not.toBeNull();
+    expect(Array.from(content!.classList).filter((cls) => cls.startsWith("z-"))).toEqual(["z-popup"]);
   });
 });

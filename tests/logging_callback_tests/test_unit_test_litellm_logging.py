@@ -1,12 +1,7 @@
 import json
-import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
 
 from typing import Literal
 
@@ -19,8 +14,6 @@ from litellm._service_logger import ServiceLogging
 import asyncio
 
 
-from litellm.litellm_core_utils.litellm_logging import Logging
-import litellm
 
 service_logger = ServiceLogging()
 

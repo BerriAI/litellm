@@ -15,13 +15,13 @@ import { AutoRoutersPanel } from "../components/AutoRouters/AutoRoutersPanel";
  * Viewer roles reach the list without write affordances.
  */
 export default function AutoRoutersTabPanel() {
-  const { accessToken, userRole, userId: userID } = useAuthorized();
+  const { accessToken, userRole, userId: userID, isViewOnly } = useAuthorized();
   const { data: teams } = useTeams();
   const { data: uiSettings } = useUISettings();
 
   const isInternalUser = userRole != null && internalUserRoles.includes(userRole);
   const scope = modelCreationScope(
-    { userRole, userID },
+    { userRole, userID, isViewOnly },
     {
       teams: teams ?? null,
       disabledForInternalUsers: isInternalUser && uiSettings?.values?.disable_model_add_for_internal_users === true,
@@ -33,6 +33,7 @@ export default function AutoRoutersTabPanel() {
       accessToken={accessToken}
       userRole={userRole ?? ""}
       userID={userID ?? null}
+      isViewOnly={isViewOnly}
       teams={teams ?? null}
       createScope={scope}
     />

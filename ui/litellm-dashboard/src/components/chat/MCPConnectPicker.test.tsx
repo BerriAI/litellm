@@ -40,8 +40,8 @@ describe("MCPConnectPicker logos", () => {
     render(<MCPConnectPicker accessToken="tok" selectedServers={[]} onChange={vi.fn()} />);
 
     expect(await screen.findByText("external_logo")).toBeInTheDocument();
-    expect(screen.getByAltText("external_logo logo").getAttribute("src")).toBe("https://cdn.example.com/ext.png");
-    expect(screen.getByAltText("local_logo logo").getAttribute("src")).toBe("/litellm/ui/assets/logos/github.svg");
+    expect(screen.getByAltText("external_logo logo")).toHaveAttribute("src", "https://cdn.example.com/ext.png");
+    expect(screen.getByAltText("local_logo logo")).toHaveAttribute("src", "/litellm/ui/assets/logos/github.svg");
   });
 
   it("renders no logo at all for servers without logo_url", async () => {

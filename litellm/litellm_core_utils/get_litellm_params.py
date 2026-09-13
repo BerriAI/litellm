@@ -1,6 +1,11 @@
+from collections.abc import Mapping, MutableMapping
+from types import MappingProxyType
+from typing import Final
+
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
 
-AWS_CREDENTIAL_KWARGS_KEYS = frozenset(
+AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
     {
         "aws_region_name",
         "aws_access_key_id",
@@ -12,14 +17,20 @@ AWS_CREDENTIAL_KWARGS_KEYS = frozenset(
         "aws_web_identity_token",
         "aws_sts_endpoint",
         "aws_external_id",
+        "aws_session_tags",
         "aws_bedrock_runtime_endpoint",
         "aws_bedrock_project_id",
     }
 )
 
+# Keys `completion()` forwards from its own kwargs into `get_litellm_params`,
+# which are otherwise invisible to it because that call site passes explicit
+# named arguments rather than `**kwargs`.
+FORWARDED_KWARGS_KEYS: Final = AWS_CREDENTIAL_KWARGS_KEYS
+
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls
-OPTIONAL_KWARGS_KEYS = (
+OPTIONAL_KWARGS_KEYS: Final = (
     frozenset(
         {
             "azure_ad_token",
@@ -38,6 +49,9 @@ OPTIONAL_KWARGS_KEYS = (
             "vertex_ai_project",
             "vertex_ai_location",
             "vertex_ai_credentials",
+            "gigachat_scope",
+            "gigachat_auth_url",
+            "gigachat_access_token",
             "tpm",
             "rpm",
             "itpm",
@@ -49,7 +63,7 @@ OPTIONAL_KWARGS_KEYS = (
 )
 
 # Backward-compatible alias for existing imports/tests.
-_OPTIONAL_KWARGS_KEYS = OPTIONAL_KWARGS_KEYS
+_OPTIONAL_KWARGS_KEYS: Final = OPTIONAL_KWARGS_KEYS
 
 
 def _get_base_model_from_litellm_call_metadata(
@@ -57,7 +71,7 @@ def _get_base_model_from_litellm_call_metadata(
 ) -> str | None:
     if metadata is None:
         return None
-    model_info = metadata.get("model_info")
+    model_info: Final = metadata.get("model_info")
     if model_info:
         return model_info.get("base_model")
     return None
@@ -101,7 +115,7 @@ def get_litellm_params(
     custom_prompt_dict: dict | None = None,
     litellm_metadata: dict | None = None,
     disable_add_transform_inline_image_block: bool | None = None,
-    drop_params: bool | None = None,
+    drop_params: bool | str | None = None,
     prompt_id: str | None = None,
     prompt_variables: dict | None = None,
     async_call: bool | None = None,
@@ -113,17 +127,20 @@ def get_litellm_params(
     litellm_request_debug: bool | None = None,
     **kwargs,
 ) -> dict:
+    _litellm_metadata_dict: Final = litellm_metadata if isinstance(litellm_metadata, dict) else None
+    resolved_metadata: Final = _litellm_metadata_dict.copy() if not metadata and _litellm_metadata_dict else metadata
+
     # Derive litellm_session_id / litellm_trace_id from metadata when not provided (call chaining)
-    _meta = metadata or {}
+    _meta: Final = resolved_metadata or {}
     if litellm_session_id is None:
         litellm_session_id = _meta.get("session_id") or _meta.get("trace_id")
     if litellm_trace_id is None:
         litellm_trace_id = _meta.get("trace_id") or _meta.get("session_id")
 
-    data_residency: str | None = infer_openai_data_residency(custom_llm_provider, api_base)
+    data_residency: Final[str | None] = infer_openai_data_residency(custom_llm_provider, api_base)
 
     # Build base dict with explicit parameters (always included)
-    litellm_params = {
+    litellm_params: Final = {
         "acompletion": acompletion,
         "allm_passthrough_route": allm_passthrough_route,
         "api_key": api_key,
@@ -137,7 +154,7 @@ def get_litellm_params(
         "model_alias_map": model_alias_map,
         "completion_call_id": completion_call_id,
         "aembedding": aembedding,
-        "metadata": metadata,
+        "metadata": resolved_metadata,
         "model_info": model_info,
         "proxy_server_request": proxy_server_request,
         "preset_cache_key": preset_cache_key,
@@ -160,7 +177,7 @@ def get_litellm_params(
         "custom_prompt_dict": custom_prompt_dict,
         "litellm_metadata": litellm_metadata,
         "disable_add_transform_inline_image_block": disable_add_transform_inline_image_block,
-        "drop_params": drop_params,
+        "drop_params": normalize_drop_params(drop_params),
         "prompt_id": prompt_id,
         "prompt_variables": prompt_variables,
         "async_call": async_call,
@@ -179,3 +196,19 @@ def get_litellm_params(
                 litellm_params[key] = kwargs[key]
 
     return litellm_params
+
+
+def add_trusted_model_credentials_to_litellm_params(
+    litellm_params_dict: MutableMapping[str, object], kwargs: Mapping[str, object]
+) -> None:
+    """
+    Carry the immutable server-side credential snapshot into litellm_params.
+
+    get_litellm_params has a fixed signature, so callers that need the snapshot to
+    survive into the logging object and the downstream file read have to re-add it. Only
+    a MappingProxyType is accepted, since providers resolve trusted configuration such
+    as a Bedrock file bucket from it and must not read a request-supplied mapping.
+    """
+    trusted_model_credentials: Final = kwargs.get("_litellm_internal_model_credentials")
+    if isinstance(trusted_model_credentials, MappingProxyType):
+        litellm_params_dict["_litellm_internal_model_credentials"] = trusted_model_credentials

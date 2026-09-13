@@ -1,3 +1,5 @@
+from typing import Final
+
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -21,7 +23,7 @@ class XInferenceImageGenerationConfig(BaseImageGenerationConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
         for k in non_default_params:
             if k not in optional_params:
                 if k in supported_params:

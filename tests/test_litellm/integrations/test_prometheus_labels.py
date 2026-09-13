@@ -61,7 +61,7 @@ def test_user_email_in_required_metrics():
         print(f"✅ {metric_name} contains user_email label")
 
 
-def test_model_id_in_required_metrics():
+def test_model_id_in_extended_metric_set():
     """
     Test that model_id label is present in all the metrics that should have it
     """

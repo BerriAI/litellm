@@ -2,11 +2,8 @@
 Test automatic routing to xAI Responses API when tools are present
 """
 
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import pytest
 import litellm

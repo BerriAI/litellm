@@ -1,20 +1,16 @@
-use serde_json::{Map, Value};
-
-use crate::constants::MESSAGES_ERROR_BODY_MAX_CHARS;
-use crate::error::{CoreError, CoreResult, json_type_name};
+use crate::Error;
+use crate::http_utils::string_headers as shared_string_headers;
 use crate::providers::anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG;
 use crate::providers::azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG;
+use serde_json::{Map, Value};
 
 use super::transformation::AnthropicMessagesProviderConfig;
 
-pub(super) fn truncate_error_body(body: &str) -> String {
-    if body.chars().count() <= MESSAGES_ERROR_BODY_MAX_CHARS {
-        return body.to_string();
-    }
-    let truncated: String = body.chars().take(MESSAGES_ERROR_BODY_MAX_CHARS).collect();
-    format!("{truncated}... (truncated)")
-}
+pub(super) use crate::http_utils::{has_bearer_auth, has_header, truncate_error_body};
 
+const HEADER_CONTEXT: &str = "messages";
+
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) fn messages_provider_config(
     provider: &str,
 ) -> Option<&'static dyn AnthropicMessagesProviderConfig> {
@@ -27,38 +23,6 @@ pub(super) fn messages_provider_config(
 
 pub(super) fn string_headers(
     extra_headers: Option<Map<String, Value>>,
-) -> CoreResult<Vec<(String, String)>> {
-    extra_headers
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(key, value)| {
-            value
-                .as_str()
-                .map(|value| (key.clone(), value.to_string()))
-                .ok_or_else(|| {
-                    CoreError::InvalidRequest(format!(
-                        "messages extra_headers.{key} must be a string, got {}",
-                        json_type_name(&value)
-                    ))
-                })
-        })
-        .collect()
-}
-
-pub(super) fn has_header(headers: &[(String, String)], name: &str) -> bool {
-    headers
-        .iter()
-        .any(|(key, _)| key.eq_ignore_ascii_case(name))
-}
-
-pub(super) fn has_bearer_auth(headers: &[(String, String)]) -> bool {
-    headers.iter().any(|(name, value)| {
-        if !name.eq_ignore_ascii_case("authorization") {
-            return false;
-        }
-        let value = value.trim();
-        value.len() > 7
-            && value[..7].eq_ignore_ascii_case("bearer ")
-            && !value[7..].trim().is_empty()
-    })
+) -> Result<Vec<(String, String)>, Error> {
+    shared_string_headers(HEADER_CONTEXT, extra_headers)
 }

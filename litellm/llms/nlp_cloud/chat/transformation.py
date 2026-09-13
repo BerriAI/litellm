@@ -1,6 +1,6 @@
 import json
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -14,6 +14,8 @@ from litellm.utils import ModelResponse, Usage
 from ..common_utils import NLPCloudError
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
     LoggingClass = LiteLLMLoggingObj
@@ -78,7 +80,7 @@ class NLPCloudConfig(BaseConfig):
         num_beams: int | None = None,
         num_return_sequences: int | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -154,9 +156,9 @@ class NLPCloudConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        text = " ".join(convert_content_list_to_str(message) for message in messages)
+        text: Final = " ".join(convert_content_list_to_str(message) for message in messages)
 
-        data = {
+        data: Final = {
             "text": text,
             **optional_params,
         }
@@ -173,7 +175,7 @@ class NLPCloudConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -187,7 +189,7 @@ class NLPCloudConfig(BaseConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response = raw_response.json()
+            completion_response: Final = raw_response.json()
         except Exception:
             raise NLPCloudError(message=raw_response.text, status_code=raw_response.status_code)
         if "error" in completion_response:
@@ -198,9 +200,7 @@ class NLPCloudConfig(BaseConfig):
         else:
             try:
                 if len(completion_response["generated_text"]) > 0:
-                    model_response.choices[0].message.content = (  # type: ignore
-                        completion_response["generated_text"]
-                    )
+                    model_response.choices[0].message.content = completion_response["generated_text"]
             except Exception:
                 raise NLPCloudError(
                     message=json.dumps(completion_response),
@@ -208,12 +208,12 @@ class NLPCloudConfig(BaseConfig):
                 )
 
         ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
-        prompt_tokens = completion_response["nb_input_tokens"]
-        completion_tokens = completion_response["nb_generated_tokens"]
+        prompt_tokens: Final = completion_response["nb_input_tokens"]
+        completion_tokens: Final = completion_response["nb_generated_tokens"]
 
         model_response.created = int(time.time())
         model_response.model = model
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,

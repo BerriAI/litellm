@@ -9,7 +9,8 @@ Proxies the Gemini v1beta Agents API:
   GET    /v1beta/agents/{name}/versions         list versions
 """
 
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, Final
 
 import httpx
 
@@ -25,10 +26,10 @@ from litellm.types.agents import (
 
 # Keys inside litellm_params that should be forwarded to the Gemini
 # create-agent body verbatim.
-_GEMINI_AGENT_BODY_KEYS = ("base_agent", "instructions", "base_environment")
+_GEMINI_AGENT_BODY_KEYS: Final = ("base_agent", "instructions", "base_environment")
 
 # LiteLLM-internal keys that must never be forwarded to Gemini.
-_LITELLM_INTERNAL_KEYS = frozenset(
+_LITELLM_INTERNAL_KEYS: Final = frozenset(
     {
         "custom_llm_provider",
         "api_key",
@@ -87,7 +88,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict[str, Any],
+        litellm_params: Mapping[str, object],
     ) -> str:
         return f"{self._base_url(api_base)}/agents"
 
@@ -98,7 +99,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
     ) -> dict[str, str]:
         headers = dict(headers)
         headers["Content-Type"] = "application/json"
-        explicit_api_key = litellm_params.get("api_key")
+        explicit_api_key: Final = litellm_params.get("api_key")
         # SECURITY: when the caller overrides ``api_base``, refuse to fall back
         # to the process-wide GOOGLE_API_KEY / GEMINI_API_KEY env vars. Otherwise
         # an authenticated proxy user could set ``api_base`` to an attacker-
@@ -111,7 +112,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
                 "GEMINI_API_KEY env vars with a custom api_base is refused "
                 "to prevent leaking the shared provider key to arbitrary hosts."
             )
-        api_key = GeminiModelInfo.get_api_key(explicit_api_key)
+        api_key: Final = GeminiModelInfo.get_api_key(explicit_api_key)
         if not api_key:
             raise ValueError("Google API key is required. Set GOOGLE_API_KEY or GEMINI_API_KEY, or pass api_key.")
         headers["x-goog-api-key"] = api_key
@@ -132,9 +133,9 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
     def transform_create_request(
         self,
         name: str,
-        litellm_params: dict[str, Any],
-    ) -> dict[str, Any]:
-        body: dict[str, Any] = {"name": name}
+        litellm_params: Mapping[str, object],
+    ) -> dict[str, object]:
+        body: Final[dict[str, object]] = {"name": name}
         for key in _GEMINI_AGENT_BODY_KEYS:
             value = litellm_params.get(key)
             if value is not None:
@@ -174,10 +175,10 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
     def transform_list_request(
         self,
         api_base: str | None,
-        litellm_params: dict[str, Any],
-    ) -> tuple[str, dict[str, Any]]:
-        url = f"{self._base_url(api_base)}/agents"
-        params: dict[str, Any] = {}
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, dict[str, object]]:
+        url: Final = f"{self._base_url(api_base)}/agents"
+        params: Final[dict[str, object]] = {}
         if litellm_params.get("page_size"):
             params["pageSize"] = litellm_params["page_size"]
         if litellm_params.get("page_token"):
@@ -207,9 +208,9 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         self,
         name: str,
         api_base: str | None,
-        litellm_params: dict[str, Any],
-    ) -> tuple[str, dict[str, Any]]:
-        url = f"{self._base_url(api_base)}/agents/{name}"
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, dict[str, object]]:
+        url: Final = f"{self._base_url(api_base)}/agents/{name}"
         return url, {}
 
     def transform_get_response(
@@ -236,7 +237,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         self,
         name: str,
         api_base: str | None,
-        litellm_params: dict[str, Any],
+        litellm_params: Mapping[str, object],
     ) -> str:
         return f"{self._base_url(api_base)}/agents/{name}"
 
@@ -262,10 +263,10 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         self,
         name: str,
         api_base: str | None,
-        litellm_params: dict[str, Any],
-    ) -> tuple[str, dict[str, Any]]:
-        url = f"{self._base_url(api_base)}/agents/{name}/versions"
-        params: dict[str, Any] = {}
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, dict[str, object]]:
+        url: Final = f"{self._base_url(api_base)}/agents/{name}/versions"
+        params: Final[dict[str, object]] = {}
         if litellm_params.get("page_size"):
             params["pageSize"] = litellm_params["page_size"]
         if litellm_params.get("page_token"):

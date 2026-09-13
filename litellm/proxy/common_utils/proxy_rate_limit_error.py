@@ -37,7 +37,7 @@ This module provides a single proxy-side error class that:
 
 import json
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Final
 
 from fastapi import HTTPException
 
@@ -98,7 +98,7 @@ def _coerce_message(detail: Any) -> str:
 # Both narrowings are intentional and handled at construction time — every
 # instance always has status_code == 429 and a Dict-typed headers — so we
 # silence the ATTR-overlap check rather than relax the annotations.
-class ProxyRateLimitError(HTTPException, RateLimitError):  # type: ignore[misc]
+class ProxyRateLimitError(HTTPException, RateLimitError):
     """
     A 429 raised by litellm's proxy-side rate limiting hooks.
 
@@ -157,8 +157,8 @@ class ProxyRateLimitError(HTTPException, RateLimitError):  # type: ignore[misc]
         # `.capitalize()` on the provider string).
         model = model or ""
         llm_provider = llm_provider or "litellm_proxy"
-        message = _coerce_message(detail)
-        stringified_headers: dict[str, str] | None = {k: str(v) for k, v in headers.items()} if headers else None
+        message: Final = _coerce_message(detail)
+        stringified_headers: Final[dict[str, str] | None] = {k: str(v) for k, v in headers.items()} if headers else None
 
         # Initialize the FastAPI HTTPException portion first so its attributes
         # (status_code, detail, headers) are already on the instance before

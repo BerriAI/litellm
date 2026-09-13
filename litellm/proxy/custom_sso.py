@@ -12,6 +12,8 @@ Flow:
 - User signed in to UI
 """
 
+from typing import Final
+
 from fastapi_sso.sso.base import OpenID
 
 from litellm.proxy import proxy_server
@@ -30,7 +32,7 @@ async def custom_sso_handler(userIDPInfo: OpenID) -> SSOUserDefinedValues:
 
         # check if user exists in litellm proxy DB
         if proxy_server.prisma_client is not None:
-            _user_info = await proxy_server.prisma_client.get_data(user_id=userIDPInfo.id)
+            _user_info: Final = await proxy_server.prisma_client.get_data(user_id=userIDPInfo.id)
 
         return SSOUserDefinedValues(
             models=[],

@@ -6,13 +6,6 @@ vi.mock("./networking", () => ({
   updateSSOSettings: vi.fn(),
 }));
 
-// Mock NotificationManager
-vi.mock("./molecules/notifications_manager", () => ({
-  default: {
-    fromBackend: vi.fn(),
-  },
-}));
-
 // Extract the logic we want to test into a pure function
 const buildApiPayload = (formValues: Record<string, any>) => {
   if (formValues.ui_access_mode_type === "all_authenticated_users") {

@@ -9,6 +9,8 @@ Convers
 Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
 """
 
+from typing import Final
+
 from litellm.types.llms.azure_ai import ImageEmbeddingInput, ImageEmbeddingRequest
 from litellm.types.llms.openai import EmbeddingCreateParams
 from litellm.types.utils import EmbeddingResponse, Usage
@@ -31,7 +33,7 @@ class AzureAICohereConfig:
         """
         Assume all str in list is base64 encoded string
         """
-        image_input: list[ImageEmbeddingInput] = []
+        image_input: Final[list[ImageEmbeddingInput]] = []
         for i in input:
             embedding_input = ImageEmbeddingInput(image=i)
             image_input.append(embedding_input)
@@ -43,8 +45,8 @@ class AzureAICohereConfig:
         """
         Return the list of input to `/image/embeddings`, `/v1/embeddings`, list of image_embedding_idx for recombination
         """
-        image_embeddings: list[str] = []
-        image_embedding_idx: list[int] = []
+        image_embeddings: Final[list[str]] = []
+        image_embedding_idx: Final[list[int]] = []
         for idx, i in enumerate(input):
             """
             - is base64 -> route to image embeddings
@@ -56,20 +58,20 @@ class AzureAICohereConfig:
                 image_embedding_idx.append(idx)
 
         ## REMOVE IMAGE EMBEDDINGS FROM input list
-        filtered_input = [item for idx, item in enumerate(input) if idx not in image_embedding_idx]
+        filtered_input: Final = [item for idx, item in enumerate(input) if idx not in image_embedding_idx]
 
-        v1_embeddings_request = EmbeddingCreateParams(input=filtered_input, model=model, **optional_params)
-        image_embeddings_request = self._transform_request_image_embeddings(
+        v1_embeddings_request: Final = EmbeddingCreateParams(input=filtered_input, model=model, **optional_params)
+        image_embeddings_request: Final = self._transform_request_image_embeddings(
             input=image_embeddings, optional_params=optional_params
         )
 
         return image_embeddings_request, v1_embeddings_request, image_embedding_idx
 
     def _transform_response(self, response: EmbeddingResponse) -> EmbeddingResponse:
-        additional_headers: dict | None = response._hidden_params.get("additional_headers")
+        additional_headers: Final[dict | None] = response._hidden_params.get("additional_headers")
         if additional_headers:
             # CALCULATE USAGE
-            input_tokens: str | None = additional_headers.get("llm_provider-num_tokens")
+            input_tokens: Final[str | None] = additional_headers.get("llm_provider-num_tokens")
             if input_tokens:
                 if response.usage:
                     response.usage.prompt_tokens = int(input_tokens)
@@ -77,7 +79,7 @@ class AzureAICohereConfig:
                     response.usage = Usage(prompt_tokens=int(input_tokens))
 
             # SET MODEL
-            base_model: str | None = additional_headers.get("llm_provider-azureml-model-group")
+            base_model: Final[str | None] = additional_headers.get("llm_provider-azureml-model-group")
             if base_model:
                 response.model = self._map_azure_model_group(base_model)
 

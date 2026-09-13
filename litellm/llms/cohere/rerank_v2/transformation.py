@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Final
 
 from litellm.llms.cohere.rerank.transformation import CohereRerankConfig
 from litellm.types.rerank import OptionalRerankParams, RerankRequest
@@ -78,7 +78,7 @@ class CohereRerankV2Config(CohereRerankConfig):
             raise ValueError("query is required for Cohere rerank")
         if "documents" not in optional_rerank_params:
             raise ValueError("documents is required for Cohere rerank")
-        rerank_request = RerankRequest(
+        rerank_request: Final = RerankRequest(
             model=model,
             query=optional_rerank_params["query"],
             documents=optional_rerank_params["documents"],

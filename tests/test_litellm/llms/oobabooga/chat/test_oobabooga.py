@@ -1,8 +1,5 @@
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
 

@@ -1,3 +1,5 @@
+from typing import Final
+
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
 
@@ -38,8 +40,8 @@ class FalAINanoBananaConfig(FalAIBaseConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        base_url: str = (api_base or get_secret_str("FAL_AI_API_BASE") or self.DEFAULT_BASE_URL).rstrip("/")
-        endpoint = model if model.startswith("fal-ai/") else f"fal-ai/{model}"
+        base_url: Final[str] = (api_base or get_secret_str("FAL_AI_API_BASE") or self.DEFAULT_BASE_URL).rstrip("/")
+        endpoint: Final = model if model.startswith("fal-ai/") else f"fal-ai/{model}"
         return f"{base_url}/{endpoint}"
 
     def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
@@ -52,7 +54,7 @@ class FalAINanoBananaConfig(FalAIBaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
         for key, value in non_default_params.items():
             if key == "response_format":
                 continue
@@ -75,7 +77,7 @@ class FalAINanoBananaConfig(FalAIBaseConfig):
             return "1:1"
         try:
             width, height = (int(part) for part in size.split("x"))
-            target = width / height
+            target: Final = width / height
         except (ValueError, ZeroDivisionError):
             return "1:1"
 

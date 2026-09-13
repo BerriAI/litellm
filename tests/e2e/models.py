@@ -8,16 +8,28 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Literal
+from typing import Final, Literal
 
-from pydantic import BaseModel, ConfigDict, RootModel, model_validator
+from e2e_http import PartialBody
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    RootModel,
+    model_serializer,
+    model_validator,
+)
 
 # ---------- keys ----------
 
 
 class ModelBudgetEntry(BaseModel):
-    budget_limit: float
-    time_period: str
+    budget_limit: float = Field(validation_alias=AliasChoices("budget_limit", "max_budget"))
+    time_period: str = Field(validation_alias=AliasChoices("time_period", "budget_duration"))
+    rpm_limit: int | None = None
+    tpm_limit: int | None = None
 
 
 class BudgetWindow(BaseModel):
@@ -33,6 +45,8 @@ class KeyLoggingCallbackVars(BaseModel):
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = None
     langfuse_host: str | None = None
+    wandb_api_key: str | None = None
+    weave_project_id: str | None = None
 
 
 class KeyLoggingCallback(BaseModel):
@@ -44,11 +58,14 @@ class KeyLoggingCallback(BaseModel):
 class KeyMetadata(BaseModel):
     logging: list[KeyLoggingCallback] | None = None
     priority: str | None = None
+    batch_enqueued_token_limit: int | None = None
+    tag: str | None = None
 
 
 class ObjectPermission(BaseModel):
     mcp_servers: list[str] | None = None
     mcp_access_groups: list[str] | None = None
+    mcp_toolsets: list[str] | None = None
 
 
 class KeyGenerateBody(BaseModel):
@@ -59,6 +76,7 @@ class KeyGenerateBody(BaseModel):
     budget_duration: str | None = None
     user_id: str | None = None
     team_id: str | None = None
+    project_id: str | None = None
     organization_id: str | None = None
     budget_id: str | None = None
     key_alias: str | None = None
@@ -71,14 +89,34 @@ class KeyGenerateBody(BaseModel):
     allowed_passthrough_routes: list[str] | None = None
     metadata: KeyMetadata | None = None
     object_permission: ObjectPermission | None = None
+    router_settings: RouterSettingsOverride | None = None
 
 
 class KeyGenerateResponse(BaseModel):
     key: str
+    token: str | None = None
+    key_alias: str | None = None
+    models: list[str] = []
+    max_budget: float | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    budget_duration: str | None = None
+    team_id: str | None = None
+    metadata: KeyMetadata | None = None
 
 
 class KeyRegenerateBody(BaseModel):
     key: str
+    grace_period: str | None = None
+
+
+class KeyResetSpendBody(BaseModel):
+    reset_to: float
+
+
+class KeyResetSpendResponse(BaseModel):
+    spend: float
+    previous_spend: float
 
 
 class KeyDeleteBody(BaseModel):
@@ -102,14 +140,18 @@ class KeyInfo(BaseModel):
     models: list[str] = []
     tpm_limit: int | None = None
     rpm_limit: int | None = None
+    project_id: str | None = None
+    organization_id: str | None = None
     team_id: str | None = None
     blocked: bool | None = None
     spend: float | None = None
     max_budget: float | None = None
+    budget_duration: str | None = None
     budget_reset_at: str | None = None
     budget_id: str | None = None
     litellm_budget_table: LiteLLMBudgetTable | None = None
     budget_limits: list[BudgetWindowState] | None = None
+    object_permission: ObjectPermission | None = None
 
 
 class KeyInfoResponse(BaseModel):
@@ -166,6 +208,7 @@ class ChatMessage(BaseModel):
 
 class CacheControl(BaseModel):
     type: str = "ephemeral"
+    ttl: str | None = None
 
 
 class TextBlock(BaseModel):
@@ -213,33 +256,68 @@ class McpChatTool(BaseModel):
     allowed_tools: list[str] | None = None
 
 
+class ToolCallFunction(BaseModel):
+    name: str | None = None
+    arguments: str | None = None
+
+
+class ToolCall(BaseModel):
+    id: str | None = None
+    type: str | None = None
+    function: ToolCallFunction = ToolCallFunction()
+
+
+class ChatAssistantTurn(BaseModel):
+    role: Literal["assistant"] = "assistant"
+    content: str | None = None
+    reasoning_content: str | None = None
+    tool_calls: list[ToolCall] | None = None
+
+
+class ChatToolResultTurn(BaseModel):
+    role: Literal["tool"] = "tool"
+    tool_call_id: str
+    content: str
+
+
+type ChatTurn = ChatMessage | ChatAssistantTurn | ChatToolResultTurn
+
+
 class ChatBody(BaseModel):
     model: str
-    messages: list[ChatMessage]
+    messages: Sequence[ChatTurn]
     stream: bool = False
     max_tokens: int | None = None
+    max_completion_tokens: int | None = None
+    temperature: float | None = None
     user: str | None = None
     metadata: ChatMetadata | None = None
     reasoning_effort: str | None = None
     thinking: ThinkingParam | None = None
     service_tier: str | None = None
+    prompt_cache_key: str | None = None
     tools: Sequence[ChatTool | McpChatTool] | None = None
     tool_choice: str | None = None
     guardrails: list[str] | None = None
     response_format: dict[str, object] | None = None
+    chat_template_kwargs: dict[str, bool] | None = None
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class RouterSettingsOverride(BaseModel):
-    """Per-request `router_settings_override` in a /chat/completions body: the
-    reliability knobs (fallbacks by trigger, retry count) the reliability suite
-    drives per call instead of via static router config. Serialized exclude_none, so
-    an override sets only the strategies a test exercises. Each fallbacks map is
-    model_name -> the ordered fallback model_names to try."""
+    """Router settings a test scopes below the global config: sent per request as
+    `router_settings_override` in a /chat/completions body (the reliability suite's
+    fallback and retry knobs) or stored on a key as `router_settings` at
+    /key/generate (the auto-router suite's tag filtering switch). Serialized
+    exclude_none, so an override sets only the knobs a test exercises. Each
+    fallbacks map is model_name -> the ordered fallback model_names to try."""
 
     fallbacks: list[dict[str, list[str]]] | None = None
     context_window_fallbacks: list[dict[str, list[str]]] | None = None
     content_policy_fallbacks: list[dict[str, list[str]]] | None = None
     num_retries: int | None = None
+    model_group_retry_policy: dict[str, dict[str, int]] | None = None
+    enable_tag_filtering: bool | None = None
 
 
 class ReliabilityChatBody(ChatBody):
@@ -248,15 +326,6 @@ class ReliabilityChatBody(ChatBody):
     exclude_none so an absent override never leaks into the request."""
 
     router_settings_override: RouterSettingsOverride | None = None
-
-
-class ToolCallFunction(BaseModel):
-    name: str | None = None
-    arguments: str | None = None
-
-
-class ToolCall(BaseModel):
-    function: ToolCallFunction = ToolCallFunction()
 
 
 class McpToolFunctionRef(BaseModel):
@@ -295,6 +364,7 @@ class McpResponseMetadata(BaseModel):
 
 
 class OutMessage(BaseModel):
+    role: str | None = None
     content: str | None = None
     reasoning_content: str | None = None
     tool_calls: list[ToolCall] | None = None
@@ -303,6 +373,7 @@ class OutMessage(BaseModel):
 
 class ChatChoice(BaseModel):
     message: OutMessage | None = None
+    finish_reason: str | None = None
 
 
 class PromptTokensDetails(BaseModel):
@@ -325,6 +396,7 @@ class Usage(BaseModel):
 
 class ChatResponse(BaseModel):
     id: str | None = None
+    object: str | None = None
     model: str | None = None
     choices: list[ChatChoice] = []
     usage: Usage | None = None
@@ -347,14 +419,26 @@ class ToolInputSchema(BaseModel):
     required: list[str] = []
 
 
-class AnthropicToolSearchTool(BaseModel):
-    """The tool_search discovery tool. `type` carries the SDK-version-pinned
-    suffix (e.g. ``tool_search_tool_regex_20251119``) that LiteLLM keys its
-    per-provider beta-header translation on; `name` is the unsuffixed
-    canonical name the upstream accepts."""
+class AnthropicServerTool(BaseModel):
+    """An Anthropic-managed tool the upstream executes itself. It carries no
+    `input_schema`; `type` is the SDK-version-pinned identifier LiteLLM keys its
+    per-provider translation on, and `name` is the unsuffixed canonical name the
+    upstream accepts."""
 
     type: str
     name: str
+
+
+class AnthropicToolSearchTool(AnthropicServerTool):
+    """The tool_search discovery tool, e.g. ``tool_search_tool_regex_20251119``."""
+
+
+class AnthropicWebSearchTool(AnthropicServerTool):
+    """The web_search server tool, e.g. ``web_search_20250305``. Distinct from
+    Claude Code's client-side ``WebSearch`` tool, which is an ordinary custom
+    tool the CLI executes and feeds back as a tool_result."""
+
+    max_uses: int | None = None
 
 
 class AnthropicCustomTool(BaseModel):
@@ -363,15 +447,55 @@ class AnthropicCustomTool(BaseModel):
     input_schema: ToolInputSchema
 
 
-type AnthropicTool = AnthropicToolSearchTool | AnthropicCustomTool
+type AnthropicTool = AnthropicToolSearchTool | AnthropicWebSearchTool | AnthropicCustomTool
+
+
+class AnthropicContentBlock(BaseModel):
+    """One block of a `content` array. Only the fields a test reads are
+    declared; `extra="allow"` keeps the rest (a `server_tool_use` block's
+    `input`, a `tool_search_tool_result` block's nested `content`) so an
+    assistant turn read off the wire can be replayed into history verbatim
+    instead of being silently flattened to its text."""
+
+    model_config = ConfigDict(extra="allow")
+    type: str | None = None
+    text: str | None = None
+    id: str | None = None
+    name: str | None = None
+    input: dict[str, object] | None = None
+
+
+class AnthropicToolResultBlock(BaseModel):
+    """The user-turn answer to a client-side `tool_use`. `tool_use_id` must be
+    the id the model actually emitted; an invented one is rejected by
+    Anthropic's own schema validator, which Bedrock inherits."""
+
+    type: Literal["tool_result"] = "tool_result"
+    tool_use_id: str
+    content: str
+
+
+class AnthropicAssistantTurn(BaseModel):
+    role: Literal["assistant"] = "assistant"
+    content: list[AnthropicContentBlock]
+
+
+class AnthropicToolResultTurn(BaseModel):
+    role: Literal["user"] = "user"
+    content: list[AnthropicToolResultBlock]
+
+
+type AnthropicMessage = ChatMessage | AnthropicAssistantTurn | AnthropicToolResultTurn
 
 
 class AnthropicMessagesBody(BaseModel):
     model: str
-    messages: list[ChatMessage]
+    messages: list[AnthropicMessage]
     max_tokens: int
     stream: bool | None = None
     tools: list[AnthropicTool] | None = None
+    guardrails: list[str] | None = None
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class CountTokensBody(BaseModel):
@@ -380,11 +504,6 @@ class CountTokensBody(BaseModel):
 
     model: str
     messages: list[ChatMessage]
-
-
-class AnthropicContentBlock(BaseModel):
-    type: str | None = None
-    text: str | None = None
 
 
 class AnthropicMessagesResponse(BaseModel):
@@ -399,6 +518,7 @@ class AnthropicMessagesResponse(BaseModel):
     model: str | None = None
     content: list[AnthropicContentBlock] | None = None
     choices: list[ChatChoice] | None = None
+    usage: Usage | None = None
 
 
 class CountTokensResponse(BaseModel):
@@ -409,6 +529,15 @@ class CountTokensResponse(BaseModel):
 
 
 # ---------- mcp servers ----------
+
+
+class McpInfo(BaseModel):
+    """The `mcp_info` display block stored on an MCP server; only the fields the
+    lifecycle test writes and reads back."""
+
+    server_name: str | None = None
+    description: str | None = None
+    logo_url: str | None = None
 
 
 class McpServerCreateBody(BaseModel):
@@ -425,6 +554,18 @@ class McpServerCreateBody(BaseModel):
     oauth2_flow: Literal["client_credentials", "authorization_code"] | None = None
     authorization_url: str | None = None
     token_url: str | None = None
+    server_name: str | None = None
+    description: str | None = None
+    mcp_info: McpInfo | None = None
+
+
+class McpServerUpdateBody(PartialBody):
+    """PUT /v1/mcp/server: a field left unset keeps its stored value, a field set
+    to None is cleared."""
+
+    server_id: str
+    alias: str | None = None
+    description: str | None = None
 
 
 class McpServerInfo(BaseModel):
@@ -438,9 +579,58 @@ class McpServerInfo(BaseModel):
     allow_all_keys: bool | None = None
 
 
+class McpServerRow(McpServerInfo):
+    """A stored MCP server as the create, get, and list routes return it: the
+    fields the lifecycle test asserts survive the round trip."""
+
+    server_name: str | None = None
+    transport: str | None = None
+    description: str | None = None
+    mcp_info: McpInfo | None = None
+
+
+class McpServerListResponse(RootModel[list[McpServerRow]]):
+    """GET /v1/mcp/server answers with a bare array of servers."""
+
+
+class ToolsetTool(BaseModel):
+    server_id: str
+    tool_name: str
+
+
+class ToolsetCreateBody(BaseModel):
+    toolset_name: str
+    description: str | None = None
+    tools: list[ToolsetTool]
+
+
+class ToolsetUpdateBody(PartialBody):
+    """PUT /v1/mcp/toolset: a field left unset keeps its stored value, a field set
+    to None is cleared."""
+
+    toolset_id: str
+    description: str | None = None
+    tools: list[ToolsetTool] | None = None
+
+
+class ToolsetRow(BaseModel):
+    """A stored toolset as POST /v1/mcp/toolset, GET /v1/mcp/toolset/{toolset_id},
+    and each row of GET /v1/mcp/toolset return it."""
+
+    toolset_id: str
+    toolset_name: str
+    description: str | None = None
+    tools: list[ToolsetTool] = Field(default_factory=list)
+
+
+class ToolsetListResponse(RootModel[list[ToolsetRow]]):
+    """GET /v1/mcp/toolset answers with a bare array of toolsets."""
+
+
 class EmbedBody(BaseModel):
     model: str
     input: str
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class EmbedResponse(BaseModel):
@@ -478,6 +668,28 @@ class OcrResponse(BaseModel):
 # ---------- spend logs ----------
 
 
+class GuardrailEntityMatch(BaseModel):
+    entity_type: str
+    score: float
+    start: int
+    end: int
+
+
+class GuardrailRunRecord(BaseModel):
+    guardrail_name: str | None = None
+    guardrail_mode: str | None = None
+    guardrail_status: str | None = None
+    guardrail_provider: str | None = None
+    masked_entity_count: dict[str, int] | None = None
+    guardrail_response: object | None = None
+
+
+class SpendLogMetadata(BaseModel):
+    user_api_key_alias: str | None = None
+    applied_guardrails: list[str] | None = None
+    guardrail_information: list[GuardrailRunRecord] | None = None
+
+
 class SpendLogRow(BaseModel):
     request_id: str | None = None
     api_key: str | None = None
@@ -494,6 +706,8 @@ class SpendLogRow(BaseModel):
     completion_tokens: int | None = None
     total_tokens: int | None = None
     request_tags: list[str] | None = None
+    metadata: SpendLogMetadata | None = None
+    proxy_server_request: JsonValue = None
 
 
 class SpendLogs(RootModel[list[SpendLogRow]]):
@@ -631,6 +845,23 @@ class ModelInfoResponse(BaseModel):
     data: list[ModelInfoEntry] = []
 
 
+class CostMapEntry(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    litellm_provider: str | None = None
+    mode: str | None = None
+    deprecation_date: str | None = None
+    input_cost_per_token: float | None = None
+    output_cost_per_token: float | None = None
+    cache_read_input_token_cost: float | None = None
+    supports_function_calling: bool | None = None
+    supports_reasoning: bool | None = None
+    supports_response_schema: bool | None = None
+
+
+class CostMap(RootModel[dict[str, CostMapEntry]]):
+    pass
+
+
 class FileEntry(BaseModel):
     id: str
 
@@ -663,8 +894,10 @@ class FineTuningJobsResponse(BaseModel):
 class LiteLLMParamsBody(BaseModel):
     """POST /model/new litellm_params: `model` is the only required field; `api_key`
     et al may be an `os.environ/FOO` reference the proxy resolves at call time.
-    `input_cost_per_token`/`output_cost_per_token` register a per-deployment custom
-    pricing override; left None (and dropped from the body) the deployment keeps the
+    The `*_cost_per_token` / `*_token_cost` fields register a per-deployment custom
+    pricing override (the cache and `_priority` rates only apply when both base
+    rates are set, which is what makes the proxy register the deployment's full
+    pricing entry); left None (and dropped from the body) the deployment keeps the
     backend's canonical rate."""
 
     model: str
@@ -691,12 +924,23 @@ class LiteLLMParamsBody(BaseModel):
     aws_external_id: str | None = None
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
+    cache_read_input_token_cost: float | None = None
+    cache_creation_input_token_cost: float | None = None
+    input_cost_per_token_priority: float | None = None
+    output_cost_per_token_priority: float | None = None
     extra_headers: dict[str, str] | None = None
     use_in_pass_through: bool | None = None
     complexity_router_config: dict[str, object] | None = None
-    mock_response: str | None = None
+    auto_router_config: str | None = None
+    auto_router_default_model: str | None = None
+    auto_router_embedding_model: str | None = None
+    tags: list[str] | None = None
+    mock_response: str | list[float] | None = None
     timeout: float | None = None
     tpm: int | None = None
+    weight: int | None = None
+    cooldown_time: float | None = None
+    order: int | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]
@@ -709,6 +953,9 @@ class ModelInfoBody(BaseModel):
     # constraint when a prior run's teardown had not removed the row.
     id: str | None = None
     mode: ModelMode | None = None
+    access_groups: list[str] | None = None
+    team_id: str | None = None
+    allowed_fails_policy: dict[str, int] | None = None
 
 
 class ModelNewBody(BaseModel):
@@ -738,6 +985,15 @@ class ModelListEntry(BaseModel):
     id: str
 
 
+class ModelsListParams(BaseModel):
+    """Query for GET /v1/models. A wildcard route such as ``openai/gpt-5.4*`` is
+    listed only under ``return_wildcard_routes``; without it the route is dropped
+    and only its expansions remain, so a readiness poll for the pattern itself
+    never resolves."""
+
+    return_wildcard_routes: bool = True
+
+
 class ModelsListResponse(BaseModel):
     """GET /v1/models on the data plane: the deployments the gateway can actually
     serve right now. Used to confirm a freshly created model has propagated from
@@ -748,6 +1004,26 @@ class ModelsListResponse(BaseModel):
 
 class ModelDeleteBody(BaseModel):
     id: str
+
+
+class ConnectionTestBody(BaseModel):
+    """POST /health/test_connection body, the API behind the Admin UI's Test
+    Connection button: the deployment params as typed into the add-model form and
+    the health-check mode picking which endpoint the probe calls. The endpoint
+    rejects `os.environ/` references, so credentials are either literal values or
+    omitted to fall through to the proxy's own environment."""
+
+    litellm_params: LiteLLMParamsBody
+    mode: Literal["chat", "completion", "embedding", "responses"]
+
+
+class ConnectionTestResult(BaseModel):
+    error: str | None = None
+
+
+class ConnectionTestResponse(BaseModel):
+    status: Literal["success", "error"]
+    result: ConnectionTestResult | None = None
 
 
 class CredentialCreateBody(BaseModel):
@@ -763,9 +1039,35 @@ class CredentialCreateResponse(BaseModel):
 # ---------- key / team / user / organization management ----------
 
 
+class Cleared(BaseModel):
+    """An explicit JSON null in a merge-patch body. The transport drops `None` fields
+    before sending (`exclude_none`), so `None` means "leave the stored value alone"; a
+    field set to `CLEAR` reaches the wire as `null`, which tells the proxy to clear it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    @model_serializer
+    def _as_null(self) -> None:
+        return None
+
+
+CLEAR: Final = Cleared()
+
+
 class KeyUpdateBody(BaseModel):
+    """POST /key/update is a merge patch: a field left `None` is dropped from the body and
+    keeps its stored value, `CLEAR` sends an explicit null that clears it (`budget_duration`
+    clears `budget_reset_at` with it), and `metadata` replaces the stored metadata wholesale."""
+
     key: str
-    models: list[str]
+    project_id: str | Cleared | None = None
+    models: list[str] | None = None
+    key_alias: str | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    max_budget: float | Cleared | None = None
+    budget_duration: str | Cleared | None = None
+    metadata: KeyMetadata | None = None
 
 
 class KeyBlockBody(BaseModel):
@@ -778,6 +1080,27 @@ class KeyListParams(BaseModel):
 
 class KeyListResponse(BaseModel):
     total_count: int
+
+
+# ---------- admin UI session ----------
+
+
+class UiLoginBody(BaseModel):
+    username: str
+    password: str
+
+
+class UiLoginResponse(BaseModel):
+    token: str
+    redirect_url: str
+
+
+class UiSessionClaims(BaseModel):
+    user_id: str
+    key: str
+    user_role: str
+    login_method: Literal["sso", "username_password"]
+    exp: int
 
 
 class TeamMemberEntry(BaseModel):
@@ -804,6 +1127,7 @@ class TeamNewResponse(BaseModel):
 class TeamUpdateBody(BaseModel):
     team_id: str
     team_alias: str
+    models: list[str] | None = None
 
 
 class TeamInfoParams(BaseModel):
@@ -950,6 +1274,19 @@ class TagListResponse(RootModel[list[TagListEntry]]):
 
 
 # ---------- health / lifecycle ----------
+
+
+class ProcessMemory(BaseModel):
+    ram_usage_mb: float | None = None
+    system_memory_percent: float | None = None
+    error: str | None = None
+
+
+class MemorySummaryResponse(BaseModel):
+    worker_pid: int
+    hostname: str | None = None
+    status: str
+    memory: ProcessMemory
 
 
 class ReadinessResponse(BaseModel):
