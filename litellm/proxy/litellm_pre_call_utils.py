@@ -905,8 +905,9 @@ class KeyAndTeamLoggingSettings:
     """
     Helper class to get the dynamic logging settings for the key and team
 
-    An empty ``logging`` list is the same as no ``logging`` key: both return ``None`` so the
-    caller falls through to the next level. Disabling a callback is ``litellm_disabled_callbacks``.
+    A key's empty ``logging`` list is unset (``None``) and falls through to the team; disabling a
+    callback on a key is ``litellm_disabled_callbacks``. A team's ``logging: []`` is the state
+    ``POST /team/{team_id}/disable_logging`` persists, so it is kept and stops the fallthrough.
     """
 
     @staticmethod
@@ -918,7 +919,7 @@ class KeyAndTeamLoggingSettings:
     @staticmethod
     def get_team_dynamic_logging_settings(user_api_key_dict: UserAPIKeyAuth):
         if user_api_key_dict.team_metadata is not None and "logging" in user_api_key_dict.team_metadata:
-            return decrypt_callback_vars(user_api_key_dict.team_metadata).get("logging") or None
+            return decrypt_callback_vars(user_api_key_dict.team_metadata).get("logging")
         return None
 
 

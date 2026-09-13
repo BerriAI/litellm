@@ -18224,6 +18224,30 @@ async def test_key_health_tests_the_team_callbacks_an_empty_key_logging_list_fal
 
 
 @pytest.mark.asyncio
+async def test_key_health_tests_a_valid_key_callback_instead_of_the_team_default():
+    from litellm.proxy.management_endpoints.key_management_endpoints import key_health
+
+    caller: Final = UserAPIKeyAuth(
+        api_key="sk-1",
+        team_id="team-gcs",
+        metadata={"logging": [{"callback_name": "langfuse", "callback_vars": {"langfuse_public_key": "pk"}}]},
+        team_metadata={},
+    )
+    logging_status: Final = LoggingCallbackStatus(callbacks=("langfuse",), status="healthy", details="ok")
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", _default_team_gcs_proxy_config("team-gcs")),  # test-quality-ok: key_health reads the module-level proxy config
+        patch(  # test-quality-ok: the mock completion behind test_key_logging needs a running proxy
+            "litellm.proxy.management_endpoints.key_management_endpoints.test_key_logging",
+            AsyncMock(return_value=logging_status),
+        ) as test_logging,
+    ):
+        response = await key_health(request=MagicMock(), user_api_key_dict=caller)
+
+    assert response == KeyHealthResponse(key="healthy", logging_callbacks=logging_status)
+    assert test_logging.await_args.kwargs["logging_callbacks"] == ("langfuse",)
+
+
+@pytest.mark.asyncio
 async def test_key_health_without_any_effective_callbacks_reports_healthy_and_sends_no_test_log():
     from litellm.proxy.management_endpoints.key_management_endpoints import key_health
 
@@ -18287,21 +18311,53 @@ async def test_key_health_rejects_key_logging_entries_without_a_callback_name():
     assert "callback_name is required" in exc.value.message
 
 
-@pytest.mark.asyncio
-async def test_flush_gcs_reports_the_failed_upload_count_from_the_registered_logger():
+def _gcs_logger_whose_flush_reports(sent: int, failed: int):
     from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
-    from litellm.proxy.management_endpoints.key_management_endpoints import flush_gcs_and_describe_failures
     from litellm.types.integrations.gcs_bucket import GCSFlushResult
 
-    class _StuckUploadGCSLogger(GCSBucketLogger):
+    class _FixedFlushGCSLogger(GCSBucketLogger):
         def __init__(self) -> None:
             with patch("litellm.proxy.proxy_server.premium_user", True):  # test-quality-ok: GCS logging is premium-gated
                 super().__init__(bucket_name="test-bucket")
 
         async def flush_queue_and_report(self) -> GCSFlushResult:
-            return GCSFlushResult(sent=0, failed=3)
+            return GCSFlushResult(sent=sent, failed=failed)
 
-    assert await flush_gcs_and_describe_failures(_StuckUploadGCSLogger()) == "GCS upload failed for 3 event(s), 0 uploaded"
+    return _FixedFlushGCSLogger()
+
+
+@pytest.mark.asyncio
+async def test_flush_gcs_reports_the_failed_upload_count_from_the_registered_logger():
+    from litellm.proxy.management_endpoints.key_management_endpoints import flush_gcs_and_describe_failures
+
+    assert (
+        await flush_gcs_and_describe_failures(_gcs_logger_whose_flush_reports(sent=0, failed=3))
+        == "GCS upload failed for 3 event(s), 0 uploaded"
+    )
+    assert await flush_gcs_and_describe_failures(_gcs_logger_whose_flush_reports(sent=2, failed=0)) is None
+
+
+@pytest.mark.asyncio
+async def test_key_logging_marks_the_key_unhealthy_when_the_gcs_flush_leaves_events_undelivered():
+    from starlette.requests import Request as StarletteRequest
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import test_key_logging
+
+    request: Final = StarletteRequest(
+        {"type": "http", "method": "POST", "path": "/key/health", "headers": [], "query_string": b""}
+    )
+    caller: Final = UserAPIKeyAuth(api_key="sk-1", team_id="team-gcs", metadata={"logging": []}, team_metadata={})
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", _default_team_gcs_proxy_config("team-gcs")),  # test-quality-ok: test_key_logging reads the module-level proxy config
+        patch(  # test-quality-ok: the registered logger is a process-wide registry, not an injectable
+            "litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class",
+            return_value=_gcs_logger_whose_flush_reports(sent=1, failed=3),
+        ),
+    ):
+        status = await test_key_logging(user_api_key_dict=caller, request=request, logging_callbacks=("gcs_bucket",))
+
+    assert status["status"] == "unhealthy"
+    assert "GCS upload failed for 3 event(s), 1 uploaded" in (status["details"] or "")
 
 
 @pytest.mark.asyncio
