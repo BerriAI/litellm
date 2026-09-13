@@ -22,11 +22,12 @@ commands:
           environment:
             MIGRATION_SOURCE_SHA: << pipeline.parameters.migration_source_sha >>
           command: |
-            if [ -n "$MIGRATION_SOURCE_SHA" ]; then
-              [[ "$MIGRATION_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
-              git fetch origin "$MIGRATION_SOURCE_SHA"
-              git checkout --detach "$MIGRATION_SOURCE_SHA"
-            fi
+            revision="${MIGRATION_SOURCE_SHA:-$CIRCLE_SHA1}"
+            [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || exit 1
+            git init
+            git remote add origin https://github.com/BerriAI/litellm.git
+            git fetch --depth 1 origin "$revision"
+            git checkout --detach FETCH_HEAD
   skip_if_unrelated_changes:
     parameters:
       category:
@@ -2869,14 +2870,24 @@ jobs:
           destination: e2e-server-root-path-playwright-report
 
   build_docker_database_image:
+    parameters:
+      migration_qualification:
+        type: boolean
+        default: false
     machine:
       image: ubuntu-2204:2024.04.1
     resource_class: large
     working_directory: ~/project
     steps:
-      - checkout
-      - checkout_migration_source
-      - skip_if_unrelated_changes
+      - when:
+          condition: << parameters.migration_qualification >>
+          steps:
+            - checkout_migration_source
+      - unless:
+          condition: << parameters.migration_qualification >>
+          steps:
+            - checkout
+            - skip_if_unrelated_changes
 
       - run:
           name: Build Docker image
@@ -2923,7 +2934,6 @@ jobs:
       MIGRATION_TEST_OUTPUT: /tmp/migration-results
       PYTHONPATH: tests/e2e
     steps:
-      - checkout
       - checkout_migration_source
       - install_uv
       - install_rust
@@ -3024,7 +3034,8 @@ workflows:
   migration_startup:
     when: << pipeline.parameters.run_migration_tests >>
     jobs: &migration_jobs
-      - build_docker_database_image
+      - build_docker_database_image:
+          migration_qualification: true
       - migration_startup_tests:
           name: migration-startup
           suite: startup
