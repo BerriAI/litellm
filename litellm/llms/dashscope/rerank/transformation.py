@@ -3,6 +3,7 @@ Transformation logic for DashScope's OpenAI-compatible /v1/reranks API.
 
 Supports
 - qwen3-rerank
+- qwen3.7-text-rerank
 
 (Other DashScope rerankers — gte-rerank-v2 / qwen3-vl-rerank — share the same
 endpoint but have not been validated against this transformer. Behavior with
@@ -53,8 +54,8 @@ class DashScopeRerankConfig(BaseRerankConfig):
     """
     Reference: https://help.aliyun.com/zh/model-studio/text-rerank-api
 
-    Targets DashScope's qwen3-rerank model. Request fields: model, query,
-    documents, top_n, return_documents. Response: results[].index,
+    Targets DashScope's qwen3-rerank and qwen3.7-text-rerank. Request fields: model, query,
+    documents, top_n, return_documents, instruct. Response: results[].index,
     results[].relevance_score, optionally results[].document.text (when
     return_documents=true), plus a top-level usage.total_tokens counter.
     """
@@ -109,7 +110,7 @@ class DashScopeRerankConfig(BaseRerankConfig):
         }
 
     def get_supported_cohere_rerank_params(self, model: str) -> list:
-        return ["query", "documents", "top_n", "return_documents"]
+        return ["query", "documents", "top_n", "return_documents", "instruction"]
 
     def map_cohere_rerank_params(
         self,
@@ -126,8 +127,6 @@ class DashScopeRerankConfig(BaseRerankConfig):
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
     ) -> dict:
-        # qwen3-rerank accepts query/documents/top_n/return_documents. The
-        # rest (rank_fields, max_*_per_doc) are silently dropped.
         params: Final[OptionalRerankParams] = OptionalRerankParams(
             query=query,
             documents=documents,
@@ -136,6 +135,8 @@ class DashScopeRerankConfig(BaseRerankConfig):
             params["top_n"] = top_n
         if return_documents is not None:
             params["return_documents"] = return_documents
+        if instruction is not None:
+            params["instruction"] = instruction
         return dict(params)
 
     def transform_rerank_request(
@@ -159,6 +160,8 @@ class DashScopeRerankConfig(BaseRerankConfig):
             request["top_n"] = optional_rerank_params["top_n"]
         if optional_rerank_params.get("return_documents") is not None:
             request["return_documents"] = optional_rerank_params["return_documents"]
+        if optional_rerank_params.get("instruction") is not None:
+            request["instruct"] = optional_rerank_params["instruction"]
         return request
 
     def transform_rerank_response(
