@@ -20,6 +20,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.rerank import (
     RerankBilledUnits,
     RerankResponse,
+    RerankResponseDocument,
     RerankResponseMeta,
     RerankResponseResult,
 )
@@ -181,21 +182,24 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
             # Handle both cases: with full details and with only IDs
             if "score" in record:
                 # Full response with score and details
-                results.append(
-                    {
-                        "index": int(record["id"]),
-                        "relevance_score": record.get("score", 0.0),
-                    }
-                )
+                result = {
+                    "index": int(record["id"]),
+                    "relevance_score": record.get("score", 0.0),
+                }
             else:
                 # Response with only IDs (when ignoreRecordDetailsInResponse=true)
                 # We can't provide a relevance score, so we'll use a default
-                results.append(
-                    {
-                        "index": int(record["id"]),
-                        "relevance_score": 1.0,  # Default score when details are ignored
-                    }
-                )
+                result = {
+                    "index": int(record["id"]),
+                    "relevance_score": 1.0,  # Default score when details are ignored
+                }
+            # Vertex returns the record content when ignoreRecordDetailsInResponse=false
+            # (i.e. the caller passed return_documents=true). Surface it as document.text
+            # so the response matches the Cohere rerank format.
+            content = record.get("content")
+            if content is not None:
+                result["document"] = RerankResponseDocument(text=content)
+            results.append(result)
 
         # Sort by relevance score (descending)
         results.sort(key=lambda x: x["relevance_score"], reverse=True)
@@ -204,9 +208,10 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         # Convert results to proper RerankResponseResult objects
         rerank_results: Final = []
         for result in results:
-            rerank_results.append(
-                RerankResponseResult(index=result["index"], relevance_score=result["relevance_score"])
-            )
+            rerank_result = RerankResponseResult(index=result["index"], relevance_score=result["relevance_score"])
+            if "document" in result:
+                rerank_result["document"] = result["document"]
+            rerank_results.append(rerank_result)
 
         # Create meta object
         meta: Final = RerankResponseMeta(billed_units=RerankBilledUnits(search_units=len(records)))
