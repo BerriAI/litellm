@@ -10,9 +10,7 @@ import time
 from dataclasses import dataclass
 
 import jwt
-
 from e2e_config import MASTER_KEY
-from proxy_client import ProxyClient
 from e2e_http import (
     AuthHeaders,
     NetworkError,
@@ -37,10 +35,17 @@ from models import (
     KeyDeleteBody,
     KeyGenerateBody,
     KeyGenerateResponse,
+    KeyInfoParams,
+    KeyInfoResponse,
     KeyListParams,
     KeyListResponse,
     KeyRegenerateBody,
+    KeyResetSpendBody,
+    KeyResetSpendResponse,
     KeyUpdateBody,
+    McpServerCreateBody,
+    McpServerRow,
+    McpServerUpdateBody,
     ModelDeleteBody,
     OrgDeleteBody,
     OrgInfoParams,
@@ -76,6 +81,7 @@ from models import (
     UserNewResponse,
     UserUpdateBody,
 )
+from proxy_client import ProxyClient
 
 MODEL_ACCESS_DENIED_MARKER = "key_model_access_denied"
 ROUTE_NOT_ALLOWED_MARKER = "not allowed to call this route"
@@ -147,13 +153,21 @@ class ManagementClient:
     def update_key_models(self, key: str, models: list[str]) -> None:
         _ = unwrap(self.update_key(KeyUpdateBody(key=key, models=models)))
 
-    def delete_key_strict(self, key: str) -> None:
+    def key_info_as(self, key: str, *, caller_key: str) -> Result[KeyInfoResponse]:
+        return self.proxy.transport.get(
+            "/key/info",
+            headers=self.proxy.transport.bearer(caller_key),
+            params=KeyInfoParams(key=key),
+            response_type=KeyInfoResponse,
+        )
+
+    def delete_key_strict(self, key: str, *, caller_key: str | None = None) -> None:
         """Strict delete for the act phase of a test: a failed delete is a hard
         failure, unlike the warn-only ProxyClient.delete_key used at teardown."""
         _ = unwrap(
             self.proxy.transport.post(
                 "/key/delete",
-                headers=self.proxy.transport.master,
+                headers=self.proxy.transport.master if caller_key is None else self.proxy.transport.bearer(caller_key),
                 json=KeyDeleteBody(keys=[key]),
                 response_type=NoBody,
             )
@@ -191,15 +205,25 @@ class ManagementClient:
                 response_type=NoBody,
             )
         )
-    def regenerate_key(self, key: str) -> str:
+    def regenerate_key(self, key: str, *, grace_period: str | None = None) -> str:
         return unwrap(
             self.proxy.transport.post(
                 "/key/regenerate",
                 headers=self.proxy.transport.master,
-                json=KeyRegenerateBody(key=key),
+                json=KeyRegenerateBody(key=key, grace_period=grace_period),
                 response_type=KeyGenerateResponse,
             )
         ).key
+
+    def reset_key_spend(self, key: str, reset_to: float) -> KeyResetSpendResponse:
+        return unwrap(
+            self.proxy.transport.post(
+                f"/key/{key}/reset_spend",
+                headers=self.proxy.transport.master,
+                json=KeyResetSpendBody(reset_to=reset_to),
+                response_type=KeyResetSpendResponse,
+            )
+        )
 
     def key_list(self, key_alias: str, *, caller_key: str | None = None) -> Result[KeyListResponse]:
         """GET /key/list, the Virtual Keys page's own inventory call. `caller_key` is
@@ -523,6 +547,38 @@ class ManagementClient:
                     response_type=TagListResponse,
                 )
             ).root
+        )
+
+    def create_mcp_server(self, body: McpServerCreateBody) -> McpServerRow:
+        return unwrap(
+            self.proxy.transport.post(
+                "/v1/mcp/server",
+                headers=self.proxy.transport.master,
+                json=body,
+                response_type=McpServerRow,
+            )
+        )
+
+    def update_mcp_server(self, body: McpServerUpdateBody) -> McpServerRow:
+        """PUT /v1/mcp/server, the call behind the dashboard's Save Changes: a partial
+        update where a field left unset keeps its stored value and None clears it."""
+        return unwrap(
+            self.proxy.transport.put(
+                "/v1/mcp/server",
+                headers=self.proxy.transport.master,
+                json=body,
+                response_type=McpServerRow,
+            )
+        )
+
+    def delete_mcp_server(self, server_id: str) -> Result[NoBody]:
+        """DELETE /v1/mcp/server/{server_id}. Returns the outcome so the act phase can
+        unwrap it while a deferred teardown can ignore an already-deleted server."""
+        return self.proxy.transport.delete(
+            f"/v1/mcp/server/{server_id}",
+            headers=self.proxy.transport.master,
+            json=NoBody(),
+            response_type=NoBody,
         )
 
     def chat_status(self, key: str, model: str, content: str) -> StreamingResponse:

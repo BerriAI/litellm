@@ -1,0 +1,1 @@
+Maps Python profiler frames onto feature-gated Rust span names via an explicit per-case mapping (Rust span name is the identity) and compares steps, order, and nesting of both live traces against a replayed provider response.

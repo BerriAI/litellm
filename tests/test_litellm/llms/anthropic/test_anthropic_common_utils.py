@@ -26,6 +26,33 @@ FAKE_REGULAR_KEY = "sk-ant-api03-regular-key-for-testing-123456789"
 FAKE_AUTH_TOKEN = "sk-ant-aut01-fake-auth-token-for-testing-123456789"
 
 
+@pytest.mark.parametrize(
+    "messages,system,expected",
+    [
+        ([{"role": "user", "content": "hi"}], "x-anthropic-billing-header: cc_is_subagent=true;", True),
+        ([{"role": "user", "content": "hi"}], "x-anthropic-billing-header: =junk; cc_is_subagent=true;", False),
+        ([{"role": "user", "content": "hi"}], "x-anthropic-billing-header: cc_version=; cc_is_subagent=true;", False),
+        ([{"role": "user", "content": "hi"}], "x-anthropic-billing-header: malformed", False),
+        ([{"content": "missing role"}], "x-anthropic-billing-header: cc_is_subagent=true;", False),
+        (["not-a-mapping"], "x-anthropic-billing-header: cc_is_subagent=true;", False),
+        ([{"role": "user", "content": "hi"}], ["not-a-mapping"], False),
+        ([{"role": "user", "content": "hi"}], None, False),
+    ],
+)
+def test_is_claude_code_one_shot_subagent_request(messages, system, expected):
+    from litellm.llms.anthropic.common_utils import is_claude_code_one_shot_subagent_request
+
+    assert (
+        is_claude_code_one_shot_subagent_request(
+            messages=messages,
+            system=system,
+            tools=None,
+            user_agent="claude-cli/2.1.263 (external, cli)",
+        )
+        is expected
+    )
+
+
 class TestOptionallyHandleAnthropicOAuth:
     """Tests for optionally_handle_anthropic_oauth function."""
 
@@ -1517,6 +1544,71 @@ class TestAnthropicThinkingSignatureSelfHeal:
         out = strip_empty_content_blocks_from_anthropic_messages(msgs)
         assert [b["type"] for b in out[0]["content"]] == ["thinking"]
 
+    def test_strip_keeps_encrypted_reasoning_blocks_for_the_responses_bridge(self):
+        """The /v1/messages handler runs this before dispatch, so the bridge must still see the replay."""
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            encrypted_reasoning_signature,
+        )
+        from litellm.llms.anthropic.common_utils import (
+            strip_empty_content_blocks_from_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "plan", "signature": encrypted_reasoning_signature("gAAAA_1")},
+                    {"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAAA_2")},
+                    {"type": "text", "text": "The answer."},
+                ],
+            }
+        ]
+        assert strip_empty_content_blocks_from_anthropic_messages(msgs) == msgs
+
+    def test_strip_encrypted_reasoning_drops_only_the_bridge_tagged_blocks(self):
+        """A session resumed on an Anthropic model replays reasoning only OpenAI can verify."""
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            encrypted_reasoning_signature,
+        )
+        from litellm.llms.anthropic.common_utils import (
+            strip_encrypted_reasoning_blocks_from_anthropic_messages,
+        )
+
+        msgs = [
+            {"role": "user", "content": "Solve it."},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "plan", "signature": encrypted_reasoning_signature("gAAAA_1")},
+                    {"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAAA_2")},
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "plan", "signature": encrypted_reasoning_signature("gAAAA_3")},
+                    {"type": "thinking", "thinking": "native", "signature": "EqQBCkYIAxgCIkA_anthropic_signed"},
+                    {"type": "redacted_thinking", "data": "EmwKAhgBEgy_anthropic_minted"},
+                    {"type": "text", "text": "The answer."},
+                ],
+            },
+        ]
+        out = strip_encrypted_reasoning_blocks_from_anthropic_messages(msgs)
+        assert [m["role"] for m in out] == ["user", "assistant"]
+        assert [b["type"] for b in out[1]["content"]] == ["thinking", "redacted_thinking", "text"]
+        assert out[1]["content"][0]["signature"] == "EqQBCkYIAxgCIkA_anthropic_signed"
+        assert len(msgs[1]["content"]) == 2
+        assert len(msgs[2]["content"]) == 4
+
+    def test_strip_encrypted_reasoning_leaves_malformed_messages_for_the_provider_to_reject(self):
+        """A bare string in messages must reach Anthropic as a 400, not die in the stripper as a 500."""
+        from litellm.llms.anthropic.common_utils import (
+            strip_encrypted_reasoning_blocks_from_anthropic_messages,
+        )
+
+        msgs = ["hi", {"role": "user", "content": "hello"}]
+        assert strip_encrypted_reasoning_blocks_from_anthropic_messages(msgs) == msgs
+
     def test_strip_empty_text_blocks_treats_null_text_as_empty(self):
         from litellm.llms.anthropic.common_utils import (
             strip_empty_content_blocks_from_anthropic_messages,
@@ -2175,3 +2267,25 @@ def test_create_anthropic_model_list_response_empty():
     assert response["has_more"] is False
     assert response["first_id"] is None
     assert response["last_id"] is None
+
+
+def test_create_anthropic_model_list_response_lists_ids_as_told():
+    """listed_ids renames an entry for the caller while display_name and every other field stay keyed to the served
+    id, and the envelope's first/last ids follow the renamed entries."""
+    from litellm.llms.anthropic.common_utils import (
+        create_anthropic_model_list_response,
+    )
+
+    response = create_anthropic_model_list_response(
+        [
+            {"id": "gpt-4o", "object": "model", "created": 0, "owned_by": "openai", "max_input_tokens": 1000000},
+            {"id": "claude-haiku-4-5", "object": "model", "created": 0, "owned_by": "openai"},
+        ],
+        display_names={"gpt-4o": "GPT 4o"},
+        listed_ids={"gpt-4o": "claude-router-gpt-4o[1m]"},
+    )
+
+    gpt, haiku = response["data"]
+    assert (gpt["id"], gpt["display_name"], gpt["max_input_tokens"]) == ("claude-router-gpt-4o[1m]", "GPT 4o", 1000000)
+    assert (haiku["id"], haiku["display_name"]) == ("claude-haiku-4-5", "claude-haiku-4-5")
+    assert (response["first_id"], response["last_id"]) == ("claude-router-gpt-4o[1m]", "claude-haiku-4-5")

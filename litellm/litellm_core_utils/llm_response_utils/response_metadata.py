@@ -168,7 +168,7 @@ class ResponseMetadata:
 
 
 def update_response_metadata(
-    result: Any,
+    result: object,
     logging_obj: LiteLLMLoggingObject,
     model: str | None,
     kwargs: dict,

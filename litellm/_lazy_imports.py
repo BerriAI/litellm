@@ -229,7 +229,7 @@ def _module_attribute(module: ModuleType, attr_name: str) -> object:
     return attribute["value"]
 
 
-def _generic_lazy_import(name: str, import_map: dict[str, tuple[str, str]], category: str) -> object:
+def _generic_lazy_import(name: str, import_map: Mapping[str, tuple[str, str]], category: str) -> object:
     """
     Generic function that handles lazy importing for most attributes.
 

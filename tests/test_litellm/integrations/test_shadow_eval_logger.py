@@ -2,7 +2,9 @@
 the detached pipeline's single attempt-row write, and the cache-first job lookup."""
 
 import asyncio
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -24,7 +26,13 @@ from litellm.integrations.shadow_eval_logger import (
     _unmask_preference,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN, ModelResponse
+from litellm.types.utils import (
+    SHADOW_EVAL_JUDGE_CALL_ORIGIN,
+    SHADOW_EVAL_ROUTER_CALL_ORIGIN,
+    ChatCompletionCustomToolCallPayload,
+    ChatCompletionMessageCustomToolCall,
+    ModelResponse,
+)
 
 
 def _job(**overrides) -> ActiveShadowEvalJob:
@@ -66,6 +74,7 @@ def _job_record(job: ActiveShadowEvalJob, target_type="key", target_id="key-hash
         target_id=target_id,
         router_name=job.router_name,
         router_names=job.router_names,
+        models=sorted(job.models),
         direction=job.direction,
         baseline_model=job.baseline_model,
         shadow_percentage=job.shadow_percentage,
@@ -120,6 +129,81 @@ def _router(
     return router
 
 
+def _shadow_reply_router(message, finish_reason="stop", routed_model="cheap-model"):
+    """A router whose shadow arm answers with a caller-supplied message, so a reply that
+    yields no judgeable text can be posed as the two different things it can be: an arm
+    that chose a tool, or an arm that returned nothing."""
+    router = MagicMock()
+    router.model_group_alias = {}
+    router.get_model_list = MagicMock(return_value=[{"litellm_params": {"model": "openai/gpt-4o-mini"}}])
+
+    async def acompletion(**kwargs):
+        if kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != SHADOW_EVAL_ROUTER_CALL_ORIGIN:
+            return {"choices": [{"message": {"content": '{"preference": "A", "confidence": 0.9}'}}]}
+        kwargs["metadata"]["routing_decision"] = {"tier_label": "SIMPLE", "routed_model": routed_model}
+        return {"choices": [{"message": message, "finish_reason": finish_reason}]}
+
+    router.acompletion = MagicMock(side_effect=acompletion)
+    return router
+
+
+def _reasoning_judge_router(
+    reasoning_tokens: int, verdict: str = '{"preference": "A", "confidence": 0.9}'
+) -> MagicMock:
+    """A router whose judge arm reasons before it answers, the way a deployment carrying an
+    elevated reasoning_effort does: reasoning bills against the caller's own max_tokens and
+    the reply is cut off at that cap. One character stands in for one token."""
+    router = MagicMock()
+    router.model_group_alias = {}
+    router.get_model_list = MagicMock(return_value=[{"litellm_params": {"model": "openai/gpt-4o-mini"}}])
+
+    async def acompletion(**kwargs):
+        if kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == SHADOW_EVAL_ROUTER_CALL_ORIGIN:
+            kwargs["metadata"]["routing_decision"] = {"tier_label": "SIMPLE", "routed_model": "cheap-model"}
+            return {"choices": [{"message": {"content": "shadow answer"}}]}
+        budget_for_the_answer: Final = kwargs["max_tokens"] - reasoning_tokens
+        return {"choices": [{"message": {"content": verdict[: max(0, budget_for_the_answer)]}}]}
+
+    router.acompletion = MagicMock(side_effect=acompletion)
+    return router
+
+
+def _judge_reply_router(content: str | None, finish_reason: str = "stop", served_model: str = "judge-pick") -> MagicMock:
+    """A router whose judge arm returns a caller-shaped reply, so the shapes that all land
+    on the same parser error can be posed apart: no content at all, versus JSON cut off
+    mid-object."""
+    router = MagicMock()
+    router.model_group_alias = {}
+    router.get_model_list = MagicMock(return_value=[{"litellm_params": {"model": "openai/gpt-4o-mini"}}])
+
+    async def acompletion(**kwargs):
+        if kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == SHADOW_EVAL_ROUTER_CALL_ORIGIN:
+            kwargs["metadata"]["routing_decision"] = {"tier_label": "SIMPLE", "routed_model": "cheap-model"}
+            return {"choices": [{"message": {"content": "shadow answer"}}]}
+        return ModelResponse(
+            model=served_model,
+            choices=[{"index": 0, "finish_reason": finish_reason, "message": {"role": "assistant", "content": content}}],
+        )
+
+    router.acompletion = MagicMock(side_effect=acompletion)
+    return router
+
+
+TOOL_CALL_MESSAGE = {
+    "content": None,
+    "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "Read", "arguments": "{}"}}],
+}
+
+CUSTOM_TOOL_CALL_MESSAGE = {
+    "content": None,
+    "tool_calls": [
+        ChatCompletionMessageCustomToolCall(
+            id="c2", custom=ChatCompletionCustomToolCallPayload(name="exec_sql", input="select 1")
+        )
+    ],
+}
+
+
 def _spend_counter(store=None):
     """In-memory stand-in for the proxy's cross-pod spend counter: reads take the max of
     the counter and the caller's fallback, exactly like get_current_spend does for a key
@@ -166,6 +250,7 @@ def _success_kwargs(
     request_metadata=None,
     call_type="acompletion",
     model="claude-opus",
+    model_group="opus-group",
     response_cost=None,
     cache_hit=None,
 ):
@@ -174,6 +259,7 @@ def _success_kwargs(
             "id": request_id,
             "call_type": call_type,
             "model": model,
+            "model_group": model_group,
             "metadata": {"user_api_key_hash": api_key_hash},
             "model_parameters": {"temperature": 0.5, "stream": True},
             "response_cost": response_cost,
@@ -336,6 +422,183 @@ class TestSurfaceNormalization:
         assert "previous_response_id" not in shadow_call
         assert "instructions" not in shadow_call
 
+    @pytest.mark.parametrize(
+        "call_type,search_params,model",
+        [
+            ("completion", {"web_search_options": {}}, "anthropic/claude-fable-5"),
+            (
+                "acompletion",
+                {"web_search_options": {"search_context_size": "high"}},
+                "anthropic/claude-fable-5",
+            ),
+            (
+                "acompletion",
+                {"tools": [{"type": "web_search_20260209", "name": "web_search"}]},
+                "anthropic/claude-fable-5",
+            ),
+            (
+                "anthropic_messages",
+                {"tools": [{"type": "web_search_20250305", "name": "web_search"}]},
+                "anthropic/claude-fable-5",
+            ),
+            (
+                "anthropic_messages",
+                {"tools": [{"type": "web_search_20260209", "name": "web_search"}]},
+                "anthropic/claude-fable-5",
+            ),
+            (
+                "anthropic_messages",
+                {"tools": [{"name": "web_search"}]},
+                "anthropic/claude-fable-5",
+            ),
+            ("aresponses", {"tools": [{"type": "web_search"}]}, "anthropic/claude-fable-5"),
+            ("responses", {"tools": [{"type": "web_search_preview"}]}, "anthropic/claude-fable-5"),
+            ("aresponses", {"tools": [{"type": "web_search_2025_08_26"}]}, "anthropic/claude-fable-5"),
+            (
+                "responses",
+                {"tools": [{"type": "web_search_preview_2025_03_11"}]},
+                "anthropic/claude-fable-5",
+            ),
+            ("aresponses", {"tools": [{"type": "web_search"}]}, "bedrock/us.anthropic.claude-fable-5"),
+            (
+                "responses",
+                {"tools": [{"type": "web_search_preview"}]},
+                "bedrock/us.anthropic.claude-fable-5",
+            ),
+            (
+                "acompletion",
+                {
+                    "tools": [
+                        {"type": "function", "function": {"name": "WebSearch", "parameters": {"type": "object"}}},
+                        {"type": "web_search_20260209", "name": "web_search"},
+                    ]
+                },
+                "anthropic/claude-fable-5",
+            ),
+        ],
+        ids=[
+            "chat-empty-options",
+            "chat-configured-options",
+            "chat-provider-transformed-tools",
+            "messages-native-search",
+            "messages-dated-search",
+            "messages-legacy-search-normalized",
+            "responses-search",
+            "responses-preview",
+            "responses-dated-search",
+            "responses-dated-preview",
+            "responses-bedrock-erases-search",
+            "responses-bedrock-erases-preview",
+            "chat-mixed-client-and-hosted-tools",
+        ],
+    )
+    async def test_hosted_web_search_skips_shadow_calls_and_spend(
+        self, call_type: str, search_params: Mapping[str, object], model: str
+    ) -> None:
+        base_kwargs: Final = _success_kwargs(call_type=call_type, model=model)
+        is_chat: Final = call_type in ("completion", "acompletion")
+        is_responses: Final = call_type in ("responses", "aresponses")
+        hook_kwargs: Final = {
+            **base_kwargs,
+            "model": model,
+            "messages": "what is new" if is_responses else base_kwargs["messages"],
+            "standard_logging_object": {
+                **base_kwargs["standard_logging_object"],
+                "model_parameters": search_params if is_chat else {},
+            },
+            "litellm_params": {
+                **base_kwargs["litellm_params"],
+                "proxy_server_request": {"body": {} if is_chat else search_params},
+            },
+        }
+        prisma: Final = _prisma()
+        router: Final = _router()
+        counter: Final = {"spend:shadow_eval:job-1": 0.1, "spend:shadow_eval:job-2": 0.1}
+        logger: Final = _logger(
+            router=router,
+            prisma=prisma,
+            jobs=(_job(max_budget=0.2), _job(id="job-2", max_budget=0.2)),
+            counter_store=counter,
+        )
+
+        await logger.async_log_success_event(
+            hook_kwargs, RESPONSES_API_RESPONSE if is_responses else RESPONSE, None, None
+        )
+        await _drain(logger)
+
+        router.acompletion.assert_not_called()
+        prisma.db.litellm_shadowevalattempt.create.assert_not_called()
+        assert logger._test_funnel == [("job-1", "unjudgeable"), ("job-2", "unjudgeable")]
+        assert logger._job_starts == {}
+        assert logger._test_counter == {"spend:shadow_eval:job-1": 0.1, "spend:shadow_eval:job-2": 0.1}
+
+    @pytest.mark.parametrize(
+        "call_type,tool_name",
+        [
+            (call_type, tool_name)
+            for call_type in ("completion", "acompletion", "anthropic_messages", "responses", "aresponses")
+            for tool_name in ("WebSearch", "litellm_web_search", "web_search")
+        ],
+    )
+    async def test_client_web_search_tools_remain_sampled(self, call_type: str, tool_name: str) -> None:
+        is_chat: Final = call_type in ("completion", "acompletion")
+        is_responses: Final = call_type in ("responses", "aresponses")
+        tool: Final = (
+            {"type": "function", "function": {"name": tool_name, "parameters": {"type": "object"}}}
+            if is_chat
+            else {"type": "function", "name": tool_name, "parameters": {"type": "object"}}
+            if is_responses
+            else {"name": tool_name, "input_schema": {"type": "object", "properties": {}}}
+        )
+        source: Final = {"tools": [tool], "web_search_options": None}
+        base_kwargs: Final = _success_kwargs(call_type=call_type)
+        hook_kwargs: Final = {
+            **base_kwargs,
+            "messages": "search for current news" if is_responses else base_kwargs["messages"],
+            "standard_logging_object": {
+                **base_kwargs["standard_logging_object"],
+                "model_parameters": source if is_chat else {},
+            },
+            "litellm_params": {
+                **base_kwargs["litellm_params"],
+                "proxy_server_request": {"body": {} if is_chat else source},
+            },
+        }
+
+        prisma, router = await self._drive(hook_kwargs, RESPONSES_API_RESPONSE if is_responses else RESPONSE)
+
+        assert router.acompletion.call_count == 2
+        shadow_call: Final = router.acompletion.call_args_list[0].kwargs
+        assert shadow_call["tools"][0]["function"]["name"] == tool_name
+        assert "web_search_options" not in shadow_call
+        prisma.db.litellm_shadowevalattempt.create.assert_called_once()
+
+    @pytest.mark.parametrize("call_type", ["completion", "acompletion"])
+    async def test_chat_search_removed_by_guardrail_still_samples(self, call_type: str) -> None:
+        base_kwargs: Final = _success_kwargs(
+            call_type=call_type,
+            request_metadata={
+                "standard_logging_guardrail_information": [{"guardrail_name": "g", "guardrail_mode": "pre_call"}]
+            },
+        )
+        hook_kwargs: Final = {
+            **base_kwargs,
+            "litellm_params": {
+                **base_kwargs["litellm_params"],
+                "proxy_server_request": {
+                    "body": {"web_search_options": {}, "tools": [{"type": "web_search_20260209"}]}
+                },
+            },
+        }
+
+        prisma, router = await self._drive(hook_kwargs, RESPONSE)
+
+        shadow_call: Final = router.acompletion.call_args_list[0].kwargs
+        assert "web_search_options" not in shadow_call
+        assert "tools" not in shadow_call
+        assert router.acompletion.call_count == 2
+        prisma.db.litellm_shadowevalattempt.create.assert_called_once()
+
     @pytest.mark.parametrize("payload_shape", ["typed", "dict"])
     @pytest.mark.parametrize("call_type", ["aresponses", "responses"])
     async def test_responses_arms_normalize_bare_string_input_and_instructions(self, call_type, payload_shape):
@@ -368,7 +631,13 @@ class TestSurfaceNormalization:
         ],
         ids=["tool-final-chat-turn", "tool-final-responses-turn"],
     )
-    async def test_unjudgeable_turns_are_skipped_without_consuming_budget(self, response_mutation, kwargs_mutation):
+    async def test_a_tool_final_turn_is_sampled_and_serialized_for_the_judge(
+        self, response_mutation, kwargs_mutation
+    ):
+        """A turn where the real model called a tool used to be dropped before sampling, on
+        every surface. On agentic traffic that is most of the traffic, so a job set to
+        sample 10% was really sampling 10% of the prose-only slice and calling it 10% of
+        the key. The turn is sampled like any other and the call is serialized as text."""
         from litellm.types.llms.openai import ResponsesAPIResponse
 
         hook_kwargs = _success_kwargs(**({"call_type": "acompletion"} | kwargs_mutation))
@@ -403,6 +672,38 @@ class TestSurfaceNormalization:
                     ]
                 }
             )
+
+        prisma, router = await self._drive(hook_kwargs, response)
+
+        judge_prompt = next(
+            call.kwargs["messages"][-1]["content"]
+            for call in router.acompletion.call_args_list
+            if call.kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != SHADOW_EVAL_ROUTER_CALL_ORIGIN
+        )
+        assert "[tool call] f({})" in judge_prompt
+        prisma.db.litellm_shadowevalattempt.create.assert_called_once()
+
+    @pytest.mark.parametrize(
+        "response_mutation,kwargs_mutation",
+        [
+            ("chat-no-content", {}),
+            ("responses-no-output", {"call_type": "aresponses"}),
+        ],
+        ids=["empty-chat-turn", "empty-responses-turn"],
+    )
+    async def test_turns_with_nothing_to_compare_are_skipped_without_consuming_budget(
+        self, response_mutation, kwargs_mutation
+    ):
+        """No prose and no tool call leaves the judge nothing to score, so the turn is
+        still skipped rather than billed."""
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        hook_kwargs = _success_kwargs(**({"call_type": "acompletion"} | kwargs_mutation))
+        if response_mutation == "chat-no-content":
+            response = {"choices": [{"message": {"content": ""}}]}
+        else:
+            hook_kwargs["messages"] = "do the thing"
+            response = ResponsesAPIResponse.model_validate(RESPONSES_API_RESPONSE | {"output": []})
 
         prisma, router = await self._drive(hook_kwargs, response)
 
@@ -931,6 +1232,79 @@ class TestTargetMatching:
 
 
 @pytest.mark.asyncio
+class TestModelScope:
+    """A job scoped to model groups samples a target's request only when the group the
+    caller asked for is one of them; an out-of-scope request is not the job's traffic at
+    all, so it records no funnel event, exactly like a direction mismatch."""
+
+    @pytest.mark.parametrize(
+        "requested,sampled",
+        [("sonnet-group", True), ("opus-group", False), ("", False)],
+        ids=["in-scope-group-samples", "other-group-skips", "unknown-group-fails-closed"],
+    )
+    async def test_scope_admits_only_the_named_groups_and_counts_nothing_else(self, requested, sampled):
+        prisma = _prisma()
+        logger = _logger(router=_router(), prisma=prisma, jobs=(_job(models=frozenset({"sonnet-group", "haiku-group"})),))
+
+        await logger.async_log_success_event(_success_kwargs(model_group=requested), RESPONSE, None, None)
+        await _drain(logger)
+
+        assert prisma.db.litellm_shadowevalattempt.create.await_count == (1 if sampled else 0)
+        assert logger._test_funnel == []
+
+    async def test_an_unscoped_job_samples_every_group(self):
+        prisma = _prisma()
+        logger = _logger(router=_router(), prisma=prisma, jobs=(_job(),))
+
+        await logger.async_log_success_event(_success_kwargs(model_group="anything"), RESPONSE, None, None)
+        await _drain(logger)
+
+        prisma.db.litellm_shadowevalattempt.create.assert_awaited_once()
+
+    @pytest.mark.parametrize(
+        "scoped_to,requested",
+        [("sonnet-group", "fast"), ("fast", "sonnet-group")],
+        ids=["job-names-the-target-request-uses-the-alias", "job-names-the-alias-request-uses-the-target"],
+    )
+    async def test_an_alias_and_its_target_are_one_group_on_both_sides(self, scoped_to, requested):
+        """Both the job's scope and the request's group resolve through the router's alias
+        map at match time, so re-pointing an alias follows config rather than freezing at
+        job start."""
+        router = _router()
+        router.model_group_alias = {"fast": "sonnet-group"}
+        prisma = _prisma(jobs=[_job_record(_job(models=frozenset({scoped_to})))])
+        logger = _logger(router=router, prisma=prisma)
+
+        await logger.async_log_success_event(_success_kwargs(model_group=requested), RESPONSE, None, None)
+        await _drain(logger)
+
+        prisma.db.litellm_shadowevalattempt.create.assert_awaited_once()
+        assert prisma.db.litellm_shadowevaljob.find_many.await_count == 1
+
+    async def test_a_repointed_alias_applies_to_the_next_request_without_a_cache_refill(self):
+        router = _router()
+        router.model_group_alias = {"fast": "sonnet-group"}
+        prisma = _prisma(jobs=[_job_record(_job(models=frozenset({"fast"})))])
+        logger = _logger(router=router, prisma=prisma)
+        await logger.async_log_success_event(_success_kwargs(model_group="sonnet-group"), RESPONSE, None, None)
+        await _drain(logger)
+        assert prisma.db.litellm_shadowevalattempt.create.await_count == 1
+
+        router.model_group_alias = {"fast": "haiku-group"}
+        await logger.async_log_success_event(
+            _success_kwargs(request_id="req-2", model_group="sonnet-group"), RESPONSE, None, None
+        )
+        await logger.async_log_success_event(
+            _success_kwargs(request_id="req-3", model_group="haiku-group"), RESPONSE, None, None
+        )
+        await _drain(logger)
+
+        rows = [call.kwargs["data"]["request_id"] for call in prisma.db.litellm_shadowevalattempt.create.call_args_list]
+        assert rows == ["req-1", "req-3"]
+        assert prisma.db.litellm_shadowevaljob.find_many.await_count == 1
+
+
+@pytest.mark.asyncio
 class TestActiveJobsCache:
     async def test_cache_miss_reads_db_once_then_serves_from_cache(self):
         job = _job()
@@ -1105,6 +1479,79 @@ class TestShadowPipeline:
         assert row["judge_cost"] == expected_cost
         assert row["shadow_cost"] == expected_shadow_cost
 
+    async def _judge_error(self, router: MagicMock, monkeypatch: pytest.MonkeyPatch) -> str:
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.007)
+        prisma = _prisma()
+        await _logger(router=router, prisma=prisma)._run_shadow_eval(
+            job=_job(),
+            request_id="req-1",
+            messages=({"role": "user", "content": "hi"},),
+            real_text="real answer",
+            real_model="claude-opus",
+            real_cost=0.0,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
+            control_tier=None,
+            shadow_params={},
+            parent_metadata={},
+        )
+        return prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]["error"]
+
+    async def test_a_judge_that_answered_nothing_is_told_apart_from_one_cut_off(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Both land on the same parser message, and they want opposite fixes: a judge
+        returning no content points at the reply never being text, while one cut off
+        mid-object points at the output cap. The row has to say which."""
+        truncated = '{"preference": "A", "confidence": 0.9, "reasoning": "'
+        answered_nothing = await self._judge_error(_judge_reply_router(None), monkeypatch)
+        cut_off = await self._judge_error(
+            _judge_reply_router(truncated, finish_reason="length"), monkeypatch
+        )
+
+        assert "content=no content" in answered_nothing
+        assert "finish_reason=stop" in answered_nothing
+        assert f"content={len(truncated)} chars" in cut_off
+        assert "finish_reason=length" in cut_off
+
+    async def test_an_unparseable_verdict_names_the_model_that_served_it(self, monkeypatch: pytest.MonkeyPatch):
+        """A judge_model that fans out over deployments hides which one truncates: without
+        the served model the operator cannot tell a bad deployment from a bad cap."""
+        error = await self._judge_error(_judge_reply_router(None, served_model="claude-sonnet-5"), monkeypatch)
+
+        assert "model=claude-sonnet-5" in error
+
+    async def test_a_diagnosed_verdict_error_stays_groupable(self, monkeypatch: pytest.MonkeyPatch):
+        """The customer groups attempt rows by error text. Every varying part has to sit
+        after the first semicolon or each row becomes its own group."""
+        first = await self._judge_error(_judge_reply_router(None, served_model="model-a"), monkeypatch)
+        second = await self._judge_error(_judge_reply_router(None, served_model="model-b"), monkeypatch)
+
+        assert first != second
+        assert first.split(";")[0] == second.split(";")[0]
+
+    async def test_a_judge_reply_that_cannot_be_read_still_records_an_error(self, monkeypatch: pytest.MonkeyPatch):
+        """The shape reader runs inside the failure path: it must never raise a second time
+        and cost the row entirely."""
+        router = MagicMock()
+        router.model_group_alias = {}
+        router.get_model_list = MagicMock(return_value=[{"litellm_params": {"model": "openai/gpt-4o-mini"}}])
+
+        async def acompletion(**kwargs):
+            if kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == SHADOW_EVAL_ROUTER_CALL_ORIGIN:
+                kwargs["metadata"]["routing_decision"] = {"tier_label": "SIMPLE", "routed_model": "cheap-model"}
+                return {"choices": [{"message": {"content": "shadow answer"}}]}
+            return {"choices": []}
+
+        router.acompletion = MagicMock(side_effect=acompletion)
+
+        error = await self._judge_error(router, monkeypatch)
+
+        assert "unparseable judge verdict" in error
+        assert "unreadable judge reply" in error
+
     async def test_an_empty_shadow_reply_still_bills_its_cost(self, monkeypatch: pytest.MonkeyPatch):
         """A shadow call that returns no extractable text has still billed; pricing it at
         zero would keep the dollar gate open while shadow calls keep charging the key."""
@@ -1133,6 +1580,234 @@ class TestShadowPipeline:
         assert "empty response" in row["error"]
         assert row["shadow_cost"] == 0.007
         assert logger._test_counter["spend:shadow_eval:job-1"] == 0.007
+
+    async def test_the_judge_output_cap_leaves_room_for_a_reasoning_judge(self):
+        """The output cap covers reasoning tokens as well as the answer, and a judge_model
+        deployment carrying an elevated reasoning_effort spends that budget before it writes
+        anything. A cap sized for the verdict JSON alone goes entirely to reasoning and the
+        reply arrives empty, which the attempt records as an unparseable verdict rather than
+        a result. The judge here burns a reasoning budget a live claude-sonnet-5 call was
+        measured at, so the cap has to clear it for the verdict to survive."""
+        reasoning_tokens = 2000
+        logger = _logger(router=_reasoning_judge_router(reasoning_tokens), prisma=(prisma := _prisma()))
+
+        await logger._run_shadow_eval(
+            job=_job(),
+            request_id="req-1",
+            messages=({"role": "user", "content": "hi"},),
+            real_text="real answer",
+            real_model="claude-opus",
+            real_cost=0.0,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
+            control_tier=None,
+            shadow_params={},
+            parent_metadata={},
+        )
+
+        row = prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]
+        assert row["outcome"] in ("real", "shadow", "tie"), row["error"]
+        assert row["error"] is None
+
+    async def _no_text_error(self, router) -> str:
+        prisma = _prisma()
+        await _logger(router=router, prisma=prisma)._run_shadow_eval(
+            job=_job(),
+            request_id="req-1",
+            messages=({"role": "user", "content": "hi"},),
+            real_text="real answer",
+            real_model="claude-opus",
+            real_cost=0.0,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
+            control_tier=None,
+            shadow_params={},
+            parent_metadata={},
+        )
+        row = prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]
+        assert row["outcome"] == "error"
+        return row["error"]
+
+    async def _judged_shadow_row(self, router: MagicMock, shadow_params: dict | None = None) -> dict:
+        prisma = _prisma()
+        await _logger(router=router, prisma=prisma)._run_shadow_eval(
+            job=_job(),
+            request_id="req-1",
+            messages=({"role": "user", "content": "hi"},),
+            real_text="real answer",
+            real_model="claude-opus",
+            real_cost=0.0,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
+            control_tier=None,
+            shadow_params=shadow_params or {},
+            parent_metadata={},
+        )
+        return prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]
+
+    async def test_a_tool_call_shadow_reply_is_judged_rather_than_discarded(self):
+        """An arm that calls a tool where the real model wrote prose has answered, it just
+        answered by acting. Dropping that turn threw away the comparison the job exists to
+        make, and on agentic traffic it threw away most of them, so the tool call is
+        serialized into text and judged like any other response."""
+        row = await self._judged_shadow_row(_shadow_reply_router(TOOL_CALL_MESSAGE, finish_reason="tool_calls"))
+
+        assert row["outcome"] != "error"
+        assert row["error"] is None
+        assert row["confidence"] == 0.9
+
+    async def test_a_tool_call_reaches_the_judge_as_readable_text(self):
+        """The judge only ever sees strings, so a tool call has to arrive as its name and
+        arguments. A serialization that dropped either would ask the judge to score a
+        response it cannot tell apart from any other tool call."""
+        router = _shadow_reply_router(TOOL_CALL_MESSAGE, finish_reason="tool_calls")
+        await self._judged_shadow_row(router)
+
+        judge_prompt = next(
+            call.kwargs["messages"][-1]["content"]
+            for call in router.acompletion.call_args_list
+            if call.kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != SHADOW_EVAL_ROUTER_CALL_ORIGIN
+        )
+
+        assert "[tool call] Read({})" in judge_prompt
+
+    async def test_the_judge_sees_what_tools_were_available(self):
+        """Scoring whether a tool call was the right response needs to know what else the
+        arm could have called instead. Without the tool list, the judge can score the
+        arguments but not whether Read, specifically, was the correct choice."""
+        router = _shadow_reply_router(TOOL_CALL_MESSAGE, finish_reason="tool_calls")
+        tools = [
+            {"type": "function", "function": {"name": "Read", "description": "read a file from disk"}},
+            {"type": "function", "function": {"name": "Bash", "description": "run a shell command"}},
+        ]
+        await self._judged_shadow_row(router, shadow_params={"tools": tools})
+
+        judge_prompt = next(
+            call.kwargs["messages"][-1]["content"]
+            for call in router.acompletion.call_args_list
+            if call.kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != SHADOW_EVAL_ROUTER_CALL_ORIGIN
+        )
+
+        assert "Read: read a file from disk" in judge_prompt
+        assert "Bash: run a shell command" in judge_prompt
+
+    async def test_a_custom_tool_definition_is_named_for_the_judge(self):
+        """A custom tool definition nests name and description under `custom`, not
+        `function`, so reading only `function` renders every one of them as unnamed and
+        tells the judge nothing about what the arm could have called."""
+        from openai.types.chat import ChatCompletionCustomToolParam
+
+        router = _shadow_reply_router(TOOL_CALL_MESSAGE, finish_reason="tool_calls")
+        tools = [
+            ChatCompletionCustomToolParam(
+                type="custom",
+                custom={"name": "exec_sql", "description": "run a read-only sql query"},
+            )
+        ]
+        await self._judged_shadow_row(router, shadow_params={"tools": tools})
+
+        judge_prompt = next(
+            call.kwargs["messages"][-1]["content"]
+            for call in router.acompletion.call_args_list
+            if call.kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != SHADOW_EVAL_ROUTER_CALL_ORIGIN
+        )
+
+        assert "exec_sql: run a read-only sql query" in judge_prompt
+        assert "unnamed" not in judge_prompt
+
+    @pytest.mark.parametrize("shadow_params", [{}, {"tools": []}], ids=["omitted", "empty-list"])
+    async def test_no_tool_definitions_section_when_the_turn_offered_no_tools(self, shadow_params):
+        """Padding every judge prompt with an empty tools section wastes budget on the
+        turns, still the majority, that never offered one, whether tools was left out of
+        the request entirely or sent as an empty list."""
+        router = _shadow_reply_router({"content": "hello"}, finish_reason="stop")
+        await self._judged_shadow_row(router, shadow_params=shadow_params)
+
+        judge_prompt = next(
+            call.kwargs["messages"][-1]["content"]
+            for call in router.acompletion.call_args_list
+            if call.kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != SHADOW_EVAL_ROUTER_CALL_ORIGIN
+        )
+
+        assert "Tools available" not in judge_prompt
+
+    async def test_a_custom_tool_call_serializes_its_name_and_input(self):
+        """Custom tool calls carry no `function` key: name and arguments live under
+        `custom`, so reading only `function` serializes every one of them as unnamed."""
+        router = _shadow_reply_router(CUSTOM_TOOL_CALL_MESSAGE, finish_reason="tool_calls")
+        await self._judged_shadow_row(router)
+
+        judge_prompt = next(
+            call.kwargs["messages"][-1]["content"]
+            for call in router.acompletion.call_args_list
+            if call.kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != SHADOW_EVAL_ROUTER_CALL_ORIGIN
+        )
+
+        assert "[tool call] exec_sql(select 1)" in judge_prompt
+
+    async def test_the_judge_is_told_a_tool_call_is_not_a_defect(self):
+        """The judge scores on completeness and clarity. Handed a tool call with no
+        instruction, it marks it down for not reading like an answer, which would bias
+        every verdict against a tool-calling arm on exactly the traffic that calls tools."""
+        router = _shadow_reply_router(TOOL_CALL_MESSAGE, finish_reason="tool_calls")
+        await self._judged_shadow_row(router)
+
+        system_prompt = next(
+            call.kwargs["messages"][0]["content"]
+            for call in router.acompletion.call_args_list
+            if call.kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != SHADOW_EVAL_ROUTER_CALL_ORIGIN
+        )
+
+        assert "tool call" in system_prompt
+        assert "not a defect" in system_prompt
+
+    async def test_prose_written_alongside_a_tool_call_survives_into_the_verdict(self):
+        """Some providers write a sentence before acting. Serializing only the call would
+        hide half of what the arm actually said from the judge."""
+        router = _shadow_reply_router(
+            {"content": "Let me look that up.", "tool_calls": TOOL_CALL_MESSAGE["tool_calls"]},
+            finish_reason="tool_calls",
+        )
+        await self._judged_shadow_row(router)
+
+        judge_prompt = next(
+            call.kwargs["messages"][-1]["content"]
+            for call in router.acompletion.call_args_list
+            if call.kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != SHADOW_EVAL_ROUTER_CALL_ORIGIN
+        )
+
+        assert "Let me look that up. [tool call] Read({})" in judge_prompt
+
+    async def test_an_empty_shadow_reply_names_the_finish_reason_and_the_routed_model(self):
+        """A reply that really carried no text is diagnosable only if the row says what
+        the arm was doing when it produced none: a truncated turn and a model that answers
+        with nothing are different faults with different fixes."""
+        error = await self._no_text_error(
+            _shadow_reply_router({"content": ""}, finish_reason="length", routed_model="some-model")
+        )
+
+        assert "empty response" in error
+        assert "finish_reason=length" in error
+        assert "model=some-model" in error
+
+    async def test_no_text_errors_stay_groupable_across_models_and_finish_reasons(self):
+        """Operators read these rows by grouping on the error text, which is how a job's
+        failures collapse to a handful of causes. Every varying part therefore has to sit
+        behind the first semicolon, or each row becomes its own group and the count that
+        made the problem visible stops existing."""
+        first = await self._no_text_error(
+            _shadow_reply_router({"content": None}, finish_reason="length", routed_model="model-a")
+        )
+        second = await self._no_text_error(
+            _shadow_reply_router(
+                {"content": ""},
+                finish_reason="stop",
+                routed_model="model-b",
+            )
+        )
+
+        assert first != second
+        assert first.split(";")[0] == second.split(";")[0]
 
     async def test_a_pipeline_error_after_the_shadow_call_keeps_its_billed_cost(self, monkeypatch: pytest.MonkeyPatch):
         """An unexpected error between the billed shadow call and the attempt write must
@@ -1691,11 +2366,13 @@ class TestSamplingFunnel:
         prisma.db.litellm_shadowevalattempt.create.assert_not_awaited()
 
     async def test_an_unjudgeable_sampled_request_counts_unjudgeable(self):
+        """A tool call still serializes into judgeable text; a turn with neither prose nor
+        a tool call to serialize is the one case left with nothing to compare."""
         prisma = _prisma()
         logger = _logger(router=_router(), prisma=prisma, jobs=(_job(),))
-        tool_final = {"choices": [{"message": {"content": None, "tool_calls": [{"type": "function", "function": {}}]}}]}
+        empty = {"choices": [{"message": {"content": None}}]}
 
-        await logger.async_log_success_event(_success_kwargs(), tool_final, None, None)
+        await logger.async_log_success_event(_success_kwargs(), empty, None, None)
         await _drain(logger)
 
         assert logger._test_funnel == [("job-1", "unjudgeable")]

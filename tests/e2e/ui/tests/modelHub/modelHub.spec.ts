@@ -23,10 +23,12 @@ test.describe("AI Hub (internal admin view)", () => {
     await expect(modal.getByText(/Select All \(\d+\)/)).toBeVisible({ timeout: 5_000 });
 
     // Step 1: pick the seeded models via "Select All"
-    await modal.getByText(/Select All/i).click();
+    await modal.getByRole("checkbox", { name: /Select All/ }).check();
 
     // Move to confirm step
-    await modal.getByRole("button", { name: "Next" }).click();
+    const next = modal.getByRole("button", { name: "Next" });
+    await expect(next).toBeEnabled();
+    await next.click();
     await expect(modal.getByText("Confirm Making Models Public")).toBeVisible({ timeout: 5_000 });
 
     // Submit

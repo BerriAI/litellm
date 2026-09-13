@@ -10,6 +10,7 @@
 import ast
 import hashlib
 import json
+import logging
 import time
 import traceback
 from collections.abc import Mapping
@@ -32,7 +33,7 @@ from .dual_cache import DualCache  # noqa: F401
 from .gcs_cache import GCSCache
 from .in_memory_cache import InMemoryCache
 from .qdrant_semantic_cache import QdrantSemanticCache
-from .redis_cache import RedisCache
+from .redis_cache import RedisCache, log_redis_failure
 from .redis_cluster_cache import RedisClusterCache
 from .redis_semantic_cache import RedisSemanticCache
 from .s3_cache import S3Cache
@@ -100,6 +101,7 @@ class Cache:
         qdrant_semantic_cache_vector_size: int | None = None,
         semantic_cache_embedding_max_input_tokens: int | None = None,
         semantic_cache_embedding_timeout: float | None = None,
+        semantic_cache_scope: str = SemanticCacheScope.KEY.value,
         # GCP IAM authentication parameters
         gcp_service_account: str | None = None,
         gcp_ssl_ca_certs: str | None = None,
@@ -127,6 +129,7 @@ class Cache:
             similarity_threshold (float, optional): The similarity threshold for semantic-caching, Required if type is "redis-semantic" or "qdrant-semantic".
             semantic_cache_embedding_max_input_tokens (int, optional): Truncate prompts to this many tokens before embedding them for semantic caching. Defaults to the embedding deployment's configured max_input_tokens.
             semantic_cache_embedding_timeout (float, optional): Seconds a semantic-cache lookup may spend embedding the prompt before it gives up and lets the request continue to the LLM. Defaults to SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS.
+            semantic_cache_scope (str, optional): "key" isolates semantic-cache buckets per key/team/org. "end_user" additionally isolates per end user (falls back to the key scope when the request carries no end-user id). Defaults to "key".
 
             # Disk Cache Args
             disk_cache_dir (str, optional): The directory for the disk cache. Defaults to None.
@@ -274,6 +277,7 @@ class Cache:
         self.redis_flush_size = redis_flush_size
         self.ttl = ttl
         self.mode: CacheMode = mode or CacheMode.default_on
+        self.semantic_cache_scope: str = SemanticCacheScope(semantic_cache_scope).value
 
         if self.type == LiteLLMCacheType.LOCAL and default_in_memory_ttl is not None:
             self.ttl = default_in_memory_ttl
@@ -301,6 +305,7 @@ class Cache:
         "user_api_key_team_id",
         "user_api_key_org_id",
     )
+    _SEMANTIC_CACHE_END_USER_SCOPE_FIELD: Final = "user_api_key_end_user_id"
 
     def _is_semantic_cache(self) -> bool:
         return self.type in (
@@ -309,19 +314,21 @@ class Cache:
             LiteLLMCacheType.VALKEY_SEMANTIC,
         )
 
-    def _get_semantic_cache_tenant_scope(self, kwargs: dict) -> str:
-        metadata: Final[dict] = kwargs.get("metadata") or {}
-        litellm_params: Final[dict] = kwargs.get("litellm_params") or {}
-        metadata_in_litellm_params: Final[dict] = litellm_params.get("metadata") or {}
+    def _semantic_cache_scope_fields(self) -> tuple[str, ...]:
+        if self.semantic_cache_scope == SemanticCacheScope.END_USER:
+            return (*self._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS, self._SEMANTIC_CACHE_END_USER_SCOPE_FIELD)
+        return self._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS
 
-        scope = ""
-        for field in self._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS:
-            value = metadata.get(field)
-            if value is None:
-                value = metadata_in_litellm_params.get(field)
-            if value is not None:
-                scope += f"{field}: {value}"
-        return scope
+    def _get_semantic_cache_tenant_scope(self, kwargs: dict) -> str:
+        litellm_params: Final[dict] = kwargs.get("litellm_params") or {}
+        metadata_sources: Final[tuple[dict, ...]] = tuple(
+            source.get(key) or {} for source in (kwargs, litellm_params) for key in ("metadata", "litellm_metadata")
+        )
+        scope_values: Final = (
+            (field, next((source[field] for source in metadata_sources if source.get(field) is not None), None))
+            for field in self._semantic_cache_scope_fields()
+        )
+        return "".join(f"{field}: {value}" for field, value in scope_values if value is not None)
 
     def get_cache_key(self, **kwargs) -> str:
         """
@@ -672,7 +679,7 @@ class Cache:
             cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
             self.cache.set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
-            verbose_logger.exception("LiteLLM Cache: Excepton add_cache: %s", e)
+            log_redis_failure(verbose_logger, logging.ERROR, "LiteLLM Cache: exception in add_cache", e)
 
     async def async_add_cache(self, result, dynamic_cache_object: BaseCache | None = None, **kwargs):
         """
@@ -691,7 +698,7 @@ class Cache:
                 else:
                     await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
-            verbose_logger.exception("LiteLLM Cache: Excepton add_cache: %s", e)
+            log_redis_failure(verbose_logger, logging.ERROR, "LiteLLM Cache: exception in add_cache", e)
 
     def _convert_to_cached_embedding(
         self,
@@ -870,7 +877,7 @@ class Cache:
             else:
                 await self.cache.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
         except Exception as e:
-            verbose_logger.exception("LiteLLM Cache: Excepton add_cache: %s", e)
+            log_redis_failure(verbose_logger, logging.ERROR, "LiteLLM Cache: exception in add_cache", e)
 
     def should_use_cache(self, **kwargs):
         """

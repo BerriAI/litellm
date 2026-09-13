@@ -11,7 +11,7 @@ from typing import Final
 
 from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH
 
-_REDACTED: Final = "REDACTED"
+REDACTED: Final = "REDACTED"
 
 
 def _build_secret_patterns() -> "re.Pattern[str]":
@@ -89,7 +89,7 @@ _SECRET_RE: Final = _build_secret_patterns()
 
 def redact_string(value: str) -> str:
     """Scrub known secret/credential patterns from *value* and return the result."""
-    return _SECRET_RE.sub(_REDACTED, value)
+    return _SECRET_RE.sub(REDACTED, value)
 
 
 _UNIX_SYSTEM_PATH: Final = r"/(?:etc|var|opt|usr|home|root|private|Users|tmp|mnt|srv)/[^\s'\"\)\]}>,]+"
@@ -110,7 +110,7 @@ def redact_internal_details(value: str) -> str:
     on top of redact_string(). For client-facing messages only: server logs keep this detail."""
     marker_index: Final = value.find(_TRACEBACK_MARKER)
     without_traceback: Final = value[:marker_index].rstrip() if marker_index != -1 else value
-    return _INTERNAL_DETAIL_RE.sub(_REDACTED, redact_string(without_traceback))
+    return _INTERNAL_DETAIL_RE.sub(REDACTED, redact_string(without_traceback))
 
 
 def redact_structured_value(key: str | None, value: str) -> str:
@@ -126,4 +126,4 @@ def redact_structured_value(key: str | None, value: str) -> str:
     if scrubbed != value or key is None:
         return scrubbed
     rendered: Final = f"'{key}': '{value}'"
-    return _REDACTED if redact_string(rendered) != rendered else value
+    return REDACTED if redact_string(rendered) != rendered else value

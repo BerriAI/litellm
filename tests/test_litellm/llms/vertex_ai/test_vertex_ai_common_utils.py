@@ -964,6 +964,48 @@ def test_construct_target_url_with_version_prefix():
     assert str(target_url) == expected_url
 
 
+@pytest.mark.parametrize(
+    ("requested_route", "expected_url"),
+    [
+        (
+            "/projects/test-project/locations/global/publishers/anthropic/models/claude-sonnet-4-6:streamRawPredict",
+            "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/anthropic/models/claude-sonnet-4-6:streamRawPredict",
+        ),
+        (
+            "/projects/test-project/locations/global/publishers/anthropic/models/count-tokens:rawPredict",
+            "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/anthropic/models/count-tokens:rawPredict",
+        ),
+        (
+            "/projects/other-project/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-6:rawPredict",
+            "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/anthropic/models/claude-sonnet-4-6:rawPredict",
+        ),
+        (
+            "/projects/test-project/locations/global/cachedContents",
+            "https://aiplatform.googleapis.com/v1beta1/projects/test-project/locations/global/cachedContents",
+        ),
+        (
+            "/v1/projects/test-project/locations/global/publishers/anthropic/models/claude-sonnet-4-6:streamRawPredict",
+            "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/anthropic/models/claude-sonnet-4-6:streamRawPredict",
+        ),
+        (
+            "/v1beta1/projects/test-project/locations/global/cachedContents",
+            "https://aiplatform.googleapis.com/v1beta1/projects/test-project/locations/global/cachedContents",
+        ),
+    ],
+)
+def test_construct_target_url_versionless_project_route_gets_api_version(requested_route: str, expected_url: str) -> None:
+    from litellm.llms.vertex_ai.common_utils import construct_target_url
+
+    target_url = construct_target_url(
+        base_url="https://aiplatform.googleapis.com",
+        requested_route=requested_route,
+        vertex_project="test-project",
+        vertex_location="global",
+    )
+
+    assert str(target_url) == expected_url
+
+
 def test_fix_enum_types():
     """
     Test _fix_enum_types function removes enum fields when type is not string.
@@ -1696,3 +1738,44 @@ def test_vertex_text_embedding_request_includes_labels_from_metadata():
         },
     )
     assert req.get("labels") == {"project_id": "cost-center-1"}
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_api"),
+    [
+        ("lyria-002", "lyria_predict"),
+        ("vertex_ai/lyria-002", "lyria_predict"),
+        ("lyria-3-clip-preview", "lyria_interactions"),
+        ("lyria-3-pro-preview", "lyria_interactions"),
+    ],
+)
+def test_get_vertex_ai_lyria_model_info_resolves_audio_api(model, expected_api):
+    from litellm.llms.vertex_ai.common_utils import get_vertex_ai_lyria_model_info
+
+    model_info = get_vertex_ai_lyria_model_info(model=model)
+
+    assert model_info is not None
+    assert model_info["vertex_ai_audio_api"] == expected_api
+
+
+@pytest.mark.parametrize("model", ["en-US-Studio-O", "gemini-2.5-flash-preview-tts", "chirp-3-hd-charon"])
+def test_get_vertex_ai_lyria_model_info_is_none_for_non_lyria_speech_models(model):
+    from litellm.llms.vertex_ai.common_utils import get_vertex_ai_lyria_model_info
+
+    assert get_vertex_ai_lyria_model_info(model=model) is None
+
+
+def test_get_vertex_ai_lyria_model_info_falls_back_to_bundled_map(monkeypatch):
+    import litellm
+    from litellm.llms.vertex_ai.common_utils import get_vertex_ai_lyria_model_info
+
+    stale_runtime_model_cost = {
+        key: value for key, value in litellm.model_cost.items() if not key.startswith("vertex_ai/lyria")
+    }
+    monkeypatch.setattr(litellm, "model_cost", stale_runtime_model_cost)
+
+    model_info = get_vertex_ai_lyria_model_info(model="lyria-3-pro-preview")
+
+    assert model_info is not None
+    assert model_info["vertex_ai_audio_api"] == "lyria_interactions"
+    assert model_info["supported_audio_formats"] == ("mp3", "wav")

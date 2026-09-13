@@ -85,6 +85,29 @@ def get_ui_credentials(master_key: str | None) -> tuple[str, str]:
     return ui_username, ui_password
 
 
+def _matches_env_credentials(username: str, password: str, master_key: str | None) -> bool:
+    ui_username, ui_password = get_ui_credentials(master_key)
+    return secrets.compare_digest(username.encode("utf-8"), ui_username.encode("utf-8")) and secrets.compare_digest(
+        password.encode("utf-8"), ui_password.encode("utf-8")
+    )
+
+
+def is_env_credential_login_enabled(general_settings: Mapping[str, object]) -> bool:
+    """Whether a login with UI_USERNAME/UI_PASSWORD (or the master-key fallback) can succeed.
+
+    Two settings can turn it off: `disable_env_credential_login` unconditionally, and
+    `disable_password_login_when_sso_enabled` as a side effect, since its gate rejects
+    every username/password login before the env comparison runs. Feeds both the
+    `authenticate_user` gate and the Admin UI warning banner, so the banner never nags
+    about a login path that is already unreachable.
+    """
+    if general_settings.get("disable_env_credential_login") is True:
+        return False
+    if general_settings.get("disable_password_login_when_sso_enabled") is True and is_sso_provider_fully_configured():
+        return False
+    return True
+
+
 class LoginResult:
     """Result object containing authentication data from login."""
 
@@ -129,7 +152,8 @@ async def authenticate_user(
         master_key: Master key for the proxy (required)
         prisma_client: Prisma database client (optional)
         general_settings: Proxy general_settings, checked for
-            `disable_password_login_when_sso_enabled`
+            `disable_password_login_when_sso_enabled` and
+            `disable_env_credential_login`
 
     Returns:
         LoginResult: Object containing authentication data
@@ -170,8 +194,6 @@ async def authenticate_user(
             code=500,
         )
 
-    ui_username, ui_password = get_ui_credentials(master_key)
-
     # Check if we can find the `username` in the db. On the UI, users can enter username=their email
     _user_row: LiteLLM_UserTable | None = None
     user_role: (
@@ -197,8 +219,8 @@ async def authenticate_user(
     - Login with UI_USERNAME and UI_PASSWORD
     - Login with Invite Link `user_email` and `password` combination
     """
-    if secrets.compare_digest(username.encode("utf-8"), ui_username.encode("utf-8")) and secrets.compare_digest(
-        password.encode("utf-8"), ui_password.encode("utf-8")
+    if general_settings.get("disable_env_credential_login") is not True and _matches_env_credentials(
+        username, password, master_key
     ):
         # Non SSO -> If user is using UI_USERNAME and UI_PASSWORD they are Proxy admin
         user_role = LitellmUserRoles.PROXY_ADMIN
@@ -340,8 +362,13 @@ async def authenticate_user(
                 code=401,
             )
     else:
+        env_credentials_hint: Final = (
+            "\nCheck 'UI_USERNAME', 'UI_PASSWORD' in .env file"
+            if is_env_credential_login_enabled(general_settings)
+            else ""
+        )
         raise ProxyException(
-            message="Invalid credentials used to access UI.\nCheck 'UI_USERNAME', 'UI_PASSWORD' in .env file",
+            message=f"Invalid credentials used to access UI.{env_credentials_hint}",
             type=ProxyErrorTypes.auth_error,
             param="invalid_credentials",
             code=401,

@@ -517,6 +517,39 @@ async def test_team_ids_extracted_from_groups_attribute(saml_env_idp_initiated):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "roles",
+    [
+        ["internal_user", "proxy_admin_viewer"],
+        ["proxy_admin_viewer", "internal_user"],
+    ],
+)
+async def test_multi_valued_role_attribute_resolves_to_highest_privilege(saml_env_idp_initiated, roles):
+    """An assertion carrying several roles must not depend on the order the IdP emitted them in."""
+    key_pem, cert_pem = saml_env_idp_initiated
+    resp = _build_signed_response(
+        key_pem,
+        cert_pem,
+        attributes={
+            "email": ["dave@example.com"],
+            "role": roles,
+        },
+    )
+
+    result = await _acs(_b64(resp), _shared_cache())
+    assert result.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+
+
+@pytest.mark.asyncio
+async def test_assertion_without_role_attribute_has_no_user_role(saml_env_idp_initiated):
+    key_pem, cert_pem = saml_env_idp_initiated
+    resp = _build_signed_response(key_pem, cert_pem, attributes={"email": ["erin@example.com"]})
+
+    result = await _acs(_b64(resp), _shared_cache())
+    assert result.user_role is None
+
+
+@pytest.mark.asyncio
 async def test_build_login_redirect_targets_idp_and_caches_request_id(saml_env):
     cache = DualCache()
     redirect = await SAMLAuthHandler.build_login_redirect(_fake_request(), cache)

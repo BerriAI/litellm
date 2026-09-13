@@ -21,7 +21,7 @@ class PrismaTableRepository(Generic[RowT_co]):
 
     table_name: str
 
-    def __init__(self, prisma_client: Any):
+    def __init__(self, prisma_client: object):
         self._prisma_client = prisma_client
 
     @property
@@ -174,6 +174,10 @@ class DailyGuardrailUsageUnitsRepository(PrismaTableRepository["prisma_models.Li
 
 class PolicyAttachmentRepository(PrismaTableRepository["prisma_models.LiteLLM_PolicyAttachmentTable"]):
     table_name = "litellm_policyattachmenttable"
+
+
+class TeamRepository(PrismaTableRepository["prisma_models.LiteLLM_TeamTable"]):
+    table_name = "litellm_teamtable"
 
 
 class DeletedTeamRepository(PrismaTableRepository["prisma_models.LiteLLM_DeletedTeamTable"]):
