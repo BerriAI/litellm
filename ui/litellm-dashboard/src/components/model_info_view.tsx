@@ -23,6 +23,7 @@ import {
   isComplexityRouter as isComplexityRouterParams,
 } from "./add_model/auto_router_strategies";
 import { canModifyModel } from "@/utils/modelPermissions";
+import { teamsUserCanAssign } from "@/utils/roles";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
@@ -174,6 +175,7 @@ export default function ModelInfoView({
     isDbModel: modelData?.model_info?.db_model === true,
   });
   const isAdmin = userRole === "Admin";
+  const assignableTeams = useMemo(() => teamsUserCanAssign(teams ?? null, userRole, userID), [teams, userRole, userID]);
   // Editor-aware on purpose: an adaptive or quality router must not offer Edit Auto Router.
   const isAutoRouterModel = hasAutoRouterEditor(modelData?.litellm_params);
   // Broader than the editor check: adaptive and quality routers equally have no upstream
@@ -420,6 +422,7 @@ export default function ModelInfoView({
             health_check_model: values.health_check_model,
           };
         }
+        if (values.team_id) updatedModelInfo = { ...updatedModelInfo, team_id: values.team_id };
         updatedModelInfo = applyPtuModelInfo(updatedModelInfo, values, ptuCostAttributionEnabled);
       } catch (e) {
         toast.fromError("Invalid JSON in Model Info");
@@ -779,6 +782,7 @@ export default function ModelInfoView({
                   tagsList={tagsList}
                   credentialsList={credentialsList}
                   healthCheckModelOptions={healthCheckModelOptions}
+                  teams={assignableTeams}
                 />
               ) : (
                 <p className="text-sm">Loading...</p>
