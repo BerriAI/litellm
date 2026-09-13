@@ -199,14 +199,19 @@ def _get_spend_logs_metadata(
     _already_redacted: Final = (
         isinstance(_trusted_hash, str) and _is_non_secret_key_value(_trusted_hash) and _trusted_hash == _raw_key
     )
+    store_responses: Final = _should_store_responses_in_spend_logs()
     clean_metadata["user_api_key"] = _redact_logged_api_key(_raw_key, already_redacted=_already_redacted)
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["batch_successful_requests"] = batch_successful_requests
     clean_metadata["batch_failed_requests"] = batch_failed_requests
-    clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
+    clean_metadata["mcp_tool_call_metadata"] = _get_mcp_tool_call_metadata_for_spend_logs_payload(
+        mcp_tool_call_metadata,
+        store_responses=store_responses,
+    )
     clean_metadata["vector_store_request_metadata"] = _get_vector_store_request_for_spend_logs_payload(
-        vector_store_request_metadata
+        vector_store_request_metadata,
+        store_responses=store_responses,
     )
     clean_metadata["guardrail_information"] = _sanitize_guardrail_information_for_spend_logs(guardrail_information)
     clean_metadata["usage_object"] = usage_object
@@ -1322,16 +1327,27 @@ def _get_proxy_server_request_for_spend_logs_payload(
     return "{}"
 
 
+def _get_mcp_tool_call_metadata_for_spend_logs_payload(
+    mcp_tool_call_metadata: StandardLoggingMCPToolCall | None,
+    *,
+    store_responses: bool,
+) -> StandardLoggingMCPToolCall | None:
+    if mcp_tool_call_metadata is None or store_responses:
+        return mcp_tool_call_metadata
+    return cast(
+        StandardLoggingMCPToolCall,
+        {key: value for key, value in mcp_tool_call_metadata.items() if key != "result"},
+    )
+
+
 def _get_vector_store_request_for_spend_logs_payload(
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None,
+    *,
+    store_responses: bool,
 ) -> list[StandardLoggingVectorStoreRequest] | None:
-    """
-    If user does not want to store prompts and responses, then remove the content from the vector store request metadata
-    """
-    if should_store_prompts_and_responses_in_spend_logs():
+    if store_responses:
         return vector_store_request_metadata
 
-    # if user does not want to store prompts and responses, then remove the content from the vector store request metadata
     if vector_store_request_metadata is None:
         return None
     for vector_store_request in vector_store_request_metadata:
