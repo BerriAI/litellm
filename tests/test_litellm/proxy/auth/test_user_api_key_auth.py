@@ -5444,6 +5444,182 @@ async def test_centralized_common_checks_backfills_org_id_from_team(key_org_id, 
 
 
 @pytest.mark.asyncio
+async def test_centralized_common_checks_backfills_org_alias_from_team_org():
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import LiteLLM_OrganizationTable, LiteLLM_TeamTableCachedObj
+
+    token = UserAPIKeyAuth(api_key="sk-test", user_id="u", team_id="t1")
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    fetched_team = LiteLLM_TeamTableCachedObj(team_id="t1", organization_id="org-1")
+    fetched_org = LiteLLM_OrganizationTable(
+        organization_id="org-1",
+        organization_alias="acme-org",
+        budget_id="budget-1",
+        created_by="test",
+        updated_by="test",
+    )
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(  # test-quality-ok: centralized checks read this auth module seam
+                "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                new_callable=AsyncMock,
+                return_value=fetched_team,
+            ),
+            patch(  # test-quality-ok: centralized checks read this auth module seam
+                "litellm.proxy.auth.user_api_key_auth.get_org_object",
+                new_callable=AsyncMock,
+                return_value=fetched_org,
+            ) as mock_get_org,
+            patch(  # test-quality-ok: centralized checks read this auth module seam
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new_callable=AsyncMock,
+            ) as mock_checks,
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"model": "gpt-4o"},
+                route="/chat/completions",
+            )
+
+        mock_checks.assert_awaited_once()
+        assert token.organization_alias == "acme-org"
+        assert mock_checks.await_args.kwargs["valid_token"].organization_alias == "acme-org"
+        mock_get_org.assert_awaited_once_with(
+            org_id="org-1",
+            prisma_client=None,
+            user_api_key_cache=attrs["user_api_key_cache"],
+            parent_otel_span=None,
+            proxy_logging_obj=attrs["proxy_logging_obj"],
+        )
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "org_id,organization_alias,team_org_id,expected_alias",
+    [
+        ("org-pinned", "pinned", "org-from-team", "pinned"),
+        (None, None, None, None),
+    ],
+)
+async def test_centralized_common_checks_preserves_or_omits_org_alias_without_org_lookup(
+    org_id, organization_alias, team_org_id, expected_alias
+):
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        user_id="u",
+        team_id="t1",
+        org_id=org_id,
+        organization_alias=organization_alias,
+    )
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    fetched_team = LiteLLM_TeamTableCachedObj(team_id="t1", organization_id=team_org_id)
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(  # test-quality-ok: centralized checks read this auth module seam
+                "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                new_callable=AsyncMock,
+                return_value=fetched_team,
+            ),
+            patch(  # test-quality-ok: centralized checks read this auth module seam
+                "litellm.proxy.auth.user_api_key_auth.get_org_object",
+                new_callable=AsyncMock,
+            ) as mock_get_org,
+            patch(  # test-quality-ok: centralized checks read this auth module seam
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new_callable=AsyncMock,
+            ),
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"model": "gpt-4o"},
+                route="/chat/completions",
+            )
+
+        assert token.organization_alias == expected_alias
+        mock_get_org.assert_not_awaited()
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_org_alias_lookup_failure_is_swallowed():
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+
+    token = UserAPIKeyAuth(api_key="sk-test", user_id="u", team_id="t1")
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    fetched_team = LiteLLM_TeamTableCachedObj(team_id="t1", organization_id="org-1")
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(  # test-quality-ok: centralized checks read this auth module seam
+                "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                new_callable=AsyncMock,
+                return_value=fetched_team,
+            ),
+            patch(  # test-quality-ok: centralized checks read this auth module seam
+                "litellm.proxy.auth.user_api_key_auth.get_org_object",
+                new_callable=AsyncMock,
+                side_effect=Exception("db down"),
+            ),
+            patch(  # test-quality-ok: centralized checks read this auth module seam
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new_callable=AsyncMock,
+            ) as mock_checks,
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"model": "gpt-4o"},
+                route="/chat/completions",
+            )
+
+        mock_checks.assert_awaited_once()
+        assert token.organization_alias is None
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
 async def test_cli_session_token_org_backfilled_from_team(monkeypatch):
     """LIT-4688 root cause: CLI session tokens (from /sso/cli/poll) are minted
     with a real team_id but no org_id, and their auth path decrypts the blob
