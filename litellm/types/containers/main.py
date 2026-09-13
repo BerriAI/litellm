@@ -1,7 +1,9 @@
+import builtins
+from collections.abc import Mapping
 from typing import Any, Literal
 
 from pydantic import BaseModel
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 
 class ExpiresAfter(BaseModel):
@@ -23,15 +25,15 @@ class ContainerObject(BaseModel):
     name: str | None = None
     _hidden_params: dict[str, Any] = {}
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: builtins.object = None) -> builtins.object:
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> builtins.object:
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
@@ -50,13 +52,13 @@ class DeleteContainerResult(BaseModel):
     object: Literal["container.deleted"]
     deleted: bool
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: builtins.object = None) -> builtins.object:
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> builtins.object:
         return getattr(self, key)
 
     def json(self, **kwargs):
@@ -75,13 +77,13 @@ class ContainerListResponse(BaseModel):
     last_id: str | None = None
     has_more: bool
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: builtins.object = None) -> builtins.object:
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> builtins.object:
         return getattr(self, key)
 
     def json(self, **kwargs):
@@ -98,7 +100,7 @@ class ContainerCreateOptionalRequestParams(TypedDict, total=False):
     Params here: https://platform.openai.com/docs/api-reference/containers/create
     """
 
-    expires_after: dict[str, Any] | None  # ExpiresAfter object
+    expires_after: ReadOnly[Mapping[str, object] | None]  # ExpiresAfter object
     file_ids: list[str] | None
     extra_headers: dict[str, str] | None
     extra_body: dict[str, str] | None
@@ -140,13 +142,13 @@ class ContainerFileObject(BaseModel):
     source: str
     _hidden_params: dict[str, Any] = {}
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: builtins.object = None) -> builtins.object:
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> builtins.object:
         return getattr(self, key)
 
     def json(self, **kwargs):
@@ -165,13 +167,13 @@ class ContainerFileListResponse(BaseModel):
     last_id: str | None = None
     has_more: bool
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: builtins.object = None) -> builtins.object:
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> builtins.object:
         return getattr(self, key)
 
     def json(self, **kwargs):
@@ -189,13 +191,13 @@ class DeleteContainerFileResponse(BaseModel):
     object: Literal["container.file.deleted", "container_file.deleted"]
     deleted: bool
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: builtins.object = None) -> builtins.object:
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> builtins.object:
         return getattr(self, key)
 
     def json(self, **kwargs):

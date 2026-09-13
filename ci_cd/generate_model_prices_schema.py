@@ -58,6 +58,11 @@ OBJECT_KEYS: dict[str, JsonSchema] = {
 }
 
 ARRAY_KEYS: dict[str, JsonSchema] = {
+    "supported_audio_formats": {
+        "type": "array",
+        "description": "Audio container formats the model can return.",
+        "items": {"type": "string", "enum": ["mp3", "wav"]},
+    },
     "supported_endpoints": {
         "type": "array",
         "description": "OpenAI-style API routes this model can be called through, e.g. /v1/chat/completions.",
@@ -231,6 +236,10 @@ def string_key_schemas(modes: tuple) -> dict[str, JsonSchema]:
         },
         "comment": STRING,
         "audio_transcription_config": STRING,
+        "vertex_ai_audio_api": {
+            "type": "string",
+            "enum": ["lyria_predict", "lyria_interactions"],
+        },
     }
 
 

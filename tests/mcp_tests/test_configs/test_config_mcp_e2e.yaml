@@ -23,3 +23,6 @@ mcp_servers:
     transport: http
     url: http://127.0.0.1:0/mcp
     allow_all_keys: true
+  math_restricted:
+    transport: http
+    url: http://127.0.0.1:0/mcp

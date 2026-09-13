@@ -2920,7 +2920,7 @@ async def test_get_config_callbacks_with_all_types(client_no_auth):
         assert result["status"] == "success"
         assert "callbacks" in result
 
-        callbacks = result["callbacks"]
+        callbacks = [cb for cb in result["callbacks"] if not cb.get("read_only", False)]
 
         # Verify we have all 5 callbacks (2 success + 1 failure + 2 success_and_failure)
         assert len(callbacks) == 5

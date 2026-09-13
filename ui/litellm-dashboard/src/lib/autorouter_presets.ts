@@ -13,6 +13,13 @@ import {
 } from "@/components/add_model/ComplexityRouterConfig";
 import { KeywordTierRule } from "@/components/add_model/KeywordTierRules";
 import { hydrateKeywordTierRules } from "@/components/add_model/complexity_router_keywords";
+import { hydrateCustomDimensions } from "@/components/add_model/custom_dimensions";
+import {
+  hydrateDimensionWeights,
+  hydrateTierBoundaries,
+  hydrateTokenThresholds,
+  hydrateReasoningOverrideMinScore,
+} from "@/components/add_model/heuristic_scoring_knobs";
 import {
   TierModelParams,
   TierModelParamsByTier,
@@ -152,15 +159,18 @@ export const deploymentRefsFromModelInfo = (
     return row.model_name && underlyingModels.length > 0 ? [{ modelGroup: row.model_name, underlyingModels }] : [];
   });
 
-const resolveAvailableModel = (requiredModel: string, availability: ModelAvailability): string | undefined => {
+export const resolveAvailableModels = (requiredModel: string, availability: ModelAvailability): readonly string[] => {
   const { modelGroups, underlyingIndex } = availability;
-  if (modelGroups.has(requiredModel)) return requiredModel;
+  if (modelGroups.has(requiredModel)) return [requiredModel];
   const normalized = normalizeModelName(requiredModel);
-  const groupMatch = Array.from(modelGroups).find((available) => normalizeModelName(available) === normalized);
-  if (groupMatch !== undefined) return groupMatch;
+  const groupMatches = Array.from(modelGroups).filter((available) => normalizeModelName(available) === normalized);
+  if (groupMatches.length > 0) return groupMatches;
   const key = normalizeUnderlyingModel(requiredModel);
-  return key === null ? undefined : underlyingIndex.get(key)?.[0];
+  return key === null ? [] : underlyingIndex.get(key) ?? [];
 };
+
+export const resolveAvailableModel = (requiredModel: string, availability: ModelAvailability): string | undefined =>
+  resolveAvailableModels(requiredModel, availability)[0];
 
 export const getMissingModels = (
   config: Parameters<typeof getRequiredModels>[0],
@@ -284,13 +294,20 @@ export const buildPresetPrefill = (
       classifier_context_include_assistant_turns: config.classifier_context_include_assistant_turns,
       classification_mode: config.classification_mode ?? DEFAULT_CLASSIFICATION_MODE,
       session_affinity: config.session_affinity ?? DEFAULT_SESSION_AFFINITY,
+      session_affinity_ttl_seconds: config.session_affinity_ttl_seconds,
       deployment_affinity: config.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY,
       modality_routing: config.modality_routing ?? false,
+      modality_pin_override: config.modality_pin_override ?? false,
       adaptive: config.adaptive,
       adaptive_weights: config.adaptive_weights,
       tier_distance_penalty: config.tier_distance_penalty,
       adaptive_eligible: config.adaptive_eligible,
       return_raw_model_name: config.return_raw_model_name,
+      dimension_weights: hydrateDimensionWeights(config.dimension_weights),
+      custom_dimensions: hydrateCustomDimensions(config.custom_dimensions),
+      tier_boundaries: hydrateTierBoundaries(config.tier_boundaries),
+      token_thresholds: hydrateTokenThresholds(config.token_thresholds),
+      reasoning_override_min_score: hydrateReasoningOverrideMinScore(config.reasoning_override_min_score),
       enable_context_window_escalation: config.enable_context_window_escalation,
       context_window_escalation_buffer: config.context_window_escalation_buffer,
     },
