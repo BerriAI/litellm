@@ -328,11 +328,11 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   };
 
   const selectCreateTeamOrganization = (
-    next: string,
+    next: string | null,
     currentOrganizationId: string | null,
     onChange: (organizationId: string | null) => void,
   ) => {
-    const nextOrganizationId = next === "" ? null : next;
+    const nextOrganizationId = next;
     if (nextOrganizationId === currentOrganizationId) return;
     onChange(nextOrganizationId);
     form.setValue("models", []);
@@ -807,7 +807,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                         showNeverResets
                         placeholder={budgetDurationPlaceholder}
                         value={value}
-                        onChange={onChange}
+                        onChange={(next) => onChange(next ?? undefined)}
                       />
                     )}
                   </FormField>

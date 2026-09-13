@@ -10,7 +10,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-09-07T23:09:03.362777Z"
+exclude-newer = "2026-09-09T21:39:49.468411Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -4390,6 +4390,7 @@ cli = [
     { name = "pyyaml" },
     { name = "requests" },
     { name = "rich" },
+    { name = "tomlkit" },
 ]
 extra-proxy = [
     { name = "a2a-sdk" },
@@ -4444,6 +4445,7 @@ proxy = [
     { name = "rq" },
     { name = "soundfile" },
     { name = "starlette" },
+    { name = "tomlkit" },
     { name = "uvicorn" },
     { name = "uvloop", marker = "sys_platform != 'win32'" },
     { name = "websockets" },
@@ -4559,6 +4561,7 @@ e2e-dev = [
     { name = "locust" },
     { name = "mcp" },
     { name = "playwright" },
+    { name = "psutil" },
     { name = "websockets" },
 ]
 healthcheck = [
@@ -4668,6 +4671,8 @@ requires-dist = [
     { name = "starlette", marker = "extra == 'proxy'", specifier = ">=1.0.1,<2.0" },
     { name = "tiktoken", specifier = ">=0.8.0,<1.0" },
     { name = "tokenizers", specifier = ">=0.21.0,<1.0" },
+    { name = "tomlkit", marker = "extra == 'cli'", specifier = ">=0.13.3,<1.0" },
+    { name = "tomlkit", marker = "extra == 'proxy'", specifier = ">=0.13.3,<1.0" },
     { name = "uvicorn", marker = "extra == 'proxy'", specifier = ">=0.33.0,<1.0" },
     { name = "uvloop", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = ">=0.22.1,<1.0" },
     { name = "websockets", marker = "extra == 'proxy'", specifier = ">=15.0.1,<16.0" },
@@ -4747,6 +4752,7 @@ e2e-dev = [
     { name = "locust", specifier = "==2.45.0" },
     { name = "mcp", specifier = ">=1.28.1,<2.0" },
     { name = "playwright", specifier = "==1.61.0" },
+    { name = "psutil", specifier = "==7.2.2" },
     { name = "websockets", specifier = ">=15.0.1,<16.0" },
 ]
 healthcheck = [
@@ -4767,12 +4773,12 @@ proxy-dev = [
 
 [[package]]
 name = "litellm-enterprise"
-version = "0.1.66"
+version = "0.1.67"
 source = { editable = "enterprise" }
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.4.96"
+version = "0.4.97"
 source = { editable = "litellm-proxy-extras" }
 
 [[package]]

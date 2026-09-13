@@ -5,18 +5,19 @@ Tests the rule-based complexity scoring and tier assignment logic.
 """
 
 import asyncio
-from collections.abc import AsyncIterator
 import json
-from copy import deepcopy
-from functools import partial
 import logging
 import sys
 import time
-from typing import Dict, Final, List
+from collections.abc import AsyncIterator, Mapping
+from copy import deepcopy
+from functools import partial
+from typing import Dict, Final, List, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 import httpx
+import pytest
+import respx
 from pydantic import ValidationError
 
 import litellm
@@ -69,6 +70,7 @@ from litellm.router_strategy.complexity_router.tier_predictor import (
 from litellm.types.router import (
     Deployment,
     LiteLLM_Params,
+    RouterErrors,
     TaggedPreRoutingStrategy,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -2671,7 +2673,8 @@ class TestEncryptedTaskClassifier:
         assert call["metadata"]["user_api_key_hash"] == "caller-key-hash"
         assert call["proxy_server_request"]["body"]["input"] == call["input"]
         assert call["proxy_server_request"]["originating_request_masked"] == {
-            "input": [task], "metadata": {"authorization": "REDACTED"},
+            "input": [task],
+            "metadata": {"authorization": "REDACTED"},
         }
         assert "source-secret" not in json.dumps(call)
         assert "originating_request_masked" not in call["proxy_server_request"]["body"]
@@ -3315,19 +3318,23 @@ class TestLLMClassifier:
         ]
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("source_body", [
-        {"model": "router", "messages": [{"role": "user", "content": "source-only"}]},
-        {"model": "router", "system": "source-only", "messages": [{"role": "user", "content": "ask"}]},
-        {"model": "router", "instructions": "source-only", "input": "ask"},
-    ])
+    @pytest.mark.parametrize(
+        "source_body",
+        [
+            {"model": "router", "messages": [{"role": "user", "content": "source-only"}]},
+            {"model": "router", "system": "source-only", "messages": [{"role": "user", "content": "ask"}]},
+            {"model": "router", "instructions": "source-only", "input": "ask"},
+        ],
+    )
     async def test_classifier_source_is_masked_and_separate_from_provider_input(
         self, llm_complexity_router, mock_router_instance, source_body
     ):
         mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
         outcome = await llm_complexity_router.aclassify(
-            "classify-this-ask", request_kwargs={"proxy_server_request": {
-                "body": {**source_body, "metadata": {"authorization": "source-secret"}}
-            }}
+            "classify-this-ask",
+            request_kwargs={
+                "proxy_server_request": {"body": {**source_body, "metadata": {"authorization": "source-secret"}}}
+            },
         )
         assert outcome.cause == "llm_classifier"
         call_kwargs = mock_router_instance.acompletion.call_args.kwargs
@@ -8138,7 +8145,9 @@ class TestContextAwareClassifier:
             ),
         ),
     )
-    def test_only_text_reminder_tails_are_ignored_for_new_asks(self, tail: list[dict[str, object]], expected: bool) -> None:
+    def test_only_text_reminder_tails_are_ignored_for_new_asks(
+        self, tail: list[dict[str, object]], expected: bool
+    ) -> None:
         from litellm.router_strategy.complexity_router.complexity_router import (
             _CODEX_REMINDER_MARKERS,
             _newest_turn_is_human_ask,
@@ -13222,6 +13231,528 @@ class TestModalityRouting:
         assert cache.async_set_cache.await_args.kwargs["value"] == {"model": "text-cheap", "tier": "SIMPLE"}
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
+class TestHealthFallbackDispatch:
+    @pytest.fixture(autouse=True)
+    def httpx_transport(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    @staticmethod
+    def _router(
+        surface: str = "chat",
+        *,
+        peer: bool = False,
+        session: bool = False,
+        tagged: bool = False,
+        budgeted: bool = False,
+        config: Mapping[str, object] | None = None,
+    ) -> Router:
+        provider: Final = "anthropic/claude-sonnet-5" if surface == "messages" else "openai/gpt-5.6"
+        base_suffix: Final = "" if surface == "messages" else "/v1"
+        return Router(
+            model_list=[
+                {
+                    "model_name": "health-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_default_model": (config or {}).get("default_model", "fallback"),
+                        "complexity_router_config": {
+                            "tiers": {"SIMPLE": ["primary", "peer"] if peer else "primary", "MEDIUM": "primary"},
+                            "session_affinity": session,
+                            "deployment_affinity": False,
+                            "max_tokens_from_tier_model": False,
+                            **(config or {}),
+                        },
+                    },
+                },
+                *[
+                    {
+                        "model_name": name,
+                        "litellm_params": {
+                            "model": provider,
+                            "api_key": "test-only",
+                            "api_base": f"https://{name}.test{base_suffix}",
+                            **({"tags": [name]} if tagged else {}),
+                            **(
+                                {"max_budget": 1.0, "budget_duration": "1d"}
+                                if budgeted and name == "primary"
+                                else {}
+                            ),
+                        },
+                        "model_info": {"id": f"{name}-id"},
+                    }
+                    for name in ("primary", "peer", "fallback")
+                ],
+            ],
+            num_retries=0,
+            enable_health_check_routing=True,
+            enable_tag_filtering=tagged,
+        )
+
+    @staticmethod
+    def _unavailable(router: Router, model_id: str, source: Literal["health", "cooldown"]) -> None:
+        if source == "health":
+            router.health_state_cache.set_deployment_health_states(
+                {model_id: {"is_healthy": False, "timestamp": time.time()}}
+            )
+        else:
+            router.cooldown_cache.add_deployment_to_cooldown(
+                model_id=model_id,
+                original_exception=RuntimeError("unavailable"),
+                exception_status=503,
+                cooldown_time=60,
+            )
+
+    @staticmethod
+    def _http_response(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        text: Final = request.url.host.split(".")[0]
+        payload: Final[Mapping[str, object]]
+        events: Final[tuple[Mapping[str, object], ...]]
+        if request.url.path.endswith("/responses"):
+            from litellm.responses.main import mock_responses_api_response
+
+            payload = mock_responses_api_response(text).model_dump()
+            events = (
+                {"type": "response.created", "response": {**payload, "status": "in_progress"}, "sequence_number": 0},
+                {
+                    "type": "response.output_text.delta",
+                    "delta": text,
+                    "item_id": "msg_test",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "sequence_number": 1,
+                },
+                {"type": "response.completed", "response": payload, "sequence_number": 2},
+            )
+        elif request.url.path.endswith("/messages"):
+            payload = {
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "model": body["model"],
+                "content": [{"type": "text", "text": text}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            }
+            events = (
+                {"type": "message_start", "message": {**payload, "content": [], "stop_reason": None}},
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+                {"type": "content_block_stop", "index": 0},
+                {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}},
+                {"type": "message_stop"},
+            )
+        else:
+            payload = {
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 1,
+                "model": body["model"],
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+            }
+            events = (
+                {
+                    **payload,
+                    "object": "chat.completion.chunk",
+                    "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}],
+                },
+                {
+                    **payload,
+                    "object": "chat.completion.chunk",
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                },
+            )
+        if not body.get("stream"):
+            return httpx.Response(200, json=payload)
+        wire: Final = "".join(
+            (f"event: {event['type']}\n" if "type" in event else "") + f"data: {json.dumps(event)}\n\n"
+            for event in events
+        )
+        return httpx.Response(
+            200,
+            text=wire + ("data: [DONE]\n\n" if "type" not in events[0] else ""),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    @staticmethod
+    async def _request(router: Router, surface: str, stream: bool, metadata: dict[str, object]) -> str:
+        if surface == "responses":
+            result = await router.aresponses(
+                model="health-router", input="Hello!", stream=stream, litellm_metadata=metadata
+            )
+        elif surface == "messages":
+            result = await router.aanthropic_messages(
+                model="health-router",
+                messages=[{"role": "user", "content": "Hello!"}],
+                max_tokens=32,
+                stream=stream,
+                litellm_metadata=metadata,
+            )
+        else:
+            result = await router.acompletion(
+                model="health-router",
+                messages=[{"role": "user", "content": "Hello!"}],
+                stream=stream,
+                metadata=metadata,
+            )
+        if not stream:
+            payload = result if isinstance(result, dict) else result.model_dump()
+            if surface == "responses":
+                return payload["output"][0]["content"][0]["text"]
+            if surface == "messages":
+                return payload["content"][0]["text"]
+            return payload["choices"][0]["message"]["content"]
+        if surface == "messages":
+            wire: Final = b"".join([chunk async for chunk in result]).decode()
+            events = tuple(json.loads(line[6:]) for line in wire.splitlines() if line.startswith("data: "))
+            assert events[-1]["type"] == "message_stop"
+            return "".join(c["delta"]["text"] for c in events if c["type"] == "content_block_delta")
+        chunks: Final = [chunk.model_dump() async for chunk in result]
+        if surface == "responses":
+            assert chunks[-1]["type"] == "response.completed"
+            return "".join(c["delta"] for c in chunks if c["type"] == "response.output_text.delta")
+        assert chunks[-1]["choices"][0]["finish_reason"] == "stop"
+        return "".join(c["choices"][0]["delta"].get("content") or "" for c in chunks if c["choices"])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+    @pytest.mark.parametrize("stream", [False, True])
+    @pytest.mark.parametrize("source", ["health", "cooldown"])
+    async def test_public_call_falls_back_and_recovers(
+        self, surface: str, stream: bool, source: Literal["health", "cooldown"]
+    ) -> None:
+        router: Final = self._router(surface, session=True)
+        self._unavailable(router, "primary-id", source)
+        metadata: Final[dict[str, object]] = {"session_id": "outage"}
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(primary|peer|fallback)\.test$").mock(side_effect=self._http_response)
+            assert await self._request(router, surface, stream, metadata) == "fallback"
+            assert metadata["routing_decision"]["cause"] == "health_default_fallback"
+            assert "tier" not in metadata["routing_decision"]
+            assert "health_displaced:primary" in metadata["routing_decision"]["signals"]
+            assert [c.request.url.host for c in upstream.calls] == ["fallback.test"]
+            strategy: Final = router.complexity_routers["health-router"][0].strategy
+            key: Final = strategy._get_session_affinity_cache_key("outage", {})
+            assert await router.cache.async_get_cache(key=key) is None
+            if source == "health":
+                router.health_state_cache.set_deployment_health_states(
+                    {"primary-id": {"is_healthy": True, "timestamp": time.time()}}
+                )
+            else:
+                router.cooldown_cache.cooldown_store.delete_cache(
+                    router.cooldown_cache.get_cooldown_cache_key("primary-id")
+                )
+            recovered: Final[dict[str, object]] = {"session_id": "outage"}
+            assert await self._request(router, surface, stream, recovered) == "primary"
+            assert recovered["routing_decision"]["routed_model"] == "primary"
+            assert [c.request.url.host for c in upstream.calls] == ["fallback.test", "primary.test"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("source", ["health", "cooldown"])
+    async def test_partial_group_then_peer_then_default(self, source: Literal["health", "cooldown"]) -> None:
+        router: Final = self._router(peer=True, session=True)
+        router.add_deployment(
+            Deployment(
+                model_name="primary",
+                litellm_params=LiteLLM_Params(
+                    model="openai/gpt-5.6", api_key="test-only", api_base="https://primary.test/v1"
+                ),
+                model_info={"id": "primary-sibling-id"},
+            )
+        )
+        strategy: Final = router.complexity_routers["health-router"][0].strategy
+        key: Final = strategy._get_session_affinity_cache_key("precedence", {})
+        await router.cache.async_set_cache(key=key, value={"model": "primary", "tier": "SIMPLE"}, ttl=600)
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(primary|peer|fallback)\.test$").mock(side_effect=self._http_response)
+            for model_id, expected, cause in (
+                ("primary-id", "primary", "session_affinity_pin"),
+                ("primary-sibling-id", "peer", "health_failover"),
+                ("peer-id", "fallback", "health_default_fallback"),
+            ):
+                self._unavailable(router, model_id, source)
+                metadata: Final[dict[str, object]] = {"session_id": "precedence"}
+                assert await self._request(router, "chat", False, metadata) == expected
+                assert metadata["routing_decision"]["cause"] == cause
+                assert await router.cache.async_get_cache(key=key) == {"model": "primary", "tier": "SIMPLE"}
+            assert [c.request.url.host for c in upstream.calls] == ["primary.test", "peer.test", "fallback.test"]
+
+    @pytest.mark.asyncio
+    async def test_spent_deployment_budget_falls_back_to_the_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A spent budget leaves the tier with nothing that may serve the request, and the budget
+        filter reports that as a bare ValueError instead of a typed router error. Reading it as
+        capacity skips the recovery and fails the request the recovery exists for."""
+
+        async def _no_sync(*args: object, **kwargs: object) -> None:
+            return None
+
+        monkeypatch.setattr(
+            "litellm.router_strategy.budget_limiter.RouterBudgetLimiting.periodic_sync_in_memory_spend_with_redis",
+            _no_sync,
+        )
+        monkeypatch.setattr(litellm, "callbacks", [])
+        router: Final = self._router(budgeted=True)
+        limiter: Final = router.router_budget_logger
+        assert limiter is not None, "a deployment max_budget must install the budget limiter"
+        await router.cache.async_set_cache(key="deployment_spend:primary-id:1d", value=2.0)
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(primary|fallback)\.test$").mock(side_effect=self._http_response)
+            metadata: Final[dict[str, object]] = {}
+            assert await self._request(router, "chat", False, metadata) == "fallback"
+            assert metadata["routing_decision"]["cause"] == "health_default_fallback"
+            assert [c.request.url.host for c in upstream.calls] == ["fallback.test"]
+
+    @pytest.mark.asyncio
+    async def test_concurrent_tag_scopes_keep_fallbacks_request_local(self) -> None:
+        router: Final = self._router(tagged=True)
+        router.add_deployment(
+            Deployment(
+                model_name="fallback",
+                litellm_params=LiteLLM_Params(
+                    model="openai/gpt-5.6", api_key="test-only", api_base="https://peer.test/v1", tags=["peer"]
+                ),
+                model_info={"id": "fallback-peer-id"},
+            )
+        )
+        self._unavailable(router, "primary-id", "cooldown")
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(peer|fallback)\.test$").mock(side_effect=self._http_response)
+            scopes: Final = tuple({"tags": [name], "session_id": name} for name in ("peer", "fallback"))
+            results: Final = await asyncio.gather(
+                *(self._request(router, "chat", False, metadata) for metadata in scopes)
+            )
+            assert results == ["peer", "fallback"]
+            assert [m["tags"] for m in scopes] == [["peer"], ["fallback"]]
+            assert [m["routing_decision"]["routed_model"] for m in scopes] == ["fallback", "fallback"]
+            assert sorted(c.request.url.host for c in upstream.calls) == ["fallback.test", "peer.test"]
+
+    @pytest.mark.asyncio
+    async def test_probe_preserves_consumed_request_exclusions(self) -> None:
+        router: Final = self._router()
+        self._unavailable(router, "primary-id", "cooldown")
+        kwargs: Final = {"_excluded_deployment_ids": ["fallback-id"], "_target_order": 1}
+        strategy: Final = router.complexity_routers["health-router"][0].strategy
+        response: Final = await strategy.async_pre_routing_hook(
+            model="health-router", messages=[{"role": "user", "content": "Hello!"}], request_kwargs=kwargs
+        )
+        assert response.model == "primary"
+        assert kwargs == {"_excluded_deployment_ids": ["fallback-id"], "_target_order": 1}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("default_state", ["cooldown", "unconfigured", "same-model"])
+    async def test_unavailable_default_preserves_no_deployment_error(self, default_state: str) -> None:
+        from litellm.types.router import RouterRateLimitError
+
+        router: Final = self._router(config={"default_model": "primary"} if default_state == "same-model" else None)
+        self._unavailable(router, "primary-id", "cooldown")
+        if default_state == "unconfigured":
+            router.delete_deployment(id="fallback-id")
+        elif default_state == "cooldown":
+            self._unavailable(router, "fallback-id", "cooldown")
+        with respx.mock(assert_all_mocked=True) as upstream:
+            with pytest.raises(RouterRateLimitError, match="No deployments available"):
+                await self._request(router, "chat", False, {})
+            assert not upstream.calls
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("plan_active", [False, True])
+    async def test_plan_floor_outage_cannot_use_untiered_default(self, plan_active: bool) -> None:
+        from litellm.types.router import RouterRateLimitError
+
+        router: Final = self._router(
+            config={"tiers": {"SIMPLE": "primary", "MEDIUM": "peer"}, "plan_mode_min_tier": "MEDIUM"}
+        )
+        self._unavailable(router, "primary-id", "cooldown")
+        self._unavailable(router, "peer-id", "cooldown")
+        metadata: Final = {}
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as upstream:
+            upstream.post(host="fallback.test").mock(side_effect=self._http_response)
+            if plan_active:
+                with pytest.raises(RouterRateLimitError, match="No deployments available"):
+                    await router.acompletion(
+                        model="health-router",
+                        messages=[
+                            {"role": "system", "content": "Plan mode is active"},
+                            {"role": "user", "content": "Hello!"},
+                        ],
+                        metadata=metadata,
+                    )
+                assert not upstream.calls
+                assert metadata["routing_decision"]["routed_model"] == "peer"
+                assert metadata["routing_decision"]["tier"] == "MEDIUM"
+            else:
+                assert await self._request(router, "chat", False, metadata) == "fallback"
+
+    @pytest.mark.asyncio
+    async def test_default_dispatch_drops_displaced_tier_params(self) -> None:
+        router: Final = self._router(
+            config={"tiers": {"SIMPLE": {"model_name": "primary", "litellm_params": {"max_tokens": 9}}}}
+        )
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(primary|fallback)\.test$").mock(side_effect=self._http_response)
+            await router.acompletion(
+                model="health-router", messages=[{"role": "user", "content": "Hello!"}], max_tokens=32
+            )
+            assert json.loads(upstream.calls[-1].request.content)["max_completion_tokens"] == 9
+            self._unavailable(router, "primary-id", "cooldown")
+            await router.acompletion(
+                model="health-router", messages=[{"role": "user", "content": "Hello!"}], max_tokens=32
+            )
+            assert json.loads(upstream.calls[-1].request.content)["max_completion_tokens"] == 32
+            assert upstream.calls[-1].request.url.host == "fallback.test"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("source", ["health", "cooldown"])
+    async def test_pinned_session_returns_to_primary_after_outage(self, source: Literal["health", "cooldown"]) -> None:
+        router: Final = self._router(session=True)
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(primary|fallback)\.test$").mock(side_effect=self._http_response)
+            assert await self._request(router, "chat", False, {"session_id": "pinned"}) == "primary"
+            self._unavailable(router, "primary-id", source)
+            outage: Final[dict[str, object]] = {"session_id": "pinned"}
+            assert await self._request(router, "chat", False, outage) == "fallback"
+            assert outage["routing_decision"]["cause"] == "health_default_fallback"
+            if source == "health":
+                router.health_state_cache.set_deployment_health_states(
+                    {"primary-id": {"is_healthy": True, "timestamp": time.time()}}
+                )
+            else:
+                router.cooldown_cache.cooldown_store.delete_cache(
+                    router.cooldown_cache.get_cooldown_cache_key("primary-id")
+                )
+            recovered: Final[dict[str, object]] = {"session_id": "pinned"}
+            assert await self._request(router, "chat", False, recovered) == "primary"
+            assert recovered["routing_decision"]["cause"] == "session_affinity_pin"
+            assert [c.request.url.host for c in upstream.calls] == ["primary.test", "fallback.test", "primary.test"]
+
+    @pytest.mark.asyncio
+    async def test_policy_plugin_does_not_escape_to_live_default(self) -> None:
+        from litellm.types.router import RouterRateLimitError, RoutingContext
+
+        class PrimaryOnly:
+            async def run(self, context: RoutingContext) -> RoutingContext:
+                context.candidate_models = [name for name in context.candidate_models if name == "primary"]
+                return context
+
+        router: Final = self._router(peer=True, config={"plugins": [PrimaryOnly()]})
+        self._unavailable(router, "primary-id", "cooldown")
+        with respx.mock(assert_all_mocked=True) as upstream:
+            with pytest.raises(RouterRateLimitError, match="No deployments available"):
+                await self._request(router, "chat", False, {})
+            assert not upstream.calls
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("live_tier", [True, False])
+    @pytest.mark.parametrize("default_fits", [True, False])
+    async def test_context_recovery_precedes_default_with_prechecks_off(
+        self, live_tier: bool, default_fits: bool
+    ) -> None:
+        from litellm.types.router import RouterRateLimitError
+
+        router: Final = self._router(config={"tiers": {"SIMPLE": "primary", "MEDIUM": "peer", "COMPLEX": "large"}})
+        router.add_deployment(
+            Deployment(
+                model_name="large",
+                litellm_params=LiteLLM_Params(
+                    model="openai/gpt-5.6", api_key="test-only", api_base="https://large.test/v1"
+                ),
+                model_info={"id": "large-id", "max_input_tokens": 10000},
+            )
+        )
+        for deployment in router.model_list:
+            deployment["model_info"]["max_input_tokens"] = (
+                10
+                if deployment["model_name"] == "primary"
+                or (deployment["model_name"] == "fallback" and not default_fits)
+                else 10000
+            )
+        self._unavailable(router, "peer-id", "cooldown")
+        if not live_tier:
+            self._unavailable(router, "large-id", "cooldown")
+        assert router.enable_pre_call_checks is False
+        metadata: Final = {}
+        messages: Final = [{"role": "user", "content": "hello " * 100}]
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as upstream:
+            upstream.post(host__regex=r"^(large|fallback)\.test$").mock(side_effect=self._http_response)
+            if not live_tier and not default_fits:
+                with pytest.raises(RouterRateLimitError, match="No deployments available"):
+                    await router.acompletion(model="health-router", messages=messages, metadata=metadata)
+                assert not upstream.calls
+            else:
+                result: Final = await router.acompletion(model="health-router", messages=messages, metadata=metadata)
+                expected: Final = "large" if live_tier else "fallback"
+                assert result.choices[0].message.content == expected
+                assert upstream.calls[-1].request.url.host == f"{expected}.test"
+                assert metadata["routing_decision"].get("tier") == ("COMPLEX" if live_tier else None)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("live_tier", [True, False])
+    async def test_modality_recovery_precedes_default(self, live_tier: bool) -> None:
+        router: Final = self._router(
+            config={"modality_routing": True, "tiers": {"SIMPLE": "primary", "MEDIUM": "peer", "COMPLEX": "vision"}}
+        )
+        router.add_deployment(
+            Deployment(
+                model_name="vision",
+                litellm_params=LiteLLM_Params(
+                    model="openai/gpt-5.6", api_key="test-only", api_base="https://vision.test/v1"
+                ),
+                model_info={"id": "vision-id", "supports_vision": True},
+            )
+        )
+        for deployment in router.model_list:
+            deployment["model_info"]["supports_vision"] = deployment["model_name"] != "primary"
+        self._unavailable(router, "peer-id", "cooldown")
+        if not live_tier:
+            self._unavailable(router, "vision-id", "cooldown")
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(vision|fallback)\.test$").mock(side_effect=self._http_response)
+            result: Final = await router.acompletion(
+                model="health-router",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Hello!"},
+                            {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGk="}},
+                        ],
+                    }
+                ],
+            )
+            expected: Final = "vision" if live_tier else "fallback"
+            assert result.choices[0].message.content == expected
+            assert upstream.calls[-1].request.url.host == f"{expected}.test"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("default_fits", [True, False])
+    async def test_modality_default_must_also_fit_context(self, default_fits: bool) -> None:
+        router: Final = self._router(config={"modality_routing": True, "tiers": {"SIMPLE": "primary"}})
+        for deployment in router.model_list:
+            deployment["model_info"]["supports_vision"] = deployment["model_name"] == "fallback"
+            deployment["model_info"]["max_input_tokens"] = 10000 if default_fits else 10
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as upstream:
+            upstream.post(host="fallback.test").mock(side_effect=self._http_response)
+            messages: Final = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "hello " * 100},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGk="}},
+                    ],
+                }
+            ]
+            if default_fits:
+                result: Final = await router.acompletion(model="health-router", messages=messages)
+                assert result.choices[0].message.content == "fallback"
+            else:
+                with pytest.raises(litellm.BadRequestError, match="modality_routing is enabled"):
+                    await router.acompletion(model="health-router", messages=messages)
+                assert not upstream.calls
+
+
 class TestTierHealthFailover:
     """A tier whose decided model group is entirely in cooldown falls back to a live peer."""
 
@@ -13256,7 +13787,7 @@ class TestTierHealthFailover:
         probed_prompts = []
 
         async def get_healthy_deployments(
-            model, request_kwargs, messages=None, input=None, parent_otel_span=None, **kwargs
+            model, request_kwargs, messages=None, input=None, parent_otel_span=None, health_check_probe=False
         ):
             probed_kwargs.append(request_kwargs)
             probed_prompts.append((messages, input))
@@ -13757,6 +14288,51 @@ class TestTierHealthFailover:
             probed_input == "summarize this document for me"
             for _, probed_input in router.litellm_router_instance.probed_prompts
         ), "the eligibility probe must forward `input` to the owner"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "raised, expected",
+        [
+            (ValueError(f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model=b"), {"live-c"}),
+            (
+                ValueError(f"{RouterErrors.no_deployments_with_provider_budget_routing.value}: b over budget"),
+                {"live-c"},
+            ),
+            (ValueError("cannot unpack non-sequence"), {"exhausted-b", "live-c"}),
+        ],
+    )
+    async def test_a_marked_exhaustion_value_error_is_a_verdict_and_an_unmarked_one_is_not(
+        self, mock_router_instance, raised, expected
+    ):
+        """Budget and tag filters exhaust a group without a typed error, signalling it only by a
+        RouterErrors marker on a bare ValueError. Those are verdicts; any other ValueError is a
+        fault, and a fault must still read as capacity rather than silently rerouting."""
+        router = self._router(
+            mock_router_instance,
+            {
+                "tiers": {
+                    "SIMPLE": ["dead-a", "exhausted-b", "live-c"],
+                    "MEDIUM": "mid",
+                    "COMPLEX": "big",
+                    "REASONING": "top",
+                },
+                "session_affinity": True,
+            },
+            {"dead-a": ["id-a1"], "exhausted-b": ["id-b1"], "live-c": ["id-c1"]},
+            cooling=("id-a1",),
+            raises_for={"exhausted-b": raised},
+        )
+        key = router._get_session_affinity_cache_key("sess-exhausted", {})
+        await router.litellm_router_instance.cache.async_set_cache(
+            key=key, value={"model": "dead-a", "tier": "SIMPLE"}, ttl=600
+        )
+        results = [
+            await router.async_pre_routing_hook(
+                model="m", request_kwargs={"metadata": {"session_id": "sess-exhausted"}}, messages=self.SIMPLE_MESSAGE
+            )
+            for _ in range(20)
+        ]
+        assert {r.model for r in results} == expected
 
     @pytest.mark.asyncio
     async def test_a_group_the_router_has_no_deployment_for_is_not_a_failover_target(self, mock_router_instance):
