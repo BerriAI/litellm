@@ -448,6 +448,7 @@ from datetime import datetime
 from litellm.proxy._experimental.mcp_server.server import (
     _jsonrpc_rejection_reason,
     _log_mcp_protocol_rejection,
+    _parse_jsonrpc_error_response_for_logging,
     _parse_jsonrpc_request_for_logging,
     _wrap_send_for_protocol_error_logging,
 )
@@ -1027,6 +1028,53 @@ def test_parse_jsonrpc_request_for_logging_truncated_or_non_json():
     assert _parse_jsonrpc_request_for_logging(b"not json at all") == (None, {}, None)
     # A bare JSON scalar (neither dict nor list).
     assert _parse_jsonrpc_request_for_logging(b'"a string"') == (None, {}, None)
+
+
+def test_parse_jsonrpc_error_response_for_logging_accepts_sse():
+    payload = _parse_jsonrpc_error_response_for_logging(
+        b'event: message\r\ndata: {"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"bad"}}\r\n\r\n'
+    )
+    assert payload is not None
+    assert payload["error"]["code"] == -32602
+
+
+@pytest.mark.asyncio
+async def test_mcp_protocol_sse_rejection_emits_slo():
+    litellm.logging_callback_manager._reset_all_callbacks()
+    capture = _ProtocolRejectionLogger()
+    litellm.callbacks = [capture]
+
+    async def fake_send(message):
+        pass
+
+    try:
+        wrapped = _wrap_send_for_protocol_error_logging(
+            fake_send,
+            request_method="tools/not-real",
+            params={},
+            request_id=1,
+            user_api_key_auth=UserAPIKeyAuth(api_key="test", user_id="u1"),
+            raw_headers={},
+            start_time=datetime.now(),
+        )
+        await wrapped(
+            {
+                "type": "http.response.body",
+                "body": (
+                    b'event: message\r\ndata: {"jsonrpc":"2.0","id":1,'
+                    b'"error":{"code":-32602,"message":"Invalid request parameters"}}\r\n\r\n'
+                ),
+            }
+        )
+        await asyncio.sleep(1)
+    finally:
+        litellm.callbacks = []
+
+    payloads = [payload for payload in capture.failure_payloads if isinstance(payload, dict)]
+    assert len(payloads) == 1
+    spend_meta = (payloads[0].get("metadata") or {}).get("spend_logs_metadata") or {}
+    assert spend_meta.get("mcp_operation") == "tools/not-real"
+    assert spend_meta.get("rejection_reason") == "malformed_params"
 
 
 _QUEUED_LOGGING_OUTLIVES_TEST = '''

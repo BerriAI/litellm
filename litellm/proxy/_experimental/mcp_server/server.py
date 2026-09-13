@@ -3791,6 +3791,26 @@ if MCP_AVAILABLE:
         except Exception as log_exc:  # noqa: BLE001  # best-effort: logging must never break the MCP response
             verbose_logger.debug("MCP protocol-error logging failed (continuing): %s", log_exc)
 
+    def _parse_jsonrpc_error_response_for_logging(
+        raw_body: bytes,
+    ) -> _JSONRPCErrorEnvelopeForLogging | None:
+        stripped_body: Final = raw_body.lstrip()
+        if stripped_body.startswith(b"{"):
+            json_body: Final = stripped_body
+        else:
+            data_lines: Final = tuple(
+                line.removeprefix(b"data:").lstrip()
+                for line in raw_body.splitlines()
+                if line.startswith(b"data:")
+            )
+            if len(data_lines) != 1:
+                return None
+            json_body = data_lines[0]
+        try:
+            return _JSONRPC_ERROR_FOR_LOGGING_ADAPTER.validate_json(json_body)
+        except ValidationError:
+            return None
+
     def _wrap_send_for_protocol_error_logging(
         inner_send: Send,
         request_method: str | None,
@@ -3834,7 +3854,9 @@ if MCP_AVAILABLE:
                     return
                 if b'"error"' not in raw_body or b'"result"' in raw_body:
                     return
-                payload: Final = _JSONRPC_ERROR_FOR_LOGGING_ADAPTER.validate_json(raw_body)
+                payload: Final = _parse_jsonrpc_error_response_for_logging(raw_body)
+                if payload is None:
+                    return
                 already_logged["done"] = True
                 await _log_mcp_protocol_rejection(
                     request_method=request_method,
@@ -3845,7 +3867,7 @@ if MCP_AVAILABLE:
                     raw_headers=raw_headers,
                     start_time=start_time,
                 )
-            except (ValidationError, TypeError, ValueError):
+            except (TypeError, ValueError):
                 # Non-JSON / streaming chunk — nothing to log here.
                 return
             except Exception as wrap_exc:  # noqa: BLE001  # best-effort: never break the response on logging
