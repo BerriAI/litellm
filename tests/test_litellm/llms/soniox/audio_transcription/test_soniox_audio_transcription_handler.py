@@ -780,6 +780,51 @@ class TestPassthroughBodyBuilding:
         post_call = next(c for c in client.calls if c["method"] == "POST")
         assert "context" not in post_call["json"]
 
+    def test_should_send_form_string_params_to_soniox_as_json_types(self, monkeypatch):
+        """Simulates the proxy path, where every multipart form field is a string."""
+        monkeypatch.setattr("time.sleep", lambda *_: None)
+        responses = {
+            "POST https://api.soniox.com/v1/transcriptions": [
+                _make_response({"id": "tx_1"}),
+            ],
+            "GET https://api.soniox.com/v1/transcriptions/tx_1": [
+                _make_response({"status": "completed"}),
+            ],
+            "GET https://api.soniox.com/v1/transcriptions/tx_1/transcript": [
+                _make_response({"text": "ok", "tokens": []}),
+            ],
+            "DELETE https://api.soniox.com/v1/transcriptions/tx_1": [
+                _make_response({}),
+            ],
+        }
+        client = _MockSyncClient(responses)
+        form_params = {
+            "audio_url": "https://example.com/a.wav",
+            "context": '{"terms": ["Celebrex"], "general": [{"key": "domain", "value": "Healthcare"}]}',
+            "translation": '{"type": "one_way", "target_language": "es"}',
+            "language_hints": "en,es",
+            "language_hints_strict": "true",
+            "enable_speaker_diarization": "true",
+            "enable_language_identification": "false",
+            "soniox_polling_interval": "0.5",
+        }
+        SonioxAudioTranscriptionHandler().audio_transcriptions(
+            audio_file=None,
+            optional_params=form_params,
+            litellm_params={},
+            atranscription=False,
+            **_common_call_kwargs(client),
+        )
+        body = next(c for c in client.calls if c["method"] == "POST")["json"]
+        assert body["context"] == {"terms": ["Celebrex"], "general": [{"key": "domain", "value": "Healthcare"}]}
+        assert body["translation"] == {"type": "one_way", "target_language": "es"}
+        assert list(body["language_hints"]) == ["en", "es"]
+        assert body["language_hints_strict"] is True
+        assert body["enable_speaker_diarization"] is True
+        assert body["enable_language_identification"] is False
+        assert "soniox_polling_interval" not in body
+        assert form_params["context"].startswith("{"), "caller's params must not be mutated"
+
 
 class TestSecretRedaction:
     """Secret-bearing fields must be redacted before reaching logging callbacks.
