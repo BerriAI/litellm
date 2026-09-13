@@ -258,6 +258,38 @@ gateway_metrics_port         = 4001
 gateway_metrics_scrape_cidrs = ["10.0.0.0/16"]
 ```
 
+### In-container connection pool
+
+Each of the `gateway_num_workers` uvicorn workers opens its own Prisma pool
+straight to Postgres, so one task holds `workers x connection_limit`
+connections and the fleet's footprint against the database ceiling grows with
+every task. `gateway_connection_pool_enabled` runs a PgBouncer (transaction
+mode, loopback) inside the gateway container that all workers share, capping
+the task at `gateway_pool_max_db_connections` upstream connections however
+many workers it runs. `gateway_pool_max_client_conn` bounds the worker-side
+connections the pooler accepts. The module sets
+`LITELLM_PGBOUNCER_ENABLED`, `LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS` and
+`LITELLM_PGBOUNCER_MAX_CLIENT_CONN` on the gateway container only; the backend
+and the migration task keep the direct connection.
+
+```hcl
+gateway_num_workers             = 4
+gateway_connection_pool_enabled = true
+gateway_pool_max_db_connections = 20
+gateway_pool_max_client_conn    = 1000
+```
+
+The pool works with the module-created Aurora as well as an existing database
+via `database_url`. Against Aurora it authenticates with the same rotating IAM
+tokens the workers used to (see [Aurora + IAM auth](#aurora--iam-auth)): the
+pooler mints a token from the task role, renews it before it expires and hands
+the workers a loopback URL with a static password instead
+
+The componentized `gateway_image` starts through `python -m gateway.launch`,
+which reads these variables, starts the pooler once per task and hands the
+workers its loopback URL; the classic `litellm` image honours them the same
+way.
+
 ### Scaling the gateway on requests and tokens
 
 By default the gateway service target-tracks CPU (`gateway_cpu_target`) and
@@ -312,6 +344,46 @@ ten tasks handle 4,200,000,000 tokens in a minute, `tokens / 60` is
 7,000,000 against a target of 6,000,000, so the service grows to
 `ceil(10 * 7000000 / 6000000) = 12`. Container Insights must be enabled on the
 cluster for `RunningTaskCount` to exist
+
+### Collector sidecar
+
+`collector_enabled = true` adds a second container to the gateway task
+that runs `python -m litellm.proxy.collector` from the gateway image, and sets
+`LITELLM_COLLECTOR_ENABLED=true` on the gateway so its uvicorn workers
+ship spend events (SpendLogs writes, key/team/user spend updates, budget
+alerts) to the sidecar instead of running that pipeline in the request
+path. This is the Terraform counterpart of helm's `gateway.collector`.
+The default (`false`) leaves the task definition exactly as before.
+
+Fargate tasks share one network namespace, so the sidecar listens on
+loopback TCP (`tcp://127.0.0.1:${collector_port}`, default 4010) instead
+of the Unix socket helm uses; the proxy rejects any non-loopback address.
+The sidecar gets the same database, Redis, master-key, license, proxy
+config, and `gateway_extra_env` / `gateway_extra_secrets` values as the
+gateway container, runs with `LITELLM_JOB_ROLE=collector`, and is
+non-essential with an ECS restart policy, so a sidecar crash restarts it in
+place while the gateway falls back to in-process spend tracking. With
+`gateway_connection_pool_enabled` it also gets the `LITELLM_PGBOUNCER_*` env,
+so with a password-authenticated database (`create_database = false`) its
+Prisma client goes through the task-local PgBouncer instead of opening a
+second pool straight to the database. Under IAM token auth (the module-managed
+Aurora cluster) the collector keeps its own direct connection on purpose: the
+pooler's auth file only holds the token the gateway container minted, which
+the sidecar cannot present, so it mints its own.
+
+```hcl
+collector_enabled = true
+# collector_cpu               = 512    # carved out of gateway_cpu
+# collector_memory            = 2048   # MiB, carved out of gateway_memory
+# collector_buffer_size       = 1000
+# collector_on_unavailable    = "fallback"  # or "drop"
+# collector_drain_timeout_seconds = 10
+```
+
+Both sidecar reservations must leave room for the gateway container inside
+`gateway_cpu` / `gateway_memory` (the plan fails otherwise). Service
+autoscaling keeps tracking the whole task's CPU and memory, sidecar
+included
 
 ## Tenant deployment
 

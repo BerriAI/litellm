@@ -287,6 +287,80 @@ the gateway on GKE with the Helm chart's `targetTokensPerSecond` (see
 "Dependencies only" below) rather than wiring the counter into Cloud
 Monitoring, which the autoscaler would ignore
 
+### In-container connection pool
+
+Each of the `gateway_num_workers` uvicorn workers opens its own Prisma pool
+straight to Cloud SQL, so one instance holds `workers x connection_limit`
+connections and the fleet's footprint against the database ceiling grows with
+every instance Cloud Run adds. `gateway_connection_pool_enabled` runs a
+PgBouncer (transaction mode, loopback) inside the gateway container that all
+workers share, capping the instance at `gateway_pool_max_db_connections`
+upstream connections however many workers it runs.
+`gateway_pool_max_client_conn` bounds the worker-side connections the pooler
+accepts. The module sets `LITELLM_PGBOUNCER_ENABLED`,
+`LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS` and `LITELLM_PGBOUNCER_MAX_CLIENT_CONN`
+on the gateway service only; the backend service and the migrations job keep
+the direct connection
+
+```hcl
+gateway_num_workers             = 4
+gateway_connection_pool_enabled = true
+gateway_pool_max_db_connections = 20
+gateway_pool_max_client_conn    = 1000
+```
+
+The pooler holds one static database password for the life of the instance.
+This stack authenticates to Cloud SQL with the Secret Manager password (see
+[Database authentication](#database-authentication)), so nothing else is
+needed; a Cloud SQL Auth Proxy sidecar with IAM auth would not work with the
+pool
+
+The gateway container starts through `python -m gateway.launch` (the
+componentized image's own entrypoint) rather than `uvicorn` directly. The
+launcher reads these variables, starts the pooler once per instance before
+uvicorn forks the workers and hands them its loopback `DATABASE_URL`. It also
+honours `KEEPALIVE_TIMEOUT` from `gateway_extra_env` the way the image does
+
+### Collector sidecar
+
+`collector_enabled = true` adds a `spend-collector` container to the gateway
+Cloud Run service that runs `python -m litellm.proxy.collector` from the gateway
+image, and sets `LITELLM_COLLECTOR_ENABLED=true` on the gateway so its
+uvicorn workers ship spend events (SpendLogs writes, key/team/user spend
+updates, budget alerts) to the sidecar instead of running that pipeline in
+the request path. This is the Terraform counterpart of helm's
+`gateway.collector`. The default (`false`) leaves the service exactly as
+before. It is independent of the metrics sidecars above, whose GMP scraper
+already owns the `collector` container name.
+
+Containers in one Cloud Run instance share localhost, so the sidecar listens
+on loopback TCP (`tcp://127.0.0.1:${collector_port}`, default 4010)
+instead of the Unix socket helm uses; the proxy rejects any non-loopback
+address. The sidecar runs the same Redis CA + `DATABASE_URL` bootstrap as
+the gateway container, gets the same database, Redis, master-key, license,
+proxy config, and `gateway_extra_env` / `gateway_extra_secrets` values, and
+runs with `LITELLM_JOB_ROLE=collector`. With `gateway_connection_pool_enabled`
+it also gets the `LITELLM_PGBOUNCER_*` env, so its Prisma client goes through
+the instance-local PgBouncer instead of opening a second pool straight to the
+database. When it is unreachable the gateway falls back to in-process spend
+tracking.
+
+```hcl
+collector_enabled = true
+# collector_cpu               = "1000m"  # added on top of gateway_cpu
+# collector_memory            = "2Gi"    # added on top of gateway_memory
+# collector_buffer_size       = 1000
+# collector_on_unavailable    = "fallback"  # or "drop"
+# collector_drain_timeout_seconds = 10
+```
+
+Cloud Run allocates CPU per instance while requests are in flight, and the
+sidecar shares that allocation. Spend events are shipped right after each
+response, so this works with request-based billing, but keep
+`gateway_min_instances >= 1` if spend must keep draining while an instance
+is otherwise idle. Variable names match the AWS stack; only the resource
+units differ (Cloud Run strings vs Fargate units)
+
 ## Tenant deployment
 
 Every resource the stack creates is named `${tenant}-litellm-${env}` (or

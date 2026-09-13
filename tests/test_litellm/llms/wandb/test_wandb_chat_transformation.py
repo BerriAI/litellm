@@ -249,7 +249,6 @@ class TestWandbConfig:
         "model,explicit_false",
         [
             ("meta-llama/Llama-3.1-8B-Instruct", False),
-            ("unknown-model", False),
             ("openai/gpt-oss-20b", True),
         ],
     )
@@ -290,3 +289,28 @@ class TestWandbConfig:
             supported_params = litellm.get_supported_openai_params(model=f"wandb/{model}")
             assert supported_params is not None
             assert "reasoning_effort" not in supported_params
+
+    @pytest.mark.respx()
+    def test_wandb_completion_keeps_reasoning_effort_for_an_unregistered_model(
+        self, wandb_test_config, wandb_request_mock: respx.Route
+    ):
+        """A wandb id the registry has not named yet resolves through the
+        wandb-reasoning-baseline fallback generalization, so its reasoning_effort reaches
+        the provider instead of raising. W&B adds reasoning models faster than this
+        registry names them, and an exact entry still wins wherever one exists."""
+        model: Final = "zai-org/GLM-6-Turbo"
+        assert f"wandb/{model}" not in litellm.model_cost
+
+        completion(
+            model=f"wandb/{model}",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="fake-wandb-key",
+            api_base="https://api.inference.wandb.ai/v1",
+            reasoning_effort="medium",
+            drop_params=False,
+        )
+
+        assert wandb_request_mock.call_count == 1
+        request_body = json.loads(wandb_request_mock.calls[0].request.content)
+        assert request_body["model"] == model
+        assert request_body["reasoning_effort"] == "medium"

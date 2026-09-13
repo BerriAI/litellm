@@ -3999,10 +3999,14 @@ def test_completion_novita_ai():
     openai_client = OpenAI(api_key="fake-key")
 
     with patch.object(
-        openai_client.chat.completions, "create", new=MagicMock()
+        openai_client.chat.completions.with_raw_response, "create"
     ) as mock_call:
+        mock_call.return_value.headers = {}
+        mock_call.return_value.parse.return_value = litellm.ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": "Hello"}}]
+        )
         try:
-            completion(
+            response = completion(
                 model="novita/meta-llama/llama-3.3-70b-instruct",
                 messages=messages,
                 client=openai_client,
@@ -4010,6 +4014,7 @@ def test_completion_novita_ai():
             )
 
             mock_call.assert_called_once()
+            assert response.choices[0].message.content == "Hello"
 
             # Verify model is passed correctly
             assert (

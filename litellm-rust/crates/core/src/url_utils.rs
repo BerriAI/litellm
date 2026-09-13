@@ -60,6 +60,14 @@ impl ApiUrl<Base> {
 }
 
 impl ApiUrl<Complete> {
+    pub(crate) fn append_query_pairs<'a>(
+        mut self,
+        pairs: impl IntoIterator<Item = (&'a str, &'a str)>,
+    ) -> Self {
+        self.url.query_pairs_mut().extend_pairs(pairs);
+        self
+    }
+
     pub(crate) fn into_string(self) -> String {
         self.url.into()
     }
@@ -91,5 +99,20 @@ mod tests {
             .map(|url| url.into_string())
             .expect("url builds");
         assert_eq!(actual, "https://example.test/v1/ocr?tenant=a");
+    }
+
+    #[test]
+    fn appended_query_pairs_are_encoded() {
+        let actual = ApiUrl::parse("https://example.test")
+            .and_then(|url| url.complete_path(&["analyze"]))
+            .map(|url| {
+                url.append_query_pairs([("model", "name with spaces")])
+                    .into_string()
+            })
+            .expect("url builds");
+        assert_eq!(
+            actual,
+            "https://example.test/analyze?model=name+with+spaces"
+        );
     }
 }

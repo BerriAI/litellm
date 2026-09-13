@@ -1,6 +1,6 @@
 use thiserror::Error as ThisError;
 
-#[derive(Debug, ThisError, PartialEq, Eq)]
+#[derive(Clone, Debug, ThisError, PartialEq, Eq)]
 pub enum Error {
     #[error("expected {expected}, got {actual}")]
     InvalidType {
@@ -9,6 +9,8 @@ pub enum Error {
     },
     #[error("missing required field: {0}")]
     MissingField(&'static str),
+    #[error("Document URL is required")]
+    MissingDocumentUrl,
     #[error("invalid response: {0}")]
     InvalidResponse(String),
     #[error("invalid provider: {0}")]
@@ -21,6 +23,18 @@ pub enum Error {
         "Missing {provider} API Key - A call is being made to {provider} but no key is set either in the environment variables or via params"
     )]
     MissingApiKey { provider: &'static str },
+    #[error(
+        "invalid authentication configuration: Missing Azure AI credentials - set AZURE_AI_API_KEY or configure Entra ID"
+    )]
+    MissingAzureAiCredentials,
+    #[error(
+        "invalid authentication configuration: Missing Azure Document Intelligence credentials - set AZURE_DOCUMENT_INTELLIGENCE_API_KEY or configure Entra ID"
+    )]
+    MissingAzureDocumentIntelligenceCredentials,
+    #[error(
+        "Missing REDUCTO_API_KEY - set it in the environment or pass api_key to litellm.ocr()/litellm.aocr()"
+    )]
+    MissingReductoApiKey,
     #[error("upstream request failed with status {status}: {body}")]
     Http { status: u16, body: String },
     #[error("upstream network error: {0}")]
@@ -38,6 +52,39 @@ pub enum Error {
     /// keep a reference implementation treat this as "fall back", not "fail".
     #[error("unsupported by the rust path: {0}")]
     Unsupported(&'static str),
+}
+
+impl Error {
+    pub const fn http_status_code(&self) -> Option<u16> {
+        match self {
+            Self::InvalidRequest(_) => Some(400),
+            Self::MissingDocumentUrl => Some(500),
+            Self::Http { status, .. } => Some(*status),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, ThisError)]
+pub(crate) enum MediaError {
+    #[error("media URL rejected by network policy")]
+    BlockedUrl,
+    #[error("media download is disabled")]
+    DownloadDisabled,
+    #[error("media download exceeds the maximum size")]
+    DownloadTooLarge,
+    #[error("too many redirects while fetching media")]
+    TooManyRedirects,
+    #[error("media redirect is missing a Location header")]
+    MissingRedirectLocation,
+    #[error("invalid media redirect")]
+    InvalidRedirect,
+    #[error("media download failed with status {0}")]
+    Http(u16),
+    #[error("media download timed out")]
+    Timeout,
+    #[error("{0}")]
+    Transport(#[from] TransportError),
 }
 
 #[derive(Clone, Debug, ThisError, PartialEq, Eq)]
@@ -72,6 +119,7 @@ impl From<crate::ocr::error::OcrRequestError> for Error {
     fn from(error: crate::ocr::error::OcrRequestError) -> Self {
         match error {
             crate::ocr::error::OcrRequestError::MissingField(field) => Self::MissingField(field),
+            crate::ocr::error::OcrRequestError::MissingDocumentUrl => Self::MissingDocumentUrl,
             error => Self::InvalidRequest(error.to_string()),
         }
     }
@@ -93,6 +141,15 @@ impl From<TransportError> for Error {
     }
 }
 
+impl From<crate::AuthError> for Error {
+    fn from(error: crate::AuthError) -> Self {
+        match error {
+            crate::AuthError::MissingApiKey { provider } => Self::MissingApiKey { provider },
+            error => Self::Auth(error.to_string()),
+        }
+    }
+}
+
 pub fn json_type_name(value: &serde_json::Value) -> &'static str {
     match value {
         serde_json::Value::Null => "null",
@@ -107,6 +164,14 @@ pub fn json_type_name(value: &serde_json::Value) -> &'static str {
 #[cfg(test)]
 mod transport_tests {
     use super::*;
+
+    #[test]
+    fn missing_auth_key_preserves_provider_in_public_error() {
+        assert_eq!(
+            Error::from(crate::AuthError::MissingApiKey { provider: "Vertex" }),
+            Error::MissingApiKey { provider: "Vertex" }
+        );
+    }
 
     #[tokio::test]
     async fn transport_errors_remove_urls_and_keep_dispatch_context() {
