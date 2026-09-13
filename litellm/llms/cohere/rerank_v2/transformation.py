@@ -19,9 +19,10 @@ class CohereRerankV2Config(CohereRerankConfig):
         optional_params: dict | None = None,
     ) -> str:
         if api_base:
-            # Remove trailing slashes and ensure clean base URL
             api_base = api_base.rstrip("/")
-            if not api_base.endswith("/v2/rerank"):
+            if api_base.endswith("/v2"):
+                api_base = f"{api_base}/rerank"
+            elif not api_base.endswith("/v2/rerank"):
                 api_base = f"{api_base}/v2/rerank"
             return api_base
         return "https://api.cohere.ai/v2/rerank"
