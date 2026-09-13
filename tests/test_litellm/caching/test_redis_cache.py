@@ -1205,6 +1205,89 @@ async def test_a_probe_overtaken_by_a_later_outage_leaves_the_breaker_to_the_new
     assert breaker._state == breaker.CLOSED
 
 
+class _SpyRedisCommands:
+    def __init__(self, eval_result: object) -> None:
+        self.commands: list[str] = []
+        self.eval_calls: list[tuple[object, ...]] = []
+        self._eval_result = eval_result
+
+    async def eval(self, script: str, numkeys: int, *keys_and_args: object) -> object:
+        self.commands.append("eval")
+        self.eval_calls.append((script, numkeys, *keys_and_args))
+        return self._eval_result
+
+    async def incrbyfloat(self, name: str, amount: float) -> float:
+        self.commands.append("incrbyfloat")
+        return amount
+
+    async def ttl(self, name: str) -> int:
+        self.commands.append("ttl")
+        return -1
+
+    async def expire(self, name: str, time: int) -> bool:
+        self.commands.append("expire")
+        return True
+
+
+class _SpyRedisCache(RedisCache):
+    def __init__(self, spy: _SpyRedisCommands, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.spy = spy
+
+    def init_async_client(self, *args: object, **kwargs: object) -> object:
+        return self.spy
+
+
+@pytest.mark.parametrize(("namespace", "expected_key"), [(None, "spend:key:abc"), ("ns", "ns:spend:key:abc")])
+@pytest.mark.asyncio
+async def test_redis_cache_async_increment_arms_ttl_in_the_same_command(
+    namespace, expected_key, monkeypatch, redis_no_ping
+):
+    """The increment and its TTL reach Redis as one server-side step."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    spy = _SpyRedisCommands(eval_result=b"1.25")
+    redis_cache = _SpyRedisCache(spy, namespace=namespace)
+
+    result = await redis_cache.async_increment(key="spend:key:abc", value=0.25, ttl=30)
+
+    assert result == 1.25
+    assert spy.commands == ["eval"]
+    script, numkeys, key, amount, ttl, refresh = spy.eval_calls[0]
+    assert "INCRBYFLOAT" in script and "EXPIRE" in script and "TTL" in script
+    assert (numkeys, key, amount, ttl, refresh) == (1, expected_key, 0.25, "30", "0")
+
+
+@pytest.mark.asyncio
+async def test_redis_cache_async_increment_refresh_ttl_sends_refresh_flag(monkeypatch, redis_no_ping):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    spy = _SpyRedisCommands(eval_result="2.5")
+    redis_cache = _SpyRedisCache(spy)
+
+    result = await redis_cache.async_increment(key="spend:team:t1", value=0.5, refresh_ttl=True)
+
+    assert result == 2.5
+    assert spy.commands == ["eval"]
+    assert spy.eval_calls[0][3:] == (0.5, "60", "1")
+
+
+@pytest.mark.parametrize(
+    ("ttl", "default_ttl", "expected_ttl_arg"), [(None, None, ""), (0, None, "0"), (None, 15, "15")]
+)
+@pytest.mark.asyncio
+async def test_redis_cache_async_increment_forwards_ttl_exactly(
+    ttl, default_ttl, expected_ttl_arg, monkeypatch, redis_no_ping
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    spy = _SpyRedisCommands(eval_result=b"0.75")
+    redis_cache = _SpyRedisCache(spy)
+    redis_cache.default_ttl = default_ttl
+
+    result = await redis_cache.async_increment(key="spend:key:abc", value=0.75, ttl=ttl)
+
+    assert result == 0.75
+    assert spy.eval_calls[0][4] == expected_ttl_arg
+
+
 @pytest.mark.asyncio
 async def test_pool_wait_timeout_is_a_timeout_failure_not_hard_connectivity():
     """A saturated blocking pool must not open the breaker before the timeout minimum duration.
@@ -1283,6 +1366,13 @@ class _RoundTripCountingRedis:
         self.ttls[name] = time
         return True
 
+    async def eval(self, script: str, numkeys: int, key: str, amount: object, ttl_arg: str, refresh: str) -> bytes:
+        self.round_trips += 1
+        value = self._incr(key, float(amount))  # pyright: ignore[reportArgumentType]  # fake receives the raw float
+        if ttl_arg != "" and (refresh == "1" or self.ttls.get(key) == -1):
+            self.ttls[key] = int(ttl_arg)
+        return str(value).encode()
+
     def _incr(self, name: str, amount: float) -> float:
         self.values[name] = self.values.get(name, 0.0) + amount
         self.ttls.setdefault(name, self._initial_ttl)
@@ -1329,12 +1419,12 @@ class _RoundTripCountingRedis:
 @pytest.mark.parametrize(
     ("refresh_ttl", "existing_ttl", "expected_round_trips", "expected_ttl"),
     [
-        pytest.param(True, 100, 2, 60, id="refresh_ttl: INCRBYFLOAT+EXPIRE in one round trip each"),
-        pytest.param(False, 100, 2, 100, id="keep ttl: INCRBYFLOAT+TTL in one round trip each, no EXPIRE"),
-        pytest.param(False, -1, 3, 60, id="unexpiring key: INCRBYFLOAT+TTL then EXPIRE once, 1 trip after"),
+        pytest.param(True, 100, 2, 60, id="refresh_ttl: one EVAL per increment, TTL re-armed"),
+        pytest.param(False, 100, 2, 100, id="keep ttl: one EVAL per increment, existing TTL kept"),
+        pytest.param(False, -1, 2, 60, id="unexpiring key: one EVAL per increment, TTL armed in the same call"),
     ],
 )
-async def test_async_increment_pipelines_the_ttl_command(
+async def test_async_increment_sets_the_ttl_in_one_round_trip(
     monkeypatch, redis_no_ping, refresh_ttl, existing_ttl, expected_round_trips, expected_ttl
 ):
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
