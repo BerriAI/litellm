@@ -823,6 +823,27 @@ class TestKeywordOverride:
 
 class TestDecisionMetadata:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("content, cause", [("hi", "quality_tier"), ("write python", "keyword")])
+    async def test_conversation_shape_is_read_once_for_metadata_and_savings(self, keyword_router, content, cause):
+        class CountedMessage(dict):
+            role_reads = 0
+
+            def get(self, key, default=None):
+                if key == "role":
+                    self.role_reads += 1
+                return super().get(key, default)
+
+        message = CountedMessage(role="user", content=content)
+        kwargs: Dict[str, Any] = {}
+        response = await keyword_router.async_pre_routing_hook("qr", kwargs, [message])
+
+        assert response is not None
+        assert response.routing_decision["cause"] == cause
+        assert response.routing_decision["conversation_continuing"] is False
+        assert kwargs["metadata"]["quality_router_decision"]["conversation_continuing"] is False
+        assert message.role_reads == 2
+
+    @pytest.mark.asyncio
     async def test_decision_includes_savings_baseline_and_conversation_shape(self, quality_router):
         quality_router.litellm_router_instance.model_name_to_deployment_indices = {
             "haiku": [0],

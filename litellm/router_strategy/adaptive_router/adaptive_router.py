@@ -224,12 +224,14 @@ class AdaptiveRouter:
         baseline = resolve_baseline(self.litellm_router_instance, self.config.available_models)
         if baseline is None:
             return {}  # mutable-ok: immutable empty result for unresolved baseline
-        fields: StandardLoggingRoutingDecision = {
+        return {
             "savings_baseline_model": baseline.model,
-        }  # mutable-ok: assemble TypedDict kwargs
-        if baseline.deployment_id is not None:
-            fields["savings_baseline_deployment_id"] = baseline.deployment_id
-        return fields
+            **(
+                {"savings_baseline_deployment_id": baseline.deployment_id}
+                if baseline.deployment_id is not None
+                else {}
+            ),
+        }
 
     # ---- Pick model ------------------------------------------------------
 

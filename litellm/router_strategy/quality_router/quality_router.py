@@ -326,12 +326,14 @@ class QualityRouter(CustomLogger):
         baseline = resolve_baseline(self.litellm_router_instance, self.config.available_models)
         if baseline is None:
             return {}  # mutable-ok: immutable empty result for unresolved baseline
-        fields: StandardLoggingRoutingDecision = {
+        return {
             "savings_baseline_model": baseline.model,
-        }  # mutable-ok: assemble TypedDict kwargs
-        if baseline.deployment_id is not None:
-            fields["savings_baseline_deployment_id"] = baseline.deployment_id
-        return fields
+            **(
+                {"savings_baseline_deployment_id": baseline.deployment_id}
+                if baseline.deployment_id is not None
+                else {}
+            ),
+        }
 
     async def async_pre_routing_hook(
         self,
@@ -347,6 +349,9 @@ class QualityRouter(CustomLogger):
         if messages is None or len(messages) == 0:
             verbose_router_logger.debug("QualityRouter: No messages provided, skipping routing")
             return None
+
+        conversation_continuing: Final = conversation_is_continuing(messages)
+        savings_fields: Final = self._savings_fields()
 
         # Extract last user message and last system prompt — same rules as
         # ComplexityRouter.async_pre_routing_hook.
@@ -376,9 +381,9 @@ class QualityRouter(CustomLogger):
                 router_type="quality",
                 routed_model=self.config.default_model,
                 cause="default_fallback",
-                conversation_continuing=conversation_is_continuing(messages),
+                conversation_continuing=conversation_continuing,
             )
-            default_routing_decision.update(self._savings_fields())
+            default_routing_decision.update(savings_fields)
             return PreRoutingHookResponse(
                 model=self.config.default_model,
                 messages=messages,
@@ -405,7 +410,7 @@ class QualityRouter(CustomLogger):
                     "matched_keyword": matched_keyword,
                     "quality_tier": self._model_quality.get(routed_model),
                     "complexity_tier": None,
-                    "conversation_continuing": conversation_is_continuing(messages),
+                    "conversation_continuing": conversation_continuing,
                 },
             )
             keyword_routing_decision: Final = StandardLoggingRoutingDecision(
@@ -414,9 +419,9 @@ class QualityRouter(CustomLogger):
                 routed_model=routed_model,
                 cause="keyword",
                 matched_keyword=matched_keyword,
-                conversation_continuing=conversation_is_continuing(messages),
+                conversation_continuing=conversation_continuing,
             )
-            keyword_routing_decision.update(self._savings_fields())
+            keyword_routing_decision.update(savings_fields)
             keyword_quality_tier: Final = self._model_quality.get(routed_model)
             if keyword_quality_tier is not None:
                 keyword_routing_decision["tier"] = str(keyword_quality_tier)
@@ -454,7 +459,7 @@ class QualityRouter(CustomLogger):
                 "matched_keyword": None,
                 "quality_tier": int(quality_tier),
                 "complexity_tier": complexity_name,
-                "conversation_continuing": conversation_is_continuing(messages),
+                "conversation_continuing": conversation_continuing,
             },
         )
 
@@ -466,9 +471,9 @@ class QualityRouter(CustomLogger):
             tier=str(int(quality_tier)),
             score=score,
             signals=list(signals),
-            conversation_continuing=conversation_is_continuing(messages),
+            conversation_continuing=conversation_continuing,
         )
-        quality_routing_decision.update(self._savings_fields())
+        quality_routing_decision.update(savings_fields)
         return PreRoutingHookResponse(
             model=routed_model,
             messages=messages,
