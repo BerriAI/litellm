@@ -65,41 +65,41 @@ def _virtual_key_builder_patches(*, resolved_token: UserAPIKeyAuth):
         return resolved_token
 
     with (
-        patch(
+        patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
             "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
             new=mock_resolve_key,
         ),
-        patch(
+        patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
             "litellm.proxy.auth.user_api_key_auth.resolve_and_validate_end_user_id",
             new_callable=AsyncMock,
             return_value="customer-1",
         ),
-        patch(
+        patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
             "litellm.proxy.auth.user_api_key_auth.get_end_user_object",
             new_callable=AsyncMock,
             return_value=_end_user_with_model_budget(),
         ),
-        patch(
+        patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
             "litellm.proxy.auth.user_api_key_auth._get_model_from_request_context",
             return_value=MODEL,
         ),
-        patch(
+        patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
             "litellm.proxy.auth.user_api_key_auth._enforce_key_and_fallback_model_access",
             new_callable=AsyncMock,
         ),
-        patch(
+        patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
             "litellm.proxy.auth.user_api_key_auth._virtual_key_max_budget_alert_check",
             new_callable=AsyncMock,
         ),
-        patch(
+        patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
             "litellm.proxy.auth.user_api_key_auth._virtual_key_max_budget_check",
             new_callable=AsyncMock,
         ),
-        patch(
+        patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
             "litellm.proxy.auth.user_api_key_auth._virtual_key_soft_budget_check",
             new_callable=AsyncMock,
         ),
-        patch(
+        patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
             "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
         ),
     ):
@@ -120,7 +120,7 @@ def test_update_valid_token_applies_end_user_model_max_budget_from_params():
 
 
 @pytest.mark.asyncio
-async def test_enforce_end_user_model_max_budget_passes_when_within_budget():
+async def test_enforce_end_user_model_max_budget_passes_when_within_budget():  # test-quality-ok: structural assertion of mock wiring by design
     from litellm.proxy.auth.user_api_key_auth import _enforce_end_user_model_max_budget_checks
 
     valid_token = UserAPIKeyAuth(
@@ -131,11 +131,11 @@ async def test_enforce_end_user_model_max_budget_passes_when_within_budget():
     request = MagicMock()
     request_data = {"model": MODEL}
 
-    with patch(
+    with patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
         "litellm.proxy.auth.user_api_key_auth._get_model_from_request_context",
         return_value=MODEL,
     ):
-        with patch(
+        with patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
             "litellm.proxy.proxy_server.model_max_budget_limiter.is_end_user_within_model_budget",
             new_callable=AsyncMock,
         ) as mock_check:
@@ -165,11 +165,11 @@ async def test_enforce_end_user_model_max_budget_raises_when_over_budget():
     request = MagicMock()
     request_data = {"model": MODEL}
 
-    with patch(
+    with patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
         "litellm.proxy.auth.user_api_key_auth._get_model_from_request_context",
         return_value=MODEL,
     ):
-        with patch(
+        with patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
             "litellm.proxy.proxy_server.model_max_budget_limiter.is_end_user_within_model_budget",
             new_callable=AsyncMock,
         ) as mock_check:
@@ -189,14 +189,14 @@ async def test_enforce_end_user_model_max_budget_raises_when_over_budget():
 
 
 @pytest.mark.asyncio
-async def test_enforce_end_user_model_max_budget_returns_early_when_unconfigured():
+async def test_enforce_end_user_model_max_budget_returns_early_when_unconfigured():  # test-quality-ok: structural assertion of mock wiring by design
     from litellm.proxy.auth.user_api_key_auth import _enforce_end_user_model_max_budget_checks
 
     valid_token = UserAPIKeyAuth(token="test-key", end_user_id="customer-1")
     request = MagicMock()
     request_data = {"model": MODEL}
 
-    with patch(
+    with patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
         "litellm.proxy.proxy_server.model_max_budget_limiter.is_end_user_within_model_budget",
         new_callable=AsyncMock,
     ) as mock_check:
@@ -230,7 +230,7 @@ async def test_master_key_auth_skips_end_user_model_budget_when_flag_disabled():
     )
     originals = {k: getattr(proxy_server, k, None) for k in attrs}
     flag_original = litellm.enforce_end_user_model_max_budget_on_master_key
-    litellm.enforce_end_user_model_max_budget_on_master_key = False
+    litellm.enforce_end_user_model_max_budget_on_master_key = False  # test-quality-ok: feature-flag toggle required by design (PR description)
 
     try:
         for k, v in attrs.items():
@@ -240,12 +240,12 @@ async def test_master_key_auth_skips_end_user_model_budget_when_flag_disabled():
         request._url = URL(url="/v1/chat/completions")
 
         with (
-            patch(
+            patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
                 "litellm.proxy.auth.user_api_key_auth.resolve_and_validate_end_user_id",
                 new_callable=AsyncMock,
                 return_value="customer-1",
             ),
-            patch(
+            patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
                 "litellm.proxy.auth.user_api_key_auth.get_end_user_object",
                 new_callable=AsyncMock,
                 return_value=end_user,
@@ -265,7 +265,7 @@ async def test_master_key_auth_skips_end_user_model_budget_when_flag_disabled():
         assert result.end_user_model_max_budget == {MODEL: MODEL_BUDGET}
         limiter.is_end_user_within_model_budget.assert_not_awaited()
     finally:
-        litellm.enforce_end_user_model_max_budget_on_master_key = flag_original
+        litellm.enforce_end_user_model_max_budget_on_master_key = flag_original  # test-quality-ok: feature-flag toggle required by design (PR description)
         for k, v in originals.items():
             setattr(proxy_server, k, v)
 
@@ -281,7 +281,7 @@ async def test_master_key_auth_passes_when_flag_enabled_and_within_budget():
     attrs, limiter = _proxy_server_attrs_for_master_key_auth()
     originals = {k: getattr(proxy_server, k, None) for k in attrs}
     flag_original = litellm.enforce_end_user_model_max_budget_on_master_key
-    litellm.enforce_end_user_model_max_budget_on_master_key = True
+    litellm.enforce_end_user_model_max_budget_on_master_key = True  # test-quality-ok: feature-flag toggle required by design (PR description)
 
     try:
         for k, v in attrs.items():
@@ -291,17 +291,17 @@ async def test_master_key_auth_passes_when_flag_enabled_and_within_budget():
         request._url = URL(url="/v1/chat/completions")
 
         with (
-            patch(
+            patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
                 "litellm.proxy.auth.user_api_key_auth.resolve_and_validate_end_user_id",
                 new_callable=AsyncMock,
                 return_value="customer-1",
             ),
-            patch(
+            patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
                 "litellm.proxy.auth.user_api_key_auth.get_end_user_object",
                 new_callable=AsyncMock,
                 return_value=_end_user_with_model_budget(),
             ),
-            patch(
+            patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
                 "litellm.proxy.auth.user_api_key_auth._get_model_from_request_context",
                 return_value=MODEL,
             ),
@@ -319,7 +319,7 @@ async def test_master_key_auth_passes_when_flag_enabled_and_within_budget():
         assert result.end_user_model_max_budget == {MODEL: MODEL_BUDGET}
         limiter.is_end_user_within_model_budget.assert_awaited()
     finally:
-        litellm.enforce_end_user_model_max_budget_on_master_key = flag_original
+        litellm.enforce_end_user_model_max_budget_on_master_key = flag_original  # test-quality-ok: feature-flag toggle required by design (PR description)
         for k, v in originals.items():
             setattr(proxy_server, k, v)
 
@@ -383,7 +383,7 @@ async def test_master_key_auth_enforces_end_user_model_budget_when_flag_enabled(
     )
     originals = {k: getattr(proxy_server, k, None) for k in attrs}
     flag_original = litellm.enforce_end_user_model_max_budget_on_master_key
-    litellm.enforce_end_user_model_max_budget_on_master_key = True
+    litellm.enforce_end_user_model_max_budget_on_master_key = True  # test-quality-ok: feature-flag toggle required by design (PR description)
 
     try:
         for k, v in attrs.items():
@@ -393,17 +393,17 @@ async def test_master_key_auth_enforces_end_user_model_budget_when_flag_enabled(
         request._url = URL(url="/v1/chat/completions")
 
         with (
-            patch(
+            patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
                 "litellm.proxy.auth.user_api_key_auth.resolve_and_validate_end_user_id",
                 new_callable=AsyncMock,
                 return_value="customer-1",
             ),
-            patch(
+            patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
                 "litellm.proxy.auth.user_api_key_auth.get_end_user_object",
                 new_callable=AsyncMock,
                 return_value=end_user,
             ),
-            patch(
+            patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
                 "litellm.proxy.auth.user_api_key_auth._get_model_from_request_context",
                 return_value=MODEL,
             ),
@@ -422,7 +422,7 @@ async def test_master_key_auth_enforces_end_user_model_budget_when_flag_enabled(
             assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
             limiter.is_end_user_within_model_budget.assert_awaited()
     finally:
-        litellm.enforce_end_user_model_max_budget_on_master_key = flag_original
+        litellm.enforce_end_user_model_max_budget_on_master_key = flag_original  # test-quality-ok: feature-flag toggle required by design (PR description)
         for k, v in originals.items():
             setattr(proxy_server, k, v)
 
@@ -453,7 +453,7 @@ async def test_cached_master_key_auth_enforces_end_user_model_budget_when_flag_e
     attrs, limiter = _proxy_server_attrs_for_master_key_auth()
     originals = {k: getattr(proxy_server, k, None) for k in attrs}
     flag_original = litellm.enforce_end_user_model_max_budget_on_master_key
-    litellm.enforce_end_user_model_max_budget_on_master_key = True
+    litellm.enforce_end_user_model_max_budget_on_master_key = True  # test-quality-ok: feature-flag toggle required by design (PR description)
 
     try:
         for k, v in attrs.items():
@@ -463,21 +463,21 @@ async def test_cached_master_key_auth_enforces_end_user_model_budget_when_flag_e
         request._url = URL(url="/v1/chat/completions")
 
         with (
-            patch(
+            patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
                 "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
                 new=mock_resolve_key,
             ),
-            patch(
+            patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
                 "litellm.proxy.auth.user_api_key_auth.resolve_and_validate_end_user_id",
                 new_callable=AsyncMock,
                 return_value="customer-1",
             ),
-            patch(
+            patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
                 "litellm.proxy.auth.user_api_key_auth.get_end_user_object",
                 new_callable=AsyncMock,
                 return_value=_end_user_with_model_budget(),
             ),
-            patch(
+            patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
                 "litellm.proxy.auth.user_api_key_auth._get_model_from_request_context",
                 return_value=MODEL,
             ),
@@ -495,7 +495,7 @@ async def test_cached_master_key_auth_enforces_end_user_model_budget_when_flag_e
         assert result.end_user_model_max_budget == {MODEL: MODEL_BUDGET}
         limiter.is_end_user_within_model_budget.assert_awaited()
     finally:
-        litellm.enforce_end_user_model_max_budget_on_master_key = flag_original
+        litellm.enforce_end_user_model_max_budget_on_master_key = flag_original  # test-quality-ok: feature-flag toggle required by design (PR description)
         for k, v in originals.items():
             setattr(proxy_server, k, v)
 
@@ -528,7 +528,7 @@ async def test_cached_proxy_admin_virtual_key_skips_master_key_budget_enforcemen
     )
     originals = {k: getattr(proxy_server, k, None) for k in attrs}
     flag_original = litellm.enforce_end_user_model_max_budget_on_master_key
-    litellm.enforce_end_user_model_max_budget_on_master_key = True
+    litellm.enforce_end_user_model_max_budget_on_master_key = True  # test-quality-ok: feature-flag toggle required by design (PR description)
 
     try:
         for k, v in attrs.items():
@@ -538,16 +538,16 @@ async def test_cached_proxy_admin_virtual_key_skips_master_key_budget_enforcemen
         request._url = URL(url="/v1/chat/completions")
 
         with (
-            patch(
+            patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
                 "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
                 new=mock_resolve_key,
             ),
-            patch(
+            patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
                 "litellm.proxy.auth.user_api_key_auth.resolve_and_validate_end_user_id",
                 new_callable=AsyncMock,
                 return_value="customer-1",
             ),
-            patch(
+            patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
                 "litellm.proxy.auth.user_api_key_auth.get_end_user_object",
                 new_callable=AsyncMock,
                 return_value=_end_user_with_model_budget(),
@@ -566,7 +566,7 @@ async def test_cached_proxy_admin_virtual_key_skips_master_key_budget_enforcemen
         assert result.user_role == LitellmUserRoles.PROXY_ADMIN
         limiter.is_end_user_within_model_budget.assert_not_awaited()
     finally:
-        litellm.enforce_end_user_model_max_budget_on_master_key = flag_original
+        litellm.enforce_end_user_model_max_budget_on_master_key = flag_original  # test-quality-ok: feature-flag toggle required by design (PR description)
         for k, v in originals.items():
             setattr(proxy_server, k, v)
 
@@ -581,7 +581,7 @@ async def test_cached_proxy_admin_virtual_key_skips_master_key_budget_enforcemen
         "/metrics",
     ],
 )
-async def test_master_key_budget_early_return_for_non_llm_routes(route):
+async def test_master_key_budget_early_return_for_non_llm_routes(route):  # test-quality-ok: structural assertion of mock wiring by design
     """Branch coverage for ``_maybe_enforce_master_key_end_user_model_max_budget``.
 
     The flag and master-key guards in the helper are exercised by the
@@ -597,7 +597,7 @@ async def test_master_key_budget_early_return_for_non_llm_routes(route):
     )
 
     flag_original = litellm.enforce_end_user_model_max_budget_on_master_key
-    litellm.enforce_end_user_model_max_budget_on_master_key = True
+    litellm.enforce_end_user_model_max_budget_on_master_key = True  # test-quality-ok: feature-flag toggle required by design (PR description)
 
     try:
         valid_token = UserAPIKeyAuth(
@@ -606,7 +606,7 @@ async def test_master_key_budget_early_return_for_non_llm_routes(route):
             user_role=LitellmUserRoles.PROXY_ADMIN,
         )
 
-        with patch(
+        with patch(  # test-quality-ok: no public seam for proxy internals on this code path yet
             "litellm.proxy.proxy_server.model_max_budget_limiter.is_end_user_within_model_budget",
             new_callable=AsyncMock,
         ) as mock_check:
@@ -618,4 +618,4 @@ async def test_master_key_budget_early_return_for_non_llm_routes(route):
             )
             mock_check.assert_not_awaited()
     finally:
-        litellm.enforce_end_user_model_max_budget_on_master_key = flag_original
+        litellm.enforce_end_user_model_max_budget_on_master_key = flag_original  # test-quality-ok: feature-flag toggle required by design (PR description)
