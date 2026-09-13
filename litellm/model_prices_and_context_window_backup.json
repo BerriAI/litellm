@@ -14802,6 +14802,50 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "dashscope/qwen-audio-3.0-realtime-flash": {
+        "input_cost_per_audio_token": 4.5e-06,
+        "input_cost_per_token": 4.5e-07,
+        "litellm_provider": "dashscope",
+        "mode": "realtime",
+        "output_cost_per_audio_token": 1.5e-05,
+        "output_cost_per_token": 4.5e-06,
+        "source": "https://www.alibabacloud.com/help/en/model-studio/model-pricing",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true
+    },
+    "dashscope/qwen-audio-3.0-realtime-plus": {
+        "input_cost_per_audio_token": 6.4e-06,
+        "input_cost_per_token": 8e-07,
+        "litellm_provider": "dashscope",
+        "mode": "realtime",
+        "output_cost_per_audio_token": 2.4e-05,
+        "output_cost_per_token": 6.4e-06,
+        "source": "https://www.alibabacloud.com/help/en/model-studio/model-pricing",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true
+    },
     "dashscope/qwen-coder": {
         "input_cost_per_token": 3e-07,
         "litellm_provider": "dashscope",
@@ -15514,6 +15558,164 @@
                 ]
             }
         ]
+    },
+    "dashscope/qwen3.5-livetranslate-flash-realtime": {
+        "input_cost_per_audio_token": 7.5e-06,
+        "input_cost_per_image_token": 5.5e-07,
+        "litellm_provider": "dashscope",
+        "max_input_tokens": 49152,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "realtime",
+        "output_cost_per_audio_token": 3e-05,
+        "output_cost_per_token": 2e-05,
+        "source": "https://www.alibabacloud.com/help/en/model-studio/model-pricing",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "audio",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true
+    },
+    "dashscope/qwen3.5-livetranslate-flash-realtime-2026-05-19": {
+        "input_cost_per_audio_token": 7.5e-06,
+        "input_cost_per_image_token": 5.5e-07,
+        "litellm_provider": "dashscope",
+        "max_input_tokens": 49152,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "realtime",
+        "output_cost_per_audio_token": 3e-05,
+        "output_cost_per_token": 2e-05,
+        "source": "https://www.alibabacloud.com/help/en/model-studio/model-pricing",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "audio",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true
+    },
+    "dashscope/qwen3.5-omni-flash-realtime": {
+        "input_cost_per_audio_token": 4.5e-06,
+        "input_cost_per_token": 5.5e-07,
+        "litellm_provider": "dashscope",
+        "max_input_tokens": 196608,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "realtime",
+        "output_cost_per_audio_token": 1.77e-05,
+        "output_cost_per_token": 3.3e-06,
+        "source": "https://www.alibabacloud.com/help/en/model-studio/qwen3-5-omni-flash-realtime",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true
+    },
+    "dashscope/qwen3.5-omni-flash-realtime-2026-03-15": {
+        "input_cost_per_audio_token": 4.5e-06,
+        "input_cost_per_token": 5.5e-07,
+        "litellm_provider": "dashscope",
+        "max_input_tokens": 196608,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "realtime",
+        "output_cost_per_audio_token": 1.77e-05,
+        "output_cost_per_token": 3.3e-06,
+        "source": "https://www.alibabacloud.com/help/en/model-studio/qwen3-5-omni-flash-realtime",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true
+    },
+    "dashscope/qwen3.5-omni-plus-realtime": {
+        "input_cost_per_audio_token": 1.65e-05,
+        "input_cost_per_token": 2.1e-06,
+        "litellm_provider": "dashscope",
+        "max_input_tokens": 196608,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "realtime",
+        "output_cost_per_audio_token": 6.2e-05,
+        "output_cost_per_token": 1.24e-05,
+        "source": "https://www.alibabacloud.com/help/en/model-studio/qwen3-5-omni-plus-realtime",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true
+    },
+    "dashscope/qwen3.5-omni-plus-realtime-2026-03-15": {
+        "input_cost_per_audio_token": 1.65e-05,
+        "input_cost_per_token": 2.1e-06,
+        "litellm_provider": "dashscope",
+        "max_input_tokens": 196608,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "realtime",
+        "output_cost_per_audio_token": 6.2e-05,
+        "output_cost_per_token": 1.24e-05,
+        "source": "https://www.alibabacloud.com/help/en/model-studio/qwen3-5-omni-plus-realtime",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true
     },
     "dashscope/qwen3.5-plus": {
         "litellm_provider": "dashscope",
