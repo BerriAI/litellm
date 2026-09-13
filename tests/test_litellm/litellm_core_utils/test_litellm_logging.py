@@ -6100,6 +6100,7 @@ async def test_prompt_hooks_compose_vector_search_with_anthropic_cache_control(
     )
     db_fallback = None
     if not registered_in_memory:
+
         async def resolve_from_db(**kwargs: object) -> list[LiteLLM_ManagedVectorStore]:
             non_default_params = kwargs["non_default_params"]
             assert isinstance(non_default_params, dict)
@@ -6143,6 +6144,7 @@ async def test_prompt_hooks_compose_vector_search_with_anthropic_cache_control(
     assert "cache_control_injection_points" in params
 
     try:
+        assert logging_obj._get_vector_store_pre_call_hook() is vector_store_hook
         _, messages, remaining_params = await logging_obj.async_get_chat_completion_prompt(
             model=model,
             messages=messages,
