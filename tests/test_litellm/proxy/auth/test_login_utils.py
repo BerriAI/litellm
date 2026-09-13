@@ -1472,7 +1472,8 @@ async def test_a_username_spray_cannot_evict_an_existing_counter(monkeypatch):
     The default in-memory cache keeps 200 entries and evicts the soonest to expire, and
     every counter shares one window, so eviction was effectively oldest-first. A few
     hundred made-up usernames therefore pushed out the attacker's own counter and handed
-    back a fresh allowance against the real account.
+    back a fresh allowance against the real account. Username and source counters must also
+    live in separate stores, or the same spray evicts the source counter meant to stop it.
     """
     from litellm.proxy._types import ProxyException
     from litellm.proxy.auth.login_throttle import (
@@ -1489,6 +1490,7 @@ async def test_a_username_spray_cannot_evict_an_existing_counter(monkeypatch):
     assert _MAX_TRACKED_LOGIN_USERNAMES >= 10_000
     assert _FAILED_LOGIN_SOURCE_CACHE.in_memory_cache.max_size_in_memory == _MAX_TRACKED_LOGIN_SOURCES
     assert _FAILED_LOGIN_USERNAME_CACHE.in_memory_cache.max_size_in_memory == _MAX_TRACKED_LOGIN_USERNAMES
+    assert _FAILED_LOGIN_SOURCE_CACHE.in_memory_cache is not _FAILED_LOGIN_USERNAME_CACHE.in_memory_cache
 
     throttle = LoginThrottle(
         client_ip="10.9.9.9",

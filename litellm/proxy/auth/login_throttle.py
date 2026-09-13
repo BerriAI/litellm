@@ -55,8 +55,6 @@ def _bounded_store(max_entries: int) -> DualCache:
     )
 
 
-# Separate stores: eviction is earliest-expiring-first, so in one shared store a spray of
-# fresh usernames would evict the source counter that is meant to stop that same spray.
 _FAILED_LOGIN_USERNAME_CACHE: Final = _bounded_store(_MAX_TRACKED_LOGIN_USERNAMES)
 _FAILED_LOGIN_SOURCE_CACHE: Final = _bounded_store(_MAX_TRACKED_LOGIN_SOURCES)
 _NO_SETTINGS: Final = MappingProxyType({})
