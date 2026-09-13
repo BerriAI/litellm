@@ -147,11 +147,7 @@ def callbacks_needed(logger: Logging, phase: str) -> bool:
         _is_debugging_on,  # pyright: ignore[reportPrivateUsage]  # use the same debug gate as Logging
     )
 
-    if (
-        _is_debugging_on()
-        or getattr(logger, "litellm_request_debug", False)
-        or os.getenv("LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD")
-    ):
+    if _is_debugging_on() or logger.litellm_request_debug or os.getenv("LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD"):
         return True
     input_needed: Final = bool(
         litellm.input_callback

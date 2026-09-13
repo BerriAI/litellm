@@ -1482,7 +1482,7 @@ class CustomStreamWrapper:
                 "is_finished": chunk_finish_reason is not None,
                 "finish_reason": chunk_finish_reason,
                 "original_chunk": cached_chunk,
-                "tool_calls": (getattr(cached_choice.delta, "tool_calls", None) if cached_choice is not None else None),
+                "tool_calls": cached_choice.delta.tool_calls if cached_choice is not None else None,
             }
 
             completion_obj["content"] = response_obj["text"]

@@ -1,5 +1,6 @@
 import asyncio
 import re
+from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlparse
@@ -380,7 +381,7 @@ class VertexPassthroughLoggingHandler:
     @staticmethod
     def _is_audio_predict_response(
         model: str,
-        json_response: dict,  # mutable-ok: predicate inspects the decoded provider response dictionary without mutation
+        json_response: Mapping[str, object],
     ) -> bool:
         return (
             VertexPassthroughLoggingHandler._get_audio_prediction_count(json_response=json_response) > 0
@@ -389,7 +390,7 @@ class VertexPassthroughLoggingHandler:
 
     @staticmethod
     def _get_audio_prediction_count(
-        json_response: dict,  # mutable-ok: counter inspects the decoded provider response dictionary without mutation
+        json_response: Mapping[str, object],
     ) -> int:
         predictions: Final = json_response.get("predictions")
         if not isinstance(predictions, list):
