@@ -5488,6 +5488,7 @@ def completion(
             "prompt_cache_key": prompt_cache_key,
             "allowed_openai_params": allowed_openai_params,
             "base_model": base_model,
+            "model_info": model_info if isinstance(model_info, dict) else None,
         }
         optional_params = get_optional_params(**optional_param_args, **non_default_params)
         processed_non_default_params: Final = pre_process_non_default_params(
