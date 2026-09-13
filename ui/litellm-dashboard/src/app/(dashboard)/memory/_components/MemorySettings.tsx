@@ -36,48 +36,42 @@ const targetNames = {
 } as const;
 const selectClass = "h-9 w-full rounded-md border bg-background px-3 text-sm";
 
-export function MemoryPreference({ userId, readOnly }: Readonly<{ userId: string; readOnly: boolean }>) {
+export function MemoryPreference({
+  userId,
+  keyId,
+  status,
+  readOnly,
+}: Readonly<{ userId: string; keyId: string; status: components["schemas"]["MemoryStatus"]; readOnly: boolean }>) {
   const cache = useQueryClient();
-  const queryKey = ["memoryPreference", userId];
-  const preference = useQuery({
-    queryKey,
-    queryFn: async ({ signal }) => (await fetchClient.GET("/v2/memory/preference", { signal })).data,
-  });
   const save = useMutation({
-    mutationFn: async (enabled: boolean) => fetchClient.PUT("/v2/memory/preference", { body: { enabled } }),
-    onSuccess: () =>
+    mutationFn: async (enabled: boolean) =>
+      fetchClient.PUT("/v2/memory/preference", { params: { query: { key_id: keyId } }, body: { enabled } }),
+    onSettled: () =>
       Promise.all([
-        cache.invalidateQueries({ queryKey }),
         cache.invalidateQueries({ queryKey: ["memoryStatus", userId] }),
         cache.invalidateQueries({ queryKey: ["memoryEntries", userId] }),
       ]),
     onError: (error: Error) => toast.error(error.message),
   });
-  const unavailable = readOnly || preference.isPending || !!preference.error;
+  const canToggle = status.activation === "opt_in" && !!status.scope;
   return (
-    <section className="rounded-lg border p-5 space-y-3" aria-labelledby="memory-preference-title">
-      <h2 id="memory-preference-title" className="font-semibold">
-        Your memory preference
-      </h2>
-      <p className="text-sm text-muted-foreground">
-        When your administrator offers opt-in memory, this setting applies to your virtual keys. Automatically enabled
-        policies apply regardless of this preference.
-      </p>
-      <div className="flex items-center gap-3">
-        <Switch
-          id="memory-opt-in"
-          checked={preference.data?.enabled ?? false}
-          disabled={unavailable || save.isPending}
-          onCheckedChange={(enabled) => save.mutate(enabled)}
-        />
-        <Label htmlFor="memory-opt-in">Use memory when offered</Label>
-      </div>
-      {preference.error && (
-        <p role="alert" className="text-sm text-destructive">
-          {preference.error.message}
-        </p>
+    <div className="flex items-center gap-3 rounded-lg border bg-card px-4 py-3">
+      <Label htmlFor="memory-enabled" className="font-medium">
+        Memory <span aria-hidden="true">{status.active ? "on" : "off"}</span>
+      </Label>
+      <Switch
+        id="memory-enabled"
+        aria-label="Memory"
+        checked={status.active}
+        disabled={readOnly || !canToggle || save.isPending}
+        onCheckedChange={(enabled) => save.mutate(enabled)}
+      />
+      {save.isPending && (
+        <span role="status" className="sr-only">
+          Updating memory
+        </span>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -156,11 +150,11 @@ export function MemoryPolicies({
     <section className="rounded-lg border p-5 space-y-4" aria-labelledby="memory-policy-title">
       <div>
         <h2 id="memory-policy-title" className="font-semibold">
-          Automatic gateway memory
+          Memory policies
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Give existing clients memory search, reading, and saving through the gateway. No developer installation is
-          needed. Memory tools use the selected model and can add model calls, latency, and spend.
+          Choose who can use memory and how it is shared. Users opt in by default. Enabling memory can add model calls,
+          latency, and spend.
         </p>
       </div>
       <form

@@ -67,10 +67,18 @@ class MemoryStore:
             raise HTTPException(status_code=403, detail="Memory is not available under the current policy")
         return current.namespace
 
-    async def search(self, search: MemorySearch, *, require_active: bool = True) -> tuple[MemoryEntry, ...]:
+    async def search(
+        self, search: MemorySearch, *, require_active: bool = True, recent_first: bool = False
+    ) -> tuple[MemoryEntry, ...]:
         entries: Final = await self.entries(require_active=require_active)
         ranked: Final = await asyncio.to_thread(fuzzy_memories, search.query, entries)
-        return tuple(entry for entry, _, _ in ranked[search.offset : search.offset + search.limit])
+        matched_ids: Final = frozenset(entry.memory_id for entry, _, _ in ranked)
+        ordered: Final = (
+            tuple(entry for entry in entries if entry.memory_id in matched_ids)
+            if recent_first
+            else tuple(entry for entry, _, _ in ranked)
+        )
+        return ordered[search.offset : search.offset + search.limit]
 
     async def entries(self, *, require_active: bool = True) -> tuple[MemoryEntry, ...]:
         namespace: Final = await self.authorize_namespace(require_active=require_active)

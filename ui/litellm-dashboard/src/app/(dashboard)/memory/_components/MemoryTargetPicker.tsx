@@ -65,9 +65,10 @@ export function MemoryKeyPicker({
   onChange,
   disabled,
   inputId = "memory-target",
-}: PickerProps & Readonly<{ inputId?: string }>) {
+  userId,
+}: PickerProps & Readonly<{ inputId?: string; userId?: string }>) {
   const [search, setSearch] = useState("");
-  const query = useInfiniteKeys(25, { search });
+  const query = useInfiniteKeys(25, { search, userID: userId });
   return (
     <PaginatedSearchSelect
       inputId={inputId}

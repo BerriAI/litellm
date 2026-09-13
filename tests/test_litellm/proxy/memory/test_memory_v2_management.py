@@ -270,3 +270,87 @@ async def test_entry_endpoints_apply_namespace_and_delete_after_disable(database
     with pytest.raises(HTTPException) as missing:
         await management.delete_entry("entry", None, auth())
     assert missing.value.status_code == 404
+
+
+@pytest.mark.parametrize("key_owner", ["owner", None])
+def test_admin_selected_key_preference_controls_actual_request_activation(
+    database: MagicMock, key_owner: str | None
+) -> None:
+    database.db.litellm_verificationtoken.find_unique.return_value["user_id"] = key_owner
+    database.db.litellm_memorypolicy.find_many.return_value = [policy(activation="opt_in")]
+    table = database.db.litellm_memorypreference
+    app = FastAPI()
+    app.include_router(management.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: auth("admin", LitellmUserRoles.PROXY_ADMIN)
+    params = {"key_id": "a" * 64}
+    subject = memory_digest("user", key_owner) if key_owner else memory_digest("key", "a" * 64)
+    with TestClient(app) as client:
+        assert client.get("/v2/memory/status", params=params).json()["active"] is False
+        assert client.put("/v2/memory/preference", params=params, json={"enabled": True}).status_code == 200
+        assert table.upsert.call_args.kwargs["where"] == {"subject": subject}
+        table.find_unique.return_value = SimpleNamespace(enabled=True)
+        assert client.get("/v2/memory/status", params=params).json()["active"] is True
+        assert client.get("/v2/memory/preference", params=params).json() == {"enabled": True}
+        assert client.put("/v2/memory/preference", params=params, json={"enabled": False}).status_code == 200
+        assert table.delete_many.call_args.kwargs["where"] == {"subject": subject}
+        table.find_unique.return_value = None
+        assert client.get("/v2/memory/status", params=params).json()["active"] is False
+
+
+@pytest.mark.parametrize("role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY])
+def test_preference_selection_cannot_bypass_key_ownership_or_readonly(
+    database: MagicMock, role: LitellmUserRoles
+) -> None:
+    app = FastAPI()
+    app.include_router(management.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: auth(role=role).model_copy(
+        update={"token": "session", "team_id": UI_TEAM_ID}
+    )
+    with TestClient(app) as client:
+        own = client.put("/v2/memory/preference", params={"key_id": "a" * 64}, json={"enabled": True})
+        assert own.status_code == (403 if role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY else 200)
+        database.db.litellm_memorypreference.upsert.reset_mock()
+        database.db.litellm_verificationtoken.find_unique.return_value["user_id"] = "another-owner"
+        assert client.get("/v2/memory/preference", params={"key_id": "a" * 64}).status_code == 403
+        assert (
+            client.put("/v2/memory/preference", params={"key_id": "a" * 64}, json={"enabled": True}).status_code == 403
+        )
+        assert (
+            client.put("/v2/memory/preference", params={"key_id": "invalid"}, json={"enabled": True}).status_code == 422
+        )
+    database.db.litellm_memorypreference.upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_search_keeps_recency_before_pagination_while_agent_search_ranks_relevance(
+    database: MagicMock,
+) -> None:
+    from litellm.proxy.memory.store import MemoryStore
+    from litellm.types.memory_v2 import MemorySearch
+
+    database.db.litellm_memorypolicy.find_many.return_value = [policy()]
+    access = await management.access_for_key(auth(), None)
+    now = datetime(2026, 9, 12, tzinfo=timezone.utc)
+    database.db.litellm_memorytable.find_many.return_value = [
+        SimpleNamespace(
+            memory_id=memory_id,
+            key=f"memory-v2:{access.namespace}:{memory_id}",
+            namespace=access.namespace,
+            value=content,
+            metadata={"title": title, "evidence": "A user instruction"},
+            updated_at=now.replace(day=day),
+            created_at=now.replace(day=day),
+            created_by="owner",
+        )
+        for memory_id, title, content, day in [
+            ("newer", "Demo configuration", "The demo uses port 8123", 12),
+            ("unrelated", "Theme", "Use dark mode", 11),
+            ("older", "port", "port", 10),
+        ]
+    ]
+    assert [entry.memory_id for entry in await management.list_entries("port", 1, 0, None, auth())] == ["newer"]
+    assert [entry.memory_id for entry in await management.list_entries("port", 1, 1, None, auth())] == ["older"]
+    assert [entry.memory_id for entry in await MemoryStore(database, access).search(MemorySearch(query="port"))] == [
+        "older",
+        "newer",
+    ]

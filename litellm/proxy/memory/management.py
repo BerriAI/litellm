@@ -167,8 +167,14 @@ async def delete_policy(policy_id: str, auth: UserAPIKeyAuth = _AUTH) -> Respons
 
 
 @router.get("/preference", response_model=MemoryPreference)
-async def get_preference(auth: UserAPIKeyAuth = _AUTH) -> MemoryPreference:
-    subject: Final = MemoryIdentity.from_auth(auth).preference_subject
+async def get_preference(
+    auth: UserAPIKeyAuth = _AUTH,
+    key_id: Annotated[str | None, Query(pattern=r"^[a-f0-9]{64}$")] = None,
+) -> MemoryPreference:
+    identity: Final = (
+        (await access_for_key(auth, key_id)).identity if key_id is not None else MemoryIdentity.from_auth(auth)
+    )
+    subject: Final = identity.preference_subject
     row: Final = await MemoryPreferenceRepository(memory_primary_client(require_memory_prisma())).table.find_unique(
         where={  # mutable-ok: Prisma serializes these as native JSON containers.
             "subject": subject
@@ -178,8 +184,14 @@ async def get_preference(auth: UserAPIKeyAuth = _AUTH) -> MemoryPreference:
 
 
 @router.put("/preference", response_model=MemoryPreference)
-async def set_preference(preference: MemoryPreference, auth: UserAPIKeyAuth = _AUTH) -> MemoryPreference:
-    identity: Final = MemoryIdentity.from_auth(auth)
+async def set_preference(
+    preference: MemoryPreference,
+    auth: UserAPIKeyAuth = _AUTH,
+    key_id: Annotated[str | None, Query(pattern=r"^[a-f0-9]{64}$")] = None,
+) -> MemoryPreference:
+    identity: Final = (
+        (await access_for_key(auth, key_id)).identity if key_id is not None else MemoryIdentity.from_auth(auth)
+    )
     if identity.read_only:
         raise HTTPException(status_code=403, detail="Read-only users cannot change memory preferences")
     subject: Final = identity.preference_subject
@@ -251,7 +263,7 @@ async def list_entries(
     prisma: Final = memory_primary_client(require_memory_prisma())
     access: Final = await access_for_key(auth, key_id)
     return await MemoryStore(prisma, access).search(
-        MemorySearch(query=query, limit=limit, offset=offset), require_active=False
+        MemorySearch(query=query, limit=limit, offset=offset), require_active=False, recent_first=True
     )
 
 

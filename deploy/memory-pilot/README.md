@@ -2,8 +2,8 @@
 
 Run this branch as an isolated forwarding gateway. Colleagues keep their existing
 upstream LiteLLM key and model name and change only their gateway base URL. They
-need no plugin or client-side memory tools. Choosing the pilot URL opts them into
-the pilot; returning to the original URL stops using and collecting pilot memory.
+need no plugin or client-side memory tools. Memory is off by default. Each person enables it explicitly for their key;
+returning to the original URL stops using and collecting pilot memory.
 
 Every model call uses that caller's upstream key. The upstream
 gateway continues to enforce its model permissions, budgets, rate limits, and
@@ -49,7 +49,7 @@ pilot must not be connected to an older gateway's production database.
    | `PORT` | `4000` |
 
 5. After deployment, open `/ui/memory`, sign in as `admin` using the pilot's master
-   key, and save a policy for **Whole gateway**, **Enabled automatically**,
+   key, expand **Advanced settings**, and save a policy for **Whole gateway**, **Users choose whether to opt in**,
    **Private to each virtual key**. This policy persists across restarts. Memory
    stays disabled until an administrator enables it.
 
@@ -60,18 +60,23 @@ curl --fail-with-body "$PILOT_URL/v2/memory/policies" \
   -H "Authorization: Bearer $PILOT_ADMIN_KEY" \
   -H 'Content-Type: application/json' \
   -X PUT \
-  -d '{"target_type":"gateway","target_id":"*","activation":"automatic","scope":"key"}'
+  -d '{"target_type":"gateway","target_id":"*","activation":"opt_in","scope":"key"}'
 ```
 
-Administrators can instead require opt-in, disable a particular registered key,
+Administrators can instead enable memory automatically, disable a particular registered key,
 or disable the whole gateway. Under an opt-in policy, callers set their preference
 with `PUT /v2/memory/preference` and `{"enabled":true}` using their own key.
+In a normal gateway, signed-in users can also select their key in Memory and turn
+on the switch. Pilot administrators can do this for a registered key. The switch
+shows the actual state; turning it off stops saving and recall but keeps saved
+memories visible. Memories appear newest first, with optional details.
 
 ## Try it
 
 Set an OpenAI-compatible client's base URL to `https://YOUR-SERVICE.onrender.com/v1`.
 For Claude Code, set `ANTHROPIC_BASE_URL` to `https://YOUR-SERVICE.onrender.com`.
-Retain the same gateway key and model setting.
+Retain the same gateway key and model setting. First opt in using the preference
+API above, or ask the pilot administrator to turn on memory for your key.
 
 In one conversation, say “Remember that my demo project is Cobalt Heron and its
 staging port is 8347.” In a **new conversation**, ask “What is my demo project and

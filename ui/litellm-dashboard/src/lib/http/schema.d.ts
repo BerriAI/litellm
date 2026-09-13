@@ -67491,7 +67491,9 @@ export interface operations {
     };
     get_preference_v2_memory_preference_get: {
         parameters: {
-            query?: never;
+            query?: {
+                key_id?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -67507,11 +67509,22 @@ export interface operations {
                     "application/json": components["schemas"]["MemoryPreference"];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     set_preference_v2_memory_preference_put: {
         parameters: {
-            query?: never;
+            query?: {
+                key_id?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
