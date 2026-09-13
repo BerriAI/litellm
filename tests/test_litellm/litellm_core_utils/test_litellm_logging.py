@@ -6094,6 +6094,10 @@ async def test_prompt_hooks_compose_vector_search_with_anthropic_cache_control(
     )
     from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
+    with monkeypatch.context() as no_hook:
+        no_hook.setattr(logging_module, "_init_custom_logger_compatible_class", MagicMock(return_value=None))
+        assert logging_obj._get_vector_store_pre_call_hook() is None
+
     vector_store = LiteLLM_ManagedVectorStore(vector_store_id="vs_123", custom_llm_provider="bedrock")
     registry = VectorStoreRegistry(
         vector_stores=[vector_store] if registered_in_memory else [],
