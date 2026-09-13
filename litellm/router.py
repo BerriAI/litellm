@@ -24,6 +24,7 @@ from collections import defaultdict
 from collections.abc import (
     AsyncGenerator,
     AsyncIterator,
+    Awaitable,
     Callable,
     Generator,
     Iterator,
@@ -66,6 +67,7 @@ from litellm.constants import (
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+    SILENT_MODEL_MIRROR_ALLOWED_CALL_TYPES,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
@@ -682,6 +684,23 @@ def as_output_cap(value: object) -> int | None:
     except (ValueError, OverflowError):
         return None
     return cap if cap >= 0 else None
+
+
+def _is_silent_experiment_marker(value: object) -> bool:
+    """True when a metadata dict carries the silent-experiment marker."""
+    return isinstance(value, Mapping) and bool(
+        cast(Mapping[str, object], value).get("is_silent_experiment", False)  # cast-ok: narrowed by isinstance above
+    )
+
+
+def _has_mcp_tool(tools: object) -> bool:
+    """True when a Responses/Messages `tools` list carries an MCP tool definition."""
+    if not isinstance(tools, Sequence) or isinstance(tools, str):
+        return False
+    for tool in cast(Sequence[object], tools):  # cast-ok: narrowed by isinstance above
+        if isinstance(tool, Mapping) and cast(Mapping[str, object], tool).get("type") == "mcp":  # cast-ok: narrowed
+            return True
+    return False
 
 
 class Router:
@@ -2512,7 +2531,12 @@ class Router:
                 self._stamp_failed_deployment_id_with_effective_model_info(e, deployment, kwargs)
             raise e
 
-    def _get_silent_experiment_kwargs(self, **kwargs) -> dict:
+    def _get_silent_experiment_kwargs(
+        self,
+        metadata_variable_name: str = "metadata",
+        /,
+        **kwargs: object,  # kwargs-ok: the primary call's kwargs, forwarded verbatim into the silent call
+    ) -> dict:
         """
         Prepare kwargs for a silent experiment by ensuring isolation from the primary call.
 
@@ -2521,29 +2545,36 @@ class Router:
         parent_otel_span — an OTel Span that is not deepcopy-able). Force a shallow
         copy of the metadata dict so mutations (model_group, is_silent_experiment)
         never corrupt the main call's metadata.
+
+        `metadata_variable_name` selects the kwargs key that carries the router's own
+        metadata: "metadata" for chat completions, "litellm_metadata" for calls routed
+        through `_ageneric_api_call_with_fallbacks` (Responses API, Anthropic Messages),
+        where `metadata` is the provider request-body field and must not be touched.
         """
         from litellm.litellm_core_utils.core_helpers import safe_deep_copy
 
-        silent_kwargs: Final = safe_deep_copy(kwargs)
+        silent_kwargs: Final[dict[str, object]] = cast(  # cast-ok: safe_deep_copy is untyped  # mutable-ok: fresh copy
+            dict[str, object], safe_deep_copy(kwargs)
+        )
 
         # safe_deep_copy may fall back to the original metadata reference when
         # deepcopy fails (UserAPIKeyAuth.parent_otel_span is not deepcopy-able).
-        # Detect this via identity check and force a shallow copy so that setting
-        # model_group / is_silent_experiment on the silent dict doesn't corrupt
-        # the primary call's metadata.
-        original_metadata: Final = kwargs.get("metadata")
-        if original_metadata is not None and silent_kwargs.get("metadata") is original_metadata:
-            silent_kwargs["metadata"] = dict(original_metadata)
-
-        if "metadata" not in silent_kwargs:
-            silent_kwargs["metadata"] = {}
+        # Always shallow-copy the metadata dict so that setting model_group /
+        # is_silent_experiment on the silent dict doesn't corrupt the primary call's.
+        copied_metadata: Final = silent_kwargs.get(metadata_variable_name)
+        silent_metadata: Final[dict[str, object]] = (  # mutable-ok: the silent call's own metadata dict
+            dict(cast(Mapping[str, object], copied_metadata))  # cast-ok: narrowed by the isinstance check
+            if isinstance(copied_metadata, Mapping)
+            else {}
+        )
 
         # OTel spans are not safe to use across event loops. The silent
         # experiment runs in a new event loop, so strip the span to prevent
         # cross-loop tracing races or span corruption.
-        silent_kwargs["metadata"].pop("litellm_parent_otel_span", None)
+        silent_metadata.pop("litellm_parent_otel_span", None)
 
-        silent_kwargs["metadata"]["is_silent_experiment"] = True
+        silent_metadata["is_silent_experiment"] = True
+        silent_kwargs[metadata_variable_name] = silent_metadata
 
         # Force stream=False so the response is fully consumed and callbacks fire
         silent_kwargs["stream"] = False
@@ -2557,13 +2588,18 @@ class Router:
 
         return silent_kwargs
 
-    def _silent_experiment_completion(self, silent_model: str, messages: Sequence[Mapping[str, str]], **kwargs):
+    def _silent_experiment_completion(
+        self,
+        silent_model: str,
+        messages: Sequence[Mapping[str, str]],
+        **kwargs: object,  # kwargs-ok: the primary call's kwargs, forwarded verbatim into the silent call
+    ):
         """
         Run a silent experiment in the background (thread).
         """
         try:
             # Prevent infinite recursion if silent model also has a silent model
-            if kwargs.get("metadata", {}).get("is_silent_experiment", False):
+            if _is_silent_experiment_marker(kwargs.get("metadata")):
                 return
 
             messages = copy.deepcopy(messages)
@@ -3453,13 +3489,69 @@ class Router:
         wrapper_ref: Final = weakref.ref(wrapped_response)
         return wrapped_response
 
-    async def _silent_experiment_acompletion(self, silent_model: str, messages: Sequence[Mapping[str, str]], **kwargs):
+    def _silent_experiment_generic_kwargs(
+        self,
+        **kwargs: object,  # kwargs-ok: the primary call's kwargs, snapshotted before the router mutates them
+    ) -> Mapping[str, object] | None:
+        """
+        Snapshot the primary call's kwargs for a generic-path silent experiment, or
+        return None when the request must not be mirrored.
+
+        Called synchronously before the mirror task is scheduled: `create_task` only
+        starts running once the caller yields, by which point
+        `_update_kwargs_with_deployment` has merged the primary deployment's metadata
+        and tags into `kwargs` in place. Copying here keeps the mirror on the caller's
+        request. Router metadata for these call types lives in `litellm_metadata`;
+        `metadata` is the provider request-body field (OpenAI Responses `metadata`,
+        Anthropic `metadata`) and is left untouched so the marker never reaches the
+        provider.
+        """
+        # Prevent infinite recursion if the silent model also has a silent model
+        if _is_silent_experiment_marker(kwargs.get("metadata")) or _is_silent_experiment_marker(
+            kwargs.get("litellm_metadata")
+        ):
+            return None
+        # MCP tools may execute against the provider (Anthropic `mcp_servers`, Responses
+        # MCP tools with require_approval="never"); replaying those is a side effect.
+        if kwargs.get("mcp_servers") or _has_mcp_tool(kwargs.get("tools")):
+            return None
+        return self._get_silent_experiment_kwargs("litellm_metadata", **kwargs)
+
+    async def _silent_experiment_ageneric(
+        self,
+        silent_model: str,
+        original_function: Callable[..., Awaitable[object]],
+        silent_kwargs: Mapping[str, object],
+    ) -> None:
+        """
+        Run a generic-path silent experiment (Responses API, Anthropic Messages) in the
+        background. Counterpart of `_silent_experiment_acompletion`; `silent_kwargs`
+        comes from `_silent_experiment_generic_kwargs`. `model_group` is re-stamped to
+        `silent_model` by `_update_kwargs_before_fallbacks` inside the call, so metrics
+        attribute the mirror to the silent model.
+        """
+        try:
+            verbose_router_logger.info("Starting silent experiment for model %s", silent_model)
+            await self._ageneric_api_call_with_fallbacks(
+                model=silent_model,
+                original_function=original_function,
+                **silent_kwargs,
+            )
+        except Exception as e:  # noqa: BLE001 - a background mirror must never break the primary request
+            verbose_router_logger.error("Silent experiment failed for model %s: %s", silent_model, e)
+
+    async def _silent_experiment_acompletion(
+        self,
+        silent_model: str,
+        messages: Sequence[Mapping[str, str]],
+        **kwargs: object,  # kwargs-ok: the primary call's kwargs, forwarded verbatim into the silent call
+    ):
         """
         Run a silent experiment in the background.
         """
         try:
             # Prevent infinite recursion if silent model also has a silent model
-            if kwargs.get("metadata", {}).get("is_silent_experiment", False):
+            if _is_silent_experiment_marker(kwargs.get("metadata")):
                 return
 
             messages = copy.deepcopy(messages)
@@ -5247,9 +5339,29 @@ class Router:
                     return await original_generic_function(model=model, **kwargs)
                 raise e
 
+            silent_model: Final[object] = deployment["litellm_params"].get("silent_model")
+            generic_handler: Final[object] = cast(object, original_generic_function)  # cast-ok: name only
+            handler_name: Final[object] = getattr(generic_handler, "__name__", None)
+            if isinstance(silent_model, str) and handler_name in SILENT_MODEL_MIRROR_ALLOWED_CALL_TYPES:
+                # Snapshot now: `_update_kwargs_with_deployment` below mutates kwargs in place,
+                # and the task only starts running once this coroutine yields.
+                silent_kwargs: Final = self._silent_experiment_generic_kwargs(**kwargs)
+                if silent_kwargs is not None:
+                    asyncio.create_task(
+                        self._silent_experiment_ageneric(
+                            silent_model=silent_model,
+                            original_function=cast(  # cast-ok: generic handlers are async callables; the bare Callable annotation predates this
+                                Callable[..., Awaitable[object]], original_generic_function
+                            ),
+                            silent_kwargs=silent_kwargs,
+                        )
+                    )
+
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name=function_name)
 
             data: Final = deployment["litellm_params"].copy()
+            # Router-only setting: must never reach the provider handler (#34890)
+            data.pop("silent_model", None)
             model_name: Final = data["model"]
             self.total_calls[model_name] += 1
 
@@ -5269,6 +5381,7 @@ class Router:
             # Only set custom_llm_provider if it's not None
             if custom_llm_provider is not None:
                 response_kwargs["custom_llm_provider"] = custom_llm_provider
+            response_kwargs.pop("silent_model", None)
 
             response = original_generic_function(**response_kwargs)
 
