@@ -4,11 +4,11 @@ raise instead of being returned as benign chunks, mirroring chat streaming
 semantics (_handle_stream_fallback_error). The event's code, type and status go
 through litellm.exception_type, so each event raises the same typed exception
 the non-streaming path raises for that provider error: non-retriable 4xx
-(except 429) raise that typed exception directly, while 429, 5xx,
-ContentPolicyViolationError and ContextWindowExceededError are wrapped in
+(except 429) raise that typed exception directly, so a context-length event
+surfaces as ContextWindowExceededError(400) with no MidStreamFallbackError
+wrapping, while 429, 5xx and ContentPolicyViolationError are wrapped in
 MidStreamFallbackError so the Router's mid-stream fallback machinery fires and
-its content_policy_fallbacks / context_window_fallbacks dispatch sees the
-trigger it matches on.
+its content_policy_fallbacks dispatch sees the trigger it matches on.
 
 Status mapping must consider both the OpenAI error `type` (e.g.
 "invalid_request_error") and `code` (e.g. "invalid_prompt",
@@ -109,19 +109,21 @@ def test_maybe_raise_for_error_event_maps_context_length_code_to_400():
     assert not isinstance(exc_info.value, MidStreamFallbackError)
 
 
-def test_maybe_raise_for_error_event_wraps_context_window_exceeded_for_context_window_fallbacks():
+def test_maybe_raise_for_error_event_raises_context_window_exceeded_directly():
     """A context-length error event maps to ContextWindowExceededError exactly like the non-streaming
-    path and is wrapped so the Router's context_window_fallbacks dispatch fires mid-stream."""
+    path and, being a non-retriable client error, is raised directly rather than wrapped for mid-stream
+    fallback, preserving the direct-SDK 400 contract from issue #15785."""
     iterator = _make_iterator()
     chunk = _make_error_chunk(
         "invalid_request_error",
         "context_length_exceeded",
         "This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens.",
     )
-    with pytest.raises(MidStreamFallbackError) as exc_info:
+    with pytest.raises(litellm.ContextWindowExceededError) as exc_info:
         iterator._maybe_raise_for_error_event(chunk)
-    assert isinstance(exc_info.value.original_exception, litellm.ContextWindowExceededError)
     assert exc_info.value.status_code == 400
+    assert not isinstance(exc_info.value, MidStreamFallbackError)
+    assert "maximum context length" in str(exc_info.value)
 
 
 CONTENT_POLICY_MESSAGE = "This content was flagged for possible cybersecurity risk. The response was halted mid-stream."

@@ -177,7 +177,7 @@ def _status_code_for_error_fields(error_type: str | None, error_code: str | None
 
 
 def _mid_stream_fallback_eligible(mapped_exception: Exception) -> bool:
-    if isinstance(mapped_exception, (litellm.ContentPolicyViolationError, litellm.ContextWindowExceededError)):
+    if isinstance(mapped_exception, litellm.ContentPolicyViolationError):
         return True
     status_code: Final = getattr(mapped_exception, "status_code", None)
     return not isinstance(status_code, int) or status_code >= 500 or status_code == 429
