@@ -1,5 +1,5 @@
 import json
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
 
@@ -8,6 +8,18 @@ from litellm.llms.cloudflare.embedding.transformation import CloudflareEmbedding
 from litellm.llms.cloudflare.chat.transformation import CloudflareError
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.utils import ProviderConfigManager
+
+
+class _RecordingHTTPHandler(HTTPHandler):
+    def __init__(self, response):
+        super().__init__()
+        self.response = response
+        self.requests = []
+
+    def post(self, url: str, **kwargs):
+        self.requests.append({"url": url, **kwargs})
+        return self.response
+
 
 
 def test_provider_config_manager_returns_cloudflare_embedding_config():
@@ -90,7 +102,6 @@ def test_get_error_class():
 
 def test_embedding_routes_to_cloudflare_openai_compatible_endpoint(monkeypatch):
     monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
-    client = HTTPHandler()
     response_json = {
         "object": "list",
         "data": [
@@ -108,17 +119,17 @@ def test_embedding_routes_to_cloudflare_openai_compatible_endpoint(monkeypatch):
     raw_response.headers = {"content-type": "application/json"}
     raw_response.json.return_value = response_json
     raw_response.text = json.dumps(response_json)
+    client = _RecordingHTTPHandler(raw_response)
 
-    with patch.object(HTTPHandler, "post", return_value=raw_response) as mock_post:
-        response = litellm.embedding(
-            model="cloudflare/@cf/baai/bge-large-en-v1.5",
-            input=["hello"],
-            api_key="cf-key",
-            client=client,
-            caching=False,
-        )
+    response = litellm.embedding(
+        model="cloudflare/@cf/baai/bge-large-en-v1.5",
+        input=["hello"],
+        api_key="cf-key",
+        client=client,
+        caching=False,
+    )
 
-    request = mock_post.call_args.kwargs
+    request = client.requests[0]
     body = json.loads(request["data"])
     assert request["url"] == "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/embeddings"
     assert request["headers"]["Authorization"] == "Bearer cf-key"
