@@ -10,7 +10,7 @@ import json
 from datetime import datetime
 from typing import Final, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
@@ -80,6 +80,13 @@ class TeamBase(LiteLLMPydanticObjectBase):
     router_settings: dict | None = None
     access_group_ids: list[str] | None = None
     default_team_member_models: list[str] | None = None
+
+    @field_validator("budget_duration", mode="before")
+    @classmethod
+    def check_budget_duration(cls, v):
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        return v
 
 
 class LiteLLM_TeamTable(TeamBase):
