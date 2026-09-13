@@ -82,7 +82,7 @@ from typing_extensions import (
     override,
 )
 
-from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject, CachedTokensDetails
+from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 from litellm.types.responses.main import (
     CustomToolCallOutputItem,
     GenericResponseOutputItem,
@@ -90,6 +90,8 @@ from litellm.types.responses.main import (
     OutputFunctionToolCall,
     OutputImageGenerationCall,
 )
+
+from .base import CachedTokensDetails
 
 FileContent = IO[bytes] | bytes | PathLike
 
