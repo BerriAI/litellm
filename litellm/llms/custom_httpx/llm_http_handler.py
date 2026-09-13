@@ -2237,6 +2237,22 @@ class BaseLLMHTTPHandler:
         )
         logging_obj.stream = stream
         logging_obj.model_call_details.update(request_body)
+        from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
+        from litellm.litellm_core_utils.prompt_cache_prediction import make_plan
+        from litellm.litellm_core_utils.token_counter import offload_token_count
+
+        metadata_key: Final = get_metadata_variable_name_from_kwargs(kwargs)
+        raw_metadata: Final = kwargs.get(metadata_key)
+        scope: Final = raw_metadata.get("user_api_key_hash") if isinstance(raw_metadata, Mapping) else None
+        model_info: Final = kwargs.get("model_info")
+        model_id: Final = model_info.get("id") if isinstance(model_info, Mapping) else None
+        logging_obj.model_call_details.update(
+            {  # mutable-ok: model_call_details owns a mutable request-scoped payload
+                "prompt_cache_plan": await offload_token_count(make_plan)(request_body),
+                "prompt_cache_observation_scope": scope if isinstance(scope, str) else None,
+                "prompt_cache_observation_model_id": model_id if isinstance(model_id, str) else None,
+            }
+        )
 
         # Make the request
         request_url: Final = anthropic_messages_provider_config.get_complete_url(
@@ -3716,7 +3732,12 @@ class BaseLLMHTTPHandler:
                     data=transformed_request,
                     timeout=timeout,
                 )
-        elif isinstance(transformed_request, dict) and "file" in transformed_request:
+        elif (
+            isinstance(  # pyright: ignore[reportUnnecessaryIsInstance]  # preserve multipart shape guard across provider payloads
+                transformed_request, dict
+            )
+            and "file" in transformed_request
+        ):
             # Handle multipart form-data uploads (e.g., Anthropic Files API)
             # The dict contains tuples suitable for httpx's `files` parameter
             file_request: Final = cast(dict[str, Any], transformed_request)
@@ -3876,7 +3897,12 @@ class BaseLLMHTTPHandler:
                     data=transformed_request,
                     timeout=timeout,
                 )
-        elif isinstance(transformed_request, dict) and "file" in transformed_request:
+        elif (
+            isinstance(  # pyright: ignore[reportUnnecessaryIsInstance]  # preserve multipart shape guard across provider payloads
+                transformed_request, dict
+            )
+            and "file" in transformed_request
+        ):
             # Handle multipart form-data uploads (e.g., Anthropic Files API)
             # The dict contains tuples suitable for httpx's `files` parameter
             upload_response = await async_httpx_client.post(

@@ -490,6 +490,9 @@ from litellm.proxy.management_endpoints.budget_management_endpoints import (
 from litellm.proxy.management_endpoints.cache_settings_endpoints import (
     router as cache_settings_router,
 )
+from litellm.proxy.management_endpoints.cache_switch_cost_estimate import (
+    router as cache_switch_cost_estimate_router,
+)
 from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
@@ -593,6 +596,7 @@ from litellm.proxy.plugin_routes import (
 from litellm.proxy.plugin_routes import (
     router as plugin_router,
 )
+from litellm.proxy.prompt_cache_prediction import prompt_cache_observation_logger
 from litellm.proxy.spend_tracking.spend_event_producer import (
     CollectorSettings,
     SpendEventProducer,
@@ -2494,6 +2498,8 @@ def cost_tracking():
         spend_event_producer = build_spend_event_producer(CollectorSettings(), fallback=run_spend_event)
         litellm.logging_callback_manager.add_litellm_callback(_ProxyDBLogger(spend_event_producer))
         litellm.logging_callback_manager.add_litellm_async_success_callback(_ProxyDBLogger(spend_event_producer))
+        litellm.logging_callback_manager.add_litellm_callback(prompt_cache_observation_logger())
+        litellm.logging_callback_manager.add_litellm_async_success_callback(prompt_cache_observation_logger())
         litellm.logging_callback_manager.add_litellm_callback(ShadowEvalLogger())
 
 
@@ -18787,6 +18793,7 @@ app.include_router(workflow_management_router)
 app.include_router(memory_router)
 app.include_router(plugin_router)
 app.include_router(cost_tracking_settings_router)
+app.include_router(cache_switch_cost_estimate_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
 app.include_router(cache_settings_router)
