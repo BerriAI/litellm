@@ -24,14 +24,15 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.llms.openai import ChatCompletionToolCallChunk, ChatCompletionToolParam
+from litellm.types.llms.openai import ChatCompletionToolParam
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPIMetadata,
     GenericGuardrailAPIRequest,
     GenericGuardrailAPIResponse,
+    GenericGuardrailAPIToolCalls,
     GuardrailToolParam,
 )
-from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -102,6 +103,16 @@ def _sanitize_inbound_headers(
             sanitized[key] = _HEADER_PRESENT_PLACEHOLDER
 
     return sanitized or None
+
+
+def _returned_tool_call_is_usable(tool_call: object) -> bool:
+    """Whether a guardrail's returned tool call carries what the chat handlers index."""
+    function: Final = tool_call.get("function") if isinstance(tool_call, dict) else getattr(tool_call, "function", None)
+    if function is None:
+        return False
+    name: Final = function.get("name") if isinstance(function, dict) else getattr(function, "name", None)
+    arguments: Final = function.get("arguments") if isinstance(function, dict) else getattr(function, "arguments", None)
+    return isinstance(name, str) and isinstance(arguments, str)
 
 
 def _extract_inbound_headers(
@@ -323,7 +334,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         images: list[str] | None,
         tools: list[ChatCompletionToolParam] | None,
         guardrail_response: GenericGuardrailAPIResponse,
-        tool_calls: list[ChatCompletionToolCallChunk] | list[ChatCompletionMessageToolCall] | None = None,
+        tool_calls: GenericGuardrailAPIToolCalls | None = None,
     ) -> GenericGuardrailAPIInputs:
         # Action is NONE or no modifications needed
         return_inputs: Final = GenericGuardrailAPIInputs(texts=texts)
@@ -337,12 +348,14 @@ class GenericGuardrailAPI(CustomGuardrail):
             return_inputs["tools"] = guardrail_response.tools
         elif tools:
             return_inputs["tools"] = tools
-        # Mirrors ``tools``: the guardrail's replacements win, otherwise the calls
-        # are echoed back unchanged. Handlers compare the returned list against the
-        # one they sent and fall back to their own copy on a length mismatch, so a
-        # guardrail that cannot reorder them still cannot change their count.
-        if guardrail_response.tool_calls:
-            return_inputs["tool_calls"] = guardrail_response.tool_calls
+        returned_tool_calls: Final = guardrail_response.tool_calls
+        if returned_tool_calls and not all(_returned_tool_call_is_usable(call) for call in returned_tool_calls):
+            verbose_proxy_logger.warning(
+                "Generic Guardrail API returned tool calls missing a function name or arguments; keeping the ones already sent",
+            )
+            returned_tool_calls = None  # rebind-ok: an unusable reply is discarded
+        if returned_tool_calls:
+            return_inputs["tool_calls"] = returned_tool_calls
         elif tool_calls:
             return_inputs["tool_calls"] = tool_calls
         if guardrail_response.stream_holdback_chars is not None:

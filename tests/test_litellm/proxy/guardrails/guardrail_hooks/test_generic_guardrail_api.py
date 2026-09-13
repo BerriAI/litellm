@@ -1999,6 +1999,32 @@ class TestToolSupport:
 
         assert result["tool_calls"] == sent
 
+    def test_malformed_returned_tool_calls_are_discarded(self, generic_guardrail):
+        """A same-length list with no function block must not reach chat handling.
+
+        The chat handlers index ``function.name`` and ``function.arguments`` on whatever the
+        guardrail returns, so forwarding an unusable list raises there instead of returning a
+        response. The calls that were sent are kept instead.
+        """
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIResponse,
+        )
+
+        sent = [{"id": "call_1", "type": "function", "function": {"name": "send_email", "arguments": "{}"}}]
+        malformed = [{"id": "call_1", "type": "function"}]
+
+        result = generic_guardrail._build_guardrail_return_inputs(
+            texts=["Done"],
+            images=None,
+            tools=None,
+            tool_calls=sent,
+            guardrail_response=GenericGuardrailAPIResponse.from_dict(
+                {"action": "GUARDRAIL_INTERVENED", "texts": ["Done"], "tool_calls": malformed}
+            ),
+        )
+
+        assert result["tool_calls"] == sent
+
     def test_no_tool_calls_on_either_side_stay_absent(self, generic_guardrail):
         """An empty list is not the same as no list: the key must stay out of the result."""
         from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (

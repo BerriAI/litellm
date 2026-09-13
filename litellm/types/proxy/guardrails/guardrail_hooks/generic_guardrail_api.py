@@ -1,4 +1,4 @@
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
@@ -8,7 +8,9 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
-from litellm.types.utils import ChatCompletionMessageToolCall
+from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
+
+GenericGuardrailAPIToolCalls: TypeAlias = GenericGuardrailAPIInputs["tool_calls"]  # noqa: F821  # TypedDict field reference, not a name
 
 
 class GuardrailToolParam(BaseModel):
@@ -167,7 +169,7 @@ class GenericGuardrailAPIResponse:
     action: str
     blocked_reason: str | None
     stream_holdback_chars: list[int] | None
-    tool_calls: list[ChatCompletionToolCallChunk] | list[ChatCompletionMessageToolCall] | None
+    tool_calls: GenericGuardrailAPIToolCalls | None
 
     def __init__(
         self,
@@ -177,7 +179,7 @@ class GenericGuardrailAPIResponse:
         images: list[str] | None = None,
         tools: list[GuardrailToolParam] | None = None,
         stream_holdback_chars: list[int] | None = None,
-        tool_calls: list[ChatCompletionToolCallChunk] | list[ChatCompletionMessageToolCall] | None = None,
+        tool_calls: GenericGuardrailAPIToolCalls | None = None,
     ) -> None:
         self.action = action
         self.blocked_reason = blocked_reason
@@ -188,10 +190,6 @@ class GenericGuardrailAPIResponse:
         # framework must withhold from streaming emission until the next
         # processing round (word-boundary safety for text transformations).
         self.stream_holdback_chars = stream_holdback_chars
-        # Replacement tool calls. ``tool_calls`` is sent on the request, so the
-        # response mirrors it back the way ``tools`` and ``images`` are: without
-        # this field a guardrail that rewrites tool arguments has no channel to
-        # return them on, and the caller keeps the values it sent in.
         self.tool_calls = tool_calls
 
     @classmethod
