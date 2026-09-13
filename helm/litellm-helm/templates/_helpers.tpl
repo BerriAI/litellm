@@ -51,6 +51,28 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
+Labels for the migrations Job's pods.
+
+Deliberately NOT "litellm.labels". That helper embeds "litellm.selectorLabels",
+which is the exact selector of the litellm Service, the metrics Service, the
+ServiceMonitor and the PodDisruptionBudget. A migrations pod carrying those
+labels is picked up by all four even though its container exposes no ports.
+Overriding app.kubernetes.io/name breaks the match while keeping the pod
+identifiable, and the component label mirrors the litellm chart's own
+migrations Job.
+*/}}
+{{- define "litellm.migrationsLabels" -}}
+helm.sh/chart: {{ include "litellm.chart" . }}
+app.kubernetes.io/name: {{ include "litellm.name" . }}-migrations
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: migrations
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{/*
 Enterprise billable-request metering. The client certificate identifies the
 deployment to LiteLLM's collector, so it is mounted read-only from an existing
 Secret rather than passed through the environment.
