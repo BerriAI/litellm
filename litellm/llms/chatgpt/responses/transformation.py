@@ -69,9 +69,14 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> dict:
+        coerced_input: Final = (
+            [{"role": "user", "content": input}]  # mutable-ok: the wire shape this backend accepts
+            if isinstance(input, str)
+            else input
+        )
         request: Final = super().transform_responses_api_request(
             model,
-            input,
+            coerced_input,
             response_api_optional_request_params,
             litellm_params,
             headers,
@@ -102,6 +107,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             "reasoning",
             "previous_response_id",
             "truncation",
+            "text",
         }
 
         return {k: v for k, v in request.items() if k in allowed_keys}
