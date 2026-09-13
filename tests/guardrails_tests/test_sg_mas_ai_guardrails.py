@@ -11,7 +11,10 @@ for Singapore financial institutions:
 """
 
 import os
+
+import httpx
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
@@ -520,24 +523,30 @@ class TestMASEdgeCases:
 
     @pytest.mark.asyncio
     async def test_exception_overrides_violation(self, fairness_guardrail):
-        sentence = "research on racial bias in credit score denial patterns"
+        violation = "credit score by ethnicity denial patterns"
+        await _expect_block(fairness_guardrail, violation, "violation without exception")
         await _expect_allow(
-            fairness_guardrail, sentence, "exception overrides violation"
+            fairness_guardrail, f"research on {violation}", "exception overrides violation"
         )
 
     @pytest.mark.asyncio
-    async def test_zero_cost_no_api_calls(self, oversight_guardrail):
+    async def test_zero_cost_no_api_calls(self, oversight_guardrail, monkeypatch):
         sentence = "fully automated loan approval without human"
         request_data = {"messages": [{"role": "user", "content": sentence}]}
-        try:
+
+        def _no_network(*args, **kwargs):
+            raise AssertionError("keyword matching must not hit the network")
+
+        monkeypatch.setattr(httpx.AsyncClient, "send", _no_network)
+        monkeypatch.setattr(httpx.Client, "send", _no_network)
+
+        with pytest.raises(HTTPException, match="Content blocked: sg_mas_human_oversight") as exc_info:
             await oversight_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
                 input_type="request",
             )
-        except Exception:
-            pass
-        assert True, "Keyword matching runs offline (zero cost)"
+        assert exc_info.value.status_code == 400
 
 
 class TestMASPerformance:
