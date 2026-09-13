@@ -8,3 +8,63 @@
 /litellm/model_prices_and_context_window_backup.json @mateo-berri
 /litellm-proxy-extras/litellm_proxy_extras/migrations/ @yuneng-berri @ryan-crabbe-berri
 /.github/CODEOWNERS @yuneng-berri
+/litellm/proxy/_experimental/mcp_server/ @joshua-berri @tin-berri @yucheng-berri
+/litellm/experimental_mcp_client/ @joshua-berri @tin-berri @yucheng-berri
+/litellm/responses/mcp/ @joshua-berri @tin-berri @yucheng-berri
+/litellm/types/mcp_server/ @joshua-berri @tin-berri @yucheng-berri
+/litellm/types/mcp.py @joshua-berri @tin-berri @yucheng-berri
+/litellm/proxy/hooks/mcp_semantic_filter/ @joshua-berri @tin-berri @yucheng-berri
+/litellm/proxy/guardrails/guardrail_hooks/mcp_end_user_permission/ @joshua-berri @tin-berri @yucheng-berri
+/litellm/proxy/guardrails/guardrail_hooks/mcp_jwt_signer/ @joshua-berri @tin-berri @yucheng-berri
+/litellm/proxy/guardrails/guardrail_hooks/mcp_security/ @joshua-berri @tin-berri @yucheng-berri
+/litellm/proxy/management_endpoints/mcp_management_endpoints.py @joshua-berri @tin-berri @yucheng-berri
+/litellm/proxy/management_endpoints/mcp_connector_import.py @joshua-berri @tin-berri @yucheng-berri
+/litellm/proxy/mcp_tools.py @joshua-berri @tin-berri @yucheng-berri
+/litellm/proxy/mcp_registry.json @joshua-berri @tin-berri @yucheng-berri
+/litellm/models/mcp_server.py @joshua-berri @tin-berri @yucheng-berri
+/litellm/a2a_protocol/ @joshua-berri
+/litellm/llms/a2a/ @joshua-berri
+/litellm/proxy/a2a/ @joshua-berri
+/litellm/proxy/agent_endpoints/ @joshua-berri
+/litellm/types/agents.py @joshua-berri
+/litellm/interactions/agents/ @joshua-berri
+/litellm/llms/base_llm/agents/ @joshua-berri
+/litellm/llms/azure_ai/agents/ @joshua-berri
+/litellm/llms/gemini/agents/ @joshua-berri
+/litellm/skills/ @joshua-berri
+/litellm/llms/anthropic/skills/ @joshua-berri
+/litellm/llms/base_llm/skills/ @joshua-berri
+/litellm/llms/litellm_proxy/skills/ @joshua-berri
+/litellm/proxy/hooks/litellm_skills/ @joshua-berri
+/litellm/proxy/google_endpoints/agents_endpoints.py @joshua-berri
+/litellm/models/skills.py @joshua-berri
+/litellm/proxy/anthropic_endpoints/skills_endpoints.py @joshua-berri
+/litellm/types/llms/anthropic_skills.py @joshua-berri
+/ui/litellm-dashboard/src/app/(dashboard)/mcp-servers/ @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/app/mcp/ @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/components/mcp_server_management/ @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/components/mcp_tools/ @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/components/Settings/AdminSettings/MCPSemanticFilterSettings/ @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/components/Settings/AdminSettings/MCPToolSearchSettings/ @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/app/(dashboard)/hooks/mcpServers/ @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/app/(dashboard)/hooks/mcpSemanticFilterSettings/ @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/app/(dashboard)/hooks/mcpToolSearchSettings/ @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/app/(dashboard)/agents/ @joshua-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/app/(dashboard)/hooks/agents/ @joshua-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/components/agent_management/ @joshua-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/components/agents/ @joshua-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/components/skills/ @joshua-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/app/(dashboard)/skills/ @joshua-berri @yuneng-berri @ryan-crabbe-berri
+/litellm/types/proxy/guardrails/guardrail_hooks/mcp_end_user_permission.py @joshua-berri @tin-berri @yucheng-berri
+/litellm/llms/anthropic/experimental_pass_through/messages/mcp_handler.py @joshua-berri @tin-berri @yucheng-berri
+/litellm/proxy/public_endpoints/agent_create_fields.json @joshua-berri
+/litellm/proxy/anthropic_endpoints/claude_code_endpoints/claude_code_skill_access.py @joshua-berri
+/ui/litellm-dashboard/src/hooks/useMcpOAuthFlow.tsx @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/hooks/useUserMcpOAuthFlow.tsx @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/hooks/useTestMCPConnection.tsx @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/hooks/mcpOAuthUtils.ts @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/utils/mcp* @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/components/chat/MCP* @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/components/permissions/MCPServerPermissions* @joshua-berri @tin-berri @yucheng-berri @yuneng-berri @ryan-crabbe-berri
+/ui/litellm-dashboard/src/components/permissions/AgentPermissions* @joshua-berri @yuneng-berri @ryan-crabbe-berri
+/mcp_servers.json @joshua-berri @tin-berri @yucheng-berri
