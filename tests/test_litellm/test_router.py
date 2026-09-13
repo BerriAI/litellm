@@ -8309,6 +8309,54 @@ class TestAdvisorSubCallCooldown:
         assert "dep-1" not in self._cooled_down_ids(router)
 
 
+class TestPoolExhaustionStatus:
+    def _router(self):
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "claude-sonnet-5",
+                    "litellm_params": {"model": "anthropic/claude-sonnet-5", "api_key": "sk-fake"},
+                    "model_info": {"id": "dep-a"},
+                },
+                {
+                    "model_name": "claude-sonnet-5",
+                    "litellm_params": {"model": "anthropic/claude-sonnet-5", "api_key": "sk-fake"},
+                    "model_info": {"id": "dep-b"},
+                },
+            ],
+            cooldown_time=60,
+        )
+
+    def test_exhausted_pool_raises_a_429(self):
+        from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+            get_deployment_failures_for_current_minute,
+        )
+        from litellm.types.router import RouterRateLimitError
+
+        router = self._router()
+        for dep_id in ("dep-a", "dep-b"):
+            router.cooldown_cache.add_deployment_to_cooldown(
+                model_id=dep_id,
+                original_exception=litellm.RateLimitError(message="slow down", llm_provider="anthropic", model="x"),
+                exception_status=429,
+                cooldown_time=60,
+            )
+
+        with pytest.raises(RouterRateLimitError) as raised:
+            router.get_available_deployment(model="claude-sonnet-5", messages=[{"role": "user", "content": "hi"}])
+        assert raised.value.status_code == 429
+        assert raised.value.cooldown_time > 0
+
+        cooled = router.deployment_callback_on_failure(
+            {"exception": raised.value, "litellm_params": {"model_info": {"id": "dep-a"}, "metadata": {}}},
+            None,
+            datetime.now(),
+            datetime.now(),
+        )
+        assert cooled is False
+        assert get_deployment_failures_for_current_minute(litellm_router_instance=router, deployment_id="dep-a") == 0
+
+
 def test_stream_chunks_have_generated_content_detects_text_and_non_text():
     from litellm.router import _stream_chunks_have_generated_content
     from litellm.types.utils import (

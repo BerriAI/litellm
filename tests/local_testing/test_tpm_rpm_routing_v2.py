@@ -770,3 +770,26 @@ async def test_tpm_rpm_routing_model_name_checks():
             standard_logging_payload["hidden_params"]["litellm_model_name"]
             == "azure/gpt-4.1-mini"
         )
+
+
+def test_every_deployment_over_its_tpm_limit_raises_a_429():
+    from litellm.types.router import RouterErrors, RouterNoDeploymentsAvailableError
+
+    test_cache = DualCache()
+    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
+    deployment = {
+        "model_name": "gpt-4o-mini",
+        "litellm_params": {"model": "openai/gpt-4o-mini", "tpm": 10},
+        "model_info": {"id": "d1"},
+    }
+    minute = get_utc_datetime().strftime("%H-%M")
+    test_cache.set_cache(key=f"d1:openai/gpt-4o-mini:tpm:{minute}", value=100)
+
+    with pytest.raises(RouterNoDeploymentsAvailableError) as raised:
+        lowest_tpm_logger.get_available_deployments(
+            model_group="gpt-4o-mini",
+            healthy_deployments=[deployment],
+            messages=[{"role": "user", "content": "hi"}],
+        )
+    assert raised.value.status_code == 429
+    assert RouterErrors.no_deployments_available.value in str(raised.value)

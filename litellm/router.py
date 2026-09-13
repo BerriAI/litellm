@@ -247,6 +247,7 @@ from litellm.types.router import (
     RouterErrors,
     RouterGeneralSettings,
     RouterModelGroupAliasItem,
+    RouterNoDeploymentsAvailableError,
     RouterRateLimitError,
     RouterRateLimitErrorBasic,
     RoutingContext,
@@ -8266,6 +8267,9 @@ class Router:
                     "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
                     "Failure originated from advisor orchestration, not the selected deployment."
                 )
+                return False
+
+            if isinstance(exception, RouterNoDeploymentsAvailableError):
                 return False
 
             exception_status: Final = getattr(exception, "status_code", "")
