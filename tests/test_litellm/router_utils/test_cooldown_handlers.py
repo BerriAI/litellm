@@ -440,10 +440,8 @@ class TestRoutingGroupCooldownAlternatives:
 
 
 class TestTeamModelCooldownAlternatives:
-    def _router(self, team_deployments: int, blocked_ids: frozenset[str] = frozenset()):
-        from litellm import Router
-
-        return Router(
+    def _router(self, team_deployments: int, blocked_ids: frozenset[str] = frozenset()) -> litellm.Router:
+        return litellm.Router(
             model_list=[
                 {
                     "model_name": f"model_name_team-1_{i}",
