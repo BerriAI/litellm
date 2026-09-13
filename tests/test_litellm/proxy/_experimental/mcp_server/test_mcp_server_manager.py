@@ -6672,6 +6672,30 @@ class TestMCPServerManager:
         assert by_prefixed_name is not None and by_prefixed_name.description == "v2"
         assert manager.get_listed_tool(server, "missing") is None
 
+    def test_get_listed_tool_uses_admin_description_override_clients_saw(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="srv",
+            name="srv",
+            transport=MCPTransport.http,
+            url="http://srv",
+            tool_name_to_description={"echo": "Admin wording"},
+        )
+        schema = {"type": "object", "properties": {"text": {"type": "string"}}}
+        manager._create_prefixed_tools(
+            [
+                MCPTool(name="echo", description="Upstream wording", inputSchema=schema),
+                MCPTool(name="ping", description="Untouched", inputSchema={}),
+            ],
+            server,
+        )
+
+        overridden = manager.get_listed_tool(server, "srv-echo")
+        assert overridden is not None
+        assert (overridden.name, overridden.description, overridden.inputSchema) == ("echo", "Admin wording", schema)
+        untouched = manager.get_listed_tool(server, "ping")
+        assert untouched is not None and untouched.description == "Untouched"
+
     def test_server_definition_change_drops_listed_tools(self):
         manager = MCPServerManager()
         server = MCPServer(server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv")

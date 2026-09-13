@@ -77,7 +77,7 @@ def _parse_expires_in(raw: object) -> float:
         return _DEFAULT_TOKEN_TTL_SECONDS
 
 
-def _parse_tool_input_schema(raw: object) -> dict[str, object] | None:
+def _parse_tool_input_schema(raw: object) -> Mapping[str, object] | None:
     try:
         return _TOOL_INPUT_SCHEMA_ADAPTER.validate_python(raw)
     except ValidationError:
@@ -101,7 +101,7 @@ class _ToolReference(BaseModel):
 
     name: str
     description: str | None = None
-    input_schema: dict[str, object] | None = Field(default=None, serialization_alias="inputSchema")
+    input_schema: Mapping[str, object] | None = Field(default=None, serialization_alias="inputSchema")
 
 
 class _UnavailableDetail(TypedDict):
