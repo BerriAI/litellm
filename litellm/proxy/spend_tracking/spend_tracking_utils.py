@@ -416,7 +416,8 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             )
             or ""
         )
-        end_user_id = end_user_id or standard_logging_payload["metadata"].get("user_api_key_end_user_id")
+        if not litellm.disable_end_user_cost_tracking:
+            end_user_id = end_user_id or standard_logging_payload["metadata"].get("user_api_key_end_user_id")
     request_tags = safe_dumps(metadata.get("tags", [])) if isinstance(metadata.get("tags", []), list) else "[]"
     if (
         standard_logging_payload is not None and standard_logging_payload.get("request_tags") is not None
