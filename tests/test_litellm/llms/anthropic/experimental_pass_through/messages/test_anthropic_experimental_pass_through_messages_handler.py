@@ -220,6 +220,86 @@ async def test_anthropic_messages_sanitizes_tool_use_ids_before_dispatch():
     assert msgs[0]["content"][0]["id"] == "functions.Bash:0"
 
 
+_ANTHROPIC_MESSAGES_OK = {
+    "id": "msg_test",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-4-5-20250929",
+    "content": [{"type": "text", "text": "ok"}],
+    "stop_reason": "end_turn",
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+
+
+def _tool_use_replay_messages():
+    return [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "functions.Bash:0",
+                    "name": "Bash",
+                    "input": {},
+                }
+            ],
+        }
+    ]
+
+
+def _capturing_anthropic_client():
+    captured = {}
+
+    def capture_upstream(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json=_ANTHROPIC_MESSAGES_OK, request=request)
+
+    upstream = AsyncHTTPHandler()
+    upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(capture_upstream))
+    return captured, upstream
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_keeps_tool_use_ids_for_non_anthropic_api_base():
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    msgs = _tool_use_replay_messages()
+    captured, upstream = _capturing_anthropic_client()
+
+    await handler.anthropic_messages(
+        max_tokens=100,
+        messages=msgs,
+        model="anthropic/claude-sonnet-4-5-20250929",
+        custom_llm_provider="anthropic",
+        api_key="k",
+        api_base="http://127.0.0.1:8000/v1",
+        client=upstream,
+    )
+
+    assert captured["body"]["messages"][0]["content"][0]["id"] == "functions.Bash:0"
+    assert msgs[0]["content"][0]["id"] == "functions.Bash:0"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_sanitizes_azure_ai_model_prefix_without_provider():
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    msgs = _tool_use_replay_messages()
+    captured, upstream = _capturing_anthropic_client()
+
+    await handler.anthropic_messages(
+        max_tokens=100,
+        messages=msgs,
+        model="azure_ai/claude-sonnet-4-5",
+        api_key="k",
+        api_base="https://myres.services.ai.azure.com/anthropic",
+        client=upstream,
+    )
+
+    assert captured["body"]["messages"][0]["content"][0]["id"] == "functions_Bash_0"
+    assert msgs[0]["content"][0]["id"] == "functions.Bash:0"
+
+
 async def _async_return(value):
     return value
 
