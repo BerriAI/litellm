@@ -1500,23 +1500,20 @@ def convert_to_gemini_tool_call_result(
     return _part
 
 
-def _sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
-    """
-    Sanitize tool_use_id to match Anthropic's required pattern: ^[a-zA-Z0-9_-]+$
-
-    Anthropic requires tool_use_id to only contain alphanumeric characters, underscores, and hyphens.
-    This function replaces any invalid characters with underscores.
-    """
-    # Replace any character that's not alphanumeric, underscore, or hyphen with underscore
-    sanitized = re.sub(r"[^a-zA-Z0-9_-]", "_", tool_use_id)
-    # Ensure it's not empty (fallback to a default if needed)
-    if not sanitized:
-        sanitized = "tool_use_id"
-    return sanitized
-
-
+_TOOL_USE_ID_FALLBACK: Final = "tool_use_id"
+_ANTHROPIC_TOOL_USE_ID_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
+_BEDROCK_TOOL_USE_ID_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_.:-]")
 _BEDROCK_TOOL_USE_ID_MAX_LEN: Final = 64
 _BEDROCK_TOOL_USE_ID_HASH_LEN: Final = 8
+
+
+def _replace_invalid_tool_use_id_chars(tool_use_id: str, invalid_chars: re.Pattern[str]) -> str:
+    return invalid_chars.sub("_", tool_use_id) or _TOOL_USE_ID_FALLBACK
+
+
+def _sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
+    """Anthropic requires tool_use_id to match ^[a-zA-Z0-9_-]+$."""
+    return _replace_invalid_tool_use_id_chars(tool_use_id, _ANTHROPIC_TOOL_USE_ID_INVALID_CHARS)
 
 
 def _sanitize_bedrock_tool_use_id(tool_use_id: str) -> str:
@@ -1525,7 +1522,7 @@ def _sanitize_bedrock_tool_use_id(tool_use_id: str) -> str:
     Ids that need rewriting get a short hash of the original appended so two ids that only
     differ in a replaced char or past the cut still map to distinct values.
     """
-    sanitized: Final = re.sub(r"[^a-zA-Z0-9_.:-]", "_", tool_use_id) or "tool_use_id"
+    sanitized: Final = _replace_invalid_tool_use_id_chars(tool_use_id, _BEDROCK_TOOL_USE_ID_INVALID_CHARS)
     if sanitized == tool_use_id and len(sanitized) <= _BEDROCK_TOOL_USE_ID_MAX_LEN:
         return sanitized
     digest: Final = hashlib.sha256(tool_use_id.encode()).hexdigest()[:_BEDROCK_TOOL_USE_ID_HASH_LEN]
