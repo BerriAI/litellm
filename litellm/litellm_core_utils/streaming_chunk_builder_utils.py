@@ -873,9 +873,9 @@ class ChunkProcessor:
                 if usage_chunk_dict["completion_tokens"] is not None and usage_chunk_dict["completion_tokens"] > 0:
                     completion_tokens = usage_chunk_dict["completion_tokens"]
                     completion_usage_updates += 1
-                if usage_chunk_dict["cache_creation_input_tokens"] is not None and (
-                    usage_chunk_dict["cache_creation_input_tokens"] > 0 or cache_creation_input_tokens is None
-                ):
+                if usage_chunk_dict["cache_creation_input_tokens"] is not None:
+                    # An explicit 0 replaces any prior positive value; only
+                    # omit (None) preserves the previous count.
                     cache_creation_input_tokens = usage_chunk_dict["cache_creation_input_tokens"]
                 if usage_chunk_dict["cache_read_input_tokens"] is not None and (
                     usage_chunk_dict["cache_read_input_tokens"] > 0 or cache_read_input_tokens is None
