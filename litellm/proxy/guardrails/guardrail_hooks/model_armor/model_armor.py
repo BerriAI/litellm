@@ -1,11 +1,13 @@
+import time
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal
 
 import httpx
 from fastapi import HTTPException
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 import json
@@ -52,6 +54,7 @@ from litellm.types.utils import (
     CallTypes,
     CallTypesLiteral,
     Choices,
+    GenericGuardrailAPIInputs,
     GuardrailStatus,
     ModelResponse,
     ModelResponseStream,
@@ -118,7 +121,11 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     Supports:
     - Pre-call sanitization (sanitizeUserPrompt)
     - Post-call sanitization (sanitizeModelResponse)
+    - logging_only: scans the completed response after it reaches the client and
+      records the verdict in spend logs without blocking
     """
+
+    use_native_lifecycle_hooks: ClassVar[bool] = True
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
@@ -128,6 +135,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             GuardrailEventHooks.post_call,
             GuardrailEventHooks.pre_mcp_call,
             GuardrailEventHooks.during_mcp_call,
+            GuardrailEventHooks.logging_only,
         ]
 
     def __init__(
@@ -1096,6 +1104,11 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             add_guardrail_to_applied_guardrails_header,
         )
 
+        if self.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call) is not True:
+            async for chunk in response:
+                yield chunk
+            return
+
         all_chunks: Final[Sequence[object]] = tuple([chunk async for chunk in response])
 
         if not all_chunks or self._is_terminal_error_stream(all_chunks):
@@ -1212,6 +1225,60 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         # Return original chunks if no sanitization needed
         for chunk in all_chunks:
             yield chunk
+
+    @log_guardrail_information
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: "LiteLLMLoggingObj | None" = None,
+    ) -> GenericGuardrailAPIInputs:
+        content: Final = "\n".join(text for text in inputs.get("texts") or () if text)
+        if not content:
+            return inputs
+
+        source: Final[Literal["user_prompt", "model_response"]] = (
+            "user_prompt" if input_type == "request" else "model_response"
+        )
+        start_time: Final = time.time()
+        try:
+            armor_response: Final = await self.make_model_armor_request(
+                content=content, source=source, request_data=request_data
+            )
+        except (ModelArmorAPIError, httpx.HTTPError) as e:
+            error_end_time: Final = time.time()
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response=str(e),
+                request_data=request_data,
+                guardrail_status="guardrail_failed_to_respond",
+                guardrail_provider="model_armor",
+                start_time=start_time,
+                end_time=error_end_time,
+                duration=error_end_time - start_time,
+            )
+            return inputs
+
+        flagged: Final = self._should_block_content(armor_response, allow_sanitization=False)
+        end_time: Final = time.time()
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=self._build_logging_response(armor_response),
+            request_data=request_data,
+            guardrail_status="guardrail_flagged" if flagged else "success",
+            guardrail_provider="model_armor",
+            start_time=start_time,
+            end_time=end_time,
+            duration=end_time - start_time,
+        )
+        if flagged and not self._event_hook_is_event_type(GuardrailEventHooks.logging_only):
+            raise HTTPException(
+                status_code=400,
+                detail=self._build_block_error_detail(
+                    "Response blocked by Model Armor" if input_type == "response" else "Content blocked by Model Armor",
+                    armor_response,
+                ),
+            )
+        return inputs
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:
