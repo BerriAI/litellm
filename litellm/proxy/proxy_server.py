@@ -11918,11 +11918,14 @@ async def _reject_realtime_session(
         await _release_realtime_budget_reservation(user_api_key_dict)
 
 
+_CODEX_LIVE_AUTH_DEPENDENCY: Final = Depends(user_api_key_auth_websocket)
+
+
 @app.websocket("/v1/live/{call_id}")
 async def codex_live_sideband_endpoint(
     websocket: WebSocket,
     call_id: str,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
+    user_api_key_dict: UserAPIKeyAuth = _CODEX_LIVE_AUTH_DEPENDENCY,
 ) -> None:
     from litellm.proxy.realtime_endpoints.call_sessions import codex_realtime_sideband
 
