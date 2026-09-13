@@ -56,7 +56,8 @@ class TestMigrationStartup:
             replicas: Final = start_replicas(stack, containers, database, (FATAL,))
             failed(replicas, COMPLETE.name)
             assert database.query(
-                "SELECT count(*) FROM _prisma_migrations WHERE migration_name = %s AND logs LIKE %s AND finished_at IS NULL",
+                'SELECT count(*) FROM _prisma_migrations WHERE migration_name = %s AND logs LIKE '
+                '%s AND finished_at IS NULL',
                 (COMPLETE.name, "%MIGRATION_TEST_FATAL%"),
             ) == ((1,),)
 

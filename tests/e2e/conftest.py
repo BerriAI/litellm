@@ -64,7 +64,9 @@ def jwt_identity(idp: Keycloak, resources: ResourceManager, proxy: ProxyClient) 
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    config.addinivalue_line("markers", "migration_startup: isolated container startup tests run by the migration CI workflow")
+    config.addinivalue_line(
+        "markers", "migration_startup: isolated container startup tests run by the migration CI workflow"
+    )
     config.addinivalue_line(
         "markers",
         "e2e: live test that requires a running proxy and real provider keys",

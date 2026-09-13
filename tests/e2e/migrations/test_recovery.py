@@ -159,7 +159,9 @@ class TestMigrationRecovery:
                 )
             case "duplicate_history":
                 database.execute(
-                    "INSERT INTO _prisma_migrations (id, migration_name, checksum, applied_steps_count) SELECT %s, migration_name, checksum, applied_steps_count FROM _prisma_migrations WHERE migration_name = %s",
+                    'INSERT INTO _prisma_migrations (id, migration_name, checksum, '
+                    'applied_steps_count) SELECT %s, migration_name, checksum, '
+                    'applied_steps_count FROM _prisma_migrations WHERE migration_name = %s',
                     (str(uuid4()), COMPLETE.name),
                 )
             case "missing_script":
