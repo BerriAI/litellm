@@ -5758,3 +5758,52 @@ def test_streaming_contentless_candidate_iterator():
     assert result.choices[0].delta.content is None
     assert result.choices[0].delta.provider_specific_fields is not None
     assert result.choices[0].delta.provider_specific_fields.get("finish_reason") == "NO_IMAGE"
+
+
+def test_process_candidates_does_not_leak_tool_calls_to_contentless_candidate():
+    candidates = [
+        {
+            "content": {
+                "parts": [
+                    {
+                        "functionCall": {
+                            "name": "get_current_time",
+                            "args": {"timezone": "America/New_York"},
+                        },
+                    },
+                ]
+            },
+            "finishReason": "STOP",
+            "index": 0,
+        },
+        {
+            "finishReason": "NO_IMAGE",
+            "index": 1,
+        },
+    ]
+    model_response = ModelResponse(choices=[])
+
+    VertexGeminiConfig._process_candidates(
+        _candidates=candidates,
+        model_response=model_response,
+        standard_optional_params={},
+        cumulative_tool_call_index=0,
+    )
+
+    assert len(model_response.choices) == 2
+    choice_0 = model_response.choices[0]
+    choice_1 = model_response.choices[1]
+
+    # Choice 0 has the tool call
+    assert choice_0.finish_reason == "tool_calls"
+    assert choice_0.message.tool_calls is not None
+    assert len(choice_0.message.tool_calls) == 1
+    assert choice_0.message.tool_calls[0].function.name == "get_current_time"
+
+    # Choice 1 is contentless, must not inherit tool calls from choice 0
+    assert choice_1.finish_reason == "content_filter"
+    assert choice_1.message.content is None
+    assert getattr(choice_1.message, "tool_calls", None) is None
+    assert getattr(choice_1.message, "function_call", None) is None
+    assert choice_1.provider_specific_fields is not None
+    assert choice_1.provider_specific_fields.get("finish_reason") == "NO_IMAGE"
