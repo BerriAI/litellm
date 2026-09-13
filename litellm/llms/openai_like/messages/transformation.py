@@ -65,6 +65,12 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
     def supports_cache_control_ttl(self) -> bool:
         return self._cache_control_ttl
 
+    @staticmethod
+    def _translate_adaptive_effort_for_non_adaptive_model(
+        model: str, optional_params: dict, max_tokens: int | None, custom_llm_provider: str
+    ) -> None:
+        """Keep native Anthropic adaptive fields intact for opted-in deployments."""
+
     def transform_anthropic_messages_request(
         self,
         model: str,
