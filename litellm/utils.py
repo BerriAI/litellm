@@ -4790,6 +4790,11 @@ def get_optional_params(
         openai_params=list(DEFAULT_CHAT_COMPLETION_PARAM_VALUES.keys()),
         additional_drop_params=additional_drop_params,
     )
+    if (
+        "stream_options" not in optional_params
+        and non_default_params.get("stream_options") is not None
+    ):
+        optional_params["stream_options"] = non_default_params["stream_options"]
     if _print_verbose_is_active():
         print_verbose(f"Final returned optional params: {redact_credentials_in_payload(optional_params)}")
     optional_params = _apply_openai_param_overrides(
