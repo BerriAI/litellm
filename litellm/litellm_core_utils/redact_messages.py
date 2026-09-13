@@ -96,6 +96,21 @@ def _redact_function_call(function_call) -> None:
         function_call.arguments = REDACTED_BY_LITELLM
 
 
+def _redact_reasoning_items_dict(reasoning_items: object, redacted_str: str) -> None:
+    """Redact summary and raw content text inside reasoning items (dict form)."""
+    if not isinstance(reasoning_items, list):
+        return
+    for reasoning_item in reasoning_items:
+        if not isinstance(reasoning_item, dict):
+            continue
+        for key in ("summary", "content"):
+            parts = reasoning_item.get(key)  # rebind-ok: reassessed per key
+            if isinstance(parts, list):
+                for part in parts:
+                    if isinstance(part, dict) and part.get("text") is not None:
+                        part["text"] = redacted_str
+
+
 def _redact_choice_content(choice):
     """Helper to redact content in a choice (message or delta)."""
     if isinstance(choice, litellm.Choices):
@@ -105,6 +120,7 @@ def _redact_choice_content(choice):
             choice.message.reasoning_content = REDACTED_BY_LITELLM
         if hasattr(choice.message, "thinking_blocks"):
             choice.message.thinking_blocks = None
+        _redact_reasoning_items_dict(getattr(choice.message, "reasoning_items", None), REDACTED_BY_LITELLM)
         _redact_tool_calls(getattr(choice.message, "tool_calls", None))
         _redact_function_call(getattr(choice.message, "function_call", None))
     elif isinstance(choice, litellm.utils.StreamingChoices):
@@ -114,6 +130,7 @@ def _redact_choice_content(choice):
             choice.delta.reasoning_content = REDACTED_BY_LITELLM
         if hasattr(choice.delta, "thinking_blocks"):
             choice.delta.thinking_blocks = None
+        _redact_reasoning_items_dict(getattr(choice.delta, "reasoning_items", None), REDACTED_BY_LITELLM)
         _redact_tool_calls(getattr(choice.delta, "tool_calls", None))
         _redact_function_call(getattr(choice.delta, "function_call", None))
 
@@ -226,6 +243,7 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
                     choice["message"]["thinking_blocks"] = None
                 if "audio" in choice["message"]:
                     choice["message"]["audio"] = None
+                _redact_reasoning_items_dict(choice["message"].get("reasoning_items"), redacted_str)
                 _redact_tool_calls_dict(choice["message"])
             elif "delta" in choice and isinstance(choice["delta"], dict):
                 if choice["delta"].get("content") is not None:
@@ -236,6 +254,7 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
                     choice["delta"]["thinking_blocks"] = None
                 if "audio" in choice["delta"]:
                     choice["delta"]["audio"] = None
+                _redact_reasoning_items_dict(choice["delta"].get("reasoning_items"), redacted_str)
                 _redact_tool_calls_dict(choice["delta"])
         else:
             _redact_choice_content(choice)

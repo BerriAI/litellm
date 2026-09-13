@@ -31693,6 +31693,13 @@
         "ChatCompletionReasoningItem": {
           "description": "Represents an OpenAI Responses API reasoning item for round-tripping in conversation history.",
           "properties": {
+            "content": {
+              "items": {
+                "$ref": "#/components/schemas/ChatCompletionReasoningTextBlock"
+              },
+              "title": "Content",
+              "type": "array"
+            },
             "encrypted_content": {
               "anyOf": [
                 {
@@ -31743,6 +31750,24 @@
             "type"
           ],
           "title": "ChatCompletionReasoningSummaryTextBlock",
+          "type": "object"
+        },
+        "ChatCompletionReasoningTextBlock": {
+          "properties": {
+            "text": {
+              "title": "Text",
+              "type": "string"
+            },
+            "type": {
+              "const": "reasoning_text",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ChatCompletionReasoningTextBlock",
           "type": "object"
         },
         "ChatCompletionRedactedThinkingBlock": {

@@ -263,6 +263,91 @@ class TestPerformRedaction:
         assert delta["thinking_blocks"] is None
         assert delta["audio"] is None
 
+    def test_redacts_reasoning_items_in_model_response_dict_choices(self):
+        result = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "message content",
+                        "reasoning_items": [
+                            {
+                                "type": "reasoning",
+                                "id": "rs_1",
+                                "summary": [{"type": "summary_text", "text": "summary text"}],
+                                "content": [{"type": "reasoning_text", "text": "raw reasoning"}],
+                            }
+                        ],
+                    }
+                },
+                {
+                    "delta": {
+                        "content": "delta content",
+                        "reasoning_items": [
+                            {
+                                "type": "reasoning",
+                                "id": "rs_2",
+                                "summary": [{"type": "summary_text", "text": "delta summary"}],
+                                "content": [{"type": "reasoning_text", "text": "delta raw reasoning"}],
+                            }
+                        ],
+                    }
+                },
+            ]
+        }
+
+        redacted = perform_redaction({}, result)
+
+        message_item = redacted["choices"][0]["message"]["reasoning_items"][0]
+        assert message_item["summary"][0]["text"] == "redacted-by-litellm"
+        assert message_item["content"][0]["text"] == "redacted-by-litellm"
+
+        delta_item = redacted["choices"][1]["delta"]["reasoning_items"][0]
+        assert delta_item["summary"][0]["text"] == "redacted-by-litellm"
+        assert delta_item["content"][0]["text"] == "redacted-by-litellm"
+
+    def test_redacts_reasoning_items_on_choice_objects(self):
+        from litellm.litellm_core_utils.redact_messages import _redact_choice_content
+        from litellm.types.utils import Choices, Delta, Message, StreamingChoices
+
+        reasoning_items = [
+            {
+                "type": "reasoning",
+                "id": "rs_1",
+                "summary": [{"type": "summary_text", "text": "summary text"}],
+                "content": [{"type": "reasoning_text", "text": "raw reasoning"}],
+            }
+        ]
+
+        message_choice = Choices(
+            message=Message(role="assistant", content="answer", reasoning_items=reasoning_items),
+            finish_reason="stop",
+            index=0,
+        )
+        _redact_choice_content(message_choice)
+        item = message_choice.message.reasoning_items[0]
+        assert item["summary"][0]["text"] == "redacted-by-litellm"
+        assert item["content"][0]["text"] == "redacted-by-litellm"
+
+        stream_choice = StreamingChoices(
+            delta=Delta(
+                content="chunk",
+                reasoning_items=[
+                    {
+                        "type": "reasoning",
+                        "id": "rs_2",
+                        "summary": [{"type": "summary_text", "text": "delta summary"}],
+                        "content": [{"type": "reasoning_text", "text": "delta raw"}],
+                    }
+                ],
+            ),
+            finish_reason=None,
+            index=0,
+        )
+        _redact_choice_content(stream_choice)
+        delta_item = stream_choice.delta.reasoning_items[0]
+        assert delta_item["summary"][0]["text"] == "redacted-by-litellm"
+        assert delta_item["content"][0]["text"] == "redacted-by-litellm"
+
     def test_redacts_standard_logging_model_response_dict_choices(self):
         details = {
             "standard_logging_object": {
