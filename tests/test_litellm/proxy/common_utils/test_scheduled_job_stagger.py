@@ -64,6 +64,10 @@ def _stagger(scheduler: AsyncIOScheduler, identity: str = "pod-a:1", **overrides
     return apply_scheduled_job_stagger(scheduler=scheduler, settings=_settings(**overrides), identity=identity)
 
 
+def _trigger_of(scheduler: AsyncIOScheduler, job_id: str):
+    return next(job.trigger for job in scheduler.get_jobs() if job.id == job_id)
+
+
 def _fire_times(trigger, start: datetime, steps: int) -> tuple[datetime, ...]:
     """The fire times APScheduler would produce, each computed from the one before it"""
     return tuple(
@@ -133,22 +137,24 @@ def test_default_cron_is_staggered_and_keeps_its_offset_on_every_later_fire():
     applied = _stagger(scheduler)
     assert applied[PTU_ROLLUP_JOB_ID] > 0
 
-    trigger = next(job.trigger for job in scheduler.get_jobs() if job.id == PTU_ROLLUP_JOB_ID)
-    fires = _fire_times(trigger, datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc), 3)
+    start = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    fires = _fire_times(_trigger_of(scheduler, PTU_ROLLUP_JOB_ID), start, 3)
 
     expected = timedelta(minutes=15) + timedelta(seconds=applied[PTU_ROLLUP_JOB_ID])
     assert [fire - fire.replace(hour=0, minute=0, second=0, microsecond=0) for fire in fires] == [expected] * 3
 
 
-async def test_explicit_offset_overrides_the_derived_one_and_zero_pins_a_job():
+def test_explicit_offset_overrides_the_derived_one_and_zero_pins_a_job():
     scheduler = _with_jobs(_scheduler())
     applied = _stagger(scheduler, offsets={"periodic_reload_job": 0, PTU_ROLLUP_JOB_ID: 7})
-    unstaggered = _next_run_times(_with_jobs(_scheduler()))
-    staggered = _next_run_times(scheduler)
 
     assert applied["periodic_reload_job"] == 0
     assert applied[PTU_ROLLUP_JOB_ID] == 7
-    assert staggered[PTU_ROLLUP_JOB_ID] - unstaggered[PTU_ROLLUP_JOB_ID] == timedelta(seconds=7)
+
+    start = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    staggered = _trigger_of(scheduler, PTU_ROLLUP_JOB_ID)
+    unstaggered = _trigger_of(_with_jobs(_scheduler()), PTU_ROLLUP_JOB_ID)
+    assert _fire_times(staggered, start, 1)[0] - _fire_times(unstaggered, start, 1)[0] == timedelta(seconds=7)
 
 
 async def test_disabling_the_stagger_leaves_every_schedule_untouched():

@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
 
 from httpx import Response
 from pydantic import BaseModel, JsonValue
@@ -23,7 +23,6 @@ import litellm
 from litellm import (
     _custom_logger_compatible_callbacks_literal,
     json_logs,
-    log_raw_request_response,
     turn_off_message_logging,
 )
 from litellm._logging import (
@@ -211,7 +210,7 @@ if TYPE_CHECKING:
     from litellm.integrations.otel.logger import OpenTelemetryV2
     from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
     from litellm.litellm_core_utils.llm_cost_calc.utils import BilledTokenRates
-    from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig, LoggedRelayResponse
+    from litellm.llms.base_llm.passthrough.transformation import PassthroughStreamCollector
 try:
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
         EnterpriseCallbackControls,
@@ -455,6 +454,17 @@ def _resolve_vertex_location_for_cost(
     return VertexBase.get_vertex_region(configured_location, model)
 
 
+def _resolve_mantle_region_for_cost(
+    custom_llm_provider: str | None,
+    litellm_params: Mapping[str, object] | None,
+) -> str | None:
+    if custom_llm_provider != "bedrock_mantle":
+        return None
+    from litellm.llms.bedrock_mantle.common_utils import resolve_mantle_region
+
+    return resolve_mantle_region(litellm_params or MappingProxyType({}))
+
+
 def _provider_response_id(source: object) -> str | None:
     candidate: Final = source.get("id") if isinstance(source, dict) else getattr(source, "id", None)
     return candidate if isinstance(candidate, str) and candidate else None
@@ -563,6 +573,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.streaming_chunks: list[Any] = []  # for generating complete stream response
         self.sync_streaming_chunks: list[Any] = []  # for generating complete stream response
         self.log_raw_request_response = log_raw_request_response
+        self._native_callback_fast_path: bool = False
 
         # Initialize dynamic callbacks
         self.dynamic_input_callbacks: list[str | Callable | CustomLogger] | None = dynamic_input_callbacks
@@ -1236,6 +1247,11 @@ class Logging(LiteLLMLoggingBaseClass):
             additional_args.get("api_base", "")
         )
 
+    def record_api_call_start_time(self) -> None:
+        self.model_call_details["api_call_start_time"] = datetime.datetime.now()
+        if self.model_call_details.get("first_api_call_start_time") is None:
+            self.model_call_details["first_api_call_start_time"] = self.model_call_details["api_call_start_time"]
+
     def pre_call(self, input, api_key, model=None, additional_args={}):
         # Log the exact input to the LLM API
         try:
@@ -1253,7 +1269,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 additional_args=additional_args,
             )
             # log raw request to provider (like LangFuse) -- if opted in.
-            if self.log_raw_request_response is True or log_raw_request_response is True:
+            if self.log_raw_request_response is True or litellm.log_raw_request_response is True:
                 _litellm_params: Final = self.model_call_details.get("litellm_params", {})
                 _metadata: Final = _litellm_params.get("metadata", {}) or {}
                 try:
@@ -1300,15 +1316,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging %s", e
                     )
 
-            self.model_call_details["api_call_start_time"] = datetime.datetime.now()
-            # Set-once first provider-handoff instant. api_call_start_time
-            # is overwritten on every retry, so it can't measure one-time
-            # preprocessing; pinning the first attempt excludes retry loops
-            # + backoff. Logging object only — must NOT go into
-            # litellm_params["metadata"] (caller request metadata, typed
-            # Dict[str, str], echoed downstream; a datetime breaks it).
-            if self.model_call_details.get("first_api_call_start_time") is None:
-                self.model_call_details["first_api_call_start_time"] = self.model_call_details["api_call_start_time"]
+            self.record_api_call_start_time()
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
             callbacks: Final = litellm.input_callback + (self.dynamic_input_callbacks or [])
             for callback in callbacks:
@@ -1442,16 +1450,21 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         return _get_masked_values(headers, ignore_sensitive_values=ignore_sensitive_headers)
 
+    def record_post_call(
+        self, original_response: object, input: object, api_key: object, additional_args: dict[str, object]
+    ) -> None:
+        self.model_call_details["input"] = input
+        self.model_call_details["api_key"] = api_key
+        self.model_call_details["original_response"] = original_response
+        self.model_call_details["additional_args"] = additional_args
+        self.model_call_details["log_event_type"] = "post_api_call"
+
     def post_call(self, original_response, input=None, api_key=None, additional_args={}):
         # Log the exact result from the LLM API, for streaming - log the type of response received
         if isinstance(original_response, dict):
             original_response = json.dumps(original_response, default=str)
         try:
-            self.model_call_details["input"] = input
-            self.model_call_details["api_key"] = api_key
-            self.model_call_details["original_response"] = original_response
-            self.model_call_details["additional_args"] = additional_args
-            self.model_call_details["log_event_type"] = "post_api_call"
+            self.record_post_call(original_response, input, api_key, additional_args)
 
             attr: Literal["warning", "debug"]
             if self.litellm_request_debug:
@@ -1765,6 +1778,10 @@ class Logging(LiteLLMLoggingBaseClass):
                     litellm_params=(self.litellm_params if hasattr(self, "litellm_params") else None),
                     optional_params=self.optional_params,
                     model=litellm_model_name or self.model,
+                ),
+                "region_name": _resolve_mantle_region_for_cost(
+                    custom_llm_provider=self.model_call_details.get("custom_llm_provider", None),
+                    litellm_params=self.model_call_details.get("litellm_params"),
                 ),
             }
         except Exception as e:  # error creating kwargs for cost calculation
@@ -2116,6 +2133,7 @@ class Logging(LiteLLMLoggingBaseClass):
         logging_result,
         start_time,
         end_time,
+        build_logging_payload: bool = True,
     ):
         """Resolve hidden params, compute response cost, and emit the standard logging payload."""
         hidden_params: Final = getattr(logging_result, "_hidden_params", {})
@@ -2139,6 +2157,9 @@ class Logging(LiteLLMLoggingBaseClass):
             pass
         else:
             self.model_call_details["response_cost"] = self._response_cost_calculator(result=logging_result)
+
+        if not build_logging_payload:
+            return
 
         self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
             logging_result, start_time, end_time
@@ -2201,6 +2222,7 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time=None,
         cache_hit=None,
         standard_logging_object: StandardLoggingPayload | None = None,
+        build_logging_payload: bool = True,
     ):
         try:
             if start_time is None:
@@ -2238,6 +2260,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         logging_result=logging_result,
                         start_time=start_time,
                         end_time=end_time,
+                        build_logging_payload=build_logging_payload,
                     )
             elif standard_logging_object is not None:
                 self.model_call_details["standard_logging_object"] = standard_logging_object
@@ -2396,52 +2419,17 @@ class Logging(LiteLLMLoggingBaseClass):
         for scope in [key for key in spans_logged if isinstance(key, tuple) and key[-1:] == ("success",)]:
             del spans_logged[scope]
 
-    def _flush_passthrough_collected_chunks_helper(
-        self,
-        raw_bytes: list[bytes],
-        provider_config: "BasePassthroughConfig",
-    ) -> Optional["LoggedRelayResponse"]:
-        all_chunks: Final = provider_config._convert_raw_bytes_to_str_lines(raw_bytes)
-        complete_streaming_response: Final = provider_config.handle_logging_collected_chunks(
-            all_chunks=all_chunks,
-            litellm_logging_obj=self,
-            model=self.model,
-            custom_llm_provider=self.model_call_details.get("custom_llm_provider", ""),
-            endpoint=self.model_call_details.get("endpoint", ""),
-        )
-        return complete_streaming_response
-
-    def flush_passthrough_collected_chunks(
-        self,
-        raw_bytes: list[bytes],
-        provider_config: "BasePassthroughConfig",
-    ):
+    def flush_passthrough_collected_chunks(self, collector: "PassthroughStreamCollector"):
         """
-        Flush collected chunks from the logging object
-        This is used to log the collected chunks once streaming is done on passthrough endpoints
-
-        1. Decode the raw bytes to string lines
-        2. Get the complete streaming response from the provider config
-        3. Log the complete streaming response (trigger success handler)
-        This is used for passthrough endpoints
+        Log the response a passthrough stream collector assembled once streaming is done (trigger success handler)
         """
-        complete_streaming_response: Final = self._flush_passthrough_collected_chunks_helper(
-            raw_bytes=raw_bytes,
-            provider_config=provider_config,
-        )
+        complete_streaming_response: Final = collector.build_logged_response(litellm_logging_obj=self)
 
         if complete_streaming_response is not None:
             self.success_handler(result=complete_streaming_response)
 
-    async def async_flush_passthrough_collected_chunks(
-        self,
-        raw_bytes: list[bytes],
-        provider_config: "BasePassthroughConfig",
-    ):
-        complete_streaming_response: Final = self._flush_passthrough_collected_chunks_helper(
-            raw_bytes=raw_bytes,
-            provider_config=provider_config,
-        )
+    async def async_flush_passthrough_collected_chunks(self, collector: "PassthroughStreamCollector"):
+        complete_streaming_response: Final = collector.build_logged_response(litellm_logging_obj=self)
 
         if complete_streaming_response is not None:
             await self.async_success_handler(result=complete_streaming_response)
@@ -3296,7 +3284,9 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception as e:
             verbose_logger.debug("Error in _handle_callback_failure: %s", e)
 
-    def _failure_handler_helper_fn(self, exception, traceback_exception, start_time=None, end_time=None):
+    def _failure_handler_helper_fn(
+        self, exception, traceback_exception, start_time=None, end_time=None, build_logging_payload: bool = True
+    ):
         if start_time is None:
             start_time = self.start_time
         if end_time is None:
@@ -3330,6 +3320,9 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details.setdefault("litellm_params", {})
             metadata: Final = self.model_call_details["litellm_params"].get("metadata", {}) or {}
             metadata.update(exception.headers)
+
+        if not build_logging_payload:
+            return start_time, end_time
 
         ## STANDARDIZED LOGGING PAYLOAD
 
@@ -6505,7 +6498,7 @@ def _get_traceback_str_for_error(error_str: str) -> str:
 from decimal import Decimal
 
 # used for unit testing
-from typing import Any, Optional, Union
+from typing import Any, Union
 
 
 def create_dummy_standard_logging_payload() -> StandardLoggingPayload:

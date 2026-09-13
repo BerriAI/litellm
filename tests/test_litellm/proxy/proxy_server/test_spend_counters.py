@@ -1147,6 +1147,54 @@ async def test_prepare_window_spend_counter_increment_missing_window_start_inval
 
 
 # ---------------------------------------------------------------------------
+# _apply_spend_counter_increments
+# ---------------------------------------------------------------------------
+
+
+def _two_pending_increments() -> tuple[ps.PendingSpendIncrement, ...]:
+    return (
+        ps.PendingSpendIncrement(counter_key="spend:key:k", increment=1.5),
+        ps.PendingSpendIncrement(counter_key="spend:team:t", increment=1.5),
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_spend_counter_increments_open_breaker_invalidates_and_returns(monkeypatch):
+    """An open Redis circuit breaker is a known, already-logged state, not a per-request tracking failure.
+
+    Re-raising the refusal sent every request through the cost callback's error path, which
+    logged an ERROR and fired the failed-tracking alert once per request for the whole outage.
+    """
+    from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+
+    fake_cache = _make_spend_counter_cache()
+    fake_cache.redis_cache.async_increment_pipeline = AsyncMock(
+        side_effect=RedisCircuitBreakerOpenError("Redis circuit breaker is open")
+    )
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+
+    await ps._apply_spend_counter_increments(_two_pending_increments())
+
+    deleted_keys = sorted(call.kwargs["key"] for call in fake_cache.in_memory_cache.delete_cache.call_args_list)
+    assert deleted_keys == ["spend:key:k", "spend:team:t"]
+    fake_cache.in_memory_cache.set_cache.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_apply_spend_counter_increments_other_redis_error_invalidates_and_raises(monkeypatch):
+    fake_cache = _make_spend_counter_cache()
+    fake_cache.redis_cache.async_increment_pipeline = AsyncMock(side_effect=ConnectionError("redis down"))
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+
+    with pytest.raises(ConnectionError, match="redis down"):
+        await ps._apply_spend_counter_increments(_two_pending_increments())
+
+    deleted_keys = sorted(call.kwargs["key"] for call in fake_cache.in_memory_cache.delete_cache.call_args_list)
+    assert deleted_keys == ["spend:key:k", "spend:team:t"]
+    fake_cache.in_memory_cache.set_cache.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # _ensure_spend_counter_initialized
 # ---------------------------------------------------------------------------
 

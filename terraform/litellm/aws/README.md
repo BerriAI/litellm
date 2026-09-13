@@ -362,7 +362,14 @@ The sidecar gets the same database, Redis, master-key, license, proxy
 config, and `gateway_extra_env` / `gateway_extra_secrets` values as the
 gateway container, runs with `LITELLM_JOB_ROLE=collector`, and is
 non-essential with an ECS restart policy, so a sidecar crash restarts it in
-place while the gateway falls back to in-process spend tracking.
+place while the gateway falls back to in-process spend tracking. With
+`gateway_connection_pool_enabled` it also gets the `LITELLM_PGBOUNCER_*` env,
+so with a password-authenticated database (`create_database = false`) its
+Prisma client goes through the task-local PgBouncer instead of opening a
+second pool straight to the database. Under IAM token auth (the module-managed
+Aurora cluster) the collector keeps its own direct connection on purpose: the
+pooler's auth file only holds the token the gateway container minted, which
+the sidecar cannot present, so it mints its own.
 
 ```hcl
 collector_enabled = true
