@@ -2506,6 +2506,7 @@ class TestToolTransformation:
             "tools": [
                 "ignored",
                 {"type": "namespace", "name": "ignored"},
+                {"type": "web_search", "name": "ignored"},
                 {
                     "type": "function",
                     "name": "spawn_agent",
@@ -2526,6 +2527,36 @@ class TestToolTransformation:
             "properties": {"task_name": {"type": "string"}},
             "type": "object",
         }
+
+    def test_transform_nested_namespace_custom_tool_becomes_a_content_function_under_its_short_name(self):
+        namespace_tool = {
+            "type": "namespace",
+            "name": "functions",
+            "description": "Codex shell tools.",
+            "tools": [
+                {
+                    "type": "custom",
+                    "name": "exec",
+                    "description": "Runs a shell command.",
+                    "format": {"type": "grammar", "syntax": "lark", "definition": "start: /.+/"},
+                },
+            ],
+        }
+
+        result_tools, _ = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[namespace_tool]
+            )
+        )
+
+        assert len(result_tools) == 1
+        function = result_tools[0]["function"]
+        assert function["name"] == "exec"
+        assert function["description"].startswith("Codex shell tools.")
+        assert "Runs a shell command." in function["description"]
+        assert "start: /.+/" in function["description"]
+        assert function["parameters"]["required"] == ["content"]
+        assert function["parameters"]["properties"]["content"]["type"] == "string"
 
     @pytest.mark.parametrize(
         "model, custom_llm_provider",
@@ -3785,6 +3816,66 @@ class TestEnsureOutputItemContentPartAdded:
         added = iterator._pending_tool_events[0]
         assert added.item.name == "spawn_agent"
         assert added.item.namespace == "collaboration"
+
+    def test_streaming_nested_custom_tool_call_comes_back_as_custom_tool_call(self):
+        from litellm.responses.litellm_completion_transformation.custom_tools import extract_custom_tool_names
+
+        iterator = self._make_iterator()
+        iterator.responses_api_request = {
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "functions",
+                    "tools": [
+                        {
+                            "type": "custom",
+                            "name": "exec",
+                            "format": {"type": "grammar", "syntax": "lark", "definition": "start: /.+/"},
+                        }
+                    ],
+                }
+            ]
+        }
+        iterator._custom_tool_names = extract_custom_tool_names(iterator.responses_api_request.get("tools"))
+        iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
+            iterator.responses_api_request.get("tools")
+        )
+
+        iterator._queue_tool_call_delta_events(
+            [{"index": 0, "id": "call_exec", "function": {"name": "exec", "arguments": '{"content":"ls"}'}}]
+        )
+        iterator._queue_final_tool_call_done_events(
+            ModelResponse(
+                id="chatcmpl-exec",
+                created=1,
+                model="us.openai.gpt-5.6",
+                object="chat.completion",
+                choices=[
+                    Choices(
+                        finish_reason="tool_calls",
+                        index=0,
+                        message=Message(
+                            content=None,
+                            role="assistant",
+                            tool_calls=[
+                                ChatCompletionMessageToolCall(
+                                    id="call_exec",
+                                    type="function",
+                                    function=Function(name="exec", arguments='{"content":"ls"}'),
+                                )
+                            ],
+                        ),
+                    )
+                ],
+            )
+        )
+
+        added = iterator._pending_tool_events[0]
+        assert added.item.type == "custom_tool_call"
+        assert added.item.name == "exec"
+        done = iterator._pending_tool_events[-1]
+        assert done.item.type == "custom_tool_call"
+        assert done.item.input == "ls"
 
     def test_streaming_unqualified_namespace_tool_calls_restore_namespace(self):
         """A unique nested tool name without the namespace still maps back."""
