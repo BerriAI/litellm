@@ -52,7 +52,10 @@ class BaseLLMModelInfo(ABC):
 
     def get_model_cost_key(self, model: str) -> str | None:
         """
-        Extra `litellm.model_cost` key to try for this provider's spelling of `model`, after the exact keys miss.
+        Maps the model name a user sends to the key `litellm.model_cost` stores it under, when the two differ.
+        `get_model_info` tries this key once the exact `model` and `provider/model` keys miss. The default None means
+        the provider's user-facing names already match the cost map, so there is nothing extra to try. Fireworks
+        overrides it: `deepseek-r1` -> `fireworks_ai/accounts/fireworks/models/deepseek-r1`.
         """
         return None
 
