@@ -7,13 +7,10 @@ and following LiteLLM testing patterns and best practices.
 
 # Standard library imports
 import importlib
-import os
-import sys
-from typing import Dict
+from typing import Any, Dict
 from unittest.mock import Mock, patch
 
 # Add parent directory to path for imports
-sys.path.insert(0, os.path.abspath("../../.."))
 
 # Third-party imports
 import json
@@ -65,7 +62,6 @@ def setup_and_teardown():
     asyncio.set_event_loop(loop)
 
     # Set up litellm state
-    litellm.set_verbose = True
     litellm.guardrail_name_config_map = {}
 
     yield

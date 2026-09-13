@@ -1,8 +1,10 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { Button, Card, Flex, Input, Modal, Space, Typography } from "antd";
-import { PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
+import { Plus, RefreshCw, Search, X } from "lucide-react";
 import { useRoutingGroups, useSaveRoutingGroups } from "@/app/(dashboard)/hooks/routingGroups/useRoutingGroups";
 import { useRouterFields } from "@/app/(dashboard)/hooks/router/useRouterFields";
 import { useModelHub } from "@/app/(dashboard)/hooks/models/useModels";
@@ -10,10 +12,9 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
 import RoutingGroupsTable from "./RoutingGroupsTable";
 import RoutingGroupModal from "./RoutingGroupModal";
-import NotificationsManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import type { RoutingGroup } from "./types";
-
-const { Text } = Typography;
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const RoutingGroups: React.FC = () => {
   const { data, isLoading, refetch, isFetching } = useRoutingGroups();
@@ -76,14 +77,14 @@ const RoutingGroups: React.FC = () => {
 
     try {
       await saveMutation.mutateAsync(next);
-      NotificationsManager.success(
+      toast.success(
         drawerMode === "create"
           ? `Created routing group "${incoming.group_name}"`
           : `Updated routing group "${incoming.group_name}"`,
       );
       setDrawerOpen(false);
     } catch (err) {
-      NotificationsManager.error(err instanceof Error ? err.message : "Failed to save routing group");
+      toast.error(err instanceof Error ? err.message : "Failed to save routing group");
     }
   };
 
@@ -92,45 +93,63 @@ const RoutingGroups: React.FC = () => {
     const next = groups.filter((g) => g.group_name !== deletingGroup.group_name);
     try {
       await saveMutation.mutateAsync(next);
-      NotificationsManager.success(`Deleted routing group "${deletingGroup.group_name}"`);
+      toast.success(`Deleted routing group "${deletingGroup.group_name}"`);
       setDeletingGroup(null);
     } catch (err) {
-      NotificationsManager.error(err instanceof Error ? err.message : "Failed to delete routing group");
+      toast.error(err instanceof Error ? err.message : "Failed to delete routing group");
     }
   };
 
   return (
-    <Space direction="vertical" size={16} className="w-full">
-      <Card bodyStyle={{ padding: 16 }}>
-        <Flex justify="space-between" align="center" gap={12} className="mb-4">
-          <Input
-            allowClear
-            prefix={<SearchOutlined className="text-gray-400" />}
-            placeholder="Search groups..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="max-w-sm"
-          />
-          <Flex align="center" gap={12}>
-            <Button icon={<ReloadOutlined />} onClick={() => refetch()} loading={isFetching && !isLoading}>
-              Refresh
-            </Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-              Create Group
-            </Button>
-            <Text type="secondary" className="text-sm whitespace-nowrap">
-              Showing {filteredGroups.length} {filteredGroups.length === 1 ? "result" : "results"}
-            </Text>
-          </Flex>
-        </Flex>
+    <div className="flex w-full flex-col gap-4">
+      <Card size="sm">
+        <CardContent>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <InputGroup className="max-w-sm">
+              <InputGroupAddon>
+                <Search className="size-4 text-muted-foreground" />
+              </InputGroupAddon>
+              <InputGroupInput
+                placeholder="Search groups..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+              {searchQuery && (
+                <InputGroupAddon align="inline-end">
+                  <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => setSearchQuery("")}>
+                    <X />
+                  </InputGroupButton>
+                </InputGroupAddon>
+              )}
+            </InputGroup>
+            <div className="flex items-center gap-3">
+              <Button
+                variant="outline"
+                onClick={() => refetch()}
+                disabled={isFetching && !isLoading}
+                aria-busy={isFetching && !isLoading}
+              >
+                <RefreshCw />
+                Refresh
+              </Button>
+              <Button onClick={openCreate}>
+                <Plus />
+                Create Group
+              </Button>
+              <span className="text-sm whitespace-nowrap text-muted-foreground">
+                Showing {filteredGroups.length} {filteredGroups.length === 1 ? "result" : "results"}
+              </span>
+            </div>
+          </div>
 
-        <RoutingGroupsTable
-          groups={filteredGroups}
-          loading={isLoading}
-          onEdit={openEdit}
-          onDelete={(g) => setDeletingGroup(g)}
-          proxyBaseUrl={proxySettings.LITELLM_UI_API_DOC_BASE_URL?.trim() || proxySettings.PROXY_BASE_URL || ""}
-        />
+          <RoutingGroupsTable
+            groups={filteredGroups}
+            isLoading={isLoading}
+            onEdit={openEdit}
+            onDelete={(g) => setDeletingGroup(g)}
+            proxyBaseUrl={proxySettings.LITELLM_UI_API_DOC_BASE_URL?.trim() || proxySettings.PROXY_BASE_URL || ""}
+          />
+        </CardContent>
       </Card>
 
       <RoutingGroupModal
@@ -146,21 +165,31 @@ const RoutingGroups: React.FC = () => {
         saving={saveMutation.isPending}
       />
 
-      <Modal
-        open={Boolean(deletingGroup)}
-        title="Delete routing group?"
-        okText="Delete"
-        okButtonProps={{ danger: true, loading: saveMutation.isPending }}
-        cancelText="Cancel"
-        onOk={confirmDelete}
-        onCancel={() => setDeletingGroup(null)}
-      >
-        <Text>
-          Models in <Text strong>{deletingGroup?.group_name}</Text> will fall back to the proxy&apos;s top-level routing
-          strategy. This cannot be undone.
-        </Text>
-      </Modal>
-    </Space>
+      <Dialog open={Boolean(deletingGroup)} onOpenChange={(open) => !open && setDeletingGroup(null)}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Delete routing group?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-foreground">
+            Models in <span className="font-medium">{deletingGroup?.group_name}</span> will fall back to the
+            proxy&apos;s top-level routing strategy. This cannot be undone.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeletingGroup(null)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={confirmDelete}
+              variant="destructive"
+              disabled={saveMutation.isPending}
+              aria-busy={saveMutation.isPending}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 };
 

@@ -61,8 +61,8 @@ class TestAzureDocumentIntelligencePagesParam:
     def cfg(self) -> AzureDocumentIntelligenceOCRConfig:
         return AzureDocumentIntelligenceOCRConfig()
 
-    def test_get_supported_ocr_params_includes_pages(self, cfg):
-        assert cfg.get_supported_ocr_params("prebuilt-layout") == ["pages"]
+    def test_get_supported_ocr_params_includes_pages_and_features(self, cfg):
+        assert cfg.get_supported_ocr_params("prebuilt-layout") == ["pages", "features", "req_format"]
 
     def test_map_ocr_params_mistral_zero_based_int_list(self, cfg):
         mapped = cfg.map_ocr_params({"pages": [0, 1, 2]}, {}, "prebuilt-layout")
@@ -101,7 +101,7 @@ class TestAzureDocumentIntelligencePagesParam:
             cfg.map_ocr_params({"pages": [True, False]}, {}, "prebuilt-layout")
 
     def test_map_ocr_params_unsupported_type_raises(self, cfg):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='based, Mistral-style\\) or a string like'):
             cfg.map_ocr_params({"pages": 5}, {}, "prebuilt-layout")
 
     def test_get_complete_url_appends_pages_query(self, cfg):

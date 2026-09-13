@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
 
@@ -9,9 +9,9 @@ else:
 
 
 class ArizeConfig(BaseModel):
-    space_id: Optional[str] = None
-    space_key: Optional[str] = None
-    api_key: Optional[str] = None
+    space_id: str | None = None
+    space_key: str | None = None
+    api_key: str | None = None
     protocol: Protocol
     endpoint: str
-    project_name: Optional[str] = None
+    project_name: str | None = None

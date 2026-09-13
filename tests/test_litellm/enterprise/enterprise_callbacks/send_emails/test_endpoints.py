@@ -1,13 +1,10 @@
 import json
-import os
-import sys
 import unittest.mock as mock
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm_enterprise.enterprise_callbacks.send_emails.endpoints import (
     _get_email_settings,

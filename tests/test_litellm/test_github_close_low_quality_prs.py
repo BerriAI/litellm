@@ -697,7 +697,7 @@ class TestListOpenItemsNoCap:
 
     def test_list_open_items_rejects_unknown_kind(self, closer_module):
         shared = self._shared(closer_module)
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="kind must be 'pr' or 'issue', got 'both"):
             shared.list_open_items("both", repo="o/r", fields="number")
 
     def test_fetch_open_prs_delegates_with_no_cap(self, closer_module, monkeypatch):

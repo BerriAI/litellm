@@ -2,14 +2,9 @@
 Tests for Writer Palmyra X5 and X4 models on Bedrock Converse.
 """
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 
 from litellm.llms.bedrock.common_utils import BedrockModelInfo

@@ -1,11 +1,9 @@
 import os
-import sys
 import unittest.mock as mock
 
 import pytest
 from httpx import Response
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import (
@@ -98,22 +96,18 @@ async def test_send_email_success(mock_env_vars, mock_async_client):
 
 
 @pytest.mark.asyncio
-async def test_send_email_missing_api_key():
-    original_key = os.environ.pop("SENDGRID_API_KEY", None)
+async def test_send_email_missing_api_key(monkeypatch):
+    monkeypatch.delenv("SENDGRID_API_KEY", raising=False)
 
-    try:
-        logger = SendGridEmailLogger()
+    logger = SendGridEmailLogger()
 
-        with pytest.raises(ValueError):
-            await logger.send_email(
-                from_email="test@example.com",
-                to_email=["recipient@example.com"],
-                subject="Test Subject",
-                html_body="<p>Test email body</p>",
-            )
-    finally:
-        if original_key is not None:
-            os.environ["SENDGRID_API_KEY"] = original_key
+    with pytest.raises(ValueError, match='SENDGRID_API_KEY is not set'):
+        await logger.send_email(
+            from_email="test@example.com",
+            to_email=["recipient@example.com"],
+            subject="Test Subject",
+            html_body="<p>Test email body</p>",
+        )
 
 
 @pytest.mark.asyncio

@@ -3,15 +3,11 @@
 
 import asyncio
 import os
-import sys
 import time
 import traceback
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
@@ -1197,22 +1193,19 @@ async def test_using_default_fallback(sync_mode):
             },
         ],
     )
-    try:
+    async def call_router():
         if sync_mode:
-            response = router.completion(
+            return router.completion(
                 model="openai/foo",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
             )
-        else:
-            response = await router.acompletion(
-                model="openai/foo",
-                messages=[{"role": "user", "content": "Hey, how's it going?"}],
-            )
-        print("got response=", response)
-        pytest.fail(f"Expected call to fail we passed model=openai/foo")
-    except Exception as e:
-        print("got exception = ", e)
-        assert "BadRequestError" in str(e)
+        return await router.acompletion(
+            model="openai/foo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+
+    with pytest.raises(Exception, match="BadRequestError"):
+        await call_router()
 
 
 @pytest.mark.parametrize("sync_mode", [False])
@@ -1330,6 +1323,8 @@ def test_router_fallbacks_with_custom_model_costs():
     Goal: make sure custom model doesn't override default model costs.
     """
 
+    default_model_info = litellm.get_model_info(model="claude-sonnet-4-5-20250929")
+
     model_list = [
         {
             "model_name": "claude-sonnet-4-5-20250929",
@@ -1383,8 +1378,8 @@ def test_router_fallbacks_with_custom_model_costs():
 
     print(f"key: {model_info['key']}")
 
-    assert model_info["input_cost_per_token"] == 30
-    assert model_info["output_cost_per_token"] == 60
+    assert model_info["input_cost_per_token"] == default_model_info["input_cost_per_token"]
+    assert model_info["output_cost_per_token"] == default_model_info["output_cost_per_token"]
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -1414,7 +1409,7 @@ async def test_router_fallbacks_default_and_model_specific_fallbacks(sync_mode):
         default_fallbacks=["bad-model"],
     )
 
-    with pytest.raises(Exception) as exc_info:
+    async def _call_bad_model():
         if sync_mode:
             resp = router.completion(
                 model="bad-model",
@@ -1427,6 +1422,9 @@ async def test_router_fallbacks_default_and_model_specific_fallbacks(sync_mode):
                 model="bad-model",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
             )
+
+    with pytest.raises(Exception, match='litellm\\.AuthenticationError: AuthenticationError') as exc_info:
+        await _call_bad_model()
     assert isinstance(
         exc_info.value, litellm.AuthenticationError
     ), f"Expected AuthenticationError, but got {type(exc_info.value).__name__}"

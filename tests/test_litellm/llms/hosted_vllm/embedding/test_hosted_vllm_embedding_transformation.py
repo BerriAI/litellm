@@ -6,15 +6,10 @@ especially ensuring that encoding_format is not included when not provided.
 """
 
 import json
-import os
-import sys
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.hosted_vllm.embedding.transformation import (
@@ -288,6 +283,49 @@ class TestHostedVLLMEmbeddingTransformation:
             ), "encoding_format should not be in request when not provided"
             assert sent_data["model"] == "BAAI/bge-small-en-v1.5"
             assert sent_data["input"] == ["Hello world"]
+
+    @pytest.mark.parametrize(
+        "provider_params",
+        [
+            {"extra_body": {"truncate": "END", "input_type": "query"}},
+            {"truncate": "END", "input_type": "query"},
+        ],
+    )
+    def test_provider_params_are_sent_at_the_top_level_of_the_request(self, provider_params: dict[str, object]) -> None:
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        client = HTTPHandler()
+
+        with patch.object(HTTPHandler, "post") as mock_post:
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.headers = {"content-type": "application/json"}
+            mock_response.json.return_value = {
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "model": "nvidia/nv-embedqa-e5-v5",
+                "usage": {"prompt_tokens": 2, "total_tokens": 2},
+            }
+            mock_response.text = json.dumps(mock_response.json.return_value)
+            mock_post.return_value = mock_response
+
+            litellm.embedding(
+                model="hosted_vllm/nvidia/nv-embedqa-e5-v5",
+                input=["Hello world"],
+                api_base="https://integrate.api.nvidia.com/v1",
+                api_key="fake-key",
+                client=client,
+                caching=False,
+                **provider_params,
+            )
+
+            sent_data = json.loads(mock_post.call_args.kwargs["data"])
+
+        assert sent_data["truncate"] == "END"
+        assert sent_data["input_type"] == "query"
+        assert "extra_body" not in sent_data
+        assert sent_data["model"] == "nvidia/nv-embedqa-e5-v5"
+        assert sent_data["input"] == ["Hello world"]
 
 
 if __name__ == "__main__":

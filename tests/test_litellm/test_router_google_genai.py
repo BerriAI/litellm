@@ -3,15 +3,10 @@
 Test to verify the new Google GenAI router methods
 """
 import asyncio
-import os
-import sys
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.types.utils import ModelResponse

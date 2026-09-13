@@ -244,7 +244,7 @@ class TestGeminiImageEditTransformation:
     def test_transform_image_edit_request_without_image_raises(self) -> None:
         optional_params = {}
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='Gemini image edit requires at least one image\\.'):
             self.config.transform_image_edit_request(
                 model=self.model,
                 prompt=self.prompt,

@@ -12,13 +12,10 @@ wasting ~100-500ms per request. With reuse, connections are pooled and
 subsequent requests are 40-60% faster.
 """
 
-import os
-import sys
 import inspect
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 

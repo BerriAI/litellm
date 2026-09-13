@@ -25,6 +25,8 @@ export interface RequestOptions {
   query?: QueryParams;
   headers?: Record<string, string>;
   signal?: AbortSignal;
+  /** Send browser cookies with the request; needed for cookie-authenticated proxy routes. */
+  credentials?: RequestCredentials;
 }
 
 export class ApiError extends Error {
@@ -44,13 +46,16 @@ export class ApiError extends Error {
  * Lives here because error parsing is the client's job; networking.tsx re-exports
  * it so existing `@/components/networking` import paths keep working.
  */
+const deriveDetailMessage = (detail: any): string | undefined => {
+  if (Array.isArray(detail)) return detail.map((d: any) => d?.msg || JSON.stringify(d)).join("; ");
+  if (typeof detail === "string") return detail;
+  if (typeof detail?.error === "string") return detail.error;
+  if (detail && typeof detail === "object") return detail.error?.message || detail.message;
+  return undefined;
+};
+
 export const deriveErrorMessage = (errorData: any): string => {
-  const detail = errorData?.detail;
-  const detailStr = Array.isArray(detail)
-    ? detail.map((d: any) => d?.msg || JSON.stringify(d)).join("; ")
-    : typeof detail === "string"
-      ? detail
-      : undefined;
+  const detailStr = deriveDetailMessage(errorData?.detail);
   return (
     (errorData?.error &&
       (errorData.error.message || (typeof errorData.error === "string" ? errorData.error : undefined))) ||
@@ -58,6 +63,38 @@ export const deriveErrorMessage = (errorData: any): string => {
     detailStr ||
     JSON.stringify(errorData)
   );
+};
+
+/**
+ * The proxy serializes HTTPException details as the string form of a Python dict,
+ * so a rejection reaches the UI as "{'error': 'actual message'}" (or that string
+ * nested inside the JSON error envelope). Unwraps to the actual message; returns
+ * the input unchanged when it does not match a known wrapper shape.
+ */
+export const unwrapProxyErrorMessage = (raw: string): string => {
+  const trimmed = raw.trim();
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object") {
+      const derived = deriveErrorMessage(parsed);
+      if (typeof derived === "string" && derived !== trimmed) {
+        return unwrapProxyErrorMessage(derived);
+      }
+    }
+  } catch {
+    const pythonDictMatch = trimmed.match(/^\{'error':\s*(['"])([\s\S]*)\1\}$/);
+    if (pythonDictMatch) {
+      return pythonDictMatch[2];
+    }
+  }
+  return raw;
+};
+
+export const extractProxyErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) {
+    return unwrapProxyErrorMessage(error.message);
+  }
+  return unwrapProxyErrorMessage(String(error));
 };
 
 export interface ApiClientConfig {
@@ -101,7 +138,7 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
   const doFetch: typeof fetch = (input, init) => (fetchImpl ?? fetch)(input, init);
 
   async function request<T = any>(method: HttpMethod, path: string, options: RequestOptions = {}): Promise<T> {
-    const { accessToken, body, rawBody, query, headers: extraHeaders, signal } = options;
+    const { accessToken, body, rawBody, query, headers: extraHeaders, signal, credentials } = options;
 
     const url = appendQuery(`${getBaseUrl()}${path}`, query);
 
@@ -117,7 +154,7 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
       Object.assign(headers, extraHeaders);
     }
 
-    const init: RequestInit = { method, headers, signal };
+    const init: RequestInit = { method, headers, signal, credentials };
     if (rawBody !== undefined) {
       init.body = rawBody;
     } else if (body !== undefined) {

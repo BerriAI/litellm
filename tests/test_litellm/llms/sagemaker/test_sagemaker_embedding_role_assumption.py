@@ -7,12 +7,9 @@ matching the behavior of the completion handler.
 """
 
 import json
-import os
-import sys
 from datetime import timezone
 from unittest.mock import MagicMock, call, patch
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from botocore.credentials import Credentials
 

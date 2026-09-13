@@ -225,3 +225,71 @@ def test_compute_overall_action_all_passed():
 
 def test_compute_overall_action_empty():
     assert _compute_overall_action([]) == "passed"
+
+
+class TestEnrichPolicyTemplateStreamKeepalive:
+    async def _collect_endpoint_body(self, monkeypatch, interval, delay=0.3) -> tuple[list[bytes], dict]:
+        import asyncio
+        from unittest.mock import MagicMock
+
+        import litellm
+        import litellm.proxy.management_endpoints.policy_endpoints.endpoints as policy_endpoints
+        import litellm.proxy.proxy_server as proxy_server
+        from fastapi.responses import StreamingResponse
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.management_endpoints.policy_endpoints.endpoints import (
+            EnrichTemplateRequest,
+            enrich_policy_template_stream,
+        )
+
+        monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", interval)
+
+        async def _name_chunks():
+            await asyncio.sleep(delay)
+            chunk = MagicMock()
+            chunk.choices = [MagicMock()]
+            chunk.choices[0].delta.content = "Rival Air\n"
+            yield chunk
+
+        class SlowRouter:
+            async def acompletion(self, **kwargs):
+                return _name_chunks()
+
+        async def _no_variations(competitors, model):
+            return {}
+
+        monkeypatch.setattr(proxy_server, "llm_router", SlowRouter())
+        monkeypatch.setattr(policy_endpoints, "_generate_competitor_variations", _no_variations)
+
+        response = await enrich_policy_template_stream(
+            data=EnrichTemplateRequest(
+                template_id="competitor-mention-detection",
+                parameters={"brand_name": "Acme"},
+                model="gpt-5.4-mini",
+            ),
+            request=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+        assert isinstance(response, StreamingResponse)
+        chunks = [chunk if isinstance(chunk, bytes) else chunk.encode() async for chunk in response.body_iterator]
+        return chunks, dict(response.headers)
+
+    @pytest.mark.asyncio
+    async def test_endpoint_pings_while_competitor_discovery_is_still_running(self, monkeypatch):
+        chunks, headers = await self._collect_endpoint_body(monkeypatch, interval=0.05)
+
+        assert headers["content-type"].startswith("text/event-stream")
+        assert headers["cache-control"] == "no-cache"
+        assert headers["x-accel-buffering"] == "no"
+        assert chunks[0] == b": ping\n\n"
+        assert chunks.count(b": ping\n\n") >= 3
+        assert b'data: {"type": "competitor", "name": "Rival Air"}\n\n' in chunks
+        assert chunks[-1].startswith(b'data: {"type": "done"')
+
+    @pytest.mark.asyncio
+    async def test_endpoint_stream_is_untouched_while_keepalives_are_unconfigured(self, monkeypatch):
+        chunks, _ = await self._collect_endpoint_body(monkeypatch, interval=None, delay=0.15)
+
+        assert b": ping\n\n" not in chunks
+        assert chunks[0] == b'data: {"type": "competitor", "name": "Rival Air"}\n\n'
+        assert chunks[-1].startswith(b'data: {"type": "done"')

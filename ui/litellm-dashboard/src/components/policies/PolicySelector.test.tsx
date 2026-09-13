@@ -7,6 +7,11 @@ import { Policy } from "./types";
 
 vi.mock("../networking");
 
+const can = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
+  default: (...args: unknown[]) => can(...args),
+}));
+
 const makePolicy = (overrides: Partial<Policy>): Policy => ({
   policy_id: "uuid-1",
   policy_name: "test-policy",
@@ -76,6 +81,7 @@ describe("PolicySelector", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    can.mockReturnValue(true);
   });
 
   it("should render", () => {
@@ -113,5 +119,19 @@ describe("PolicySelector", () => {
   it("should not fetch policies when accessToken is empty", () => {
     renderWithProviders(<PolicySelector accessToken="" onChange={mockOnChange} />);
     expect(networking.getPoliciesList).not.toHaveBeenCalled();
+  });
+
+  it("should render nothing and skip the admin-only fetch without the viewPolicies capability", async () => {
+    can.mockReturnValue(false);
+    vi.mocked(networking.getPoliciesList).mockResolvedValue({ policies: [] });
+
+    const { container } = renderWithProviders(<PolicySelector accessToken="tok" onChange={mockOnChange} />);
+
+    await waitFor(() => {
+      expect(can).toHaveBeenCalledWith("viewPolicies");
+    });
+    expect(networking.getPoliciesList).not.toHaveBeenCalled();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(container).toBeEmptyDOMElement();
   });
 });

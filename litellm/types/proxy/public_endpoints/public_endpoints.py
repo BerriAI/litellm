@@ -1,57 +1,60 @@
-from typing import Dict, List, Literal, Optional, Union, Any
+from collections.abc import Mapping, Sequence
+from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class PublicModelHubInfo(BaseModel):
     docs_title: str
-    custom_docs_description: Optional[str]
+    custom_docs_description: str | None
     litellm_version: str
     # Supports both old format (Dict[str, str]) and new format (Dict[str, Dict[str, Any]])
     # New format: { "displayName": { "url": "...", "index": 0 } }
     # Old format: { "displayName": "url" } (for backward compatibility)
-    useful_links: Optional[Dict[str, Union[str, Dict[str, Any]]]]
+    useful_links: dict[str, str | dict[str, Any]] | None
 
 
 class ProviderCredentialField(BaseModel):
     key: str
     label: str
-    placeholder: Optional[str] = None
-    tooltip: Optional[str] = None
+    placeholder: str | None = None
+    tooltip: str | None = None
     required: bool = False
     field_type: Literal["text", "password", "select", "upload", "textarea"] = "text"
-    options: Optional[List[str]] = None
-    default_value: Optional[str] = None
+    options: list[str] | None = None
+    default_value: str | None = None
 
 
 class ProviderCreateInfo(BaseModel):
     provider: str
     provider_display_name: str
     litellm_provider: str
-    credential_fields: List[ProviderCredentialField]
-    default_model_placeholder: Optional[str] = None
+    credential_fields: list[ProviderCredentialField]
+    default_model_placeholder: str | None = None
 
 
 class AgentCredentialField(BaseModel):
     key: str
     label: str
-    placeholder: Optional[str] = None
-    tooltip: Optional[str] = None
+    placeholder: str | None = None
+    tooltip: str | None = None
     required: bool = False
     field_type: Literal["text", "password", "select", "upload", "textarea"] = "text"
-    options: Optional[List[str]] = None
-    default_value: Optional[str] = None
-    include_in_litellm_params: Optional[bool] = None
+    options: list[str] | None = None
+    default_value: str | None = None
+    include_in_litellm_params: bool | None = None
+    validation_pattern: str | None = None
+    validation_message: str | None = None
 
 
 class AgentCreateInfo(BaseModel):
     agent_type: str
     agent_type_display_name: str
-    description: Optional[str] = None
-    logo_url: Optional[str] = None
-    credential_fields: List[AgentCredentialField]
-    litellm_params_template: Optional[Dict[str, str]] = None
-    model_template: Optional[str] = None
+    description: str | None = None
+    logo_url: str | None = None
+    credential_fields: list[AgentCredentialField]
+    litellm_params_template: dict[str, str] | None = None
+    model_template: str | None = None
 
 
 class EndpointProvider(BaseModel):
@@ -63,8 +66,58 @@ class SupportedEndpoint(BaseModel):
     key: str
     label: str
     endpoint: str
-    providers: List[EndpointProvider]
+    providers: list[EndpointProvider]
 
 
 class SupportedEndpointsResponse(BaseModel):
-    endpoints: List[SupportedEndpoint]
+    endpoints: list[SupportedEndpoint]
+
+
+class AutoRouterPresetTiers(BaseModel):
+    """Exactly the four built-in tiers the dashboard's preset prefill can apply.
+
+    extra="forbid" on purpose: a tier name this dashboard cannot apply would grey out or crash the
+    picker, so such a catalog is rejected wholesale and the bundled one serves instead.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    SIMPLE: Sequence[str]
+    MEDIUM: Sequence[str]
+    COMPLEX: Sequence[str]
+    REASONING: Sequence[str]
+
+
+class AutoRouterPresetConfig(BaseModel):
+    """The complexity_router_config a preset prefills.
+
+    Only tiers is validated, because every dashboard consumer dereferences it; everything else
+    passes through verbatim with unknown fields kept (extra="allow"), so a catalog published after
+    this proxy shipped still serves its new fields intact.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    tiers: AutoRouterPresetTiers
+
+
+class AutoRouterPresetRecord(BaseModel):
+    """One auto-router preset as served to the dashboard's template picker."""
+
+    model_config = ConfigDict(extra="allow")
+
+    label: str
+    description: str
+    complexity_router_config: AutoRouterPresetConfig
+
+
+class ComplexityScorerDefaults(BaseModel):
+    """The complexity router's shipped heuristic scorer defaults.
+
+    The dashboard prefills its Advanced scoring controls from these rather than keeping its own copy, so
+    a recalibration of the defaults cannot leave the form reporting numbers the router no longer uses.
+    """
+
+    tier_boundaries: Mapping[str, float]
+    token_thresholds: Mapping[str, int]
+    dimension_weights: Mapping[str, float]

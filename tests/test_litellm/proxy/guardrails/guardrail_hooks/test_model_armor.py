@@ -1,21 +1,26 @@
 import asyncio
+import base64
 import io
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
+import httpx
 from fastapi import HTTPException
 
 import litellm
 import litellm.types.utils
+from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
+from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
+from litellm.proxy.guardrails.anthropic_sse import anthropic_sse_error_frames
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.model_armor import ModelArmorGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.model_armor.model_armor import (
+    ModelArmorAPIError,
+)
 from litellm.types.guardrails import GuardrailEventHooks
 
 
@@ -401,8 +406,9 @@ async def test_model_armor_api_error_handling():
             "metadata": {"guardrails": ["model-armor-test"]},
         }
 
-        # Should raise HTTPException for API error
-        with pytest.raises(HTTPException) as exc_info:
+        # An API failure propagates as ModelArmorAPIError, not a content-block
+        # HTTPException, so guardrail trace status stays guardrail_failed_to_respond
+        with pytest.raises(ModelArmorAPIError) as exc_info:
             await guardrail.async_pre_call_hook(
                 user_api_key_dict=mock_user_api_key_dict,
                 cache=mock_cache,
@@ -410,9 +416,8 @@ async def test_model_armor_api_error_handling():
                 call_type="completion",
             )
 
-        assert exc_info.value.status_code == 400
-        assert "Model Armor API error" in str(exc_info.value.detail)
-        assert "upstream 500" in str(exc_info.value.detail)
+        assert exc_info.value.detail == "Model Armor API error (upstream 500)"
+        assert "Internal Server Error" not in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
@@ -620,7 +625,7 @@ async def test_model_armor_streaming_block_yields_sse_error():
 
 
 @pytest.mark.asyncio
-async def test_model_armor_api_failure_returns_400():
+async def test_model_armor_api_failure_raises_sanitized_error():
     """Test that Model Armor API failures raise HTTP 400, not the upstream status code."""
     guardrail = ModelArmorGuardrail(
         template_id="test-template",
@@ -641,15 +646,544 @@ async def test_model_armor_api_failure_returns_400():
     with patch.object(
         guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
     ):
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ModelArmorAPIError) as exc_info:
             await guardrail.make_model_armor_request(
                 content="test content",
                 source="user_prompt",
             )
 
-        # Should be 400, NOT the upstream 500
-        assert exc_info.value.status_code == 400
-        assert "upstream 500" in str(exc_info.value.detail)
+        assert exc_info.value.detail == "Model Armor API error (upstream 500)"
+        assert "Internal Server Error" not in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sanitize", [True, False])
+async def test_model_armor_error_output_sanitization(sanitize: bool):
+    marker = "SYNTHETIC_MODEL_ARMOR_MARKER"
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        guardrail_name="model-armor-test",
+        sanitize_error_detail=sanitize,
+    )
+    guardrail._ensure_access_token_async = AsyncMock(
+        return_value=("test-token", "test-project")
+    )
+
+    error_response = AsyncMock(status_code=500, text=marker)
+    with patch.object(
+        guardrail.async_handler, "post", AsyncMock(return_value=error_response)
+    ), patch.object(verbose_proxy_logger, "debug") as debug_log, patch.object(
+        verbose_proxy_logger, "error"
+    ) as error_log, pytest.raises(ModelArmorAPIError) as exc_info:
+        await guardrail.make_model_armor_request(content=marker)
+
+    direct_log = f"{debug_log.call_args_list} {error_log.call_args_list}"
+    if sanitize:
+        assert marker not in str(exc_info.value.detail)
+        assert marker not in direct_log
+    else:
+        assert marker in str(exc_info.value.detail)
+        assert marker in direct_log
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_on_error", [True, False])
+async def test_model_armor_api_error_honors_fail_open(fail_on_error: bool):
+    """An upstream API failure (raised by the real handler as MaskedHTTPStatusError)
+    must block with a sanitized 400 when fail_on_error is true and let the request
+    proceed when the operator configured fail-open."""
+    marker = "SYNTHETIC_FAIL_OPEN_MARKER"
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        guardrail_name="model-armor-test",
+        fail_on_error=fail_on_error,
+    )
+    guardrail._ensure_access_token_async = AsyncMock(
+        return_value=("test-token", "test-project")
+    )
+    guardrail.should_run_guardrail = Mock(return_value=True)
+
+    request = httpx.Request("POST", "https://modelarmor.example.test/v1")
+    upstream = httpx.Response(503, content=marker.encode(), request=request)
+    original = httpx.HTTPStatusError("Service Unavailable", request=request, response=upstream)
+    masked = MaskedHTTPStatusError(original, message=marker, text=marker)
+
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "synthetic input"}],
+        "metadata": {},
+    }
+
+    with patch.object(guardrail.async_handler, "post", AsyncMock(side_effect=masked)):
+        if fail_on_error:
+            with pytest.raises(ModelArmorAPIError) as exc_info:
+                await guardrail.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(),
+                    cache=MagicMock(spec=DualCache),
+                    data=request_data,
+                    call_type="completion",
+                )
+            assert exc_info.value.detail == "Model Armor API error (upstream 503)"
+            assert marker not in str(exc_info.value.detail)
+        else:
+            result = await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=MagicMock(spec=DualCache),
+                data=request_data,
+                call_type="completion",
+            )
+            assert result is request_data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_on_error", [True, False])
+async def test_model_armor_api_error_fail_open_moderation_and_post_call(fail_on_error: bool):
+    """The during-call and post-call hooks route API failures through fail_on_error
+    exactly like pre-call: sanitized 400 when failing closed, pass-through when open."""
+    api_error = ModelArmorAPIError("Model Armor API error (upstream 503)")
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        guardrail_name="model-armor-test",
+        fail_on_error=fail_on_error,
+    )
+    guardrail.make_model_armor_request = AsyncMock(side_effect=api_error)
+    guardrail.should_run_guardrail = Mock(return_value=True)
+
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "synthetic input"}],
+        "metadata": {},
+    }
+    mock_llm_response = litellm.ModelResponse()
+    mock_llm_response.choices = [
+        litellm.Choices(message=litellm.Message(content="model output"))
+    ]
+
+    if fail_on_error:
+        with pytest.raises(ModelArmorAPIError) as mod_exc:
+            await guardrail.async_moderation_hook(
+                data=dict(request_data),
+                user_api_key_dict=UserAPIKeyAuth(),
+                call_type="completion",
+            )
+        assert mod_exc.value.detail == "Model Armor API error (upstream 503)"
+
+        with pytest.raises(ModelArmorAPIError) as post_exc:
+            await guardrail.async_post_call_success_hook(
+                data=dict(request_data),
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=mock_llm_response,
+            )
+        assert post_exc.value.detail == "Model Armor API error (upstream 503)"
+    else:
+        moderated = await guardrail.async_moderation_hook(
+            data=dict(request_data),
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type="completion",
+        )
+        assert moderated is not None
+
+        result = await guardrail.async_post_call_success_hook(
+            data=dict(request_data),
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=mock_llm_response,
+        )
+        assert result is mock_llm_response
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_on_error", [True, False])
+async def test_model_armor_api_error_fail_open_streaming(fail_on_error: bool):
+    """A streaming-path API failure yields a sanitized SSE error frame when failing
+    closed and passes the original chunks through when the operator opted into fail-open."""
+    api_error = ModelArmorAPIError("Model Armor API error (upstream 503)")
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        guardrail_name="model-armor-test",
+        fail_on_error=fail_on_error,
+    )
+    guardrail.make_model_armor_request = AsyncMock(side_effect=api_error)
+    guardrail.should_run_guardrail = Mock(return_value=True)
+
+    async def mock_stream():
+        yield litellm.ModelResponseStream(
+            choices=[
+                litellm.types.utils.StreamingChoices(
+                    delta=litellm.types.utils.Delta(content="streamed output")
+                )
+            ]
+        )
+
+    chunks = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(),
+        response=mock_stream(),
+        request_data={
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "synthetic input"}],
+            "metadata": {},
+        },
+    ):
+        chunks.append(chunk)
+
+    if fail_on_error:
+        assert len(chunks) == 1
+        assert isinstance(chunks[0], str)
+        assert "Model Armor API error (upstream 503)" in chunks[0]
+        assert '"code": "500"' in chunks[0]
+    else:
+        assert len(chunks) == 1
+        assert isinstance(chunks[0], litellm.ModelResponseStream)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_on_error", [True, False])
+async def test_model_armor_api_error_fail_open_file_scan(fail_on_error: bool):
+    """A file-scan API failure blocks with the sanitized detail when failing closed
+    and skips the attachment when the operator opted into fail-open."""
+    api_error = ModelArmorAPIError("Model Armor API error (upstream 503)")
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        guardrail_name="model-armor-test",
+        fail_on_error=fail_on_error,
+    )
+    guardrail.make_model_armor_request = AsyncMock(side_effect=api_error)
+
+    pdf_b64 = base64.b64encode(b"%PDF-1.4 synthetic").decode()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "file_data": f"data:application/pdf;base64,{pdf_b64}",
+                        "filename": "synthetic.pdf",
+                        "format": "application/pdf",
+                    },
+                }
+            ],
+        }
+    ]
+    data = {"metadata": {}}
+
+    if fail_on_error:
+        with pytest.raises(ModelArmorAPIError) as exc_info:
+            await guardrail._scan_request_files(messages=messages, data=data)
+        assert exc_info.value.detail == "Model Armor API error (upstream 503)"
+    else:
+        assert await guardrail._scan_request_files(messages=messages, data=data) is None
+
+
+def test_model_armor_hot_reload_null_stays_sanitized():
+    """update_in_memory_litellm_params assigns raw fields; an explicit null in a
+    hot-reloaded config must not disable sanitization."""
+    from litellm.types.guardrails import LitellmParams
+
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        guardrail_name="model-armor-test",
+    )
+    guardrail.update_in_memory_litellm_params(
+        LitellmParams(guardrail="model_armor", mode="pre_call", sanitize_error_detail=None)
+    )
+    assert guardrail.sanitize_error_detail is True
+
+    guardrail.update_in_memory_litellm_params(
+        LitellmParams(guardrail="model_armor", mode="pre_call", sanitize_error_detail=False)
+    )
+    assert guardrail.sanitize_error_detail is False
+
+
+def test_model_armor_redactor_depth_cap_fails_closed():
+    """Past the recursion cap the redactor must return the redaction sentinel,
+    never raw content, and must not raise RecursionError."""
+    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+    from litellm.proxy.guardrails.guardrail_hooks.model_armor.model_armor import (
+        _redact_scanned_content,
+    )
+
+    marker = "SYNTHETIC_DEEP_MARKER"
+    payload: dict = {"safe_key": marker, "items": [{"safe_key": marker}]}
+    for _ in range(DEFAULT_MAX_RECURSE_DEPTH + 5):
+        payload = {"nested": payload}
+
+    redacted = _redact_scanned_content(payload)
+    assert marker not in str(redacted)
+
+    shallow = _redact_scanned_content({"filterResults": [{"text": marker, "matchState": "MATCH_FOUND"}]})
+    assert shallow == {"filterResults": [{"text": "[REDACTED]", "matchState": "MATCH_FOUND"}]}
+
+    uri_payload = _redact_scanned_content(
+        {
+            "maliciousUriFilterResult": {
+                "matchState": "MATCH_FOUND",
+                "maliciousUriMatchedItems": [{"uri": f"https://evil.example/{marker}"}],
+            }
+        }
+    )
+    assert uri_payload == {
+        "maliciousUriFilterResult": {
+            "matchState": "MATCH_FOUND",
+            "maliciousUriMatchedItems": "[REDACTED]",
+        }
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sanitize", [True, False])
+async def test_model_armor_handler_raised_http_error_sanitized(sanitize: bool):
+    """The real AsyncHTTPHandler raises on non-2xx via raise_for_status, so a non-200
+    never returns a response object. The raised MaskedHTTPStatusError carries the raw
+    upstream body in its message; the guardrail must convert it to a sanitized
+    HTTPException instead of letting it bubble raw to callers and logs."""
+    marker = "SYNTHETIC_MODEL_ARMOR_MARKER"
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        guardrail_name="model-armor-test",
+        sanitize_error_detail=sanitize,
+    )
+    guardrail._ensure_access_token_async = AsyncMock(
+        return_value=("test-token", "test-project")
+    )
+
+    request = httpx.Request("POST", "https://modelarmor.example.test/v1")
+    upstream = httpx.Response(403, content=marker.encode(), request=request)
+    original = httpx.HTTPStatusError("Forbidden", request=request, response=upstream)
+    masked = MaskedHTTPStatusError(original, message=marker, text=marker)
+
+    with patch.object(
+        guardrail.async_handler, "post", AsyncMock(side_effect=masked)
+    ), patch.object(verbose_proxy_logger, "debug") as debug_log, patch.object(
+        verbose_proxy_logger, "error"
+    ) as error_log, pytest.raises(ModelArmorAPIError) as exc_info:
+        await guardrail.make_model_armor_request(content=marker)
+
+    direct_log = f"{debug_log.call_args_list} {error_log.call_args_list}"
+    assert "403" in str(exc_info.value.detail)
+    if sanitize:
+        assert marker not in str(exc_info.value.detail)
+        assert marker not in direct_log
+    else:
+        assert marker in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sanitize", [True, False])
+async def test_model_armor_post_call_logging_redacts_scanned_content(sanitize: bool):
+    marker = "SYNTHETIC_POST_CALL_MARKER"
+    armor_response = {
+        "sanitizationResult": {
+            "filterMatchState": "NO_MATCH_FOUND",
+            "filterResults": {
+                "sdp": {
+                    "sdpFilterResult": {
+                        "deidentifyResult": {
+                            "matchState": "MATCH_FOUND",
+                            "data": {"text": marker},
+                        }
+                    }
+                }
+            },
+        }
+    }
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        guardrail_name="model-armor-test",
+        mask_response_content=True,
+        sanitize_error_detail=sanitize,
+    )
+    guardrail.make_model_armor_request = AsyncMock(return_value=armor_response)
+    guardrail.should_run_guardrail = Mock(return_value=True)
+
+    mock_llm_response = litellm.ModelResponse()
+    mock_llm_response.choices = [
+        litellm.Choices(message=litellm.Message(content="model output"))
+    ]
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "synthetic input"}],
+        "metadata": {},
+        "litellm_logging_obj": MagicMock(),
+    }
+
+    with patch(
+        "litellm.proxy.common_utils.callback_utils.add_guardrail_response_to_standard_logging_object"
+    ) as add_logging:
+        await guardrail.async_post_call_success_hook(
+            data=request_data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=mock_llm_response,
+        )
+
+    logged = add_logging.call_args.kwargs["guardrail_response"]
+    assert logged["guardrail_status"] == "success"
+    logged_armor_response = logged["guardrail_response"]["model_armor_response"]
+    if sanitize:
+        assert marker not in str(logged_armor_response)
+        assert (
+            logged_armor_response["sanitizationResult"]["filterResults"]["sdp"][
+                "sdpFilterResult"
+            ]["deidentifyResult"]["matchState"]
+            == "MATCH_FOUND"
+        )
+    else:
+        assert logged_armor_response == armor_response
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sanitize", [True, False])
+async def test_model_armor_streaming_logging_redacts_scanned_content(sanitize: bool):
+    marker = "SYNTHETIC_STREAMING_MARKER"
+    armor_response = {
+        "sanitizationResult": {
+            "filterMatchState": "NO_MATCH_FOUND",
+            "sanitizedText": marker,
+        }
+    }
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        guardrail_name="model-armor-test",
+        sanitize_error_detail=sanitize,
+    )
+    guardrail.make_model_armor_request = AsyncMock(return_value=armor_response)
+    guardrail.should_run_guardrail = Mock(return_value=True)
+
+    async def mock_stream():
+        yield litellm.ModelResponseStream(
+            choices=[
+                litellm.types.utils.StreamingChoices(
+                    delta=litellm.types.utils.Delta(content="streamed output")
+                )
+            ]
+        )
+
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "synthetic input"}],
+        "metadata": {},
+    }
+
+    async for _ in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(),
+        response=mock_stream(),
+        request_data=request_data,
+    ):
+        pass
+
+    logged_response = request_data["metadata"]["_model_armor_response"]
+    if sanitize:
+        assert logged_response == {
+            "sanitizationResult": {
+                "filterMatchState": "NO_MATCH_FOUND",
+                "sanitizedText": "[REDACTED]",
+            }
+        }
+        assert marker not in str(logged_response)
+    else:
+        assert logged_response == armor_response
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sanitize", [True, False])
+async def test_model_armor_match_found_sanitizes_caller_and_logging(sanitize: bool):
+    marker = "SYNTHETIC_MATCH_FOUND_MARKER"
+    armor_response = {
+        "sanitizationResult": {
+            "filterResults": {
+                "sdp": {
+                    "sdpFilterResult": {
+                        "inspectResult": {
+                            "matchState": "MATCH_FOUND",
+                            "findings": [{"marker": marker}],
+                        }
+                    }
+                }
+            }
+        }
+    }
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        guardrail_name="model-armor-test",
+        event_hook=[GuardrailEventHooks.pre_mcp_call],
+        sanitize_error_detail=sanitize,
+    )
+    guardrail.make_model_armor_request = AsyncMock(return_value=armor_response)
+    guardrail.should_run_guardrail = Mock(return_value=True)
+    request_data = {
+        "messages": [{"role": "user", "content": "synthetic input"}],
+        "metadata": {},
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type=litellm.types.utils.CallTypes.call_mcp_tool.value,
+        )
+
+    detail = exc_info.value.detail
+    logged_response = request_data["metadata"]["_model_armor_response"]
+    if sanitize:
+        assert detail == {"error": "Content blocked by Model Armor"}
+        assert logged_response == {
+            "sanitizationResult": {
+                "filterResults": {
+                    "sdp": {
+                        "sdpFilterResult": {
+                            "inspectResult": {
+                                "matchState": "MATCH_FOUND",
+                                "findings": "[REDACTED]",
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert marker not in str(detail)
+        assert marker not in str(logged_response)
+    else:
+        assert detail["model_armor_response"] == armor_response
+        assert logged_response == armor_response
+        assert marker in str(detail)
+        assert marker in str(logged_response)
+
+
+def test_model_armor_sanitize_error_detail_config_wiring():
+    from litellm.proxy.guardrails.guardrail_hooks.model_armor import (
+        initialize_guardrail,
+    )
+    from litellm.types.guardrails import LitellmParams
+
+    config = {"guardrail_name": "model-armor-test"}
+    params = {
+        "guardrail": "model_armor",
+        "mode": "pre_mcp_call",
+        "template_id": "test-template",
+        "project_id": "test-project",
+    }
+    opted_out = initialize_guardrail(
+        LitellmParams(**params, sanitize_error_detail=False), config
+    )
+    explicit_null = initialize_guardrail(
+        LitellmParams(**params, sanitize_error_detail=None), config
+    )
+    default = initialize_guardrail(LitellmParams(**params), config)
+
+    assert opted_out.sanitize_error_detail is False
+    assert explicit_null.sanitize_error_detail is True
+    assert default.sanitize_error_detail is True
 
 
 def test_model_armor_ui_friendly_name():
@@ -1392,7 +1926,10 @@ async def test_model_armor_guardrail_status_intervened_vs_failed():
             )
 
         info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert info[0]["guardrail_name"] == guardrail.guardrail_name
         assert info[0]["guardrail_status"] == "guardrail_intervened"
+        assert "model_armor_response" not in info[0]["guardrail_response"]
+        assert "sanitizationResult" not in info[0]["guardrail_response"]
 
     # 2: if an API error - guardrail status should be guardrail_failed_to_respond"
     guardrail2 = ModelArmorGuardrail(
@@ -1425,7 +1962,6 @@ async def test_model_armor_guardrail_status_intervened_vs_failed():
 
 def mock_open(read_data=""):
     """Helper to create a mock file object"""
-    import io
     from unittest.mock import MagicMock
 
     file_object = io.StringIO(read_data)
@@ -1795,7 +2331,7 @@ async def test_async_moderation_hook_api_error_fail_on_error_true():
         }
 
         # Should raise the exception since fail_on_error is True
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="API Error") as exc_info:
             await guardrail.async_moderation_hook(
                 data=request_data,
                 user_api_key_dict=mock_user_api_key_dict,
@@ -1835,7 +2371,7 @@ async def test_async_moderation_hook_api_error_fail_on_error_false():
 
         # Even with fail_on_error=False, the decorator may still raise the exception
         # This test verifies that the exception is properly logged and handled
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="API Error") as exc_info:
             await guardrail.async_moderation_hook(
                 data=request_data,
                 user_api_key_dict=mock_user_api_key_dict,
@@ -1843,3 +2379,2553 @@ async def test_async_moderation_hook_api_error_fail_on_error_false():
             )
 
         assert "API Error" in str(exc_info.value)
+
+
+# ===== FILE / DOCUMENT ATTACHMENT SCANNING TESTS (LIT-4084) =====
+
+PDF_BYTES = b"%PDF-1.4\nfake pdf payload with policy-violating content\n%%EOF"
+DOCX_BYTES = b"PK\x03\x04 fake docx zip payload"
+
+
+def _make_guardrail(**overrides):
+    params = dict(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+    )
+    params.update(overrides)
+    guardrail = ModelArmorGuardrail(**params)
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
+    return guardrail
+
+
+def _armor_response(blocked: bool):
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    if blocked:
+        body = {
+            "sanitizationResult": {
+                "filterMatchState": "MATCH_FOUND",
+                "filterResults": {"rai": {"raiFilterResult": {"matchState": "MATCH_FOUND"}}},
+            }
+        }
+    else:
+        body = {"sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND"}}
+    mock_response.json = AsyncMock(return_value=body)
+    return mock_response
+
+
+def _byte_items_sent(mock_post):
+    """Return every byteItem payload (file scans) submitted to Model Armor."""
+    items = []
+    for call in mock_post.call_args_list:
+        body = call.kwargs.get("json", {})
+        byte_item = body.get("userPromptData", {}).get("byteItem")
+        if byte_item is not None:
+            items.append(byte_item)
+    return items
+
+
+def _text_payloads_sent(mock_post):
+    """Return every text payload (text scans) submitted to Model Armor."""
+    texts = []
+    for call in mock_post.call_args_list:
+        body = call.kwargs.get("json", {})
+        user_prompt = body.get("userPromptData", {})
+        if "text" in user_prompt:
+            texts.append(user_prompt["text"])
+    return texts
+
+
+def _file_message(file_data_b64: str, mime: str = "application/pdf", filename: str = "doc.pdf"):
+    return {
+        "role": "user",
+        "content": [
+            {
+                "type": "file",
+                "file": {
+                    "file_data": f"data:{mime};base64,{file_data_b64}",
+                    "filename": filename,
+                },
+            }
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_pre_call_blocks_harmful_pdf_attachment():
+    """Pre-call hook must scan an inline PDF attachment and block on a Model Armor match.
+
+    Regression for LIT-4084: before the fix, a file-only message has no extractable
+    text, so the hook returned early and the document was never sent to Model Armor.
+    """
+    guardrail = _make_guardrail()
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    request_data = {
+        "model": "gpt-4",
+        "messages": [_file_message(pdf_b64)],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=True)),
+    ) as mock_post:
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=MagicMock(spec=DualCache),
+                data=request_data,
+                call_type="completion",
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "Content blocked by Model Armor" in str(exc_info.value.detail)
+
+    byte_items = _byte_items_sent(mock_post)
+    assert len(byte_items) == 1
+    assert byte_items[0]["byteDataType"] == "PDF"
+    assert base64.b64decode(byte_items[0]["byteData"]) == PDF_BYTES
+
+    assert "model-armor-test" in request_data["metadata"]["applied_guardrails"]
+    assert request_data["metadata"]["_model_armor_status"] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_pre_call_allows_safe_pdf_attachment_but_still_scans_it():
+    """A safe PDF attachment passes through, but the bytes are still submitted to Model Armor."""
+    guardrail = _make_guardrail()
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    request_data = {
+        "model": "gpt-4",
+        "messages": [_file_message(pdf_b64)],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        result = await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    assert result == request_data
+    byte_items = _byte_items_sent(mock_post)
+    assert len(byte_items) == 1
+    assert byte_items[0]["byteDataType"] == "PDF"
+    assert base64.b64decode(byte_items[0]["byteData"]) == PDF_BYTES
+
+
+@pytest.mark.asyncio
+async def test_moderation_hook_blocks_harmful_file_attachment():
+    """The during-call moderation hook must scan file attachments the same way."""
+    guardrail = _make_guardrail()
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    request_data = {
+        "model": "gpt-4",
+        "messages": [_file_message(pdf_b64)],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=True)),
+    ) as mock_post:
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_moderation_hook(
+                data=request_data,
+                user_api_key_dict=UserAPIKeyAuth(),
+                call_type="completion",
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "Content blocked by Model Armor" in str(exc_info.value.detail)
+    assert len(_byte_items_sent(mock_post)) == 1
+    assert "model-armor-test" in request_data["metadata"]["applied_guardrails"]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_scans_both_text_and_file():
+    """When a message has both text and a file, both are submitted to Model Armor."""
+    guardrail = _make_guardrail()
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    request_data = {
+        "model": "gpt-4",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize this"},
+                    {
+                        "type": "file",
+                        "file": {"file_data": f"data:application/pdf;base64,{pdf_b64}"},
+                    },
+                ],
+            }
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    assert len(_byte_items_sent(mock_post)) == 1
+    assert "summarize this" in _text_payloads_sent(mock_post)
+
+
+@pytest.mark.asyncio
+async def test_pre_call_scans_anthropic_document_block():
+    """Anthropic-style `type: document` blocks with inline base64 are scanned and typed."""
+    guardrail = _make_guardrail()
+    docx_b64 = base64.b64encode(DOCX_BYTES).decode("utf-8")
+    request_data = {
+        "model": "gpt-4",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            "data": docx_b64,
+                        },
+                    }
+                ],
+            }
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    byte_items = _byte_items_sent(mock_post)
+    assert len(byte_items) == 1
+    assert byte_items[0]["byteDataType"] == "WORD_DOCUMENT"
+    assert base64.b64decode(byte_items[0]["byteData"]) == DOCX_BYTES
+
+
+@pytest.mark.asyncio
+async def test_pre_call_blocks_unresolvable_file_id_reference():
+    """A bare file_id has no inline bytes to scan, so by default the guardrail fails closed."""
+    guardrail = _make_guardrail()
+    request_data = {
+        "model": "gpt-4",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize this"},
+                    {"type": "file", "file": {"file_id": "file-abc123"}},
+                ],
+            }
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=MagicMock(spec=DualCache),
+                data=request_data,
+                call_type="completion",
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "could not scan" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_pre_call_blocks_remote_url_document_reference():
+    """A remote (https) document reference cannot be fetched here, so it fails closed by default."""
+    guardrail = _make_guardrail()
+    request_data = {
+        "model": "gpt-4",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "file",
+                        "file": {"file_data": "https://example.com/secret.pdf", "filename": "secret.pdf"},
+                    }
+                ],
+            }
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=MagicMock(spec=DualCache),
+                data=request_data,
+                call_type="completion",
+            )
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_pre_call_file_id_reference_skipped_when_fail_open():
+    """With fail_on_error=False an unresolvable reference is skipped and the text is still scanned."""
+    guardrail = _make_guardrail(fail_on_error=False)
+    request_data = {
+        "model": "gpt-4",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize this"},
+                    {"type": "file", "file": {"file_id": "file-abc123"}},
+                ],
+            }
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    assert _byte_items_sent(mock_post) == []
+    assert _text_payloads_sent(mock_post) == ["summarize this"]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_file_id_reference_passthrough_when_skip_unscannable_enabled():
+    """skip_unscannable_attachments lets a file_id reference through even with fail_on_error=True."""
+    guardrail = _make_guardrail(skip_unscannable_attachments=True)
+    request_data = {
+        "model": "gpt-4",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize this"},
+                    {"type": "file", "file": {"file_id": "file-abc123"}},
+                ],
+            }
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    assert _byte_items_sent(mock_post) == []
+    assert _text_payloads_sent(mock_post) == ["summarize this"]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_gs_uri_reference_passthrough_when_skip_unscannable_enabled():
+    """A gs:// document reference passes through when skip_unscannable_attachments is enabled."""
+    guardrail = _make_guardrail(skip_unscannable_attachments=True)
+    request_data = {
+        "model": "gpt-4",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "file",
+                        "file": {"file_data": "gs://my-bucket/report.pdf", "filename": "report.pdf"},
+                    }
+                ],
+            }
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    assert _byte_items_sent(mock_post) == []
+
+
+def test_initialize_guardrail_forwards_skip_unscannable_attachments():
+    """skip_unscannable_attachments configured in litellm_params reaches the guardrail instance."""
+    from litellm.proxy.guardrails.guardrail_hooks.model_armor import initialize_guardrail
+    from litellm.types.guardrails import Guardrail, LitellmParams
+
+    litellm_params = LitellmParams(
+        guardrail="model_armor",
+        mode="pre_call",
+        template_id="demo-template",
+        project_id="demo-project",
+        skip_unscannable_attachments=True,
+    )
+    guardrail = initialize_guardrail(
+        litellm_params=litellm_params,
+        guardrail=Guardrail(guardrail_name="model-armor-config-test"),
+    )
+
+    assert guardrail.optional_params.get("skip_unscannable_attachments") is True
+
+
+def test_initialize_guardrail_skip_unscannable_defaults_false():
+    """A config that omits skip_unscannable_attachments keeps the secure default (block)."""
+    from litellm.proxy.guardrails.guardrail_hooks.model_armor import initialize_guardrail
+    from litellm.types.guardrails import Guardrail, LitellmParams
+
+    litellm_params = LitellmParams(
+        guardrail="model_armor",
+        mode="pre_call",
+        template_id="demo-template",
+        project_id="demo-project",
+    )
+    guardrail = initialize_guardrail(
+        litellm_params=litellm_params,
+        guardrail=Guardrail(guardrail_name="model-armor-config-default"),
+    )
+
+    assert guardrail.optional_params.get("skip_unscannable_attachments") is False
+
+
+@pytest.mark.asyncio
+async def test_skip_unscannable_still_fails_closed_on_api_error():
+    """skip_unscannable_attachments only affects references; a real API error still fails closed."""
+    guardrail = _make_guardrail(skip_unscannable_attachments=True, fail_on_error=True)
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    request_data = {
+        "model": "gpt-4",
+        "messages": [_file_message(pdf_b64)],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(side_effect=Exception("model armor upstream 500")),
+    ):
+        with pytest.raises(Exception, match='model armor upstream') as exc_info:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=MagicMock(spec=DualCache),
+                data=request_data,
+                call_type="completion",
+            )
+
+    assert "model armor upstream 500" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_pre_call_scans_every_attachment_without_a_count_cap():
+    """There is no per-request attachment cap: every scannable attachment is submitted to Model Armor."""
+    guardrail = _make_guardrail()
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    block = {
+        "type": "file",
+        "file": {"file_data": f"data:application/pdf;base64,{pdf_b64}"},
+    }
+    count = 25
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": [block] * count}],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    mock_post = AsyncMock(return_value=_armor_response(blocked=False))
+    with patch.object(guardrail.async_handler, "post", mock_post):
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    assert len(_byte_items_sent(mock_post)) == count
+
+
+@pytest.mark.asyncio
+async def test_file_scan_error_isolated_when_fail_open():
+    """A transient error on one attachment does not skip the remaining attachments (fail_on_error=False)."""
+    guardrail = _make_guardrail(fail_on_error=False)
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    block = {
+        "type": "file",
+        "file": {"file_data": f"data:application/pdf;base64,{pdf_b64}"},
+    }
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": [block, block]}],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    # First attachment raises a transient error, second returns a normal response
+    post = AsyncMock(side_effect=[Exception("transient"), _armor_response(blocked=False)])
+    with patch.object(guardrail.async_handler, "post", post):
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    # Both attachments are attempted: the first errors and is isolated, the second still scans
+    assert post.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_pre_call_skips_unsupported_file_type():
+    """An image attachment (no Model Armor byteDataType) is not submitted as a document."""
+    guardrail = _make_guardrail()
+    png_b64 = base64.b64encode(b"\x89PNG fake").decode("utf-8")
+    request_data = {
+        "model": "gpt-4",
+        "messages": [_file_message(png_b64, mime="image/png", filename="x.png")],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_pre_call_blocks_file_over_size_limit():
+    """A recognized document over Model Armor's 4 MB limit cannot be scanned, so it is blocked."""
+    from litellm.proxy.guardrails.guardrail_hooks.model_armor.file_scanning import (
+        MODEL_ARMOR_MAX_FILE_SIZE_BYTES,
+    )
+
+    guardrail = _make_guardrail()
+    oversize_b64 = base64.b64encode(b"x" * (MODEL_ARMOR_MAX_FILE_SIZE_BYTES + 1)).decode("utf-8")
+    request_data = {
+        "model": "gpt-4",
+        "messages": [_file_message(oversize_b64)],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=MagicMock(spec=DualCache),
+                data=request_data,
+                call_type="completion",
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "scan limit" in str(exc_info.value.detail)
+    # The oversized document is never forwarded to the Model Armor API
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_pre_call_oversize_file_skipped_when_fail_open():
+    """With fail_on_error=False the operator opts into fail-open, so an oversized file proceeds."""
+    from litellm.proxy.guardrails.guardrail_hooks.model_armor.file_scanning import (
+        MODEL_ARMOR_MAX_FILE_SIZE_BYTES,
+    )
+
+    guardrail = _make_guardrail(fail_on_error=False)
+    oversize_b64 = base64.b64encode(b"x" * (MODEL_ARMOR_MAX_FILE_SIZE_BYTES + 1)).decode("utf-8")
+    request_data = {
+        "model": "gpt-4",
+        "messages": [_file_message(oversize_b64)],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        result = await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    assert result == request_data
+    mock_post.assert_not_called()
+
+
+def _armor_sdp_deidentify_response():
+    """A response that only trips the SDP deidentify (PII masking) filter."""
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json = AsyncMock(
+        return_value={
+            "sanitizationResult": {
+                "filterMatchState": "MATCH_FOUND",
+                "filterResults": {
+                    "sdp": {
+                        "sdpFilterResult": {
+                            "deidentifyResult": {
+                                "matchState": "MATCH_FOUND",
+                                "data": {"text": "[REDACTED]"},
+                            }
+                        }
+                    }
+                },
+            }
+        }
+    )
+    return mock_response
+
+
+@pytest.mark.asyncio
+async def test_pre_call_blocks_pii_document_even_when_masking_enabled():
+    """A PII document must block, not pass, even when mask_request_content=True.
+
+    Documents have no masking fallback (Model Armor returns findings, not a sanitized
+    file), so a deidentify-only match has to block. Without this the original bytes
+    would reach the provider with PII intact.
+    """
+    guardrail = _make_guardrail(mask_request_content=True)
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    request_data = {
+        "model": "gpt-4",
+        "messages": [_file_message(pdf_b64)],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_sdp_deidentify_response()),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=MagicMock(spec=DualCache),
+                data=request_data,
+                call_type="completion",
+            )
+
+    assert exc_info.value.status_code == 400
+    assert request_data["metadata"]["_model_armor_status"] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_pre_call_scans_raw_base64_file_without_data_uri():
+    """A `type: file` with raw base64 (no data: URI) resolves its MIME from the filename."""
+    guardrail = _make_guardrail()
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    request_data = {
+        "model": "gpt-4",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "file",
+                        "file": {"file_data": pdf_b64, "filename": "report.pdf"},
+                    }
+                ],
+            }
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    byte_items = _byte_items_sent(mock_post)
+    assert len(byte_items) == 1
+    assert byte_items[0]["byteDataType"] == "PDF"
+    assert base64.b64decode(byte_items[0]["byteData"]) == PDF_BYTES
+
+
+@pytest.mark.asyncio
+async def test_first_of_multiple_attachments_blocks():
+    """Scanning stops and blocks at the first flagged attachment."""
+    guardrail = _make_guardrail()
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    file_block = {
+        "type": "file",
+        "file": {"file_data": f"data:application/pdf;base64,{pdf_b64}"},
+    }
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": [file_block, file_block]}],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=True)),
+    ) as mock_post:
+        with pytest.raises(HTTPException):
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=MagicMock(spec=DualCache),
+                data=request_data,
+                call_type="completion",
+            )
+
+    assert mock_post.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_file_scan_fail_on_error_false_proceeds():
+    """When the Model Armor call errors and fail_on_error=False, the request proceeds."""
+    guardrail = _make_guardrail(fail_on_error=False)
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    request_data = {
+        "model": "gpt-4",
+        "messages": [_file_message(pdf_b64)],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(side_effect=Exception("Connection error")),
+    ):
+        result = await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    assert result == request_data
+
+
+SUPPORTED_MIME_TYPE_MATRIX = [
+    ("application/pdf", "PDF"),
+    ("application/msword", "WORD_DOCUMENT"),
+    (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "WORD_DOCUMENT",
+    ),
+    ("application/vnd.ms-excel", "EXCEL_DOCUMENT"),
+    (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "EXCEL_DOCUMENT",
+    ),
+    ("application/vnd.ms-powerpoint", "POWERPOINT_DOCUMENT"),
+    (
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "POWERPOINT_DOCUMENT",
+    ),
+    ("text/csv", "CSV"),
+    ("text/plain", "TXT"),
+]
+
+
+@pytest.mark.parametrize("mime,expected_byte_data_type", SUPPORTED_MIME_TYPE_MATRIX)
+@pytest.mark.asyncio
+async def test_pre_call_submits_correct_byte_data_type_for_every_supported_mime(mime, expected_byte_data_type):
+    """Every supported MIME type maps to the right Model Armor byteDataType and is submitted."""
+    guardrail = _make_guardrail()
+    payload = b"file content for %s" % mime.encode()
+    payload_b64 = base64.b64encode(payload).decode("utf-8")
+    request_data = {
+        "model": "gpt-4",
+        "messages": [_file_message(payload_b64, mime=mime, filename="attachment")],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    byte_items = _byte_items_sent(mock_post)
+    assert len(byte_items) == 1
+    assert byte_items[0]["byteDataType"] == expected_byte_data_type
+    assert base64.b64decode(byte_items[0]["byteData"]) == payload
+
+
+@pytest.mark.asyncio
+async def test_pre_call_resolves_mime_from_filename_when_data_uri_is_generic():
+    """A data URI with a generic MIME still scans when the filename identifies a document.
+
+    Regression for the case where attachments were skipped because only the data URI
+    header MIME was consulted, ignoring file.format and the filename.
+    """
+    guardrail = _make_guardrail()
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    request_data = {
+        "model": "gpt-4",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "file",
+                        "file": {
+                            "file_data": f"data:application/octet-stream;base64,{pdf_b64}",
+                            "filename": "report.pdf",
+                        },
+                    }
+                ],
+            }
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    byte_items = _byte_items_sent(mock_post)
+    assert len(byte_items) == 1
+    assert byte_items[0]["byteDataType"] == "PDF"
+    assert base64.b64decode(byte_items[0]["byteData"]) == PDF_BYTES
+
+
+@pytest.mark.asyncio
+async def test_pre_call_normalizes_mime_with_charset_suffix():
+    """A MIME with a charset parameter (text/plain; charset=utf-8) still maps to TXT."""
+    guardrail = _make_guardrail()
+    payload = b"plain text body"
+    payload_b64 = base64.b64encode(payload).decode("utf-8")
+    request_data = {
+        "model": "gpt-4",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "file",
+                        "file": {
+                            "file_data": f"data:text/plain;charset=utf-8;base64,{payload_b64}",
+                            "filename": "notes.txt",
+                        },
+                    }
+                ],
+            }
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    byte_items = _byte_items_sent(mock_post)
+    assert len(byte_items) == 1
+    assert byte_items[0]["byteDataType"] == "TXT"
+
+
+@pytest.mark.asyncio
+async def test_pre_call_scans_macro_enabled_office_document():
+    """Macro-enabled and template Office MIME types map to their document family, not skipped."""
+    guardrail = _make_guardrail()
+    payload = b"macro enabled word document bytes"
+    payload_b64 = base64.b64encode(payload).decode("utf-8")
+    request_data = {
+        "model": "gpt-4",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "file",
+                        "file": {
+                            "file_data": f"data:application/vnd.ms-word.document.macroEnabled.12;base64,{payload_b64}",
+                            "filename": "report.docm",
+                        },
+                    }
+                ],
+            }
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    byte_items = _byte_items_sent(mock_post)
+    assert len(byte_items) == 1
+    assert byte_items[0]["byteDataType"] == "WORD_DOCUMENT"
+
+
+@pytest.mark.asyncio
+async def test_file_scan_does_not_log_document_bytes():
+    """Debug logging must never emit the scanned document's base64 bytes."""
+    guardrail = _make_guardrail()
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    request_data = {
+        "model": "gpt-4",
+        "messages": [_file_message(pdf_b64)],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    logged_args = []
+
+    def _capture(*args, **kwargs):
+        logged_args.append(args)
+
+    with patch.object(verbose_proxy_logger, "debug", side_effect=_capture):
+        with patch.object(
+            guardrail.async_handler,
+            "post",
+            AsyncMock(return_value=_armor_response(blocked=False)),
+        ):
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=MagicMock(spec=DualCache),
+                data=request_data,
+                call_type="completion",
+            )
+
+    flattened = " ".join(str(arg) for call in logged_args for arg in call)
+    assert pdf_b64 not in flattened
+    # the file request is still logged, just with type and size instead of the bytes
+    assert "byteDataType" in flattened
+
+
+@pytest.mark.asyncio
+async def test_pre_call_prefers_filename_over_conflicting_data_uri_mime():
+    """A data URI mislabeled text/plain must not downgrade a .pdf attachment to TXT scanning."""
+    guardrail = _make_guardrail()
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    request_data = {
+        "model": "gpt-4",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "file",
+                        "file": {
+                            "file_data": f"data:text/plain;base64,{pdf_b64}",
+                            "filename": "report.pdf",
+                        },
+                    }
+                ],
+            }
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    byte_items = _byte_items_sent(mock_post)
+    assert len(byte_items) == 1
+    assert byte_items[0]["byteDataType"] == "PDF"
+
+
+@pytest.mark.asyncio
+async def test_file_and_text_responses_are_both_recorded():
+    """A request with both a file and text records both Model Armor responses, not just the last."""
+    guardrail = _make_guardrail()
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    request_data = {
+        "model": "gpt-4",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize this"},
+                    {
+                        "type": "file",
+                        "file": {"file_data": f"data:application/pdf;base64,{pdf_b64}"},
+                    },
+                ],
+            }
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ):
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    recorded = request_data["metadata"]["_model_armor_response"]
+    # A list (not a tuple) so the guardrail logging redaction/serialization can walk it
+    assert isinstance(recorded, list)
+    assert len(recorded) == 2
+
+
+@pytest.mark.asyncio
+async def test_single_scan_response_stays_a_dict():
+    """A single scan keeps the backward-compatible single-dict response shape."""
+    guardrail = _make_guardrail()
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    request_data = {
+        "model": "gpt-4",
+        "messages": [_file_message(pdf_b64)],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ):
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    assert isinstance(request_data["metadata"]["_model_armor_response"], dict)
+
+
+@pytest.mark.asyncio
+async def test_scan_result_reaches_the_logger_on_a_seeded_route():
+    """On routes that seed `litellm_metadata` the scan result must land in that bucket
+    and be found by `_process_response`. Writing the file-scan result through the shared
+    resolver while the text-scan writers and the reader used a hard-coded `metadata` key
+    split the record in two, so the logged guardrail payload came back empty."""
+    guardrail = _make_guardrail()
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    request_data = {
+        "model": "claude-haiku",
+        "messages": [_file_message(pdf_b64)],
+        "metadata": {"user_id": "device-account-session"},
+        "litellm_metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ):
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    assert "_model_armor_response" not in request_data["metadata"]
+    assert "_model_armor_response" in request_data["litellm_metadata"]
+
+    before = len(request_data["litellm_metadata"].get("standard_logging_guardrail_information", []))
+    guardrail._process_response(response=None, request_data=request_data)
+
+    logged = request_data["litellm_metadata"]["standard_logging_guardrail_information"]
+    assert len(logged) == before + 1
+    assert logged[-1]["guardrail_response"], "the logger recorded an empty Model Armor payload"
+
+
+@pytest.mark.asyncio
+async def test_pre_call_blocks_supported_document_with_undecodable_base64():
+    """A supported document whose inline base64 will not decode cannot be scanned, so it fails closed."""
+    guardrail = _make_guardrail()
+    request_data = {
+        "model": "gpt-4",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "file",
+                        "file": {
+                            "file_data": "data:application/pdf;base64,@@@not-valid-base64@@@",
+                            "filename": "broken.pdf",
+                        },
+                    }
+                ],
+            }
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=MagicMock(spec=DualCache),
+                data=request_data,
+                call_type="completion",
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "could not scan" in str(exc_info.value.detail)
+    # The malformed document is never submitted to Model Armor
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_pre_call_undecodable_document_skipped_when_fail_open():
+    """With fail_on_error=False a malformed supported document is skipped rather than blocking."""
+    guardrail = _make_guardrail(fail_on_error=False)
+    request_data = {
+        "model": "gpt-4",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "file",
+                        "file": {
+                            "file_data": "data:application/pdf;base64,@@@not-valid-base64@@@",
+                            "filename": "broken.pdf",
+                        },
+                    }
+                ],
+            }
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        result = await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    assert result == request_data
+    mock_post.assert_not_called()
+
+
+def test_accumulated_responses_are_redactable_as_a_list():
+    """Accumulated file+text responses must be a list so guardrail logging can redact nested keys.
+
+    Regression: a tuple is skipped by redact_nested_match_and_regex_keys (it only recurses into
+    dicts and lists), which would leave sensitive match/regex findings un-redacted in logs.
+    """
+    from litellm.litellm_core_utils.core_helpers import (
+        redact_nested_match_and_regex_keys,
+    )
+
+    first = {"sanitizationResult": {"filterResults": {"f": {"match": "secret-one"}}}}
+    second = {"sanitizationResult": {"filterResults": {"f": {"match": "secret-two"}}}}
+
+    accumulated = ModelArmorGuardrail._append_armor_response(first, second)
+    assert isinstance(accumulated, list)
+
+    redacted = redact_nested_match_and_regex_keys(accumulated)
+    blob = json.dumps(redacted)
+    assert "secret-one" not in blob
+    assert "secret-two" not in blob
+    assert blob.count("[REDACTED]") == 2
+
+
+def _mcp_synthetic_data(tool_name: str = "send_email", arguments: dict = None):
+    """Mirror ProxyLogging._convert_mcp_to_llm_format: an MCP tool call rendered as a
+    synthetic user message so the existing prompt-scanning path can inspect it."""
+    if arguments is None:
+        arguments = {"to": "user@example.com", "body": "some content"}
+    return {
+        "model": "mcp-tool-call",
+        "messages": [
+            {
+                "role": "user",
+                "content": f"Tool: {tool_name}\nArguments: {arguments}",
+            }
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]},
+        "mcp_tool_name": tool_name,
+        "mcp_arguments": arguments,
+    }
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_scans_mcp_tool_call_when_configured_for_pre_mcp_call():
+    """A guardrail configured with mode `pre_mcp_call` must scan MCP tool calls.
+
+    Regression: async_pre_call_hook hardcoded its event-type gate to `pre_call`, so a
+    `pre_mcp_call` guardrail's own inner should_run_guardrail check returned False for an
+    MCP call (call_type=call_mcp_tool) and the scan was skipped entirely -- letting
+    sensitive content in tool arguments through unscanned. The gate must remap
+    call_mcp_tool -> pre_mcp_call.
+    """
+    guardrail = _make_guardrail(event_hook="pre_mcp_call", mask_request_content=True)
+    data = _mcp_synthetic_data()
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=data,
+            call_type="call_mcp_tool",
+        )
+
+    mock_post.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_skips_chat_traffic_when_configured_for_pre_mcp_call():
+    """A `pre_mcp_call` guardrail must NOT scan ordinary chat completions -- the remap is
+    scoped to MCP calls, so a `completion` call_type still fails the gate and is skipped."""
+    guardrail = _make_guardrail(event_hook="pre_mcp_call", mask_request_content=True)
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hello there"}],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        result = await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=data,
+            call_type="completion",
+        )
+
+    assert result == data
+    mock_post.assert_not_called()
+
+
+def test_process_response_with_none_metadata_does_not_crash():
+    guardrail = _make_guardrail()
+    response = {"id": "batch_123", "status": "validating"}
+    request_data = {"model": "gemini-2.5-flash", "metadata": None}
+
+    result = guardrail._process_response(
+        response=response,
+        request_data=request_data,
+        event_type=GuardrailEventHooks.post_call,
+    )
+
+    assert result is response
+    assert isinstance(request_data["metadata"], dict)
+    assert "standard_logging_guardrail_information" in request_data["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_moderation_hook_scans_mcp_tool_call_when_configured_for_during_mcp_call():
+    """A guardrail configured with mode `during_mcp_call` must scan MCP tool calls.
+
+    Regression: async_moderation_hook hardcoded its event-type gate to `during_call`, so a
+    `during_mcp_call` guardrail skipped MCP calls (call_type=call_mcp_tool). The gate must
+    remap call_mcp_tool -> during_mcp_call.
+    """
+    guardrail = _make_guardrail(event_hook="during_mcp_call", mask_request_content=True)
+    data = _mcp_synthetic_data()
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type="call_mcp_tool",
+        )
+
+    mock_post.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_moderation_hook_skips_chat_traffic_when_configured_for_during_mcp_call():
+    """A `during_mcp_call` guardrail must NOT scan ordinary chat completions."""
+    guardrail = _make_guardrail(event_hook="during_mcp_call", mask_request_content=True)
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hello there"}],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ) as mock_post:
+        result = await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type="completion",
+        )
+
+    assert result == data
+    mock_post.assert_not_called()
+
+
+_ANTHROPIC_SSE_CHUNKS = (
+    b'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message",'
+    b'"role":"assistant","model":"claude","content":[],"usage":{"input_tokens":5,"output_tokens":0}}}\n\n',
+    b'event: content_block_start\ndata: {"type":"content_block_start","index":0,'
+    b'"content_block":{"type":"text","text":""}}\n\n',
+    b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+    b'"delta":{"type":"text_delta","text":"my card is 4111-1111-1111-1111"}}\n\n',
+    b'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+    b'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
+    b'"usage":{"output_tokens":9}}\n\n',
+    b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+)
+
+_MODEL_ARMOR_CLEAN = {"sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND"}}
+
+_MODEL_ARMOR_BLOCK = {
+    "sanitizationResult": {
+        "filterMatchState": "MATCH_FOUND",
+        "filterResults": {
+            "sdp": {
+                "sdpFilterResult": {
+                    "inspectResult": {
+                        "matchState": "MATCH_FOUND",
+                        "findings": [
+                            {"infoType": "CREDIT_CARD_NUMBER", "likelihood": "VERY_LIKELY"}
+                        ],
+                    }
+                }
+            }
+        },
+    }
+}
+
+# The root-level sanitizedText fallback in _get_sanitized_content, i.e. a rewrite that trips no
+# named filter
+_MODEL_ARMOR_SANITIZED = {
+    "sanitizedText": "my card is [REDACTED]",
+    "sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND"},
+}
+
+# The shape a real de-identify template returns: the SDP filter both matches and hands back the
+# rewritten text, so whether it blocks or masks is decided by allow_sanitization alone
+_MODEL_ARMOR_DEIDENTIFIED = {
+    "sanitizationResult": {
+        "filterMatchState": "MATCH_FOUND",
+        "filterResults": {
+            "sdp": {
+                "sdpFilterResult": {
+                    "deidentifyResult": {
+                        "matchState": "MATCH_FOUND",
+                        "data": {"text": "my card is [REDACTED]"},
+                    }
+                }
+            }
+        },
+    }
+}
+
+
+def _chat_completion_chunks():
+    """The chat-completions surface: typed ModelResponseStream chunks."""
+    return (
+        litellm.types.utils.ModelResponseStream(
+            choices=[
+                litellm.types.utils.StreamingChoices(
+                    index=0,
+                    delta=litellm.types.utils.Delta(content="my card is 4111-1111-1111-1111"),
+                )
+            ]
+        ),
+        litellm.types.utils.ModelResponseStream(
+            choices=[
+                litellm.types.utils.StreamingChoices(
+                    index=0,
+                    delta=litellm.types.utils.Delta(content=""),
+                    finish_reason="stop",
+                )
+            ]
+        ),
+    )
+
+
+def _surface_guardrail(**kwargs):
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+        **kwargs,
+    )
+    guardrail._ensure_access_token_async = AsyncMock(
+        return_value=("test-token", "test-project")
+    )
+    return guardrail
+
+
+def _armor_post_mock(payload):
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json = AsyncMock(return_value=payload)
+    return AsyncMock(return_value=mock_response)
+
+
+async def _anthropic_sse_stream():
+    for chunk in _ANTHROPIC_SSE_CHUNKS:
+        yield chunk
+
+
+def _responses_api_events():
+    from litellm.types.llms.openai import (
+        OutputTextDeltaEvent,
+        ResponseCompletedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    completed = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        model="gpt-4o-mini",
+        object="response",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "my card is 4111-1111-1111-1111"}],
+            }
+        ],
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
+    )
+    return (
+        OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            delta="my card is 4111-1111-1111-1111",
+        ),
+        ResponseCompletedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            response=completed,
+        ),
+    )
+
+
+async def _drain_surface_hook(guardrail, chunks, request_data=None):
+    async def _stream():
+        for chunk in chunks:
+            yield chunk
+
+    return [
+        item
+        async for item in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_stream(),
+            request_data=request_data
+            if request_data is not None
+            else {
+                "model": "claude-haiku",
+                "messages": [{"role": "user", "content": "show me a card"}],
+                "metadata": {"guardrails": ["model-armor-test"]},
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_scans_raw_anthropic_sse_instead_of_crashing():
+    """A /v1/messages stream arrives as raw SSE bytes and must be assembled, then scanned.
+
+    Regression for the 500 `Error building chunks for logging/streaming usage calculation`:
+    stream_chunk_builder calls .get() on each chunk, which raises on bytes.
+    """
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, _ANTHROPIC_SSE_CHUNKS)
+
+    post.assert_called_once()
+    scanned = post.call_args.kwargs["json"]["modelResponseData"]["text"]
+    assert "my card is 4111-1111-1111-1111" in scanned
+    assert tuple(delivered) == _ANTHROPIC_SSE_CHUNKS
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_scans_responses_api_events_instead_of_crashing():
+    """A /v1/responses stream arrives as typed Responses events, which stream_chunk_builder
+    cannot subscript. The final response.completed event carries the text to scan."""
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+    events = _responses_api_events()
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, events)
+
+    post.assert_called_once()
+    scanned = post.call_args.kwargs["json"]["modelResponseData"]["text"]
+    assert scanned == "my card is 4111-1111-1111-1111"
+    assert tuple(delivered) == events
+
+
+@pytest.mark.asyncio
+async def test_streaming_block_emits_anthropic_error_frame():
+    """A block on /v1/messages must terminate the stream in Anthropic's error format.
+
+    The OpenAI-shaped `data: {"error": ...}` frame the chat surface uses is rejected by
+    Anthropic clients.
+    """
+    guardrail = _surface_guardrail()
+
+    with patch.object(
+        guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_BLOCK)
+    ):
+        delivered = await _drain_surface_hook(guardrail, _ANTHROPIC_SSE_CHUNKS)
+
+    body = b"".join(delivered)
+    assert b"event: error" in body
+    assert b'"type": "error"' in body
+    assert b"guardrail_error" in body
+    assert b"Streaming response blocked by Model Armor" in body
+    assert b"4111-1111-1111-1111" not in body
+
+
+@pytest.mark.asyncio
+async def test_streaming_block_emits_responses_api_error_event():
+    """A block on /v1/responses must terminate the stream with a Responses ErrorEvent."""
+    from litellm.types.llms.openai import ErrorEvent
+
+    guardrail = _surface_guardrail()
+
+    with patch.object(
+        guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_BLOCK)
+    ):
+        delivered = await _drain_surface_hook(guardrail, _responses_api_events())
+
+    assert len(delivered) == 1
+    error_event = delivered[0]
+    assert isinstance(error_event, ErrorEvent)
+    assert error_event.error.type == "guardrail_error"
+    assert error_event.error.code == "400"
+    assert error_event.error.message == "Streaming response blocked by Model Armor"
+
+
+@pytest.mark.asyncio
+async def test_streaming_masking_re_emits_anthropic_sse_with_sanitized_text():
+    """mask_response_content on /v1/messages must ship the sanitized text, not the original."""
+    guardrail = _surface_guardrail(mask_response_content=True)
+
+    with patch.object(
+        guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_SANITIZED)
+    ):
+        delivered = await _drain_surface_hook(guardrail, _ANTHROPIC_SSE_CHUNKS)
+
+    body = b"".join(delivered)
+    assert b"[REDACTED]" in body
+    assert b"4111-1111-1111-1111" not in body
+
+
+@pytest.mark.asyncio
+async def test_streaming_masking_blocks_responses_api_stream():
+    """A Responses event stream cannot be rebuilt from sanitized text, so releasing it would
+    ship the content the guardrail just rewrote. It is blocked instead."""
+    from litellm.types.llms.openai import ErrorEvent
+
+    guardrail = _surface_guardrail(mask_response_content=True)
+
+    with patch.object(
+        guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_SANITIZED)
+    ):
+        delivered = await _drain_surface_hook(guardrail, _responses_api_events())
+
+    assert len(delivered) == 1
+    assert isinstance(delivered[0], ErrorEvent)
+    assert delivered[0].error.code == "400"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["anthropic_sse", "responses"])
+async def test_streaming_api_failure_frames_error_per_surface(surface):
+    """A Model Armor outage with fail_on_error must terminate the stream in the endpoint's
+    own error format rather than leaking an OpenAI SSE frame onto it."""
+    from litellm.types.llms.openai import ErrorEvent
+
+    guardrail = _surface_guardrail(fail_on_error=True)
+    chunks = _ANTHROPIC_SSE_CHUNKS if surface == "anthropic_sse" else _responses_api_events()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 500
+    mock_response.text = "Internal Server Error"
+
+    with patch.object(
+        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
+    ):
+        delivered = await _drain_surface_hook(guardrail, chunks)
+
+    assert len(delivered) >= 1
+    if surface == "anthropic_sse":
+        assert b"event: error" in b"".join(delivered)
+    else:
+        assert isinstance(delivered[0], ErrorEvent)
+        assert delivered[0].error.code == "500"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        pytest.param(
+            (b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+             b'"delta":{"type":"text_delta","text":"hi"}}\n\n',),
+            id="anthropic-sse-without-message-start",
+        ),
+        pytest.param(None, id="responses-stream-without-completed-event"),
+        pytest.param("created", id="responses-stream-cut-off-after-response-created"),
+    ],
+)
+async def test_streaming_hook_fails_closed_when_a_surface_stream_cannot_be_assembled(chunks):
+    """Forwarding an unscannable /v1/messages or /v1/responses stream would silently disable the
+    guardrail, so the stream is refused in its own wire format instead of released unscanned."""
+    from litellm.types.llms.openai import (
+        ErrorEvent,
+        OutputTextDeltaEvent,
+        ResponsesAPIStreamEvents,
+    )
+
+    if chunks is None or chunks == "created":
+        delta = OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            delta="my card is 4111-1111-1111-1111",
+        )
+        # response.created carries a ResponsesAPIResponse too, but an empty one: reading the body
+        # off it would scan "" and release every buffered delta unscanned
+        chunks = (delta,) if chunks is None else (_responses_created_event(), delta)
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, chunks)
+
+    post.assert_not_called()
+    assert tuple(delivered) != tuple(chunks)
+    if isinstance(chunks[0], bytes):
+        joined = b"".join(item.encode() if isinstance(item, str) else item for item in delivered).decode()
+        assert "event: error" in joined
+        assert "could not be assembled for scanning" in joined
+        return
+    assert len(delivered) == 1
+    assert isinstance(delivered[0], ErrorEvent)
+    assert "could not be assembled for scanning" in delivered[0].error.message
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_forwards_a_preceding_guardrails_error_item():
+    """A guardrail earlier in the post_call chain replaces the stream with its own terminal
+    error item. That item is not a chat delta, and feeding it to stream_chunk_builder is what
+    surfaced the ticket's 500, so it has to be forwarded untouched instead."""
+    from litellm.types.llms.openai import (
+        ErrorEvent,
+        ErrorEventError,
+        ResponsesAPIStreamEvents,
+    )
+
+    chunks = (
+        ErrorEvent(
+            type=ResponsesAPIStreamEvents.ERROR,
+            sequence_number=1,
+            error=ErrorEventError(
+                type="guardrail_error",
+                code="400",
+                message="Streaming response blocked by Model Armor",
+                param=None,
+            ),
+        ),
+    )
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, chunks)
+
+    post.assert_not_called()
+    assert tuple(delivered) == chunks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        pytest.param(None, id="anthropic-error-event"),
+        pytest.param(
+            ('data: {"error": {"message": "Streaming response blocked by the first guardrail", "code": "400"}}\n\n',),
+            id="chat-completions-error-payload",
+        ),
+    ],
+)
+async def test_streaming_hook_forwards_a_preceding_guardrails_error_frame(chunks):
+    """Chained post_call guardrails hand each other their output. An earlier guardrail's error
+    frame carries no message to assemble, and replacing it would hide the real refusal."""
+    if chunks is None:
+        chunks = anthropic_sse_error_frames("Streaming response blocked by the first guardrail")
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, chunks)
+
+    post.assert_not_called()
+    assert tuple(delivered) == chunks
+
+
+@pytest.mark.asyncio
+async def test_streaming_responses_error_falls_back_to_sse_when_the_handler_declines():
+    """build_stream_error_items may return None, which must not swallow the block into a clean
+    200: the refusal falls back to the chat-completions SSE form that still carries the status."""
+    from litellm.proxy.guardrails.guardrail_hooks.model_armor.model_armor import (
+        _StreamSurface,
+    )
+
+    class _DecliningGuardrail(ModelArmorGuardrail):
+        @staticmethod
+        def _build_responses_error_items(exc):
+            return None
+
+    guardrail = _DecliningGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+    )
+    exc = HTTPException(status_code=400, detail={"message": "blocked"})
+
+    items = guardrail._stream_error_items(exc, surface=_StreamSurface.RESPONSES)
+
+    assert len(items) == 1
+    assert '"code": "400"' in items[0]
+    assert "blocked" in items[0]
+
+
+def _responses_created_event():
+    from litellm.types.llms.openai import (
+        ResponseCreatedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    return ResponseCreatedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_CREATED,
+        response=ResponsesAPIResponse(
+            id="resp_1",
+            created_at=0,
+            model="gpt-4o-mini",
+            object="response",
+            output=[],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_refuses_an_opaque_sse_stream_without_anthropic_framing():
+    """/v1/messages is not the only endpoint that streams raw SSE: the Google generateContent
+    route marks its own stream raw too. Its frames carry no Anthropic event types, so refusing
+    them in Anthropic's format would hand a Google client a body it cannot parse."""
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+    chunks = (b'data: {"candidates":[{"content":{"parts":[{"text":"my card is 4111"}]}}]}\n\n',)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, chunks)
+
+    post.assert_not_called()
+    assert tuple(delivered) != chunks
+    body = "".join(item.decode() if isinstance(item, bytes) else item for item in delivered)
+    assert "could not be assembled for scanning" in body
+    assert "event: error" not in body
+    assert '"code": "500"' in body
+
+
+@pytest.mark.asyncio
+async def test_streaming_unassemblable_stream_is_forwarded_when_fail_on_error_is_disabled():
+    """fail_on_error: false is a deliberate choice to degrade open, and it governs every other
+    path in this hook. The fail-closed refusal has to honour it too."""
+    guardrail = _surface_guardrail(fail_on_error=False)
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+    chunks = (
+        b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+        b'"delta":{"type":"text_delta","text":"hi"}}\n\n',
+    )
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, chunks)
+
+    post.assert_not_called()
+    assert tuple(delivered) == chunks
+
+
+@pytest.mark.asyncio
+async def test_streaming_fail_closed_records_the_applied_guardrail():
+    """A refusal that no header or log attributes to the guardrail leaves on-call unable to tell
+    a guardrail block apart from a provider failure."""
+    guardrail = _surface_guardrail()
+    request_data = {
+        "model": "claude-haiku",
+        "messages": [{"role": "user", "content": "show me a card"}],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+    chunks = (
+        b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+        b'"delta":{"type":"text_delta","text":"hi"}}\n\n',
+    )
+
+    with patch.object(guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_CLEAN)):
+        await _drain_surface_hook(guardrail, chunks, request_data=request_data)
+
+    assert request_data["metadata"]["applied_guardrails"] == ["model-armor-test"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_responses_tool_call_output_is_scanned():
+    """An agentic /v1/responses turn can carry its whole payload in tool-call arguments, which
+    is what the chat surface already folds into the scanned text."""
+    from litellm.types.llms.openai import (
+        ResponseCompletedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+    completed = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=ResponsesAPIResponse(
+            id="resp_1",
+            created_at=0,
+            model="gpt-4o-mini",
+            object="response",
+            output=[
+                {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "send_email",
+                    "arguments": '{"body": "my card is 4111-1111-1111-1111"}',
+                }
+            ],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+        ),
+    )
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, (completed,))
+
+    post.assert_called_once()
+    scanned = post.call_args.kwargs["json"]["modelResponseData"]["text"]
+    assert "4111-1111-1111-1111" in scanned
+    assert tuple(delivered) == (completed,)
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_refuses_a_content_stream_that_ends_with_an_error_frame():
+    """The chain-aware passthrough must stay narrow. A stream carrying real content plus a
+    trailing error frame is not a bare refusal to forward: the assembler cannot read it, and
+    releasing it would ship the buffered content unscanned."""
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+    chunks = (*_ANTHROPIC_SSE_CHUNKS, *anthropic_sse_error_frames("upstream gave up"))
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, chunks)
+
+    post.assert_not_called()
+    body = b"".join(delivered)
+    assert b"4111-1111-1111-1111" not in body
+    assert b"could not be assembled for scanning" in body
+
+
+@pytest.mark.parametrize(
+    "chunks, expected, case",
+    [
+        (anthropic_sse_error_frames("blocked upstream"), True, "anthropic-error-frames-only"),
+        ((f"data: {json.dumps({'error': {'message': 'blocked'}})}\n\n",), True, "chat-error-payload-only"),
+        ((), False, "empty-stream"),
+        (
+            (b'event: message_delta\ndata: {"type":"message_delta","error":null}\n\n',),
+            False,
+            "content-event-carrying-a-null-error-field",
+        ),
+        (
+            (
+                litellm.types.utils.ModelResponseStream(
+                    choices=[
+                        litellm.types.utils.StreamingChoices(
+                            index=0,
+                            delta=litellm.types.utils.Delta(content="my card is 4111-1111-1111-1111"),
+                        )
+                    ]
+                ),
+                *anthropic_sse_error_frames("upstream gave up"),
+            ),
+            False,
+            "typed-content-chunks-plus-a-trailing-error-frame",
+        ),
+    ],
+)
+def test_is_sse_error_stream_only_matches_a_stream_that_is_nothing_but_refusals(chunks, expected, case):
+    """The chain-aware passthrough turns on this predicate, so anything it calls error-only is
+    forwarded to the client untouched. A stream that still carries content must not qualify: the
+    frames-only join drops typed chunks, and a content event may carry an empty ``error`` field."""
+    from litellm.proxy.guardrails.anthropic_sse import is_sse_error_stream
+
+    assert is_sse_error_stream(chunks) is expected, case
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_does_not_forward_typed_chunks_that_end_with_an_error_frame():
+    """A stream mixing buffered content with a trailing refusal is not the bare refusal the chain
+    passthrough exists for. Forwarding it would release the content no scanner ever saw."""
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+    chunks = (
+        litellm.types.utils.ModelResponseStream(
+            choices=[
+                litellm.types.utils.StreamingChoices(
+                    index=0,
+                    delta=litellm.types.utils.Delta(content="my card is 4111-1111-1111-1111"),
+                )
+            ]
+        ),
+        *anthropic_sse_error_frames("upstream gave up"),
+    )
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, chunks)
+
+    post.assert_not_called()
+    body = b"".join(item if isinstance(item, bytes) else str(item).encode() for item in delivered)
+    assert b"4111-1111-1111-1111" not in body
+    assert b"could not be assembled for scanning" in body
+
+
+def _delivered_bytes(delivered):
+    return b"".join(
+        item
+        if isinstance(item, bytes)
+        else item.encode()
+        if isinstance(item, str)
+        else str(item.model_dump() if hasattr(item, "model_dump") else item).encode()
+        for item in delivered
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chunks, case", [(None, "chat_completions"), (_ANTHROPIC_SSE_CHUNKS, "anthropic_sse")])
+async def test_streaming_deidentify_match_masks_when_masking_is_enabled(chunks, case):
+    """A de-identify template reports MATCH_FOUND for every redaction it makes, so reading that
+    match as a refusal makes mask_response_content unusable on a stream: the client gets an error
+    where its non-streaming sibling gets redacted text. The block check has to allow sanitization
+    exactly as the non-streaming hook does."""
+    guardrail = _surface_guardrail(mask_response_content=True)
+    post = _armor_post_mock(_MODEL_ARMOR_DEIDENTIFIED)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(
+            guardrail, _chat_completion_chunks() if chunks is None else chunks
+        )
+
+    body = _delivered_bytes(delivered)
+    assert b"[REDACTED]" in body, case
+    assert b"4111-1111-1111-1111" not in body, case
+    assert b"blocked by Model Armor" not in body, case
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chunks, case", [(None, "chat_completions"), (_ANTHROPIC_SSE_CHUNKS, "anthropic_sse")])
+async def test_streaming_deidentify_match_still_blocks_when_masking_is_disabled(chunks, case):
+    """Without mask_response_content there is nowhere to put the rewritten text, so the same
+    de-identify match must still end the stream rather than release the original."""
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_DEIDENTIFIED)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(
+            guardrail, _chat_completion_chunks() if chunks is None else chunks
+        )
+
+    body = _delivered_bytes(delivered)
+    assert b"Streaming response blocked by Model Armor" in body, case
+    assert b"4111-1111-1111-1111" not in body, case
+
+
+@pytest.mark.asyncio
+async def test_streaming_deidentify_match_logs_masked_run_as_success_not_blocked():
+    """The status stamped on request metadata feeds the spend log, so it has to agree with what
+    the client actually received: a masked stream is a success, not a block."""
+    guardrail = _surface_guardrail(mask_response_content=True)
+    request_data = {
+        "model": "claude-haiku",
+        "messages": [{"role": "user", "content": "show me a card"}],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_DEIDENTIFIED)):
+        await _drain_surface_hook(guardrail, _chat_completion_chunks(), request_data=request_data)
+
+    assert request_data["metadata"]["_model_armor_status"] == "success"
+
+
+# A de-identify template that matched but handed back no rewrite, e.g. because the transformation
+# itself failed. The match still says the buffered original carries what it matched on
+_MODEL_ARMOR_DEIDENTIFIED_NO_TEXT = {
+    "sanitizationResult": {
+        "filterMatchState": "MATCH_FOUND",
+        "filterResults": {
+            "sdp": {"sdpFilterResult": {"deidentifyResult": {"matchState": "MATCH_FOUND"}}}
+        },
+    }
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chunks, case", [(None, "chat_completions"), (_ANTHROPIC_SSE_CHUNKS, "anthropic_sse")])
+async def test_streaming_deidentify_match_without_a_rewrite_fails_closed(chunks, case):
+    """Allowing sanitization past the block check is a promise to apply the redaction. When Model
+    Armor matches but returns no sanitized text there is nothing to apply, and yielding the
+    buffered chunks would hand back exactly what it matched on."""
+    guardrail = _surface_guardrail(mask_response_content=True)
+    post = _armor_post_mock(_MODEL_ARMOR_DEIDENTIFIED_NO_TEXT)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(
+            guardrail, _chat_completion_chunks() if chunks is None else chunks
+        )
+
+    body = _delivered_bytes(delivered)
+    assert b"4111-1111-1111-1111" not in body, case
+    assert b"Streaming response blocked by Model Armor" in body, case
+
+
+@pytest.mark.asyncio
+async def test_streaming_status_records_a_surface_that_cannot_carry_the_rewrite_as_blocked():
+    """The Responses surface has no assembled body to rewrite, so a de-identify match ends as a
+    refusal. The status stamped on metadata feeds the spend log and has to say so rather than
+    reporting the success the block check alone would have implied."""
+    guardrail = _surface_guardrail(mask_response_content=True)
+    request_data = {
+        "model": "gpt-4o-mini",
+        "input": "show me a card",
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_DEIDENTIFIED)):
+        delivered = await _drain_surface_hook(
+            guardrail, _responses_api_events(), request_data=request_data
+        )
+
+    body = _delivered_bytes(delivered)
+    assert b"4111-1111-1111-1111" not in body
+    assert b"Streaming response blocked by Model Armor" in body
+    assert request_data["metadata"]["_model_armor_status"] == "blocked"
+
+
+def _responses_api_events_truncated(terminal: str):
+    """A /v1/responses stream whose text went out as deltas and whose terminal event reports no body.
+
+    ``response.failed`` and ``response.incomplete`` are terminal like ``response.completed``, but a
+    turn that broke mid-generation reports an empty ``output`` while the deltas ahead of it already
+    spelled the answer out to the client.
+    """
+    from litellm.types.llms.openai import (
+        OutputTextDeltaEvent,
+        ResponseFailedEvent,
+        ResponseIncompleteEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    empty_body = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        model="gpt-4o-mini",
+        object="response",
+        output=[],
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
+    )
+    terminal_event = (
+        ResponseFailedEvent(type=ResponsesAPIStreamEvents.RESPONSE_FAILED, response=empty_body)
+        if terminal == "failed"
+        else ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=empty_body)
+    )
+    return (
+        OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            delta="my card is 4111-1111-1111-1111",
+        ),
+        terminal_event,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal", ["failed", "incomplete"])
+async def test_streaming_responses_terminal_event_without_a_body_still_scans_the_deltas(terminal):
+    """A /v1/responses turn that broke mid-generation has still delivered its deltas.
+
+    Reading only the terminal body would find nothing to scan and hand every buffered delta to the
+    client untouched, so the deltas themselves are what gets scanned.
+    """
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_BLOCK)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, _responses_api_events_truncated(terminal))
+
+    post.assert_called_once()
+    assert "4111-1111-1111-1111" in post.call_args.kwargs["json"]["modelResponseData"]["text"]
+    rendered = "".join(str(item) for item in delivered)
+    assert "4111-1111-1111-1111" not in rendered
+    assert "Streaming response blocked by Model Armor" in rendered
+
+
+@pytest.mark.asyncio
+async def test_streaming_responses_mcp_argument_deltas_are_scanned_when_the_body_is_empty():
+    """A turn that only streamed MCP tool arguments still handed the client a payload.
+
+    The delta fallback is read off the event enum rather than listed by hand, so an argument event
+    that carries no `output_text` cannot fall out of the scan.
+    """
+    from litellm.types.llms.openai import (
+        MCPCallArgumentsDeltaEvent,
+        ResponseIncompleteEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    chunks = (
+        MCPCallArgumentsDeltaEvent(
+            type=ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA,
+            output_index=0,
+            item_id="mcp_1",
+            delta='{"note": "my card is 4111-1111-1111-1111"}',
+            sequence_number=0,
+        ),
+        ResponseIncompleteEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+            response=ResponsesAPIResponse(
+                id="resp_1",
+                created_at=0,
+                model="gpt-4o-mini",
+                object="response",
+                output=[],
+                parallel_tool_calls=False,
+                tool_choice="auto",
+                tools=[],
+            ),
+        ),
+    )
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_BLOCK)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, chunks)
+
+    post.assert_called_once()
+    assert "4111-1111-1111-1111" in post.call_args.kwargs["json"]["modelResponseData"]["text"]
+    rendered = "".join(str(item) for item in delivered)
+    assert "4111-1111-1111-1111" not in rendered
+    assert "Streaming response blocked by Model Armor" in rendered
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "with_output_text_delta",
+    [True, False],
+    ids=["summary-and-text-deltas", "summary-delta-only"],
+)
+async def test_streaming_responses_reasoning_summary_deltas_are_scanned_alongside_the_body(with_output_text_delta):
+    """A reasoning turn streams its summary in deltas the terminal body never repeats.
+
+    Reading only the body scans the visible answer and hands the client every summary delta
+    unscanned, so the body and the deltas are scanned together.
+    """
+    from litellm.types.llms.openai import (
+        OutputTextDeltaEvent,
+        ReasoningSummaryTextDeltaEvent,
+        ResponseCompletedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    answer = "the weather is fine"
+    summary_delta = ReasoningSummaryTextDeltaEvent(
+        type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
+        item_id="rs_1",
+        output_index=0,
+        delta="the user said my card is 4111-1111-1111-1111",
+    )
+    text_deltas = (
+        (
+            OutputTextDeltaEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+                item_id="msg_1",
+                output_index=1,
+                content_index=0,
+                delta=answer,
+            ),
+        )
+        if with_output_text_delta
+        else ()
+    )
+    completed = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=ResponsesAPIResponse(
+            id="resp_1",
+            created_at=0,
+            model="gpt-5-mini",
+            object="response",
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": answer, "annotations": []}],
+                }
+            ],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+        ),
+    )
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_BLOCK)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, (summary_delta, *text_deltas, completed))
+
+    post.assert_called_once()
+    scanned = post.call_args.kwargs["json"]["modelResponseData"]["text"]
+    assert "4111-1111-1111-1111" in scanned
+    assert answer in scanned
+    assert scanned.count(answer) == 1
+    rendered = "".join(str(item) for item in delivered)
+    assert "4111-1111-1111-1111" not in rendered
+    assert "Streaming response blocked by Model Armor" in rendered
+
+
+@pytest.mark.asyncio
+async def test_streaming_responses_deltas_of_separate_fields_do_not_form_a_finding_across_their_boundary():
+    """Two fields of a turn are separate text, so what runs across their boundary is not model output.
+
+    A reasoning summary ending in half a card number and an answer opening with the other half
+    each carry nothing to find, and joining them without a break would invent one.
+    """
+    from litellm.types.llms.openai import (
+        OutputTextDeltaEvent,
+        ReasoningSummaryTextDeltaEvent,
+        ResponseCompletedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    answer = "1111-1111 is not a full card"
+    summary_delta = ReasoningSummaryTextDeltaEvent(
+        type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
+        item_id="rs_1",
+        output_index=0,
+        delta="the prefix they gave me is 4111-1111-",
+    )
+    text_delta = OutputTextDeltaEvent(
+        type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+        item_id="msg_1",
+        output_index=1,
+        content_index=0,
+        delta=answer,
+    )
+    completed = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=ResponsesAPIResponse(
+            id="resp_1",
+            created_at=0,
+            model="gpt-5-mini",
+            object="response",
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": answer, "annotations": []}],
+                }
+            ],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+        ),
+    )
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, (summary_delta, text_delta, completed))
+
+    post.assert_called_once()
+    scanned = post.call_args.kwargs["json"]["modelResponseData"]["text"]
+    assert "4111-1111-" in scanned
+    assert answer in scanned
+    assert "4111-1111-1111-1111" not in scanned
+    rendered = "".join(str(item) for item in delivered)
+    assert "Streaming response blocked by Model Armor" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_streaming_responses_one_fields_deltas_still_join_into_a_single_finding():
+    """A card number split across two deltas of one field is still one card number to scan."""
+    from litellm.types.llms.openai import (
+        OutputTextDeltaEvent,
+        ResponseCompletedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    halves = ("my card is 4111-1111-", "1111-1111")
+    text_deltas = tuple(
+        OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            delta=half,
+        )
+        for half in halves
+    )
+    completed = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=ResponsesAPIResponse(
+            id="resp_1",
+            created_at=0,
+            model="gpt-5-mini",
+            object="response",
+            output=[],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+        ),
+    )
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_BLOCK)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, (*text_deltas, completed))
+
+    post.assert_called_once()
+    assert "4111-1111-1111-1111" in post.call_args.kwargs["json"]["modelResponseData"]["text"]
+    rendered = "".join(str(item) for item in delivered)
+    assert "4111-1111-1111-1111" not in rendered
+    assert "Streaming response blocked by Model Armor" in rendered
+
+
+@pytest.mark.asyncio
+async def test_streaming_responses_fields_the_body_repeats_are_not_scanned_a_second_time():
+    """A turn whose visible fields all reach the terminal body is scanned once, not twice.
+
+    Two output_text fields stream as deltas and come back in the completed body, so scanning the
+    deltas on top of the body would send Model Armor two copies of everything the client sees.
+    """
+    from litellm.types.llms.openai import (
+        OutputTextDeltaEvent,
+        ResponseCompletedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    paragraphs = ("the first thing to know", "a second and separate point")
+    text_deltas = tuple(
+        OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id=f"msg_{index}",
+            output_index=index,
+            content_index=0,
+            delta=paragraph,
+        )
+        for index, paragraph in enumerate(paragraphs)
+    )
+    completed = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=ResponsesAPIResponse(
+            id="resp_1",
+            created_at=0,
+            model="gpt-5-mini",
+            object="response",
+            output=[
+                {
+                    "type": "message",
+                    "id": f"msg_{index}",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": paragraph, "annotations": []}],
+                }
+                for index, paragraph in enumerate(paragraphs)
+            ],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+        ),
+    )
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, (*text_deltas, completed))
+
+    post.assert_called_once()
+    scanned = post.call_args.kwargs["json"]["modelResponseData"]["text"]
+    assert [scanned.count(paragraph) for paragraph in paragraphs] == [1, 1]
+    rendered = "".join(str(item) for item in delivered)
+    assert all(paragraph in rendered for paragraph in paragraphs)
+
+
+def test_every_responses_delta_event_is_in_the_scanned_set():
+    """Every ``.delta`` the Responses event enum defines is model output on its way to the client."""
+    from litellm.proxy.guardrails.guardrail_hooks.model_armor.model_armor import (
+        _RESPONSES_DELTA_EVENT_TYPES,
+    )
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+
+    missing = {
+        event.value
+        for event in ResponsesAPIStreamEvents
+        if event.value.endswith(".delta") and event.value not in _RESPONSES_DELTA_EVENT_TYPES
+    }
+    assert not missing
+    assert "response.mcp_call_arguments.delta" in _RESPONSES_DELTA_EVENT_TYPES

@@ -1,4 +1,4 @@
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { testMCPSemanticFilter } from "@/components/networking";
 
 export interface TestResult {
@@ -29,46 +29,51 @@ export const runSemanticFilterTest = async ({
   testQuery,
   setIsTesting,
   setTestResult,
+  setTestError,
 }: {
   accessToken: string;
-  testModel: string;
+  testModel: string | null;
   testQuery: string;
   setIsTesting: (value: boolean) => void;
   setTestResult: (result: TestResult | null) => void;
+  setTestError: (error: string | null) => void;
 }) => {
   if (!testQuery || !testModel || !accessToken) {
-    NotificationManager.error("Please enter a query and select a model");
+    toast.error("Please enter a query and select a model");
     return;
   }
 
   setIsTesting(true);
   setTestResult(null);
+  setTestError(null);
 
   try {
     const { headers } = await testMCPSemanticFilter(accessToken, testModel, testQuery);
     const parsedResult = parseFilterHeaders(headers);
 
     if (!parsedResult) {
-      NotificationManager.warning("Semantic filter is not enabled or no tools were filtered");
+      toast.warning("Semantic filter is not enabled or no tools were filtered");
       return;
     }
 
     setTestResult(parsedResult);
-    NotificationManager.success("Semantic filter test completed successfully");
+    toast.success("Semantic filter test completed successfully");
   } catch (error) {
     console.error("Test failed:", error);
-    NotificationManager.error("Failed to test semantic filter");
+    const message = error instanceof Error && error.message ? error.message : "Failed to test semantic filter";
+    setTestError(message);
+    toast.error("Failed to test semantic filter");
   } finally {
     setIsTesting(false);
   }
 };
 
-export const getCurlCommand = (testModel: string, testQuery: string) =>
+export const getCurlCommand = (testModel: string | null, testQuery: string) =>
   `curl --location 'http://localhost:4000/v1/responses' \\
 --header 'Content-Type: application/json' \\
 --header 'Authorization: Bearer sk-1234' \\
 --data '{
-    "model": "${testModel}",
+    "model": "${testModel ?? "YOUR_MODEL"}",
     "input": [
     {
       "role": "user",

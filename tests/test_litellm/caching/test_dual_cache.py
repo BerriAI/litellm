@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import time
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -7,7 +8,8 @@ import pytest
 
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_cache import RedisCache
+from litellm.caching.redis_cache import RedisCache, _redis_circuit_breaker_guard, _redis_circuit_breaker_guard_sync
+from litellm.types.caching import RedisPipelineIncrementOperation
 
 
 @pytest.mark.asyncio
@@ -61,6 +63,137 @@ async def test_dual_cache_async_batch_get_cache_rolls_back_redis_reservation_on_
         assert "shared_b" not in dual_cache.last_redis_batch_access_time
 
 
+def _redis_mock_for_sync_batch(redis_result: dict) -> MagicMock:
+    mock_redis = MagicMock(spec=RedisCache)
+    mock_redis.batch_get_cache.return_value = redis_result
+    return mock_redis
+
+
+def _assert_sync_batch_used_blocking_client(dual_cache: DualCache, mock_redis: MagicMock) -> None:
+    with patch("asyncio.new_event_loop", side_effect=AssertionError("sync path must not create an event loop")):
+        result = dual_cache.batch_get_cache(keys=["lit6729_key"])
+
+    assert result == ["redis_value"]
+    mock_redis.batch_get_cache.assert_called_once_with(key_list=["lit6729_key"], parent_otel_span=None)
+    mock_redis.async_batch_get_cache.assert_not_called()
+    mock_redis.init_async_client.assert_not_called()
+    assert dual_cache.in_memory_cache.get_cache("lit6729_key") == "redis_value"
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_batch_get_cache_uses_sync_redis_client_inside_running_loop():
+    """
+    Regression test for LIT-6729: sync batch_get_cache ran async_batch_get_cache on a
+    throwaway event loop, reusing an async Redis client created on another loop and
+    corrupting its connection pool. The sync path must use the blocking client, never
+    the async one, and never create an event loop, even when called from a coroutine
+    (e.g. async_raise_no_deployment_exception -> get_min_cooldown).
+    """
+    mock_redis = _redis_mock_for_sync_batch({"lit6729_key": "redis_value"})
+    dual_cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=mock_redis)
+
+    _assert_sync_batch_used_blocking_client(dual_cache, mock_redis)
+
+
+def test_dual_cache_batch_get_cache_uses_sync_redis_client_without_running_loop():
+    mock_redis = _redis_mock_for_sync_batch({"lit6729_key": "redis_value"})
+    dual_cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=mock_redis)
+
+    _assert_sync_batch_used_blocking_client(dual_cache, mock_redis)
+
+
+def test_dual_cache_batch_get_cache_only_reads_missing_keys_from_redis():
+    mock_redis = _redis_mock_for_sync_batch({"miss_key": "from_redis"})
+    dual_cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=mock_redis)
+    dual_cache.in_memory_cache.set_cache("hit_key", "from_memory")
+
+    result = dual_cache.batch_get_cache(keys=["hit_key", "miss_key"])
+
+    assert result == ["from_memory", "from_redis"]
+    mock_redis.batch_get_cache.assert_called_once_with(key_list=["miss_key"], parent_otel_span=None)
+
+
+def test_dual_cache_batch_get_cache_throttles_repeat_redis_reads():
+    mock_redis = _redis_mock_for_sync_batch({"absent_key": None})
+    dual_cache = DualCache(
+        in_memory_cache=InMemoryCache(), redis_cache=mock_redis, default_redis_batch_cache_expiry=10
+    )
+
+    first = dual_cache.batch_get_cache(keys=["absent_key"])
+    second = dual_cache.batch_get_cache(keys=["absent_key"])
+
+    assert first == [None]
+    assert second == [None]
+    mock_redis.batch_get_cache.assert_called_once()
+
+
+def test_dual_cache_batch_get_cache_rolls_back_redis_reservation_on_error():
+    mock_redis = MagicMock(spec=RedisCache)
+    mock_redis.batch_get_cache.side_effect = RuntimeError("redis unavailable")
+    dual_cache = DualCache(
+        in_memory_cache=InMemoryCache(), redis_cache=mock_redis, default_redis_batch_cache_expiry=10
+    )
+
+    first_result = dual_cache.batch_get_cache(keys=["shared_a"])
+    second_result = dual_cache.batch_get_cache(keys=["shared_a"])
+
+    assert first_result is None
+    assert second_result is None
+    assert mock_redis.batch_get_cache.call_count == 2
+    assert "shared_a" not in dual_cache.last_redis_batch_access_time
+
+
+def test_dual_cache_batch_get_cache_returns_memory_only_when_redis_read_is_throttled():
+    mock_redis = _redis_mock_for_sync_batch({"throttled_key": "redis_value"})
+    dual_cache = DualCache(
+        in_memory_cache=InMemoryCache(), redis_cache=mock_redis, default_redis_batch_cache_expiry=10
+    )
+    dual_cache.last_redis_batch_access_time["throttled_key"] = time.time()
+
+    result = dual_cache.batch_get_cache(keys=["throttled_key"])
+
+    assert result == [None]
+    mock_redis.batch_get_cache.assert_not_called()
+
+
+def test_dual_cache_sync_batch_redis_backfill_injects_default_in_memory_ttl():
+    """Sync batch_get_cache's Redis-to-memory backfill must honor
+    default_in_memory_ttl, same as the async path."""
+    in_memory_cache = InMemoryCache(default_ttl=600)
+    mock_redis = _redis_mock_for_sync_batch({"batch_backfill_key": "redis_value"})
+    dual_cache = DualCache(
+        in_memory_cache=in_memory_cache,
+        redis_cache=mock_redis,
+        default_in_memory_ttl=60,
+    )
+
+    before = time.time()
+    result = dual_cache.batch_get_cache(keys=["batch_backfill_key"])
+    after = time.time()
+
+    assert result == ["redis_value"]
+    expiry = in_memory_cache.ttl_dict["batch_backfill_key"]
+    assert expiry >= before + 60
+    assert expiry <= after + 60
+
+
+def test_dual_cache_batch_get_cache_forwards_explicit_ttl_to_backfill():
+    """An explicit ttl kwarg must reach the in-memory backfill flat, not nested
+    under a 'kwargs' key the way the old locals()-forwarding path sent it."""
+    in_memory_cache = InMemoryCache(default_ttl=600)
+    mock_redis = _redis_mock_for_sync_batch({"explicit_ttl_key": "redis_value"})
+    dual_cache = DualCache(in_memory_cache=in_memory_cache, redis_cache=mock_redis)
+
+    before = time.time()
+    result = dual_cache.batch_get_cache(keys=["explicit_ttl_key"], ttl=5)
+    after = time.time()
+
+    assert result == ["redis_value"]
+    expiry = in_memory_cache.ttl_dict["explicit_ttl_key"]
+    assert expiry >= before + 5
+    assert expiry <= after + 5
+
+
 @pytest.mark.asyncio
 async def test_dual_cache_async_set_cache_injects_default_in_memory_ttl():
     """
@@ -84,6 +217,60 @@ async def test_dual_cache_async_set_cache_injects_default_in_memory_ttl():
     # The TTL stored should reflect default_in_memory_ttl (60s), not
     # InMemoryCache's default_ttl (600s)
     expiry = in_memory_cache.ttl_dict["test_key"]
+    assert expiry >= before + 60
+    assert expiry <= after + 60
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_redis_backfill_injects_default_in_memory_ttl():
+    """
+    A Redis-hit backfill into the in-memory tier must honor
+    default_in_memory_ttl the same way the write paths do. Without it, the
+    backfilled entry falls to InMemoryCache's own default_ttl (600s), so a
+    replica that primed a management object (e.g. a virtual key's auth blob)
+    from Redis keeps serving it for 10 minutes after the object was updated
+    and invalidated, instead of re-reading within the configured TTL.
+    """
+    in_memory_cache = InMemoryCache(default_ttl=600)
+    redis_cache = MagicMock()
+    redis_cache.async_get_cache = AsyncMock(return_value="redis_value")
+    dual_cache = DualCache(
+        in_memory_cache=in_memory_cache,
+        redis_cache=redis_cache,
+        default_in_memory_ttl=60,
+    )
+
+    before = time.time()
+    result = await dual_cache.async_get_cache(key="backfill_key")
+    after = time.time()
+
+    assert result == "redis_value"
+    expiry = in_memory_cache.ttl_dict["backfill_key"]
+    assert expiry >= before + 60
+    assert expiry <= after + 60
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_batch_redis_backfill_injects_default_in_memory_ttl():
+    """async_batch_get_cache's Redis-to-memory backfill must honor
+    default_in_memory_ttl, same as the single-key path."""
+    in_memory_cache = InMemoryCache(default_ttl=600)
+    mock_redis = MagicMock(spec=RedisCache)
+    mock_redis.async_batch_get_cache = AsyncMock(
+        return_value={"batch_backfill_key": "redis_value"}
+    )
+    dual_cache = DualCache(
+        in_memory_cache=in_memory_cache,
+        redis_cache=mock_redis,
+        default_in_memory_ttl=60,
+    )
+
+    before = time.time()
+    result = await dual_cache.async_batch_get_cache(keys=["batch_backfill_key"])
+    after = time.time()
+
+    assert result == ["redis_value"]
+    expiry = in_memory_cache.ttl_dict["batch_backfill_key"]
     assert expiry >= before + 60
     assert expiry <= after + 60
 
@@ -391,3 +578,129 @@ async def test_dual_cache_late_attach_redis_wires_writes_and_ttl_async():
     assert mock_redis.async_set_cache.call_args[0][:2] == (key_after, val_after)
 
     assert in_memory.get_cache(key_after) == val_after
+
+
+class _OpenBreakerRedis:
+    def __init__(self) -> None:
+        from litellm.caching.redis_cache import RedisCircuitBreaker
+
+        self._circuit_breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
+        for _ in range(3):
+            self._circuit_breaker.record_failure()
+
+    @_redis_circuit_breaker_guard
+    async def async_get_cache(self, key, **kwargs):
+        raise AssertionError("never reached")
+
+    @_redis_circuit_breaker_guard
+    async def async_batch_get_cache(self, key_list, **kwargs):
+        raise AssertionError("never reached")
+
+    @_redis_circuit_breaker_guard
+    async def async_set_cache(self, key, value, **kwargs):
+        raise AssertionError("never reached")
+
+    @_redis_circuit_breaker_guard
+    async def async_set_cache_pipeline(self, cache_list, **kwargs):
+        raise AssertionError("never reached")
+
+    @_redis_circuit_breaker_guard
+    async def async_increment_pipeline(self, increment_list, **kwargs):
+        raise AssertionError("never reached")
+
+    @_redis_circuit_breaker_guard
+    async def async_increment(self, key, value, **kwargs):
+        raise AssertionError("never reached")
+
+    @_redis_circuit_breaker_guard_sync
+    def get_cache(self, key, **kwargs):
+        raise AssertionError("never reached")
+
+    @_redis_circuit_breaker_guard_sync
+    def batch_get_cache(self, key_list, **kwargs):
+        raise AssertionError("never reached")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda cache: cache.async_get_cache("k"),
+        lambda cache: cache.async_batch_get_cache(["k1", "k2"]),
+        lambda cache: cache.async_set_cache("k", "v"),
+        lambda cache: cache.async_set_cache_pipeline([("k", "v")]),
+        lambda cache: cache.async_increment_cache_pipeline(
+            increment_list=[RedisPipelineIncrementOperation(key="k", increment_value=1.0, ttl=60)]
+        ),
+        lambda cache: cache.async_increment_cache("k", 1.0),
+    ],
+    ids=["get", "batch_get", "set", "set_pipeline", "increment_pipeline", "increment"],
+)
+async def test_an_open_circuit_breaker_is_not_an_error_per_request(caplog, call):
+    cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=_OpenBreakerRedis())  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    caplog.clear()
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        await call(cache)
+
+    assert [record.levelno for record in caplog.records if record.levelno >= logging.WARNING] == []
+    assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [lambda cache: cache.get_cache("k"), lambda cache: cache.batch_get_cache(["k1", "k2"])],
+    ids=["get", "batch_get"],
+)
+def test_an_open_circuit_breaker_is_not_an_error_per_sync_request(caplog, call):
+    cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=_OpenBreakerRedis())  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    caplog.clear()
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        call(cache)
+
+    assert [record.levelno for record in caplog.records if record.levelno >= logging.WARNING] == []
+    assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_a_real_redis_failure_still_logs_an_error(caplog):
+    class _BrokenRedis:
+        async def async_get_cache(self, key, **kwargs):
+            raise ConnectionError("redis is down")
+
+    cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=_BrokenRedis())  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        assert await cache.async_get_cache("k") is None
+
+    errors = [record for record in caplog.records if record.levelno == logging.ERROR]
+    assert [record.getMessage() for record in errors] == ["LiteLLM Cache: exception in async_get_cache: redis is down"]
+    assert errors[0].exc_info is not None
+
+
+def _dual_cache_with_open_breaker_and_a_memory_hit() -> DualCache:
+    in_memory = InMemoryCache()
+    in_memory.set_cache("k1", "v1")
+    return DualCache(in_memory_cache=in_memory, redis_cache=_OpenBreakerRedis(), default_redis_batch_cache_expiry=10)  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+
+
+def test_open_breaker_keeps_sync_batch_read_memory_hits_and_releases_reservations():
+    """A refused Redis batch read must still answer with the in-memory hits and hold no reservation.
+
+    The refusal was logged and turned into a bare None, so a caller lost its in-memory hits
+    for as long as the breaker stayed open, and the reserved keys stayed throttled until
+    the batch expiry passed even though nothing was ever read for them.
+    """
+    cache = _dual_cache_with_open_breaker_and_a_memory_hit()
+
+    assert list(cache.batch_get_cache(["k1", "k2"])) == ["v1", None]
+    assert "k2" not in cache.last_redis_batch_access_time
+
+
+@pytest.mark.asyncio
+async def test_open_breaker_keeps_async_batch_read_memory_hits_and_releases_reservations():
+    cache = _dual_cache_with_open_breaker_and_a_memory_hit()
+
+    assert list(await cache.async_batch_get_cache(["k1", "k2"])) == ["v1", None]
+    assert "k2" not in cache.last_redis_batch_access_time

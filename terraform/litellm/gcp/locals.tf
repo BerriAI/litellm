@@ -21,6 +21,9 @@ locals {
     var.labels,
   )
 
+  create_network = var.network_id == ""
+  network_id     = local.create_network ? google_compute_network.this[0].id : var.network_id
+
   gateway_path_prefixes = [
     "/v1/chat/*", "/chat/*",
     "/v1/completions*", "/completions*",
@@ -52,7 +55,7 @@ locals {
     "/queue/chat/*",
     "/v1beta/*",
     "/interactions/*",
-    "/anthropic/*", "/azure/*", "/azure_ai/*", "/aws/*", "/bedrock/*",
+    "/anthropic/*", "/azure/*", "/azure_ai/*", "/aws/*", "/bedrock/*", "/comprehendmedical*",
     "/cohere/*", "/gemini/*", "/google/*",
     "/vertex_ai/*", "/vertex-ai/*",
     "/assemblyai/*", "/eu.assemblyai/*",
@@ -74,7 +77,7 @@ locals {
     "/ui/*",
   ]
 
-  proxy_config_enabled = length(keys(var.proxy_config)) > 0
+  proxy_config_enabled = var.create_runtime && length(keys(var.proxy_config)) > 0
   proxy_config_yaml    = local.proxy_config_enabled ? yamlencode(var.proxy_config) : ""
 
   proxy_config_mount_path = "/etc/litellm"

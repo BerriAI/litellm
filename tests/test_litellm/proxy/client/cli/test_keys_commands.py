@@ -1,13 +1,9 @@
 import json
 import os
-import sys
 from unittest.mock import patch
 
 import requests
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 import pytest
@@ -124,7 +120,6 @@ def test_async_keys_generate_error_handling(mock_keys_client, cli_runner):
 
 
 def test_async_keys_delete_error_handling(mock_keys_client, cli_runner):
-    import requests
 
     # Mock a connection error that would normally happen in CI
     mock_keys_client.return_value.delete.side_effect = (
@@ -146,7 +141,6 @@ def test_async_keys_delete_error_handling(mock_keys_client, cli_runner):
 def test_async_keys_delete_http_error_handling(mock_keys_client, cli_runner):
     from unittest.mock import Mock
 
-    import requests
 
     # Create a mock response object for HTTPError
     mock_response = Mock()
@@ -262,7 +256,7 @@ def test_keys_import_actual_import_success(mock_keys_client, cli_runner):
 
         assert result.exit_code == 0
         assert "Found 1 keys in source instance" in result.output
-        assert "✓ Imported key: import-key-1" in result.output
+        assert "Imported key: import-key-1" in result.output
         assert "Successfully imported: 1" in result.output
         assert "Failed to import: 0" in result.output
 
@@ -481,8 +475,8 @@ def test_keys_import_partial_failure(mock_keys_client, cli_runner):
         )
 
         assert result.exit_code == 0  # Command completes even with partial failures
-        assert "✓ Imported key: success-key" in result.output
-        assert "✗ Failed to import key fail-key" in result.output
+        assert "Imported key: success-key" in result.output
+        assert "Failed to import key fail-key" in result.output
         assert "Successfully imported: 1" in result.output
         assert "Failed to import: 1" in result.output
         assert "Total keys processed: 2" in result.output

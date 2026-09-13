@@ -1,4 +1,4 @@
-from typing import List, Literal
+from typing import Literal
 
 
 def get_formatted_prompt(
@@ -25,7 +25,7 @@ def get_formatted_prompt(
                 content = message.get("content")
                 if isinstance(content, str):
                     prompt += message["content"]
-                elif isinstance(content, List):
+                elif isinstance(content, list):
                     for c in content:
                         if c["type"] == "text":
                             prompt += c["text"]

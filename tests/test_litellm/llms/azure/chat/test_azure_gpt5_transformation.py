@@ -1,12 +1,22 @@
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
 
 
 @pytest.fixture()
 def config() -> AzureOpenAIGPT5Config:
     return AzureOpenAIGPT5Config()
+
+
+@pytest.fixture(autouse=True)
+def use_local_model_cost_map(monkeypatch: pytest.MonkeyPatch):
+    """Pin the bundled cost map: these gates read model-map capability keys, and the default
+    import path fetches the published map, which lags a key added in this repo."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url))
+    litellm.add_known_models(model_cost_map=litellm.model_cost)
 
 
 def test_azure_gpt5_supports_reasoning_effort(config: AzureOpenAIGPT5Config):
@@ -299,3 +309,70 @@ def test_azure_gpt5_1_does_not_support_logprobs(config: AzureOpenAIGPT5Config):
     supported_params = config.get_supported_openai_params(model="gpt-5.1")
     assert "logprobs" not in supported_params
     assert "top_logprobs" not in supported_params
+
+
+class TestAzureResolvesTheDeclaredDefaultEffort:
+    """Azure reaches the same models under names that are not cost-map keys. Every capability
+    lookup therefore has to normalise the name identically, which is why the normalisation is
+    one overridden resolver rather than a rewrite inside a single lookup.
+    """
+
+    @pytest.mark.parametrize(
+        "model, temperature_survives",
+        [
+            ("azure/gpt-5.1", True),
+            ("gpt5_series/gpt-5.1", True),
+            ("gpt-5.1", True),
+            ("azure/gpt-5.6-terra", False),
+            ("gpt5_series/gpt-5.6-terra", False),
+            ("azure/gpt-5.5", False),
+        ],
+    )
+    def test_every_azure_name_shape_reads_the_same_entry(self, config, model, temperature_survives):
+        mapped = config.map_openai_params(
+            non_default_params={"temperature": 0},
+            optional_params={},
+            model=model,
+            drop_params=True,
+        )
+        assert ("temperature" in mapped) is temperature_survives
+
+
+def test_azure_gpt_6_astra_takes_the_reasoning_series_request_shape():
+    params = litellm.get_optional_params(
+        model="gpt-6-astra",
+        custom_llm_provider="azure",
+        max_tokens=100,
+        reasoning_effort="max",
+    )
+    assert params["max_completion_tokens"] == 100
+    assert "max_tokens" not in params
+    assert params["reasoning_effort"] == "max"
+
+
+@pytest.mark.parametrize("model", ["azure/gpt-6-astra", "azure/us/gpt-6-astra"])
+def test_azure_gpt6_astra_reasoning_effort_none_unlocks_temperature(config: AzureOpenAIGPT5Config, model: str):
+    """Foundry's gpt-6-astra accepts reasoning_effort='none' and, only then, a non-default
+    temperature (verified live against a Foundry deployment), unlike OpenAI's gpt-6-astra."""
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.2, "reasoning_effort": "none"},
+        optional_params={},
+        model=model,
+        drop_params=False,
+        api_version="2025-04-01-preview",
+    )
+    assert params["temperature"] == 0.2
+    assert params["reasoning_effort"] == "none"
+
+
+@pytest.mark.parametrize("model", ["azure/gpt-6-astra", "azure/us/gpt-6-astra"])
+def test_azure_gpt6_astra_rejects_reasoning_effort_minimal(config: AzureOpenAIGPT5Config, model: str):
+    """Foundry's gpt-6-astra lists none, low, medium, high, xhigh and max but not minimal."""
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": "minimal"},
+            optional_params={},
+            model=model,
+            drop_params=False,
+            api_version="2025-04-01-preview",
+        )

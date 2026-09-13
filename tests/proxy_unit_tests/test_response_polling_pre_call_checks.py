@@ -6,14 +6,11 @@ BEFORE a polling ID is created, so rate-limited requests get a
 synchronous error instead of a polling ID that immediately fails.
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException, Request, Response
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth

@@ -20,14 +20,11 @@ Tests cover:
 - llm_router unavailable / model_group missing / router raises → silent no-op.
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from prometheus_client import REGISTRY
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.types.integrations.prometheus import UserAPIKeyLabelValues

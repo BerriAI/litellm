@@ -2,6 +2,7 @@ import asyncio
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -29,6 +30,7 @@ def _make_mock_tts_response():
     inner = MagicMock()
     inner.aiter_bytes = _aiter_bytes
     inner._hidden_params = {}
+    inner.response = httpx.Response(status_code=200, headers={"content-type": "audio/mpeg"})
 
     async def _resolver():
         return inner

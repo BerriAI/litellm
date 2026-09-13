@@ -231,7 +231,7 @@ async def test_claim_token_rejects_already_used_link():
     data = InvitationClaim(
         invitation_link="invite-abc",
         user_id="user-123",
-        password="NewP@ssw0rd",
+        password="NewP@ssw0rd123",
     )
 
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
@@ -254,7 +254,7 @@ async def test_claim_token_rejects_expired_link():
     data = InvitationClaim(
         invitation_link="invite-abc",
         user_id="user-123",
-        password="NewP@ssw0rd",
+        password="NewP@ssw0rd123",
     )
 
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
@@ -275,7 +275,7 @@ async def test_claim_token_rejects_mismatched_user_id():
     data = InvitationClaim(
         invitation_link="invite-abc",
         user_id="wrong-user",
-        password="NewP@ssw0rd",
+        password="NewP@ssw0rd123",
     )
 
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
@@ -296,7 +296,7 @@ async def test_claim_token_rejects_missing_onboarding_token():
     data = InvitationClaim(
         invitation_link="invite-abc",
         user_id="user-123",
-        password="NewP@ssw0rd",
+        password="NewP@ssw0rd123",
     )
 
     with (
@@ -322,7 +322,7 @@ async def test_claim_token_rejects_wrong_onboarding_session():
     data = InvitationClaim(
         invitation_link="invite-abc",
         user_id="user-123",
-        password="NewP@ssw0rd",
+        password="NewP@ssw0rd123",
     )
     request = _make_claim_request(
         _make_onboarding_token(invitation_link="other-invite")
@@ -351,7 +351,7 @@ async def test_claim_token_rejects_invalid_bearer_token():
     data = InvitationClaim(
         invitation_link="invite-abc",
         user_id="user-123",
-        password="NewP@ssw0rd",
+        password="NewP@ssw0rd123",
     )
     request = _make_claim_request("sk-regular-key")
 
@@ -380,7 +380,7 @@ async def test_claim_token_rejects_concurrent_reuse_before_password_write():
     data = InvitationClaim(
         invitation_link="invite-abc",
         user_id="user-123",
-        password="NewP@ssw0rd",
+        password="NewP@ssw0rd123",
     )
 
     with (
@@ -418,7 +418,7 @@ async def test_claim_token_sets_accepted_at_after_password_written():
     data = InvitationClaim(
         invitation_link="invite-abc",
         user_id="user-123",
-        password="NewP@ssw0rd",
+        password="NewP@ssw0rd123",
     )
 
     mock_token_response = {"token": "sk-generated-key", "user_id": "user-123"}
@@ -477,7 +477,7 @@ async def test_claim_token_rolls_back_invite_when_session_key_mint_fails():
     data = InvitationClaim(
         invitation_link="invite-abc",
         user_id="user-123",
-        password="NewP@ssw0rd",
+        password="NewP@ssw0rd123",
     )
 
     with (

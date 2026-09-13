@@ -6,6 +6,7 @@ import asyncio
 import aiohttp
 import os
 import dotenv
+from typing import Final
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -495,16 +496,13 @@ async def test_model_group_info_e2e():
         model_group_info = await get_model_group_info(session=session, key="sk-1234")
         print(model_group_info)
 
-        # Check that the endpoint returns data and contains the wildcard
-        # anthropic model group from the proxy config
-        has_anthropic_wildcard = False
-        for model in model_group_info["data"]:
-            if model["model_group"] == "anthropic/*":
-                has_anthropic_wildcard = True
+        model_groups: Final = [m["model_group"] for m in model_group_info["data"]]
 
-        assert has_anthropic_wildcard, (
-            f"Expected 'anthropic/*' in model groups, got: "
-            f"{[m['model_group'] for m in model_group_info['data']]}"
+        assert "anthropic/*" not in model_groups, (
+            f"Expected 'anthropic/*' to be expanded, but it was returned verbatim: {model_groups}"
+        )
+        assert any(m.startswith("anthropic/") for m in model_groups), (
+            f"Expected concrete anthropic models from the 'anthropic/*' config entry, got: {model_groups}"
         )
 
 

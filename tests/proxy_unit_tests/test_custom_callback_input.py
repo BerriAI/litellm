@@ -2,8 +2,7 @@
 ## This test asserts the type of data passed into each method of the custom callback handler
 import asyncio
 import inspect
-import os
-import sys
+import json
 import time
 import traceback
 from litellm._uuid import uuid
@@ -12,7 +11,6 @@ from datetime import datetime
 import pytest
 from pydantic import BaseModel
 
-sys.path.insert(0, os.path.abspath("../.."))
 from typing import List, Literal, Optional, Union
 from unittest.mock import AsyncMock, MagicMock, patch
 

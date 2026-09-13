@@ -3,18 +3,12 @@
 
 
 import asyncio
-import os
-import sys
 import time
 import traceback
 
 import openai
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
-import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from typing import (
@@ -489,9 +483,9 @@ async def test_image_generation_async_additional_params():
 
         mock_client.assert_awaited_once()
 
-        mock_client.call_args.kwargs["api_key"] == "my-api-key"
-        mock_client.call_args.kwargs["api_base"] == "my-api-base"
-        mock_client.call_args.kwargs["optional_params"] == {
+        assert mock_client.call_args.kwargs["api_key"] == "my-api-key"
+        assert mock_client.call_args.kwargs["api_base"] == "my-api-base"
+        assert mock_client.call_args.kwargs["optional_params"] == {
             "my_custom_param": "my-custom-param"
         }
 

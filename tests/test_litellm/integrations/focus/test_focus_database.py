@@ -1,5 +1,6 @@
 """Tests for FocusLiteLLMDatabase query construction."""
 
+import hashlib
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -68,7 +69,7 @@ async def test_should_accept_string_timestamps(monkeypatch: pytest.MonkeyPatch):
 async def test_should_reject_invalid_limit(monkeypatch: pytest.MonkeyPatch):
     db, query_mock = _setup_db(monkeypatch, [])
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='limit must be an integer'):
         await db.get_usage_data(limit="invalid")
 
     assert query_mock.await_count == 0
@@ -87,3 +88,24 @@ async def test_should_join_organization_table(monkeypatch: pytest.MonkeyPatch):
     )
     assert "ot.organization_alias as organization_alias" in query_text
     assert 'LEFT JOIN "LiteLLM_OrganizationTable" ot' in query_text
+
+
+@pytest.mark.asyncio
+async def test_should_build_frame_from_rows_recovered_for_double_hashed_keys(monkeypatch: pytest.MonkeyPatch):
+    double_hashed = hashlib.sha256(b"sk-hashed-token").hexdigest()
+    joined_row = {"api_key": "sk-joined", "api_key_alias": "joined", "team_id": "team-0", "user_email": None, "spend": 0.1}
+    dirty_row = {"api_key": double_hashed, "api_key_alias": None, "team_id": None, "user_email": None, "spend": 0.5}
+
+    async def query_raw(query: str, *params):
+        if "sha256(" in query:
+            return [{"digest": double_hashed, "key_alias": "batch-worker", "team_id": "team-1", "user_id": None}]
+        return [joined_row, dirty_row]
+
+    mock_client = SimpleNamespace(db=SimpleNamespace(query_raw=AsyncMock(side_effect=query_raw)))
+    db = FocusLiteLLMDatabase()
+    monkeypatch.setattr(db, "_ensure_prisma_client", lambda: mock_client)
+
+    result = await db.get_usage_data()
+
+    assert result["api_key_alias"].to_list() == ["joined", "batch-worker"]
+    assert result["team_id"].to_list() == ["team-0", "team-1"]

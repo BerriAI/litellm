@@ -67,6 +67,8 @@ When an A2A request hits `/a2a/{agent_id}/message/send`, the bridge:
 3. Calls `litellm.acompletion(model="langgraph/agent", api_base="http://localhost:2024")`
 4. Transforms response → A2A format
 
+The proxy then normalizes the client-facing response to the agent's pinned `protocolVersion` (`0.3` or `1.0`). No extra provider config is required for completion-bridge agents — pin `protocolVersion` only if your client expects a specific wire format.
+
 ## Classes
 
 - `A2ACompletionBridgeTransformation` - Static methods for message format conversion

@@ -3,15 +3,12 @@ Regression tests for streaming connection pool leak fix.
 """
 
 import asyncio
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import anyio
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.custom_httpx.aiohttp_transport import (

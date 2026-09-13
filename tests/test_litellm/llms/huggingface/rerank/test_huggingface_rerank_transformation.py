@@ -232,7 +232,7 @@ def test_huggingface_rerank_error_handling(mock_post):
     mock_response.text = "Unauthorized"
     mock_post.return_value = mock_response
 
-    with pytest.raises(Exception):
+    with pytest.raises(litellm.APIConnectionError):
         litellm.rerank(
             model="huggingface/BAAI/bge-reranker-base",
             query="hello",

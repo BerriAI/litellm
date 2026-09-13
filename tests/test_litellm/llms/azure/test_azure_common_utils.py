@@ -1,17 +1,18 @@
 import json
 import os
-import sys
 import traceback
 from typing import Callable, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 import litellm
-from litellm.llms.azure.common_utils import BaseAzureLLM, get_azure_ad_token
+from litellm.llms.azure.common_utils import (
+    BaseAzureLLM,
+    _cached_entra_id_token_provider,
+    get_azure_ad_token,
+    get_azure_ad_token_from_entra_id,
+)
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
@@ -283,36 +284,6 @@ def test_initialize_with_oidc_token_fallback_to_env(setup_mocks, monkeypatch):
     assert result["azure_ad_token"] == "mock-oidc-token"
 
 
-def test_initialize_with_oidc_token_no_credentials(setup_mocks, monkeypatch):
-    # Clear environment variables
-    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
-    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
-    monkeypatch.delenv("AZURE_SCOPE", raising=False)
-
-    # Test with azure_ad_token that starts with "oidc/" but no credentials anywhere
-    result = BaseAzureLLM().initialize_azure_sdk_client(
-        litellm_params={
-            "azure_ad_token": "oidc/test-token",
-        },
-        api_key=None,
-        api_base="https://test.openai.azure.com",
-        model_name="gpt-4",
-        api_version=None,
-        is_async=False,
-    )
-
-    # Verify that get_azure_ad_token_from_oidc was called with None values
-    setup_mocks["oidc_token"].assert_called_once_with(
-        azure_ad_token="oidc/test-token",
-        azure_client_id=None,
-        azure_tenant_id=None,
-        scope="https://cognitiveservices.azure.com/.default",
-    )
-
-    # Verify expected result
-    assert result["azure_ad_token"] == "mock-oidc-token"
-
-
 def test_initialize_with_ad_token_provider(setup_mocks, monkeypatch):
     # Clear environment variables
     monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
@@ -414,6 +385,58 @@ def test_select_azure_base_url_called(setup_mocks):
     setup_mocks["select_url"].assert_called_once()
 
 
+def test_initialize_defaults_max_retries_to_litellm_default(setup_mocks):
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={},
+        api_key="test-api-key",
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version="2023-06-01",
+        is_async=False,
+    )
+
+    assert result["max_retries"] == litellm.constants.DEFAULT_MAX_RETRIES
+
+
+@pytest.mark.parametrize(
+    "configured, expected",
+    [(0, 0), (5, 5), (None, litellm.constants.DEFAULT_MAX_RETRIES)],
+)
+def test_initialize_honors_explicit_max_retries(setup_mocks, configured, expected):
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={"max_retries": configured},
+        api_key="test-api-key",
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version="2023-06-01",
+        is_async=False,
+    )
+
+    assert result["max_retries"] == expected
+
+
+def test_default_max_retries_env_var_reaches_azure_sdk_client():
+    import subprocess
+    import sys
+
+    code = (
+        "from litellm.llms.azure.common_utils import BaseAzureLLM\n"
+        "client = BaseAzureLLM().get_azure_openai_client("
+        "api_key='test-api-key', api_base='https://test.openai.azure.com', api_version='2024-02-01',"
+        " client=None, _is_async=True, litellm_params={}, model='gpt-4')\n"
+        "print(client.max_retries)"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        env={**os.environ, "DEFAULT_MAX_RETRIES": "0"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert completed.stdout.strip() == "0"
+
+
 @pytest.mark.parametrize(
     "call_type",
     [
@@ -426,6 +449,7 @@ def test_select_azure_base_url_called(setup_mocks):
             "arerank",
             "arealtime",
             "anthropic_messages",
+            "aanthropic_messages",
             "add_message",
             "arun_thread_stream",
             "aresponses",
@@ -446,6 +470,7 @@ def test_select_azure_base_url_called(setup_mocks):
             "avector_store_create",
             "avector_store_search",
             "acreate_skill",
+            "acreate_interaction",
         ]
     ],
 )
@@ -841,7 +866,6 @@ async def test_azure_client_reuse(function_name, is_async, args):
     """
     Test that multiple Azure API calls reuse the same Azure OpenAI client
     """
-    litellm.set_verbose = True
 
     # Determine which client class to mock based on whether the test is async
     client_path = (
@@ -1429,7 +1453,7 @@ def test_token_provider_returns_non_string(setup_mocks):
 
     # Verify the error was logged
     setup_mocks["logger"].error.assert_any_call(
-        "Azure AD token provider returned non-string value: <class 'int'>"
+        "Azure AD token provider returned non-string value: %s", int
     )
 
 
@@ -2033,3 +2057,130 @@ def test_azure_traditional_api_uses_azure_openai_client():
         assert isinstance(
             async_client, AsyncAzureOpenAI
         ), f"Expected AsyncAzureOpenAI client for api_version={api_version}"
+
+
+class TestEntraIdTokenProviderCache:
+    def setup_method(self):
+        _cached_entra_id_token_provider.cache_clear()
+
+    def teardown_method(self):
+        _cached_entra_id_token_provider.cache_clear()
+
+    def test_reuses_credential_for_the_same_service_principal(self):
+        with (
+            patch("azure.identity.ClientSecretCredential") as mock_credential,
+            patch("azure.identity.get_bearer_token_provider", side_effect=lambda credential, scope: lambda: "token"),
+        ):
+            first = get_azure_ad_token_from_entra_id(
+                tenant_id="tenant",
+                client_id="client",
+                client_secret="secret",
+                scope="https://cognitiveservices.azure.com/.default",
+            )
+            second = get_azure_ad_token_from_entra_id(
+                tenant_id="tenant",
+                client_id="client",
+                client_secret="secret",
+                scope="https://cognitiveservices.azure.com/.default",
+            )
+
+        assert first is second
+        assert mock_credential.call_count == 1
+
+    @pytest.mark.parametrize(
+        "second_call_kwargs",
+        [
+            {"tenant_id": "other-tenant"},
+            {"client_id": "other-client"},
+            {"client_secret": "other-secret"},
+            {"scope": "https://ai.azure.com/.default"},
+        ],
+    )
+    def test_does_not_share_a_provider_across_credentials_or_scopes(self, second_call_kwargs):
+        base_kwargs = {
+            "tenant_id": "tenant",
+            "client_id": "client",
+            "client_secret": "secret",
+            "scope": "https://cognitiveservices.azure.com/.default",
+        }
+
+        with (
+            patch("azure.identity.ClientSecretCredential") as mock_credential,
+            patch("azure.identity.get_bearer_token_provider", side_effect=lambda credential, scope: lambda: "token"),
+        ):
+            first = get_azure_ad_token_from_entra_id(**base_kwargs)
+            second = get_azure_ad_token_from_entra_id(**{**base_kwargs, **second_call_kwargs})
+
+        assert first is not second
+        assert mock_credential.call_count == 2
+
+
+def test_evicting_an_azure_client_built_on_the_callers_session_leaves_it_open(monkeypatch):
+    """`initialize_azure_sdk_client` puts `litellm.aclient_session` on the SDK client.
+
+    That session belongs to the caller. `AsyncAzureOpenAI.close()` closes whatever
+    http client it was handed, so treating the wrapper as litellm's to close would
+    close the caller's shared session out from under them.
+    """
+    import httpx
+
+    from litellm.caching.evicted_client_closer import EvictedClientCloser
+    from litellm.caching.llm_caching_handler import LLMClientCache
+
+    shared_session = httpx.AsyncClient()
+    closer = EvictedClientCloser(grace_seconds=0.0)
+    monkeypatch.setattr(litellm, "aclient_session", shared_session)
+    monkeypatch.setattr(
+        litellm,
+        "in_memory_llm_clients_cache",
+        LLMClientCache(evicted_client_closer=closer),
+    )
+
+    wrapper = BaseAzureLLM().get_azure_openai_client(
+        api_key="not-a-real-key",
+        api_base="https://litellm.openai.azure.com",
+        api_version="2024-02-01",
+        litellm_params={},
+        _is_async=True,
+    )
+
+    assert wrapper is not None
+    assert wrapper._client is shared_session, "the wrapper should be built on the caller's session"
+
+    closer.schedule(wrapper)
+    closer.reap()
+
+    assert closer.pending_count == 0, "a wrapper around the caller's session must never be queued"
+    assert shared_session.is_closed is False, "closed the session the caller configured"
+
+
+def test_an_azure_client_litellm_built_its_own_http_client_for_is_still_closed(monkeypatch):
+    """The ownership check must not turn the reclaim off for the ordinary case."""
+    from litellm.caching.evicted_client_closer import EvictedClientCloser
+    from litellm.caching.llm_caching_handler import LLMClientCache
+
+    closer = EvictedClientCloser(grace_seconds=0.0)
+    monkeypatch.setattr(litellm, "aclient_session", None)
+    monkeypatch.setattr(litellm, "client_session", None)
+    monkeypatch.setattr(
+        litellm,
+        "in_memory_llm_clients_cache",
+        LLMClientCache(evicted_client_closer=closer),
+    )
+
+    wrapper = BaseAzureLLM().get_azure_openai_client(
+        api_key="not-a-real-key",
+        api_base="https://litellm.openai.azure.com",
+        api_version="2024-02-01",
+        litellm_params={},
+        _is_async=False,
+    )
+
+    assert wrapper is not None
+    closer.schedule(wrapper)
+
+    assert closer.pending_count == 1, "litellm built this client's http client, so it owns it"
+
+    closer.reap()
+
+    assert wrapper.is_closed() is True

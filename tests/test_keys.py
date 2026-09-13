@@ -8,9 +8,6 @@ from openai import AsyncOpenAI
 import sys, os
 from typing import Optional
 
-sys.path.insert(
-    0, os.path.abspath("../")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.proxy._types import LitellmUserRoles
 
@@ -22,7 +19,7 @@ async def generate_team(
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     if team_id is None:
         team_id = "litellm-dashboard"
-    data = {"team_id": team_id, "models": models}
+    data = {"team_id": team_id, **({"models": models} if models is not None else {})}
 
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
@@ -708,11 +705,10 @@ async def test_key_crossing_budget():
         response = await chat_completion(session=session, key=key)
         print("response 1: ", response)
         await asyncio.sleep(10)
-        try:
+        with pytest.raises(Exception, match="Budget has been exceeded!") as exc_info:
             response = await chat_completion(session=session, key=key)
-            pytest.fail("Should have failed - Key crossed it's budget")
-        except Exception as e:
-            assert "Budget has been exceeded!" in str(e)
+        e = exc_info.value
+        assert "Budget has been exceeded!" in str(e)
 
 
 @pytest.mark.skip(reason="AWS Suspended Account")
@@ -814,6 +810,7 @@ async def test_key_model_list(model_access, model_access_level, model_endpoint):
             models=_models if model_access_level == "team" else None,
             team_id=team_id,
         )
+        assert new_team["team_id"] == team_id
         key_gen = await generate_key(
             session=session,
             i=0,
@@ -884,8 +881,7 @@ async def test_key_over_budget():
         ## CALL `/models` - expect to work
         model_list = await get_key_info(session=session, get_key=key, call_key=key)
         ## CALL `/chat/completions` - expect to fail
-        try:
+        with pytest.raises(Exception, match="Budget has been exceeded!") as exc_info:
             await chat_completion(session=session, key=key)
-            pytest.fail("Expected this call to fail")
-        except Exception as e:
-            assert "Budget has been exceeded!" in str(e)
+        e = exc_info.value
+        assert "Budget has been exceeded!" in str(e)

@@ -2,6 +2,8 @@
 Test case normalization in LitellmParams for all guardrail types
 """
 
+from typing import Literal
+
 import pytest
 from pydantic import ValidationError
 
@@ -91,6 +93,34 @@ class TestLitellmParamsCaseNormalization:
             )
             assert params.on_disallowed_action in ["block", "rewrite"]
             assert params.on_disallowed_action.islower()
+
+
+class TestOnViolationAcceptedValues:
+    """on_violation is shared by /v1/realtime guardrails and the mcp_security guardrail"""
+
+    @pytest.mark.parametrize("action", ["block", "alert"])
+    def test_mcp_security_policy_template_on_violation_is_accepted(self, action: Literal["block", "alert"]):
+        params = LitellmParams(
+            guardrail="mcp_security",
+            mode="pre_call",
+            default_on=True,
+            on_violation=action,
+        )
+        assert params.on_violation == action
+
+    @pytest.mark.parametrize("action", ["warn", "end_session"])
+    def test_realtime_on_violation_still_accepted(self, action: Literal["warn", "end_session"]):
+        params = LitellmParams(guardrail="presidio", mode="pre_call", on_violation=action)
+        assert params.on_violation == action
+
+    @pytest.mark.parametrize("action", ["block", "alert"])
+    def test_mcp_only_on_violation_is_rejected_for_other_guardrails(self, action: Literal["block", "alert"]):
+        with pytest.raises(ValidationError, match="only supported by guardrail='mcp_security'"):
+            LitellmParams(guardrail="presidio", mode="pre_call", on_violation=action)
+
+    def test_unknown_on_violation_is_rejected(self):
+        with pytest.raises(ValidationError):
+            LitellmParams(guardrail="mcp_security", mode="pre_call", on_violation="ignore")
 
 
 class TestSensitiveDataRoutingValidation:

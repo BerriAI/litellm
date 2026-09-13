@@ -1,0 +1,69 @@
+interactions:
+- request:
+    body: '{"model":"mistral-ocr-latest","document":{"type":"image_url","image_url":"https://dummyjson.com/image/800x300/ffffff/000000?text=invoice%20123&fontSize=24"},"pages":[0]}'
+    headers:
+      Accept:
+      - '*/*'
+      Content-Type:
+      - application/json
+      User-Agent:
+      - litellm/1.101.0
+    method: POST
+    uri: http://parity-provider.invalid/v1/ocr
+  response:
+    body:
+      string: '{"pages":[{"index":0,"markdown":"invoice 123","images":[],"tables":[],"hyperlinks":[],"header":null,"footer":null,"dimensions":{"dpi":200,"height":300,"width":800},"confidence_scores":null,"blocks":[{"top_left_x":335,"top_left_y":138,"bottom_right_x":464,"bottom_right_y":162,"content":"invoice
+        123","confidence_scores":null,"type":"text"}]}],"model":"mistral-ocr-latest","document_annotation":null,"usage_info":{"pages_processed":1,"doc_size_bytes":4124}}'
+    headers:
+      CF-RAY:
+      - a346d35d1fbbebe5-SJC
+      Content-Type:
+      - application/json
+      Date:
+      - Tue, 01 Sep 2026 19:54:14 GMT
+      Server:
+      - cloudflare
+      Strict-Transport-Security:
+      - max-age=15552000; includeSubDomains; preload
+      X-Content-Type-Options:
+      - nosniff
+      access-control-allow-origin:
+      - '*'
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      mistral-correlation-id:
+      - 01a05e89-5685-747f-b76d-dab242ea7512
+      x-envoy-upstream-service-time:
+      - '179'
+      x-kong-proxy-latency:
+      - '12'
+      x-kong-request-id:
+      - 01a05e89-5685-747f-b76d-dab242ea7512
+      x-kong-upstream-latency:
+      - '180'
+      x-ratelimit-limit-ocr-pages-minute:
+      - '60'
+      x-ratelimit-ocr-pages-query-cost:
+      - '1'
+      x-ratelimit-remaining-ocr-pages-minute:
+      - '58'
+    status:
+      code: 200
+      message: ''
+recorded_at: '2026-09-01T19:54:14.385374+00:00'
+ttl_seconds: 0
+version: 1
+x-litellm:
+  case:
+    litellm_input:
+      contract: mistral
+      document:
+        image_url: https://dummyjson.com/image/800x300/ffffff/000000?text=invoice%20123&fontSize=24
+        type: image_url
+      model: mistral/mistral-ocr-latest
+      pages:
+      - 0
+  request_source: python_replay
+  schema_version: 1

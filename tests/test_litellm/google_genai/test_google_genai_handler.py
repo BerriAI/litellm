@@ -3,15 +3,10 @@
 Test to verify the Google GenAI generate_content handler functionality
 """
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler

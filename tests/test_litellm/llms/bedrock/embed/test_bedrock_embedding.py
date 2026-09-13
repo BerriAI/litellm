@@ -1,15 +1,17 @@
 import json
+import asyncio
 import os
-import sys
 from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import httpx
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 import litellm
+from litellm.llms.bedrock.embed.twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
+from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
 
 # Mock responses for different embedding models
 titan_embedding_response = {"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}
@@ -50,7 +52,6 @@ test_image_base64 = "data:image/png,test_image_base64_data"
 )
 def test_bedrock_embedding_with_api_key_bearer_token(model, input_type, embed_response):
     """Test embedding functionality with bearer token authentication"""
-    litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "test-bearer-token-12345"
 
@@ -98,7 +99,6 @@ def test_bedrock_embedding_with_env_variable_bearer_token(
     model, input_type, embed_response
 ):
     """Test embedding functionality with bearer token from environment variable"""
-    litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "env-bearer-token-12345"
 
@@ -130,7 +130,6 @@ def test_bedrock_embedding_with_env_variable_bearer_token(
 @pytest.mark.asyncio
 async def test_async_bedrock_embedding_with_bearer_token():
     """Test async embedding functionality with bearer token authentication"""
-    litellm.set_verbose = True
     client = AsyncHTTPHandler()
     test_api_key = "async-bearer-token-12345"
     model = "bedrock/amazon.titan-embed-text-v1"
@@ -160,7 +159,6 @@ async def test_async_bedrock_embedding_with_bearer_token():
 
 def test_bedrock_embedding_with_sigv4():
     """Test embedding falls back to SigV4 auth when no bearer token is provided"""
-    litellm.set_verbose = True
     model = "bedrock/amazon.titan-embed-text-v1"
 
     with patch(
@@ -182,7 +180,6 @@ def test_bedrock_embedding_with_sigv4():
 
 def test_bedrock_titan_v2_encoding_format_float():
     """Test amazon.titan-embed-text-v2:0 with encoding_format=float parameter"""
-    litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "test-bearer-token-12345"
     model = "bedrock/amazon.titan-embed-text-v2:0"
@@ -220,7 +217,6 @@ def test_bedrock_titan_v2_encoding_format_float():
 
 def test_bedrock_titan_v2_encoding_format_base64():
     """Test amazon.titan-embed-text-v2:0 with encoding_format=base64 parameter (maps to binary)"""
-    litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "test-bearer-token-12345"
     model = "bedrock/amazon.titan-embed-text-v2:0"
@@ -260,7 +256,6 @@ def test_bedrock_titan_v2_encoding_format_base64():
 
 def test_twelvelabs_input_type_parameter_mapping():
     """Test that input_type parameter is correctly mapped to inputType for TwelveLabs models"""
-    litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "test-bearer-token-12345"
     model = "bedrock/twelvelabs.marengo-embed-2-7-v1:0"
@@ -300,7 +295,6 @@ def test_twelvelabs_input_type_parameter_mapping():
 
 def test_twelvelabs_input_type_parameter_mapping_async_invoke():
     """Test that input_type parameter is correctly mapped to inputType for TwelveLabs async invoke models"""
-    litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "test-bearer-token-12345"
     model = "bedrock/async_invoke/twelvelabs.marengo-embed-2-7-v1:0"
@@ -343,7 +337,6 @@ def test_twelvelabs_input_type_parameter_mapping_async_invoke():
 
 def test_twelvelabs_missing_input_type_error():
     """Test that missing input_type parameter defaults to 'text' for TwelveLabs models"""
-    litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "test-bearer-token-12345"
 
@@ -422,7 +415,6 @@ def test_bedrock_embedding_header_forwarding(model, embed_response):
 
     Relevant Issue: https://github.com/BerriAI/litellm/pull/16042
     """
-    litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "test-bearer-token-12345"
 
@@ -489,7 +481,6 @@ def test_bedrock_embedding_extra_headers_and_headers_merge():
     This ensures that headers from kwargs (forwarded by proxy) and extra_headers
     (passed explicitly) are both included in the final headers sent to the provider.
     """
-    litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "test-bearer-token-12345"
     model = "bedrock/amazon.titan-embed-text-v1"
@@ -557,7 +548,6 @@ def test_bedrock_cohere_v4_embedding_response_parsing():
     Test parsing of Bedrock Cohere v4 embedding response which returns a dictionary of embeddings
     keyed by type (e.g. 'float', 'int8') instead of a direct list.
     """
-    litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "test-bearer-token-12345"
     model = "bedrock/cohere.embed-v4:0"
@@ -617,7 +607,6 @@ def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_base():
 
     Relevant Issue: Custom headers not forwarded with IAM roles + custom api_base
     """
-    litellm.set_verbose = True
     client = HTTPHandler()
 
     # Simulate IAM role credentials with session token
@@ -734,7 +723,6 @@ async def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_bas
     This is the async version of the test above, verifying the fix works for both
     sync and async embedding calls.
     """
-    litellm.set_verbose = True
     client = AsyncHTTPHandler()
 
     # Simulate IAM role credentials with session token
@@ -963,7 +951,7 @@ def test_titan_image_embedding_cost_uses_per_image_rate():
     "encoding_format,expected_embedding_types",
     [
         ("float", ["float"]),
-        ("base64", ["base64"]),
+        ("base64", ["float"]),
         (["float", "int8"], ["float", "int8"]),
     ],
 )
@@ -977,7 +965,6 @@ def test_bedrock_cohere_embedding_types_wrapped_as_list(
         Malformed input request: #/embedding_types: expected type: JSONArray, found: String
     when `encoding_format` is passed as a string.
     """
-    litellm.set_verbose = True
     client = HTTPHandler()
     model = "bedrock/cohere.embed-multilingual-v3"
 
@@ -1004,3 +991,348 @@ def test_bedrock_cohere_embedding_types_wrapped_as_list(
         assert "embedding_types" in request_body
         assert request_body["embedding_types"] == expected_embedding_types
         assert isinstance(request_body["embedding_types"], list)
+
+
+def test_load_credentials_assumes_role_with_external_id(monkeypatch):
+    """A trust policy requiring sts:ExternalId must be satisfied by the deployment's aws_external_id."""
+    import datetime
+
+    import boto3
+    from botocore.exceptions import ClientError
+
+    from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
+
+    monkeypatch.delenv("AWS_EXTERNAL_ID", raising=False)
+
+    class FakeSTSClient:
+        def get_caller_identity(self):
+            return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
+
+        def assume_role(self, **params):
+            if params.get("ExternalId") != "external-id-embed":
+                raise ClientError(
+                    {"Error": {"Code": "AccessDenied", "Message": "is not authorized to perform: sts:AssumeRole"}},
+                    "AssumeRole",
+                )
+            return {
+                "Credentials": {
+                    "AccessKeyId": "ASIAEMBEDROLEKEY",
+                    "SecretAccessKey": "assumed-secret",
+                    "SessionToken": "assumed-session-token",
+                    "Expiration": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=30),
+                }
+            }
+
+    optional_params = {
+        "aws_access_key_id": "AKIAEMBEDCALLERKEY",
+        "aws_secret_access_key": "pod-caller-secret",
+        "aws_region_name": "us-east-1",
+        "aws_role_name": "arn:aws:iam::999999999999:role/litellm-embed-role",
+        "aws_session_name": "litellm-embed-session",
+        "aws_external_id": "external-id-embed",
+    }
+
+    with patch.object(boto3, "client", return_value=FakeSTSClient()):
+        credentials, aws_region_name = BedrockEmbedding()._load_credentials(optional_params)
+
+    assert credentials.access_key == "ASIAEMBEDROLEKEY"
+    assert credentials.token == "assumed-session-token"
+    assert aws_region_name == "us-east-1"
+    assert "aws_external_id" not in optional_params
+
+
+def test_embedding_session_tags_sign_the_request_and_stay_out_of_the_body(monkeypatch):
+    """The tagged STS session signs the InvokeModel call and the tags never reach the body (#34069)."""
+    import datetime
+
+    import boto3
+    from botocore.exceptions import ClientError
+
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("AWS_ROLE_ARN", raising=False)
+    tags = [{"Key": "team", "Value": "genai"}]
+
+    class FakeSTSClient:
+        def get_caller_identity(self):
+            return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
+
+        def assume_role(self, **params):
+            if list(params.get("Tags", ())) != tags:
+                raise ClientError(
+                    {"Error": {"Code": "AccessDenied", "Message": "is not authorized to perform: sts:TagSession"}},
+                    "AssumeRole",
+                )
+            return {
+                "Credentials": {
+                    "AccessKeyId": "ASIAEMBEDTAGGED",
+                    "SecretAccessKey": "assumed-secret",
+                    "SessionToken": "assumed-session-token",
+                    "Expiration": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=30),
+                }
+            }
+
+    client = HTTPHandler()
+    with patch.object(boto3, "client", return_value=FakeSTSClient()), patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(titan_embedding_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model="bedrock/amazon.titan-embed-text-v1",
+            input=test_input,
+            client=client,
+            aws_region_name="us-east-1",
+            aws_access_key_id="AKIAEMBEDCALLERKEY",
+            aws_secret_access_key="pod-caller-secret",
+            aws_role_name="arn:aws:iam::999999999999:role/litellm-embed-role",
+            aws_session_name="litellm-embed-session",
+            aws_session_tags=tags,
+        )
+
+    assert response.data[0]["embedding"] == titan_embedding_response["embedding"]
+    sent = mock_post.call_args.kwargs
+    assert "Credential=ASIAEMBEDTAGGED/" in sent["headers"]["Authorization"]
+    assert "aws_session_tags" not in sent["data"]
+
+
+def test_bedrock_embedding_bearer_token_never_runs_the_sigv4_credential_chain(monkeypatch):
+    """The deployment's AWS profile does not exist, so resolving SigV4 credentials
+    raises; a bearer-token deployment must still serve the request, since the
+    bearer token alone signs it."""
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "env-bearer-token-12345")
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(titan_embedding_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model="bedrock/amazon.titan-embed-text-v1",
+            input=test_input,
+            client=client,
+            aws_region_name="us-west-2",
+            aws_profile_name="litellm-no-such-aws-profile",
+        )
+
+    assert response.data[0]["embedding"] == titan_embedding_response["embedding"]
+    assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer env-bearer-token-12345"
+
+
+@pytest.mark.asyncio
+async def test_async_single_func_embeddings_signs_off_the_event_loop(monkeypatch):
+    """Regression for issue #40165: Titan, Nova, and TwelveLabs embeddings sign one SigV4 request per
+    input, and botocore refreshes expiring credentials inside that signing with a blocking HTTP call,
+    so each signing must run on a worker thread to keep the loop serving other requests."""
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    probe = EventLoopProbe()
+    client = MagicMock()
+    client.__class__ = AsyncHTTPHandler
+    client.post = AsyncMock(
+        return_value=httpx.Response(
+            200,
+            json=titan_embedding_response,
+            request=httpx.Request("POST", "https://bedrock-runtime.us-west-2.amazonaws.com"),
+        )
+    )
+
+    release = asyncio.create_task(probe.release_refresh_from_the_loop())
+    response = await BedrockEmbedding()._async_single_func_embeddings(
+        client=client,
+        timeout=None,
+        batch_data=[{"inputText": test_input}],
+        credentials=probe.credentials(),
+        extra_headers=None,
+        endpoint_url="https://bedrock-runtime.us-west-2.amazonaws.com/model/amazon.titan-embed-text-v1/invoke",
+        aws_region_name="us-west-2",
+        model="amazon.titan-embed-text-v1",
+        logging_obj=MagicMock(),
+        provider="amazon",
+    )
+    await release
+
+    assert response.data[0]["embedding"] == titan_embedding_response["embedding"]
+    assert "Authorization" in client.post.call_args.kwargs["headers"]
+    assert probe.served_during_refresh is True
+marengo_3_embedding_response = {"data": [{"embedding": [0.01 * i for i in range(512)]}]}
+MARENGO_3_DUCK = "data:image/png;base64,ZHVjaw=="
+
+
+@pytest.mark.parametrize(
+    "model,kwargs,expected_body,expected_usage_details",
+    [
+        (
+            "bedrock/us.twelvelabs.marengo-embed-3-0-v1:0",
+            {"input_type": "text"},
+            {"inputType": "text", "text": {"inputText": "a duck on water"}},
+            {"query_count": 1},
+        ),
+        (
+            "bedrock/twelvelabs.marengo-embed-3-0-v1:0",
+            {"input_type": "text"},
+            {"inputType": "text", "text": {"inputText": "a duck on water"}},
+            {"query_count": 1},
+        ),
+        (
+            "bedrock/us.twelvelabs.marengo-embed-3-0-v1:0",
+            {"input_type": "text_image", "media_source": MARENGO_3_DUCK},
+            {
+                "inputType": "text_image",
+                "text_image": {"inputText": "a duck on water", "mediaSource": {"base64String": "ZHVjaw=="}},
+            },
+            {"query_count": 1, "image_count": 1},
+        ),
+        (
+            "bedrock/us.twelvelabs.marengo-embed-3-0-v1:0",
+            {"input_type": "multi_input", "media_sources": {"bird": MARENGO_3_DUCK}},
+            {
+                "inputType": "multi_input",
+                "multi_input": {
+                    "inputText": "a duck on water",
+                    "mediaSources": [{"name": "bird", "mediaType": "image", "base64String": "ZHVjaw=="}],
+                },
+            },
+            {"query_count": 1, "image_count": 1},
+        ),
+    ],
+)
+def test_marengo_3_embedding_sends_the_nested_payload_and_parses_512_dims(
+    model, kwargs, expected_body, expected_usage_details
+):
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(marengo_3_embedding_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model=model,
+            input="a duck on water",
+            client=client,
+            aws_region_name="us-east-1",
+            api_key="test-bearer-token-12345",
+            **kwargs,
+        )
+
+    assert json.loads(mock_post.call_args.kwargs["data"]) == expected_body
+    assert mock_post.call_args.kwargs["url"].endswith(f"/model/{model.removeprefix('bedrock/').replace(':', '%3A')}/invoke")
+    assert len(response.data[0]["embedding"]) == 512
+    assert response.data[0]["embedding"][:2] == [0.0, 0.01]
+    assert response.usage.prompt_tokens == 0
+    assert response.usage.total_tokens == 0
+    assert response.usage.prompt_tokens_details.model_dump(exclude_none=True) == expected_usage_details
+
+
+def test_marengo_3_image_embedding_sends_the_media_under_the_image_key():
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(marengo_3_embedding_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model="bedrock/us.twelvelabs.marengo-embed-3-0-v1:0",
+            input=MARENGO_3_DUCK,
+            client=client,
+            aws_region_name="us-east-1",
+            api_key="test-bearer-token-12345",
+            input_type="image",
+        )
+
+    assert json.loads(mock_post.call_args.kwargs["data"]) == {
+        "inputType": "image",
+        "image": {"mediaSource": {"base64String": "ZHVjaw=="}},
+    }
+    assert len(response.data[0]["embedding"]) == 512
+    assert response.data[0]["embedding"][:2] == [0.0, 0.01]
+    assert response.usage.prompt_tokens == 0
+    assert response.usage.prompt_tokens_details.model_dump(exclude_none=True) == {"image_count": 1}
+
+
+def test_marengo_2_7_embedding_keeps_the_flat_payload():
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(twelvelabs_embedding_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model="bedrock/us.twelvelabs.marengo-embed-2-7-v1:0",
+            input="a duck on water",
+            client=client,
+            aws_region_name="us-east-1",
+            api_key="test-bearer-token-12345",
+            input_type="text",
+        )
+
+    assert json.loads(mock_post.call_args.kwargs["data"]) == {
+        "inputType": "text",
+        "inputText": "a duck on water",
+        "textTruncate": "end",
+    }
+    assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+    assert response.usage.prompt_tokens == 0
+    assert response.usage.prompt_tokens_details.model_dump(exclude_none=True) == {"query_count": 1}
+
+
+def test_marengo_usage_counts_text_requests_and_images_across_a_batch():
+    duck = {"mediaType": "image", "base64String": "ZHVjaw=="}
+    response = TwelveLabsMarengoEmbeddingConfig()._transform_response(
+        response_list=[marengo_3_embedding_response, marengo_3_embedding_response, marengo_3_embedding_response],
+        model="us.twelvelabs.marengo-embed-3-0-v1:0",
+        batch_data=[
+            {"inputType": "text", "text": {"inputText": "a duck"}},
+            {"inputType": "image", "image": {"mediaSource": {"base64String": "ZHVjaw=="}}},
+            {"inputType": "multi_input", "multi_input": {"mediaSources": [{"name": "a", **duck}, {"name": "b", **duck}]}},
+        ],
+    )
+
+    assert [item["index"] for item in response.data] == [0, 1, 2]
+    assert response.usage.prompt_tokens == 0
+    assert response.usage.total_tokens == 0
+    assert response.usage.prompt_tokens_details.model_dump(exclude_none=True) == {"query_count": 1, "image_count": 3}
+
+
+def test_marengo_usage_without_request_data_bills_nothing():
+    response = TwelveLabsMarengoEmbeddingConfig()._transform_response(
+        response_list=[marengo_3_embedding_response], model="us.twelvelabs.marengo-embed-3-0-v1:0"
+    )
+
+    assert len(response.data[0]["embedding"]) == 512
+    assert response.usage.prompt_tokens == 0
+    assert response.usage.prompt_tokens_details is None
+
+
+def test_marengo_response_items_without_an_embedding_are_skipped():
+    response = TwelveLabsMarengoEmbeddingConfig()._transform_response(
+        response_list=[{"data": [{"embeddingOption": "visual-text", "startSec": 0.0}, {"embedding": [0.1, 0.2, 0.3]}]}],
+        model="us.twelvelabs.marengo-embed-3-0-v1:0",
+    )
+
+    assert [item["embedding"] for item in response.data] == [[0.1, 0.2, 0.3]]
+    assert response.data[0]["index"] == 0
+
+
+def test_marengo_3_text_image_without_media_source_is_a_bad_request():
+    with pytest.raises(litellm.BadRequestError, match=r"text_image.*media_source"):
+        litellm.embedding(
+            model="bedrock/us.twelvelabs.marengo-embed-3-0-v1:0",
+            input="a duck on water",
+            aws_region_name="us-east-1",
+            api_key="test-bearer-token-12345",
+            input_type="text_image",
+        )

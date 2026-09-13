@@ -10,7 +10,7 @@ the other across the cutover). A missing or undecryptable entry reads as a miss.
 from __future__ import annotations
 
 from dataclasses import KW_ONLY, dataclass
-from typing import Protocol
+from typing import Final, Protocol
 
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
@@ -49,7 +49,7 @@ class DualCacheTokenCacheBackend:
 
     async def get(self, user_id: str, server_id: str) -> OAuthToken | None:
         try:
-            blob = await self.cache.async_get_cache(self._key(user_id, server_id))
+            blob: Final = await self.cache.async_get_cache(self._key(user_id, server_id))
             return self.codec.decode(blob) if isinstance(blob, str) else None
         except Exception as exc:  # noqa: BLE001
             verbose_logger.debug("MCP per-user token cache get failed (miss): %s", exc)

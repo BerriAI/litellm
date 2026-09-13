@@ -1,9 +1,14 @@
 import React from "react";
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../tests/test-utils";
 import ToolPoliciesView from "./ToolPoliciesView";
+
+const can = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
+  default: (...args: unknown[]) => can(...args),
+}));
 
 vi.mock("@/components/ToolDetail", () => ({
   ToolDetail: ({ toolName, onBack }: { toolName: string; onBack: () => void }) => (
@@ -14,25 +19,39 @@ vi.mock("@/components/ToolDetail", () => ({
   ),
 }));
 
-vi.mock("@/components/ToolPolicies", () => ({
-  ToolPolicies: ({ onSelectTool }: { onSelectTool: (name: string) => void }) => (
-    <div>
-      <span>Tool Policies Overview</span>
-      <button onClick={() => onSelectTool("my-tool")}>Select Tool</button>
-    </div>
-  ),
+vi.mock("@/components/ToolPolicies/ToolPoliciesPanel", () => ({
+  ToolPoliciesPanel: function ToolPoliciesPanelMock({ onSelectTool }: { onSelectTool: (name: string) => void }) {
+    return (
+      <div>
+        <span>Tool Policies Overview</span>
+        <button onClick={() => onSelectTool("my-tool")}>Select Tool</button>
+      </div>
+    );
+  },
 }));
 
 describe("ToolPoliciesView", () => {
+  beforeEach(() => {
+    can.mockReset().mockReturnValue(true);
+  });
+
+  it("should show an admin-only notice instead of the overview when the caller lacks access", () => {
+    can.mockReturnValue(false);
+    renderWithProviders(<ToolPoliciesView accessToken="token" />);
+
+    expect(screen.getByText(/only available to admin users/i)).toBeInTheDocument();
+    expect(screen.queryByText("Tool Policies Overview")).not.toBeInTheDocument();
+  });
+
   it("should render the overview by default", () => {
-    renderWithProviders(<ToolPoliciesView accessToken="token" userRole="Admin" />);
+    renderWithProviders(<ToolPoliciesView accessToken="token" />);
 
     expect(screen.getByText("Tool Policies Overview")).toBeInTheDocument();
   });
 
   it("should navigate to tool detail when a tool is selected", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<ToolPoliciesView accessToken="token" userRole="Admin" />);
+    renderWithProviders(<ToolPoliciesView accessToken="token" />);
 
     await user.click(screen.getByRole("button", { name: /select tool/i }));
 
@@ -42,7 +61,7 @@ describe("ToolPoliciesView", () => {
 
   it("should navigate back to overview when back is clicked", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<ToolPoliciesView accessToken="token" userRole="Admin" />);
+    renderWithProviders(<ToolPoliciesView accessToken="token" />);
 
     await user.click(screen.getByRole("button", { name: /select tool/i }));
     await user.click(screen.getByRole("button", { name: /back/i }));

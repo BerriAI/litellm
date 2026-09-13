@@ -1,11 +1,9 @@
 import os
-import sys
 import unittest.mock as mock
 
 import pytest
 from httpx import Response
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
@@ -88,49 +86,44 @@ async def test_send_email_success(mock_env_vars):
 
 
 @pytest.mark.asyncio
-async def test_send_email_missing_api_key():
+async def test_send_email_missing_api_key(monkeypatch):
     # Remove the API key from environment before initializing logger
-    original_key = os.environ.pop("RESEND_API_KEY", None)
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
 
-    try:
-        # Initialize the logger after removing the API key
-        logger = ResendEmailLogger()
+    # Initialize the logger after removing the API key
+    logger = ResendEmailLogger()
 
-        # Test data
-        from_email = "test@example.com"
-        to_email = ["recipient@example.com"]
-        subject = "Test Subject"
-        html_body = "<p>Test email body</p>"
+    # Test data
+    from_email = "test@example.com"
+    to_email = ["recipient@example.com"]
+    subject = "Test Subject"
+    html_body = "<p>Test email body</p>"
 
-        # Create mock HTTP client and inject it directly into the logger
-        # This ensures the mock is used regardless of any caching issues
-        mock_response = mock.Mock(spec=Response)
-        mock_response.raise_for_status.return_value = None
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"id": "test_email_id"}
+    # Create mock HTTP client and inject it directly into the logger
+    # This ensures the mock is used regardless of any caching issues
+    mock_response = mock.Mock(spec=Response)
+    mock_response.raise_for_status.return_value = None
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"id": "test_email_id"}
 
-        mock_async_client = mock.AsyncMock()
-        mock_async_client.post.return_value = mock_response
+    mock_async_client = mock.AsyncMock()
+    mock_async_client.post.return_value = mock_response
 
-        # Directly inject the mock client to bypass any caching
-        logger.async_httpx_client = mock_async_client
+    # Directly inject the mock client to bypass any caching
+    logger.async_httpx_client = mock_async_client
 
-        # Send email
-        await logger.send_email(
-            from_email=from_email,
-            to_email=to_email,
-            subject=subject,
-            html_body=html_body,
-        )
+    # Send email
+    await logger.send_email(
+        from_email=from_email,
+        to_email=to_email,
+        subject=subject,
+        html_body=html_body,
+    )
 
-        # Verify the HTTP client was called with None as the API key
-        mock_async_client.post.assert_called_once()
-        call_args = mock_async_client.post.call_args
-        assert call_args[1]["headers"] == {"Authorization": "Bearer None"}
-    finally:
-        # Restore the original key if it existed
-        if original_key is not None:
-            os.environ["RESEND_API_KEY"] = original_key
+    # Verify the HTTP client was called with None as the API key
+    mock_async_client.post.assert_called_once()
+    call_args = mock_async_client.post.call_args
+    assert call_args[1]["headers"] == {"Authorization": "Bearer None"}
 
 
 @pytest.mark.asyncio

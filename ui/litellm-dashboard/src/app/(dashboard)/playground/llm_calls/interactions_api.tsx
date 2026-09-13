@@ -1,4 +1,4 @@
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
 
 export async function makeInteractionsRequest(
@@ -113,10 +113,9 @@ export async function makeInteractionsRequest(
     }
   } catch (error: unknown) {
     if (signal?.aborted) {
-      console.log("Interactions request was cancelled");
       throw error;
     }
-    NotificationManager.fromBackend(`Error occurred while making Interactions API request. Error: ${error}`);
+    toast.fromError(`Error occurred while making Interactions API request. Error: ${error}`);
     throw error;
   }
 }

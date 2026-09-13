@@ -8,14 +8,11 @@ branches, error mapping, and pre/post logging hooks.
 No real HTTP traffic is made.
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.interactions.agents.http_handler import (
     AgentsHTTPHandler,

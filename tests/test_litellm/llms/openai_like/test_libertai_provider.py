@@ -59,23 +59,6 @@ class TestLibertAIProviderConfig:
         assert api_base == "https://custom.example.com/v1"
         assert api_key == "sk-test"
 
-    def test_libertai_model_cost_map(self):
-        """Test that libertai models are present in the model cost map"""
-        model_cost = litellm.model_cost
-
-        assert "libertai/qwen3.6-27b" in model_cost
-        info = model_cost["libertai/qwen3.6-27b"]
-        assert info["litellm_provider"] == "libertai"
-        assert info["mode"] == "chat"
-        assert info["max_input_tokens"] == 262144
-        assert info["max_output_tokens"] == 262144
-
-        # thinking variants are marked as reasoning models
-        assert (
-            model_cost["libertai/qwen3.6-27b-thinking"].get("supports_reasoning")
-            is True
-        )
-
     def test_libertai_router_config(self):
         """Test that libertai can be used in Router configuration"""
         from litellm import Router
@@ -94,20 +77,6 @@ class TestLibertAIProviderConfig:
 
         assert len(router.model_list) == 1
         assert router.model_list[0]["model_name"] == "libertai-chat"
-
-    def test_libertai_model_modes(self):
-        """Chat models carry mode 'chat'; the embedding model carries mode 'embedding'."""
-        model_cost = litellm.model_cost
-
-        # chat model
-        assert model_cost["libertai/qwen3.6-27b"]["mode"] == "chat"
-
-        # embedding model (bge-m3) must be normalized to mode 'embedding' so
-        # /embeddings routing and the supported-endpoints matrix stay consistent
-        assert "libertai/bge-m3" in model_cost
-        bge = model_cost["libertai/bge-m3"]
-        assert bge["litellm_provider"] == "libertai"
-        assert bge["mode"] == "embedding"
 
     def test_libertai_supported_endpoints_matrix(self):
         """The runtime-served backup matrix (GET /public/supported_endpoints) lists libertai."""

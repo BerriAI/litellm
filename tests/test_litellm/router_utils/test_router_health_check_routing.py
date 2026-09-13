@@ -43,7 +43,12 @@ def _make_health_cache(
 class TestFilterHealthCheckUnhealthyDeployments:
     """Test the sync filter method."""
 
-    def _make_router_like(self, enable: bool, health_cache: DeploymentHealthCache):
+    def _make_router_like(
+        self,
+        enable: bool,
+        health_cache: DeploymentHealthCache,
+        model_groups: frozenset[str] | None = None,
+    ):
         """Create a minimal object that behaves like Router for filter testing."""
 
         class FakeRouter:
@@ -51,6 +56,7 @@ class TestFilterHealthCheckUnhealthyDeployments:
                 self.enable_health_check_routing = enable
                 self.health_state_cache = health_cache
                 self.allowed_fails_policy = None
+                self.background_health_check_model_groups = model_groups
 
         # Import the actual method and bind it
         from litellm.router import Router
@@ -115,11 +121,50 @@ class TestFilterHealthCheckUnhealthyDeployments:
         result = router._filter_health_check_unhealthy_deployments(deployments)
         assert len(result) == 2
 
+    def test_filter_scoped_to_listed_model_groups(self):
+        """With an allowlist, only deployments in listed groups are filtered on health."""
+        health_cache = _make_health_cache(unhealthy_ids={"bad-listed", "bad-unlisted"})
+        router = self._make_router_like(
+            enable=True, health_cache=health_cache, model_groups=frozenset({"prod"})
+        )
+
+        deployments = [
+            _make_deployment("bad-listed", model_name="prod"),
+            _make_deployment("ok-listed", model_name="prod"),
+            _make_deployment("bad-unlisted", model_name="other"),
+            _make_deployment("ok-unlisted", model_name="other"),
+        ]
+        result = router._filter_health_check_unhealthy_deployments(deployments)
+        assert [d["model_info"]["id"] for d in result] == [
+            "ok-listed",
+            "bad-unlisted",
+            "ok-unlisted",
+        ]
+
+    def test_filter_unscoped_when_model_groups_unset(self):
+        """Without an allowlist, unhealthy deployments in every group are filtered."""
+        health_cache = _make_health_cache(unhealthy_ids={"bad-listed", "bad-unlisted"})
+        router = self._make_router_like(enable=True, health_cache=health_cache)
+
+        deployments = [
+            _make_deployment("bad-listed", model_name="prod"),
+            _make_deployment("ok-listed", model_name="prod"),
+            _make_deployment("bad-unlisted", model_name="other"),
+            _make_deployment("ok-unlisted", model_name="other"),
+        ]
+        result = router._filter_health_check_unhealthy_deployments(deployments)
+        assert [d["model_info"]["id"] for d in result] == ["ok-listed", "ok-unlisted"]
+
 
 class TestAsyncFilterHealthCheckUnhealthyDeployments:
     """Test the async filter method."""
 
-    def _make_router_like(self, enable: bool, health_cache: DeploymentHealthCache):
+    def _make_router_like(
+        self,
+        enable: bool,
+        health_cache: DeploymentHealthCache,
+        model_groups: frozenset[str] | None = None,
+    ):
         from litellm.router import Router
 
         class FakeRouter:
@@ -127,6 +172,7 @@ class TestAsyncFilterHealthCheckUnhealthyDeployments:
                 self.enable_health_check_routing = enable
                 self.health_state_cache = health_cache
                 self.allowed_fails_policy = None
+                self.background_health_check_model_groups = model_groups
 
         fake = FakeRouter()
         fake._async_filter_health_check_unhealthy_deployments = (
@@ -167,6 +213,29 @@ class TestAsyncFilterHealthCheckUnhealthyDeployments:
             healthy_deployments=deployments
         )
         assert len(result) == 2  # safety net
+
+    @pytest.mark.asyncio
+    async def test_async_filter_scoped_to_listed_model_groups(self):
+        """Async version: only deployments in listed groups are filtered on health."""
+        health_cache = _make_health_cache(unhealthy_ids={"bad-listed", "bad-unlisted"})
+        router = self._make_router_like(
+            enable=True, health_cache=health_cache, model_groups=frozenset({"prod"})
+        )
+
+        deployments = [
+            _make_deployment("bad-listed", model_name="prod"),
+            _make_deployment("ok-listed", model_name="prod"),
+            _make_deployment("bad-unlisted", model_name="other"),
+            _make_deployment("ok-unlisted", model_name="other"),
+        ]
+        result = await router._async_filter_health_check_unhealthy_deployments(
+            healthy_deployments=deployments
+        )
+        assert [d["model_info"]["id"] for d in result] == [
+            "ok-listed",
+            "bad-unlisted",
+            "ok-unlisted",
+        ]
 
 
 class TestBuildDeploymentHealthStates:

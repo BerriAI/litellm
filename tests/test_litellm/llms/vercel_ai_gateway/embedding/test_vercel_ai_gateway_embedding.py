@@ -1,13 +1,9 @@
 import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.vercel_ai_gateway.embedding.transformation import (
     VercelAIGatewayEmbeddingConfig,

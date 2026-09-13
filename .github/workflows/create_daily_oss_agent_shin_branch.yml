@@ -13,35 +13,16 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
       - name: Create daily oss-agent-shin branch
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Configure Git user
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Generate branch name with MM_DD_YYYY format
           BRANCH_NAME="litellm_oss_agent_shin_$(date +'%m_%d_%Y')"
           echo "Creating branch: $BRANCH_NAME"
-
-          # Fetch all branches
-          git fetch --all
-
-          # Check if the branch already exists
-          if git show-ref --verify --quiet refs/remotes/origin/$BRANCH_NAME; then
+          if gh api "repos/${{ github.repository }}/git/ref/heads/$BRANCH_NAME" --silent 2>/dev/null; then
             echo "Branch $BRANCH_NAME already exists. Skipping creation."
-          else
-            echo "Creating new branch: $BRANCH_NAME"
-            # Create the new branch from main
-            git checkout -b $BRANCH_NAME origin/main
-            # Push the new branch
-            git push origin $BRANCH_NAME
-            echo "Successfully created and pushed branch: $BRANCH_NAME"
+            exit 0
           fi
+          MAIN_SHA=$(gh api "repos/${{ github.repository }}/git/ref/heads/main" --jq '.object.sha')
+          gh api "repos/${{ github.repository }}/git/refs" -f ref="refs/heads/$BRANCH_NAME" -f sha="$MAIN_SHA" --silent
+          echo "Successfully created branch: $BRANCH_NAME at $MAIN_SHA"

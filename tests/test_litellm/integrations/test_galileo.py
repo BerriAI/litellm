@@ -1,11 +1,8 @@
-import os
-import sys
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.integrations.galileo import GalileoObserve
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
@@ -112,7 +109,6 @@ def test_galileo_input_text_from_messages():
 
 
 def test_galileo_get_output_str_responses_api(galileo_v2_env):
-    from litellm.types.llms.openai import ResponsesAPIResponse
 
     logger = GalileoObserve()
     resp_dict = {

@@ -1,12 +1,8 @@
 import json
 import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, patch, MagicMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 
 import httpx
@@ -163,15 +159,23 @@ def test_azure_o_series_routing():
 def test_openai_o_series_max_retries_0(mock_get_openai_client):
     import litellm
 
+    mock_get_openai_client.return_value.chat.completions.with_raw_response.create.return_value.headers = {}
+    mock_get_openai_client.return_value.chat.completions.with_raw_response.create.return_value.parse.return_value = (
+        ModelResponse(choices=[{"message": {"role": "assistant", "content": "Hello"}}])
+    )
     litellm.set_verbose = True
     response = litellm.completion(
         model="azure/o1-preview",
         messages=[{"role": "user", "content": "hi"}],
         max_retries=0,
+        api_key="fake-key",
+        api_base="https://fake-azure.openai.azure.com",
+        api_version="2024-10-21",
     )
 
     mock_get_openai_client.assert_called_once()
     assert mock_get_openai_client.call_args.kwargs["max_retries"] == 0
+    assert response.choices[0].message.content == "Hello"
 
 
 @pytest.mark.asyncio

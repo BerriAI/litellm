@@ -100,7 +100,7 @@ def test_score_combines_quality_and_cost():
 
 
 def test_pick_best_empty_dict_raises():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='pick_best called with no models'):
         pick_best({}, {})
 
 

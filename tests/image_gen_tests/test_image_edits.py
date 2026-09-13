@@ -1,6 +1,5 @@
 import logging
 import os
-import sys
 import traceback
 import asyncio
 from typing import Optional
@@ -11,9 +10,6 @@ from unittest.mock import patch, AsyncMock
 import json
 from abc import ABC, abstractmethod
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.utils import ImageResponse

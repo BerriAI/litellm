@@ -4,7 +4,8 @@ Mock tests for LiteLLMA2ACardResolver.
 Tests that the card resolver tries both old and new well-known paths.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -12,6 +13,8 @@ from litellm.a2a_protocol.card_resolver import (
     LiteLLMA2ACardResolver,
     fix_agent_card_url,
     is_localhost_or_internal_url,
+    normalize_agent_card_interfaces,
+    set_agent_card_url,
 )
 
 
@@ -88,3 +91,50 @@ def test_fix_agent_card_url_replaces_localhost():
 
     # Verify localhost URL was replaced with base_url
     assert result.url == "https://my-public-agent.example.com/"
+
+
+def test_set_agent_card_url_updates_top_level_and_supported_interface():
+    card = SimpleNamespace(
+        url="http://localhost:10001/",
+        supported_interfaces=[SimpleNamespace(url="http://0.0.0.0:10001/")],
+    )
+
+    set_agent_card_url(card, "https://my-public-agent.example.com")
+
+    assert card.url == "https://my-public-agent.example.com/"
+    assert card.supported_interfaces[0].url == "https://my-public-agent.example.com/"
+
+
+def test_fix_agent_card_url_updates_interface_when_top_level_is_localhost():
+    card = SimpleNamespace(
+        url="http://localhost:10001/",
+        supported_interfaces=[SimpleNamespace(url="http://0.0.0.0:10001/")],
+    )
+
+    result = fix_agent_card_url(card, "https://my-public-agent.example.com")
+
+    assert result.url == "https://my-public-agent.example.com/"
+    assert result.supported_interfaces[0].url == "https://my-public-agent.example.com/"
+
+
+def test_normalize_agent_card_interfaces_downgrades_miscased_interfaces_to_the_0_3_dialect():
+    pb2 = pytest.importorskip("a2a.types.a2a_pb2")
+
+    card = pb2.AgentCard(
+        name="langgraph",
+        supported_interfaces=[
+            pb2.AgentInterface(url="http://a/", protocol_binding="jsonrpc", protocol_version="1.0"),
+            pb2.AgentInterface(url="http://b/", protocol_binding="JSONRPC", protocol_version="1.0"),
+            pb2.AgentInterface(url="http://c/", protocol_binding="websocket", protocol_version="1.0"),
+        ],
+    )
+
+    normalized = normalize_agent_card_interfaces(card)
+
+    assert [(i.protocol_binding, i.protocol_version) for i in normalized.supported_interfaces] == [
+        ("JSONRPC", "0.3"),
+        ("JSONRPC", "1.0"),
+        ("websocket", "1.0"),
+    ]
+    assert card.supported_interfaces[0].protocol_binding == "jsonrpc"
+    assert card.supported_interfaces[0].protocol_version == "1.0"
