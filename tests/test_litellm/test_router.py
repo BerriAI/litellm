@@ -7818,6 +7818,24 @@ def test_get_available_deployment_for_pass_through_raises_when_dict_blocked():
         )
 
 
+def test_get_available_deployment_for_pass_through_names_cooldown_despite_healthy_non_pass_through():
+    from litellm.types.router import RouterRateLimitError
+
+    router: Final = _router_with_two_pass_through_deployments([False, False])
+    router.add_deployment(
+        Deployment(
+            model_name="gpt-4o",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o-plain", api_key="sk-fake-for-tests"),
+            model_info=ModelInfo(id="plain-0"),
+        )
+    )
+    _cool_down(router, "pt-0", "pt-1")
+    with pytest.raises(RouterRateLimitError) as exc_info:
+        router.get_available_deployment_for_pass_through(model="gpt-4o", request_kwargs={})
+    assert exc_info.value.all_deployments_in_cooldown is True
+    assert exc_info.value.type == "all_deployments_in_cooldown"
+
+
 def test_initialize_deployment_for_pass_through_keeps_bedrock_iam_deployment():
     """
     Bedrock deployments using IAM/OIDC auth have no api_key; pass-through
