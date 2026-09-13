@@ -886,6 +886,20 @@ class Cache:
         If cache is default_on then this is True
         If cache is default_off then this is only true when user has opted in to use cache
         """
+        if self.supported_call_types is not None:
+            candidates: set[str] = set()
+            call_type = kwargs.get("call_type") or kwargs.get("route_type")
+            if call_type:
+                candidates.add(str(call_type))
+                candidates.add(str(call_type).lstrip("_"))
+            original_function = kwargs.get("original_function")
+            if original_function is not None:
+                fn_name = getattr(original_function, "__name__", str(original_function))
+                candidates.add(fn_name)
+                candidates.add(fn_name.lstrip("_"))
+            if candidates and not (candidates & set(self.supported_call_types)):
+                return False
+
         if self.mode == CacheMode.default_on:
             return True
 
