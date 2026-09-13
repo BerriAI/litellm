@@ -868,9 +868,12 @@ class LiteLLMRoutes(enum.Enum):
         "/prompt/list",
         "/prompt/info",
         "/vector_store/info",
-        # Project read routes - endpoint scopes results to caller's teams (non-admin)
+        # Project routes - reads scope results to caller's teams; /new and
+        # /update require proxy admin or admin of the project's team in the endpoint
         "/project/list",
         "/project/info",
+        "/project/new",
+        "/project/update",
         # Endpoint enforces proxy-admin vs team-admin model access itself.
         "/health/test_connection",
         # Invitation routes - org/team admins checked in endpoint via _user_has_admin_privileges

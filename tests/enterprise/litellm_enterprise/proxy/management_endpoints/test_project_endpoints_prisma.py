@@ -1383,3 +1383,33 @@ async def test_new_project_flag_on_access_group_model_returns_400(monkeypatch):
 
     assert "prod-models" in str(exc_info.value)
     assert "expand to multiple models at request time" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_check_user_permission_for_project_uses_members_with_roles():
+    """Team admins added via /team/member_add live in members_with_roles, not the legacy admins list."""
+    from litellm.proxy._types import LiteLLM_TeamTable, Member
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        _check_user_permission_for_project,
+    )
+
+    team = LiteLLM_TeamTable(
+        team_id="team-1",
+        admins=[],
+        members_with_roles=[
+            Member(user_id="team-admin", role="admin"),
+            Member(user_id="plain-member", role="user"),
+        ],
+    )
+
+    async def check(user_id: str) -> bool:
+        return await _check_user_permission_for_project(
+            user_api_key_dict=UserAPIKeyAuth(user_id=user_id, user_role=LitellmUserRoles.INTERNAL_USER),
+            team_id="team-1",
+            prisma_client=mock.MagicMock(),
+            team_object=team,
+        )
+
+    assert await check("team-admin") is True
+    assert await check("plain-member") is False
+    assert await check("stranger") is False

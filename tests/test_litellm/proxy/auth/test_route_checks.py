@@ -3714,6 +3714,47 @@ def test_agent_registry_route_gate_open_to_non_admin_roles(user_role, method, ro
         valid_token=valid_token,
         request_data={},
     )
+
+
+@pytest.mark.parametrize("route", ["/project/new", "/project/update"])
+def test_project_write_routes_reach_endpoint_for_internal_user(route):
+    """A team admin is an internal_user at the route gate. /project/new and
+    /project/update must pass it so the endpoint can apply its own proxy-admin
+    or team-admin check instead of the gate 403ing every non-proxy-admin."""
+
+    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    request = MagicMock(spec=Request)
+    request.method = "POST"
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=LiteLLM_UserTable(user_id="test_user", user_role=LitellmUserRoles.INTERNAL_USER.value),
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={"team_id": "team-1"},
+    )
+    assert RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.self_managed_routes.value)
+
+
+def test_project_delete_route_stays_proxy_admin_only():
+    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    request = MagicMock(spec=Request)
+    request.method = "DELETE"
+    request.query_params = {}
+
+    with pytest.raises(Exception, match="Only proxy admin can be used"):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=LiteLLM_UserTable(user_id="test_user", user_role=LitellmUserRoles.INTERNAL_USER.value),
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/project/delete",
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+
+
 TEAM_CALLBACK_ROUTES = (
     "/team/06bda574-5ca9-43d3-beb8-3b23c2f17112/callback",
     "/team/06bda574-5ca9-43d3-beb8-3b23c2f17112/callback/langfuse",

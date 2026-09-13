@@ -43,6 +43,7 @@ if TYPE_CHECKING:
 router = APIRouter()
 
 _OBJECT_PERMISSION_PAYLOAD: Final = TypeAdapter(dict[str, object])
+_TEAM_MEMBERS: Final = TypeAdapter(list[Member])
 
 
 def _team_table(prisma_client: PrismaClient) -> TableActions["prisma_models.LiteLLM_TeamTable"]:
@@ -105,14 +106,21 @@ async def _check_user_permission_for_project(
     if not team_id or not user_api_key_dict.user_id:
         return False
 
-    team = team_object
-    if team is None:
-        team = await _team_table(prisma_client).find_unique(where={"team_id": team_id})
+    team_row: Final = (
+        team_object
+        if team_object is not None
+        else await _team_table(prisma_client).find_unique(where={"team_id": team_id})
+    )
+    if team_row is None:
+        return False
 
-    if team and team.admins:
-        return user_api_key_dict.user_id in team.admins
-
-    return False
+    raw_members: Final = team_row.members_with_roles
+    members: Final = _TEAM_MEMBERS.validate_python(raw_members) if isinstance(raw_members, list) else ()
+    is_role_admin: Final = any(
+        member.user_id is not None and member.user_id == user_api_key_dict.user_id and member.role == "admin"
+        for member in members
+    )
+    return is_role_admin or user_api_key_dict.user_id in (team_row.admins or [])
 
 
 async def _validate_team_exists(
