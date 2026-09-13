@@ -1026,27 +1026,47 @@ def test_hosted_vllm_embedding(monkeypatch):
         assert json_data["model"] == "jina-embeddings-v3"
 
 
+class _RecordingHTTPHandler(HTTPHandler):
+    def __init__(self, response):
+        super().__init__()
+        self.response = response
+        self.requests = []
+
+    def post(self, url: str, **kwargs):
+        self.requests.append({"url": url, **kwargs})
+        return self.response
+
+
 def test_cloudflare_embedding_dispatch(monkeypatch):
     monkeypatch.setattr(litellm, "cloudflare_api_key", None)
     monkeypatch.setattr(litellm, "api_key", None)
     monkeypatch.setattr(litellm, "api_base", None)
 
-    with patch(
-        "litellm.main.base_llm_http_handler.embedding",
-        return_value=litellm.EmbeddingResponse(),
-    ) as mock_embedding:
-        embedding(
-            model="cloudflare/@cf/baai/bge-large-en-v1.5",
-            input=["Hello world"],
-            api_key="cf-key",
-            api_base="https://example.com/ai/v1",
-            caching=False,
-        )
+    response_json = {
+        "object": "list",
+        "data": [{"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0}],
+        "model": "@cf/baai/bge-large-en-v1.5",
+        "usage": {"prompt_tokens": 2, "total_tokens": 2},
+    }
+    raw_response = MagicMock()
+    raw_response.status_code = 200
+    raw_response.headers = {"content-type": "application/json"}
+    raw_response.json.return_value = response_json
+    raw_response.text = json.dumps(response_json)
+    client = _RecordingHTTPHandler(raw_response)
 
-    dispatch = mock_embedding.call_args.kwargs
-    assert dispatch["custom_llm_provider"] == "cloudflare"
-    assert dispatch["api_key"] == "cf-key"
-    assert dispatch["api_base"] == "https://example.com/ai/v1"
+    embedding(
+        model="cloudflare/@cf/baai/bge-large-en-v1.5",
+        input=["Hello world"],
+        api_key="cf-key",
+        api_base="https://example.com/ai/v1",
+        client=client,
+        caching=False,
+    )
+
+    request = client.requests[0]
+    assert request["url"] == "https://example.com/ai/v1/embeddings"
+    assert request["headers"]["Authorization"] == "Bearer cf-key"
 
 
 def test_cloudflare_embedding_dispatch_requires_api_key(monkeypatch):
