@@ -541,3 +541,56 @@ def test_v2_model_info_access_group_paginates_over_the_filtered_set(client, auth
     assert _model_names(payload) == ["openai/*"]
     assert payload["total_count"] == 2
     assert payload["total_pages"] == 2
+
+
+def test_enrich_model_info_with_litellm_data_populates_none_keys(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    from litellm.proxy._types import ModelInfo as ProxyModelInfo
+    from litellm.proxy.proxy_server import _enrich_model_info_with_litellm_data
+
+    backend = "bedrock/eu.anthropic.claude-opus-5"
+    p_model_info = ProxyModelInfo(id="d1").model_dump()
+    model = {"model_name": "m", "litellm_params": {"model": backend}, "model_info": dict(p_model_info)}
+
+    enriched = _enrich_model_info_with_litellm_data(model=model, llm_router=None)
+    mi = enriched["model_info"]
+    assert mi.get("input_cost_per_token") == 5.5e-06
+    assert mi.get("max_tokens") == 128000
+    assert mi.get("mode") == "chat"
+
+
+def test_get_proxy_model_info_populates_none_keys(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    from litellm.proxy._types import ModelInfo as ProxyModelInfo
+    from litellm.proxy.proxy_server import _get_proxy_model_info
+
+    backend = "bedrock/eu.anthropic.claude-opus-5"
+    p_model_info = ProxyModelInfo(id="d1").model_dump()
+    fresh_model = {"model_name": "m", "litellm_params": {"model": backend}, "model_info": dict(p_model_info)}
+
+    proxy_info = _get_proxy_model_info(model=fresh_model)
+    p_mi = proxy_info["model_info"]
+    assert p_mi.get("input_cost_per_token") == 5.5e-06
+    assert p_mi.get("max_tokens") == 128000
+    assert p_mi.get("mode") == "chat"
+
+
+def test_enrich_model_info_with_litellm_data_preserves_custom_pricing(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    from litellm.proxy._types import ModelInfo as ProxyModelInfo
+    from litellm.proxy.proxy_server import _enrich_model_info_with_litellm_data, _get_proxy_model_info
+
+    backend = "bedrock/eu.anthropic.claude-opus-5"
+    custom_model_info = ProxyModelInfo(id="d1", input_cost_per_token=0.00099).model_dump()
+    model = {"model_name": "m", "litellm_params": {"model": backend}, "model_info": dict(custom_model_info)}
+
+    enriched = _enrich_model_info_with_litellm_data(model=model, llm_router=None)
+    mi = enriched["model_info"]
+    assert mi.get("input_cost_per_token") == 0.00099
+    assert mi.get("max_tokens") == 128000
+
+    fresh_custom_model = {"model_name": "m", "litellm_params": {"model": backend}, "model_info": dict(custom_model_info)}
+    proxy_info = _get_proxy_model_info(model=fresh_custom_model)
+    p_mi = proxy_info["model_info"]
+    assert p_mi.get("input_cost_per_token") == 0.00099
+
