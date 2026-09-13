@@ -21,6 +21,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/.well-known/agent-skills/index.json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Agent Skills Index
+         * @description Agent Skills v0.2.0 discovery index over every skill stored on this proxy.
+         */
+        get: operations["agent_skills_index__well_known_agent_skills_index_json_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/.well-known/jwks.json": {
         parameters: {
             query?: never;
@@ -302,6 +322,26 @@ export interface paths {
         };
         /** Openid Configuration */
         get: operations["openid_configuration__well_known_openid_configuration_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/.well-known/skills/index.json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Agent Skills Index
+         * @description Agent Skills v0.2.0 discovery index over every skill stored on this proxy.
+         */
+        get: operations["agent_skills_index__well_known_skills_index_json_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -19984,6 +20024,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/skills/{skill_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Agent Skills Archive
+         * @description Stored skill upload, repacked so SKILL.md sits at the archive root.
+         */
+        get: operations["agent_skills_archive_v1_skills__skill_id__archive_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/threads": {
         parameters: {
             query?: never;
@@ -23139,6 +23199,32 @@ export interface components {
             }[] | null;
             /** Tags */
             tags?: string[];
+        };
+        /** AgentSkillsIndex */
+        AgentSkillsIndex: {
+            /**
+             * $Schema
+             * @default https://schemas.agentskills.io/discovery/0.2.0/schema.json
+             */
+            $schema: string;
+            /** Skills */
+            skills: components["schemas"]["AgentSkillsIndexEntry"][];
+        };
+        /** AgentSkillsIndexEntry */
+        AgentSkillsIndexEntry: {
+            /** Description */
+            description: string;
+            /** Digest */
+            digest: string;
+            /** Name */
+            name: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "archive";
+            /** Url */
+            url: string;
         };
         /**
          * AlertType
@@ -28376,6 +28462,8 @@ export interface components {
             team_id?: string | null;
             /** User Email */
             user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
         };
         /**
          * KeyMetricWithMetadata
@@ -40098,6 +40186,26 @@ export interface operations {
             };
         };
     };
+    agent_skills_index__well_known_agent_skills_index_json_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSkillsIndex"];
+                };
+            };
+        };
+    };
     jwks_json__well_known_jwks_json_get: {
         parameters: {
             query?: never;
@@ -40422,6 +40530,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    agent_skills_index__well_known_skills_index_json_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSkillsIndex"];
                 };
             };
         };
@@ -50324,7 +50452,7 @@ export interface operations {
                 organization_id?: string | null;
                 /** @description Filter keys by key hash */
                 key_hash?: string | null;
-                /** @description Filter keys by key alias. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching. */
+                /** @description Filter keys by key alias. Exact match by default; set substring_matching=true for case-insensitive substring matching. */
                 key_alias?: string | null;
                 /** @description Combined search: matches keys whose token (key hash) equals the value OR whose key_alias contains it (case-insensitive). */
                 search?: string | null;
@@ -50348,7 +50476,7 @@ export interface operations {
                 access_group_id?: string | null;
                 /** @description Filter keys by agent ID */
                 agent_id?: string | null;
-                /** @description If true (proxy admins only), match user_id/key_alias as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id/key_alias filter must never return another user's keys. */
+                /** @description If true, match key_alias (any caller) and user_id (proxy admins only) as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id filter must never return another user's keys. */
                 substring_matching?: boolean;
                 /** @description Filter keys by expiration. 'expired' returns keys whose expires is in the past; 'active' returns keys that never expire or expire in the future. Omit to return keys regardless of expiration. */
                 expires?: string | null;
@@ -65143,6 +65271,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeleteSkillResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    agent_skills_archive_v1_skills__skill_id__archive_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                skill_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
                 };
             };
             /** @description Validation Error */

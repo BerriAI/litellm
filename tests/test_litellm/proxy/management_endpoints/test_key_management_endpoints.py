@@ -21,6 +21,7 @@ from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_OrganizationTable,
     LiteLLM_ProjectTableCachedObj,
+    LiteLLM_TeamTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LiteLLM_VerificationToken,
@@ -6416,7 +6417,7 @@ def test_build_key_filter_conditions_key_alias_narrows_team_admin_visibility():
         admin_team_ids=["team-a"],
         member_team_ids=["team-a"],
         include_created_by_keys=False,
-        use_substring_matching=True,
+        use_key_alias_substring_matching=True,
     )
     assert {"key_alias": {"contains": "member-key", "mode": "insensitive"}} in where_substring["AND"], (
         f"substring key_alias not ANDed: {where_substring}"
@@ -9361,7 +9362,7 @@ async def test_build_key_filter_team_id_scoped():
 async def test_build_key_filter_admin_substring_matching():
     """
     Admin callers get substring (contains + insensitive) matching for user_id
-    and key_alias when use_substring_matching=True.
+    and key_alias when both substring flags are set.
     """
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _build_key_filter_conditions,
@@ -9381,6 +9382,7 @@ async def test_build_key_filter_admin_substring_matching():
         member_team_ids=None,
         include_created_by_keys=False,
         use_substring_matching=True,
+        use_key_alias_substring_matching=True,
     )
 
     assert where["AND"][0]["user_id"] == {"contains": user_id, "mode": "insensitive"}
@@ -15152,14 +15154,116 @@ async def test_list_keys_admin_substring_opt_in():
 
 @pytest.mark.asyncio
 async def test_list_keys_non_admin_cannot_opt_into_substring():
-    """substring_matching is admin-only: a non-admin requesting it still gets
-    exact matching, scoped to their own user_id."""
+    """user_id substring matching is admin-only: a non-admin requesting it still
+    gets exact matching, scoped to their own user_id."""
     user = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice")
     kwargs = await _list_keys_capture_helper_kwargs(
         user, user_id=None, substring_matching=True
     )
     assert kwargs["use_substring_matching"] is False
     assert kwargs["user_id"] == "alice"
+
+
+def _prisma_where_matches(row, where):
+    for field, expected in where.items():
+        if field == "AND":
+            if not all(_prisma_where_matches(row, child) for child in expected):
+                return False
+        elif field == "OR":
+            if not any(_prisma_where_matches(row, child) for child in expected):
+                return False
+        elif isinstance(expected, dict):
+            value = getattr(row, field)
+            if "in" in expected and value not in expected["in"]:
+                return False
+            if "not" in expected and value == expected["not"]:
+                return False
+            if "contains" in expected:
+                haystack, needle = value or "", expected["contains"]
+                if expected.get("mode") == "insensitive":
+                    haystack, needle = haystack.lower(), needle.lower()
+                if needle not in haystack:
+                    return False
+        elif getattr(row, field) != expected:
+            return False
+    return True
+
+
+class _InMemoryVerificationTokenTable:
+    def __init__(self, rows):
+        self.rows = rows
+
+    async def find_many(self, where, **kwargs):
+        return [row for row in self.rows if _prisma_where_matches(row, where)]
+
+    async def count(self, where):
+        return len(await self.find_many(where))
+
+
+def _team_key(token, key_alias, user_id):
+    return LiteLLM_VerificationToken(token=token, key_alias=key_alias, user_id=user_id, team_id="team-a")
+
+
+_TEAM_A_KEYS = (
+    _team_key("tok-alice-first", "app_llmhub_first.last", "alice"),
+    _team_key("tok-alice-other", "alice_other_key", "alice"),
+    _team_key("tok-bob-first", "bob_First_key", "bob"),
+    _team_key("tok-svc-first", "service_first_key", None),
+)
+
+
+def _list_team_a_keys_as(user_role, members_with_roles, query):
+    from fastapi import FastAPI
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.management_endpoints.key_management_endpoints import router
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken = _InMemoryVerificationTokenTable(_TEAM_A_KEYS)
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=LiteLLM_UserTable(user_id="alice", teams=["team-a"], organization_memberships=[])
+    )
+    mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(
+        return_value=[LiteLLM_TeamTable(team_id="team-a", members_with_roles=members_with_roles)]
+    )
+    test_app = FastAPI()
+    test_app.include_router(router)
+    test_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=user_role, user_id="alice")
+    with patch(  # test-quality-ok: /key/list reads the prisma client from the proxy_server module global, no injection point
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+    ):
+        response = TestClient(test_app).get(
+            f"/key/list?team_id=team-a&include_team_keys=true&include_created_by_keys=true&{query}"
+        )
+    assert response.status_code == 200, response.text
+    return sorted(response.json()["keys"])
+
+
+_ALICE_TEAM_ADMIN = [Member(user_id="alice", role="admin"), Member(user_id="bob", role="user")]
+_ALICE_TEAM_MEMBER = [Member(user_id="alice", role="user"), Member(user_id="bob", role="user")]
+
+
+@pytest.mark.parametrize(
+    "user_role",
+    [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, LitellmUserRoles.TEAM],
+)
+def test_list_keys_team_admin_key_alias_substring_returns_every_matching_team_key(user_role):
+    keys = _list_team_a_keys_as(user_role, _ALICE_TEAM_ADMIN, "key_alias=first&substring_matching=true")
+    assert keys == ["tok-alice-first", "tok-bob-first", "tok-svc-first"]
+
+
+def test_list_keys_team_member_key_alias_substring_stays_within_own_visibility():
+    keys = _list_team_a_keys_as(
+        LitellmUserRoles.INTERNAL_USER, _ALICE_TEAM_MEMBER, "key_alias=first&substring_matching=true"
+    )
+    assert keys == ["tok-alice-first", "tok-svc-first"]
+
+
+def test_list_keys_key_alias_stays_exact_without_substring_matching():
+    assert _list_team_a_keys_as(LitellmUserRoles.INTERNAL_USER, _ALICE_TEAM_ADMIN, "key_alias=first") == []
+    assert _list_team_a_keys_as(
+        LitellmUserRoles.INTERNAL_USER, _ALICE_TEAM_ADMIN, "key_alias=app_llmhub_first.last"
+    ) == ["tok-alice-first"]
 
 
 @pytest.mark.asyncio
