@@ -15,6 +15,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.utils import SearchProviders
 from litellm.utils import ProviderConfigManager, client, filter_out_litellm_params
@@ -232,6 +233,17 @@ def search(
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         client: Final = kwargs.get("client", None)
         _is_async: Final = kwargs.pop("asearch", False) is True
+
+        if _is_async:
+            if client is not None and not isinstance(client, AsyncHTTPHandler):
+                raise ValueError(
+                    f"client must be an instance of AsyncHTTPHandler for asynchronous search, got {type(client)}"
+                )
+        else:
+            if client is not None and not isinstance(client, HTTPHandler):
+                raise ValueError(
+                    f"client must be an instance of HTTPHandler for synchronous search, got {type(client)}"
+                )
 
         # Validate query parameter
         if not isinstance(query, (str, list)):

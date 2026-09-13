@@ -450,3 +450,26 @@ class TestSearchHTTPErrorHandling:
                     search_provider="tavily",
                     api_key="tvly-testkey",
                 )
+
+    def test_sync_search_rejects_async_client(self) -> None:
+        """Verify that passing an AsyncHTTPHandler to synchronous search raises a clear exception."""
+        async_client = AsyncHTTPHandler()
+        with pytest.raises(Exception, match="client must be an instance of HTTPHandler"):
+            litellm.search(
+                query="test query",
+                search_provider="tavily",
+                api_key="tvly-testkey",
+                client=async_client,
+            )
+
+    @pytest.mark.asyncio
+    async def test_async_search_rejects_sync_client(self) -> None:
+        """Verify that passing a sync HTTPHandler to asynchronous search raises a clear exception."""
+        sync_client = HTTPHandler()
+        with pytest.raises(Exception, match="client must be an instance of AsyncHTTPHandler"):
+            await litellm.asearch(
+                query="test query",
+                search_provider="tavily",
+                api_key="tvly-testkey",
+                client=sync_client,
+            )
