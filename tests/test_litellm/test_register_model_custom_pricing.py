@@ -17,6 +17,7 @@ import pytest
 
 import litellm
 from litellm.main import _build_custom_pricing_entry
+from litellm.types.router import ModelInfo
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
 
@@ -37,6 +38,7 @@ def test_build_custom_pricing_entry_includes_all_kwargs_fields():
     """All CustomPricingLiteLLMParams fields present in kwargs should be
     included in the resulting entry dict."""
     kwargs = {
+        "cost_discount": 0.8,
         "input_cost_per_token": 0.001,
         "output_cost_per_token": 0.002,
         "cache_read_input_token_cost": 0.00025,
@@ -52,6 +54,7 @@ def test_build_custom_pricing_entry_includes_all_kwargs_fields():
     )
 
     assert entry["litellm_provider"] == "openai"
+    assert entry["cost_discount"] == 0.8
     assert entry["input_cost_per_token"] == 0.001
     assert entry["output_cost_per_token"] == 0.002
     assert entry["cache_read_input_token_cost"] == 0.00025
@@ -59,6 +62,120 @@ def test_build_custom_pricing_entry_includes_all_kwargs_fields():
     assert entry["output_cost_per_reasoning_token"] == 0.01
     assert entry["input_cost_per_audio_token"] == 0.003
     assert "unrelated_kwarg" not in entry
+
+
+def test_model_info_validates_cost_discount():
+    ModelInfo(cost_discount=0.8)
+    with pytest.raises(ValueError, match="cost_discount must be between 0 and 1"):
+        ModelInfo(cost_discount=1.1)
+
+
+def test_router_registers_deployment_cost_discount_and_litellm_params_override():
+    model_info_only_id = "deployment-cost-discount-model-info"
+    litellm_params_only_id = "deployment-cost-discount-litellm-params"
+    litellm_params_override_id = "deployment-cost-discount-override"
+    shared_backend_key = "openai/gpt-4o-mini"
+    snapshot = _snapshot_model_cost_entries(
+        [
+            model_info_only_id,
+            litellm_params_only_id,
+            litellm_params_override_id,
+            shared_backend_key,
+        ]
+    )
+
+    try:
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "deployment-cost-discount-test",
+                    "litellm_params": {
+                        "model": shared_backend_key,
+                        "api_key": "test-api-key",
+                    },
+                    "model_info": {
+                        "id": model_info_only_id,
+                        "cost_discount": 0.6,
+                    },
+                },
+                {
+                    "model_name": "deployment-cost-discount-test",
+                    "litellm_params": {
+                        "model": shared_backend_key,
+                        "api_key": "test-api-key",
+                        "cost_discount": 0.7,
+                    },
+                    "model_info": {
+                        "id": litellm_params_only_id,
+                    },
+                },
+                {
+                    "model_name": "deployment-cost-discount-test",
+                    "litellm_params": {
+                        "model": shared_backend_key,
+                        "api_key": "test-api-key",
+                        "cost_discount": 0.8,
+                    },
+                    "model_info": {
+                        "id": litellm_params_override_id,
+                        "cost_discount": 0.4,
+                    },
+                },
+            ]
+        )
+
+        assert litellm.model_cost[model_info_only_id]["cost_discount"] == 0.6
+        assert litellm.model_cost[litellm_params_only_id]["cost_discount"] == 0.7
+        assert litellm.model_cost[litellm_params_override_id]["cost_discount"] == 0.8
+        shared_backend_entry = litellm.model_cost.get(shared_backend_key)
+        if shared_backend_entry is not None:
+            assert "cost_discount" not in shared_backend_entry
+    finally:
+        _restore_model_cost_entries(snapshot)
+
+
+def test_router_completion_applies_deployment_cost_discount_without_custom_base_prices():
+    shared_backend_key = "openai/gpt-4o-mini"
+    deployment_id = "deployment-cost-discount-runtime"
+    snapshot = _snapshot_model_cost_entries([deployment_id, shared_backend_key])
+
+    try:
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "deployment-runtime-discount-test",
+                    "litellm_params": {
+                        "model": shared_backend_key,
+                        "api_key": "test-api-key",
+                    },
+                    "model_info": {
+                        "id": deployment_id,
+                        "cost_discount": 0.8,
+                    },
+                },
+            ]
+        )
+
+        messages = [{"role": "user", "content": "hello"}]
+        discounted_response = router.completion(
+            model="deployment-runtime-discount-test",
+            messages=messages,
+            mock_response="ok",
+            max_tokens=20,
+        )
+        undiscounted_response = litellm.completion(
+            model=shared_backend_key,
+            messages=messages,
+            mock_response="ok",
+            max_tokens=20,
+        )
+
+        assert discounted_response._hidden_params["response_cost"] == pytest.approx(
+            undiscounted_response._hidden_params["response_cost"] * 0.2,
+            rel=1e-9,
+        )
+    finally:
+        _restore_model_cost_entries(snapshot)
 
 
 def test_build_custom_pricing_entry_merges_model_info_metadata():
