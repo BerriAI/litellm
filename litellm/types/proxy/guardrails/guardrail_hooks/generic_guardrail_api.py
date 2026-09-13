@@ -167,6 +167,7 @@ class GenericGuardrailAPIResponse:
     action: str
     blocked_reason: str | None
     stream_holdback_chars: list[int] | None
+    tool_calls: list[ChatCompletionToolCallChunk] | list[ChatCompletionMessageToolCall] | None
 
     def __init__(
         self,
@@ -176,6 +177,7 @@ class GenericGuardrailAPIResponse:
         images: list[str] | None = None,
         tools: list[GuardrailToolParam] | None = None,
         stream_holdback_chars: list[int] | None = None,
+        tool_calls: list[ChatCompletionToolCallChunk] | list[ChatCompletionMessageToolCall] | None = None,
     ) -> None:
         self.action = action
         self.blocked_reason = blocked_reason
@@ -186,6 +188,11 @@ class GenericGuardrailAPIResponse:
         # framework must withhold from streaming emission until the next
         # processing round (word-boundary safety for text transformations).
         self.stream_holdback_chars = stream_holdback_chars
+        # Replacement tool calls. ``tool_calls`` is sent on the request, so the
+        # response mirrors it back the way ``tools`` and ``images`` are: without
+        # this field a guardrail that rewrites tool arguments has no channel to
+        # return them on, and the caller keeps the values it sent in.
+        self.tool_calls = tool_calls
 
     @classmethod
     def from_dict(cls, data: dict) -> "GenericGuardrailAPIResponse":
@@ -200,4 +207,5 @@ class GenericGuardrailAPIResponse:
             images=data.get("images"),
             tools=data.get("tools"),
             stream_holdback_chars=stream_holdback_chars,
+            tool_calls=data.get("tool_calls"),
         )
