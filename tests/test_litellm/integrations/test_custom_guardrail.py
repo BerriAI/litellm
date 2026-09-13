@@ -2902,9 +2902,15 @@ class _NativeLifecycleLoggingGuardrail(CustomGuardrail):
             guardrail_name="native-logging-guardrail",
             event_hook=GuardrailEventHooks.logging_only,
         )
-        self.calls: list = []
+        self.calls: list[tuple[Literal["request", "response"], list[str]]] = []
 
-    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: "LiteLLMLoggingObj | None" = None,
+    ) -> GenericGuardrailAPIInputs:
         self.calls.append((input_type, list(inputs.get("texts") or [])))
         return inputs
 
