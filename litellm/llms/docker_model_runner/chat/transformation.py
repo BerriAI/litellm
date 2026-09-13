@@ -1,5 +1,5 @@
 """
-Translates from OpenAI's `/v1/chat/completions` to Docker Model Runner's `/engines/{engine}/v1/chat/completions`
+Translates from OpenAI's `/v1/chat/completions` to Docker Model Runner's `/engines/v1/chat/completions`
 
 Docker Model Runner API Reference: https://docs.docker.com/ai/model-runner/api-reference/
 """
@@ -17,37 +17,57 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class DockerModelRunnerChatConfig(OpenAIGPTConfig):
-    """
-    Configuration for Docker Model Runner API.
-
-    Docker Model Runner uses URLs in the format: /engines/{engine}/v1/chat/completions
-    The engine name (e.g., "llama.cpp") is part of the API endpoint path.
-    """
-
     @overload
     def _transform_messages(
-        self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: signature dictated by OpenAIGPTConfig
+        model: str,
+        is_async: Literal[True],
+    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...  # mutable-ok: signature dictated by OpenAIGPTConfig
 
     @overload
     def _transform_messages(
         self,
-        messages: list[AllMessageValues],
+        messages: list[AllMessageValues],  # mutable-ok: signature dictated by OpenAIGPTConfig
         model: str,
         is_async: Literal[False] = False,
-    ) -> list[AllMessageValues]: ...
+    ) -> list[AllMessageValues]: ...  # mutable-ok: signature dictated by OpenAIGPTConfig
+
+    @staticmethod
+    def _has_multimodal_content(message: AllMessageValues) -> bool:
+        message_content: Final = message.get("content")
+        if not message_content or not isinstance(message_content, list):
+            return False
+        for c in message_content:
+            block_type = c.get("type")
+            if block_type is not None and block_type != "text":
+                return True
+            if block_type is None and isinstance(c, dict) and "text" not in c:
+                return True
+        return False
 
     def _transform_messages(
-        self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
-        """
-        Docker Model Runner is OpenAI-compatible, so we use standard message transformation.
-        """
-        messages = handle_messages_with_content_list_to_str_conversion(messages)
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: signature dictated by OpenAIGPTConfig
+        model: str,
+        is_async: bool = False,
+    ) -> (
+        list[AllMessageValues]  # mutable-ok: signature dictated by OpenAIGPTConfig
+        | Coroutine[Any, Any, list[AllMessageValues]]  # mutable-ok: signature dictated by OpenAIGPTConfig
+    ):
+        text_only_messages: Final = [  # mutable-ok: API request payload
+            m for m in messages if not self._has_multimodal_content(m)
+        ]
+
+        converted: Final = iter(handle_messages_with_content_list_to_str_conversion(text_only_messages))
+        transformed: Final = [  # mutable-ok: API request payload
+            m if self._has_multimodal_content(m) else next(converted) for m in messages
+        ]
+
         if is_async:
-            return super()._transform_messages(messages=messages, model=model, is_async=True)
+            return super()._transform_messages(messages=transformed, model=model, is_async=True)
         else:
-            return super()._transform_messages(messages=messages, model=model, is_async=False)
+            return super()._transform_messages(messages=transformed, model=model, is_async=False)
 
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
@@ -55,58 +75,45 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
         """
         Get API base and key for Docker Model Runner.
 
-        Default API base: http://localhost:22088/engines/llama.cpp
-        The engine path should be included in the api_base.
+        Default API base: http://localhost:12434/engines/v1
         """
-        api_base = (
-            api_base or get_secret_str("DOCKER_MODEL_RUNNER_API_BASE") or "http://localhost:22088/engines/llama.cpp"
+        api_base = (  # rebind-ok: normalize the argument locally, mirrors hosted_vllm
+            api_base or get_secret_str("DOCKER_MODEL_RUNNER_API_BASE") or "http://localhost:12434/engines/v1"
         )
         # Docker Model Runner may not require authentication for local instances
         dynamic_api_key: Final = api_key or get_secret_str("DOCKER_MODEL_RUNNER_API_KEY") or "dummy-key"
         return api_base, dynamic_api_key
+
+    def validate_environment(
+        self,
+        headers: dict,  # mutable-ok: signature dictated by OpenAIGPTConfig
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: signature dictated by OpenAIGPTConfig
+        optional_params: dict,  # mutable-ok: signature dictated by OpenAIGPTConfig
+        litellm_params: dict,  # mutable-ok: signature dictated by OpenAIGPTConfig
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:  # mutable-ok: signature dictated by OpenAIGPTConfig
+        default_headers: Final = {  # mutable-ok: API request payload
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key or 'dummy-key'}",
+        }
+
+        return {**default_headers, **headers}  # mutable-ok: API request payload
 
     def get_complete_url(
         self,
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict,  # mutable-ok: signature dictated by OpenAIGPTConfig
+        litellm_params: dict,  # mutable-ok: signature dictated by OpenAIGPTConfig
         stream: bool | None = None,
     ) -> str:
-        """
-        Build the complete URL for Docker Model Runner API.
+        base_url: Final = (api_base or "http://localhost:12434/engines/v1").rstrip("/")
+        return f"{base_url}/chat/completions"
 
-        Docker Model Runner uses URLs in the format: /engines/{engine}/v1/chat/completions
-
-        The engine name should be specified in the api_base:
-            - api_base="http://model-runner.docker.internal/engines/llama.cpp"
-            - Default: "http://localhost:22088/engines/llama.cpp"
-
-        Args:
-            api_base: Base URL for the Docker Model Runner instance including engine path
-            api_key: API key (may not be required for local instances)
-            model: Model name (e.g., "llama-3.1")
-            optional_params: Optional parameters
-            litellm_params: LiteLLM parameters
-            stream: Whether streaming is enabled
-
-        Returns:
-            Complete URL for the API call
-        """
-        if not api_base:
-            api_base = "http://localhost:22088/engines/llama.cpp"
-
-        # Remove trailing slashes from api_base
-        api_base = api_base.rstrip("/")
-
-        # Build the URL: {api_base}/v1/chat/completions
-        # api_base is expected to already contain the engine path
-        complete_url: Final = f"{api_base}/v1/chat/completions"
-
-        return complete_url
-
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: signature dictated by OpenAIGPTConfig
         """
         Get the supported OpenAI params for Docker Model Runner.
 
@@ -116,11 +123,11 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict,  # mutable-ok: signature dictated by OpenAIGPTConfig
+        optional_params: dict,  # mutable-ok: signature dictated by OpenAIGPTConfig
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict:  # mutable-ok: signature dictated by OpenAIGPTConfig
         """
         Map OpenAI parameters to Docker Model Runner parameters.
 
@@ -129,8 +136,8 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
         supported_openai_params: Final = self.get_supported_openai_params(model)
         for param, value in non_default_params.items():
             if param == "max_completion_tokens":
-                optional_params["max_tokens"] = value
+                optional_params["max_tokens"] = value  # rebind-ok: out-param store
             elif param in supported_openai_params:
-                optional_params[param] = value
+                optional_params[param] = value  # rebind-ok: out-param store
 
         return optional_params

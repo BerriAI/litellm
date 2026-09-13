@@ -735,6 +735,7 @@ LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS: Final = [
     "azure",
     "hosted_vllm",
     "nebius",
+    "docker_model_runner",
 ]
 
 
@@ -994,6 +995,7 @@ openai_text_completion_compatible_providers: Final[list] = [  # providers that s
     "lambda_ai",
     "hyperbolic",
     "wandb",
+    "docker_model_runner",
 ]
 _openai_like_providers: Final[list] = [
     "predibase",
