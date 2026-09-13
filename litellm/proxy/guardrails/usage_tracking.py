@@ -17,8 +17,10 @@ from typing import TYPE_CHECKING, Any, Final, NamedTuple, TypeVar
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import billed_guardrail_cost_by_unit
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
+from litellm.proxy.db.spend_log_batching import spend_log_write_batches
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.table_repositories import (
     DailyGuardrailMetricsRepository,
@@ -401,13 +403,12 @@ async def process_spend_logs_guardrail_usage(
         return
 
     try:
-        # Insert index rows (skip duplicates by request_id + guardrail_id)
-        if index_rows:
+        index_table: Final = SpendLogGuardrailIndexRepository(prisma_client).table
+        for statement_rows in spend_log_write_batches(
+            index_rows, SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS
+        ):
             try:
-                await SpendLogGuardrailIndexRepository(prisma_client).table.create_many(
-                    data=index_rows,
-                    skip_duplicates=True,
-                )
+                await index_table.create_many(data=statement_rows, skip_duplicates=True)
             except Exception as e:
                 verbose_proxy_logger.debug("Guardrail usage tracking: index create_many skipped: %s", e)
 
