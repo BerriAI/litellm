@@ -1,14 +1,10 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { ModelData } from "@/components/model_dashboard/types";
 
 import { AllModelsTable } from "./AllModelsTable";
-
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), fromBackend: vi.fn() },
-}));
 
 const makeModel = (overrides: Partial<ModelData> = {}): ModelData =>
   ({
@@ -63,6 +59,7 @@ const baseProps = {
   availableModelAccessGroups: ["sales-team"],
   userRole: "Admin",
   userID: "alice",
+  isViewOnly: false,
   onModelIdClick: vi.fn(),
   onTeamIdClick: vi.fn(),
   onDeleteClick: vi.fn(),
@@ -79,7 +76,7 @@ const row = (modelId: string): HTMLElement => {
 };
 
 describe("AllModelsTable", () => {
-  it("renders the nine design columns and hides Status behind the Columns menu", async () => {
+  it("renders the nine design columns and hides Source behind the Columns menu", async () => {
     const user = userEvent.setup();
     render(<AllModelsTable {...baseProps} />);
 
@@ -97,12 +94,15 @@ describe("AllModelsTable", () => {
       expect(screen.getByRole("columnheader", { name: new RegExp(header, "i") })).toBeInTheDocument();
     }
 
+    expect(screen.queryByRole("columnheader", { name: /^source$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: /^status$/i })).not.toBeInTheDocument();
     expect(screen.queryByText("DB Model")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /columns/i }));
-    await user.click(await screen.findByRole("menuitemcheckbox", { name: /status/i }));
+    expect(screen.queryByRole("menuitemcheckbox", { name: /status/i })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("menuitemcheckbox", { name: /^source$/i }));
 
+    expect(await screen.findByRole("columnheader", { name: /^source$/i })).toBeInTheDocument();
     expect(await screen.findByText("DB Model")).toBeInTheDocument();
   });
 
@@ -255,6 +255,17 @@ describe("AllModelsTable", () => {
       expect(onTogglePauseClick).not.toHaveBeenCalled();
     });
 
+    it("does not let a view-only admin toggle a model", async () => {
+      const user = userEvent.setup();
+      const onTogglePauseClick = vi.fn();
+      render(<AllModelsTable {...baseProps} isViewOnly onTogglePauseClick={onTogglePauseClick} />);
+
+      const toggle = screen.getByTestId("model-pause-toggle-model-1");
+      expect(toggle).toHaveAttribute("data-disabled");
+      await user.click(toggle);
+      expect(onTogglePauseClick).not.toHaveBeenCalled();
+    });
+
     it("does not let anyone toggle a config model", async () => {
       const user = userEvent.setup();
       const onTogglePauseClick = vi.fn();
@@ -310,6 +321,17 @@ describe("AllModelsTable", () => {
       expect(onDeleteClick).not.toHaveBeenCalled();
     });
 
+    it("blocks a view-only admin from deleting a DB model they created", async () => {
+      const user = userEvent.setup();
+      const onDeleteClick = vi.fn();
+      render(<AllModelsTable {...baseProps} isViewOnly onDeleteClick={onDeleteClick} />);
+
+      const deleteButton = screen.getByTestId("model-delete-model-1");
+      expect(deleteButton).toBeDisabled();
+      await user.click(deleteButton);
+      expect(onDeleteClick).not.toHaveBeenCalled();
+    });
+
     it("blocks deleting a config model", async () => {
       const user = userEvent.setup();
       const onDeleteClick = vi.fn();
@@ -343,7 +365,7 @@ describe("AllModelsTable", () => {
         />,
       );
 
-      await user.type(screen.getByTestId("datatable-search"), "gpt");
+      fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "gpt" } });
       expect(onSearchChange).toHaveBeenCalled();
 
       await user.click(screen.getByTestId("datatable-refresh"));

@@ -55,7 +55,7 @@ for pattern_data in _PATTERNS_DATA["patterns"]:
     PATTERN_EXTRA_CONFIG[pattern_data["name"]] = extra_config
 
 
-def get_compiled_pattern(pattern_name: str) -> Pattern:
+def get_compiled_pattern(pattern_name: str) -> Pattern[str]:
     """
     Get a compiled regex pattern by name.
 

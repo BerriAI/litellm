@@ -4,14 +4,10 @@ Tests for the Content Filter Guardrail
 
 import json
 import os
-import sys
 from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../")
-)  # Adds the parent directory to the system path
 
 from fastapi import HTTPException
 
@@ -629,6 +625,64 @@ class TestContentFilterGuardrail:
         assert entry["guardrail_provider"] == "litellm_content_filter"
         assert entry["guardrail_status"] == "success"
         assert entry["guardrail_response"] == []
+
+    @pytest.mark.asyncio
+    async def test_streaming_hook_duration_excludes_provider_wait(self):
+        """
+        Streaming post-call: the logged guardrail duration must only cover the
+        per-chunk scans, not the time spent waiting on the provider between
+        chunks. PrometheusLogger adds post_call guardrail duration to
+        litellm_overhead_with_guardrails_latency_metric, so a duration spanning
+        the whole stream reports LLM generation time as guardrail overhead.
+        """
+        import asyncio
+
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-streaming-duration",
+            patterns=[
+                ContentFilterPattern(
+                    pattern_type="prebuilt",
+                    pattern_name="email",
+                    action=ContentFilterAction.MASK,
+                ),
+            ],
+            event_hook=GuardrailEventHooks.post_call,
+        )
+
+        provider_wait_per_chunk = 0.15
+        chunks = ("Hello ", "world, reach me at ", "test@example.com ")
+
+        async def slow_stream():
+            for i, text in enumerate(chunks):
+                await asyncio.sleep(provider_wait_per_chunk)
+                yield ModelResponseStream(
+                    id=f"chunk{i}",
+                    choices=[
+                        StreamingChoices(
+                            delta=Delta(content=text),
+                            index=0,
+                            finish_reason="stop" if i == len(chunks) - 1 else None,
+                        )
+                    ],
+                    model="gpt-4",
+                )
+
+        request_data = {"messages": [{"role": "user", "content": "Hi"}], "model": "gpt-4o", "metadata": {}}
+
+        async for _ in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=MagicMock(),
+            response=slow_stream(),
+            request_data=request_data,
+        ):
+            pass
+
+        entry = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        stream_wall_clock = entry["end_time"] - entry["start_time"]
+        assert stream_wall_clock >= provider_wait_per_chunk * len(chunks)
+        assert entry["masked_entity_count"].get("email", 0) >= 1
+        assert 0 < entry["duration"] < provider_wait_per_chunk, entry["duration"]
 
     @pytest.mark.asyncio
     async def test_streaming_hook_logs_guardrail_information_mask(self):

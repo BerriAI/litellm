@@ -4,9 +4,10 @@
 import json
 from collections.abc import Callable
 from functools import partial
-from typing import Final
+from typing import Final, Protocol
 
 import httpx
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -21,6 +22,53 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.utils import TextChoices
 from litellm.utils import CustomStreamWrapper, TextCompletionResponse
+
+
+class _CodestralChoiceMessage(TypedDict):
+    """`choices[].message` of a Codestral FIM completion."""
+
+    role: ReadOnly[NotRequired[str]]
+    content: ReadOnly[NotRequired[str | None]]
+
+
+class _CodestralChoice(TypedDict):
+    """One entry of `choices` in a Codestral FIM completion."""
+
+    index: ReadOnly[int]
+    message: ReadOnly[NotRequired[_CodestralChoiceMessage]]
+    finish_reason: ReadOnly[NotRequired[str | None]]
+    logprobs: ReadOnly[NotRequired[dict[str, object] | None]]
+
+
+class _CodestralUsage(TypedDict):
+    """Token accounting returned alongside a Codestral FIM completion."""
+
+    prompt_tokens: ReadOnly[NotRequired[int]]
+    completion_tokens: ReadOnly[NotRequired[int]]
+    total_tokens: ReadOnly[NotRequired[int]]
+
+
+class _CodestralCompletionResponse(TypedDict):
+    """Body returned by the Codestral `/v1/fim/completions` endpoint."""
+
+    id: ReadOnly[NotRequired[str]]
+    created: ReadOnly[NotRequired[int]]
+    model: ReadOnly[NotRequired[str]]
+    object: ReadOnly[NotRequired[str]]
+    usage: ReadOnly[NotRequired[_CodestralUsage]]
+    choices: ReadOnly[NotRequired[list[_CodestralChoice]]]
+
+
+class _CodestralHTTPResponse(Protocol):
+    """The Codestral completion response as this handler reads it."""
+
+    @property
+    def status_code(self) -> int: ...
+
+    @property
+    def text(self) -> str: ...
+
+    def json(self) -> _CodestralCompletionResponse: ...
 
 
 class TextCompletionCodestralError(Exception):
@@ -115,7 +163,7 @@ class CodestralTextCompletion:
     def process_text_completion_response(
         self,
         model: str,
-        response: httpx.Response,
+        response: _CodestralHTTPResponse,
         model_response: TextCompletionResponse,
         stream: bool,
         logging_obj: LiteLLMLogging,
@@ -195,7 +243,7 @@ class CodestralTextCompletion:
         print_verbose: Callable,
         encoding,
         api_key: str,
-        logging_obj,
+        logging_obj: LiteLLMLogging,
         optional_params: dict,
         timeout: float | httpx.Timeout,
         acompletion=None,
@@ -383,7 +431,7 @@ class CodestralTextCompletion:
         print_verbose: Callable,
         encoding,
         api_key,
-        logging_obj,
+        logging_obj: LiteLLMLogging,
         data: dict,
         timeout: float | httpx.Timeout,
         optional_params=None,

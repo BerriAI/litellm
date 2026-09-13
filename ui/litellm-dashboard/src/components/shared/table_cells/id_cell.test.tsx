@@ -4,6 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import { IdCell } from "./id_cell";
 
+const { routerPushMock } = vi.hoisted(() => ({ routerPushMock: vi.fn() }));
+
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: routerPushMock }) }));
+
 const { copyToClipboardMock } = vi.hoisted(() => ({ copyToClipboardMock: vi.fn() }));
 
 vi.mock("@/utils/dataUtils", async (importOriginal) => ({
@@ -26,22 +30,22 @@ describe("IdCell", () => {
     render(<IdCell value="sk-1234567890abcdef" />);
     const el = screen.getByText("sk-1234567890abcdef");
     expect(el.tagName).toBe("SPAN");
-    expect(el.className).toContain("bg-blue-50");
-    expect(el.className).toContain("font-mono");
-    expect(el.className).toContain("max-w-[15ch]");
-    expect(el.className).toContain("truncate");
+    expect(el).toHaveClass("bg-info/10");
+    expect(el).toHaveClass("font-mono");
+    expect(el).toHaveClass("max-w-[15ch]");
+    expect(el).toHaveClass("truncate");
   });
 
   it("renders plain mono text without pill styling for the plain variant", () => {
     render(<IdCell value="req-123" variant="plain" />);
     const el = screen.getByText("req-123");
-    expect(el.className).toContain("font-mono");
-    expect(el.className).not.toContain("bg-blue-50");
+    expect(el).toHaveClass("font-mono");
+    expect(el).not.toHaveClass("bg-info/10");
   });
 
   it("does not truncate when truncate is false", () => {
     render(<IdCell value="audit-object-id" truncate={false} />);
-    expect(screen.getByText("audit-object-id").className).not.toContain("truncate");
+    expect(screen.getByText("audit-object-id")).not.toHaveClass("truncate");
   });
 
   it("becomes a button that fires onClick with the id value", async () => {
@@ -71,8 +75,35 @@ describe("IdCell", () => {
     expect(rowClick).not.toHaveBeenCalled();
   });
 
+  it("names the copy button after the field it copies", async () => {
+    const user = userEvent.setup();
+    render(<IdCell value="alice@example.com" copyable copyLabel="Copy User Email" />);
+    expect(screen.queryByRole("button", { name: "Copy ID" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Copy User Email" }));
+    expect(copyToClipboardMock).toHaveBeenCalledWith("alice@example.com");
+  });
+
   it("passes dataTestId through to the id element", () => {
     render(<IdCell value="k-1" dataTestId="key-id-cell" />);
     expect(screen.getByTestId("key-id-cell")).toHaveTextContent("k-1");
+  });
+
+  it("renders the id as a link and routes client side when href is set", async () => {
+    const user = userEvent.setup();
+    render(<IdCell value="user-42" href="/ui/users?user=user-42" />);
+
+    const link = screen.getByRole("link", { name: "user-42" });
+    expect(link).toHaveAttribute("href", "/ui/users?user=user-42");
+    expect(link).toHaveClass("cursor-pointer");
+
+    await user.click(link);
+    expect(routerPushMock).toHaveBeenCalledWith("/ui/users?user=user-42");
+  });
+
+  it("stays plain text when href is undefined", () => {
+    render(<IdCell value="default_user_id" href={undefined} />);
+
+    expect(screen.getByText("default_user_id").tagName).toBe("SPAN");
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 });

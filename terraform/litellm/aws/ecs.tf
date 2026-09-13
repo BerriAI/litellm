@@ -31,6 +31,7 @@ resource "aws_cloudwatch_log_group" "ui" {
 }
 
 resource "aws_cloudwatch_log_group" "migrations" {
+  count             = local.database_enabled ? 1 : 0
   name              = "/ecs/${local.name}/migrations"
   retention_in_days = var.log_retention_days
 
@@ -38,11 +39,13 @@ resource "aws_cloudwatch_log_group" "migrations" {
 }
 
 # Shared env block fed to gateway, backend, and the migration task. Mirrors
-# the helm chart's `litellm.serverEnv` helper on the IAM-auth branch:
-# DATABASE_URL is assembled at runtime by
+# the helm chart's `litellm.serverEnv` helper on the IAM-auth branch: for the
+# module-created Aurora, DATABASE_URL is assembled at runtime by
 # litellm/proxy/auth/rds_iam_token.py::init_iam_db_url_from_env from
 # HOST/PORT/USER/NAME plus an IAM-signed token, so no DB password is needed
-# in the task definition.
+# in the task definition. An existing database instead arrives as a
+# DATABASE_URL secret (var.database_url), which run.py and the proxy both
+# take as-is.
 locals {
   # OTel v2 is opt-in and gated on otel_endpoint, matching the GCP stack.
   # When set, LITELLM_OTEL_V2 flips on alongside the OTEL_* block, with
@@ -103,29 +106,50 @@ locals {
     ] : [],
   )
 
-  shared_env = [
+  managed_db_env = var.create_database ? [
     { name = "IAM_TOKEN_DB_AUTH", value = "true" },
-    { name = "DATABASE_HOST", value = aws_rds_cluster.this.endpoint },
-    { name = "DATABASE_PORT", value = tostring(aws_rds_cluster.this.port) },
+    { name = "DATABASE_HOST", value = aws_rds_cluster.this[0].endpoint },
+    { name = "DATABASE_PORT", value = tostring(aws_rds_cluster.this[0].port) },
     { name = "DATABASE_USER", value = var.db_username },
     { name = "DATABASE_NAME", value = var.db_name },
-    { name = "DATABASE_HOST_READ_REPLICA", value = aws_rds_cluster.this.reader_endpoint },
-    { name = "DATABASE_PORT_READ_REPLICA", value = tostring(aws_rds_cluster.this.port) },
-    { name = "REDIS_HOST", value = aws_elasticache_replication_group.this.primary_endpoint_address },
-    { name = "REDIS_PORT", value = tostring(aws_elasticache_replication_group.this.port) },
+    { name = "DATABASE_HOST_READ_REPLICA", value = aws_rds_cluster.this[0].reader_endpoint },
+    { name = "DATABASE_PORT_READ_REPLICA", value = tostring(aws_rds_cluster.this[0].port) },
+  ] : []
+
+  managed_redis_env = var.create_redis ? [
+    { name = "REDIS_HOST", value = aws_elasticache_replication_group.this[0].primary_endpoint_address },
+    { name = "REDIS_PORT", value = tostring(aws_elasticache_replication_group.this[0].port) },
     # transit_encryption_enabled = true on the replication group means the
     # proxy must connect via rediss://. _redis.get_redis_url_from_environment
     # honors REDIS_SSL to flip the scheme.
     { name = "REDIS_SSL", value = "true" },
-    # S3 bucket — referenced from proxy_config via os.environ/S3_BUCKET_NAME
-    # (e.g. cache backend, request log archival, /files passthrough).
-    { name = "S3_BUCKET_NAME", value = aws_s3_bucket.this.bucket },
-    { name = "S3_REGION_NAME", value = var.region },
-    # boto3 inside generate_iam_auth_token reads AWS_REGION_NAME first, then
-    # AWS_REGION. Set both for compatibility.
-    { name = "AWS_REGION", value = var.region },
-    { name = "AWS_REGION_NAME", value = var.region },
-  ]
+  ] : []
+
+  shared_env = concat(
+    local.managed_db_env,
+    local.managed_redis_env,
+    [
+      # S3 bucket — referenced from proxy_config via os.environ/S3_BUCKET_NAME
+      # (e.g. cache backend, request log archival, /files passthrough).
+      { name = "S3_BUCKET_NAME", value = aws_s3_bucket.this.bucket },
+      { name = "S3_REGION_NAME", value = var.region },
+      # boto3 inside generate_iam_auth_token reads AWS_REGION_NAME first, then
+      # AWS_REGION. Set both for compatibility.
+      { name = "AWS_REGION", value = var.region },
+      { name = "AWS_REGION_NAME", value = var.region },
+    ],
+  )
+
+  # DATABASE_URL / REDIS_URL both outrank the discrete host/port vars in the
+  # proxy, so the BYO branch needs nothing removed from shared_env: the
+  # managed_*_env blocks are already empty whenever these are set.
+  byo_database_secrets = local.byo_database ? [
+    { name = "DATABASE_URL", valueFrom = aws_secretsmanager_secret.database_url[0].arn },
+  ] : []
+
+  byo_redis_secrets = local.byo_redis ? [
+    { name = "REDIS_URL", valueFrom = aws_secretsmanager_secret.redis_url[0].arn },
+  ] : []
 
   shared_secrets = concat(
     [
@@ -134,6 +158,8 @@ locals {
     var.litellm_license == "" ? [] : [
       { name = "LITELLM_LICENSE", valueFrom = aws_secretsmanager_secret.license[0].arn },
     ],
+    local.byo_database_secrets,
+    local.byo_redis_secrets,
     local.otel_secrets,
     local.billing_metrics_secrets,
   )
@@ -151,9 +177,11 @@ locals {
     for k, v in var.backend_extra_env : { name = k, value = v }
   ]
 
-  backend_default_env = [
+  # Storing models in the DB needs a DB. Without one the backend reads its
+  # model list from proxy_config only.
+  backend_default_env = local.database_enabled ? [
     { name = "STORE_MODEL_IN_DB", value = "true" },
-  ]
+  ] : []
   gateway_extra_secrets_list = [
     for k, v in var.gateway_extra_secrets : { name = k, valueFrom = v }
   ]
@@ -184,10 +212,55 @@ locals {
   # pull the config from S3 first, so the command goes through `sh -c`;
   # otherwise we keep the image's ENTRYPOINT and only override `command`.
   gateway_uvicorn_args = "--host 0.0.0.0 --port 4000 --workers ${var.gateway_num_workers}"
+
+  gateway_pool_env = var.gateway_connection_pool_enabled ? [
+    { name = "LITELLM_PGBOUNCER_ENABLED", value = "true" },
+    { name = "LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS", value = tostring(var.gateway_pool_max_db_connections) },
+    { name = "LITELLM_PGBOUNCER_MAX_CLIENT_CONN", value = tostring(var.gateway_pool_max_client_conn) },
+  ] : []
+
+  metrics_enabled       = var.gateway_metrics_port != null
+  metrics_multiproc_dir = "/tmp/litellm_prometheus_multiproc"
+  metrics_volume        = "prometheus-multiproc"
+  metrics_env           = local.metrics_enabled ? [{ name = "PROMETHEUS_MULTIPROC_DIR", value = local.metrics_multiproc_dir }] : []
+  metrics_mount_points  = local.metrics_enabled ? [{ sourceVolume = local.metrics_volume, containerPath = local.metrics_multiproc_dir }] : []
+  metrics_health_cmd    = "import socket; socket.create_connection(('127.0.0.1', ${coalesce(var.gateway_metrics_port, 0)}), timeout=2).close()"
+
+  gateway_metrics_container = local.metrics_enabled ? [
+    {
+      name       = "metrics"
+      image      = var.gateway_image
+      essential  = false
+      entryPoint = ["python", "-m", "litellm.proxy.prometheus_metrics_server"]
+      command    = ["--port", tostring(var.gateway_metrics_port)]
+
+      portMappings = [{ containerPort = var.gateway_metrics_port, protocol = "tcp" }]
+      environment  = local.metrics_env
+      mountPoints  = local.metrics_mount_points
+
+      healthCheck = {
+        command     = ["CMD", "python", "-c", local.metrics_health_cmd]
+        interval    = 30
+        timeout     = 5
+        retries     = 3
+        startPeriod = 30
+      }
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.gateway.name
+          awslogs-region        = var.region
+          awslogs-stream-prefix = "metrics"
+        }
+      }
+    }
+  ] : []
+
   backend_uvicorn_args = "--host 0.0.0.0 --port 4001"
 
-  gateway_launch_cmd = "if [ \"$USE_DDTRACE\" = \"true\" ]; then export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run uvicorn gateway.main:app ${local.gateway_uvicorn_args}; else exec uvicorn gateway.main:app ${local.gateway_uvicorn_args}; fi"
-  backend_launch_cmd = "if [ \"$USE_DDTRACE\" = \"true\" ]; then export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run uvicorn backend.main:app ${local.backend_uvicorn_args}; else exec uvicorn backend.main:app ${local.backend_uvicorn_args}; fi"
+  gateway_launch_cmd = "case \"$USE_DDTRACE\" in [Tt][Rr][Uu][Ee]) export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run python -m gateway.launch ${local.gateway_uvicorn_args};; *) exec python -m gateway.launch ${local.gateway_uvicorn_args};; esac"
+  backend_launch_cmd = "case \"$USE_DDTRACE\" in [Tt][Rr][Uu][Ee]) export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run uvicorn backend.main:app ${local.backend_uvicorn_args};; *) exec uvicorn backend.main:app ${local.backend_uvicorn_args};; esac"
 
   gateway_proxy_overrides = local.proxy_config_enabled ? {
     entryPoint = ["sh", "-c"]
@@ -205,6 +278,62 @@ locals {
       "${local.proxy_config_fetch_cmd} && ${local.backend_launch_cmd}"
     ]
   } : {}
+
+  collector_address = "tcp://127.0.0.1:${var.collector_port}"
+  collector_env = var.collector_enabled ? [
+    { name = "LITELLM_COLLECTOR_ENABLED", value = "true" },
+    { name = "LITELLM_COLLECTOR_ADDRESS", value = local.collector_address },
+    { name = "LITELLM_COLLECTOR_BUFFER_SIZE", value = tostring(var.collector_buffer_size) },
+    { name = "LITELLM_COLLECTOR_ON_UNAVAILABLE", value = var.collector_on_unavailable },
+    { name = "LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS", value = tostring(var.collector_drain_timeout_seconds) },
+  ] : []
+
+  gateway_environment = concat(
+    local.shared_env,
+    local.gateway_otel_env,
+    local.billing_metrics_env,
+    local.gateway_extra_env_list,
+    local.proxy_config_env,
+    local.metrics_env,
+    local.gateway_pool_env,
+    local.collector_env,
+  )
+
+  collector_launch_cmd = "exec python -m litellm.proxy.collector"
+  collector_command = [
+    local.proxy_config_enabled ? "${local.proxy_config_fetch_cmd} && ${local.collector_launch_cmd}" : local.collector_launch_cmd
+  ]
+
+  collector_container = var.collector_enabled ? [{
+    name      = "collector"
+    image     = var.gateway_image
+    essential = false
+    cpu       = var.collector_cpu
+    memory    = var.collector_memory
+
+    restartPolicy = { enabled = true }
+
+    entryPoint = ["sh", "-c"]
+    command    = local.collector_command
+    environment = concat(
+      local.shared_env,
+      local.gateway_extra_env_list,
+      local.proxy_config_env,
+      local.gateway_pool_env,
+      local.collector_env,
+      [{ name = "LITELLM_JOB_ROLE", value = "collector" }],
+    )
+    secrets = concat(local.shared_secrets, local.gateway_extra_secrets_list)
+
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.gateway.name
+        awslogs-region        = var.region
+        awslogs-stream-prefix = "collector"
+      }
+    }
+  }] : []
 }
 
 # ---------- Gateway ----------
@@ -231,6 +360,21 @@ resource "aws_ecs_task_definition" "gateway" {
       )
       error_message = "billing_metrics_client_cert_pem and billing_metrics_client_key_pem are both required when billing_metrics_endpoint is set."
     }
+
+    precondition {
+      condition     = !var.gateway_connection_pool_enabled || local.database_enabled
+      error_message = "gateway_connection_pool_enabled needs a database: set create_database = true or pass database_url."
+    }
+
+    precondition {
+      condition     = !var.collector_enabled || (var.collector_cpu < var.gateway_cpu && var.collector_memory < var.gateway_memory)
+      error_message = "collector_cpu and collector_memory are carved out of gateway_cpu / gateway_memory and must leave room for the gateway container."
+    }
+
+    precondition {
+      condition     = !var.collector_enabled || var.gateway_metrics_port == null || var.collector_port != var.gateway_metrics_port
+      error_message = "collector_port and gateway_metrics_port must differ: both sidecars bind loopback in the same task."
+    }
   }
 
   family                   = "${local.name}-gateway"
@@ -241,7 +385,7 @@ resource "aws_ecs_task_definition" "gateway" {
   execution_role_arn       = aws_iam_role.task_execution.arn
   task_role_arn            = aws_iam_role.task.arn
 
-  container_definitions = jsonencode([
+  container_definitions = jsonencode(concat([
     merge(
       {
         name      = "gateway"
@@ -249,14 +393,9 @@ resource "aws_ecs_task_definition" "gateway" {
         essential = true
 
         portMappings = [{ containerPort = 4000, protocol = "tcp" }]
-        environment = concat(
-          local.shared_env,
-          local.gateway_otel_env,
-          local.billing_metrics_env,
-          local.gateway_extra_env_list,
-          local.proxy_config_env,
-        )
-        secrets = concat(local.shared_secrets, local.gateway_extra_secrets_list)
+        environment  = local.gateway_environment
+        secrets      = concat(local.shared_secrets, local.gateway_extra_secrets_list)
+        mountPoints  = local.metrics_mount_points
 
         # Container-level healthCheck intentionally omitted — the wolfi
         # runtime image doesn't ship curl/wget. The ALB target group polls
@@ -273,7 +412,14 @@ resource "aws_ecs_task_definition" "gateway" {
       },
       local.gateway_proxy_overrides,
     )
-  ])
+  ], local.gateway_metrics_container, local.collector_container))
+
+  dynamic "volume" {
+    for_each = local.metrics_enabled ? [1] : []
+    content {
+      name = local.metrics_volume
+    }
+  }
 
   tags = local.tags
 }
@@ -286,8 +432,8 @@ resource "aws_ecs_service" "gateway" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = aws_subnet.private[*].id
-    security_groups  = [aws_security_group.tasks.id]
+    subnets          = local.private_subnet_ids
+    security_groups  = local.task_security_group_ids
     assign_public_ip = false
   }
 
@@ -308,10 +454,20 @@ resource "aws_ecs_service" "gateway" {
 
   # Don't start until the schema migration has run. Otherwise the proxy
   # boots, Prisma fails on the missing tables, and ECS thrashes the task.
+  # The _version entries are listed because a task reads its secrets by ARN,
+  # which gives Terraform no edge to the resource that writes the value; the
+  # migration covers that ordering only while a database exists.
   depends_on = [
     aws_lb_listener.http,
     aws_lb_listener.https,
     terraform_data.migration,
+    aws_secretsmanager_secret_version.master_key,
+    aws_secretsmanager_secret_version.license,
+    aws_secretsmanager_secret_version.database_url,
+    aws_secretsmanager_secret_version.redis_url,
+    aws_secretsmanager_secret_version.billing_metrics_client_cert,
+    aws_secretsmanager_secret_version.billing_metrics_client_key,
+    aws_secretsmanager_secret_version.billing_metrics_ca_cert,
   ]
 
   tags = local.tags
@@ -381,8 +537,8 @@ resource "aws_ecs_service" "backend" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = aws_subnet.private[*].id
-    security_groups  = [aws_security_group.tasks.id]
+    subnets          = local.private_subnet_ids
+    security_groups  = local.task_security_group_ids
     assign_public_ip = false
   }
 
@@ -399,10 +555,20 @@ resource "aws_ecs_service" "backend" {
     ignore_changes = [desired_count]
   }
 
+  # Same secret-version ordering as the gateway, plus UI_PASSWORD, which only
+  # the backend consumes.
   depends_on = [
     aws_lb_listener.http,
     aws_lb_listener.https,
     terraform_data.migration,
+    aws_secretsmanager_secret_version.master_key,
+    aws_secretsmanager_secret_version.license,
+    aws_secretsmanager_secret_version.ui_password,
+    aws_secretsmanager_secret_version.database_url,
+    aws_secretsmanager_secret_version.redis_url,
+    aws_secretsmanager_secret_version.billing_metrics_client_cert,
+    aws_secretsmanager_secret_version.billing_metrics_client_key,
+    aws_secretsmanager_secret_version.billing_metrics_ca_cert,
   ]
 
   tags = local.tags
@@ -451,8 +617,8 @@ resource "aws_ecs_service" "ui" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = aws_subnet.private[*].id
-    security_groups  = [aws_security_group.tasks.id]
+    subnets          = local.private_subnet_ids
+    security_groups  = local.task_security_group_ids
     assign_public_ip = false
   }
 

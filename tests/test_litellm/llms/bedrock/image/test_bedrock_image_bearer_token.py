@@ -1,12 +1,8 @@
 import json
 import os
-import sys
 from unittest.mock import Mock, patch
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
@@ -18,7 +14,6 @@ mock_image_response = {"images": ["base64_encoded_image_data"], "error": None}
 class TestBedrockImageGeneration:
     def test_image_generation_with_api_key_bearer_token(self):
         """Test image generation with bearer token authentication"""
-        litellm.set_verbose = True
         test_api_key = "test-bearer-token-12345"
         model = "bedrock/stability.sd3-large-v1:0"
         prompt = "A cute baby sea otter"
@@ -53,7 +48,6 @@ class TestBedrockImageGeneration:
 
     def test_image_generation_with_env_variable_bearer_token(self, monkeypatch):
         """Test image generation with bearer token from environment variable"""
-        litellm.set_verbose = True
         test_api_key = "env-bearer-token-12345"
         model = "bedrock/stability.sd3-large-v1:0"
         prompt = "A cute baby sea otter"
@@ -90,7 +84,6 @@ class TestBedrockImageGeneration:
     @pytest.mark.asyncio
     async def test_async_image_generation_with_bearer_token(self):
         """Test async image generation with bearer token authentication"""
-        litellm.set_verbose = True
         test_api_key = "async-bearer-token-12345"
         model = "bedrock/stability.sd3-large-v1:0"
         prompt = "A cute baby sea otter"
@@ -125,7 +118,6 @@ class TestBedrockImageGeneration:
 
     def test_image_generation_with_sigv4(self):
         """Test image generation falls back to SigV4 auth when no bearer token is provided"""
-        litellm.set_verbose = True
         model = "bedrock/stability.sd3-large-v1:0"
         prompt = "A cute baby sea otter"
 
@@ -143,3 +135,24 @@ class TestBedrockImageGeneration:
             assert response is not None
             assert len(response.data) > 0
             mock_bedrock_image_gen.assert_called_once()
+
+
+def test_image_generation_bearer_token_never_runs_the_sigv4_credential_chain(monkeypatch):
+    """The deployment's AWS profile does not exist, so resolving SigV4 credentials
+    raises; a bearer-token deployment must still sign the request with the
+    bearer token alone."""
+    from litellm.llms.bedrock.image_generation.image_handler import BedrockImageGeneration
+
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "env-bearer-token-12345")
+
+    request = BedrockImageGeneration()._prepare_request(
+        model="amazon.nova-canvas-v1:0",
+        prompt="A cute baby sea otter",
+        optional_params={"aws_region_name": "us-west-2", "aws_profile_name": "litellm-no-such-aws-profile"},
+        api_base=None,
+        extra_headers=None,
+        api_key=None,
+        logging_obj=Mock(),
+    )
+
+    assert request.prepped.headers["Authorization"] == "Bearer env-bearer-token-12345"

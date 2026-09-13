@@ -170,22 +170,27 @@ class TestExtractConverseTexts:
         texts, _ = _extract_converse_texts(body, skip_system=False, skip_tool=False)
         assert texts == []
 
-    def test_extracts_tool_config_description_and_schema(self):
+    def test_tool_config_definitions_not_extracted(self):
+        """Tool definitions are app-authored config, so nothing under
+        toolConfig.tools reaches the guardrail as input content."""
         body = {
-            "messages": [{"role": "user", "content": [{"text": "hi"}]}],
+            "messages": [
+                {"role": "user", "content": [{"text": "How much lag is there in my data?"}]}
+            ],
             "toolConfig": {
                 "tools": [
                     {
                         "toolSpec": {
                             "name": "lookup",
-                            "description": "blocked tool description",
+                            "description": "tool description",
                             "inputSchema": {
                                 "json": {
                                     "type": "object",
                                     "properties": {
-                                        "q": {
+                                        "agent_name": {
                                             "type": "string",
-                                            "description": "blocked schema description",
+                                            "title": "Agent Name",
+                                            "enum": ["alpha", "beta", "gamma"],
                                         }
                                     },
                                 }
@@ -196,20 +201,56 @@ class TestExtractConverseTexts:
             },
         }
         texts, _ = _extract_converse_texts(body, skip_system=False, skip_tool=False)
-        assert "blocked tool description" in texts
-        assert "blocked schema description" in texts
+        assert texts == ["How much lag is there in my data?"]
 
-    def test_tool_config_scanned_even_when_tool_messages_skipped(self):
+    def test_every_tool_definition_excluded_not_just_the_first(self):
+        """A per-tool scan that only skipped tools[0] would still leak the rest."""
         body = {
             "messages": [{"role": "user", "content": [{"text": "hi"}]}],
             "toolConfig": {
                 "tools": [
-                    {"toolSpec": {"name": "fn", "description": "blocked description"}}
+                    {"toolSpec": {"name": "first", "description": "first description"}},
+                    {"toolSpec": {"name": "second", "description": "second description"}},
+                    {"toolSpec": {"name": "third", "description": "third description"}},
+                ]
+            },
+        }
+        texts, _ = _extract_converse_texts(body, skip_system=False, skip_tool=False)
+        assert texts == ["hi"]
+
+    def test_tool_config_definitions_not_extracted_when_tool_messages_skipped(self):
+        body = {
+            "messages": [{"role": "user", "content": [{"text": "hi"}]}],
+            "toolConfig": {
+                "tools": [
+                    {"toolSpec": {"name": "fn", "description": "tool description"}}
                 ]
             },
         }
         texts, _ = _extract_converse_texts(body, skip_system=False, skip_tool=True)
-        assert "blocked description" in texts
+        assert texts == ["hi"]
+
+    def test_tool_use_input_still_extracted_alongside_tool_config(self):
+        """Only tool DEFINITIONS are excluded; caller content inside a toolUse
+        block is still scanned."""
+        body = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"text": "hi"},
+                        {"toolUse": {"toolUseId": "t1", "name": "fn", "input": {"q": "user secret"}}},
+                    ],
+                }
+            ],
+            "toolConfig": {
+                "tools": [
+                    {"toolSpec": {"name": "fn", "description": "tool description"}}
+                ]
+            },
+        }
+        texts, _ = _extract_converse_texts(body, skip_system=False, skip_tool=False)
+        assert texts == ["hi", "user secret"]
 
     def test_extracts_additional_model_request_fields(self):
         body = {
@@ -437,9 +478,9 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         assert "blocked content" in sent_texts
 
     @pytest.mark.asyncio
-    async def test_tool_config_description_scanned_and_masked(self):
-        """Blocked text hidden in toolConfig.tools[].toolSpec.description is still
-        forwarded to Bedrock, so the guardrail must see it and mask it in place."""
+    async def test_tool_config_definitions_not_sent_and_left_untouched(self):
+        """Tool definitions never reach the guardrail, and the body forwarded to
+        Bedrock keeps them byte for byte."""
         handler = BedrockPassthroughGuardrailHandler()
         data = _converse_data()
         data["data"]["toolConfig"] = {
@@ -453,36 +494,42 @@ class TestBedrockPassthroughGuardrailHandlerInput:
                 }
             ]
         }
-        guardrail = _make_guardrail(
-            {"texts": ["You are helpful.", "Hello world", "lookup", "[REDACTED]", "object"]}
-        )
+        original_tool_config = copy.deepcopy(data["data"]["toolConfig"])
+        guardrail = _make_guardrail({"texts": ["[REDACTED]", "[REDACTED]"]})
 
         result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
         sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
-        assert "email john@example.com" in sent_texts
-        tool_spec = result["data"]["toolConfig"]["tools"][0]["toolSpec"]
-        assert tool_spec["description"] == "[REDACTED]"
+        assert sent_texts == ["You are helpful.", "Hello world"]
+        assert result["data"]["toolConfig"] == original_tool_config
 
     @pytest.mark.asyncio
-    async def test_tool_config_description_blocking_propagates(self):
-        """A blocking guardrail must reject content hidden in a tool description."""
+    async def test_blocking_guardrail_not_triggered_by_tool_description(self):
+        """LIT-5797: a request whose only prompt is a benign user message must not
+        be blocked because a denied term appears in a tool definition."""
         handler = BedrockPassthroughGuardrailHandler()
         data = _converse_data()
         data["data"]["toolConfig"] = {
             "tools": [{"toolSpec": {"name": "fn", "description": "blocked content"}}]
         }
+
+        async def _block_on_denied_term(**kwargs):
+            texts = kwargs["inputs"]["texts"]
+            if any("blocked content" in text for text in texts):
+                raise GuardrailBlocked("Blocked")
+            return {"texts": texts}
+
         guardrail = MagicMock()
         guardrail.guardrail_name = "block-guard"
         guardrail.skip_system_message_in_guardrail = False
         guardrail.skip_tool_message_in_guardrail = False
-        guardrail.apply_guardrail = AsyncMock(side_effect=GuardrailBlocked("Blocked"))
+        guardrail.apply_guardrail = AsyncMock(side_effect=_block_on_denied_term)
 
-        with pytest.raises(GuardrailBlocked):
-            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
         sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
-        assert "blocked content" in sent_texts
+        assert "blocked content" not in sent_texts
+        assert result["data"]["toolConfig"]["tools"][0]["toolSpec"]["description"] == "blocked content"
 
     @pytest.mark.asyncio
     async def test_additional_model_request_fields_scanned_and_masked(self):

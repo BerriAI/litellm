@@ -1,8 +1,12 @@
+import logging
+
 import pytest
+from pydantic import ValidationError
 
 from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
     Deployment,
+    GenericLiteLLMParams,
     LiteLLM_Params,
     ModelInfo,
 )
@@ -46,12 +50,30 @@ def test_custom_pricing_params_keeps_every_field_it_had():
 
 @pytest.mark.parametrize("field", SPECIAL_MODEL_INFO_PARAMS)
 def test_deployment_mirrors_pricing_from_litellm_params_onto_model_info(field):
+    value = [{"range": [0, 128000], "input_cost_per_token": 3e-06}] if field == "tiered_pricing" else 3e-06
     deployment = Deployment(
         model_name="my-model",
-        litellm_params=LiteLLM_Params(model="gpt-4o", **{field: 3e-06}),
+        litellm_params=LiteLLM_Params(model="gpt-4o", **{field: value}),
     )
-    assert getattr(deployment.model_info, field) == 3e-06
-    assert deployment.model_info.model_dump(exclude_none=True)[field] == 3e-06
+    assert getattr(deployment.model_info, field) == value
+    assert deployment.model_info.model_dump(exclude_none=True)[field] == value
+
+
+def test_deployment_mirrors_tiered_pricing_onto_model_info():
+    """
+    Regression: tiered_pricing set under a deployment's litellm_params was silently
+    ignored at cost time because the Deployment mirror excluded it, so the logging
+    path never flagged the deployment as custom-priced.
+    """
+    tiers = [
+        {"range": [0, 3000], "input_cost_per_token": 3.25e-07, "output_cost_per_token": 1.95e-06},
+        {"range": [3000, 128000], "input_cost_per_token": 6.5e-07, "output_cost_per_token": 3.9e-06},
+    ]
+    deployment = Deployment(
+        model_name="my-model",
+        litellm_params=LiteLLM_Params(model="anthropic/claude-haiku-4-5", tiered_pricing=tiers),
+    )
+    assert deployment.model_info.tiered_pricing == tiers
 
 
 def test_unset_pricing_is_still_absent_from_dumps():
@@ -69,5 +91,58 @@ def test_pricing_strings_are_coerced_to_float():
 
 
 def test_invalid_pricing_is_rejected():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='validation error for ModelInfo'):
         ModelInfo(id="x", input_cost_per_token="free")
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (True, True),
+        ("true", True),
+        (" False ", False),
+        ("yes", True),
+        (None, None),
+        ("os.environ/DROP_PARAMS", "os.environ/DROP_PARAMS"),
+        ("v2:gcm:ciphertext-from-a-pre-fix-row", "v2:gcm:ciphertext-from-a-pre-fix-row"),
+    ],
+)
+def test_drop_params_coerces_flags_and_keeps_unresolved_strings(value, expected):
+    assert GenericLiteLLMParams(drop_params=value).drop_params == expected
+
+
+@pytest.mark.parametrize("value", [2, 2.5, [], {}])
+def test_drop_params_ignores_non_flag_non_string_values_with_a_warning(value, caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        assert GenericLiteLLMParams(drop_params=value).drop_params is None
+    assert f"drop_params={value!r} is not a flag value" in caplog.text
+
+
+@pytest.mark.parametrize("value", [True, "true", None, "os.environ/DROP_PARAMS", "v2:gcm:ciphertext-from-a-pre-fix-row"])
+def test_drop_params_flags_and_strings_log_nothing(value, caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        GenericLiteLLMParams(drop_params=value)
+    assert caplog.text == ""
+
+
+def test_aws_session_tags_round_trip_as_sts_shaped_pairs():
+    """The deployment field keeps the exact Key/Value shape STS AssumeRole expects."""
+    params = LiteLLM_Params(
+        model="bedrock/anthropic.claude-opus-5",
+        aws_session_tags=[{"Key": "team", "Value": "genai"}, {"Key": "env", "Value": "prod"}],
+    )
+
+    assert params.model_dump(exclude_none=True)["aws_session_tags"] == [
+        {"Key": "team", "Value": "genai"},
+        {"Key": "env", "Value": "prod"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "aws_session_tags",
+    ["team=genai", {"team": "genai"}, [{"key": "team", "value": "genai"}], [{"Key": "team"}]],
+    ids=["string", "flat-dict", "lowercase-keys", "missing-value"],
+)
+def test_aws_session_tags_reject_shapes_sts_would_refuse(aws_session_tags):
+    with pytest.raises(ValidationError, match="aws_session_tags"):
+        LiteLLM_Params(model="bedrock/anthropic.claude-opus-5", aws_session_tags=aws_session_tags)

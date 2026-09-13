@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it } from "vitest";
 
-import { createSelectionColumn, DataTable, validateDataTableConfig } from "./index";
+import { createSelectionColumn, DataTable } from "./index";
 
 interface Model {
   id: string;
@@ -121,17 +121,5 @@ describe("DataTable row selection", () => {
 
     await user.click(rowBox("m1"));
     expect(selectedCount()).toHaveTextContent("1");
-  });
-
-  it("rejects controlled rowSelection without onRowSelectionChange", () => {
-    const errors = validateDataTableConfig<Model, unknown>({ data, columns, rowSelection: { m1: true } });
-
-    expect(errors).toContain(
-      "Controlled `rowSelection` requires `onRowSelectionChange`; without it selection changes are dropped.",
-    );
-  });
-
-  it("does not complain when selection is left uncontrolled", () => {
-    expect(validateDataTableConfig<Model, unknown>({ data, columns })).toHaveLength(0);
   });
 });

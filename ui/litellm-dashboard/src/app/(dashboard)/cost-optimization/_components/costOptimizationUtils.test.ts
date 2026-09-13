@@ -7,10 +7,12 @@ import {
   SAVINGS_DRIVERS,
   SAVINGS_SERIES,
   buildDailyToolSeries,
+  classificationRatePer1kTurns,
   computeCacheLeakage,
   formatRangeLabel,
   isAnthropicModel,
   localIsoDay,
+  savingsSeriesOf,
   toCumulative,
   topToolsBySpend,
   usd,
@@ -66,6 +68,28 @@ const modelDay = (date: string, models: Record<string, Partial<SpendMetrics>>): 
   },
 });
 
+describe("savingsSeriesOf", () => {
+  it("plots the LiteLLM-injected caching share, sorted oldest first", () => {
+    // Total and injected caching deliberately differ: every chart derives from
+    // SAVINGS_DRIVERS, so the caching series must follow the injected figure.
+    const sharedSavings: Partial<SpendMetrics> = {
+      compression_savings_spend: 0.1,
+      prompt_caching_savings_spend: 0.5,
+      autorouter_savings_spend: 0.05,
+    };
+    const newestFirst = [day("2026-07-02", {}), day("2026-07-01", {})].map((d, i) => ({
+      ...d,
+      metrics: metrics({ ...sharedSavings, gateway_injected_caching_savings_spend: i === 0 ? 0.2 : 0.3 }),
+    }));
+
+    const series = savingsSeriesOf(newestFirst);
+
+    expect(series.map((p) => p.date)).toEqual(["Jul 1", "Jul 2"]);
+    expect(series[0]).toMatchObject({ Compression: 0.1, "Prompt caching": 0.3, "Auto-router": 0.05 });
+    expect(series[1]).toMatchObject({ Compression: 0.1, "Prompt caching": 0.2, "Auto-router": 0.05 });
+  });
+});
+
 describe("computeCacheLeakage", () => {
   it("aggregates a key's tokens and savings across multiple days", () => {
     const results = [
@@ -102,10 +126,51 @@ describe("computeCacheLeakage", () => {
         leaker: { alias: "leaker", metrics: { prompt_tokens: 500 } },
       }),
     ];
-    const { rows, discountPerToken } = computeCacheLeakage(results);
-    expect(discountPerToken).toBeCloseTo(0.002, 6);
+    const { rows, netSavingsPerCachedToken } = computeCacheLeakage(results);
+    expect(netSavingsPerCachedToken).toBeCloseTo(0.002, 6);
     expect(rows.map((r) => r.label)).toEqual(["leaker"]);
     expect(rows[0].potentialSavings).toBeCloseTo(1.0, 6);
+  });
+
+  it("divides net savings by cache writes as well as reads, since a new cacher pays write premiums too", () => {
+    const results = [
+      day("2026-07-01", {
+        cacher: {
+          alias: "cacher",
+          metrics: {
+            prompt_tokens: 2000,
+            cache_read_input_tokens: 1000,
+            cache_creation_input_tokens: 1000,
+            prompt_caching_savings_spend: 2.0,
+          },
+        },
+        leaker: { alias: "leaker", metrics: { prompt_tokens: 500 } },
+      }),
+    ];
+    const { rows, netSavingsPerCachedToken } = computeCacheLeakage(results);
+    expect(netSavingsPerCachedToken).toBeCloseTo(0.001, 6);
+    expect(rows[0].potentialSavings).toBeCloseTo(0.5, 6);
+  });
+
+  it("declines to price leakage when write premiums leave caching net negative", () => {
+    const results = [
+      day("2026-07-01", {
+        writer: {
+          alias: "writer",
+          metrics: {
+            prompt_tokens: 2000,
+            cache_read_input_tokens: 100,
+            cache_creation_input_tokens: 1500,
+            prompt_caching_savings_spend: -0.75,
+          },
+        },
+        leaker: { alias: "leaker", metrics: { prompt_tokens: 500 } },
+      }),
+    ];
+    const { rows, netSavingsPerCachedToken } = computeCacheLeakage(results);
+    expect(netSavingsPerCachedToken).toBeLessThan(0);
+    expect(rows.every((r) => r.potentialSavings === null)).toBe(true);
+    expect(rows.map((r) => r.label)).toEqual(["leaker", "writer"]);
   });
 
   it("returns null estimate and ranks by uncached tokens when nobody used caching", () => {
@@ -115,8 +180,8 @@ describe("computeCacheLeakage", () => {
         small: { alias: "small", metrics: { prompt_tokens: 100 } },
       }),
     ];
-    const { rows, discountPerToken } = computeCacheLeakage(results);
-    expect(discountPerToken).toBeNull();
+    const { rows, netSavingsPerCachedToken } = computeCacheLeakage(results);
+    expect(netSavingsPerCachedToken).toBeNull();
     expect(rows.map((r) => r.label)).toEqual(["big", "small"]);
     expect(rows.every((r) => r.potentialSavings === null)).toBe(true);
   });
@@ -174,8 +239,8 @@ describe("computeCacheLeakage by model", () => {
         "claude-haiku-4-5": { prompt_tokens: 500 },
       }),
     ];
-    const { rows, discountPerToken } = computeCacheLeakage(results, "model");
-    expect(discountPerToken).toBeCloseTo(0.002, 6);
+    const { rows, netSavingsPerCachedToken } = computeCacheLeakage(results, "model");
+    expect(netSavingsPerCachedToken).toBeCloseTo(0.002, 6);
     expect(rows.map((r) => r.id)).toEqual(["claude-haiku-4-5"]);
     expect(rows[0].potentialSavings).toBeCloseTo(1.0, 6);
   });
@@ -334,6 +399,23 @@ describe("usd", () => {
     expect(usd(-0.05)).toBe("-$0.0500");
     expect(usd(-0.0004)).toBe("-$0.0004");
     expect(usd(-12.4)).toBe("-$12.40");
+  });
+});
+
+describe("classificationRatePer1kTurns", () => {
+  it("normalizes total classification cost to one thousand turns", () => {
+    expect(classificationRatePer1kTurns(342.18, 140815)).toBe("($2.43 / 1K turns)");
+    expect(classificationRatePer1kTurns(0.0004, 100)).toBe("($0.0040 / 1K turns)");
+  });
+
+  it("shows a floor instead of rounding a real cost down to zero", () => {
+    expect(classificationRatePer1kTurns(0.00001, 1000)).toBe("(<$0.0001 / 1K turns)");
+    expect(classificationRatePer1kTurns(0.0001, 1000)).toBe("($0.0001 / 1K turns)");
+  });
+
+  it("reports zero when there are no turns or no classification cost", () => {
+    expect(classificationRatePer1kTurns(0, 0)).toBe("($0.00 / 1K turns)");
+    expect(classificationRatePer1kTurns(0, 100)).toBe("($0.00 / 1K turns)");
   });
 });
 

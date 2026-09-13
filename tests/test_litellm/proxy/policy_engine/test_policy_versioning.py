@@ -157,7 +157,7 @@ class TestUpdatePolicyDraftOnly:
         prod_row = _make_row(policy_id="pid-1", version_status="production")
         prisma.db.litellm_policytable.find_unique = AsyncMock(return_value=prod_row)
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='Error updating policy in DB: Only draft versions can be') as exc_info:
             await registry.update_policy_in_db(
                 policy_id="pid-1",
                 policy_request=PolicyUpdateRequest(description="new"),
@@ -341,7 +341,7 @@ class TestUpdateVersionStatus:
         draft = _make_row(policy_id="d-1", version_status="draft")
         prisma.db.litellm_policytable.find_unique = AsyncMock(return_value=draft)
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='Error updating version status: Cannot promote draft') as exc_info:
             await registry.update_version_status(
                 policy_id="d-1",
                 new_status="production",

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Union
 
 import httpx
@@ -11,15 +11,17 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     CreateFileRequest,
     FileContentRequest,
+    FileListPage,
     OpenAICreateFileRequestOptionalParams,
     OpenAIFileObject,
-    OpenAIFilesPurpose,
 )
 from litellm.types.utils import LlmProviders, ModelResponse
 
 from ..chat.transformation import BaseConfig
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.router import Router as _Router
     from litellm.types.llms.openai import HttpxBinaryResponseContent
@@ -158,6 +160,15 @@ class BaseFilesConfig(BaseConfig):
     ) -> tuple[str, dict]:
         """Transform file list request into provider-specific format."""
 
+    def transform_list_files_next_request(
+        self,
+        raw_response: httpx.Response,
+        optional_params: Mapping[str, object],
+        litellm_params: dict,  # mutable-ok: carries provider stashes from the request transform to the response one
+    ) -> tuple[str, dict[str, str]] | None:
+        """Request for the page after `raw_response`, or None once the listing is complete."""
+        return None
+
     @abstractmethod
     def transform_list_files_response(
         self,
@@ -207,7 +218,7 @@ class BaseFilesConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -240,10 +251,13 @@ class BaseFileEndpoints(ABC):
     @abstractmethod
     async def afile_list(
         self,
-        purpose: OpenAIFilesPurpose | None,
+        purpose: str | None,
         litellm_parent_otel_span: Span | None,
+        user_api_key_dict: UserAPIKeyAuth,
+        limit: int | None = None,
+        after: str | None = None,
         **data: dict,
-    ) -> list[OpenAIFileObject]:
+    ) -> FileListPage:
         pass
 
     @abstractmethod
@@ -253,7 +267,7 @@ class BaseFileEndpoints(ABC):
         litellm_parent_otel_span: Span | None,
         llm_router: Router,
         **data: dict,
-    ) -> OpenAIFileObject:
+    ) -> FileDeleted:
         pass
 
     @abstractmethod

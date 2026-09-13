@@ -30,8 +30,8 @@ def _image_response_with_web_search(web_search_requests):
     return ImageResponse(data=[ImageObject(b64_json="img1")], usage=usage)
 
 
-def test_vertex_image_generation_cost_adds_web_search_grounding():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_vertex_image_generation_cost_adds_web_search_grounding(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     model = "gemini-3-pro-image-preview"
     model_info = litellm.get_model_info(model=model, custom_llm_provider="vertex_ai")
@@ -55,8 +55,8 @@ def test_vertex_image_generation_cost_adds_web_search_grounding():
     assert round(grounded - ungrounded, 10) == round(expected_web_search_cost, 10)
 
 
-def test_vertex_image_generation_cost_no_web_search_when_absent():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_vertex_image_generation_cost_no_web_search_when_absent(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     model = "gemini-3-pro-image-preview"
 

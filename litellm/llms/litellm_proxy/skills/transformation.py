@@ -7,8 +7,10 @@ API requests to database operations via LiteLLMSkillsHandler.
 Pattern follows litellm/llms/litellm_proxy/responses/transformation.py
 """
 
-from collections.abc import Coroutine
-from typing import TYPE_CHECKING, Any, Final, Optional
+from collections.abc import Coroutine, Sequence
+from typing import TYPE_CHECKING, Final, Optional
+
+from pydantic import JsonValue
 
 from litellm.types.llms.anthropic_skills import (
     DeleteSkillResponse,
@@ -19,7 +21,7 @@ from litellm.types.utils import LlmProviders
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy._types import LiteLLM_SkillsTable, UserAPIKeyAuth
 
 
 class LiteLLMSkillsTransformationHandler:
@@ -40,18 +42,18 @@ class LiteLLMSkillsTransformationHandler:
         display_title: str | None = None,
         description: str | None = None,
         instructions: str | None = None,
-        files: list[Any] | None = None,
+        files: Sequence[object] | None = None,
         file_content: bytes | None = None,
         file_name: str | None = None,
         file_type: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: dict[str, JsonValue] | None = None,
         user_id: str | None = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         _is_async: bool = False,
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
         litellm_call_id: str | None = None,
         **kwargs,
-    ) -> Skill | Coroutine[Any, Any, Skill]:
+    ) -> Skill | Coroutine[object, object, Skill]:
         """
         Create a skill in LiteLLM database.
 
@@ -127,7 +129,7 @@ class LiteLLMSkillsTransformationHandler:
         file_content: bytes | None = None,
         file_name: str | None = None,
         file_type: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: dict[str, JsonValue] | None = None,
         user_id: str | None = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
     ) -> Skill:
@@ -152,7 +154,7 @@ class LiteLLMSkillsTransformationHandler:
             user_api_key_dict=user_api_key_dict,
         )
 
-        return self._db_skill_to_response(db_skill)
+        return self.db_skill_to_response(db_skill)
 
     def list_skills_handler(
         self,
@@ -163,7 +165,7 @@ class LiteLLMSkillsTransformationHandler:
         litellm_call_id: str | None = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         **kwargs,
-    ) -> ListSkillsResponse | Coroutine[Any, Any, ListSkillsResponse]:
+    ) -> ListSkillsResponse | Coroutine[object, object, ListSkillsResponse]:
         """
         List skills from LiteLLM database.
 
@@ -220,7 +222,9 @@ class LiteLLMSkillsTransformationHandler:
             user_api_key_dict=user_api_key_dict,
         )
 
-        skills: Final = [self._db_skill_to_response(s) for s in db_skills]
+        skills: Final = [  # mutable-ok: ListSkillsResponse.data needs list[Skill]; never mutated after
+            self.db_skill_to_response(s) for s in db_skills
+        ]
         return ListSkillsResponse(
             data=skills,
             has_more=len(skills) >= limit,
@@ -235,7 +239,7 @@ class LiteLLMSkillsTransformationHandler:
         litellm_call_id: str | None = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         **kwargs,
-    ) -> Skill | Coroutine[Any, Any, Skill]:
+    ) -> Skill | Coroutine[object, object, Skill]:
         """
         Get a skill from LiteLLM database.
 
@@ -286,7 +290,7 @@ class LiteLLMSkillsTransformationHandler:
             skill_id=skill_id,
             user_api_key_dict=user_api_key_dict,
         )
-        return self._db_skill_to_response(db_skill)
+        return self.db_skill_to_response(db_skill)
 
     def delete_skill_handler(
         self,
@@ -296,7 +300,7 @@ class LiteLLMSkillsTransformationHandler:
         litellm_call_id: str | None = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         **kwargs,
-    ) -> DeleteSkillResponse | Coroutine[Any, Any, DeleteSkillResponse]:
+    ) -> DeleteSkillResponse | Coroutine[object, object, DeleteSkillResponse]:
         """
         Delete a skill from LiteLLM database.
 
@@ -352,7 +356,7 @@ class LiteLLMSkillsTransformationHandler:
             type=result.get("type", "skill_deleted"),
         )
 
-    def _db_skill_to_response(self, db_skill: Any) -> Skill:
+    def db_skill_to_response(self, db_skill: "LiteLLM_SkillsTable") -> Skill:
         """
         Convert a database skill record to Anthropic-compatible Skill response.
 
@@ -362,21 +366,8 @@ class LiteLLMSkillsTransformationHandler:
         Returns:
             Skill object
         """
-        created_at = ""
-        updated_at = ""
-
-        if hasattr(db_skill, "created_at") and db_skill.created_at:
-            created_at = (
-                db_skill.created_at.isoformat()
-                if hasattr(db_skill.created_at, "isoformat")
-                else str(db_skill.created_at)
-            )
-        if hasattr(db_skill, "updated_at") and db_skill.updated_at:
-            updated_at = (
-                db_skill.updated_at.isoformat()
-                if hasattr(db_skill.updated_at, "isoformat")
-                else str(db_skill.updated_at)
-            )
+        created_at: Final = db_skill.created_at.isoformat() if db_skill.created_at else ""
+        updated_at: Final = db_skill.updated_at.isoformat() if db_skill.updated_at else ""
 
         return Skill(
             id=db_skill.skill_id,
@@ -386,4 +377,5 @@ class LiteLLMSkillsTransformationHandler:
             latest_version=db_skill.latest_version,
             source=db_skill.source or "custom",
             type="skill",
+            description=db_skill.description,
         )

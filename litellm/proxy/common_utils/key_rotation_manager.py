@@ -4,8 +4,9 @@ Key Rotation Manager - Automated key rotation based on rotation schedules
 Handles finding keys that need rotation based on their individual schedules.
 """
 
+from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -30,6 +31,9 @@ from litellm.repositories.table_repositories import (
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
 
 
 class KeyRotationManager:
@@ -106,7 +110,7 @@ class KeyRotationManager:
                     cronjob_id=KEY_ROTATION_JOB_NAME,
                 )
 
-    async def _find_keys_needing_rotation(self) -> list[LiteLLM_VerificationToken]:
+    async def _find_keys_needing_rotation(self) -> "Sequence[prisma_models.LiteLLM_VerificationToken]":
         """
         Find keys that are due for rotation based on their key_rotation_at timestamp.
 
@@ -156,7 +160,7 @@ class KeyRotationManager:
         # Check if the rotation time has passed
         return now >= key.key_rotation_at
 
-    async def _rotate_key(self, key: LiteLLM_VerificationToken):
+    async def _rotate_key(self, key: "prisma_models.LiteLLM_VerificationToken"):
         """
         Rotate a single key using existing regenerate_key_fn and call the rotation hook
         """
@@ -197,7 +201,7 @@ class KeyRotationManager:
         if isinstance(response, GenerateKeyResponse):
             await KeyManagementEventHooks.async_key_rotated_hook(
                 data=regenerate_request,
-                existing_key_row=key,
+                existing_key_row=key,  # pyright: ignore[reportArgumentType]  # prisma row, hook wants the domain model
                 response=response,
                 user_api_key_dict=system_user,
                 litellm_changed_by=LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,

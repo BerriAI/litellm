@@ -14,17 +14,27 @@ import asyncio
 import json
 import os
 from collections.abc import Callable, Mapping
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
+from litellm.constants import SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
 from litellm.types.utils import EmbeddingResponse
 
-from ._embedding_router import build_router_embedding_metadata, resolve_embedding_router
+from ._embedding_router import (
+    build_router_embedding_metadata,
+    resolve_embedding_max_input_tokens,
+    resolve_embedding_router,
+    resolve_embedding_timeout,
+    truncate_embedding_input,
+)
 from .base_cache import BaseCache
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 
 class RedisSemanticCache(BaseCache):
@@ -38,6 +48,8 @@ class RedisSemanticCache(BaseCache):
 
     DEFAULT_REDIS_INDEX_NAME: str = "litellm_semantic_cache_index"
     CACHE_KEY_FIELD_NAME: str = "litellm_cache_key"
+    embedding_max_input_tokens: int | None = None
+    embedding_timeout: float = SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS
 
     def __init__(
         self,
@@ -48,6 +60,8 @@ class RedisSemanticCache(BaseCache):
         similarity_threshold: float | None = None,
         embedding_model: str = "text-embedding-ada-002",
         index_name: str | None = None,
+        embedding_max_input_tokens: int | None = None,
+        embedding_timeout: float | None = None,
         **kwargs: object,
     ):
         """
@@ -62,6 +76,10 @@ class RedisSemanticCache(BaseCache):
                 where 1.0 requires exact matches and 0.0 accepts any match
             embedding_model: Model to use for generating embeddings
             index_name: Name for the Redis index
+            embedding_max_input_tokens: Truncate prompts to this many tokens before
+                embedding; defaults to the Router deployment's configured max_input_tokens
+            embedding_timeout: Seconds a cache lookup may spend embedding the prompt before it
+                gives up and lets the request continue to the LLM
             ttl: Default time-to-live for cache entries in seconds
             **kwargs: Additional arguments passed to the Redis client
 
@@ -86,6 +104,8 @@ class RedisSemanticCache(BaseCache):
         # While similarity: 1 = most similar, 0 = least similar
         self.distance_threshold = 1 - similarity_threshold
         self.embedding_model = embedding_model
+        self.embedding_max_input_tokens = embedding_max_input_tokens
+        self.embedding_timeout = resolve_embedding_timeout(embedding_timeout)
 
         # Set up Redis connection
         if redis_url is None:
@@ -96,7 +116,7 @@ class RedisSemanticCache(BaseCache):
                 password = password or os.environ["REDIS_PASSWORD"]
             except KeyError as e:
                 # Raise a more informative exception if any of the required keys are missing
-                missing_var: Final = e.args[0]
+                missing_var: Final[object] = e.args[0]
                 raise ValueError(
                     f"Missing required Redis configuration: {missing_var}. Provide {missing_var} or redis_url."
                 ) from e
@@ -253,7 +273,7 @@ class RedisSemanticCache(BaseCache):
         return prompt or None
 
     @classmethod
-    def _collect_responses_input_text(cls, value: Any, prompt_parts: list[str]) -> None:
+    def _collect_responses_input_text(cls, value: object, prompt_parts: list[str]) -> None:
         value = cls._coerce_response_input_value(value)
         if value is None:
             return
@@ -307,7 +327,14 @@ class RedisSemanticCache(BaseCache):
             return dict_method()
         return value
 
-    def _get_embedding(self, prompt: str, metadata: dict[str, Any] | None = None) -> list[float]:
+    def _embedding_input(self, prompt: str, router: "Router | None") -> str:
+        return truncate_embedding_input(
+            prompt,
+            self.embedding_model,
+            resolve_embedding_max_input_tokens(self.embedding_max_input_tokens, self.embedding_model, router),
+        )
+
+    def _get_embedding(self, prompt: str, metadata: dict[str, object] | None = None) -> list[float]:
         """
         Routes through the proxy Router when the embedding model is a Router
         deployment so per-deployment auth (e.g. Bedrock aws_role_name) applies,
@@ -320,14 +347,17 @@ class RedisSemanticCache(BaseCache):
             llm_router = None
 
         router: Final = resolve_embedding_router(self.embedding_model, llm_router, llm_model_list)
+        embedding_input: Final = self._embedding_input(prompt, router)
         if router is not None:
             embedding_response = cast(
                 EmbeddingResponse,
                 router.embedding(
                     model=self.embedding_model,
-                    input=prompt,
+                    input=embedding_input,
                     cache={"no-store": True, "no-cache": True},
                     metadata=build_router_embedding_metadata(metadata),
+                    timeout=self.embedding_timeout,
+                    num_retries=0,
                 ),
             )
         else:
@@ -335,8 +365,10 @@ class RedisSemanticCache(BaseCache):
                 EmbeddingResponse,
                 litellm.embedding(
                     model=self.embedding_model,
-                    input=prompt,
+                    input=embedding_input,
                     cache={"no-store": True, "no-cache": True},
+                    timeout=self.embedding_timeout,
+                    num_retries=0,
                 ),
             )
         return embedding_response["data"][0]["embedding"]
@@ -393,7 +425,7 @@ class RedisSemanticCache(BaseCache):
 
             prompt_embedding: Final = self._get_embedding(prompt, metadata=kwargs.get("metadata"))
 
-            store_kwargs: Final[dict[str, Any]] = {
+            store_kwargs: Final[dict[str, object]] = {
                 "vector": prompt_embedding,
                 "filters": self._get_cache_filters(key),
             }
@@ -472,7 +504,7 @@ class RedisSemanticCache(BaseCache):
             print_verbose(f"Error retrieving from Redis semantic cache: {e}")
             kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
 
-    async def _get_async_embedding(self, prompt: str, metadata: dict[str, Any] | None = None) -> list[float]:
+    async def _get_async_embedding(self, prompt: str, metadata: dict[str, object] | None = None) -> list[float]:
         """
         Asynchronously generate an embedding for the given prompt.
 
@@ -490,20 +522,27 @@ class RedisSemanticCache(BaseCache):
             llm_router = None
 
         router: Final = resolve_embedding_router(self.embedding_model, llm_router, llm_model_list)
+        embedding_input: Final = self._embedding_input(prompt, router)
+        embedding_call: Final = (
+            router.aembedding(
+                model=self.embedding_model,
+                input=embedding_input,
+                cache={"no-store": True, "no-cache": True},
+                metadata=build_router_embedding_metadata(metadata),
+                timeout=self.embedding_timeout,
+                num_retries=0,
+            )
+            if router is not None
+            else litellm.aembedding(
+                model=self.embedding_model,
+                input=embedding_input,
+                cache={"no-store": True, "no-cache": True},
+                timeout=self.embedding_timeout,
+                num_retries=0,
+            )
+        )
         try:
-            if router is not None:
-                embedding_response = await router.aembedding(
-                    model=self.embedding_model,
-                    input=prompt,
-                    cache={"no-store": True, "no-cache": True},
-                    metadata=build_router_embedding_metadata(metadata),
-                )
-            else:
-                embedding_response = await litellm.aembedding(
-                    model=self.embedding_model,
-                    input=prompt,
-                    cache={"no-store": True, "no-cache": True},
-                )
+            embedding_response: Final = await asyncio.wait_for(embedding_call, self.embedding_timeout)
             return embedding_response["data"][0]["embedding"]
         except Exception as e:
             print_verbose(f"Error generating async embedding: {e}")
@@ -532,7 +571,7 @@ class RedisSemanticCache(BaseCache):
             # Generate embedding for the value (response) to cache
             prompt_embedding: Final = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
 
-            store_kwargs: Final[dict[str, Any]] = {
+            store_kwargs: Final[dict[str, object]] = {
                 "vector": prompt_embedding,
                 "filters": self._get_cache_filters(key),
             }
@@ -626,7 +665,7 @@ class RedisSemanticCache(BaseCache):
         aindex: Final = await self.llmcache._get_async_index()
         return await aindex.info()
 
-    async def async_set_cache_pipeline(self, cache_list: list[tuple[str, Any]], **kwargs: object) -> None:
+    async def async_set_cache_pipeline(self, cache_list: list[tuple[str, object]], **kwargs: object) -> None:
         """
         Asynchronously store multiple values in the semantic cache.
 

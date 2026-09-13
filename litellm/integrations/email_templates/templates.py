@@ -54,7 +54,7 @@ USER_INVITED_EMAIL_TEMPLATE: Final = """
 
                     You were invited to use OpenAI Proxy API for team {team_name}  <br /> <br />
 
-                    <a href="{base_url}" style="display: inline-block; padding: 10px 20px; background-color: #87ceeb; color: #fff; text-decoration: none; border-radius: 20px;">Get Started here</a> <br /> <br />
+                    <a href="{base_url}" style="display: inline-block; padding: 10px 20px; background-color: #87ceeb; color: #fff; text-decoration: none; border-radius: 20px;">Accept Invitation</a> <br /> <br />
 
                     
                     If you have any questions, please send an email to {email_support_contact} <br /> <br />

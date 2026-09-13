@@ -3,16 +3,12 @@ Unit tests for OVHCloud AI Endpoints chat integration.
 """
 
 import os
-import sys
 
 import pytest
 
 from litellm.llms.ovhcloud.utils import OVHCloudException
 from litellm.utils import get_optional_params
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.ovhcloud.chat.transformation import (
     OVHCloudChatCompletionStreamingHandler,
@@ -179,7 +175,6 @@ class TestOVHCloudConfig:
 
 
 def test_ovhcloud_integration():
-    import os
     from litellm import completion
 
     api_key = os.getenv("OVHCLOUD_API_KEY")
@@ -207,7 +202,6 @@ def test_OVHCloud_streaming_integration():
     Integration test for streaming - requires real API key
     Run with: pytest -k test_OVHCloud_streaming_integration -s
     """
-    import os
     from litellm import completion
 
     api_key = os.getenv("OVHCLOUD_API_KEY")
@@ -262,7 +256,6 @@ def test_ovhcloud_with_custom_base_url():
     """
     Test OVHCloud with custom base URL
     """
-    import os
     from litellm import completion
 
     api_key = os.getenv("OVHCLOUD_API_KEY")

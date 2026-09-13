@@ -1,4 +1,5 @@
 import math
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 from fastapi import HTTPException, status
@@ -19,6 +20,35 @@ def validate_finite_spend(spend: float | None) -> None:
         raise HTTPException(
             status_code=400,
             detail={"error": f"spend must be a finite number. Received: {spend}"},
+        )
+
+
+def validate_budget_duration(budget_duration: str | None, status_code: int = 400) -> None:
+    """Reject budget durations that can't be parsed, are non-positive, or
+    overflow date math, so a bad value can't be persisted and later crash the
+    budget reset job.
+
+    A non-positive duration also resolves to a reset time of "now", which leaves
+    the row permanently due: the reset job re-reads it every tick and, once
+    enough of them exist, they fill each batch and starve every other tenant's
+    reset.
+    """
+    if budget_duration is None:
+        return
+
+    from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+    from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+    try:
+        if duration_in_seconds(budget_duration) <= 0:
+            raise ValueError("budget_duration must be positive")
+        get_budget_reset_time(budget_duration=budget_duration)
+    except (ValueError, OverflowError):
+        raise HTTPException(
+            status_code=status_code,
+            detail={
+                "error": f"Invalid budget_duration '{budget_duration}'. Use a format like '1h', '24h', '7d', or '30d'."
+            },
         )
 
 
@@ -409,7 +439,7 @@ _TEAM_MEMBER_BUDGET_LIMIT_FIELDS: Final = (
 )
 
 
-def _is_set_budget_value(value: Any) -> bool:
+def _is_set_budget_value(value: object) -> bool:
     if value is None:
         return False
     if isinstance(value, list) and len(value) == 0:
@@ -417,7 +447,7 @@ def _is_set_budget_value(value: Any) -> bool:
     return True
 
 
-def _has_meaningful_budget_limit(budget_values: dict[str, Any]) -> bool:
+def _has_meaningful_budget_limit(budget_values: Mapping[str, object]) -> bool:
     """A budget is meaningful if at least one limit is actually set; an empty
     list (no model restriction) and None both count as unset."""
     return any(_is_set_budget_value(budget_values.get(field)) for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS)
@@ -561,7 +591,7 @@ def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
             updated_kv["metadata"] = {field_name: _value}
 
 
-def _has_non_empty_value(value: Any) -> bool:
+def _has_non_empty_value(value: object) -> bool:
     """Check if a value has real content (not None, not empty list, not blank string)."""
     if value is None:
         return False

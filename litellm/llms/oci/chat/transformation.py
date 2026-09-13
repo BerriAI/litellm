@@ -10,7 +10,7 @@ implement the LiteLLM BaseConfig interface.  Heavy-lifting lives in:
 """
 
 import json
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -65,6 +65,8 @@ from litellm.types.utils import (
 from litellm.utils import supports_reasoning
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -601,7 +603,7 @@ class OCIChatConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -713,8 +715,25 @@ class OCIChatConfig(BaseConfig):
 class OCIStreamWrapper(CustomStreamWrapper):
     """Custom stream wrapper that dispatches OCI SSE chunks to the correct handler."""
 
-    def __init__(self, **kwargs: Any):
-        super().__init__(**kwargs)
+    def __init__(
+        self,
+        completion_stream: object,
+        model: str,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: str | None = None,
+        stream_options: object = None,
+        make_call: Callable[..., object] | None = None,
+        _response_headers: dict[str, object] | None = None,
+    ) -> None:
+        super().__init__(
+            completion_stream=completion_stream,
+            model=model,
+            logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+            stream_options=stream_options,
+            make_call=make_call,
+            _response_headers=_response_headers,
+        )
         # Tracks whether any prior Cohere chunk in this stream has emitted
         # tool calls. The Cohere handler uses this to decide whether the
         # terminal consolidation chunk's tool calls are duplicates (suppress)
@@ -726,13 +745,25 @@ class OCIStreamWrapper(CustomStreamWrapper):
         # single-event case (terminal chunk carries the only copy of the text).
         self._cohere_text_emitted = False
 
-    def chunk_creator(self, chunk: Any) -> ModelResponseStream:
+    def _emit_chunk(self, parsed: ModelResponseStream) -> ModelResponseStream:
+        for choice in parsed.choices:
+            if getattr(choice.delta, "tool_calls", None):
+                self.tool_call = True
+            if choice.finish_reason is not None:
+                self.received_finish_reason = choice.finish_reason
+                self.sent_last_chunk = True
+        return self.model_response_creator(chunk={"choices": parsed.choices})
+
+    def chunk_creator(self, chunk: Any) -> ModelResponseStream | None:
         if not isinstance(chunk, str):
             raise ValueError(f"Chunk is not a string: {chunk}")
         if not chunk.startswith("data:"):
             raise ValueError(f"Chunk does not start with 'data:': {chunk}")
+        payload: Final = chunk[5:].strip()
+        if payload == "[DONE]":
+            return None
         try:
-            dict_chunk: Final = json.loads(chunk[5:])
+            dict_chunk: Final = json.loads(payload)
         except json.JSONDecodeError as e:
             raise OCIError(
                 status_code=500,
@@ -755,8 +786,8 @@ class OCIStreamWrapper(CustomStreamWrapper):
                     if getattr(choice.delta, "content", None):
                         self._cohere_text_emitted = True
                         break
-            return result
-        return handle_generic_stream_chunk(dict_chunk)
+            return self._emit_chunk(result)
+        return self._emit_chunk(handle_generic_stream_chunk(dict_chunk))
 
 
 __all__ = [

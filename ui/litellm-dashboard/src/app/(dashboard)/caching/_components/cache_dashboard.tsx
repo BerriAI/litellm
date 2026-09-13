@@ -1,7 +1,7 @@
-import { DateRangePickerValue } from "@tremor/react";
+import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useEffect, useState } from "react";
-import NotificationsManager from "@/components/molecules/notifications_manager";
-import UsageDatePicker from "@/components/shared/usage_date_picker";
+import { toast } from "@/lib/toast";
+import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { BarChart } from "@/components/shared/charts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,6 +15,7 @@ import {
   ComboboxItem,
   ComboboxList,
   ComboboxValue,
+  useComboboxAnchor,
 } from "@/components/ui/combobox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -26,12 +27,18 @@ import { useCacheActivity, type CacheActivityGroup } from "@/app/(dashboard)/hoo
 import { CacheHealthTab } from "./cache_health";
 import CacheSettings from "./cache_settings";
 import CoordinationRedisSettings from "./coordination_redis_settings";
+import { ErrorDrilldownCard } from "./ErrorDrilldown";
 
 const REQUEST_SERIES = {
   apiRequests: "LLM API requests",
   cacheHits: "Cache hit",
   failed: "Failed requests",
 } as const;
+
+const UNKNOWN_CALL_TYPE = "Unknown";
+
+const UNKNOWN_CALL_TYPE_NOTE =
+  "Unknown groups spend logs that recorded no endpoint. Older proxy versions wrote those for requests rejected before routing, so they are not necessarily LLM API requests.";
 
 const toChartDatum = (group: CacheActivityGroup) => ({
   name: group.call_type,
@@ -46,6 +53,11 @@ const formatDateWithoutTZ = (date: Date | undefined) => {
   if (!date) return undefined;
   return date.toISOString().split("T")[0];
 };
+
+const resolveDrilldownCallType = (selected: string | null, groups: readonly CacheActivityGroup[]): string | null =>
+  selected !== null && groups.some((group) => group.call_type === selected && group.failed_requests > 0)
+    ? selected
+    : null;
 
 function valueFormatterNumbers(number: number) {
   const formatter = new Intl.NumberFormat("en-US", {
@@ -68,8 +80,11 @@ interface CachePageProps {
 // Helper function to deep-parse a JSON string if possible
 
 const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole, userID, premiumUser }) => {
+  const anchor1 = useComboboxAnchor();
+  const anchor2 = useComboboxAnchor();
   const [selectedApiKeys, setSelectedApiKeys] = useState<string[]>([]);
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
+  const [errorDrilldownCallType, setErrorDrilldownCallType] = useState<string | null>(null);
 
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
     from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
@@ -93,6 +108,8 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
   const uniqueApiKeys = activity?.filter_options.key_aliases ?? [];
   const uniqueModels = activity?.filter_options.models ?? [];
   const chartData = (activity?.groups ?? []).map(toChartDatum);
+  const hasUnknownGroup = (activity?.groups ?? []).some((group) => group.call_type === UNKNOWN_CALL_TYPE);
+  const activeDrilldownCallType = resolveDrilldownCallType(errorDrilldownCallType, activity?.groups ?? []);
 
   const handleRefreshClick = () => {
     refetch();
@@ -101,7 +118,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
 
   const runCachingHealthCheck = async () => {
     try {
-      NotificationsManager.info("Running cache health check...");
+      toast.info("Running cache health check...");
       setHealthCheckResponse("");
       const response = await cachingHealthCheckCall(accessToken !== null ? accessToken : "");
       setHealthCheckResponse(response);
@@ -137,18 +154,18 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
 
   return (
     <Tabs defaultValue="analytics" className="mt-2 mb-8 w-full gap-2 p-8">
-      <div className="mt-2 flex w-full items-center justify-between">
-        <TabsList>
-          <TabsTrigger value="analytics" className="flex-none">
+      <div className="mt-2 flex w-full items-center justify-between border-b">
+        <TabsList variant="line" className="h-auto rounded-none p-0">
+          <TabsTrigger value="analytics" className="flex-none rounded-none px-4 py-2">
             Cache Analytics
           </TabsTrigger>
-          <TabsTrigger value="health" className="flex-none">
+          <TabsTrigger value="health" className="flex-none rounded-none px-4 py-2">
             Cache Health
           </TabsTrigger>
-          <TabsTrigger value="settings" className="flex-none">
+          <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
             Cache Settings
           </TabsTrigger>
-          <TabsTrigger value="coordination" className="flex-none">
+          <TabsTrigger value="coordination" className="flex-none rounded-none px-4 py-2">
             Coordination Redis
           </TabsTrigger>
         </TabsList>
@@ -161,7 +178,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
         </div>
       </div>
 
-      <TabsContent value="analytics">
+      <TabsContent value="analytics" keepMounted>
         <Card>
           <CardContent>
             <p className="text-sm text-muted-foreground">
@@ -187,14 +204,14 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
               Metrics&quot; on the Usage page or individual requests in the Logs page.
             </p>
 
-            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div className="mt-4 grid grid-cols-1 items-center gap-4 md:grid-cols-[1fr_1fr_auto]">
               <Combobox
                 multiple
                 items={uniqueApiKeys}
                 value={selectedApiKeys}
                 onValueChange={(keys: string[]) => setSelectedApiKeys(keys)}
               >
-                <ComboboxChips>
+                <ComboboxChips render={<div ref={anchor1} />}>
                   <ComboboxValue>
                     {(keys: string[]) =>
                       keys.map((key) => (
@@ -204,9 +221,9 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                       ))
                     }
                   </ComboboxValue>
-                  <ComboboxChipsInput placeholder="Select Virtual Keys" className="border-0 bg-transparent" />
+                  <ComboboxChipsInput placeholder="Select Virtual Keys" />
                 </ComboboxChips>
-                <ComboboxContent>
+                <ComboboxContent anchor={anchor1}>
                   <ComboboxEmpty>No virtual keys found</ComboboxEmpty>
                   <ComboboxList>
                     {(key: string) => (
@@ -224,7 +241,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                 value={selectedModels}
                 onValueChange={(models: string[]) => setSelectedModels(models)}
               >
-                <ComboboxChips>
+                <ComboboxChips render={<div ref={anchor2} />}>
                   <ComboboxValue>
                     {(models: string[]) =>
                       models.map((model) => (
@@ -234,9 +251,9 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                       ))
                     }
                   </ComboboxValue>
-                  <ComboboxChipsInput placeholder="Select Models" className="border-0 bg-transparent" />
+                  <ComboboxChipsInput placeholder="Select Models" />
                 </ComboboxChips>
-                <ComboboxContent>
+                <ComboboxContent anchor={anchor2}>
                   <ComboboxEmpty>No models found</ComboboxEmpty>
                   <ComboboxList>
                     {(model: string) => (
@@ -248,7 +265,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                 </ComboboxContent>
               </Combobox>
 
-              <UsageDatePicker
+              <AdvancedDatePicker
                 value={dateValue}
                 onValueChange={(value) => {
                   setDateValue(value);
@@ -274,6 +291,10 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                 <CardTitle className="text-base font-semibold">Cache Hits vs API Requests</CardTitle>
               </CardHeader>
               <CardContent>
+                <p className="text-sm text-muted-foreground">
+                  Click a red failed-requests segment to see which error codes caused those failures.
+                </p>
+                {hasUnknownGroup && <p className="mt-1 text-sm text-muted-foreground">{UNKNOWN_CALL_TYPE_NOTE}</p>}
                 <BarChart
                   data={chartData}
                   stack={true}
@@ -282,9 +303,22 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                   categories={[REQUEST_SERIES.apiRequests, REQUEST_SERIES.cacheHits, REQUEST_SERIES.failed]}
                   colors={["sky", "teal", "red"]}
                   yAxisWidth={48}
+                  className="mt-2"
+                  onValueChange={(item) => {
+                    if (item.categoryClicked === REQUEST_SERIES.failed) setErrorDrilldownCallType(item.name);
+                  }}
                 />
               </CardContent>
             </Card>
+
+            {activeDrilldownCallType !== null && (
+              <ErrorDrilldownCard
+                callType={activeDrilldownCallType}
+                buckets={activity?.error_breakdown ?? []}
+                valueFormatter={valueFormatterNumbers}
+                onClose={() => setErrorDrilldownCallType(null)}
+              />
+            )}
 
             <Card className="mt-6">
               <CardHeader>
@@ -308,7 +342,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
         </Card>
       </TabsContent>
 
-      <TabsContent value="health">
+      <TabsContent value="health" keepMounted>
         <CacheHealthTab
           accessToken={accessToken}
           healthCheckResponse={healthCheckResponse}
@@ -316,11 +350,11 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
         />
       </TabsContent>
 
-      <TabsContent value="settings">
+      <TabsContent value="settings" keepMounted>
         <CacheSettings accessToken={accessToken} userRole={userRole} userID={userID} />
       </TabsContent>
 
-      <TabsContent value="coordination">
+      <TabsContent value="coordination" keepMounted>
         <CoordinationRedisSettings />
       </TabsContent>
     </Tabs>

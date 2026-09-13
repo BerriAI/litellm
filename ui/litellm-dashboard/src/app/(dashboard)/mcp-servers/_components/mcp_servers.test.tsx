@@ -19,14 +19,6 @@ vi.mock("@/components/networking", () => ({
   listMCPUserEnvVarStatus: vi.fn().mockResolvedValue([]),
 }));
 
-// Mock NotificationsManager
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
-
 const createQueryClient = () =>
   new QueryClient({
     defaultOptions: {
@@ -53,7 +45,7 @@ describe("MCPServers", () => {
     vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
 
     const queryClient = createQueryClient();
-    const { getByText } = render(
+    render(
       <QueryClientProvider client={queryClient}>
         <MCPServers {...defaultProps} />
       </QueryClientProvider>,
@@ -61,11 +53,11 @@ describe("MCPServers", () => {
 
     // Wait for the component to load and check if title renders
     await waitFor(() => {
-      expect(getByText("MCP Servers")).toBeInTheDocument();
+      expect(screen.getByText("MCP Servers")).toBeInTheDocument();
     });
 
     // Verify the title is rendered
-    expect(getByText("MCP Servers")).toBeInTheDocument();
+    expect(screen.getByText("MCP Servers")).toBeInTheDocument();
   });
 
   it("should render mocked MCP servers data in the table", async () => {
@@ -104,7 +96,7 @@ describe("MCPServers", () => {
     vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers);
 
     const queryClient = createQueryClient();
-    const { getByText, getAllByText } = render(
+    render(
       <QueryClientProvider client={queryClient}>
         <MCPServers {...defaultProps} />
       </QueryClientProvider>,
@@ -112,19 +104,19 @@ describe("MCPServers", () => {
 
     // Wait for the component to load
     await waitFor(() => {
-      expect(getByText("MCP Servers")).toBeInTheDocument();
+      expect(screen.getByText("MCP Servers")).toBeInTheDocument();
     });
 
     // Wait for the mocked data to render in the table
     await waitFor(() => {
-      expect(getByText("Test Server 1")).toBeInTheDocument();
+      expect(screen.getByText("Test Server 1")).toBeInTheDocument();
     });
 
     // Verify the mocked server data is rendered in the table
-    expect(getByText("Test Server 1")).toBeInTheDocument();
-    expect(getByText("Test Server 2")).toBeInTheDocument();
-    expect(getAllByText("test-server-1").length).toBeGreaterThan(0);
-    expect(getAllByText("test-server-2").length).toBeGreaterThan(0);
+    expect(screen.getByText("Test Server 1")).toBeInTheDocument();
+    expect(screen.getByText("Test Server 2")).toBeInTheDocument();
+    expect(screen.getAllByText("test-server-1").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("test-server-2").length).toBeGreaterThan(0);
 
     // Verify the API was called
     // Note: useMCPServers uses useAuthorized() internally, which returns "123" from global mock
@@ -176,7 +168,7 @@ describe("MCPServers", () => {
     vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue(mockHealthStatuses);
 
     const queryClient = createQueryClient();
-    const { getByText } = render(
+    render(
       <QueryClientProvider client={queryClient}>
         <MCPServers {...defaultProps} />
       </QueryClientProvider>,
@@ -184,7 +176,7 @@ describe("MCPServers", () => {
 
     // Wait for the component to load
     await waitFor(() => {
-      expect(getByText("MCP Servers")).toBeInTheDocument();
+      expect(screen.getByText("MCP Servers")).toBeInTheDocument();
     });
 
     // Verify the health check API was called (without a server ID filter — the hook always
@@ -219,7 +211,7 @@ describe("MCPServers", () => {
     );
 
     const queryClient = createQueryClient();
-    const { getByText } = render(
+    render(
       <QueryClientProvider client={queryClient}>
         <MCPServers {...defaultProps} />
       </QueryClientProvider>,
@@ -227,7 +219,7 @@ describe("MCPServers", () => {
 
     // Wait for the component to load
     await waitFor(() => {
-      expect(getByText("MCP Servers")).toBeInTheDocument();
+      expect(screen.getByText("MCP Servers")).toBeInTheDocument();
     });
 
     // Verify that health check was initiated

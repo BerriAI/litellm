@@ -32,6 +32,10 @@ from litellm.proxy.hooks.rate_limiter_utils import (
     resolve_llm_provider_for_rate_limit,
 )
 from litellm.proxy.utils import InternalUsageCache
+from litellm.router_utils.add_retry_fallback_headers import (
+    ensure_response_additional_headers,
+    response_has_hidden_params,
+)
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypesLiteral
 
@@ -53,6 +57,10 @@ def _get_priority_settings() -> "PriorityReservationSettings":
 
         return PriorityReservationSettings()
     return settings
+
+
+def _is_latin1_encodable(value: object) -> bool:
+    return all(ord(char) < 256 for char in str(value))
 
 
 class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
@@ -454,7 +462,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             parent_otel_span=user_api_key_dict.parent_otel_span,
         )
 
-        verbose_proxy_logger.debug("Atomic check+increment response: %s", json.dumps(atomic_response, indent=2))
+        verbose_proxy_logger.debug(
+            "Atomic check+increment response: %s", json.dumps(atomic_response, indent=2, default=list)
+        )
 
         if atomic_response["overall_code"] == "OVER_LIMIT":
             resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(model)
@@ -657,21 +667,17 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 data=data, user_api_key_dict=user_api_key_dict, response=response
             )
 
-            # Add additional priority-specific headers
-            if isinstance(response, ModelResponse):
+            if response_has_hidden_params(response):
                 priority: Final = self._get_priority_from_user_api_key_dict(user_api_key_dict=user_api_key_dict)
-
-                # Get existing additional headers
-                additional_headers: Final = getattr(response, "_hidden_params", {}).get("additional_headers", {}) or {}
-
-                # Add priority information
-                additional_headers["x-litellm-priority"] = priority or "default"
+                additional_headers: Final = ensure_response_additional_headers(response)
+                priority_header: Final = priority or "default"
+                if _is_latin1_encodable(priority_header):
+                    additional_headers["x-litellm-priority"] = priority_header
+                else:
+                    verbose_proxy_logger.debug(
+                        "Skipping x-litellm-priority header: priority %r is not Latin-1 encodable", priority
+                    )
                 additional_headers["x-litellm-rate-limiter-version"] = "v3"
-
-                # Update response
-                if not hasattr(response, "_hidden_params"):
-                    response._hidden_params = {}
-                response._hidden_params["additional_headers"] = additional_headers
 
             return response
 

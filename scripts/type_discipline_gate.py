@@ -13,10 +13,12 @@ emits is gated: LIT001 (mutable collection in any annotation), LIT002
 without codes or reason), LIT006 (cast), LIT008 (`**kwargs`), LIT009 (inert
 `# type: ignore`, dead syntax while enableTypeIgnoreComments is false), LIT010
 (assignment without a Final declaration; suppress deliberate rebinding with
-`# rebind-ok: <reason>`), and LIT011 (parameter rebinding or in-place mutation)
-carry limits at or above their current count to ratchet down; LIT005 (`*-ok`
-suppression without a reason) is frozen at limit 0 so any net-new reasonless
-suppression trips the gate; and LIT007 (TypeGuard/TypeIs) is a hard zero.
+`# rebind-ok: <reason>`), LIT011 (parameter rebinding or in-place mutation), and
+LIT012 (TypedDict field without a `ReadOnly[...]` qualifier; suppress with
+`# writable-ok: <reason>`) carry limits at or above their current count to
+ratchet down; LIT005 (`*-ok` suppression without a reason) is frozen at limit 0
+so any net-new reasonless suppression trips the gate; and LIT007
+(TypeGuard/TypeIs) is a hard zero.
 LIT010 and LIT011 were seeded at 1.5x the count left after the sweep that
 annotated every never-rebound name with Final, so that headroom is the hard
 line new code cannot cross.
@@ -42,7 +44,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 CHECKER = REPO_ROOT / "scripts" / "check_type_discipline.py"
 BUDGET_PATH = REPO_ROOT / "type-discipline-budget.json"
 TARGET = "litellm"
-DEFAULT_BASE = "origin/litellm_internal_staging"
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 _LINE = re.compile(r"^(?P<file>.+?):(?P<line>\d+): (?P<code>LIT\d+) ")
@@ -201,7 +202,8 @@ def cmd_check(base: str) -> None:
         "Remove the new violations, give each a reason (`# noqa: XXX  # <reason>`, "
         "`# pyright: ignore[rule]  # <reason>`, `# mutable-ok: <reason>`, "
         "`# cast-ok: <reason>`, `# guard-ok: <reason>`, `# kwargs-ok: <reason>`, "
-        "`# rebind-ok: <reason>`), or remove an equal number elsewhere; the ceiling "
+        "`# rebind-ok: <reason>`, `# writable-ok: <reason>`), or remove an equal "
+        "number elsewhere; the ceiling "
         "is the limit in type-discipline-budget.json."
     )
     raise SystemExit(1)
@@ -236,7 +238,7 @@ def _base_budget_rules(base_point: str) -> frozenset:
     return frozenset(json.loads(proc.stdout))
 
 
-def cmd_update(base_ref: str = DEFAULT_BASE) -> None:
+def cmd_update(base_ref: str) -> None:
     """Ratchet each rule's limit down by the violations this branch fixed.
 
     The working-tree count is compared against a checker pass over a detached
@@ -261,10 +263,15 @@ def cmd_update(base_ref: str = DEFAULT_BASE) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", default=DEFAULT_BASE)
+    parser.add_argument("--base", help="Comparison ref (default: origin's current default branch)")
     parser.add_argument("--update", action="store_true")
     args = parser.parse_args()
-    cmd_update(args.base) if args.update else cmd_check(args.base)
+    from default_branch import resolve_base_ref
+    from gate_slot_lock import held_slot
+
+    base_ref: Final = resolve_base_ref(args.base, REPO_ROOT)
+    with held_slot():
+        cmd_update(base_ref) if args.update else cmd_check(base_ref)
 
 
 if __name__ == "__main__":

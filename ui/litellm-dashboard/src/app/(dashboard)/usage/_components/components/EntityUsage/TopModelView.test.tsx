@@ -10,6 +10,14 @@ describe("TopModelView", () => {
     mockSetTopModelsLimit.mockClear();
   });
 
+  // Which element a control library gives its label to is its own business, so drive the
+  // control by its visible text and judge the result by what the panel renders.
+  const clickControl = async (user: ReturnType<typeof userEvent.setup>, label: string) => {
+    await user.click(screen.getByText(label));
+  };
+
+  const showsChart = (container: HTMLElement) => container.querySelector(".recharts-wrapper") !== null;
+
   it("should render", () => {
     render(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
     expect(screen.getByText("Table View")).toBeInTheDocument();
@@ -17,12 +25,12 @@ describe("TopModelView", () => {
 
   it("should display table view button", () => {
     render(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
-    expect(screen.getByRole("button", { name: "Table View" })).toBeInTheDocument();
+    expect(screen.getByText("Table View")).toBeInTheDocument();
   });
 
   it("should display chart view button", () => {
     render(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
-    expect(screen.getByRole("button", { name: "Chart View" })).toBeInTheDocument();
+    expect(screen.getByText("Chart View")).toBeInTheDocument();
   });
 
   it("should display all table column headers", () => {
@@ -55,32 +63,37 @@ describe("TopModelView", () => {
     expect(screen.getByText("100")).toBeInTheDocument();
     const failedRequestsCell = screen
       .getAllByText("5")
-      .find((el) => el.closest("span")?.classList.contains("text-red-600"));
+      .find((el) => el.closest("span")?.classList.contains("text-destructive"));
     expect(failedRequestsCell).toBeDefined();
     expect(screen.getByText("50,000")).toBeInTheDocument();
   });
 
+  const oneModel = [{ key: "gpt-4", spend: 150.5, successful_requests: 100, failed_requests: 5, tokens: 50000 }];
+
   it("should switch to chart view when chart view button is clicked", async () => {
     const user = userEvent.setup();
-    render(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
+    const { container } = render(
+      <TopModelView topModels={oneModel} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />,
+    );
 
-    const chartViewButton = screen.getByRole("button", { name: "Chart View" });
-    await user.click(chartViewButton);
+    expect(showsChart(container)).toBe(false);
+    await clickControl(user, "Chart View");
 
-    expect(chartViewButton).toHaveClass("bg-blue-100");
+    expect(showsChart(container)).toBe(true);
+    expect(screen.queryByText("Spend (USD)")).not.toBeInTheDocument();
   });
 
   it("should switch to table view when table view button is clicked", async () => {
     const user = userEvent.setup();
-    render(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
+    const { container } = render(
+      <TopModelView topModels={oneModel} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />,
+    );
 
-    const chartViewButton = screen.getByRole("button", { name: "Chart View" });
-    const tableViewButton = screen.getByRole("button", { name: "Table View" });
+    await clickControl(user, "Chart View");
+    await clickControl(user, "Table View");
 
-    await user.click(chartViewButton);
-    await user.click(tableViewButton);
-
-    expect(tableViewButton).toHaveClass("bg-blue-100");
+    expect(showsChart(container)).toBe(false);
+    expect(screen.getByText("Spend (USD)")).toBeInTheDocument();
   });
 
   it("renders one cyan bar per model with model names on the axis in chart view", async () => {
@@ -108,7 +121,7 @@ describe("TopModelView", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Chart View" }));
+    await clickControl(user, "Chart View");
 
     const bars = container.querySelectorAll("path.recharts-rectangle");
     expect(bars).toHaveLength(2);
@@ -118,19 +131,11 @@ describe("TopModelView", () => {
     expect(screen.getAllByText("claude-3").length).toBeGreaterThan(0);
   });
 
-  it("should call setTopModelsLimit when limit is changed via Segmented control", async () => {
+  it("should call setTopModelsLimit when the limit control is changed", async () => {
     const user = userEvent.setup();
     render(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
 
-    const limit10Radio = screen.getByRole("radio", { name: "10" });
-    const limit10Label = limit10Radio.closest("label");
-    if (limit10Label) {
-      await user.click(limit10Label);
-    } else {
-      // Fallback: click the div with title="10"
-      const limit10Div = screen.getByTitle("10");
-      await user.click(limit10Div);
-    }
+    await clickControl(user, "10");
 
     expect(mockSetTopModelsLimit).toHaveBeenCalledWith(10);
   });
@@ -232,7 +237,7 @@ describe("TopModelView", () => {
     );
     const successfulCell = screen
       .getAllByText("50")
-      .find((el) => el.closest("span")?.classList.contains("text-green-600"));
+      .find((el) => el.closest("span")?.classList.contains("text-success"));
     expect(successfulCell).toBeDefined();
   });
 
@@ -252,7 +257,9 @@ describe("TopModelView", () => {
         setTopModelsLimit={mockSetTopModelsLimit}
       />,
     );
-    const failedCell = screen.getAllByText("5").find((el) => el.closest("span")?.classList.contains("text-red-600"));
+    const failedCell = screen
+      .getAllByText("5")
+      .find((el) => el.closest("span")?.classList.contains("text-destructive"));
     expect(failedCell).toBeDefined();
   });
 

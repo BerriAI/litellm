@@ -7,7 +7,7 @@ Docs - https://docs.mistral.ai/api/
 """
 
 from collections.abc import AsyncIterator, Coroutine, Iterator
-from typing import Any, Final, Literal, cast, get_type_hints, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, cast, get_type_hints, overload
 
 import httpx
 
@@ -25,6 +25,9 @@ from litellm.types.llms.mistral import MistralThinkingBlock, MistralToolCallMess
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, ModelResponseStream
 from litellm.utils import convert_to_model_response_object
+
+if TYPE_CHECKING:
+    import tiktoken
 
 
 class MistralConfig(OpenAIGPTConfig):
@@ -292,7 +295,7 @@ class MistralConfig(OpenAIGPTConfig):
                         file_id = file_content.get("file", {}).get("file_id")
                         if file_id:
                             # Replace 'file' with 'file_id'
-                            file_content["file_id"] = file_id
+                            file_content["file_id"] = file_id  # pyright: ignore[reportGeneralTypeIssues]  # legacy in-place rewrite of the block shape
                             file_content.pop("file", None)
         return messages
 
@@ -550,7 +553,7 @@ class MistralConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

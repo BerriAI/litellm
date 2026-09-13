@@ -1,4 +1,3 @@
-import type { FormInstance } from "antd";
 import { describe, expect, it, vi } from "vitest";
 import { Providers } from "../provider_info_helpers";
 import { resetCredentialFormOnProviderChange } from "./credential_form_helpers";
@@ -18,7 +17,7 @@ function makeFormStub(initialFields: Record<string, unknown> = {}) {
       Object.keys(fields).forEach((k) => delete fields[k]);
     }),
   };
-  return { stub: stub as unknown as FormInstance, fields, calls: stub };
+  return { stub: stub as unknown as Parameters<typeof resetCredentialFormOnProviderChange>[0], fields, calls: stub };
 }
 
 describe("resetCredentialFormOnProviderChange", () => {

@@ -217,7 +217,7 @@ class OpenAITextCompletion(BaseLLM):
 
     def streaming(
         self,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         api_key: str,
         data: dict,
         headers: dict,
@@ -274,7 +274,7 @@ class OpenAITextCompletion(BaseLLM):
 
     async def async_streaming(
         self,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         api_key: str,
         data: dict,
         headers: dict,

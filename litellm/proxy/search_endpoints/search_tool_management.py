@@ -51,6 +51,20 @@ def _convert_datetime_to_str(value: datetime | str | None) -> str | None:
 TeamObjectLookup: TypeAlias = Callable[[str, UserAPIKeyAuth], Awaitable[LiteLLM_TeamTable]]
 
 
+async def _refresh_router_search_tools() -> None:
+    """Push the search tools table into this worker's router.
+
+    Best-effort: the row is already committed, so a refresh failure must not surface as a 500 and
+    push the caller into a retry that creates duplicates.
+    """
+    from litellm.proxy.proxy_server import proxy_config
+
+    try:
+        await proxy_config.reload_search_tools_from_db()
+    except Exception as e:  # noqa: BLE001  # the row is committed; no refresh failure may reach the caller
+        verbose_proxy_logger.exception("Search tool router refresh failed after a management write: %s", e)
+
+
 async def _team_object_from_db(team_id: str, user_api_key_dict: UserAPIKeyAuth) -> LiteLLM_TeamTable:
     from litellm.proxy.auth.auth_checks import get_team_object
     from litellm.proxy.proxy_server import (
@@ -305,8 +319,10 @@ async def create_search_tool(request: CreateSearchToolRequest):
             search_tool=request.search_tool, prisma_client=prisma_client
         )
 
+        await _refresh_router_search_tools()
+
         verbose_proxy_logger.debug(
-            "Successfully added search tool '%s' to database. Router will be updated by the cron job.",
+            "Successfully added search tool '%s' to database.",
             result.get("search_tool_name"),
         )
 
@@ -388,8 +404,10 @@ async def update_search_tool(search_tool_id: str, request: UpdateSearchToolReque
             prisma_client=prisma_client,
         )
 
+        await _refresh_router_search_tools()
+
         verbose_proxy_logger.debug(
-            "Successfully updated search tool '%s' in database. Router will be updated by the cron job.",
+            "Successfully updated search tool '%s' in database.",
             result.get("search_tool_name"),
         )
 
@@ -445,9 +463,9 @@ async def delete_search_tool(search_tool_id: str):
             search_tool_id=search_tool_id, prisma_client=prisma_client
         )
 
-        verbose_proxy_logger.debug(
-            "Successfully deleted search tool from database. Router will be updated by the cron job."
-        )
+        await _refresh_router_search_tools()
+
+        verbose_proxy_logger.debug("Successfully deleted search tool from database.")
 
         return result
     except HTTPException as e:

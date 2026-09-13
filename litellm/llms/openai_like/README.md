@@ -54,7 +54,10 @@ That's it! The provider will be automatically loaded and available.
     "constraints": {
       "temperature_max": 1.0,
       "temperature_min": 0.0,
-      "temperature_min_with_n_gt_1": 0.3
+      "temperature_min_with_n_gt_1": 0.3,
+      // /v1/messages providers only: keep Anthropic cache_control extensions
+      // such as ttl instead of stripping them down to {"type": ...}
+      "cache_control_ttl": true
     },
     
     // Optional: Special handling flags
