@@ -2392,6 +2392,14 @@ def _tool_replay_request() -> dict:
     }
 
 
+def _string_input_request() -> dict:
+    return {
+        "model": "gpt-5.6",
+        "instructions": "Never repeat the SSN " + SSN + " back.",
+        "input": "My SSN is " + SSN + ".",
+    }
+
+
 class TestPerMessageRewriteWriteBack:
     """A guardrail that rewrites per chat row hands the rows back as
     structured_messages, and the handler lands them on the instructions and the
@@ -2422,6 +2430,33 @@ class TestPerMessageRewriteWriteBack:
 
         guardrail = _per_message_redactor()
         data = _tool_replay_request()
+        original = copy.deepcopy(data)
+
+        with patch.object(guardrail.async_handler, "post", side_effect=_per_message_guardrail_server(False)):
+            with pytest.raises(UnappliableRequestRewrite) as excinfo:
+                await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        assert excinfo.value.guardrail_name == "per-message-redactor"
+        assert data["input"] == original["input"]
+        assert data["instructions"] == original["instructions"]
+
+    @pytest.mark.asyncio
+    async def test_structured_rows_land_on_instructions_and_string_input(self):
+        guardrail = _per_message_redactor()
+        data = _string_input_request()
+
+        with patch.object(guardrail.async_handler, "post", side_effect=_per_message_guardrail_server(True)):
+            result = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        assert result["instructions"] == "Never repeat the SSN " + REDACTED_SSN + " back."
+        assert [_texts(item) for item in result["input"]] == [["My SSN is " + REDACTED_SSN + "."]]
+
+    @pytest.mark.asyncio
+    async def test_texts_only_per_message_answer_over_a_string_input_is_rejected_by_name(self):
+        from litellm.proxy.policy_engine.pipeline_executor import UnappliableRequestRewrite
+
+        guardrail = _per_message_redactor()
+        data = _string_input_request()
         original = copy.deepcopy(data)
 
         with patch.object(guardrail.async_handler, "post", side_effect=_per_message_guardrail_server(False)):

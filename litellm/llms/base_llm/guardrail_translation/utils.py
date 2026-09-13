@@ -411,3 +411,9 @@ def message_with_slot_texts(message: AllMessageValues, texts: Sequence[str]) -> 
     rewritten_content: Final = texts[0] if isinstance(content, str) else _content_with_slot_texts(content, texts)
     rewritten: Final = {**message, "content": rewritten_content}  # mutable-ok: chat rows stay JSON-plain dicts
     return cast("AllMessageValues", rewritten)  # cast-ok: the same row with only its text slots swapped
+
+
+def unappliable_request_rewrite(guardrail_name: str | None) -> Exception:
+    from litellm.proxy.policy_engine.pipeline_executor import UnappliableRequestRewrite
+
+    return UnappliableRequestRewrite(guardrail_name or "unknown")
