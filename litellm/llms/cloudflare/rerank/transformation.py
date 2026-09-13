@@ -1,5 +1,6 @@
 import json
 from collections.abc import Mapping, Sequence
+from typing import Final
 
 import httpx
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -30,11 +31,6 @@ class CohereRerankParams(TypedDict):
     documents: ReadOnly[Sequence[str | Mapping[str, object]]]
     top_n: NotRequired[ReadOnly[int]]
     return_documents: NotRequired[ReadOnly[bool]]
-
-
-class CloudflareHeaders(TypedDict):
-    Authorization: str
-    accept: str
 
 
 class LoggingAdditionalArgs(TypedDict):
@@ -122,13 +118,12 @@ class CloudflareRerankConfig(BaseRerankConfig):
         api_key = api_key or get_secret_str("CLOUDFLARE_API_KEY")
         if api_key is None:
             raise ValueError("Missing Cloudflare API Key - set CLOUDFLARE_API_KEY or pass api_key explicitly")
-        cloudflare_headers = CloudflareHeaders(
-            Authorization=f"Bearer {api_key}",
-            accept="application/json",
-        )
-        cloudflare_headers["content-type"] = "application/json"
-        cloudflare_headers.update(headers)
-        return cloudflare_headers
+        default_headers: Final = {
+            "Authorization": f"Bearer {api_key}",
+            "accept": "application/json",
+            "content-type": "application/json",
+        }
+        return {**default_headers, **headers}
 
     def get_complete_url(
         self,

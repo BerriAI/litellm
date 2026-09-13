@@ -8495,7 +8495,7 @@ class ProviderConfigManager:
         return None
 
     @staticmethod
-    def get_provider_rerank_config(
+    def get_provider_rerank_config(  # noqa: C901  # provider dispatch; one branch per rerank provider
         model: str,
         provider: LlmProviders,
         api_base: str | None,
