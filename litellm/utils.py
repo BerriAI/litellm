@@ -5556,17 +5556,21 @@ def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> P
 
         split_model = strip_bedrock_routing_prefix(split_model)
 
-    if custom_llm_provider == "fireworks_ai":
-        from litellm.llms.fireworks_ai.common_utils import fireworks_cost_map_key
-
-        provider_prefixed_model_name = fireworks_cost_map_key(split_model)
+    provider_model_info: Final = (
+        ProviderConfigManager.get_provider_model_info(model=split_model, provider=LlmProviders(custom_llm_provider))
+        if custom_llm_provider in LlmProvidersSet
+        else None
+    )
+    provider_cost_key: Final = (
+        provider_model_info.get_model_cost_key(split_model) if provider_model_info is not None else None
+    )
 
     return PotentialModelNamesAndCustomLLMProvider(
         split_model=split_model,
         combined_model_name=combined_model_name,
         stripped_model_name=stripped_model_name,
         combined_stripped_model_name=combined_stripped_model_name,
-        provider_prefixed_model_name=provider_prefixed_model_name,
+        provider_prefixed_model_name=provider_cost_key or provider_prefixed_model_name,
         custom_llm_provider=cast(str, custom_llm_provider),
     )
 
