@@ -49,11 +49,14 @@ vi.mock("@/utils/dataUtils", () => ({
   copyToClipboard: async () => true,
   formatNumberWithCommas: (n: any) => String(n),
 }));
-vi.mock("../key_info_utils", () => ({
-  extractLoggingSettings: () => ({}),
-  formatMetadataForDisplay: (m: any) => JSON.stringify(m, null, 2),
-  stripTagsFromMetadata: (m: any) => m,
-}));
+vi.mock("../key_info_utils", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../key_info_utils")>();
+  return {
+    ...actual,
+    extractLoggingSettings: () => ({}),
+    formatMetadataForDisplay: (m: any) => JSON.stringify(m, null, 2),
+  };
+});
 vi.mock("../callback_info_helpers", () => ({
   callback_map: {},
   mapInternalToDisplayNames: (x: any) => x,
@@ -341,6 +344,66 @@ describe("KeyInfoView handleKeyUpdate guardrails guard", () => {
     expect(sentPayload.prompts).toEqual(["fast"]);
     expect(sentPayload.metadata?.guardrails).toEqual(["gr-1"]);
     expect(sentPayload.key).toBe("tok_123");
+  });
+});
+
+describe("KeyInfoView handleKeyUpdate metadata tags", () => {
+  it("merges tags from the field and metadata JSON while preserving metadata", async () => {
+    renderView(true);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      tags: ["ui-tag"],
+      metadata: JSON.stringify({ tags: ["headroom-pilot"], keep: "x" }),
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect(sentPayload.metadata.tags).toEqual(["ui-tag", "headroom-pilot"]);
+    expect(sentPayload.metadata.keep).toBe("x");
+    expect("tags" in sentPayload).toBe(false);
+  });
+
+  it("preserves metadata tags when the dedicated field is absent", async () => {
+    renderView(true);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      metadata: JSON.stringify({ tags: ["headroom-pilot"] }),
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect(sentPayload.metadata.tags).toEqual(["headroom-pilot"]);
+  });
+
+  it("merges and deduplicates tags from object metadata", async () => {
+    renderView(true);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      tags: ["ui-tag", "headroom-pilot"],
+      metadata: { tags: ["headroom-pilot"] },
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect(sentPayload.metadata.tags).toEqual(["ui-tag", "headroom-pilot"]);
   });
 });
 
