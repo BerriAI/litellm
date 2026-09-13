@@ -281,3 +281,72 @@ def test_router_silent_experiment_completion():
         assert silent_call[1]["model"] == "openai/gpt-4"
         # Verify model_group is set to the silent model name for correct metric attribution
         assert silent_call[1]["metadata"]["model_group"] == "silent-model"
+
+
+def _silent_model_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "primary-model",
+                "litellm_params": {
+                    "model": "openai/primary-model",
+                    "custom_llm_provider": "openai",
+                    "api_key": "fake-key",
+                    "silent_model": "shadow-model",
+                },
+            },
+            {
+                "model_name": "shadow-model",
+                "litellm_params": {
+                    "model": "openai/shadow-model",
+                    "custom_llm_provider": "openai",
+                    "api_key": "fake-key",
+                },
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_router_silent_model_stripped_from_responses_call():
+    """
+    Regression for #34890: a deployment configured with silent_model must not
+    leak that param into the Responses API primary request. Without the fix the
+    underlying handler receives silent_model and raises
+    "got an unexpected keyword argument 'silent_model'".
+    """
+    router = _silent_model_router()
+    mock_aresponses = AsyncMock(return_value=MagicMock())
+    router.aresponses = router.factory_function(mock_aresponses, call_type="aresponses")
+
+    await router.aresponses(model="primary-model", input="Reply only OK")
+
+    assert mock_aresponses.call_count == 1
+    _, call_kwargs = mock_aresponses.call_args
+    assert "silent_model" not in call_kwargs
+    assert call_kwargs["model"] == "openai/primary-model"
+
+
+@pytest.mark.asyncio
+async def test_router_silent_model_stripped_from_anthropic_messages_call():
+    """
+    Regression for #34890: silent_model must not leak into the Anthropic
+    Messages primary request. PR #31901's regression test only covered
+    Responses, so this pins the /v1/messages path too.
+    """
+    router = _silent_model_router()
+    mock_anthropic_messages = AsyncMock(return_value=MagicMock())
+    router.aanthropic_messages = router.factory_function(
+        mock_anthropic_messages, call_type="anthropic_messages"
+    )
+
+    await router.aanthropic_messages(
+        model="primary-model",
+        messages=[{"role": "user", "content": "Reply only OK"}],
+        max_tokens=16,
+    )
+
+    assert mock_anthropic_messages.call_count == 1
+    _, call_kwargs = mock_anthropic_messages.call_args
+    assert "silent_model" not in call_kwargs
+    assert call_kwargs["model"] == "openai/primary-model"
