@@ -72,10 +72,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     publish_auth_cache_invalidation,
 )
 from litellm.proxy.common_utils.callback_config_validation import logging_metadata_config_error
-from litellm.proxy.common_utils.callback_utils import (
-    decrypt_callback_vars,
-    encrypt_callback_vars,
-)
+from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
@@ -7032,14 +7029,12 @@ async def key_health(
     from litellm.proxy.proxy_server import proxy_config
 
     try:
-        key_metadata: Final = user_api_key_dict.metadata
-        if key_metadata and "logging" in key_metadata:
-            _raise_if_key_logging_missing_callback_name(decrypt_callback_vars(key_metadata)["logging"])
+        key_logging_entries: Final = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
+        if key_logging_entries is not None:
+            _raise_if_key_logging_missing_callback_name(key_logging_entries)
 
         configured_entries: Final = (
-            KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
-            or KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
-            or ()
+            key_logging_entries or KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict) or ()
         )
         invalid_entries: Final = _describe_invalid_callback_entries(configured_entries)
         if invalid_entries is not None:

@@ -18309,11 +18309,14 @@ def _default_team_gcs_proxy_config(team_id: str):
     return pc
 
 
+@pytest.mark.parametrize("key_logging", [[], None], ids=["empty list", "null"])
 @pytest.mark.asyncio
-async def test_key_health_tests_the_team_callbacks_an_empty_key_logging_list_falls_back_to():
+async def test_key_health_tests_the_team_callbacks_an_unset_key_logging_falls_back_to(key_logging: list | None):
     from litellm.proxy.management_endpoints.key_management_endpoints import key_health
 
-    caller: Final = UserAPIKeyAuth(api_key="sk-1", team_id="team-gcs", metadata={"logging": []}, team_metadata={})
+    caller: Final = UserAPIKeyAuth(
+        api_key="sk-1", team_id="team-gcs", metadata={"logging": key_logging}, team_metadata={}
+    )
     logging_status: Final = LoggingCallbackStatus(callbacks=("gcs_bucket",), status="unhealthy", details="404")
     with (
         patch("litellm.proxy.proxy_server.proxy_config", _default_team_gcs_proxy_config("team-gcs")),  # test-quality-ok: key_health reads the module-level proxy config
