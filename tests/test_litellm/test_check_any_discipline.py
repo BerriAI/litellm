@@ -81,3 +81,22 @@ def test_new_file_with_any_breaches_against_a_zero_budget():
 
 def test_clean_file_never_breaches():
     assert mod.budget_breaches({}, {"litellm/a.py": 100}) == []
+
+
+# --------------------------------------------------------------------------- #
+# contains_any: the depth cap keeps a pathologically deep type from blowing the
+# stack (some litellm types recurse past Python's default limit otherwise)
+# --------------------------------------------------------------------------- #
+
+
+def test_depth_cap_bails_out_past_the_limit():
+    any_t = mod.AnyType(mod.TypeOfAny.explicit)
+    assert mod.contains_any(any_t) is True
+    assert mod.contains_any(any_t, _depth=mod._MAX_TYPE_DEPTH + 1) is False
+
+
+def test_any_nested_in_a_union_is_still_found():
+    from mypy.types import NoneType
+
+    union = mod.UnionType([NoneType(), mod.AnyType(mod.TypeOfAny.explicit)])
+    assert mod.contains_any(union) is True

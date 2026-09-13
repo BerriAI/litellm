@@ -142,6 +142,12 @@ _HARMLESS_ANY = frozenset(
     if kind is not None
 )
 
+# Depth cap for the recursive "contains Any" walk. `seen` stops cycles between
+# identical type objects, but a genuinely deep nesting (or a recursive type whose
+# `get_proper_type` yields a fresh object each step) can still blow Python's stack.
+# Real Any-bearing types are shallow, so treat anything past this as Any-free.
+_MAX_TYPE_DEPTH = 100
+
 # AST attributes that point OUTSIDE the syntactic subtree (a RefExpr's resolved
 # definition, a node's TypeInfo). Skipping exactly these two makes a generic
 # child-walk equivalent to mypy's TraverserVisitor -- validated to the node
@@ -170,8 +176,10 @@ def cap_for(baseline: int) -> int:
 # --------------------------------------------------------------------------- #
 
 
-def contains_any(t: Type, _seen: set[int] | None = None) -> bool:
+def contains_any(t: Type, _seen: set[int] | None = None, _depth: int = 0) -> bool:
     """True if a *value* of type ``t`` carries `Any` anywhere meaningful."""
+    if _depth > _MAX_TYPE_DEPTH:
+        return False
     seen = _seen if _seen is not None else set()
     p = get_proper_type(t)
     if id(p) in seen:
@@ -185,11 +193,11 @@ def contains_any(t: Type, _seen: set[int] | None = None) -> bool:
     if isinstance(p, AnyType):
         return p.type_of_any not in _HARMLESS_ANY
     if isinstance(p, UnionType):
-        return any(contains_any(item, seen) for item in p.items)
+        return any(contains_any(item, seen, _depth + 1) for item in p.items)
     if isinstance(p, Instance):
-        return any(contains_any(arg, seen) for arg in p.args)
+        return any(contains_any(arg, seen, _depth + 1) for arg in p.args)
     if isinstance(p, TupleType):
-        return any(contains_any(item, seen) for item in p.items)
+        return any(contains_any(item, seen, _depth + 1) for item in p.items)
     return False
 
 
