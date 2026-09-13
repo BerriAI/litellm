@@ -585,7 +585,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         requested_model: str | None = None,
     ) -> NoReturn:
         """Raise :class:`ProxyRateLimitError` (a 429) for batch rate limit exceeded."""
-        from datetime import datetime
+        from datetime import datetime, timezone
 
         # Find the descriptor for this status. Matching on (key, value) is
         # required, not key alone: a batch can carry several project ITPM/OTPM
@@ -612,7 +612,9 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         now: Final = datetime.now().timestamp()
         window_size: Final = self.parallel_request_limiter.window_size
         reset_time: Final = now + window_size
-        reset_time_formatted: Final = datetime.fromtimestamp(reset_time).strftime("%Y-%m-%d %H:%M:%S UTC")
+        reset_time_formatted: Final = datetime.fromtimestamp(reset_time, tz=timezone.utc).strftime(
+            "%Y-%m-%d %H:%M:%S UTC"
+        )
 
         remaining_display: Final = max(0, status["limit_remaining"])
         current_limit: Final = status["current_limit"]
