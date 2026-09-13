@@ -67,11 +67,15 @@ class AmazonBedrockNativeMessagesConfig(BaseAWSLLM, AnthropicMessagesConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict, str | None]:  # mutable-ok: provider interface
+        content_type: Final = next(
+            (value for key, value in headers.items() if key.lower() == "content-type"),
+            "application/json",
+        )
         return (
             {  # mutable-ok: provider interface
-                **headers,
+                **{key: value for key, value in headers.items() if key.lower() != "content-type"},
                 "anthropic-version": headers.get("anthropic-version", DEFAULT_ANTHROPIC_API_VERSION),
-                "content-type": headers.get("content-type", "application/json"),
+                "Content-Type": content_type,
             },
             api_base,
         )

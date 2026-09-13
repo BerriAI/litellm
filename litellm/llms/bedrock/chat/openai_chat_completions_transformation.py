@@ -69,7 +69,13 @@ class AmazonBedrockOpenAIChatCompletionsConfig(OpenAIGPTConfig, BaseAWSLLM):
     ) -> dict:  # mutable-ok: provider interface
         owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
         return merge_bedrock_invoke_headers(
-            headers,
+            {
+                **{key: value for key, value in headers.items() if key.lower() != "content-type"},
+                "Content-Type": next(
+                    (value for key, value in headers.items() if key.lower() == "content-type"),
+                    "application/json",
+                ),
+            },
             (),
             metadata_headers,
             owned_names,

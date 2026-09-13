@@ -52,8 +52,11 @@ class AmazonBedrockResponsesAPIConfig(OpenAIResponsesAPIConfig, BaseAWSLLM):
         self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None
     ) -> dict:  # mutable-ok: provider interface
         return {
-            **headers,
-            "Content-Type": headers.get("Content-Type", "application/json"),
+            **{key: value for key, value in headers.items() if key.lower() != "content-type"},
+            "Content-Type": next(
+                (value for key, value in headers.items() if key.lower() == "content-type"),
+                "application/json",
+            ),
         }  # mutable-ok: provider interface
 
     def sign_request(

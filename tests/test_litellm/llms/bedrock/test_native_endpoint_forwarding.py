@@ -106,6 +106,20 @@ def test_bedrock_chat_route_prefers_explicit_converse(monkeypatch):
     assert type(get_bedrock_chat_config("converse/native-model")).__name__ == "AmazonConverseConfig"
 
 
+def test_bedrock_converse_catalog_model_prefers_declared_native_chat(monkeypatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "bedrock/anthropic.claude-sonnet-4-6",
+        {"supported_endpoints": ["/v1/chat/completions"]},  # mutable-ok: provider interface
+    )
+
+    assert isinstance(
+        get_bedrock_chat_config("anthropic.claude-sonnet-4-6"),
+        AmazonBedrockOpenAIChatCompletionsConfig,
+    )
+    assert type(get_bedrock_chat_config("converse/anthropic.claude-sonnet-4-6")).__name__ == "AmazonConverseConfig"
+
+
 def test_native_chat_url_and_bearer_auth(monkeypatch):
     config = AmazonBedrockOpenAIChatCompletionsConfig()  # rebind-ok: test capture
 
@@ -114,13 +128,21 @@ def test_native_chat_url_and_bearer_auth(monkeypatch):
     ) == "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1/chat/completions"
 
     monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "token")
-    headers, body = config.sign_request(
+    validated_headers = config.validate_environment(
+        {"content-type": "application/json"},  # mutable-ok: provider interface
+        "native-model",
+        [],  # mutable-ok: provider interface
         {},  # mutable-ok: provider interface
+        {},  # mutable-ok: provider interface
+    )
+    headers, body = config.sign_request(
+        validated_headers,
         {"aws_region_name": "us-west-2"},  # mutable-ok: provider interface
         {"model": "native-model"},  # mutable-ok: provider interface
         "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1/chat/completions",
     )
     assert headers["Authorization"] == "Bearer token"
+    assert sum(key.lower() == "content-type" for key in headers) == 1
     assert body is not None
 
 
@@ -176,7 +198,23 @@ def test_native_messages_preserves_body_and_urls(monkeypatch):
         "https://bedrock-runtime.us-west-2.amazonaws.com/anthropic/v1/messages",
     )
     assert headers["Authorization"] == "Bearer token"
+    assert sum(key.lower() == "content-type" for key in headers) == 1
     assert signed_body is not None
+
+
+def test_native_messages_deduplicates_content_type_header(monkeypatch):
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "token")
+    config = AmazonBedrockNativeMessagesConfig()  # rebind-ok: test capture
+    headers, _ = config.validate_anthropic_messages_environment(
+        headers={"content-type": "application/json"},  # mutable-ok: provider interface
+        model="native-model",
+        messages=[],  # mutable-ok: provider interface
+        optional_params={},  # mutable-ok: provider interface
+        litellm_params={},  # mutable-ok: provider interface
+    )
+
+    assert sum(key.lower() == "content-type" for key in headers) == 1
+    assert headers["Content-Type"] == "application/json"
 
 
 def test_native_messages_selection_is_not_cached(monkeypatch):
@@ -214,6 +252,12 @@ def test_native_responses_selection_and_url(monkeypatch):
     assert config.get_complete_url(None, {"aws_region_name": "us-west-2"}).endswith(  # mutable-ok: provider interface
         "/openai/v1/responses"
     )
+    validated_headers = config.validate_environment(
+        {"content-type": "application/json"},  # mutable-ok: provider interface
+        "native-model",
+        {},  # mutable-ok: provider interface
+    )
+    assert sum(key.lower() == "content-type" for key in validated_headers) == 1
 
     monkeypatch.setitem(litellm.model_cost, "bedrock/native-model", {})  # mutable-ok: provider interface
     assert ProviderConfigManager.get_provider_responses_api_config(
@@ -264,6 +308,31 @@ def test_completion_forwards_native_chat_body(monkeypatch):
             {"model": "native-model", "messages": [{"role": "user", "content": "hello"}]},  # mutable-ok: provider interface
         )
     ]
+
+
+def test_completion_forwards_declared_native_chat_for_converse_catalog_model(monkeypatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "bedrock/anthropic.claude-sonnet-4-6",
+        {"supported_endpoints": ["/v1/chat/completions"]},  # mutable-ok: provider interface
+    )
+    requests: list[tuple[str, dict]] = []  # mutable-ok: provider interface  # rebind-ok: test capture
+
+    def post(self, url, data=None, headers=None, **kwargs):  # kwargs-ok: HTTP handler compatibility
+        requests.append((url, json.loads(data)))
+        return _chat_response(url)
+
+    with patch(  # test-quality-ok: captures the serialized provider request at the HTTP boundary
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", post
+    ):
+        litellm.completion(
+            model="bedrock/anthropic.claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "hello"}],  # mutable-ok: provider interface
+            api_base="https://bedrock-runtime.us-west-2.amazonaws.com",
+            api_key="token",
+        )
+
+    assert requests[0][0].endswith("/openai/v1/chat/completions")
 
 
 @pytest.mark.asyncio
