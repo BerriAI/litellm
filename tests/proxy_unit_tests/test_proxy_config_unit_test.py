@@ -158,6 +158,129 @@ async def test_multiple_includes():
     assert config["litellm_settings"]["callbacks"] == ["prometheus"]
 
 
+@pytest.mark.asyncio
+async def test_config_file_success_callback_registers_custom_logger_instance(monkeypatch):
+    """Config-file success_callback must register a custom-logger instance, not just the
+    string.
+
+    Pass-through endpoints log through the async success path only; string registration
+    leaves langfuse out of both callback lists because
+    `_should_run_sync_callbacks_for_async_calls` filters strings in
+    `_known_custom_logger_compatible_callbacks`.
+    """
+    import tempfile
+
+    import yaml
+
+    from litellm.integrations.langfuse.langfuse_prompt_management import (
+        LangfusePromptManagement,
+    )
+
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    # test_add_callbacks_from_db_config clears _known_custom_logger_compatible_callbacks
+    # without restoring it (and the conftest snapshot skips underscore attrs), so
+    # re-assert the precondition explicitly instead of depending on test order.
+    known_callbacks = list(getattr(litellm, "_known_custom_logger_compatible_callbacks", []))
+    if "langfuse" not in known_callbacks:
+        known_callbacks.append("langfuse")
+    monkeypatch.setattr(litellm, "_known_custom_logger_compatible_callbacks", known_callbacks)
+    # the custom-logger instance path needs env credentials; without them the
+    # config path falls back to the string and this test would not exercise
+    # the instance registration
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
+    monkeypatch.setenv("LANGFUSE_HOST", "http://localhost:3000")
+
+    config_content = {
+        "litellm_settings": {
+            "success_callback": ["langfuse", "sentry"],
+            "failure_callback": ["langfuse"],
+        }
+    }
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as temp_file:
+        yaml.dump(config_content, temp_file)
+        temp_file_path = temp_file.name
+
+    try:
+        proxy_config = ProxyConfig()
+        await proxy_config.load_config(
+            router=None,
+            config_file_path=temp_file_path,
+        )
+
+        # custom-logger-compatible names are registered as instances, not strings
+        assert "langfuse" not in litellm.success_callback
+        # non-compatible names still take the string path
+        assert "sentry" in litellm.success_callback
+        num_langfuse_instances = sum(
+            isinstance(callback, LangfusePromptManagement) for callback in litellm._async_success_callback
+        )
+        assert num_langfuse_instances == 1
+        num_failure_instances = sum(
+            isinstance(callback, LangfusePromptManagement) for callback in litellm._async_failure_callback
+        )
+        assert num_failure_instances == 1
+    finally:
+        os.unlink(temp_file_path)
+
+
+@pytest.mark.asyncio
+async def test_config_file_callback_falls_back_to_string_when_init_fails(monkeypatch):
+    """When the custom-logger class cannot be initialized, config-file callbacks
+    must fall back to string registration so standard-route logging still works."""
+    import tempfile
+
+    import yaml
+
+    from litellm.integrations.langfuse.langfuse_prompt_management import (
+        LangfusePromptManagement,
+    )
+
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    # same precondition as the sibling instance test: langfuse must be a known
+    # custom-logger name, otherwise the config path skips the helper entirely
+    # and this test would not exercise the fallback branch
+    known_callbacks = list(getattr(litellm, "_known_custom_logger_compatible_callbacks", []))
+    if "langfuse" not in known_callbacks:
+        known_callbacks.append("langfuse")
+    monkeypatch.setattr(litellm, "_known_custom_logger_compatible_callbacks", known_callbacks)
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class",
+        lambda callback, internal_usage_cache=None, llm_router=None: None,
+    )
+
+    config_content = {
+        "litellm_settings": {
+            "success_callback": ["langfuse"],
+            "failure_callback": ["langfuse"],
+        }
+    }
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as temp_file:
+        yaml.dump(config_content, temp_file)
+        temp_file_path = temp_file.name
+
+    try:
+        proxy_config = ProxyConfig()
+        await proxy_config.load_config(
+            router=None,
+            config_file_path=temp_file_path,
+        )
+
+        # init failed -> fall back to the string path, standard route keeps logging
+        assert "langfuse" in litellm.success_callback
+        assert "langfuse" in litellm.failure_callback
+        assert not any(isinstance(callback, LangfusePromptManagement) for callback in litellm._async_success_callback)
+        assert not any(isinstance(callback, LangfusePromptManagement) for callback in litellm._async_failure_callback)
+    finally:
+        os.unlink(temp_file_path)
+
+
 def test_add_callbacks_from_db_config():
     """Test that callbacks are added correctly and duplicates are prevented"""
     # Setup
