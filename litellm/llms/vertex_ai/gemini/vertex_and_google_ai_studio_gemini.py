@@ -325,8 +325,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "stop",
             "extra_headers",
             "seed",
-            "logprobs",
-            "top_logprobs",
             "modalities",
             "audio",
             "parallel_tool_calls",
@@ -338,6 +336,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         # Add penalty parameters only for non-preview models
         if self._supports_penalty_parameters(model):
             supported_params.extend(["frequency_penalty", "presence_penalty"])
+
+        # Gemini 3+ models do not support logprobs on Vertex AI
+        if not VertexGeminiConfig._is_gemini_3_or_newer(model):
+            supported_params.extend(["logprobs", "top_logprobs"])
 
         if supports_reasoning(model):
             supported_params.append("reasoning_effort")
