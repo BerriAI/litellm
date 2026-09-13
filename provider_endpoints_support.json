@@ -1547,6 +1547,24 @@
         "interactions": true
       }
     },
+    "merge_ai_gateway": {
+      "display_name": "Merge AI Gateway (`merge_ai_gateway`)",
+      "url": "https://docs.litellm.ai/docs/providers/merge_ai_gateway",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
     "meta_llama": {
       "display_name": "Meta - Llama API (`meta_llama`)",
       "url": "https://docs.litellm.ai/docs/providers/meta_llama",
