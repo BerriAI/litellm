@@ -88,19 +88,6 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         return headers
 
     # ------------------------------------------------------------------
-    # Audio MIME type — Vertex AI needs the sample rate in the MIME string
-    # ------------------------------------------------------------------
-
-    def get_audio_mime_type(self, input_audio_format: str = "pcm16") -> str:
-        mime_types: Final = {
-            # Gemini Live native audio (OpenAI GA realtime default) is 24kHz PCM.
-            "pcm16": "audio/pcm;rate=24000",
-            "g711_ulaw": "audio/pcmu",
-            "g711_alaw": "audio/pcma",
-        }
-        return mime_types.get(input_audio_format, "application/octet-stream")
-
-    # ------------------------------------------------------------------
     # Session setup message
     # ------------------------------------------------------------------
 
@@ -206,6 +193,10 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         msg_type: Final = json_message.get("type")
 
         if msg_type == "session.update":
+            # Vertex handles session.update itself and never reaches the parent's handler, so the
+            # declared input audio rate has to be recorded here or the Vertex path silently keeps
+            # the default no matter what the client declares.
+            self._record_input_audio_sample_rate(json_message.get("session") or {})
             if session_configuration_request is None:
                 setup_config: Final = self._build_vertex_ai_setup_config(model, json_message.get("session") or {})
                 gemini_setup_msg: Final = json.dumps({"setup": setup_config})
