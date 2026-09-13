@@ -534,3 +534,44 @@ def test_importing_caching_does_not_require_redis():
     )
     assert result.returncode == 0, result.stderr
     assert "ok" in result.stdout
+
+
+def test_index_definition_import_falls_back_to_legacy_camelcase_module():
+    # redis-py >= 6.0 renamed redis/commands/search/indexDefinition.py to
+    # snake_case index_definition.py. valkey_semantic_cache.py imports it at
+    # module level. On modern redis-py the snake_case path must resolve; the
+    # fix also keeps a fallback for redis-py 5.x, which shipped only the
+    # camelCase module. That fallback cannot be exercised by swapping packages
+    # (redis.commands.search itself hard-imports index_definition), so this
+    # subprocess fully imports the module first, then simulates the redis-py
+    # 5.x layout (snake_case blocked + legacy camelCase injected) and forces a
+    # fresh module import to prove the fallback branch resolves it.
+    code = textwrap.dedent("""
+        import importlib
+        import sys
+        import types
+
+        import redis.commands.search
+        import litellm.caching.valkey_semantic_cache  # primary snake_case path
+
+        sys.modules["redis.commands.search.index_definition"] = None
+        legacy = types.ModuleType("redis.commands.search.indexDefinition")
+        legacy.IndexDefinition = object
+        legacy.IndexType = object
+        sys.modules["redis.commands.search.indexDefinition"] = legacy
+        sys.modules.pop("litellm.caching.valkey_semantic_cache", None)
+
+        legacy_cache = importlib.import_module("litellm.caching.valkey_semantic_cache")
+        assert legacy_cache.IndexDefinition is legacy.IndexDefinition
+        assert legacy_cache.IndexType is legacy.IndexType
+        assert isinstance(legacy_cache.ValkeySemanticCache, type)
+        print("ok")
+        """)
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": _REPO_ROOT},
+    )
+    assert result.returncode == 0, result.stderr
+    assert "ok" in result.stdout
