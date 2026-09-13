@@ -234,7 +234,6 @@ def test_batch_session_outranks_the_per_request_trace_id():
 
 
 def test_caller_litellm_session_id_wins_over_the_per_request_trace_id():
-    """Caller litellm_session_id wins over the per-call trace id."""
     session_id: Final = _get_session_id_for_spend_log(
         kwargs={"litellm_session_id": "sess-1", "litellm_trace_id": "trace-abc"},
         metadata={"trace_id": "trace-abc"},
@@ -245,7 +244,6 @@ def test_caller_litellm_session_id_wins_over_the_per_request_trace_id():
 
 
 def test_batch_session_outranks_a_caller_litellm_session_id():
-    """Batch session still outranks a caller session id."""
     session_id: Final = _get_session_id_for_spend_log(
         kwargs={"litellm_session_id": "sess-1", "litellm_trace_id": "trace-abc"},
         metadata={"trace_id": "trace-abc"},
