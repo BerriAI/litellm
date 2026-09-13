@@ -21,8 +21,9 @@ from litellm.integrations.opentelemetry_utils.gen_ai_semconv import (
     parse_semconv_opt_in,
 )
 from litellm.integrations.otel.model.db_endpoint import db_span_attributes
-from litellm.integrations.otel.model.semconv import Metric
+from litellm.integrations.otel.model.semconv import LiteLLM, Metric
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import prompt_shield_guardrail_cost
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.service_tier_utils import (
@@ -2389,6 +2390,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                             key=f"gen_ai.cost.{key}",
                             value=value,
                         )
+            prompt_shield_cost: Final = prompt_shield_guardrail_cost(
+                standard_logging_payload.get("guardrail_information")
+            )
+            if prompt_shield_cost is not None:
+                self.safe_set_attribute(span=span, key=LiteLLM.GUARDRAIL_PROMPT_SHIELD_COST, value=prompt_shield_cost)
             #############################################
             ########## LLM Request Attributes ###########
             #############################################

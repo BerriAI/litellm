@@ -96,6 +96,7 @@ def bedrock_guardrail_cost(usage_units: Mapping[str, int], aws_region_name: str 
 
 
 AZURE_PROMPT_SHIELD_TEXT_RECORD_UNIT: Final = "text_records"
+AZURE_PROMPT_SHIELD_GUARDRAIL_PROVIDER: Final = "azure"
 
 
 def azure_prompt_shield_guardrail_cost(
@@ -113,6 +114,51 @@ def azure_prompt_shield_guardrail_cost(
     if price_per_1000_text_records is None:
         return None
     return usage_units.get(AZURE_PROMPT_SHIELD_TEXT_RECORD_UNIT, 0) * price_per_1000_text_records / 1000.0
+
+
+class GuardrailProviderCostEntry(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    guardrail_provider: str | None = None
+    guardrail_cost: float | None = None
+
+
+_GUARDRAIL_PROVIDER_COST_ENTRY_ADAPTER: Final[TypeAdapter[GuardrailProviderCostEntry]] = TypeAdapter(
+    GuardrailProviderCostEntry
+)
+_GUARDRAIL_INFORMATION_ENTRIES_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
+
+
+def _prompt_shield_entry_cost(raw: object) -> float | None:
+    try:
+        entry: Final = _GUARDRAIL_PROVIDER_COST_ENTRY_ADAPTER.validate_python(raw)
+    except ValidationError as e:
+        verbose_logger.warning("Ignoring malformed guardrail_information entry for Prompt Shield cost: %s", e)
+        return None
+    cost: Final = entry.guardrail_cost
+    return (
+        cost
+        if entry.guardrail_provider == AZURE_PROMPT_SHIELD_GUARDRAIL_PROVIDER
+        and cost is not None
+        and math.isfinite(cost)
+        else None
+    )
+
+
+def prompt_shield_guardrail_cost(guardrail_information: object) -> float | None:
+    """Summed USD cost of the Azure Prompt Shield entries in a request's ``guardrail_information``,
+    report-only entries included; None when no such entry carried a cost."""
+    if guardrail_information is None:
+        return None
+    entries: Final[tuple[object, ...]] = (
+        _GUARDRAIL_INFORMATION_ENTRIES_ADAPTER.validate_python(guardrail_information)
+        if isinstance(guardrail_information, (list, tuple))
+        else (guardrail_information,)
+    )
+    qualifying_costs: Final = tuple(
+        cost for entry in entries for cost in (_prompt_shield_entry_cost(entry),) if cost is not None
+    )
+    return None if not qualifying_costs else sum(qualifying_costs)
 
 
 def _billable_entry_cost(entry: GuardrailCostEntry) -> float:
