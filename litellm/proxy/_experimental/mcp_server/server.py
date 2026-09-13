@@ -57,6 +57,7 @@ from litellm.proxy._experimental.mcp_server.mcp_debug import (
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     _redact_mcp_resource_url,
     get_byok_www_authenticate,
+    get_passthrough_resource_metadata_url,
     get_passthrough_www_authenticate,
     get_route_relative_request_path,
     well_known_root_suffix,
@@ -80,12 +81,17 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.proxy.guardrails.guardrail_hooks.agent_365.agent_365 import (
+    agent_365_authorization_servers,
+    agent_365_subject_token_present,
+)
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     get_chain_id_from_headers,
 )
 from litellm.types.mcp import MCPAuth, MCPSpecVersion
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
+from litellm.types.mcp_server.tool_registry import MCPTool as RegisteredTool
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
 from litellm.utils import Rules, client, function_setup
 
@@ -2777,6 +2783,9 @@ if MCP_AVAILABLE:
 
         return managed_resource_templates
 
+    def _registered_tool_metadata(name: str, registered: RegisteredTool) -> MCPTool:
+        return MCPTool(name=name, description=registered.description, inputSchema=registered.input_schema)
+
     def _resolve_display_name_to_original(
         name: str,
         allowed_mcp_servers: list[MCPServer],
@@ -3115,6 +3124,7 @@ if MCP_AVAILABLE:
                 server=mcp_server,
                 raw_headers=raw_headers,
                 litellm_logging_obj=litellm_logging_obj,
+                tool=_registered_tool_metadata(original_tool_name, local_tool),
             )
             # `pre_call_tool_check` may return guardrail-modified
             # arguments; honor them on the local path too.
@@ -3180,7 +3190,8 @@ if MCP_AVAILABLE:
             # not in the registry either, `_handle_local_mcp_tool` below reports
             # 404 and nothing runs, so demanding a server here would turn every
             # unknown tool name into a misleading 503.
-            if global_mcp_tool_registry.get_tool(original_tool_name) is not None:
+            registered_local_tool: Final = global_mcp_tool_registry.get_tool(original_tool_name)
+            if registered_local_tool is not None:
                 # `mcp_server` is None here because the tool name is not in the
                 # tool -> server mapping, but the name still carries a prefix
                 # that the server-level check above compared against the
@@ -3221,6 +3232,7 @@ if MCP_AVAILABLE:
                     server=prefix_server,
                     raw_headers=raw_headers,
                     litellm_logging_obj=litellm_logging_obj,
+                    tool=_registered_tool_metadata(original_tool_name, registered_local_tool),
                 )
                 if "arguments" in hook_result:
                     arguments = hook_result["arguments"]  # pyright: ignore[reportAny]  # hook returns untyped args
@@ -4129,8 +4141,19 @@ if MCP_AVAILABLE:
             # (transport level, where WWW-Authenticate survives) with the RFC 9728 resource_metadata
             # so the client discovers the IdP, SSOs, and retries with a subject token, which LiteLLM
             # then exchanges. A tool-call-time 401 would be wrapped into a JSON-RPC error and the
-            # header lost, so the discovery flow needs this pre-emptive challenge.
-            if server and server.auth_type == MCPAuth.oauth2_token_exchange and not oauth2_headers:
+            # header lost, so the discovery flow needs this pre-emptive challenge. Servers gated by an
+            # Agent 365 guardrail (OBO to the evaluate API) get the same challenge, also when the only
+            # bearer is the LiteLLM key itself, which admits the caller but is not an exchangeable subject.
+            # Only on the server's own route: the per-server metadata ``resource`` must equal the URL the
+            # client connected to (RFC 9728 3.3), which aggregate ``/mcp`` and multi-server connects never do.
+            if server and (
+                (server.auth_type == MCPAuth.oauth2_token_exchange and not oauth2_headers)
+                or (
+                    tuple(_get_mcp_servers_in_path(get_route_relative_request_path(scope)) or ()) == (server_name,)
+                    and not agent_365_subject_token_present(oauth2_headers)
+                    and agent_365_authorization_servers(server, user_api_key_auth)
+                )
+            ):
                 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415  # lazy: adapter pulls MCP subgraph
                     raise_token_exchange_challenge,
                 )
@@ -4138,7 +4161,11 @@ if MCP_AVAILABLE:
                     get_request_root_path,
                 )
 
-                raise_token_exchange_challenge(server, root_path=get_request_root_path())
+                raise_token_exchange_challenge(
+                    server,
+                    root_path=get_request_root_path(),
+                    resource_metadata_url=get_passthrough_resource_metadata_url(scope=scope, server_name=server_name),
+                )
 
             # Exchange-backed modes (token_exchange's OBO mint, id_jag's stored-assertion mint): run
             # the exchange here at the transport edge, so a rejected subject raises the RFC 9728
@@ -4163,6 +4190,7 @@ if MCP_AVAILABLE:
                     oauth2_headers=oauth2_headers,
                     user_api_key_auth=user_api_key_auth,
                     raw_headers=raw_headers,
+                    resource_metadata_url=get_passthrough_resource_metadata_url(scope=scope, server_name=server_name),
                 )
 
             # Pass-through OAuth: when the admin has opted a server into

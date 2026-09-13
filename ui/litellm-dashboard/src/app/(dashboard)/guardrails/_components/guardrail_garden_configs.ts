@@ -318,6 +318,13 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: "pre_call",
     defaultOn: false,
   },
+  agent_365: {
+    provider: "Agent365",
+    guardrailNameSuggestion: "Microsoft Agent 365 Guardrail",
+    mode: "pre_mcp_call",
+    // MCP-only: default_on is the only activation path on the MCP hook
+    defaultOn: true,
+  },
   conduct: {
     provider: "Conduct",
     guardrailNameSuggestion: "Conduct Guard",

@@ -6571,6 +6571,300 @@ class TestMCPServerManager:
         # Verify the MCP client call was awaited exactly once
         assert mock_client.call_tool.await_count == 1
 
+    @staticmethod
+    def _manager_ready_for_call_tool(listed_tools: list[MCPTool]) -> tuple[MCPServerManager, MagicMock]:
+        from mcp.types import CallToolResult
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="test-server",
+            name="test-server",
+            transport=MCPTransport.http,
+            url="http://test-server.com",
+        )
+        manager.registry = {"test-server": server}
+        manager.tool_name_to_mcp_server_name_mapping["test_tool"] = "test-server"
+        manager.tool_name_to_mcp_server_name_mapping["test-server-test_tool"] = "test-server"
+        manager._create_prefixed_tools(listed_tools, server)
+
+        mock_client = AsyncMock()
+        mock_client.call_tool.return_value = MagicMock(spec=CallToolResult, content=[], isError=False)
+        manager._create_mcp_client = AsyncMock(return_value=mock_client)
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
+        proxy_logging_obj._convert_mcp_to_llm_format = MagicMock(return_value={})
+        proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        return manager, proxy_logging_obj
+
+    @staticmethod
+    def _unrestricted_auth() -> MagicMock:
+        user_api_key_auth = MagicMock()
+        user_api_key_auth.object_permission = None
+        user_api_key_auth.object_permission_id = None
+        return user_api_key_auth
+
+    @pytest.mark.asyncio
+    async def test_call_tool_hands_listed_tool_description_and_schema_to_pre_call_hooks(self):
+        schema = {"type": "object", "properties": {"param": {"type": "string"}}, "required": ["param"]}
+        listed = [MCPTool(name="test_tool", description="Runs the test tool", inputSchema=schema)]
+        manager, proxy_logging_obj = self._manager_ready_for_call_tool(listed)
+
+        await manager.call_tool(
+            server_name="test-server",
+            name="test_tool",
+            arguments={"param": "value"},
+            user_api_key_auth=self._unrestricted_auth(),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        hook_kwargs = proxy_logging_obj._create_mcp_request_object_from_kwargs.call_args.args[0]
+        assert (hook_kwargs["tool_description"], hook_kwargs["tool_input_schema"]) == ("Runs the test tool", schema)
+
+    @pytest.mark.asyncio
+    async def test_call_tool_hands_listed_tool_metadata_to_during_call_hooks_through_real_conversion(self):
+        schema = {"type": "object", "properties": {"param": {"type": "string"}}}
+        listed = [MCPTool(name="test_tool", description="Runs the test tool", inputSchema=schema)]
+        manager, _ = self._manager_ready_for_call_tool(listed)
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+
+        await manager.call_tool(
+            server_name="test-server",
+            name="test_tool",
+            arguments={"param": "value"},
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        during_data = proxy_logging_obj.during_call_hook.call_args.kwargs["data"]
+        assert (during_data["mcp_tool_description"], during_data["mcp_tool_input_schema"]) == (
+            "Runs the test tool",
+            schema,
+        )
+
+    @pytest.mark.asyncio
+    async def test_call_tool_passes_no_tool_metadata_when_tool_was_never_listed(self):
+        manager, proxy_logging_obj = self._manager_ready_for_call_tool(
+            [MCPTool(name="other_tool", description="Unrelated", inputSchema={"type": "object"})]
+        )
+
+        await manager.call_tool(
+            server_name="test-server",
+            name="test_tool",
+            arguments={"param": "value"},
+            user_api_key_auth=self._unrestricted_auth(),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        hook_kwargs = proxy_logging_obj._create_mcp_request_object_from_kwargs.call_args.args[0]
+        assert (hook_kwargs["tool_description"], hook_kwargs["tool_input_schema"]) == (None, None)
+
+    def test_get_listed_tool_resolves_prefixed_name_and_latest_listing(self):
+        manager = MCPServerManager()
+        server = MCPServer(server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv")
+        manager._create_prefixed_tools([MCPTool(name="echo", description="v1", inputSchema={})], server)
+        manager._create_prefixed_tools([MCPTool(name="echo", description="v2", inputSchema={})], server)
+
+        by_prefixed_name = manager.get_listed_tool(server, "srv-echo")
+        assert by_prefixed_name is not None and by_prefixed_name.description == "v2"
+        assert manager.get_listed_tool(server, "missing") is None
+
+    def test_get_listed_tool_uses_admin_description_override_clients_saw(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="srv",
+            name="srv",
+            transport=MCPTransport.http,
+            url="http://srv",
+            tool_name_to_description={"echo": "Admin wording"},
+        )
+        schema = {"type": "object", "properties": {"text": {"type": "string"}}}
+        manager._create_prefixed_tools(
+            [
+                MCPTool(name="echo", description="Upstream wording", inputSchema=schema),
+                MCPTool(name="ping", description="Untouched", inputSchema={}),
+            ],
+            server,
+        )
+
+        overridden = manager.get_listed_tool(server, "srv-echo")
+        assert overridden is not None
+        assert (overridden.name, overridden.description, overridden.inputSchema) == ("echo", "Admin wording", schema)
+        untouched = manager.get_listed_tool(server, "ping")
+        assert untouched is not None and untouched.description == "Untouched"
+
+    def test_server_definition_change_drops_listed_tools(self):
+        manager = MCPServerManager()
+        server = MCPServer(server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv")
+        other = MCPServer(server_id="other", name="other", transport=MCPTransport.http, url="http://other")
+        manager._create_prefixed_tools([MCPTool(name="echo", description="old", inputSchema={})], server)
+        manager._create_prefixed_tools([MCPTool(name="ping", description="kept", inputSchema={})], other)
+
+        manager._invalidate_server_definition_caches(server.server_id)
+
+        assert manager.get_listed_tool(server, "echo") is None
+        kept = manager.get_listed_tool(other, "ping")
+        assert kept is not None and kept.description == "kept"
+
+    @pytest.mark.asyncio
+    async def test_user_oauth_refresh_keeps_listed_tools(self):
+        """Tool definitions are server-wide, so one user's re-auth must not blank the metadata other
+        callers' tool calls hand to pre-call guardrails."""
+        manager = MCPServerManager()
+        server = MCPServer(server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv")
+        manager._create_prefixed_tools([MCPTool(name="echo", description="shared", inputSchema={})], server)
+
+        await manager.invalidate_user_oauth_token_cache("alice", server.server_id)
+
+        listed = manager.get_listed_tool(server, "echo")
+        assert listed is not None and listed.description == "shared"
+
+    def test_per_caller_server_keeps_listed_tools_per_identity(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="srv",
+            name="srv",
+            transport=MCPTransport.http,
+            url="http://srv",
+            auth_type=MCPAuth.oauth2_token_exchange,
+        )
+        alice = UserAPIKeyAuth(user_id="alice", api_key="hashed-alice")
+        bob = UserAPIKeyAuth(user_id="bob", api_key="hashed-bob")
+        alice_schema = {"type": "object", "properties": {"path": {"type": "string"}}}
+        bob_schema = {"type": "object", "properties": {"path": {"type": "string"}, "site": {"type": "string"}}}
+        manager._create_prefixed_tools(
+            [MCPTool(name="read", description="alice view", inputSchema=alice_schema)], server, user_api_key_auth=alice
+        )
+        manager._create_prefixed_tools(
+            [MCPTool(name="read", description="bob view", inputSchema=bob_schema)], server, user_api_key_auth=bob
+        )
+
+        alice_tool = manager.get_listed_tool(server, "srv-read", alice)
+        bob_tool = manager.get_listed_tool(server, "srv-read", bob)
+        assert alice_tool is not None and (alice_tool.description, alice_tool.inputSchema) == ("alice view", alice_schema)
+        assert bob_tool is not None and (bob_tool.description, bob_tool.inputSchema) == ("bob view", bob_schema)
+        assert manager.get_listed_tool(server, "srv-read", UserAPIKeyAuth(user_id="carol", api_key="k")) is None
+
+        shared = MCPServer(server_id="shared", name="shared", transport=MCPTransport.http, url="http://shared")
+        manager._create_prefixed_tools(
+            [MCPTool(name="echo", description="everyone", inputSchema={})], shared, user_api_key_auth=alice
+        )
+        for_bob = manager.get_listed_tool(shared, "echo", bob)
+        assert for_bob is not None and for_bob.description == "everyone"
+
+    def test_per_caller_listed_tools_evict_oldest_caller_and_keep_shared(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import _LISTED_TOOLS_CALLERS_PER_SERVER
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="srv",
+            name="srv",
+            transport=MCPTransport.http,
+            url="http://srv",
+            auth_type=MCPAuth.oauth2_token_exchange,
+        )
+        manager._create_prefixed_tools([MCPTool(name="read", description="shared", inputSchema={})], server)
+        callers = [UserAPIKeyAuth(user_id=f"u{i}", api_key=f"k{i}") for i in range(_LISTED_TOOLS_CALLERS_PER_SERVER + 1)]
+        for caller in callers:
+            manager._create_prefixed_tools(
+                [MCPTool(name="read", description=caller.user_id, inputSchema={})], server, user_api_key_auth=caller
+            )
+        manager._create_prefixed_tools(
+            [MCPTool(name="read", description="u1 again", inputSchema={})], server, user_api_key_auth=callers[1]
+        )
+
+        assert manager.get_listed_tool(server, "srv-read", callers[0]) is None
+        second = manager.get_listed_tool(server, "srv-read", callers[1])
+        assert second is not None and second.description == "u1 again"
+        newest = manager.get_listed_tool(server, "srv-read", callers[-1])
+        assert newest is not None and newest.description == callers[-1].user_id
+        assert len(manager._listed_tools_by_server_id[server.server_id]) == _LISTED_TOOLS_CALLERS_PER_SERVER + 1
+        shared = manager.get_listed_tool(server, "srv-read")
+        assert shared is not None and shared.description == "shared"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("add_prefix", [True, False])
+    async def test_openapi_listing_records_listed_tools(self, add_prefix):
+        from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+        server = MCPServer(
+            server_id="petstore-id",
+            name="petstore",
+            alias="petstore",
+            transport=MCPTransport.http,
+            url=None,
+            spec_path="/spec.yaml",
+        )
+        manager = MCPServerManager()
+        manager._create_mcp_client = AsyncMock(return_value=AsyncMock())
+
+        async def _handler(**kwargs):
+            return None
+
+        global_mcp_tool_registry.unregister_tools_with_prefix("petstore-")
+        global_mcp_tool_registry.register_tool(
+            name="petstore-list_pets",
+            description="List pets",
+            input_schema={"type": "object", "properties": {"limit": {"type": "integer"}}},
+            handler=_handler,
+        )
+        try:
+            listed = await manager._get_tools_from_server(server=server, add_prefix=add_prefix)
+        finally:
+            global_mcp_tool_registry.unregister_tools_with_prefix("petstore-")
+
+        assert [t.name for t in listed] == ["petstore-list_pets" if add_prefix else "list_pets"]
+        for name in ("list_pets", "petstore-list_pets"):
+            tool = manager.get_listed_tool(server, name)
+            assert tool is not None and tool.description == "List pets"
+            assert tool.inputSchema["properties"] == {"limit": {"type": "integer"}}
+
+    @pytest.mark.asyncio
+    async def test_openapi_listing_ignores_overlapping_server_prefix(self):
+        from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+        server = MCPServer(
+            server_id="pet-id",
+            name="pet",
+            alias="pet",
+            transport=MCPTransport.http,
+            url=None,
+            spec_path="/spec.yaml",
+        )
+        manager = MCPServerManager()
+        manager._create_mcp_client = AsyncMock(return_value=AsyncMock())
+
+        async def _handler(**kwargs):
+            return None
+
+        for prefix in ("pet-", "petstore-"):
+            global_mcp_tool_registry.unregister_tools_with_prefix(prefix)
+        global_mcp_tool_registry.register_tool(
+            name="pet-petstore-list",
+            description="Local pet tool",
+            input_schema={"type": "object", "properties": {"limit": {"type": "integer"}}},
+            handler=_handler,
+        )
+        global_mcp_tool_registry.register_tool(
+            name="petstore-list",
+            description="Foreign petstore tool",
+            input_schema={"type": "object", "properties": {"status": {"type": "string"}}},
+            handler=_handler,
+        )
+        try:
+            listed = await manager._get_tools_from_server(server=server, add_prefix=True)
+        finally:
+            for prefix in ("pet-", "petstore-"):
+                global_mcp_tool_registry.unregister_tools_with_prefix(prefix)
+
+        assert [t.name for t in listed] == ["pet-petstore-list"]
+        tool = manager.get_listed_tool(server, "petstore-list")
+        assert tool is not None and tool.description == "Local pet tool"
+        assert tool.inputSchema["properties"] == {"limit": {"type": "integer"}}
+
     @pytest.mark.asyncio
     async def test_get_allowed_mcp_servers_with_user_api_key_auth(self):
         """

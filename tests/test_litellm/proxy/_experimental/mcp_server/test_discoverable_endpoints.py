@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from fastapi.encoders import jsonable_encoder
 
 from litellm.types.mcp import MCPAuth
 
@@ -7122,6 +7123,81 @@ async def test_build_oauth_protected_resource_response_obo_end_to_end():
         assert response["resource"] == "https://litellm.example.com/mcp/obo_mcp"
     finally:
         global_mcp_server_manager.registry.clear()
+
+
+@pytest.fixture
+def agent_365_guardrail():
+    import litellm
+    from litellm.proxy.guardrails.guardrail_hooks.agent_365 import Agent365Guardrail
+
+    guardrail = Agent365Guardrail(
+        guardrail_name="agent-365-guard",
+        tenant_id="tenant-abc",
+        client_id="client-xyz",
+        client_secret="secret-123",
+        async_handler=AsyncMock(),
+        event_hook="pre_mcp_call",
+        default_on=True,
+    )
+    litellm.logging_callback_manager.add_litellm_callback(guardrail)
+    try:
+        yield guardrail
+    finally:
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(
+            litellm.callbacks, guardrail, require_self=False
+        )
+
+
+async def _agent_365_gated_prm(scopes):
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_oauth_protected_resource_response,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.registry["tools"] = MCPServer(
+        server_id="tools",
+        name="tools",
+        server_name="tools",
+        alias="tools",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+        scopes=scopes,
+    )
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+    try:
+        return await _build_oauth_protected_resource_response(
+            request=mock_request, mcp_server_name="tools", use_standard_pattern=True
+        )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_agent_365_gated_server_prm_names_the_entra_tenant(agent_365_guardrail):
+    response = await _agent_365_gated_prm(scopes=["api://gateway-app/access_as_user"])
+    assert jsonable_encoder(response) == {
+        "authorization_servers": ["https://login.microsoftonline.com/tenant-abc/v2.0"],
+        "resource": "https://litellm.example.com/mcp/tools",
+        "scopes_supported": ["api://gateway-app/access_as_user"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_agent_365_prm_defaults_scopeless_server_to_the_gateway_app_scope(agent_365_guardrail):
+    response = await _agent_365_gated_prm(scopes=None)
+    assert jsonable_encoder(response) == {
+        "authorization_servers": ["https://login.microsoftonline.com/tenant-abc/v2.0"],
+        "resource": "https://litellm.example.com/mcp/tools",
+        "scopes_supported": ["api://client-xyz/access_as_user"],
+    }
 
 
 def _token_request(headers):

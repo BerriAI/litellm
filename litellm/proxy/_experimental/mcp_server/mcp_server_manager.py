@@ -242,6 +242,10 @@ _user_env_vars_cache: Final[dict[tuple[str, str], tuple[dict[str, str], float]]]
 _USER_ENV_VARS_CACHE_TTL: Final = 60  # seconds
 _USER_ENV_VARS_CACHE_MAX_SIZE: Final = 4096  # cap to prevent unbounded growth
 
+_ListedToolsByCaller: TypeAlias = Mapping[str | None, Mapping[str, MCPTool]]
+_NO_LISTED_TOOLS: Final[_ListedToolsByCaller] = MappingProxyType({})
+_LISTED_TOOLS_CALLERS_PER_SERVER: Final = 256
+
 # Auth types whose upstream OAuth endpoints (protected-resource + authorization-server metadata) the
 # gateway discovers from the upstream itself: interactive oauth2 and the two client-forwarded modes.
 # OBO/M2M endpoint discovery is decided separately via _obo_needs_endpoint_discovery. Shared by the
@@ -1945,6 +1949,7 @@ class MCPServerManager:
             "gmail_send_email": "zapier_mcp_server",
         }
         """
+        self._listed_tools_by_server_id: dict[str, _ListedToolsByCaller] = {}  # mutable-ok: refreshed per tools/list
         self._upstream_initialize_instructions_by_server_id: dict[str, str] = {}
         # Per-server monotonic timestamp of last upstream prefetch attempt (success,
         # empty result, or failure). Used to throttle re-probes for servers that do
@@ -2640,7 +2645,7 @@ class MCPServerManager:
             self._assign_unique_short_prefix(new_server)
             _warn_legacy_delegate_auth_if_applicable(new_server, source="config")
             _warn_config_id_jag_server_outruns_sso(new_server)
-            self._invalidate_discovery_lists(server_id)
+            self._invalidate_server_definition_caches(server_id)
             self.config_mcp_servers[server_id] = new_server
             self._set_oauth_discovery_deferred(
                 server_id,
@@ -2842,7 +2847,7 @@ class MCPServerManager:
             global_mcp_tool_registry,
         )
 
-        self._invalidate_discovery_lists(server.server_id)
+        self._invalidate_server_definition_caches(server.server_id)
         prefix_root: Final = normalize_server_name(get_server_prefix(server))
         if server.spec_path and prefix_root:
             openapi_key_prefix: Final = prefix_root + MCP_TOOL_PREFIX_SEPARATOR
@@ -3219,7 +3224,7 @@ class MCPServerManager:
                 # env_vars_are_encrypted=False.
                 new_server: Final = await self.build_mcp_server_from_table(mcp_server, env_vars_are_encrypted=False)
                 self._assign_unique_short_prefix(new_server)
-                self._invalidate_discovery_lists(mcp_server.server_id)
+                self._invalidate_server_definition_caches(mcp_server.server_id)
                 self.registry[mcp_server.server_id] = new_server
                 await self._maybe_register_openapi_tools(new_server)
                 self.prime_oauth_metadata_discovery(new_server)
@@ -3256,7 +3261,7 @@ class MCPServerManager:
                     previous_server=self.registry[mcp_server.server_id],
                 )
                 self._assign_unique_short_prefix(new_server)
-                self._invalidate_discovery_lists(mcp_server.server_id)
+                self._invalidate_server_definition_caches(mcp_server.server_id)
                 self.registry[mcp_server.server_id] = new_server
                 await self._maybe_register_openapi_tools(new_server)
                 self.prime_oauth_metadata_discovery(new_server)
@@ -4075,6 +4080,7 @@ class MCPServerManager:
         oauth2_headers: dict[str, str] | None,
         user_api_key_auth: UserAPIKeyAuth | None,
         raw_headers: Mapping[str, str] | None = None,
+        resource_metadata_url: str | None = None,
     ) -> None:
         """Mint an exchange-backed server's upstream credential at the transport edge.
 
@@ -4112,7 +4118,9 @@ class MCPServerManager:
         if spec is None or not isinstance(spec.config, (TokenExchangeConfig, IdJagConfig)):
             return
         if subject_token is None and isinstance(spec.config, TokenExchangeConfig):
-            raise_token_exchange_challenge(resolved_server, root_path=get_request_root_path())
+            raise_token_exchange_challenge(
+                resolved_server, root_path=get_request_root_path(), resource_metadata_url=resource_metadata_url
+            )
         match await self._cred_provider.resolve_credentials(to_subject(user_api_key_auth, subject_token), spec):
             case Ok(_):
                 return
@@ -4122,6 +4130,7 @@ class MCPServerManager:
                         resolved_server,
                         root_path=get_request_root_path(),
                         claims=err.unauthorized.claims,
+                        resource_metadata_url=resource_metadata_url,
                     )
                 raise_public(err)
 
@@ -4414,29 +4423,25 @@ class MCPServerManager:
             if server.spec_path:
                 # OpenAPI tools were stored in the registry under the prefix
                 # active at registration time — fetch by that same prefix.
-                _tools: Final = global_mcp_tool_registry.list_tools(tool_prefix=get_server_prefix(server))
+                registry_prefix: Final = normalize_server_name(get_server_prefix(server)) + MCP_TOOL_PREFIX_SEPARATOR
+                _tools: Final = global_mcp_tool_registry.list_tools(tool_prefix=registry_prefix)
                 tools = global_mcp_tool_registry.convert_tools_to_mcp_sdk_tool_type(_tools)
                 # OpenAPI tools are stored in the registry with their prefix already
                 # applied (e.g. "test_petstore-getinventory").  Do NOT pass them
                 # through _create_prefixed_tools — that would add the prefix a second
                 # time producing "test_petstore-test_petstore-getinventory".
-                if not add_prefix:
-                    prefix: Final = get_server_prefix(server)
-                    sep: Final = MCP_TOOL_PREFIX_SEPARATOR
-                    tools = [
-                        (
-                            t.model_copy(update={"name": t.name[len(prefix) + len(sep) :]})
-                            if t.name.startswith(f"{prefix}{sep}")
-                            else t
-                        )
-                        for t in tools
-                    ]
-                return tools
+                unprefixed_tools: Final = [  # mutable-ok: returned through the list[MCPTool] listing contract
+                    t.model_copy(update=MappingProxyType({"name": t.name[len(registry_prefix) :]})) for t in tools
+                ]
+                self._record_listed_tools(server, unprefixed_tools, user_api_key_auth)
+                return tools if add_prefix else unprefixed_tools
             else:
                 tools = await self._fetch_tools_with_timeout(client, server.name)
                 self._remember_upstream_initialize_instructions(server, client)
 
-            prefixed_or_original_tools: Final = self._create_prefixed_tools(tools, server, add_prefix=add_prefix)
+            prefixed_or_original_tools: Final = self._create_prefixed_tools(
+                tools, server, add_prefix=add_prefix, user_api_key_auth=user_api_key_auth
+            )
 
             return prefixed_or_original_tools
 
@@ -4480,6 +4485,40 @@ class MCPServerManager:
         self._resource_discovery_cache.invalidate(server_id)
         self._template_discovery_cache.invalidate(server_id)
 
+    def _invalidate_server_definition_caches(self, server_id: str) -> None:
+        self._invalidate_discovery_lists(server_id)
+        self._listed_tools_by_server_id.pop(server_id, None)
+
+    def _discovers_per_caller(self, server: MCPServer) -> bool:
+        return (
+            server.requires_per_user_auth
+            or self._references_per_user_env_var(server)
+            or server.delegate_auth_to_upstream
+            or server.auth_type in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag)
+        )
+
+    def _listed_tools_identity(self, server: MCPServer, user_api_key_auth: UserAPIKeyAuth | None) -> str | None:
+        if server.spec_path or user_api_key_auth is None or not self._discovers_per_caller(server):
+            return None
+        material: Final = json.dumps((user_api_key_auth.user_id, user_api_key_auth.api_key), separators=(",", ":"))
+        return hashlib.sha256(material.encode()).hexdigest()
+
+    def _record_listed_tools(
+        self, server: MCPServer, tools: Sequence[MCPTool], user_api_key_auth: UserAPIKeyAuth | None
+    ) -> None:
+        identity: Final = self._listed_tools_identity(server, user_api_key_auth)
+        listing: Final = MappingProxyType({tool.name: tool for tool in tools})
+        existing: Final = self._listed_tools_by_server_id.get(server.server_id, _NO_LISTED_TOOLS)
+        shared: Final = existing.get(None)
+        callers: Final = tuple((key, value) for key, value in existing.items() if key not in (None, identity))
+        evicted: Final = 0 if identity is None else max(len(callers) + 1 - _LISTED_TOOLS_CALLERS_PER_SERVER, 0)
+        entries: Final = (
+            *(() if shared is None else ((None, shared),)),
+            *callers[evicted:],
+            (identity, listing),
+        )
+        self._listed_tools_by_server_id[server.server_id] = MappingProxyType(dict(entries))
+
     def _discovery_key(
         self,
         server: MCPServer,
@@ -4490,12 +4529,7 @@ class MCPServerManager:
         subject_token: str | None,
         credential_fingerprint: str | None = None,
     ) -> _DiscoveryKey:
-        per_user: Final = (
-            server.requires_per_user_auth
-            or self._references_per_user_env_var(server)
-            or server.delegate_auth_to_upstream
-            or server.auth_type in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag)
-        )
+        per_user: Final = self._discovers_per_caller(server)
         if not (per_user or mcp_auth_header or extra_headers or stdio_env or subject_token):
             return server.server_id, None
         identity: Final = (
@@ -5308,7 +5342,13 @@ class MCPServerManager:
             "attempts; the 3-character prefix space is too crowded."
         )
 
-    def _create_prefixed_tools(self, tools: list[MCPTool], server: MCPServer, add_prefix: bool = True) -> list[MCPTool]:
+    def _create_prefixed_tools(
+        self,
+        tools: list[MCPTool],
+        server: MCPServer,
+        add_prefix: bool = True,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+    ) -> list[MCPTool]:
         """
         Create prefixed tools and update tool mapping.
 
@@ -5340,8 +5380,22 @@ class MCPServerManager:
             for spelling in iter_known_tool_name_spellings(original_name, server):
                 self.tool_name_to_mcp_server_name_mapping[spelling] = prefix
 
+        self._record_listed_tools(server, tools, user_api_key_auth)
         verbose_logger.info("Successfully fetched %s tools from server %s", len(prefixed_tools), server.name)
         return prefixed_tools
+
+    def get_listed_tool(
+        self, server: MCPServer, name: str, user_api_key_auth: UserAPIKeyAuth | None = None
+    ) -> MCPTool | None:
+        identity: Final = self._listed_tools_identity(server, user_api_key_auth)
+        listed: Final = self._listed_tools_by_server_id.get(server.server_id, _NO_LISTED_TOOLS).get(identity)
+        if not listed:
+            return None
+        tool: Final = listed.get(name) or listed.get(strip_known_server_prefix(name, server))
+        if tool is None:
+            return None
+        description: Final = (server.tool_name_to_description or {}).get(tool.name)
+        return tool if description is None else tool.model_copy(update={"description": description})
 
     def _create_prefixed_prompts(
         self, prompts: Sequence[Prompt], server: MCPServer, add_prefix: bool = True
@@ -5581,6 +5635,7 @@ class MCPServerManager:
         server: MCPServer,
         raw_headers: dict[str, str] | None = None,
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+        tool: MCPTool | None = None,
     ) -> dict[str, Any]:
         """
         Run pre-call checks and guardrail hooks for an MCP tool call.
@@ -5593,6 +5648,9 @@ class MCPServerManager:
         ``litellm_logging_obj`` is the request's logger, and it is what lands a
         ``pre_mcp_call`` evaluation (or a block) on the spend-log row the Guardrails
         Monitor counts. It stays optional so callers that do no logging are unchanged.
+
+        ``tool`` is the upstream tool definition when one was listed, so guardrails
+        can see its description and input schema, not just the name and arguments.
 
         Returns a dict that may contain:
         - "arguments": hook-modified tool arguments (only if changed)
@@ -5647,6 +5705,8 @@ class MCPServerManager:
             "user_api_key_hash": (getattr(user_api_key_auth, "api_key_hash", None) if user_api_key_auth else None),
             "incoming_bearer_token": incoming_bearer_token,
             "headers": logging_safe_mcp_headers(raw_headers),
+            "tool_description": tool.description if tool is not None else None,
+            "tool_input_schema": tool.inputSchema if tool is not None else None,
         }
 
         # Create MCP request object for processing
@@ -5701,6 +5761,7 @@ class MCPServerManager:
         proxy_logging_obj: ProxyLogging,
         start_time: datetime.datetime,
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+        tool: MCPTool | None = None,
     ):
         """Create and return a during hook task for MCP tool calls.
 
@@ -5715,6 +5776,8 @@ class MCPServerManager:
             tool_name=name,
             arguments=arguments,
             server_name=server_name_from_prefix,
+            tool_description=tool.description if tool is not None else None,
+            tool_input_schema=tool.inputSchema if tool is not None else None,
             start_time=start_time.timestamp() if start_time else None,
             hidden_params=HiddenParams(),
         )
@@ -6311,6 +6374,7 @@ class MCPServerManager:
             server=mcp_server,
             raw_headers=raw_headers,
             litellm_logging_obj=litellm_logging_obj,
+            tool=self.get_listed_tool(mcp_server, name, user_api_key_auth),
         )
         if "arguments" in hook_result:
             arguments = hook_result["arguments"]
@@ -6326,6 +6390,7 @@ class MCPServerManager:
                 proxy_logging_obj=proxy_logging_obj,
                 start_time=start_time,
                 litellm_logging_obj=litellm_logging_obj,
+                tool=self.get_listed_tool(mcp_server, name, user_api_key_auth),
             )
             tasks.append(during_hook_task)
 
@@ -6593,7 +6658,7 @@ class MCPServerManager:
 
         for server_id in previous_registry.keys() | registered_registry.keys():
             if previous_registry.get(server_id) != registered_registry.get(server_id):
-                self._invalidate_discovery_lists(server_id)
+                self._invalidate_server_definition_caches(server_id)
         self.registry = registered_registry
         # A discovery task may have published into ``previous_registry`` while
         # this replacement was being staged. Reconcile every published entry

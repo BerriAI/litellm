@@ -43,6 +43,8 @@ async def test_openapi_local_tool_runs_pre_call_tool_check():
 
     fake_tool = MagicMock()
     fake_tool.name = "list_pets"
+    fake_tool.description = "test tool"
+    fake_tool.input_schema = {"type": "object"}
 
     pre_call = AsyncMock(return_value={})
     handle_local = AsyncMock(return_value=[])
@@ -124,6 +126,8 @@ async def test_openapi_local_tool_blocked_when_pre_call_check_raises():
 
     fake_tool = MagicMock()
     fake_tool.name = "delete_pet"
+    fake_tool.description = "test tool"
+    fake_tool.input_schema = {"type": "object"}
 
     pre_call = AsyncMock(
         side_effect=HTTPException(status_code=403, detail="not allowed")
@@ -186,6 +190,8 @@ async def test_openapi_local_tool_denied_when_server_not_resolvable():
 
     fake_tool = MagicMock()
     fake_tool.name = "list_pets"
+    fake_tool.description = "test tool"
+    fake_tool.input_schema = {"type": "object"}
 
     pre_call = AsyncMock(return_value={})
     handle_local = AsyncMock(return_value=[])
@@ -270,6 +276,8 @@ async def test_openapi_local_tool_injects_resolved_oauth_token():
 
     fake_tool = MagicMock()
     fake_tool.name = "get_values"
+    fake_tool.description = "test tool"
+    fake_tool.input_schema = {"type": "object"}
     captured: dict = {}
 
     async def handle_local(_name, _arguments):
@@ -616,6 +624,8 @@ async def test_per_server_auth_header_reaches_both_openapi_dispatch_arms(dispatc
         if dispatch_arm == "local_registry":
             fake_tool = MagicMock()
             fake_tool.name = "list_reports"
+            fake_tool.description = "test tool"
+            fake_tool.input_schema = {"type": "object"}
             with (
                 patch.object(manager, "_get_mcp_server_from_tool_name", return_value=server),
                 patch.object(mcp_module.global_mcp_tool_registry, "get_tool", return_value=fake_tool),
@@ -687,6 +697,8 @@ async def test_local_dispatch_reports_the_outcome_instead_of_success(failure: st
 
     fake_tool = MagicMock()
     fake_tool.name = "list_reports"
+    fake_tool.description = "test tool"
+    fake_tool.input_schema = {"type": "object"}
     fake_tool.handler = raising_handler
     server = MCPServer(
         server_id="srv-openapi",

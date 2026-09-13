@@ -1244,6 +1244,8 @@ class ProxyLogging:
             "user_api_key_request_route": kwargs.get("user_api_key_request_route"),
             "mcp_tool_name": request_obj.tool_name,  # Keep original for reference
             "mcp_arguments": request_obj.arguments,  # Keep original for reference
+            "mcp_tool_description": request_obj.tool_description,
+            "mcp_tool_input_schema": request_obj.tool_input_schema,
             # Surface the per-MCP-server rate-limit identity so the
             # ParallelRequestLimiterV3 hook can apply mcp_rpm_limit on the
             # synthetic call_mcp_tool payload (otherwise a key with
@@ -1465,6 +1467,8 @@ class ProxyLogging:
             tool_name=kwargs.get("name", ""),
             arguments=kwargs.get("arguments", {}),
             server_name=kwargs.get("server_name"),
+            tool_description=kwargs.get("tool_description"),
+            tool_input_schema=kwargs.get("tool_input_schema"),
             user_api_key_auth=user_api_key_auth_dict,
             hidden_params=HiddenParams(),
         )

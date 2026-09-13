@@ -28,6 +28,7 @@ const EXPECTED_PARTNER_LOGO_FILES: Record<string, string> = {
   repelloai: "repelloai.png",
   straiker: "straiker.svg",
   alice: "alice.svg",
+  agent_365: "microsoft_azure.svg",
   conduct: "conduct.png",
 };
 

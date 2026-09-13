@@ -7055,6 +7055,8 @@ async def test_execute_mcp_tool_sets_model_in_model_call_details():
 
     fake_tool = MagicMock()
     fake_tool.name = "list_pets"
+    fake_tool.description = "test tool"
+    fake_tool.input_schema = {"type": "object"}
 
     start_time = datetime.now(timezone.utc)
     litellm_logging_obj, _ = function_setup(
@@ -7103,6 +7105,99 @@ async def test_execute_mcp_tool_sets_model_in_model_call_details():
 
     assert litellm_logging_obj.model_call_details["model"] == "MCP: list_pets"
     assert litellm_logging_obj.model == "MCP: list_pets"
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_hands_openapi_registered_tool_metadata_to_pre_call_hooks():
+    """OpenAPI-generated tools dispatch through the local registry, so the pre-call hooks must get the
+    registered description and input schema on that path too, even when no tools/list ran first."""
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    petstore = MCPServer(
+        server_id="petstore-id",
+        name="petstore",
+        server_name="petstore",
+        transport=MCPTransport.http,
+        url=None,
+        spec_path="https://example.com/petstore.yaml",
+    )
+    schema = {"type": "object", "properties": {"limit": {"type": "integer"}}}
+    mcp_module.global_mcp_tool_registry.register_tool(
+        name="petstore-list_pets", description="List the pets", input_schema=schema, handler=lambda limit: "ok"
+    )
+    manager = mcp_module.global_mcp_server_manager
+    manager._listed_tools_by_server_id.pop(petstore.server_id, None)
+    pre_call_tool_check = AsyncMock(return_value={})
+
+    try:
+        with (
+            patch.object(manager, "_get_mcp_server_from_tool_name", return_value=petstore),
+            patch.object(manager, "pre_call_tool_check", new=pre_call_tool_check),
+        ):
+            await mcp_module.execute_mcp_tool(
+                name="petstore-list_pets",
+                arguments={"limit": 10},
+                allowed_mcp_servers=[petstore],
+                start_time=datetime.now(),
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-user", user_id="alice"),
+            )
+    finally:
+        mcp_module.global_mcp_tool_registry.unregister_tools_with_prefix("petstore-")
+
+    handed_tool = pre_call_tool_check.call_args.kwargs["tool"]
+    assert (handed_tool.name, handed_tool.description, handed_tool.inputSchema) == (
+        "list_pets",
+        "List the pets",
+        schema,
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_hands_hooks_the_metadata_of_the_operation_it_runs_when_names_collide():
+    """An OpenAPI operation whose name starts with its own server prefix must not be reported to the
+    pre-call hooks with the metadata of the shorter operation, since that is not the one that runs."""
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    petstore = MCPServer(
+        server_id="petstore-id",
+        name="petstore",
+        server_name="petstore",
+        transport=MCPTransport.http,
+        url=None,
+        spec_path="https://example.com/petstore.yaml",
+    )
+    registry = mcp_module.global_mcp_tool_registry
+    registry.register_tool(name="petstore-get_pet", description="short", input_schema={}, handler=lambda: "short")
+    registry.register_tool(
+        name="petstore-petstore-get_pet",
+        description="long",
+        input_schema={"type": "object", "properties": {"petId": {"type": "integer"}}},
+        handler=lambda: "long",
+    )
+    manager = mcp_module.global_mcp_server_manager
+    pre_call_tool_check = AsyncMock(return_value={})
+
+    try:
+        with (
+            patch.object(manager, "_get_mcp_server_from_tool_name", return_value=petstore),
+            patch.object(manager, "pre_call_tool_check", new=pre_call_tool_check),
+        ):
+            result = await mcp_module.execute_mcp_tool(
+                name="petstore-petstore-get_pet",
+                arguments={},
+                allowed_mcp_servers=[petstore],
+                start_time=datetime.now(),
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-user", user_id="alice"),
+            )
+    finally:
+        registry.unregister_tools_with_prefix("petstore-")
+
+    handed_tool = pre_call_tool_check.call_args.kwargs["tool"]
+    assert (handed_tool.description, handed_tool.inputSchema) == (
+        "long",
+        {"type": "object", "properties": {"petId": {"type": "integer"}}},
+    )
+    assert result.content[0].text == "long"
 
 
 @pytest.mark.asyncio
@@ -8772,6 +8867,174 @@ class TestSingleServerPreflightReachesIdJag:
         preflight.assert_not_awaited()
 
 
+class TestAgent365ChallengeAtConnect:
+    """A missing Entra bearer on an Agent 365 gated server is challenged at connect (RFC 9728), where the
+    WWW-Authenticate header survives, instead of only inside the tools/call JSON-RPC error."""
+
+    GATEWAY_SCOPE = "api://gateway-app/access_as_user"
+
+    def _server(self, scopes: list[str] | None) -> MCPServer:
+        return MCPServer(
+            server_id="id-tools",
+            name="tools",
+            alias="tools",
+            server_name="tools",
+            url="https://tools.test/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            scopes=scopes,
+            mcp_info={"server_name": "tools"},
+        )
+
+    @pytest.fixture
+    def agent_365_guardrail(self):
+        import litellm
+        from litellm.proxy.guardrails.guardrail_hooks.agent_365 import Agent365Guardrail
+
+        guardrail = Agent365Guardrail(
+            guardrail_name="agent-365-guard",
+            tenant_id="tenant-abc",
+            client_id="client-xyz",
+            client_secret="secret-123",
+            async_handler=AsyncMock(),
+            event_hook="pre_mcp_call",
+            default_on=True,
+        )
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            yield guardrail
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+    async def _connect(
+        self,
+        server: MCPServer,
+        oauth2_headers: dict[str, str] | None,
+        path: str = "/mcp/tools",
+        mount_scope: dict[str, str] | None = None,
+    ) -> HTTPException | None:
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        with (
+            patch.object(  # test-quality-ok: route wiring must use the manager's configured server
+                server_module.global_mcp_server_manager, "get_mcp_server_by_name", return_value=server
+            ),
+            patch.object(  # test-quality-ok: allowed-set resolution needs the DB; the test controls its answer
+                server_module, "_get_allowed_mcp_servers", AsyncMock(return_value=[])
+            ),
+        ):
+            try:
+                await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                    scope={
+                        "type": "http",
+                        "method": "POST",
+                        "path": path,
+                        "scheme": "https",
+                        "server": ("gw.example.com", 443),
+                        "headers": [],
+                        **(mount_scope or {}),
+                    },
+                    mcp_servers=["tools"],
+                    oauth2_headers=oauth2_headers,
+                    mcp_server_auth_headers=None,
+                    user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+                    client_ip=None,
+                )
+            except HTTPException as challenge:
+                return challenge
+            return None
+
+    @pytest.mark.asyncio
+    async def test_no_bearer_gets_the_discovery_challenge(self, agent_365_guardrail):
+        challenge = await self._connect(self._server([self.GATEWAY_SCOPE]), None)
+
+        assert challenge is not None and challenge.status_code == 401
+        www_authenticate = (challenge.headers or {}).get("WWW-Authenticate", "")
+        assert 'error="invalid_token"' in www_authenticate
+        assert (
+            'resource_metadata="https://gw.example.com/.well-known/oauth-protected-resource/mcp/tools"'
+            in www_authenticate
+        )
+
+    @pytest.mark.asyncio
+    async def test_legacy_route_challenge_points_at_its_own_metadata(self, agent_365_guardrail):
+        """RFC 9728 3.3: the metadata's ``resource`` must equal the URL the client connected to, so a
+        ``/{server}/mcp`` connect is sent to the ``/{server}/mcp`` document, not the ``/mcp/{server}`` one."""
+        challenge = await self._connect(self._server([self.GATEWAY_SCOPE]), None, path="/tools/mcp")
+
+        assert challenge is not None and challenge.status_code == 401
+        www_authenticate = (challenge.headers or {}).get("WWW-Authenticate", "")
+        assert (
+            'resource_metadata="https://gw.example.com/.well-known/oauth-protected-resource/tools/mcp"'
+            in www_authenticate
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "server_root, mount_scope",
+        [
+            ("", {"root_path": "/mcp", "app_root_path": ""}),
+            ("/litellm", {"root_path": "/litellm/mcp", "app_root_path": "/litellm"}),
+        ],
+    )
+    async def test_mounted_standard_route_is_challenged(self, agent_365_guardrail, server_root, mount_scope):
+        """``/mcp/{server}`` is served by the ``/mcp`` Mount, which moves the mount prefix into
+        ``root_path`` and leaves the app root (empty or SERVER_ROOT_PATH) in ``app_root_path``."""
+        with patch.dict(os.environ, {"SERVER_ROOT_PATH": server_root}):
+            challenge = await self._connect(
+                self._server([self.GATEWAY_SCOPE]), None, path=f"{server_root}/mcp/tools", mount_scope=mount_scope
+            )
+
+        assert challenge is not None and challenge.status_code == 401
+        www_authenticate = (challenge.headers or {}).get("WWW-Authenticate", "")
+        assert (
+            f'resource_metadata="https://gw.example.com{server_root}'
+            f'/.well-known/oauth-protected-resource{server_root}/mcp/tools"' in www_authenticate
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("path", ["/mcp", "/mcp/tools,other"])
+    async def test_aggregate_route_is_not_challenged_at_connect(self, agent_365_guardrail, path):
+        """The per-server metadata's ``resource`` can never equal the aggregate ``/mcp`` URL the client
+        connected to (RFC 9728 3.3), and one guarded server must not 401 a multi-server connect, so the
+        Agent 365 challenge is left to tools/call there."""
+        assert await self._connect(self._server([self.GATEWAY_SCOPE]), None, path=path) is None
+
+    @pytest.mark.asyncio
+    async def test_entra_assertion_present_connects(self, agent_365_guardrail):
+        bearer = {"Authorization": "Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1LTEifQ.c2ln"}
+        assert await self._connect(self._server([self.GATEWAY_SCOPE]), bearer) is None
+
+    @pytest.mark.asyncio
+    async def test_litellm_key_in_authorization_is_still_challenged(self, agent_365_guardrail):
+        """A LiteLLM virtual key admits the caller but is no Entra assertion, so the tools/call would fail
+        401 inside JSON-RPC with the WWW-Authenticate header lost. The connect must challenge instead."""
+        challenge = await self._connect(
+            self._server([self.GATEWAY_SCOPE]), {"Authorization": "Bearer sk-litellm-virtual-key"}
+        )
+
+        assert challenge is not None and challenge.status_code == 401
+        www_authenticate = (challenge.headers or {}).get("WWW-Authenticate", "")
+        assert 'error="invalid_token"' in www_authenticate
+        assert (
+            'resource_metadata="https://gw.example.com/.well-known/oauth-protected-resource/mcp/tools"'
+            in www_authenticate
+        )
+
+    @pytest.mark.asyncio
+    async def test_scopeless_server_is_still_challenged(self, agent_365_guardrail):
+        challenge = await self._connect(self._server(None), None)
+
+        assert challenge is not None and challenge.status_code == 401
+        assert 'error="invalid_token"' in (challenge.headers or {}).get("WWW-Authenticate", "")
+
+    @pytest.mark.asyncio
+    async def test_no_registered_guardrail_means_no_challenge(self):
+        assert await self._connect(self._server([self.GATEWAY_SCOPE]), None) is None
+
+
 def _make_obo_server(alias: str) -> MCPServer:
     return MCPServer(
         server_id=f"id-{alias}",
@@ -8843,7 +9106,11 @@ class TestOboPreflightScopedToAllowedServers:
         _, preflight = await self._run(requested, allowed=[requested], user_api_key_auth=key)
 
         preflight.assert_awaited_once_with(
-            server=requested, oauth2_headers=self.SUBJECT_HEADERS, user_api_key_auth=key, raw_headers=None
+            server=requested,
+            oauth2_headers=self.SUBJECT_HEADERS,
+            user_api_key_auth=key,
+            raw_headers=None,
+            resource_metadata_url="/.well-known/oauth-protected-resource/mcp/obo_tools",
         )
 
 

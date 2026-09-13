@@ -9986,7 +9986,7 @@
             },
             "unreachable_fallback": {
               "default": "fail_closed",
-              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', 'repelloai', 'headroom', and 'compresr'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.",
+              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', and 'compresr'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.",
               "enum": [
                 "fail_closed",
                 "fail_open"
@@ -10948,6 +10948,18 @@
               "description": "Custom advisory message template used when on_flagged='inject_system_message'. Must contain a {reason} placeholder. Defaults to a generic advisory message if unset.",
               "title": "Advisory System Message"
             },
+            "agent_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Agent identity reported to Agent 365 with every tool evaluation. When unset, the caller's key alias is used.",
+              "title": "Agent Id"
+            },
             "akto_account_id": {
               "anyOf": [
                 {
@@ -11449,6 +11461,30 @@
               "exclusiveMinimum": 0.0,
               "title": "Chunk Budget Chars",
               "type": "integer"
+            },
+            "client_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Client id of the gateway's Entra app registration (a confidential client). Falls back to the AGENT365_CLIENT_ID environment variable.",
+              "title": "Client Id"
+            },
+            "client_secret": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Client secret of the gateway's Entra app registration, used to perform the On-Behalf-Of exchange. Falls back to the AGENT365_CLIENT_SECRET environment variable.",
+              "title": "Client Secret"
             },
             "confidence_threshold": {
               "default": 0.5,
@@ -12490,6 +12526,18 @@
               "description": "The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.",
               "title": "Realtime Violation Message"
             },
+            "resource_app_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Application id of the Agent 365 resource the OBO token is minted for. Defaults to the production resource ea9ffc3e-8a23-4a7d-836d-234d7c7565c1; the Test and PreProd environments use a different id. Falls back to the AGENT365_RESOURCE_APP_ID environment variable.",
+              "title": "Resource App Id"
+            },
             "rules": {
               "anyOf": [
                 {
@@ -12726,6 +12774,18 @@
               ],
               "description": "The ID of your Model Armor template",
               "title": "Template Id"
+            },
+            "tenant_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Entra tenant id used for the On-Behalf-Of token exchange. Falls back to the AGENT365_TENANT_ID environment variable.",
+              "title": "Tenant Id"
             },
             "timeout": {
               "anyOf": [
