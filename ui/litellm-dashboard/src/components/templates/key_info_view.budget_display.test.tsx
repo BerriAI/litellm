@@ -258,6 +258,71 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
     expect(screen.getByTestId("inherited-budget-hint")).not.toHaveTextContent("Team Org Team");
   });
 
+  it("lists the owner's user budget in the hint for a personal key with no budget of its own", async () => {
+    renderWithProviders(
+      <KeyInfoView
+        keyData={
+          {
+            ...MOCK_KEY_DATA,
+            max_budget: null,
+            team_id: null,
+            user: {
+              user_id: "user-1",
+              user_email: "owner@example.com",
+              user_alias: "Budget Owner",
+              max_budget: 1500,
+              budget_duration: "1mo",
+            },
+          } as unknown as KeyResponse
+        }
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/of Unlimited/)).toBeInTheDocument();
+    });
+    await userEvent.setup().hover(screen.getByLabelText("question-circle"));
+    expect(screen.getByTestId("inherited-budget-hint")).toHaveTextContent("User Budget Owner: $1,500.00 / 1mo");
+  });
+
+  it("omits the owner's user budget from the hint for a team key", async () => {
+    vi.mocked(useTeams).mockReturnValue({
+      teams: [makeTeam({ team_id: "team-123", team_alias: "Test Budget", max_budget: 1200, budget_duration: "30d" })],
+      setTeams: vi.fn(),
+    });
+    renderWithProviders(
+      <KeyInfoView
+        keyData={
+          {
+            ...MOCK_KEY_DATA,
+            max_budget: null,
+            team_id: "team-123",
+            user: {
+              user_id: "user-1",
+              user_email: "owner@example.com",
+              user_alias: "Budget Owner",
+              max_budget: 1500,
+              budget_duration: "1mo",
+            },
+          } as unknown as KeyResponse
+        }
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/of Unlimited/)).toBeInTheDocument();
+    });
+    await userEvent.setup().hover(screen.getByLabelText("question-circle"));
+    expect(screen.getByTestId("inherited-budget-hint")).toHaveTextContent("Team Test Budget: $1,200.00 / 30d");
+    expect(screen.getByTestId("inherited-budget-hint")).not.toHaveTextContent("User Budget Owner");
+  });
+
   it("renders 'Unlimited' with no hint when neither key, team, nor org has a budget", async () => {
     vi.mocked(useTeams).mockReturnValue({
       teams: [makeTeam({ team_id: "team-789", team_alias: "Free Team" })],
