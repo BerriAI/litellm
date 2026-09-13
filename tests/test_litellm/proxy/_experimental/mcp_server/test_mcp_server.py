@@ -521,6 +521,63 @@ def test_prepare_mcp_server_headers_oauth2_interactive_drops_caller_authorizatio
     assert extra_headers is None
 
 
+def test_prepare_mcp_server_headers_legacy_delegate_strips_admission_authorization():
+    from litellm.proxy._experimental.mcp_server.server import (
+        _prepare_mcp_server_headers,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    server = MCPServer(
+        server_id="legacy-delegate-admission",
+        name="legacy-delegate",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        delegate_auth_to_upstream=True,
+    )
+
+    server_auth_header, extra_headers = _prepare_mcp_server_headers(
+        server=server,
+        mcp_server_auth_headers=None,
+        mcp_auth_header=None,
+        oauth2_headers={"Authorization": "Bearer sk-litellm-key"},
+        raw_headers={"authorization": "Bearer sk-litellm-key"},
+        user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-key"),
+    )
+
+    assert server_auth_header is None
+    assert extra_headers is None
+
+
+def test_prepare_mcp_server_headers_legacy_delegate_preserves_separate_upstream_authorization():
+    from litellm.proxy._experimental.mcp_server.server import (
+        _prepare_mcp_server_headers,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    server = MCPServer(
+        server_id="legacy-delegate-dual-credential",
+        name="legacy-delegate",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        delegate_auth_to_upstream=True,
+    )
+
+    server_auth_header, extra_headers = _prepare_mcp_server_headers(
+        server=server,
+        mcp_server_auth_headers=None,
+        mcp_auth_header=None,
+        oauth2_headers={"Authorization": "Bearer upstream-token"},
+        raw_headers={
+            "x-litellm-api-key": "Bearer sk-litellm-key",
+            "authorization": "Bearer upstream-token",
+        },
+        user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-key"),
+    )
+
+    assert server_auth_header is None
+    assert extra_headers == {"Authorization": "Bearer upstream-token"}
+
+
 def test_prepare_mcp_server_headers_m2m_skips_authorization_from_raw_extra_headers():
     """M2M must not merge caller Authorization from raw_headers when extra_headers lists it."""
     try:

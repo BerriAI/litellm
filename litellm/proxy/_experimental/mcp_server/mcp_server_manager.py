@@ -1055,7 +1055,7 @@ def _should_strip_caller_authorization(
       pass-through cold-start case (RFC 9728) the bearer in
       ``Authorization`` is the upstream OAuth token and must be
       forwarded, so we keep it.
-    - **oauth_delegate servers**: admission always runs and there is no
+    - **Delegated OAuth servers**: admission always runs and there is no
       anonymous path, so the caller's separate ``Authorization`` is
       forwarded only when a distinct ``x-litellm-api-key`` carried
       admission. Without that header the ``Authorization`` *was* the
@@ -1075,11 +1075,14 @@ def _should_strip_caller_authorization(
         # upstream — it would override another user's stored credential. Delegate and
         # pass-through return None from to_server_spec and keep forwarding the bearer.
         return True
-    if not (mcp_server.is_oauth_passthrough or mcp_server.is_oauth_delegate):
+    is_delegated_oauth: Final = mcp_server.is_oauth_delegate or (
+        mcp_server.auth_type == MCPAuth.oauth2 and mcp_server.delegate_auth_to_upstream
+    )
+    if not (mcp_server.is_oauth_passthrough or is_delegated_oauth):
         return False
 
     has_explicit_litellm_admission_header: Final = _has_explicit_litellm_admission_header(raw_headers)
-    if mcp_server.is_oauth_delegate:
+    if is_delegated_oauth:
         return not has_explicit_litellm_admission_header
     return _authorization_is_litellm_admission_credential(raw_headers, user_api_key_auth) or (
         user_api_key_auth is None and not has_explicit_litellm_admission_header
