@@ -538,7 +538,7 @@ context_window_fallbacks: Optional[List] = None
 content_policy_fallbacks: Optional[List] = None
 allowed_fails: int = 3
 allow_dynamic_callback_disabling: bool = True
-num_retries_per_request: Optional[int] = None  # for the request overall (incl. fallbacks + model retries)
+num_retries_per_request: Optional[int] = None  # cap on Router retries of one model group; resets per fallback hop
 ####### SECRET MANAGERS #####################
 secret_manager_client: Optional[Any] = (
     None  # list of instantiated key management clients - e.g. azure kv, infisical, etc.

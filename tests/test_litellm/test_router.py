@@ -10607,6 +10607,7 @@ def _cyclic_fallback_router(num_retries=0):
                     "api_key": "sk-fake",
                     "mock_response": "litellm.InternalServerError",
                 },
+                "model_info": {"id": f"{group}-deployment"},
             }
             for group in groups
         ],
@@ -10656,28 +10657,37 @@ async def test_cyclic_fallback_graph_does_not_amplify_one_request():
     assert sum(len(message) for message in capture.messages) < 5_000
 
 
+_FLAT_ATTEMPT_RECORD_KEYS = frozenset(
+    {"model_group", "deployment_id", "exception_type", "exception_string", "attempted_retries"}
+)
+_BREADCRUMB_CREDENTIAL_CANARY = "Bearer sk-ant-oat01-RETRY-BREADCRUMB-CANARY-doNotShip"
+
+
 @pytest.mark.asyncio
-async def test_retry_breadcrumbs_do_not_carry_the_walk_state():
-    """log_retry copies every kwarg into previous_models, which reaches spend logs and
-    logging callbacks. The set of already-attempted groups is router-internal walk state
-    with no diagnostic value there, and it is the one entry that is not a plain scalar.
-    A retry has to be configured for the walk state to reach log_retry at all."""
+async def test_retry_records_are_flat_and_name_the_failed_group_on_fallback_hops():
+    """Each failed attempt leaves a flat record in previous_models, which reaches spend logs and
+    logging callbacks. Nothing downstream reads the failed attempt's kwargs or metadata, and copying
+    them is what carried client credentials and multiplied the payload on every retry. A fallback hop
+    calls log_retry too, so the record has to name the group that failed, not the one taken next."""
     router = _cyclic_fallback_router(num_retries=1)
     capture = _LogCapture(logging.ERROR)
     recorder = _FallbackAttemptRecorder()
 
     await _drive_cyclic_fallback(router, capture, recorder)
 
-    breadcrumbs = [breadcrumb for hop in recorder.breadcrumbs_per_target for breadcrumb in hop]
-    assert breadcrumbs, "no retry breadcrumbs were recorded"
-    assert any(
-        "fallback_depth" in breadcrumb for breadcrumb in breadcrumbs
-    ), "no breadcrumb carried router walk state, so this test cannot see the leak"
-    for breadcrumb in breadcrumbs:
-        assert "attempted_targets" not in breadcrumb
-
-
-_BREADCRUMB_CREDENTIAL_CANARY = "Bearer sk-ant-oat01-RETRY-BREADCRUMB-CANARY-doNotShip"
+    records = [record for hop in recorder.breadcrumbs_per_target for record in hop]
+    assert records, "no retry records were recorded"
+    for record in records:
+        assert set(record) == _FLAT_ATTEMPT_RECORD_KEYS
+        assert record["exception_type"] == "InternalServerError"
+        assert record["deployment_id"] == f"{record['model_group']}-deployment"
+    group_failed_before_hop = {"group-b": "group-a", "group-c": "group-b", "group-d": "group-c"}
+    for failed_target, hop_records in zip(recorder.failed_targets, recorder.breadcrumbs_per_target):
+        groups = [record["model_group"] for record in hop_records]
+        first_own_attempt = groups.index(failed_target)
+        assert groups[first_own_attempt - 1] == group_failed_before_hop[failed_target]
+        assert set(groups[first_own_attempt:]) == {failed_target}
+        assert [record["attempted_retries"] for record in hop_records[first_own_attempt:]][:2] == [0, 1]
 
 
 @pytest.mark.parametrize(
@@ -10703,22 +10713,20 @@ _BREADCRUMB_CREDENTIAL_CANARY = "Bearer sk-ant-oat01-RETRY-BREADCRUMB-CANARY-doN
     ],
 )
 @pytest.mark.asyncio
-async def test_retry_breadcrumbs_never_carry_a_forwarded_credential(container_key, request_kwargs):
-    """log_retry copies kwargs into previous_models, which reaches spend logs and logging callbacks.
-    Any of these kwargs can carry a client's forwarded Authorization token or a provider key, and a
-    breadcrumb has no diagnostic use for the raw secret. A denylist of key names is always one new
-    credential kwarg behind, so log_retry scrubs credential-named values by pattern instead: the
-    container still reaches the breadcrumb, but the raw secret never does, whatever key holds it."""
+async def test_retry_records_never_carry_a_forwarded_credential(container_key, request_kwargs):
+    """previous_models reaches spend logs and logging callbacks. Any request kwarg can carry a client's
+    forwarded Authorization token or a provider key, so the record must not carry request kwargs at
+    all: neither the credential-bearing container nor the raw secret, whatever key holds it."""
     router = _cyclic_fallback_router(num_retries=1)
     capture = _LogCapture(logging.ERROR)
     metadata = {}
 
     await _drive_cyclic_fallback(router, capture, metadata=metadata, **request_kwargs)
 
-    breadcrumbs = metadata["previous_models"]
-    assert breadcrumbs, "no retry breadcrumbs were recorded"
-    dumped = json.dumps(breadcrumbs, default=str)
-    assert container_key in dumped, "the credential-bearing kwarg never reached the breadcrumb, so this test cannot see the leak"
+    records = metadata["previous_models"]
+    assert records, "no retry records were recorded"
+    dumped = json.dumps(records)
+    assert container_key not in dumped
     assert _BREADCRUMB_CREDENTIAL_CANARY not in dumped
 
 
@@ -10743,7 +10751,7 @@ async def _fail_one_proxy_shaped_request(router, request_marker):
     shallow copy of the request, so body["metadata"] is the very same dict the router later
     stamps previous_models onto."""
     metadata = {"request_marker": request_marker}
-    with pytest.raises(litellm.InternalServerError):
+    with pytest.raises((litellm.InternalServerError, litellm.APIConnectionError)):
         await router.acompletion(
             model="broken-group",
             messages=[{"role": "user", "content": "hi"}],
@@ -10769,34 +10777,52 @@ def _nested_breadcrumb_lists(node):
 
 
 @pytest.mark.asyncio
-async def test_retry_breadcrumbs_stay_per_request_and_flat_across_failing_requests():
-    """Every failed attempt appends a breadcrumb to metadata["previous_models"], and the proxy's
+async def test_retry_records_stay_per_request_and_flat_across_failing_requests():
+    """Every failed attempt appends a record to metadata["previous_models"], and the proxy's
     request snapshot aliases that same metadata dict. Kept on the Router and copied wholesale,
-    each breadcrumb embedded every earlier one from every earlier request, so the breadcrumb
+    each breadcrumb once embedded every earlier one from every earlier request, so the breadcrumb
     tree, and with it the debug repr of the kwargs, roughly doubled on each failed attempt until
     a single-worker proxy spent minutes in the redaction regex and stopped answering."""
     router = _always_failing_router(num_retries=2)
 
-    breadcrumbs_per_request = [
+    records_per_request = [
         await _fail_one_proxy_shaped_request(router, f"request-{request_number}") for request_number in range(1, 7)
     ]
 
-    for request_number, breadcrumbs in enumerate(breadcrumbs_per_request, start=1):
-        assert len(breadcrumbs) == 3, "one initial attempt plus two retries failed, each leaving one breadcrumb"
-        assert {breadcrumb["metadata"]["request_marker"] for breadcrumb in breadcrumbs} == {f"request-{request_number}"}
-        for breadcrumb in breadcrumbs:
-            assert _nested_breadcrumb_lists(breadcrumb) == []
-    assert len({len(repr(breadcrumbs)) for breadcrumbs in breadcrumbs_per_request}) == 1
+    for records in records_per_request:
+        assert [record["attempted_retries"] for record in records] == [0, 1, 2]
+        for record in records:
+            assert set(record) == _FLAT_ATTEMPT_RECORD_KEYS
+            assert _nested_breadcrumb_lists(record) == []
+    assert len({len(repr(records)) for records in records_per_request}) == 1
 
 
 @pytest.mark.asyncio
-async def test_retry_breadcrumbs_keep_only_the_last_four_attempts():
+async def test_retry_records_keep_only_the_last_four_attempts():
     router = _always_failing_router(num_retries=6)
 
-    breadcrumbs = await _fail_one_proxy_shaped_request(router, "request-1")
+    records = await _fail_one_proxy_shaped_request(router, "request-1")
 
-    assert len(breadcrumbs) == 4
-    assert [breadcrumb["metadata"]["attempted_retries"] for breadcrumb in breadcrumbs] == [3, 4, 5, 6]
+    assert [record["attempted_retries"] for record in records] == [3, 4, 5, 6]
+
+
+@pytest.mark.asyncio
+async def test_num_retries_per_request_stops_retries_at_caps_above_four(monkeypatch):
+    """The cap used to be read off len(previous_models), which never exceeds four, so any cap above
+    four was inert. Reading the Router's attempted_retries counter instead lets a cap of five refuse
+    retries five and six before they reach the deployment."""
+    monkeypatch.setattr(litellm, "num_retries_per_request", 5)
+    router = _always_failing_router(num_retries=6)
+
+    records = await _fail_one_proxy_shaped_request(router, "request-1")
+
+    assert [record["attempted_retries"] for record in records] == [3, 4, 5, 6]
+    assert ["Max retries per request hit!" in record["exception_string"] for record in records] == [
+        False,
+        False,
+        True,
+        True,
+    ]
 
 
 @pytest.mark.asyncio

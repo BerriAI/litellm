@@ -806,7 +806,7 @@ async def test_shared_call_limits_still_reject_before_reading_ocr_file(
     monkeypatch.setattr(litellm, "_current_cost", 2)
     monkeypatch.setattr(litellm, "num_retries_per_request", 1 if limit == "retries" else None)
     expected: Final = litellm.BudgetExceededError if limit == "budget" else RuntimeError
-    arguments: Final = {"document": {"type": "file", "file": File()}, "metadata": {"previous_models": ["earlier"]}}
+    arguments: Final = {"document": {"type": "file", "file": File()}, "metadata": {"attempted_retries": 1}}
     with pytest.raises(expected, match=r"Budget has been exceeded|Max retries per request hit"):
         await call_aocr(ocr_server, **arguments) if asynchronous else call_ocr(ocr_server, **arguments)
     assert reads == []
