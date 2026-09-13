@@ -272,6 +272,15 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             "thinking",
         ]
 
+    @staticmethod
+    def _uses_anthropic_thinking_param(model: str) -> bool:
+        from litellm.utils import supports_anthropic_thinking_payload
+
+        normalized: Final = model.lower().replace(".", "-")
+        return "claude" in normalized or supports_anthropic_thinking_payload(
+            model=normalized, custom_llm_provider="databricks"
+        )
+
     def convert_anthropic_tool_to_databricks_tool(self, tool: AllAnthropicToolsValues | None) -> DatabricksTool | None:
         if tool is None:
             return None
@@ -377,7 +386,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 "response_format", None
             )  # unsupported for claude models - if json_schema -> convert to tool call
 
-        if "reasoning_effort" in non_default_params and "claude" in model:
+        if "reasoning_effort" in non_default_params and self._uses_anthropic_thinking_param(model):
             reasoning_effort_value: Final = non_default_params.get("reasoning_effort")
             mapped_thinking: Final = AnthropicConfig._map_reasoning_effort(
                 reasoning_effort=reasoning_effort_value,

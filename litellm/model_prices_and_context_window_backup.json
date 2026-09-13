@@ -17599,6 +17599,7 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_tool_choice": true
     },
     "databricks/databricks-claude-fable-5": {
@@ -17624,6 +17625,7 @@
         "supports_mid_conversation_system": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": false,
@@ -17653,6 +17655,7 @@
         "supports_mid_conversation_system": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true,
@@ -17678,6 +17681,7 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_tool_choice": true,
         "prompt_cache_min_tokens": 4096
     },
@@ -17701,6 +17705,7 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_tool_choice": true,
         "prompt_cache_min_tokens": 1024
     },
@@ -17724,6 +17729,7 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_tool_choice": true,
         "prompt_cache_min_tokens": 1024
     },
@@ -17747,6 +17753,7 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_tool_choice": true,
         "supports_output_config": true,
         "prompt_cache_min_tokens": 4096
@@ -17772,6 +17779,7 @@
         "supports_legacy_thinking": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_tool_choice": true,
         "prompt_cache_min_tokens": 4096
     },
@@ -17797,6 +17805,7 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -17824,6 +17833,7 @@
         "supports_mid_conversation_system": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -17851,6 +17861,7 @@
         "supports_mid_conversation_system": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -17877,6 +17888,7 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_tool_choice": true
     },
     "databricks/databricks-claude-sonnet-4-1": {
@@ -17899,6 +17911,7 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_tool_choice": true
     },
     "databricks/databricks-claude-sonnet-4-5": {
@@ -17921,6 +17934,7 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_tool_choice": true,
         "prompt_cache_min_tokens": 1024
     },
@@ -17945,6 +17959,7 @@
         "supports_legacy_thinking": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_tool_choice": true,
         "prompt_cache_min_tokens": 1024
     },
@@ -17971,6 +17986,7 @@
         "supports_mid_conversation_system": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -18049,6 +18065,7 @@
         "output_dbu_cost_per_token": 3.5714e-05,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_function_calling": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_prompt_caching": true,
         "supports_tool_choice": true
     },
@@ -18069,6 +18086,7 @@
         "output_dbu_cost_per_token": 0.000142857,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_function_calling": true,
+        "supports_anthropic_thinking_payload": true,
         "supports_prompt_caching": true,
         "supports_tool_choice": true
     },

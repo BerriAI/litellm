@@ -2850,6 +2850,12 @@ def supports_reasoning(model: str, custom_llm_provider: str | None = None) -> bo
     return _supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_reasoning")
 
 
+def supports_anthropic_thinking_payload(model: str, custom_llm_provider: str | None = None) -> bool:
+    return _supports_factory(
+        model=model, custom_llm_provider=custom_llm_provider, key="supports_anthropic_thinking_payload"
+    )
+
+
 def supports_none_reasoning_effort(model: str, custom_llm_provider: str | None = None) -> bool:
     """
     Check if the given model accepts reasoning effort "none" and return a boolean value.
@@ -5996,6 +6002,7 @@ def _get_model_info_helper(
                 thinking_always_on=_model_info.get("thinking_always_on", None),
                 supports_tool_search=_model_info.get("supports_tool_search", None),
                 supports_mid_conversation_system=_model_info.get("supports_mid_conversation_system", None),
+                supports_anthropic_thinking_payload=_model_info.get("supports_anthropic_thinking_payload", None),
                 supports_none_reasoning_effort=_model_info.get("supports_none_reasoning_effort", None),
                 supports_minimal_reasoning_effort=_model_info.get("supports_minimal_reasoning_effort", None),
                 supports_low_reasoning_effort=_model_info.get("supports_low_reasoning_effort", None),
