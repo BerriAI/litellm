@@ -18240,6 +18240,41 @@ async def test_key_health_without_any_effective_callbacks_reports_healthy_and_se
     test_logging.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    "caller",
+    [
+        UserAPIKeyAuth(api_key="sk-1", metadata={"logging": [{"callback_name": "langfuse"}]}),
+        UserAPIKeyAuth(
+            api_key="sk-1",
+            metadata={"logging": []},
+            team_metadata={"logging": [{"callback_name": "langfuse", "callback_vars": {"not_a_var": "x"}}]},
+        ),
+    ],
+    ids=["key entry without callback_vars", "team entry with an unknown callback var"],
+)
+@pytest.mark.asyncio
+async def test_key_health_reports_callback_entries_requests_ignore_instead_of_calling_them_healthy(
+    caller: UserAPIKeyAuth,
+):
+    from litellm.proxy.management_endpoints.key_management_endpoints import key_health
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", _default_team_gcs_proxy_config("team-gcs")),  # test-quality-ok: key_health reads the module-level proxy config
+        patch(  # test-quality-ok: the mock completion behind test_key_logging needs a running proxy
+            "litellm.proxy.management_endpoints.key_management_endpoints.test_key_logging", AsyncMock()
+        ) as test_logging,
+    ):
+        response = await key_health(request=MagicMock(), user_api_key_dict=caller)
+
+    assert response["key"] == "unhealthy"
+    logging_callbacks: Final = response["logging_callbacks"]
+    assert logging_callbacks is not None
+    assert logging_callbacks["callbacks"] == ("langfuse",)
+    assert logging_callbacks["status"] == "unhealthy"
+    assert "langfuse:" in (logging_callbacks["details"] or "")
+    test_logging.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_key_health_rejects_key_logging_entries_without_a_callback_name():
     from litellm.proxy.management_endpoints.key_management_endpoints import key_health

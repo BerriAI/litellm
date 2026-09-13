@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeV
 import fastapi
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from pydantic import ValidationError as PydanticValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -7019,6 +7020,7 @@ async def key_health(
     ```
     """
     from litellm.proxy.litellm_pre_call_utils import (
+        KeyAndTeamLoggingSettings,
         _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # the request-time resolver; the health check must report the same callbacks a request would use
     )
     from litellm.proxy.proxy_server import proxy_config
@@ -7027,6 +7029,22 @@ async def key_health(
         key_metadata: Final = user_api_key_dict.metadata
         if key_metadata and "logging" in key_metadata:
             _raise_if_key_logging_missing_callback_name(decrypt_callback_vars(key_metadata)["logging"])
+
+        configured_entries: Final = (
+            KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
+            or KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
+            or ()
+        )
+        invalid_entries: Final = _describe_invalid_callback_entries(configured_entries)
+        if invalid_entries is not None:
+            return KeyHealthResponse(
+                key="unhealthy",
+                logging_callbacks=LoggingCallbackStatus(
+                    callbacks=_configured_callback_names(configured_entries),
+                    status="unhealthy",
+                    details=invalid_entries,
+                ),
+            )
 
         callback_settings: Final = _get_dynamic_logging_metadata(
             user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
@@ -7089,6 +7107,32 @@ async def _can_user_query_key_info(
 def _raise_if_key_logging_missing_callback_name(key_logging: Sequence[Mapping[str, str]]) -> None:
     if any(callback.get("callback_name") is None for callback in key_logging):
         raise ValueError("callback_name is required in key_logging")
+
+
+def _configured_callback_names(entries: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(name for entry in entries if isinstance(name := entry.get("callback_name"), str)))
+
+
+def _describe_invalid_callback_entries(entries: Sequence[Mapping[str, object]]) -> str | None:
+    errors: Final = tuple(
+        f"{entry.get('callback_name')}: {error}"
+        for entry in entries
+        if (error := _callback_entry_error(entry)) is not None
+    )
+    if not errors:
+        return None
+    return f"Invalid callback metadata, requests ignore these entries: {'; '.join(errors)}"
+
+
+def _callback_entry_error(entry: Mapping[str, object]) -> str | None:
+    try:
+        AddTeamCallback.model_validate(entry)
+    except PydanticValidationError as e:
+        return ", ".join(
+            f"{'.'.join(str(part) for part in err['loc'])} {err['msg']}"
+            for err in e.errors(include_url=False, include_input=False)
+        )
+    return None
 
 
 async def flush_gcs_and_describe_failures(gcs_logger: CustomLogger | None) -> str | None:
