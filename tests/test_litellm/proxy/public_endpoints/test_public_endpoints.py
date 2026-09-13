@@ -328,6 +328,37 @@ def test_cognition_provider_fields():
     assert fields_by_key["api_base"]["required"] is False
 
 
+def test_zai_provider_fields():
+    """Z.AI must be selectable in the Add Credential flow (#39310).
+
+    The form is driven by GET /public/providers/fields. Without a ZAI row the
+    UI shows only Credential Name and Provider, so the key cannot be saved.
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    zai = next((p for p in providers if p["provider"] == "ZAI"), None)
+    assert zai is not None, "Z.AI provider entry not found"
+
+    assert zai["provider_display_name"] == "Z.AI (Zhipu AI)"
+    assert zai["litellm_provider"] == "zai"
+    assert zai["default_model_placeholder"].startswith("zai/")
+
+    fields_by_key = {f["key"]: f for f in zai["credential_fields"]}
+
+    assert fields_by_key["api_key"]["required"] is True
+    assert fields_by_key["api_key"]["field_type"] == "password"
+
+    assert fields_by_key["api_base"]["required"] is False
+    assert fields_by_key["api_base"]["field_type"] == "text"
+    assert fields_by_key["api_base"]["placeholder"] == "https://api.z.ai/api/paas/v4"
+
+
 def test_chatgpt_provider_fields():
     app_instance = FastAPI()
     app_instance.include_router(router)
@@ -386,7 +417,6 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "text-completion-inception",
         "valkey",
         "xiaomi_mimo",
-        "zai",
     }
 )
 
