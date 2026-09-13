@@ -1026,6 +1026,62 @@ def test_hosted_vllm_embedding(monkeypatch):
         assert json_data["model"] == "jina-embeddings-v3"
 
 
+class _RecordingHTTPHandler(HTTPHandler):
+    def __init__(self, response):
+        super().__init__()
+        self.response = response
+        self.requests = []
+
+    def post(self, url: str, **kwargs):
+        self.requests.append({"url": url, **kwargs})
+        return self.response
+
+
+def test_cloudflare_embedding_dispatch(monkeypatch):
+    monkeypatch.setattr(litellm, "cloudflare_api_key", None)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "api_base", None)
+
+    response_json = {
+        "object": "list",
+        "data": [{"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0}],
+        "model": "@cf/baai/bge-large-en-v1.5",
+        "usage": {"prompt_tokens": 2, "total_tokens": 2},
+    }
+    raw_response = MagicMock()
+    raw_response.status_code = 200
+    raw_response.headers = {"content-type": "application/json"}
+    raw_response.json.return_value = response_json
+    raw_response.text = json.dumps(response_json)
+    client = _RecordingHTTPHandler(raw_response)
+
+    embedding(
+        model="cloudflare/@cf/baai/bge-large-en-v1.5",
+        input=["Hello world"],
+        api_key="cf-key",
+        api_base="https://example.com/ai/v1",
+        client=client,
+        caching=False,
+    )
+
+    request = client.requests[0]
+    assert request["url"] == "https://example.com/ai/v1/embeddings"
+    assert request["headers"]["Authorization"] == "Bearer cf-key"
+
+
+def test_cloudflare_embedding_dispatch_requires_api_key(monkeypatch):
+    monkeypatch.setattr(litellm, "cloudflare_api_key", None)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.delenv("CLOUDFLARE_API_KEY", raising=False)
+
+    with pytest.raises(litellm.APIConnectionError, match="Missing Cloudflare API Key"):
+        embedding(
+            model="cloudflare/@cf/baai/bge-large-en-v1.5",
+            input=["Hello world"],
+            caching=False,
+        )
+
+
 def test_llamafile_embedding(monkeypatch):
     monkeypatch.setenv("LLAMAFILE_API_BASE", "http://localhost:8080/v1")
     from litellm.llms.custom_httpx.http_handler import HTTPHandler

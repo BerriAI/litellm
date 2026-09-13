@@ -8478,6 +8478,8 @@ class ProviderConfigManager:
             )
 
             return VercelAIGatewayEmbeddingConfig()
+        elif litellm.LlmProviders.CLOUDFLARE == provider:
+            return litellm.CloudflareEmbeddingConfig()
         elif litellm.LlmProviders.GIGACHAT == provider:
             return litellm.GigaChatEmbeddingConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
@@ -8493,7 +8495,7 @@ class ProviderConfigManager:
         return None
 
     @staticmethod
-    def get_provider_rerank_config(
+    def get_provider_rerank_config(  # noqa: C901  # provider dispatch; one branch per rerank provider
         model: str,
         provider: LlmProviders,
         api_base: str | None,
@@ -8540,6 +8542,8 @@ class ProviderConfigManager:
             )
 
             return get_dashscope_family_rerank_config(provider.value)
+        elif litellm.LlmProviders.CLOUDFLARE == provider:
+            return litellm.CloudflareRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod

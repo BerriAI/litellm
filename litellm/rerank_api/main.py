@@ -33,7 +33,7 @@ async def arerank(
     query: str,
     documents: list[str | dict[str, Any]],
     custom_llm_provider: (
-        Literal["cohere", "together_ai", "deepinfra", "fireworks_ai", "voyage", "watsonx"] | None
+        Literal["cohere", "together_ai", "deepinfra", "fireworks_ai", "voyage", "watsonx", "cloudflare"] | None
     ) = None,
     top_n: int | None = None,
     rank_fields: list[str] | None = None,
@@ -108,6 +108,7 @@ def rerank(
             "fireworks_ai",
             "voyage",
             "watsonx",
+            "cloudflare",
         ]
         | None
     ) = None,
