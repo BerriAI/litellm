@@ -7,10 +7,8 @@ client touches requests.* or builds raw dicts; they pass pydantic models here.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
-
-from pydantic import BaseModel
 
 import e2e_http
 from e2e_http import (
@@ -21,6 +19,7 @@ from e2e_http import (
     Result,
     StreamingResponse,
 )
+from pydantic import BaseModel
 
 
 class Transport(Protocol):
@@ -85,7 +84,7 @@ class Transport(Protocol):
         self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
     ) -> Result[R]: ...
 
-    def probe(self, path: str, *, params: BaseModel) -> ProbeResult: ...
+    def probe(self, path: str, *, params: BaseModel, headers: BaseModel | None = None) -> ProbeResult: ...
 
     def upload[R: BaseModel](
         self,
@@ -113,7 +112,7 @@ class Transport(Protocol):
 @dataclass(frozen=True, slots=True)
 class HttpTransport:
     base_url: str
-    master_key: str
+    master_key: str = field(repr=False)
     request_timeout: float = 60.0
 
     def _url(self, path: str) -> URL:
@@ -245,10 +244,10 @@ class HttpTransport:
             timeout=self.request_timeout,
         )
 
-    def probe(self, path: str, *, params: BaseModel) -> ProbeResult:
+    def probe(self, path: str, *, params: BaseModel, headers: BaseModel | None = None) -> ProbeResult:
         return e2e_http.probe(
             self._url(path),
-            headers=self.master,
+            headers=self.master if headers is None else headers,
             params=params,
             timeout=self.request_timeout,
         )
@@ -434,8 +433,8 @@ class SplitTransport:
             path, headers=headers, json=json, params=params, stream=stream
         )
 
-    def probe(self, path: str, *, params: BaseModel) -> ProbeResult:
-        return self._route(path).probe(path, params=params)
+    def probe(self, path: str, *, params: BaseModel, headers: BaseModel | None = None) -> ProbeResult:
+        return self._route(path).probe(path, params=params, headers=headers)
 
     def upload[R: BaseModel](
         self,
