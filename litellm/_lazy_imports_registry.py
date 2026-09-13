@@ -152,6 +152,7 @@ LLM_CONFIG_NAMES: Final = (
     "InfinityRerankConfig",
     "JinaAIRerankConfig",
     "DeepinfraRerankConfig",
+    "GPUStackRerankConfig",
     "HostedVLLMRerankConfig",
     "NvidiaNimRerankConfig",
     "NvidiaNimRankingConfig",
@@ -283,6 +284,7 @@ LLM_CONFIG_NAMES: Final = (
     "AzureSpeechAudioTranscriptionConfig",
     "HostedVLLMChatConfig",
     "HostedVLLMEmbeddingConfig",
+    "GPUStackEmbeddingConfig",
     # Alias for backwards compatibility
     "VolcEngineConfig",  # Alias for VolcEngineChatConfig
     "LlamafileChatConfig",
@@ -677,6 +679,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "DeepinfraRerankConfig": (
         ".llms.deepinfra.rerank.transformation",
         "DeepinfraRerankConfig",
+    ),
+    "GPUStackRerankConfig": (
+        ".llms.gpustack.rerank.transformation",
+        "GPUStackRerankConfig",
     ),
     "HostedVLLMRerankConfig": (
         ".llms.hosted_vllm.rerank.transformation",
@@ -1100,6 +1106,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "HostedVLLMEmbeddingConfig": (
         ".llms.hosted_vllm.embedding.transformation",
         "HostedVLLMEmbeddingConfig",
+    ),
+    "GPUStackEmbeddingConfig": (
+        ".llms.gpustack.embedding.transformation",
+        "GPUStackEmbeddingConfig",
     ),
     # Alias for backwards compatibility
     "VolcEngineConfig": (

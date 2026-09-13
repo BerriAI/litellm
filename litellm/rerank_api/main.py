@@ -103,6 +103,7 @@ def rerank(
             "azure_ai",
             "infinity",
             "litellm_proxy",
+            "gpustack",
             "hosted_vllm",
             "deepinfra",
             "fireworks_ai",
@@ -413,6 +414,32 @@ def rerank(
                 model_response=model_response,
                 litellm_params=rerank_litellm_params,
             )
+
+        # fmt: off
+        elif _custom_llm_provider == litellm.LlmProviders.GPUSTACK:
+            api_key = (  # rebind-ok: provider dispatch resolves explicit and environment configuration
+                dynamic_api_key or optional_params.api_key or litellm.api_key or get_secret_str("GPUSTACK_API_KEY")
+            )
+            api_base = (  # rebind-ok: provider dispatch resolves explicit and environment configuration
+                dynamic_api_base or optional_params.api_base or litellm.api_base or get_secret_str("GPUSTACK_API_BASE")
+            )
+
+            response = base_llm_http_handler.rerank(  # rebind-ok: provider dispatch resolves explicit and environment configuration
+                model=model,
+                custom_llm_provider=_custom_llm_provider,
+                provider_config=rerank_provider_config,
+                optional_rerank_params=optional_rerank_params,
+                logging_obj=litellm_logging_obj,
+                timeout=optional_params.timeout,
+                api_key=api_key,
+                api_base=api_base,
+                _is_async=_is_async,
+                headers=headers or litellm.headers or {},  # mutable-ok: HTTP handler requires mutable request headers
+                client=client,
+                model_response=model_response,
+                litellm_params=rerank_litellm_params,
+            )
+        # fmt: on
 
         elif _custom_llm_provider == litellm.LlmProviders.DEEPINFRA:
             api_key = dynamic_api_key or optional_params.api_key or get_secret_str("DEEPINFRA_API_KEY")
