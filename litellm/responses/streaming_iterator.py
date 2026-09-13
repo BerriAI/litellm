@@ -758,8 +758,8 @@ class BaseResponsesAPIStreamingIterator:
                         + [_slot]  # mutable-ok: list concat appending final slot
                     )
                     self._streamed_text_only_items[_text_output_index] = (
-                        BaseLiteLLMOpenAIResponseObject(  # mutable-ok: incremental index-keyed fallback accumulation; no immutable equivalent
-                            **{
+                        BaseLiteLLMOpenAIResponseObject.model_validate(  # mutable-ok: incremental index-keyed fallback accumulation; no immutable equivalent
+                            {
                                 "type": "message",
                                 "id": getattr(_existing, "id", _item_id),
                                 "role": "assistant",
