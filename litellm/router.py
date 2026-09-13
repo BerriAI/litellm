@@ -1553,6 +1553,16 @@ class Router:
             return False
         return sum(len(self.model_name_to_deployment_indices.get(member) or ()) for member in group.models) > 1
 
+    def team_model_has_alternatives(self, deployment_id: str) -> bool:
+        deployment: Final = self.get_deployment(model_id=deployment_id)
+        if deployment is None:
+            return False
+        team_id: Final = deployment.model_info.team_id
+        public_model_name: Final = deployment.model_info.team_public_model_name
+        if team_id is None or public_model_name is None:
+            return False
+        return len(self.team_model_to_deployment_indices.get((team_id, public_model_name)) or ()) > 1
+
     _OVERRIDABLE_ROUTING_STRATEGIES: frozenset[str] = frozenset({"simple-shuffle", *_DEFAULT_SELECTOR_ATTR_BY_STRATEGY})
 
     def _get_request_routing_strategy_override(self, request_kwargs: dict | None) -> str | None:
