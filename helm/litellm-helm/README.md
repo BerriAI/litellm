@@ -53,6 +53,10 @@ If `db.useStackgresOperator` is used (not yet implemented):
 | `pdb.maxUnavailable`        | Maximum number/percentage of pods that can be unavailable during **voluntary** disruptions (choose **one** of minAvailable/maxUnavailable)                                                                                                    | `null`                    |
 | `pdb.annotations`           | Extra metadata annotations to add to the PDB                                                                                                                                                                                                  | `{}`                      |
 | `pdb.labels`                | Extra metadata labels to add to the PDB                                                                                                                                                                                                       | `{}`                      |
+| `serviceMonitor.enabled`    | Create a Prometheus Operator ServiceMonitor                                                                                                                                                                                                   | `false`                   |
+| `serviceMonitor.authSecret.enabled` | Configure bearer authorization for metrics scraping from an existing Kubernetes Secret                                                                                                                                              | `false`                   |
+| `serviceMonitor.authSecret.name` | Name of the existing Secret containing a valid LiteLLM key                                                                                                                                                                                | `""`                      |
+| `serviceMonitor.authSecret.key` | Key within the existing Secret that contains the LiteLLM key                                                                                                                                                                             | `""`                      |
 
 | `billingMetrics.enabled`    | Enable enterprise billable-request metering. Requires an enterprise license.                                                                                                                                                                  | `false`                   |
 | `billingMetrics.endpoint`   | Collector that the billable-request counter is pushed to.                                                                                                                                                                                    | `https://telemetry.litellm.ai` |
@@ -99,6 +103,21 @@ data:
   AZURE_OPENAI_API_KEY: TXlTZWN1cmVLM3k=
 type: Opaque
 ```
+
+#### Authenticated Prometheus scraping
+
+LiteLLM requires authentication on `/metrics` by default. Store a valid LiteLLM key in a Kubernetes Secret in the ServiceMonitor namespace, then reference it from the chart:
+
+```
+serviceMonitor:
+  enabled: true
+  authSecret:
+    enabled: true
+    name: litellm-prometheus-key
+    key: token
+```
+
+Use a dedicated restricted key instead of the LiteLLM master key. The Prometheus Operator must be able to read the Secret. If unauthenticated metrics are acceptable for your deployment, leave `authSecret.enabled` set to `false` and set `litellm_settings.require_auth_for_metrics_endpoint: false` in `proxy_config`
 
 #### Enterprise billable-request metering
 

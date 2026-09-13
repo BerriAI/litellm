@@ -1,0 +1,51 @@
+suite: ServiceMonitor Configuration Tests
+templates:
+  - servicemonitor.yaml
+tests:
+  - it: should not create a ServiceMonitor by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should create a ServiceMonitor without authorization when no secret is enabled
+    set:
+      serviceMonitor.enabled: true
+    asserts:
+      - isKind:
+          of: ServiceMonitor
+      - isNull:
+          path: spec.endpoints[0].authorization
+
+  - it: should configure bearer authorization from an existing secret
+    set:
+      serviceMonitor.enabled: true
+      serviceMonitor.authSecret.enabled: true
+      serviceMonitor.authSecret.name: prometheus-litellm-key
+      serviceMonitor.authSecret.key: token
+    asserts:
+      - equal:
+          path: spec.endpoints[0].authorization
+          value:
+            credentials:
+              name: prometheus-litellm-key
+              key: token
+      - isNull:
+          path: spec.endpoints[0].bearerTokenSecret
+
+  - it: should reject an enabled authorization secret without a name
+    set:
+      serviceMonitor.enabled: true
+      serviceMonitor.authSecret.enabled: true
+      serviceMonitor.authSecret.key: token
+    asserts:
+      - failedTemplate:
+          errorMessage: serviceMonitor.authSecret.name is required when serviceMonitor.authSecret.enabled is true
+
+  - it: should reject an enabled authorization secret without a key
+    set:
+      serviceMonitor.enabled: true
+      serviceMonitor.authSecret.enabled: true
+      serviceMonitor.authSecret.name: prometheus-litellm-key
+    asserts:
+      - failedTemplate:
+          errorMessage: serviceMonitor.authSecret.key is required when serviceMonitor.authSecret.enabled is true
