@@ -313,14 +313,15 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         await self._send_queued_events()
 
     async def _send_queued_events(self) -> GCSFlushResult:
-        items_to_process: Final = self._drain_queue_batch()
+        return await self._send_items(self._drain_queue_batch())
 
-        if not items_to_process:
+    async def _send_items(self, items: list[GCSLogQueueItem]) -> GCSFlushResult:
+        if not items:
             return GCSFlushResult(sent_ids=(), failed_ids=())
 
         if self.use_batched_logging:
-            return await self._send_grouped_batches(items_to_process)
-        return await self._send_individual_logs(items_to_process)
+            return await self._send_grouped_batches(items)
+        return await self._send_individual_logs(items)
 
     def _get_object_name(self, kwargs: dict, logging_payload: StandardLoggingPayload, response_obj: Any) -> str:
         """
@@ -411,10 +412,12 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
     async def flush_queue_and_report(self) -> GCSFlushResult:
         """
         Flush everything queued at call time, waiting for any in-flight periodic flush first, and report every event id.
+        Events are drained before any upload starts, so a batch that fails and is requeued is not retried in this call.
         """
         async with self.flush_lock:
             batch_count: Final = math.ceil(self.log_queue.qsize() / self.batch_size)
-            results: Final = tuple([await self._send_queued_events() for _ in range(batch_count)])
+            batches: Final = tuple(self._drain_queue_batch() for _ in range(batch_count))
+            results: Final = tuple([await self._send_items(batch) for batch in batches])
             self.last_flush_time = time.time()
         return GCSFlushResult(
             sent_ids=tuple(event_id for result in results for event_id in result.sent_ids),

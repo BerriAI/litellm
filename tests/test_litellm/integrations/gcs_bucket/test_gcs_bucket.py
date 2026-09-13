@@ -74,6 +74,22 @@ async def test_failed_batch_stays_queued_and_is_retried_on_the_next_flush():
 
 
 @pytest.mark.asyncio
+async def test_multi_batch_flush_tries_every_queued_event_once_and_leaves_requeued_failures_for_the_next_flush():
+    logger = _FakeUploadGCSLogger()
+    logger.batch_size = 2
+    logger.failing_ids = frozenset({"req-1"})
+    await logger.enqueue("req-1")
+    await logger.enqueue("req-2")
+    await logger.enqueue("req-3")
+
+    result = await logger.flush_queue_and_report()
+
+    assert result == GCSFlushResult(sent_ids=("req-3",), failed_ids=("req-1", "req-2"))
+    assert logger.uploaded == [["req-3"]]
+    assert logger.queued_ids() == ["req-1", "req-2"]
+
+
+@pytest.mark.asyncio
 async def test_individual_mode_requeues_only_the_failed_items():
     logger = _FakeUploadGCSLogger()
     logger.use_batched_logging = False
