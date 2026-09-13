@@ -1,0 +1,126 @@
+"use client";
+
+import { Copy } from "lucide-react";
+import * as React from "react";
+
+import { useEntityLinkClick } from "@/components/shared/EntityLink";
+import { cn } from "@/lib/cva.config";
+import { copyToClipboard } from "@/utils/dataUtils";
+
+import { CellTooltip } from "./cell_tooltip";
+
+export type IdCellVariant = "pill" | "plain";
+
+interface IdCellProps {
+  value: string | null | undefined;
+  variant?: IdCellVariant;
+  href?: string;
+  onClick?: (value: string) => void;
+  copyable?: boolean;
+  copyLabel?: string;
+  truncate?: boolean;
+  fallback?: string;
+  tooltip?: React.ReactNode;
+  disabled?: boolean;
+  dataTestId?: string;
+  className?: string;
+}
+
+const VARIANT_CLASS: Record<IdCellVariant, { base: string; clickable: string }> = {
+  pill: {
+    base: "font-mono text-xs font-normal px-2 py-0.5 rounded-md text-left bg-info/10 text-info",
+    clickable: "hover:bg-info/15 cursor-pointer",
+  },
+  plain: {
+    base: "font-mono text-xs text-left",
+    clickable: "hover:text-info cursor-pointer",
+  },
+};
+
+export function IdCell({
+  value,
+  variant = "pill",
+  href,
+  onClick,
+  copyable = false,
+  copyLabel = "Copy ID",
+  truncate = true,
+  fallback = "-",
+  tooltip,
+  disabled = false,
+  dataTestId,
+  className,
+}: IdCellProps) {
+  if (!value) {
+    return <span className="text-muted-foreground">{fallback}</span>;
+  }
+
+  const linked = !!href && !disabled;
+  const clickable = !!onClick && !disabled;
+  const classes = cn(
+    VARIANT_CLASS[variant].base,
+    (linked || clickable) && VARIANT_CLASS[variant].clickable,
+    truncate && "block max-w-[15ch] truncate",
+    disabled && "opacity-50",
+    className,
+  );
+
+  const unlinkedElement = clickable ? (
+    <button type="button" className={classes} data-testid={dataTestId} onClick={() => onClick(value)}>
+      {value}
+    </button>
+  ) : (
+    <span className={classes} data-testid={dataTestId}>
+      {value}
+    </span>
+  );
+
+  const idElement = linked ? (
+    <IdLink href={href} className={classes} dataTestId={dataTestId}>
+      {value}
+    </IdLink>
+  ) : (
+    unlinkedElement
+  );
+
+  const withTooltip = <CellTooltip content={tooltip ?? value} trigger={idElement} />;
+
+  if (!copyable) {
+    return withTooltip;
+  }
+
+  return (
+    <span className="inline-flex max-w-full items-center gap-1">
+      {withTooltip}
+      <button
+        type="button"
+        aria-label={copyLabel}
+        className="shrink-0 cursor-pointer text-muted-foreground hover:text-foreground"
+        onClick={(event) => {
+          event.stopPropagation();
+          void copyToClipboard(value);
+        }}
+      >
+        <Copy className="size-3" />
+      </button>
+    </span>
+  );
+}
+
+interface IdLinkProps extends React.ComponentPropsWithoutRef<"a"> {
+  href: string;
+  dataTestId?: string;
+}
+
+const IdLink = React.forwardRef<HTMLAnchorElement, IdLinkProps>(function IdLink(
+  { href, dataTestId, children, ...props },
+  ref,
+) {
+  const handleClick = useEntityLinkClick(href);
+
+  return (
+    <a {...props} ref={ref} href={href} data-testid={dataTestId} onClick={handleClick}>
+      {children}
+    </a>
+  );
+});

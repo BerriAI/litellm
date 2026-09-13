@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, Dict, List, Optional, Union
+from collections.abc import AsyncIterator
 
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -21,8 +21,8 @@ class MessagesInterceptor(ABC):
     @abstractmethod
     def can_handle(
         self,
-        tools: Optional[List[Dict]],
-        custom_llm_provider: Optional[str],
+        tools: list[dict] | None,
+        custom_llm_provider: str | None,
     ) -> bool:
         """Return True if this interceptor should handle the request."""
 
@@ -31,11 +31,11 @@ class MessagesInterceptor(ABC):
         self,
         *,
         model: str,
-        messages: List[Dict],
-        tools: Optional[List[Dict]],
-        stream: Optional[bool],
+        messages: list[dict],
+        tools: list[dict] | None,
+        stream: bool | None,
         max_tokens: int,
-        custom_llm_provider: Optional[str],
+        custom_llm_provider: str | None,
         **kwargs,
-    ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
+    ) -> AnthropicMessagesResponse | AsyncIterator:
         """Execute the interception and return the response."""

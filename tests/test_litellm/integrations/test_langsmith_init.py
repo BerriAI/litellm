@@ -1,10 +1,9 @@
+import asyncio
 import os
-import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.integrations.langsmith import LangsmithLogger
@@ -156,24 +155,22 @@ class TestLangsmithLoggerInit:
         assert logger._start_periodic_flush_task() is None
         mock_get_running_loop.assert_called_once()
 
-    @patch("asyncio.get_running_loop")
-    def test_langsmith_init_starts_periodic_flush_with_running_loop(
-        self, mock_get_running_loop
-    ):
+    @pytest.mark.asyncio
+    async def test_langsmith_init_starts_periodic_flush_with_running_loop(self):
         """Test that init schedules periodic flush when a running loop exists."""
-        mock_loop = MagicMock()
-        mock_task = MagicMock()
-        mock_loop.create_task.return_value = mock_task
-        mock_get_running_loop.return_value = mock_loop
-
         logger = LangsmithLogger(
-            langsmith_api_key="test-key", langsmith_project="test-project"
+            langsmith_api_key="test-key", langsmith_project="test-project", flush_interval=0.01
         )
+        batch_sent = asyncio.Event()
+        logger.async_send_batch = AsyncMock(side_effect=batch_sent.set)
+        logger.log_queue.append({"id": "run-id"})
 
-        assert logger._flush_task == mock_task
-        mock_loop.create_task.assert_called_once()
-        scheduled_coro = mock_loop.create_task.call_args.args[0]
-        scheduled_coro.close()
+        flush_task = logger._flush_task
+        assert isinstance(flush_task, asyncio.Task)
+        await asyncio.wait_for(batch_sent.wait(), timeout=5)
+        flush_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await flush_task
 
     @pytest.mark.asyncio
     async def test_async_log_success_event_lazily_starts_periodic_flush(self):
@@ -347,3 +344,190 @@ class TestLangsmithRedactUserApiKeyInfo:
         assert "user_api_key_user_id" not in nested
         assert nested["session_id"] == "sess-1"
         assert extra["session_id"] == "sess-1"
+
+    def test_redact_enabled_strips_user_api_key_info_from_inputs(self, reset_redact_flag):
+        """
+        Regression (LIT-4306): `inputs` is the whole StandardLoggingPayload, so
+        `redact_user_api_key_info` has to cover `inputs.metadata` the same way it
+        covers `extra` - including the nested `requester_metadata` copy. Before
+        the fix `extra` was redacted and `inputs` shipped every user_api_key_*
+        field verbatim.
+        """
+        litellm.redact_user_api_key_info = True
+        logger = self._logger()
+        metadata = self._metadata_with_user_api_key_fields()
+        metadata["user_api_key_auth_metadata"] = {"priority": "high"}
+        payload = {
+            "id": "run-1",
+            "response": {"choices": []},
+            "metadata": metadata,
+            "startTime": 1.0,
+            "endTime": 2.0,
+            "request_tags": [],
+            "error_str": None,
+            "status": "success",
+            "response_cost": 0.0,
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        }
+        credentials = {
+            "LANGSMITH_API_KEY": "test-key",
+            "LANGSMITH_PROJECT": "test-project",
+            "LANGSMITH_BASE_URL": "https://api.smith.langchain.com",
+        }
+
+        data = logger._prepare_log_data(
+            kwargs={"litellm_params": {"metadata": metadata}, "standard_logging_object": payload},
+            response_obj=None,
+            start_time=1.0,
+            end_time=2.0,
+            credentials=credentials,
+        )
+
+        inputs_metadata = data["inputs"]["metadata"]
+        assert [k for k in inputs_metadata if k.startswith("user_api_key")] == []
+        assert [k for k in inputs_metadata["requester_metadata"] if k.startswith("user_api_key")] == []
+        # inputs and extra must agree - they go through the same redaction now
+        assert [k for k in data["extra"] if k.startswith("user_api_key")] == []
+        # non-identity payload is untouched
+        assert inputs_metadata["model"] == "gpt-4"
+        assert inputs_metadata["requester_metadata"]["session_id"] == "sess-1"
+        assert data["inputs"]["total_tokens"] == 2
+        # the shared standard_logging_object other loggers read is not mutated
+        assert "user_api_key_hash" in payload["metadata"]
+        assert "user_api_key_user_id" in payload["metadata"]["requester_metadata"]
+
+    def test_redact_disabled_keeps_user_api_key_info_in_inputs(self, reset_redact_flag):
+        """Flag off: the identity fields stay. The flag governs them, not this fix."""
+        litellm.redact_user_api_key_info = False
+        logger = self._logger()
+        metadata = self._metadata_with_user_api_key_fields()
+        payload = {
+            "id": "run-1",
+            "response": {"choices": []},
+            "metadata": metadata,
+            "startTime": 1.0,
+            "endTime": 2.0,
+            "request_tags": [],
+            "error_str": None,
+            "status": "success",
+            "response_cost": 0.0,
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        }
+
+        data = logger._prepare_log_data(
+            kwargs={"litellm_params": {"metadata": metadata}, "standard_logging_object": payload},
+            response_obj=None,
+            start_time=1.0,
+            end_time=2.0,
+            credentials={
+                "LANGSMITH_API_KEY": "test-key",
+                "LANGSMITH_PROJECT": "test-project",
+                "LANGSMITH_BASE_URL": "https://api.smith.langchain.com",
+            },
+        )
+
+        assert data["inputs"]["metadata"]["user_api_key_hash"] == "abc123"
+
+
+class TestLangsmithRootRunIdConsistency:
+    """Regression tests for LIT-5878 / #37269.
+
+    A request that carries a session/trace header (e.g. x-claude-code-session-id)
+    fans the header value out into litellm metadata as both trace_id and
+    session_id. LangSmith then rejected the whole ingest batch twice over:
+    a root run whose trace_id does not match the run id embedded in dotted_order
+    (400), and a run-body session_id that does not reference an existing tracer
+    session (404, or 422 for non-UUID values).
+    """
+
+    def _prepare(self, request_metadata):
+        payload = {
+            "id": "slp-1",
+            "response": {"choices": []},
+            "metadata": {},
+            "startTime": 1.0,
+            "endTime": 2.0,
+            "request_tags": [],
+            "error_str": None,
+            "status": "success",
+            "response_cost": 0.0,
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        }
+        logger = LangsmithLogger(
+            langsmith_api_key="test-key",
+            langsmith_project="test-project",
+        )
+        return logger._prepare_log_data(
+            kwargs={
+                "litellm_params": {"metadata": request_metadata},
+                "standard_logging_object": payload,
+            },
+            response_obj=None,
+            start_time=1.0,
+            end_time=2.0,
+            credentials={
+                "LANGSMITH_API_KEY": "test-key",
+                "LANGSMITH_PROJECT": "test-project",
+                "LANGSMITH_BASE_URL": "https://api.smith.langchain.com",
+            },
+        )
+
+    def test_header_derived_ids_yield_self_consistent_root_run(self):
+        header_value = "ed29c3bb-44fa-4eec-9b7b-fecaa3e82d64"
+        data = self._prepare({"trace_id": header_value, "session_id": header_value})
+
+        assert data["trace_id"] == data["id"]
+        assert data["trace_id"] != header_value
+        assert data["dotted_order"].endswith(data["id"])
+        assert len(data["dotted_order"]) == 22 + len(data["id"])
+        assert "session_id" not in data
+
+    def test_distinct_session_id_is_still_forwarded(self):
+        data = self._prepare({"session_id": "11111111-2222-3333-4444-555555555555"})
+
+        assert data["session_id"] == "11111111-2222-3333-4444-555555555555"
+
+    def test_trace_id_only_root_run_is_overridden(self):
+        data = self._prepare({"trace_id": "ed29c3bb-44fa-4eec-9b7b-fecaa3e82d64"})
+
+        assert data["trace_id"] == data["id"]
+        assert data["trace_id"] != "ed29c3bb-44fa-4eec-9b7b-fecaa3e82d64"
+        assert data["dotted_order"].endswith(data["id"])
+
+    def test_root_run_without_caller_ids_is_self_consistent(self):
+        data = self._prepare({})
+
+        assert data["trace_id"] == data["id"]
+        assert data["dotted_order"].endswith(data["id"])
+
+    def test_child_run_keeps_caller_trace_id(self):
+        data = self._prepare(
+            {
+                "trace_id": "trace-1",
+                "parent_run_id": "parent-1",
+                "run_id": "child-1",
+            }
+        )
+
+        assert data["trace_id"] == "trace-1"
+        assert data["id"] == "child-1"
+        assert data["parent_run_id"] == "parent-1"
+
+    def test_caller_supplied_dotted_order_and_trace_id_are_untouched(self):
+        dotted = "20260820T000000000000Ztrace-1.20260820T000001000000Zrun-1"
+        data = self._prepare(
+            {
+                "trace_id": "trace-1",
+                "run_id": "run-1",
+                "dotted_order": dotted,
+            }
+        )
+
+        assert data["trace_id"] == "trace-1"
+        assert data["dotted_order"] == dotted

@@ -12,6 +12,7 @@ from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.types.services import ServiceTypes
 from litellm._service_logger import ServiceLogging
+from litellm.types.utils import StandardCallbackDynamicParams
 
 
 class TestServiceLoggerOTEL(unittest.IsolatedAsyncioTestCase):
@@ -107,6 +108,44 @@ class TestServiceLoggerOTEL(unittest.IsolatedAsyncioTestCase):
                 1,
                 "Generic OTEL logger should have received the log exactly once.",
             )
+
+    @patch("litellm.integrations.opentelemetry.OpenTelemetry._init_tracing")
+    @patch("litellm.integrations.opentelemetry.OpenTelemetry._init_metrics")
+    @patch("litellm.integrations.opentelemetry.OpenTelemetry._init_logs")
+    async def test_langfuse_otel_env_config_includes_v4_ingestion_header(
+        self, mock_logs, mock_metrics, mock_tracing
+    ):
+        logger = LangfuseOtelLogger()
+
+        headers = OpenTelemetry._get_headers_dictionary(logger.config.headers)
+
+        self.assertEqual(
+            headers["x-langfuse-ingestion-version"],
+            "4",
+        )
+        self.assertTrue(headers["Authorization"].startswith("Basic "))
+
+    @patch("litellm.integrations.opentelemetry.OpenTelemetry._init_tracing")
+    @patch("litellm.integrations.opentelemetry.OpenTelemetry._init_metrics")
+    @patch("litellm.integrations.opentelemetry.OpenTelemetry._init_logs")
+    async def test_langfuse_otel_dynamic_headers_include_v4_ingestion_header(
+        self, mock_logs, mock_metrics, mock_tracing
+    ):
+        logger = LangfuseOtelLogger()
+
+        headers = logger.construct_dynamic_otel_headers(
+            StandardCallbackDynamicParams(
+                langfuse_public_key="pk-lf-dynamic",
+                langfuse_secret_key="sk-lf-dynamic",
+            )
+        )
+
+        self.assertIsNotNone(headers)
+        self.assertEqual(
+            headers["x-langfuse-ingestion-version"],
+            "4",
+        )
+        self.assertTrue(headers["Authorization"].startswith("Basic "))
 
 
 if __name__ == "__main__":

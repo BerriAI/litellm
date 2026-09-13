@@ -9,8 +9,11 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
+
+import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
 import ReasoningContent from "@/components/chat_ui/ReasoningContent";
 import MCPEventsDisplay from "@/components/chat_ui/MCPEventsDisplay";
+import ResponseMetrics from "@/components/chat_ui/ResponseMetrics";
 import { ChatMessage } from "./types";
 
 const REDACTED_KEY_PATTERNS = /token|key|secret|password|auth/i;
@@ -48,15 +51,10 @@ function MarkdownCodeRenderer({
   children,
   ...props
 }: React.ComponentPropsWithoutRef<"code"> & { node?: unknown }) {
+  const syntaxTheme = useSyntaxTheme(coy);
   const match = /language-(\w+)/.exec(className || "");
   return match ? (
-    <SyntaxHighlighter
-      style={coy as Record<string, React.CSSProperties>}
-      language={match[1]}
-      PreTag="div"
-      className="rounded-md my-2"
-      {...(props as Record<string, unknown>)}
-    >
+    <SyntaxHighlighter {...props} style={syntaxTheme} language={match[1]} PreTag="div" className="rounded-md my-2">
       {String(children).replace(/\n$/, "")}
     </SyntaxHighlighter>
   ) : (
@@ -150,21 +148,23 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
     >
       <div className="flex items-end gap-1.5 max-w-[72%]">
         {hovered && !isStreaming && onEdit && (
-          <TooltipProvider delayDuration={300}>
+          <TooltipProvider delay={300}>
             <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  onClick={() => {
-                    setEditValue(message.content);
-                    setEditing(true);
-                  }}
-                  className="text-muted-foreground hover:text-foreground shrink-0"
-                >
-                  <Pencil className="size-3.5" />
-                </Button>
-              </TooltipTrigger>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    onClick={() => {
+                      setEditValue(message.content);
+                      setEditing(true);
+                    }}
+                    className="text-muted-foreground hover:text-foreground shrink-0"
+                  >
+                    <Pencil className="size-3.5" />
+                  </Button>
+                }
+              />
               <TooltipContent>
                 <p>Edit message</p>
               </TooltipContent>
@@ -246,6 +246,12 @@ function AssistantBubble({ message, isLastMessage, isStreaming, isTypingIndicato
           <MCPEventsDisplay events={mcpEvents} />
         </div>
       )}
+
+      <ResponseMetrics
+        timeToFirstToken={message.timeToFirstToken}
+        totalLatency={message.totalLatency}
+        usage={message.usage}
+      />
     </div>
   );
 }
@@ -265,18 +271,20 @@ function CopyButton({ text }: { text: string }) {
 
   return (
     <div className="flex items-center gap-1 mt-1.5">
-      <TooltipProvider delayDuration={300}>
+      <TooltipProvider delay={300}>
         <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              onClick={handleCopy}
-              className={copied ? "text-emerald-600" : "text-muted-foreground hover:text-foreground"}
-            >
-              {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-            </Button>
-          </TooltipTrigger>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={handleCopy}
+                className={copied ? "text-success" : "text-muted-foreground hover:text-foreground"}
+              >
+                {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+              </Button>
+            }
+          />
           <TooltipContent>
             <p>{copied ? "Copied!" : "Copy"}</p>
           </TooltipContent>

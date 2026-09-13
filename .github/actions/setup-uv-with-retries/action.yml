@@ -1,0 +1,43 @@
+name: "Set up uv with retries"
+description: >-
+  Install uv via astral-sh/setup-uv, retrying the full setup step so manifest
+  resolution and binary downloads get fresh attempts after transient failures.
+
+inputs:
+  version:
+    description: "uv version to install"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Set up uv (attempt 1)
+      id: attempt-1
+      continue-on-error: true
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      with:
+        version: ${{ inputs.version }}
+
+    - name: Wait before attempt 2
+      if: steps.attempt-1.outcome == 'failure'
+      shell: bash
+      run: sleep 15
+
+    - name: Set up uv (attempt 2)
+      id: attempt-2
+      if: steps.attempt-1.outcome == 'failure'
+      continue-on-error: true
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      with:
+        version: ${{ inputs.version }}
+
+    - name: Wait before attempt 3
+      if: steps.attempt-2.outcome == 'failure'
+      shell: bash
+      run: sleep 30
+
+    - name: Set up uv (attempt 3)
+      if: steps.attempt-2.outcome == 'failure'
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      with:
+        version: ${{ inputs.version }}

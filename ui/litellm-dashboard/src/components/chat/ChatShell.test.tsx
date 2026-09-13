@@ -18,7 +18,7 @@ vi.mock("next/navigation", () => ({
   usePathname: mockUsePathname,
 }));
 // Deterministic hrefs so navigation/active-state assertions don't depend on server_root_path.
-vi.mock("@/utils/migratedPages", () => ({ migratedHref: (seg: string) => `/ui/${seg}`.replace(/\/$/, "") || "/ui" }));
+vi.mock("@/utils/uiHref", () => ({ uiHref: (seg: string) => `/ui/${seg}`.replace(/\/$/, "") || "/ui" }));
 vi.mock("@/contexts/ChatShellContext", () => ({ useChatShell: mockUseChatShell }));
 vi.mock("./ConversationList", () => ({ default: () => <div data-testid="conversation-list" /> }));
 
@@ -62,6 +62,20 @@ describe("ChatShell", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Usage" }));
     expect(mockPush).toHaveBeenCalledWith("/ui/chat/usage");
+
+    fireEvent.click(screen.getByRole("button", { name: "Logs" }));
+    expect(mockPush).toHaveBeenCalledWith("/ui/chat/logs");
+  });
+
+  it("marks Logs active on the logs route", () => {
+    mockUsePathname.mockReturnValue("/ui/chat/logs");
+    render(
+      <ChatShell>
+        <div />
+      </ChatShell>,
+    );
+    expect(screen.getByRole("button", { name: "Logs" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "Usage" })).not.toHaveAttribute("aria-current");
   });
 
   it("tolerates a trailing slash on the current pathname when matching the active route", () => {

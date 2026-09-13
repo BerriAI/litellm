@@ -2,9 +2,11 @@
 Translate between Cohere's `/rerank` format and Deepinfra's `/rerank` format.
 """
 
-from typing import Any, Dict, List, Union
+from collections.abc import Mapping, Sequence
+from typing import Final, Protocol
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -21,6 +23,36 @@ from litellm.types.rerank import (
     RerankResponseResult,
     RerankTokens,
 )
+
+
+class _DeepinfraInferenceStatus(TypedDict, total=False):
+    """The ``inference_status`` block of a DeepInfra rerank response."""
+
+    status: ReadOnly[str]
+    runtime_ms: ReadOnly[float]
+    cost: ReadOnly[float]
+    tokens_generated: ReadOnly[int]
+    tokens_input: ReadOnly[int]
+
+
+class _DeepinfraRerankResponse(TypedDict, total=False):
+    """Body of a DeepInfra ``/rerank`` response."""
+
+    scores: ReadOnly[Sequence[float]]
+    input_tokens: ReadOnly[int]
+    request_id: ReadOnly[str | None]
+    inference_status: ReadOnly[_DeepinfraInferenceStatus]
+
+
+class _DeepinfraRerankResponseSource(Protocol):
+    """The DeepInfra ``/rerank`` HTTP response, read for the body it decodes to."""
+
+    def json(self) -> _DeepinfraRerankResponse: ...
+
+
+def _deepinfra_rerank_body(response: _DeepinfraRerankResponseSource) -> _DeepinfraRerankResponse:
+    """Decode the body of a DeepInfra ``/rerank`` response."""
+    return response.json()
 
 
 class DeepinfraRerankConfig(BaseRerankConfig):
@@ -67,6 +99,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         if api_key is None:
             api_key = get_secret_str("DEEPINFRA_API_KEY")
@@ -74,7 +107,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
         if api_key is None:
             raise ValueError("Deepinfra API key is required. Please set 'DEEPINFRA_API_KEY' environment variable")
 
-        default_headers = {
+        default_headers: Final = {
             "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
             "content-type": "application/json",
@@ -93,17 +126,17 @@ class DeepinfraRerankConfig(BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: List[Union[str, Dict[str, Any]]],
+        documents: list[str | dict[str, object]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
-        rank_fields: List[str] | None = None,
+        rank_fields: list[str] | None = None,
         return_documents: bool | None = True,
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> Dict:
+    ) -> dict:
         # Start with the basic parameters
-        optional_rerank_params = {}
+        optional_rerank_params: Final = {}
         if query:
             optional_rerank_params["queries"] = [query] * len(
                 documents
@@ -122,12 +155,12 @@ class DeepinfraRerankConfig(BaseRerankConfig):
                     optional_rerank_params["instruction"] = v
                 elif k == "webhook" and v is not None:
                     optional_rerank_params["webhook"] = v
-        return OptionalRerankParams(**optional_rerank_params)  # type: ignore
+        return OptionalRerankParams(**optional_rerank_params)
 
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: Dict,
+        optional_rerank_params: dict,
         headers: dict,
         litellm_params: dict | None = None,
     ) -> dict:
@@ -148,34 +181,34 @@ class DeepinfraRerankConfig(BaseRerankConfig):
         litellm_params: dict = {},
     ) -> RerankResponse:
         try:
-            response_json = raw_response.json()
+            response_json: Final = _deepinfra_rerank_body(raw_response)
             logging_obj.post_call(original_response=raw_response.text)
 
             # Extract the scores from the response
-            scores = response_json.get("scores", [])
-            input_tokens = response_json.get("input_tokens", 0)
-            request_id = response_json.get("request_id")
+            scores: Final = response_json.get("scores", [])
+            input_tokens: Final = response_json.get("input_tokens", 0)
+            request_id: Final = response_json.get("request_id")
 
             # Create inference status information
-            inference_status = response_json.get("inference_status", {})
-            status = inference_status.get("status", "unknown")
-            runtime_ms = inference_status.get("runtime_ms", 0)
-            cost = inference_status.get("cost", 0.0)
-            tokens_generated = inference_status.get("tokens_generated", 0)
-            tokens_input = inference_status.get("tokens_input", 0)
+            inference_status: Final = response_json.get("inference_status", {})
+            status: Final = inference_status.get("status", "unknown")
+            runtime_ms: Final = inference_status.get("runtime_ms", 0)
+            cost: Final = inference_status.get("cost", 0.0)
+            tokens_generated: Final = inference_status.get("tokens_generated", 0)
+            tokens_input: Final = inference_status.get("tokens_input", 0)
 
             # Create RerankResponse
-            results = []
+            results: Final = []
             for i, score in enumerate(scores):
                 results.append(RerankResponseResult(index=i, relevance_score=float(score)))
 
             # Create metadata for the response
-            tokens = RerankTokens(
+            tokens: Final = RerankTokens(
                 input_tokens=input_tokens,
                 output_tokens=0,  # DeepInfra doesn't provide output tokens for rerank
             )
-            billed_units = RerankBilledUnits(total_tokens=input_tokens)
-            meta = RerankResponseMeta(tokens=tokens, billed_units=billed_units)
+            billed_units: Final = RerankBilledUnits(total_tokens=input_tokens)
+            meta: Final = RerankResponseMeta(tokens=tokens, billed_units=billed_units)
 
             rerank_response = RerankResponse(id=request_id or str(uuid.uuid4()), results=results, meta=meta)
 
@@ -210,9 +243,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
     def get_supported_cohere_rerank_params(self, model: str) -> list:
         return ["query", "documents"]
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         # Deepinfra errors may come as JSON: {"detail": {"error": "..."}}
         import json
 
@@ -223,7 +254,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
                 error_data = json.loads(error_message)
             if isinstance(error_data, dict):
                 # Check for {"detail": {"error": "..."}}
-                detail = error_data.get("detail")
+                detail: Final = error_data.get("detail")
                 if isinstance(detail, dict) and "error" in detail:
                     error_message = detail["error"]
                 elif isinstance(detail, str):

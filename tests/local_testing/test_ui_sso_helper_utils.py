@@ -3,9 +3,7 @@
 
 
 import asyncio
-import os
 import random
-import sys
 import time
 import traceback
 from datetime import datetime
@@ -15,9 +13,6 @@ from fastapi import Request
 
 load_dotenv()
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import logging
 from litellm.proxy.management_endpoints.sso_helper_utils import (

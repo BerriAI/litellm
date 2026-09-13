@@ -1,6 +1,6 @@
 """Composition root for the v2-native token_exchange (OBO) exchanger.
 
-Wires the pure ``Rfc8693TokenExchanger`` to its runtime edges: the real httpx POST against the IdP and
+Wires the pure ``OboTokenExchanger`` to its runtime edges: the real httpx POST against the IdP and
 the configured cache sizing/TTL constants. ``build_token_exchanger`` is built once at egress
 construction and reused, so the in-process exchanged-token cache survives across requests. Unlike the
 per-user store, nothing here reads a runtime global at build time (the httpx client is acquired per
@@ -8,6 +8,8 @@ call), so it needs no lazy wrapper.
 """
 
 from __future__ import annotations
+
+from typing import Final
 
 import httpx
 
@@ -22,33 +24,39 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_sto
     InMemoryTokenCacheBackend,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import (
-    Rfc8693TokenExchanger,
+    OboTokenExchanger,
     SubjectTokenRejected,
     TokenExchangeClientError,
 )
 
 # RFC 6749 5.2 error codes that mean the gateway's own request/credentials are wrong (not the
 # caller's subject token), so they surface as a 500 the caller can't fix by re-authenticating.
-_GATEWAY_FAULT_OAUTH_ERRORS = frozenset(
+_GATEWAY_FAULT_OAUTH_ERRORS: Final = frozenset(
     {"invalid_client", "unauthorized_client", "unsupported_grant_type", "invalid_target", "invalid_scope"}
 )
 
 
-def _oauth_error_code(response: httpx.Response) -> str | None:
-    """Read the RFC 6749 5.2 ``error`` code from a token-endpoint error body, or None if absent.
+def _oauth_error_fields(response: httpx.Response) -> tuple[str | None, str | None]:
+    """Read the RFC 6749 5.2 ``error`` code and the IdP's step-up ``claims`` blob from a
+    token-endpoint error body, as ``(error, claims)`` with None for whatever is absent.
 
-    The ``error_description`` is deliberately not read: it can carry IdP internals and must never
-    reach the caller. Only the standard machine code drives classification.
+    ``claims`` is the Entra Conditional Access / CAE challenge (a JSON string the client must
+    replay to the IdP to satisfy the step-up); it is the caller's own requirement, not an IdP
+    internal, so it may travel to the caller. The ``error_description`` is deliberately not read:
+    it can carry IdP internals and must never reach the caller.
     """
     try:
-        body: object = response.json()
+        body: Final[object] = response.json()
     except Exception:  # noqa: BLE001
-        return None
-    if isinstance(body, dict):
-        code = body.get("error")
-        if isinstance(code, str):
-            return code
-    return None
+        return None, None
+    if not isinstance(body, dict):
+        return None, None
+    code: Final = body.get("error")
+    claims: Final = body.get("claims")
+    return (
+        code if isinstance(code, str) else None,
+        claims if isinstance(claims, str) and claims else None,
+    )
 
 
 async def _post_exchange_endpoint(
@@ -63,16 +71,16 @@ async def _post_exchange_endpoint(
     # object and the exchanger validates each field, so the untyped boundary is contained here.
     # A 4xx is the IdP rejecting the subject (non-retryable -> 401 via SubjectTokenRejected); any
     # other failure is a miss (-> None -> upstream_unavailable -> 503), matching v1's fail-closed.
-    headers = {"Accept": "application/json", **client_auth_headers}
+    headers: Final = {"Accept": "application/json", **client_auth_headers}
     try:
-        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)  # pyright: ignore
-        response = await client.post(url, headers=headers, data=form)  # pyright: ignore
+        client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)  # pyright: ignore
+        response: Final = await client.post(url, headers=headers, data=form)  # pyright: ignore
         response.raise_for_status()  # pyright: ignore
-        parsed: object = response.json()  # pyright: ignore
+        parsed: Final[object] = response.json()  # pyright: ignore
     except httpx.HTTPStatusError as status_err:
-        status_code = status_err.response.status_code
+        status_code: Final = status_err.response.status_code
         if 400 <= status_code < 500:
-            oauth_error = _oauth_error_code(status_err.response)
+            oauth_error, claims = _oauth_error_fields(status_err.response)
             if oauth_error in _GATEWAY_FAULT_OAUTH_ERRORS:
                 verbose_logger.warning(
                     "MCP token exchange rejected as %s (HTTP %d); check the gateway client credentials, "
@@ -81,7 +89,10 @@ async def _post_exchange_endpoint(
                     status_code,
                 )
                 raise TokenExchangeClientError(oauth_error) from status_err
-            raise SubjectTokenRejected(f"IdP rejected the subject token (HTTP {status_code})") from status_err
+            raise SubjectTokenRejected(
+                f"IdP rejected the subject token (HTTP {status_code})",
+                claims=claims,
+            ) from status_err
         verbose_logger.warning("MCP token exchange request failed: %s", status_err)
         return None
     except Exception as exc:  # noqa: BLE001
@@ -95,8 +106,8 @@ async def _post_exchange_endpoint(
     return parsed  # pyright: ignore
 
 
-def build_token_exchanger() -> Rfc8693TokenExchanger:
-    return Rfc8693TokenExchanger(
+def build_token_exchanger() -> OboTokenExchanger:
+    return OboTokenExchanger(
         _post_exchange_endpoint,
         cache=InMemoryTokenCacheBackend(max_size=MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE),
         default_ttl_seconds=MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL,

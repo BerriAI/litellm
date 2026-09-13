@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Union
+from typing import Any, Final
 
 from litellm.llms.cohere.rerank.transformation import CohereRerankConfig
 from litellm.types.rerank import OptionalRerankParams, RerankRequest
@@ -42,15 +42,15 @@ class CohereRerankV2Config(CohereRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: List[Union[str, Dict[str, Any]]],
+        documents: list[str | dict[str, Any]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
-        rank_fields: List[str] | None = None,
+        rank_fields: list[str] | None = None,
         return_documents: bool | None = True,
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> Dict:
+    ) -> dict:
         """
         Map Cohere rerank params
 
@@ -70,7 +70,7 @@ class CohereRerankV2Config(CohereRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: Dict,
+        optional_rerank_params: dict,
         headers: dict,
         litellm_params: dict | None = None,
     ) -> dict:
@@ -78,7 +78,7 @@ class CohereRerankV2Config(CohereRerankConfig):
             raise ValueError("query is required for Cohere rerank")
         if "documents" not in optional_rerank_params:
             raise ValueError("documents is required for Cohere rerank")
-        rerank_request = RerankRequest(
+        rerank_request: Final = RerankRequest(
             model=model,
             query=optional_rerank_params["query"],
             documents=optional_rerank_params["documents"],

@@ -1,0 +1,40 @@
+name: "Cache Prisma binaries"
+description: >-
+  Cache the Prisma CLI and engine binaries that `prisma generate` downloads, so
+  only the first job on a given prisma-client-py version pays for the download.
+
+  prisma-client-py shells out to `npm install prisma@<version>` whenever its
+  binary cache directory has no CLI entrypoint, which pulls ~85 MB of query and
+  schema engines over the network. That normally takes a few seconds, but it is
+  unbounded: one shard of a proxy-db run took 5m18s on that single step versus
+  3.8s on its eleven siblings, which pushed the job past its timeout and got a
+  fully passing test run cancelled.
+
+  Callers must not set PRISMA_BINARY_CACHE_DIR. The prisma-client-py default
+  (~/.cache/prisma-python/binaries/<prisma-version>/<engine-version>) is already
+  keyed by both versions, so a cache entry can never be served to a run that
+  expects different binaries.
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve prisma-client-py version
+      id: version
+      shell: bash
+      run: |
+        version="$(grep -A1 '^name = "prisma"$' uv.lock | sed -n 's/^version = "\(.*\)"$/\1/p' | head -1)"
+        if [ -z "${version}" ]; then
+          echo "could not resolve the prisma package version from uv.lock" >&2
+          exit 1
+        fi
+        echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore Prisma binaries
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        # ~/.cache/prisma-python holds the npm install tree prisma-client-py
+        # drives; ~/.cache/prisma is where @prisma/engines stages its downloads.
+        path: |
+          ~/.cache/prisma-python
+          ~/.cache/prisma
+        key: ${{ runner.os }}-prisma-binaries-${{ steps.version.outputs.version }}

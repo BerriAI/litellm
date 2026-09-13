@@ -5,11 +5,8 @@ Tests that LiteLLM correctly filters out the advanced-tool-use-2025-11-20 beta h
 for Bedrock Invoke API, which doesn't support it and returns a 400 "invalid beta flag" error.
 """
 
-import os
-import sys
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 

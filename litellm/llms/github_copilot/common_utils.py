@@ -2,7 +2,7 @@
 Constants for Copilot integration
 """
 
-from typing import Optional, Union
+from typing import Final
 from uuid import uuid4
 
 import httpx
@@ -10,11 +10,11 @@ import httpx
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 # Constants
-COPILOT_VERSION = "0.26.7"
-EDITOR_PLUGIN_VERSION = f"copilot-chat/{COPILOT_VERSION}"
-USER_AGENT = f"GitHubCopilotChat/{COPILOT_VERSION}"
-API_VERSION = "2025-04-01"
-DEFAULT_GITHUB_COPILOT_API_BASE = "https://api.githubcopilot.com"
+COPILOT_VERSION: Final = "0.26.7"
+EDITOR_PLUGIN_VERSION: Final = f"copilot-chat/{COPILOT_VERSION}"
+USER_AGENT: Final = f"GitHubCopilotChat/{COPILOT_VERSION}"
+API_VERSION: Final = "2025-04-01"
+DEFAULT_GITHUB_COPILOT_API_BASE: Final = "https://api.githubcopilot.com"
 
 
 class GithubCopilotError(BaseLLMException):
@@ -22,10 +22,10 @@ class GithubCopilotError(BaseLLMException):
         self,
         status_code,
         message,
-        request: Optional[httpx.Request] = None,
-        response: Optional[httpx.Response] = None,
-        headers: Optional[Union[httpx.Headers, dict]] = None,
-        body: Optional[dict] = None,
+        request: httpx.Request | None = None,
+        response: httpx.Response | None = None,
+        headers: httpx.Headers | dict | None = None,
+        body: dict | None = None,
     ):
         super().__init__(
             status_code=status_code,

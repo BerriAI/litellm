@@ -9,13 +9,10 @@ small helper utilities without touching the network.
 """
 
 import asyncio
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 from litellm.interactions.agents import (
@@ -314,7 +311,7 @@ class TestAsyncErrorWrapping:
         handler.create_agent.side_effect = RuntimeError("kaboom")
 
         with patch(_HANDLER_PATH, handler):
-            with pytest.raises(Exception):
+            with pytest.raises(litellm.APIConnectionError):
                 await acreate(name="waverunner", api_key="AIza")
 
     @pytest.mark.asyncio
@@ -323,7 +320,7 @@ class TestAsyncErrorWrapping:
         handler.get_agent.side_effect = RuntimeError("kaboom")
 
         with patch(_HANDLER_PATH, handler):
-            with pytest.raises(Exception):
+            with pytest.raises(litellm.APIConnectionError):
                 await aget(name="waverunner", api_key="AIza")
 
     @pytest.mark.asyncio
@@ -332,7 +329,7 @@ class TestAsyncErrorWrapping:
         handler.list_agents.side_effect = RuntimeError("kaboom")
 
         with patch(_HANDLER_PATH, handler):
-            with pytest.raises(Exception):
+            with pytest.raises(litellm.APIConnectionError):
                 await alist(api_key="AIza")
 
     @pytest.mark.asyncio
@@ -341,7 +338,7 @@ class TestAsyncErrorWrapping:
         handler.delete_agent.side_effect = RuntimeError("kaboom")
 
         with patch(_HANDLER_PATH, handler):
-            with pytest.raises(Exception):
+            with pytest.raises(litellm.APIConnectionError):
                 await adelete(name="waverunner", api_key="AIza")
 
     @pytest.mark.asyncio
@@ -350,5 +347,5 @@ class TestAsyncErrorWrapping:
         handler.list_agent_versions.side_effect = RuntimeError("kaboom")
 
         with patch(_HANDLER_PATH, handler):
-            with pytest.raises(Exception):
+            with pytest.raises(litellm.APIConnectionError):
                 await alist_versions(name="waverunner", api_key="AIza")

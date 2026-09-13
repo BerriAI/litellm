@@ -13,6 +13,7 @@
 # every apply (after the IAM-authed user has been created). The
 # `migration_run_command` output is preserved for break-glass manual re-runs.
 resource "aws_ecs_task_definition" "migrations" {
+  count                    = local.database_enabled ? 1 : 0
   family                   = "${local.name}-migrations"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
@@ -32,11 +33,12 @@ resource "aws_ecs_task_definition" "migrations" {
 
     # No entryPoint/command override — the image's ENTRYPOINT runs run.py.
     environment = local.shared_env
+    secrets     = local.byo_database_secrets
 
     logConfiguration = {
       logDriver = "awslogs"
       options = {
-        awslogs-group         = aws_cloudwatch_log_group.migrations.name
+        awslogs-group         = aws_cloudwatch_log_group.migrations[0].name
         awslogs-region        = var.region
         awslogs-stream-prefix = "migrations"
       }

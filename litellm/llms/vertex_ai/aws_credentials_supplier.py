@@ -8,7 +8,8 @@ without hitting the EC2 instance metadata service.
 Requires google-auth >= 2.29.0.
 """
 
-from typing import Callable
+from collections.abc import Callable
+from typing import Final
 
 from google.auth import aws
 
@@ -40,7 +41,7 @@ class AwsCredentialsSupplier(aws.AwsSecurityCredentialsSupplier):
 
     def get_aws_security_credentials(self, context, request):
         """Return current AWS credentials for the GCP token exchange."""
-        current = self._credentials_provider()
+        current: Final = self._credentials_provider()
         return aws.AwsSecurityCredentials(
             access_key_id=current.access_key,
             secret_access_key=current.secret_key,

@@ -1,7 +1,6 @@
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Literal
 
-from pydantic import BaseModel
 from typing_extensions import TypedDict
 
 
@@ -24,44 +23,44 @@ class VectorStoreFileStaticChunkingConfig(TypedDict, total=False):
 
 class VectorStoreFileChunkingStrategy(TypedDict, total=False):
     type: Literal["auto", "static"]
-    static: Optional[VectorStoreFileStaticChunkingConfig]
+    static: VectorStoreFileStaticChunkingConfig | None
 
 
 class VectorStoreFileObject(TypedDict, total=False):
     id: str
     object: Literal["vector_store.file"]
     created_at: int
-    usage_bytes: Optional[int]
+    usage_bytes: int | None
     vector_store_id: str
     status: VectorStoreFileStatus
-    last_error: Optional[Dict[str, Any]]
-    chunking_strategy: Optional[VectorStoreFileChunkingStrategy]
-    attributes: Optional[Dict[str, Union[str, int, float, bool]]]
+    last_error: dict[str, Any] | None
+    chunking_strategy: VectorStoreFileChunkingStrategy | None
+    attributes: dict[str, str | int | float | bool] | None
 
 
 class VectorStoreFileCreateRequest(TypedDict, total=False):
     file_id: str
-    attributes: Optional[Dict[str, Union[str, int, float, bool]]]
-    chunking_strategy: Optional[VectorStoreFileChunkingStrategy]
+    attributes: dict[str, str | int | float | bool] | None
+    chunking_strategy: VectorStoreFileChunkingStrategy | None
 
 
 class VectorStoreFileUpdateRequest(TypedDict, total=False):
-    attributes: Dict[str, Union[str, int, float, bool]]
+    attributes: dict[str, str | int | float | bool]
 
 
 class VectorStoreFileListQueryParams(TypedDict, total=False):
-    after: Optional[str]
-    before: Optional[str]
-    filter: Optional[Literal["in_progress", "completed", "failed", "cancelled"]]
-    limit: Optional[int]
-    order: Optional[Literal["asc", "desc"]]
+    after: str | None
+    before: str | None
+    filter: Literal["in_progress", "completed", "failed", "cancelled"] | None
+    limit: int | None
+    order: Literal["asc", "desc"] | None
 
 
 class VectorStoreFileListResponse(TypedDict, total=False):
     object: Literal["list"]
-    data: List[VectorStoreFileObject]
-    first_id: Optional[str]
-    last_id: Optional[str]
+    data: list[VectorStoreFileObject]
+    first_id: str | None
+    last_id: str | None
     has_more: bool
 
 
@@ -78,11 +77,11 @@ class VectorStoreFileContentTextPart(TypedDict, total=False):
 
 class VectorStoreFileContentResponse(TypedDict, total=False):
     file_id: str
-    filename: Optional[str]
-    attributes: Optional[Dict[str, Union[str, int, float, bool]]]
-    content: List[VectorStoreFileContentTextPart]
+    filename: str | None
+    attributes: dict[str, str | int | float | bool] | None
+    content: list[VectorStoreFileContentTextPart]
 
 
 class VectorStoreFileAuthCredentials(TypedDict, total=False):
-    headers: Dict[str, Any]
-    query_params: Dict[str, Any]
+    headers: dict[str, Any]
+    query_params: dict[str, Any]

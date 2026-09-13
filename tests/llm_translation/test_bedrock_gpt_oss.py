@@ -1,13 +1,8 @@
 from base_llm_unit_tests import BaseLLMChatTest
 import json
 import pytest
-import sys
-import os
 from unittest.mock import patch, Mock, MagicMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from litellm.llms.custom_httpx.http_handler import HTTPHandler

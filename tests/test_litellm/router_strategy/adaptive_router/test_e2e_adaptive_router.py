@@ -111,23 +111,6 @@ async def test_pick_record_flush_full_cycle():
 
 
 @pytest.mark.asyncio
-async def test_owner_cache_pins_attribution_to_first_picked_model():
-    """First call claims ownership; matching model returns True, mismatch False."""
-    router = _make_router()
-    chosen = await router.pick_model(RequestType.GENERAL)
-    assert router.claim_or_check_owner("sess-own", chosen) is True
-
-    # Same model on later turns keeps attributing.
-    for _ in range(5):
-        assert router.claim_or_check_owner("sess-own", chosen) is True
-
-    # A different model on a later turn is rejected.
-    other = "gpt-4o" if chosen == "gpt-4o-mini" else "gpt-4o-mini"
-    assert router.claim_or_check_owner("sess-own", other) is False
-    assert router._skipped_updates_total == 1
-
-
-@pytest.mark.asyncio
 async def test_pick_model_returns_valid_models_without_error():
     router = _make_router()
     # Picks may legitimately differ across calls (Thompson sampling is stochastic).
@@ -203,8 +186,12 @@ async def test_failure_signal_increments_beta_after_flush():
 
 
 @pytest.mark.asyncio
-async def test_load_state_from_db_overrides_cold_start():
+async def test_load_state_from_db_adds_persisted_delta_to_cold_start():
+    """A row holds an accumulated delta, not a full posterior; loading must add it to the
+    cold-start prior, not replace the cell outright."""
     router = _make_router()
+    cold = router._cells[(RequestType.GENERAL, "gpt-4o")]
+
     fake_row = MagicMock()
     fake_row.request_type = RequestType.GENERAL.value
     fake_row.model_name = "gpt-4o"
@@ -217,8 +204,8 @@ async def test_load_state_from_db_overrides_cold_start():
     await router.load_state_from_db(prisma)
 
     cell = router._cells[(RequestType.GENERAL, "gpt-4o")]
-    assert cell.alpha == 90.0
-    assert cell.beta == 10.0
+    assert cell.alpha == cold.alpha + 90.0
+    assert cell.beta == cold.beta + 10.0
 
 
 @pytest.mark.asyncio

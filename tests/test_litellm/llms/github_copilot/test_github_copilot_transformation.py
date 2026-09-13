@@ -1,17 +1,13 @@
 import asyncio
 import json
-import os
-import sys
 from datetime import datetime, timedelta
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import httpx
-import pytest
 from respx import MockRouter
 
 import litellm
@@ -866,7 +862,7 @@ class TestGithubCopilotTransformResponse:
         )
         model_response = ModelResponse()
 
-        with pytest.raises(Exception):
+        with pytest.raises(json.JSONDecodeError):
             config.transform_response(
                 model="github_copilot/claude-opus-4.7",
                 raw_response=raw_response,

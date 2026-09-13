@@ -35,6 +35,12 @@ export const fetchAvailableModelsForTeamOrKey = async (
   }
 };
 
+export const excludeProxyWideSentinel = (models: string[]): string[] =>
+  models.filter((model) => model !== "all-proxy-models");
+
+export const hasAllModelsSentinel = (models: string[]): boolean =>
+  models.includes("all-proxy-models") || models.includes("all-team-models");
+
 export const getModelDisplayName = (model: string) => {
   if (model === "all-proxy-models") {
     return "All Proxy Models";

@@ -14,10 +14,10 @@ from .transformation import (
 __all__ = [
     "BaseOCRConfig",
     "DocumentType",
-    "OCRResponse",
     "OCRPage",
     "OCRPageDimensions",
     "OCRPageImage",
-    "OCRUsageInfo",
     "OCRRequestData",
+    "OCRResponse",
+    "OCRUsageInfo",
 ]

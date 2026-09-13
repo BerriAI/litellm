@@ -2,7 +2,23 @@ import { ProxyModel, useAllProxyModels } from "@/app/(dashboard)/hooks/models/us
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
-import { Select, Skeleton, Tooltip, type SelectProps } from "antd";
+import {
+  Combobox,
+  ComboboxChip,
+  ComboboxChips,
+  ComboboxChipsInput,
+  ComboboxCollection,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxGroup,
+  ComboboxItem,
+  ComboboxLabel,
+  ComboboxList,
+  ComboboxValue,
+  useComboboxAnchor,
+} from "@/components/ui/combobox";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Organization, Team } from "../networking";
 import { splitWildcardModels } from "./modelUtils";
 
@@ -16,12 +32,15 @@ const MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE = {
   value: "no-default-models",
 } as const;
 
-const MODEL_SELECT_SPECIAL_VALUES_ARRAY = [
+export const MODEL_SENTINEL_OPTIONS = [
   MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE,
   MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE,
 ] as const;
 
+const MAX_VISIBLE_MODEL_CHIPS = 5;
+
 export interface ModelSelectProps {
+  id?: string;
   teamID?: string;
   organizationID?: string;
   options?: {
@@ -36,6 +55,17 @@ export interface ModelSelectProps {
   onChange: (values: string[]) => void;
   style?: React.CSSProperties;
 }
+
+type ModelOption = {
+  label: string;
+  value: string;
+  disabled?: boolean;
+};
+
+type ModelOptionGroup = {
+  label: string;
+  items: ModelOption[];
+};
 
 type FilterContextArgs = {
   allProxyModels: string[];
@@ -92,15 +122,15 @@ const filterModels = (
 };
 
 export const ModelSelect = (props: ModelSelectProps) => {
-  const { teamID, organizationID, options, context, dataTestId, value = [], onChange, style } = props;
-  const { includeUserModels, showAllTeamModelsOption, showAllProxyModelsOverride, includeSpecialOptions } =
-    options || {};
+  const anchor = useComboboxAnchor();
+  const { id, teamID, organizationID, options, context, dataTestId, value = [], onChange, style } = props;
+  const { showAllProxyModelsOverride, includeSpecialOptions } = options || {};
   const { data: allProxyModels, isLoading: isLoadingAllProxyModels } = useAllProxyModels();
   const { data: team, isLoading: isLoadingTeam } = useTeam(teamID);
   const { data: organization, isLoading: isLoadingOrganization } = useOrganization(organizationID);
   const { data: currentUser, isLoading: isCurrentUserLoading } = useCurrentUser();
 
-  const isSpecialOption = (value: string) => MODEL_SELECT_SPECIAL_VALUES_ARRAY.some((sv) => sv.value === value);
+  const isSpecialOption = (value: string) => MODEL_SENTINEL_OPTIONS.some((sv) => sv.value === value);
   const hasSpecialOptionSelected = value.some(isSpecialOption);
   const isLoading = isLoadingAllProxyModels || isLoadingTeam || isLoadingOrganization || isCurrentUserLoading;
   const organizationHasAllProxyModels =
@@ -110,14 +140,11 @@ export const ModelSelect = (props: ModelSelectProps) => {
     showAllProxyModelsOverride || (organizationHasAllProxyModels && includeSpecialOptions) || context === "global";
 
   if (isLoading) {
-    return <Skeleton.Input active block />;
+    return <Skeleton className="h-9 w-full" />;
   }
 
-  const optionRender: NonNullable<SelectProps["optionRender"]> = (option) => {
-    return <span>{option.label}</span>;
-  };
-
-  const handleChange = (values: string[]) => {
+  const handleChange = (selected: ModelOption[]) => {
+    const values = selected.map((option) => option.value);
     const specialValues = values.filter(isSpecialOption);
 
     let finalValues: string[];
@@ -138,85 +165,118 @@ export const ModelSelect = (props: ModelSelectProps) => {
   });
 
   const { wildcard, regular } = splitWildcardModels(filteredModels);
-  return (
-    <Select
-      data-testid={dataTestId}
-      value={value}
-      onChange={handleChange}
-      style={style}
-      options={[
-        ...(includeSpecialOptions
-          ? [
-              {
-                label: <span>Special Options</span>,
-                title: "Special Options",
-                options: [
-                  ...(shouldShowAllProxyModels
-                    ? [
-                        {
-                          label: <span>All Proxy Models</span>,
-                          value: MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value,
-                          disabled:
-                            value.length > 0 &&
-                            value.some(
-                              (v) => isSpecialOption(v) && v !== MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value,
-                            ),
-                          key: MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value,
-                        },
-                      ]
-                    : []),
-                  {
-                    label: <span>No Default Models</span>,
-                    value: MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.value,
-                    disabled:
-                      value.length > 0 &&
-                      value.some((v) => isSpecialOption(v) && v !== MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.value),
-                    key: MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.value,
-                  },
-                ],
-              },
-            ]
-          : []),
-        ...(wildcard.length > 0
-          ? [
-              {
-                label: <span>Wildcard Options</span>,
-                title: "Wildcard Options",
-                options: wildcard.map((model) => {
-                  const provider = model.replace("/*", "");
-                  const capitalizedProvider = provider.charAt(0).toUpperCase() + provider.slice(1);
 
-                  return {
-                    label: <span>{`All ${capitalizedProvider} models`}</span>,
-                    value: model,
-                    disabled: hasSpecialOptionSelected,
-                  };
-                }),
+  const groups: ModelOptionGroup[] = [
+    ...(includeSpecialOptions
+      ? [
+          {
+            label: "Special Options",
+            items: [
+              ...(shouldShowAllProxyModels
+                ? [
+                    {
+                      label: MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.label,
+                      value: MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value,
+                      disabled:
+                        value.length > 0 &&
+                        value.some(
+                          (v) => isSpecialOption(v) && v !== MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value,
+                        ),
+                    },
+                  ]
+                : []),
+              {
+                label: MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.label,
+                value: MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.value,
+                disabled:
+                  value.length > 0 &&
+                  value.some((v) => isSpecialOption(v) && v !== MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.value),
               },
-            ]
-          : []),
-        {
-          label: <span>Models</span>,
-          title: "Models",
-          options: regular.map((model) => ({
-            label: <span>{model}</span>,
-            value: model,
-            disabled: hasSpecialOptionSelected,
-          })),
-        },
-      ]}
-      mode="multiple"
-      placeholder="Select Models"
-      allowClear
-      maxTagCount="responsive"
-      maxTagPlaceholder={(omittedValues) => (
-        <Tooltip
-          styles={{ root: { pointerEvents: "none" } }}
-          title={omittedValues.map(({ value }) => value).join(", ")}
-        >
-          <span>+{omittedValues.length} more</span>
-        </Tooltip>
-      )}
-    />
+            ],
+          },
+        ]
+      : []),
+    ...(wildcard.length > 0
+      ? [
+          {
+            label: "Wildcard Options",
+            items: wildcard.map((model) => {
+              const provider = model.replace("/*", "");
+              const capitalizedProvider = provider.charAt(0).toUpperCase() + provider.slice(1);
+
+              return {
+                label: `All ${capitalizedProvider} models`,
+                value: model,
+                disabled: hasSpecialOptionSelected,
+              };
+            }),
+          },
+        ]
+      : []),
+    {
+      label: "Models",
+      items: regular.map((model) => ({
+        label: model,
+        value: model,
+        disabled: hasSpecialOptionSelected,
+      })),
+    },
+  ];
+
+  const optionsByValue = new Map(groups.flatMap((group) => group.items).map((option) => [option.value, option]));
+  const selectedOptions = value.map((v) => optionsByValue.get(v) ?? { label: v, value: v });
+  const overflowOptions = selectedOptions.slice(MAX_VISIBLE_MODEL_CHIPS);
+
+  return (
+    <TooltipProvider>
+      <Combobox
+        multiple
+        items={groups}
+        value={selectedOptions}
+        onValueChange={handleChange}
+        isItemEqualToValue={(option: ModelOption, selected: ModelOption) => option.value === selected.value}
+        itemToStringLabel={(option: ModelOption) => option.label}
+      >
+        <ComboboxChips render={<div ref={anchor} />} data-testid={dataTestId} style={style} className="w-full">
+          <ComboboxValue>
+            {(selected: ModelOption[]) => (
+              <>
+                {selected.slice(0, MAX_VISIBLE_MODEL_CHIPS).map((option) => (
+                  <ComboboxChip key={option.value} aria-label={option.label}>
+                    {option.label}
+                  </ComboboxChip>
+                ))}
+                {overflowOptions.length > 0 && (
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={<span className="px-1 text-xs text-muted-foreground" />}
+                    >{`+${overflowOptions.length} more`}</TooltipTrigger>
+                    <TooltipContent>{overflowOptions.map((option) => option.value).join(", ")}</TooltipContent>
+                  </Tooltip>
+                )}
+              </>
+            )}
+          </ComboboxValue>
+          <ComboboxChipsInput id={id} placeholder="Select Models" aria-label="Select Models" className="min-w-24" />
+        </ComboboxChips>
+        <ComboboxContent anchor={anchor}>
+          <ComboboxEmpty>No models found</ComboboxEmpty>
+          <ComboboxList>
+            {(group: ModelOptionGroup) => (
+              <ComboboxGroup key={group.label} items={group.items}>
+                <ComboboxLabel>{group.label}</ComboboxLabel>
+                <ComboboxCollection>
+                  {(option: ModelOption) => (
+                    <ComboboxItem key={option.value} value={option} disabled={option.disabled}>
+                      <span className="min-w-0 break-words">{option.label}</span>
+                    </ComboboxItem>
+                  )}
+                </ComboboxCollection>
+              </ComboboxGroup>
+            )}
+          </ComboboxList>
+        </ComboboxContent>
+      </Combobox>
+    </TooltipProvider>
   );
 };

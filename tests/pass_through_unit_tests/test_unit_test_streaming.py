@@ -1,12 +1,7 @@
 import json
-import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, Mock, patch, MagicMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import httpx
 import pytest
@@ -50,6 +45,7 @@ async def test_chunk_processor_yields_raw_bytes(endpoint_type, url_route):
     """
     # Mock inputs
     response = AsyncMock(spec=httpx.Response)
+    response.status_code = 200
     raw_chunks = [
         b'{"id": "1", "content": "Hello"}',
         b'{"id": "2", "content": "World"}',

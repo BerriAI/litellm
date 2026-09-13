@@ -26,46 +26,9 @@ import pytest
 
 @pytest.fixture(scope="module")
 def model_data():
-    json_path = os.path.join(
-        os.path.dirname(__file__), "../../model_prices_and_context_window.json"
-    )
+    json_path = os.path.join(os.path.dirname(__file__), "../../model_prices_and_context_window.json")
     with open(json_path) as f:
         return json.load(f)
-
-
-SONNET_4_5_USGOV_KEYS = [
-    "bedrock/us-gov-east-1/anthropic.claude-sonnet-4-5-20250929-v1:0",
-    "bedrock/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0",
-    "bedrock/us-gov-east-1/claude-sonnet-4-5-20250929-v1:0",
-    "bedrock/us-gov-west-1/claude-sonnet-4-5-20250929-v1:0",
-    "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0",
-]
-
-
-@pytest.mark.parametrize("model_key", SONNET_4_5_USGOV_KEYS)
-def test_usgov_sonnet_4_5_pricing(model_data, model_key):
-    """Each us-gov sonnet-4-5 entry must carry the +20%-over-global rates
-    that AWS publishes on the GovCloud pricing page.
-    """
-    assert model_key in model_data, f"Missing model entry: {model_key}"
-    info = model_data[model_key]
-
-    assert info["input_cost_per_token"] == 3.6e-06, (
-        f"{model_key}: input_cost_per_token should be $3.60/MTok "
-        f"(got {info['input_cost_per_token']})"
-    )
-    assert (
-        info["output_cost_per_token"] == 1.8e-05
-    ), f"{model_key}: output_cost_per_token should be $18.00/MTok"
-    assert (
-        info["cache_creation_input_token_cost"] == 4.5e-06
-    ), f"{model_key}: 5m cache write should be $4.50/MTok"
-    assert (
-        info["cache_creation_input_token_cost_above_1hr"] == 7.2e-06
-    ), f"{model_key}: 1h cache write should be $7.20/MTok"
-    assert (
-        info["cache_read_input_token_cost"] == 3.6e-07
-    ), f"{model_key}: cache read should be $0.36/MTok"
 
 
 def test_usgov_carries_20_percent_premium_over_global(model_data):
@@ -84,9 +47,7 @@ def test_usgov_carries_20_percent_premium_over_global(model_data):
         "cache_read_input_token_cost",
     ):
         ratio = usgov_info[field] / global_info[field]
-        assert (
-            abs(ratio - 1.2) < 1e-9
-        ), f"{field}: us-gov / global ratio is {ratio}, expected 1.2"
+        assert abs(ratio - 1.2) < 1e-9, f"{field}: us-gov / global ratio is {ratio}, expected 1.2"
 
 
 # The us-gov.anthropic.* cross-region inference profile is the only us-gov
@@ -103,20 +64,6 @@ EXPECTED_USGOV_ABOVE_200K = {
 }
 
 
-@pytest.mark.parametrize("field,expected", EXPECTED_USGOV_ABOVE_200K.items())
-def test_usgov_cross_region_above_200k_carries_gov_premium(model_data, field, expected):
-    """The `_above_200k_tokens` tier on the us-gov cross-region inference
-    profile must also carry the +20% GovCloud uplift. The original PR
-    corrected the base rates but left the 200k-tier fields at the +10%
-    commercial-US rates, undercharging long-context requests.
-    """
-    info = model_data[USGOV_CROSS_REGION_KEY]
-    assert field in info, f"{USGOV_CROSS_REGION_KEY}: missing field {field}"
-    assert (
-        info[field] == expected
-    ), f"{USGOV_CROSS_REGION_KEY}: {field} should be {expected} (got {info[field]})"
-
-
 def test_usgov_cross_region_above_200k_ratio_to_global(model_data):
     """Cross-check via the property-based invariant: every `_above_200k_tokens`
     field on the us-gov cross-region profile must equal 1.2x the global
@@ -127,6 +74,55 @@ def test_usgov_cross_region_above_200k_ratio_to_global(model_data):
     usgov_info = model_data[USGOV_CROSS_REGION_KEY]
     for field in EXPECTED_USGOV_ABOVE_200K:
         ratio = usgov_info[field] / global_info[field]
-        assert (
-            abs(ratio - 1.2) < 1e-9
-        ), f"{field}: us-gov / global ratio is {ratio}, expected 1.2"
+        assert abs(ratio - 1.2) < 1e-9, f"{field}: us-gov / global ratio is {ratio}, expected 1.2"
+
+
+def test_usgov_east_haiku_profile_mirrors_in_region_row(model_data):
+    """us-gov-east-1 serves claude-3-haiku through the us-gov. inference profile
+    only, so the profile row must bill exactly like the in-region gov row.
+    """
+    profile = model_data["us-gov.anthropic.claude-3-haiku-20240307-v1:0"]
+    in_region = model_data["bedrock/us-gov-east-1/anthropic.claude-3-haiku-20240307-v1:0"]
+    assert profile["litellm_provider"] == "bedrock_converse"
+    assert {k: v for k, v in profile.items() if k != "litellm_provider"} == {
+        k: v for k, v in in_region.items() if k != "litellm_provider"
+    }
+
+
+GOV_ROW_SOURCES = {
+    "us-gov.anthropic.claude-fable-5-1": "anthropic.claude-fable-5-1",
+    "bedrock/us-gov-west-1/anthropic.claude-fable-5-1": "anthropic.claude-fable-5-1",
+    "bedrock/us-gov-east-1/anthropic.claude-fable-5-1": "anthropic.claude-fable-5-1",
+    "us-gov.nvidia.nemotron-nano-9b-v2": "nvidia.nemotron-nano-9b-v2",
+    "bedrock/us-gov-west-1/nvidia.nemotron-nano-9b-v2": "nvidia.nemotron-nano-9b-v2",
+    "bedrock/us-gov-east-1/nvidia.nemotron-nano-9b-v2": "nvidia.nemotron-nano-9b-v2",
+    "us-gov.xai.grok-4.6": "us.xai.grok-4.6",
+    "bedrock_mantle/us-gov-west-1/xai.grok-4.6": "bedrock_mantle/xai.grok-4.6",
+    "bedrock_mantle/us-gov-east-1/xai.grok-4.6": "bedrock_mantle/xai.grok-4.6",
+    "bedrock/us-gov-west-1/amazon.nova-2-multimodal-embeddings-v1:0": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "bedrock/us-gov-west-1/amazon.nova-lite-v1:0": "amazon.nova-lite-v1:0",
+    "bedrock/us-gov-west-1/amazon.nova-micro-v1:0": "amazon.nova-micro-v1:0",
+    "bedrock_mantle/us-gov-west-1/google.gemma-4-e2b": "bedrock_mantle/google.gemma-4-e2b",
+    "bedrock_mantle/us-gov-west-1/google.gemma-4-26b-a4b": "bedrock_mantle/google.gemma-4-26b-a4b",
+    "bedrock_mantle/us-gov-west-1/google.gemma-4-31b": "bedrock_mantle/google.gemma-4-31b",
+    "bedrock_mantle/us-gov-west-1/openai.gpt-oss-20b": "bedrock_mantle/openai.gpt-oss-20b",
+    "bedrock_mantle/us-gov-east-1/openai.gpt-oss-20b": "bedrock_mantle/openai.gpt-oss-20b",
+    "bedrock_mantle/us-gov-west-1/openai.gpt-oss-120b": "bedrock_mantle/openai.gpt-oss-120b",
+    "bedrock_mantle/us-gov-east-1/openai.gpt-oss-120b": "bedrock_mantle/openai.gpt-oss-120b",
+}
+
+
+def _non_pricing_fields(info):
+    return {k: v for k, v in info.items() if "cost" not in k and k not in ("litellm_provider", "source")}
+
+
+@pytest.mark.parametrize("gov_key", GOV_ROW_SOURCES)
+def test_usgov_rows_keep_commercial_limits_and_capabilities(model_data, gov_key):
+    """A gov row differs from the commercial row it mirrors only in price and
+    provider: context limits, mode, and capability flags stay identical, so a
+    hand-copied row cannot silently drop tool calling or shrink the context window.
+    """
+    gov = model_data[gov_key]
+    assert _non_pricing_fields(gov) == _non_pricing_fields(model_data[GOV_ROW_SOURCES[gov_key]])
+    assert "search_context_cost_per_query" not in gov
+    assert "source" not in gov

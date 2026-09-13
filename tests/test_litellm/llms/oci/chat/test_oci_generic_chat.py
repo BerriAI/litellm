@@ -106,7 +106,7 @@ class TestGenericToolCallErrors:
             )
 
     def test_non_string_id_raises(self):
-        with pytest.raises(OCIError, match="id.*must be a string"):
+        with pytest.raises(OCIError, match=r"id.*must be a string"):
             adapt_messages_to_generic_oci_standard_tool_call(
                 "assistant",
                 [
@@ -126,7 +126,7 @@ class TestGenericToolCallErrors:
             )
 
     def test_non_string_function_name_raises(self):
-        with pytest.raises(OCIError, match="function.name.*must be a string"):
+        with pytest.raises(OCIError, match=r"function\.name.*must be a string"):
             adapt_messages_to_generic_oci_standard_tool_call(
                 "assistant",
                 [
@@ -139,7 +139,7 @@ class TestGenericToolCallErrors:
             )
 
     def test_non_string_arguments_raises(self):
-        with pytest.raises(OCIError, match="arguments.*must be a JSON string"):
+        with pytest.raises(OCIError, match=r"arguments.*must be a JSON string"):
             adapt_messages_to_generic_oci_standard_tool_call(
                 "assistant",
                 [

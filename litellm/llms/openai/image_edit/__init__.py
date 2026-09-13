@@ -1,11 +1,13 @@
+from typing import Final
+
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 
 from .dalle2_transformation import DallE2ImageEditConfig
 from .transformation import OpenAIImageEditConfig
 
 __all__ = [
-    "OpenAIImageEditConfig",
     "DallE2ImageEditConfig",
+    "OpenAIImageEditConfig",
     "get_openai_image_edit_config",
 ]
 
@@ -20,7 +22,7 @@ def get_openai_image_edit_config(model: str) -> BaseImageEditConfig:
     Returns:
         The appropriate config instance for the model
     """
-    model_normalized = model.lower().replace("-", "").replace("_", "")
+    model_normalized: Final = model.lower().replace("-", "").replace("_", "")
 
     if model_normalized == "dalle2":
         return DallE2ImageEditConfig()

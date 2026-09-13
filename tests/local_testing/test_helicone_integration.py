@@ -2,13 +2,11 @@ import asyncio
 import copy
 import logging
 import os
-import sys
 import time
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 logging.basicConfig(level=logging.DEBUG)
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm import completion
@@ -131,7 +129,6 @@ def test_helicone_removes_otel_span_from_metadata():
     to prevent JSON serialization errors.
     """
     from litellm.integrations.helicone import HeliconeLogger
-    from unittest.mock import MagicMock
 
     # Create a mock span object (similar to what OpenTelemetry would create)
     mock_span = MagicMock()

@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import MakeMCPPublicForm from "./MakeMCPPublicForm";
-import { MCPServerData } from "../../mcp_hub_table_columns";
+import { MCPServerData } from "@/components/AIHub/MCPHubTableColumns";
 
 // Mock the networking function
 vi.mock("../../networking", () => ({
@@ -12,83 +12,8 @@ vi.mock("../../networking", () => ({
 import { makeMCPPublicCall } from "../../networking";
 const mockMakeMCPPublicCall = vi.mocked(makeMCPPublicCall);
 
-// Mock antd components
-vi.mock("antd", () => ({
-  Modal: ({ open, title, children, onCancel, footer }: any) =>
-    open ? (
-      <div data-testid="modal">
-        <div>{title}</div>
-        {children}
-        {footer}
-      </div>
-    ) : null,
-  Form: Object.assign(({ children, form }: any) => <form data-testid="form">{children}</form>, {
-    useForm: () => [
-      {
-        resetFields: vi.fn(),
-        validateFields: vi.fn(),
-        getFieldsValue: vi.fn(),
-        setFieldsValue: vi.fn(),
-      },
-      vi.fn(),
-    ],
-    Item: ({ children }: any) => <div>{children}</div>,
-  }),
-  Steps: Object.assign(
-    ({ children, current, className }: any) => (
-      <div data-testid="steps" className={className}>
-        {children}
-      </div>
-    ),
-    {
-      Step: ({ title }: any) => <div>{title}</div>,
-    },
-  ),
-  Button: ({ children, onClick, disabled, loading, ...props }: any) => (
-    <button onClick={onClick} disabled={disabled || loading} data-loading={loading} {...props}>
-      {children}
-    </button>
-  ),
-  Checkbox: ({ checked, indeterminate, onChange, children, disabled }: any) => (
-    <label>
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange({ target: { checked: e.target.checked } })}
-        disabled={disabled}
-        data-indeterminate={indeterminate}
-      />
-      {children}
-    </label>
-  ),
-}));
-
-// Additional @tremor/react mocks.
-// NOTE: the comment used to say "Button is already mocked globally" — that was
-// incorrect. A file-level vi.mock fully replaces the setup-level mock from
-// tests/setupTests.ts, so we must re-apply the Button/Tooltip overrides here.
-// Without them, the real Tremor Button leaks through and its useTooltip(300)
-// schedules a native setTimeout that can fire post-teardown -> "window is not defined".
-vi.mock("@tremor/react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tremor/react")>();
-  const React = await import("react");
-  return {
-    ...actual,
-    Text: ({ children, className }: any) => <span className={className}>{children}</span>,
-    Title: ({ children }: any) => <h3>{children}</h3>,
-    Badge: ({ children, color, size }: any) => (
-      <span data-color={color} data-size={size}>
-        {children}
-      </span>
-    ),
-    Button: React.forwardRef<HTMLButtonElement, any>(({ children, ...props }, ref) => (
-      <button {...props} ref={ref}>
-        {children}
-      </button>
-    )),
-    Tooltip: ({ children }: any) => <>{children}</>,
-  };
-});
+const expectDisabledControl = (element: HTMLElement) =>
+  expect(element.hasAttribute("disabled") || element.getAttribute("aria-disabled") === "true").toBe(true);
 
 describe("MakeMCPPublicForm", () => {
   const mockProps = {
@@ -172,7 +97,7 @@ describe("MakeMCPPublicForm", () => {
 
     // Check that the Next button is enabled (servers are preselected)
     const nextButton = screen.getByRole("button", { name: "Next" });
-    expect(nextButton).not.toBeDisabled();
+    expect(nextButton).toBeEnabled();
   });
 
   it("should handle server selection and navigation", async () => {
@@ -182,14 +107,14 @@ describe("MakeMCPPublicForm", () => {
     expect(screen.getByText("Select MCP Servers to Make Public")).toBeInTheDocument();
 
     // Select all servers using the select all checkbox
-    const selectAllCheckbox = screen.getByLabelText("Select All (2)");
+    const selectAllCheckbox = screen.getByRole("checkbox", { name: "Select All (2)" });
     await act(async () => {
       fireEvent.click(selectAllCheckbox);
     });
 
     // Verify Next button is enabled
     const nextButton = screen.getByRole("button", { name: "Next" });
-    expect(nextButton).not.toBeDisabled();
+    expect(nextButton).toBeEnabled();
 
     // Click Next
     await act(async () => {
@@ -208,12 +133,11 @@ describe("MakeMCPPublicForm", () => {
     render(<MakeMCPPublicForm {...mockProps} />);
 
     // Select all servers
-    const selectAllCheckbox = screen.getByLabelText("Select All (2)");
+    const selectAllCheckbox = screen.getByRole("checkbox", { name: "Select All (2)" });
     await act(async () => {
       fireEvent.click(selectAllCheckbox);
     });
 
-    // Navigate to confirm step
     const nextButton = screen.getByRole("button", { name: "Next" });
     await act(async () => {
       fireEvent.click(nextButton);
@@ -224,7 +148,6 @@ describe("MakeMCPPublicForm", () => {
       expect(screen.getByText("Confirm Making MCP Servers Public")).toBeInTheDocument();
     });
 
-    // Submit
     const submitButton = screen.getByRole("button", { name: "Make Public" });
     await act(async () => {
       fireEvent.click(submitButton);
@@ -271,6 +194,8 @@ describe("MakeMCPPublicForm", () => {
     const checkboxes = screen.getAllByRole("checkbox");
     await act(async () => {
       fireEvent.click(checkboxes[0]); // Click select all to select all
+    });
+    await act(async () => {
       fireEvent.click(checkboxes[0]); // Click select all again to deselect all
     });
 
@@ -295,8 +220,8 @@ describe("MakeMCPPublicForm", () => {
     expect(screen.getByText("No MCP servers available.")).toBeInTheDocument();
 
     // Select All checkbox should be disabled
-    const selectAllCheckbox = screen.getByLabelText("Select All");
-    expect(selectAllCheckbox).toBeDisabled();
+    const selectAllCheckbox = screen.getByRole("checkbox", { name: "Select All" });
+    expectDisabledControl(selectAllCheckbox);
 
     // Next button should be disabled
     const nextButton = screen.getByRole("button", { name: "Next" });
@@ -371,7 +296,7 @@ describe("MakeMCPPublicForm", () => {
 
     // Select all should be indeterminate now
     const selectAllCheckbox = checkboxes[0];
-    expect(selectAllCheckbox).toHaveAttribute("data-indeterminate", "true");
+    expect(selectAllCheckbox).toBePartiallyChecked();
   });
 
   it("should display tools overflow text when server has more than 3 tools", () => {
@@ -402,7 +327,6 @@ describe("MakeMCPPublicForm", () => {
 
     render(<MakeMCPPublicForm {...mockProps} />);
 
-    // Navigate to confirm step
     const nextButton = screen.getByRole("button", { name: "Next" });
     await act(async () => {
       fireEvent.click(nextButton);
@@ -412,7 +336,6 @@ describe("MakeMCPPublicForm", () => {
       expect(screen.getByText("Confirm Making MCP Servers Public")).toBeInTheDocument();
     });
 
-    // Submit
     const submitButton = screen.getByRole("button", { name: "Make Public" });
     await act(async () => {
       fireEvent.click(submitButton);
@@ -428,7 +351,7 @@ describe("MakeMCPPublicForm", () => {
     expect(mockProps.onClose).not.toHaveBeenCalled();
   });
 
-  it("should show loading state during submit", async () => {
+  it("should not complete the flow until the submit request resolves", async () => {
     let resolvePromise: (value: any) => void = () => {};
     const pendingPromise = new Promise((resolve) => {
       resolvePromise = resolve;
@@ -437,7 +360,6 @@ describe("MakeMCPPublicForm", () => {
 
     render(<MakeMCPPublicForm {...mockProps} />);
 
-    // Navigate to confirm step
     const nextButton = screen.getByRole("button", { name: "Next" });
     await act(async () => {
       fireEvent.click(nextButton);
@@ -447,17 +369,20 @@ describe("MakeMCPPublicForm", () => {
       expect(screen.getByText("Confirm Making MCP Servers Public")).toBeInTheDocument();
     });
 
-    // Submit
     const submitButton = screen.getByRole("button", { name: "Make Public" });
     await act(async () => {
       fireEvent.click(submitButton);
     });
 
-    // Check loading state
-    expect(submitButton).toHaveAttribute("data-loading", "true");
-    expect(submitButton).toBeDisabled();
+    expectDisabledControl(submitButton);
+    await act(async () => {
+      fireEvent.click(submitButton);
+    });
+    expect(mockMakeMCPPublicCall).toHaveBeenCalledTimes(1);
+    expect(mockProps.onSuccess).not.toHaveBeenCalled();
+    expect(mockProps.onClose).not.toHaveBeenCalled();
+    expect(screen.getByText("Confirm Making MCP Servers Public")).toBeInTheDocument();
 
-    // Resolve the promise
     resolvePromise({});
     await waitFor(() => {
       expect(mockProps.onSuccess).toHaveBeenCalled();
@@ -474,7 +399,7 @@ describe("MakeMCPPublicForm", () => {
     render(<MakeMCPPublicForm {...invisibleProps} />);
 
     // Modal should not be rendered
-    expect(screen.queryByTestId("modal")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.queryByText("Make MCP Servers Public")).not.toBeInTheDocument();
   });
 
@@ -569,6 +494,6 @@ describe("MakeMCPPublicForm", () => {
 
     // Select all should be indeterminate
     const selectAllCheckbox = checkboxes[0];
-    expect(selectAllCheckbox).toHaveAttribute("data-indeterminate", "true");
+    expect(selectAllCheckbox).toBePartiallyChecked();
   });
 });
