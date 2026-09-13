@@ -6,11 +6,12 @@ Calls done in OpenAI/openai.py as OpenRouter is openai-compatible.
 Docs: https://openrouter.ai/docs/parameters
 """
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -25,6 +26,22 @@ from ..common_utils import OpenRouterException
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+
+_RESPONSE_JSON_ADAPTER: Final = TypeAdapter(dict[str, object])
+_ERROR_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, str])
+_RESPONSE_COST_ADAPTER: Final = TypeAdapter(float)
+
+
+class _PostCallLogger(Protocol):
+    def post_call(
+        self,
+        *,
+        input: Sequence[AllMessageValues],
+        api_key: str | None,
+        original_response: str,
+        additional_args: Mapping[str, object],
+    ) -> None: ...
 
 
 class CacheControlSupportedModels(str, Enum):
@@ -169,7 +186,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: "LiteLLMLoggingObj",
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
@@ -185,6 +202,18 @@ class OpenrouterConfig(OpenAIGPTConfig):
         Returns:
             ModelResponse: The transformed response with cost information.
         """
+        try:
+            response_json: Final = self._get_response_json(raw_response)
+            self._raise_if_error_response(response_json=response_json, raw_response=raw_response)
+        except OpenRouterException:
+            cast(_PostCallLogger, logging_obj).post_call(  # cast-ok: legacy Logging.post_call has no type annotations
+                input=messages,
+                api_key=api_key,
+                original_response=raw_response.text,
+                additional_args={"complete_input_dict": request_data},
+            )
+            raise
+
         # Call parent transform_response to get the standard ModelResponse
         model_response = super().transform_response(
             model=model,
@@ -203,9 +232,10 @@ class OpenrouterConfig(OpenAIGPTConfig):
         # Extract cost from OpenRouter response body
         # OpenRouter returns cost information in the usage object when usage.include=true
         try:
-            response_json: Final = raw_response.json()
-            if "usage" in response_json and response_json["usage"]:
-                response_cost: Final = response_json["usage"].get("cost")
+            raw_usage: Final = response_json.get("usage")
+            if isinstance(raw_usage, dict) and raw_usage:
+                usage: Final = _RESPONSE_JSON_ADAPTER.validate_python(raw_usage)
+                response_cost: Final = usage.get("cost")
                 if response_cost is not None:
                     # Store cost in hidden params for the cost calculator to use
                     if not hasattr(model_response, HIDDEN_PARAMS_ATTR):
@@ -218,12 +248,62 @@ class OpenrouterConfig(OpenAIGPTConfig):
                     additional_headers: Final = cast(  # cast-ok: preserve mapping operations on response metadata
                         dict[str, object], hidden_params["additional_headers"]
                     )
-                    additional_headers["llm_provider-x-litellm-response-cost"] = float(response_cost)
+                    additional_headers["llm_provider-x-litellm-response-cost"] = _RESPONSE_COST_ADAPTER.validate_python(
+                        response_cost
+                    )
         except Exception:
             # If we can't extract cost, continue without it - don't fail the response
             pass
 
         return model_response
+
+    def _get_response_json(self, raw_response: httpx.Response) -> Mapping[str, object]:
+        try:
+            response_json: Final = _RESPONSE_JSON_ADAPTER.validate_python(raw_response.json())
+        except ValueError as e:
+            status_code: Final = 502 if 200 <= raw_response.status_code < 300 else raw_response.status_code
+            response_text: Final = raw_response.text
+            response_preview: Final = (response_text.strip() or response_text)[:500]
+            raise OpenRouterException(
+                message=f"OpenRouter returned a non-JSON response - {e}, Original Response: {response_preview!r}",
+                status_code=status_code,
+                headers=raw_response.headers,
+            ) from e
+        return response_json
+
+    def _raise_if_error_response(self, response_json: Mapping[str, object], raw_response: httpx.Response) -> None:
+        raw_error: Final = response_json.get("error")
+        if not isinstance(raw_error, dict):
+            return
+        error_response: Final = _RESPONSE_JSON_ADAPTER.validate_python(raw_error)
+        if not error_response.get("message") and error_response.get("code") is None:
+            return
+
+        raw_metadata: Final = error_response.get("metadata", {})
+        metadata: Final[Mapping[str, object]] = (
+            _RESPONSE_JSON_ADAPTER.validate_python(raw_metadata) if isinstance(raw_metadata, dict) else {}
+        )
+        raw_status_code: Final = error_response.get("code")
+        status_code: Final = (
+            raw_status_code
+            if isinstance(raw_status_code, int)
+            and not isinstance(raw_status_code, bool)
+            and 400 <= raw_status_code < 600
+            else 502
+        )
+
+        raise OpenRouterException(
+            message=f"Message: {error_response.get('message', 'Unknown error')}, Metadata: {metadata}",
+            status_code=status_code,
+            headers=self._get_error_headers(metadata, raw_response.headers),
+        )
+
+    def _get_error_headers(self, metadata: Mapping[str, object], response_headers: httpx.Headers) -> httpx.Headers:
+        try:
+            metadata_headers: Final = _ERROR_HEADERS_ADAPTER.validate_python(metadata.get("headers", {}))
+        except ValidationError:
+            return response_headers
+        return httpx.Headers({**response_headers, **httpx.Headers(metadata_headers)})
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return OpenRouterException(

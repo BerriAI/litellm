@@ -1,5 +1,5 @@
-
 import json
+from datetime import datetime
 from typing import Final
 
 import httpx
@@ -7,9 +7,11 @@ import pytest
 import respx
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.types.utils import ModelResponse
 
 
-from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openrouter.chat.transformation import (
     OpenRouterChatCompletionStreamingHandler,
     OpenrouterConfig,
@@ -19,9 +21,7 @@ from litellm.llms.openrouter.chat.transformation import (
 
 class TestOpenRouterChatCompletionStreamingHandler:
     def test_chunk_parser_successful(self):
-        handler = OpenRouterChatCompletionStreamingHandler(
-            streaming_response=None, sync_stream=True
-        )
+        handler = OpenRouterChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
 
         # Test input chunk
         chunk = {
@@ -29,9 +29,7 @@ class TestOpenRouterChatCompletionStreamingHandler:
             "created": 1234567890,
             "model": "test_model",
             "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
-            "choices": [
-                {"delta": {"content": "test content", "reasoning": "test reasoning"}}
-            ],
+            "choices": [{"delta": {"content": "test content", "reasoning": "test reasoning"}}],
         }
 
         # Parse chunk
@@ -49,9 +47,7 @@ class TestOpenRouterChatCompletionStreamingHandler:
         assert result.choices[0]["delta"]["reasoning_content"] == "test reasoning"
 
     def test_chunk_parser_error_response(self):
-        handler = OpenRouterChatCompletionStreamingHandler(
-            streaming_response=None, sync_stream=True
-        )
+        handler = OpenRouterChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
 
         # Test error chunk
         error_chunk = {
@@ -71,9 +67,7 @@ class TestOpenRouterChatCompletionStreamingHandler:
         assert exc_info.value.status_code == 400
 
     def test_chunk_parser_key_error(self):
-        handler = OpenRouterChatCompletionStreamingHandler(
-            streaming_response=None, sync_stream=True
-        )
+        handler = OpenRouterChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
 
         # Test invalid chunk missing required fields
         invalid_chunk = {"incomplete": "data"}
@@ -97,15 +91,11 @@ def test_openrouter_extra_body_transformation():
 
     # https://github.com/BerriAI/litellm/issues/8425, validate its not contained in extra_body still
     assert transformed_request["provider"]["order"] == ["DeepSeek"]
-    assert transformed_request["messages"] == [
-        {"role": "user", "content": "Hello, world!"}
-    ]
+    assert transformed_request["messages"] == [{"role": "user", "content": "Hello, world!"}]
 
 
 def test_openrouter_supported_params_include_reasoning_for_unmapped_model():
-    supported_params = OpenrouterConfig().get_supported_openai_params(
-        "openrouter/unmapped-model"
-    )
+    supported_params = OpenrouterConfig().get_supported_openai_params("openrouter/unmapped-model")
 
     assert "reasoning_effort" in supported_params
     assert "thinking" in supported_params
@@ -151,8 +141,6 @@ def test_openrouter_transform_request_with_cache_control():
         ]
     }
     """
-    import json
-
     config = OpenrouterConfig()
 
     messages = [
@@ -183,9 +171,6 @@ def test_openrouter_transform_request_with_cache_control():
         litellm_params={},
         headers={},
     )
-
-    print("\n=== Transformed Request ===")
-    print(json.dumps(transformed_request, indent=4, default=str))
 
     assert "messages" in transformed_request
     assert len(transformed_request["messages"]) == 2
@@ -228,8 +213,6 @@ def test_openrouter_transform_request_with_cache_control_list_content():
         ]
     }
     """
-    import json
-
     config = OpenrouterConfig()
 
     messages = [
@@ -254,9 +237,6 @@ def test_openrouter_transform_request_with_cache_control_list_content():
         litellm_params={},
         headers={},
     )
-
-    print("\n=== Transformed Request (List Content) ===")
-    print(json.dumps(transformed_request, indent=4, default=str))
 
     assert "messages" in transformed_request
     assert len(transformed_request["messages"]) == 2
@@ -294,8 +274,6 @@ def test_openrouter_transform_request_with_cache_control_gemini():
         ]
     }
     """
-    import json
-
     config = OpenrouterConfig()
 
     messages = [
@@ -313,9 +291,6 @@ def test_openrouter_transform_request_with_cache_control_gemini():
         litellm_params={},
         headers={},
     )
-
-    print("\n=== Transformed Request (Gemini) ===")
-    print(json.dumps(transformed_request, indent=4, default=str))
 
     assert "messages" in transformed_request
     assert len(transformed_request["messages"]) == 1
@@ -335,8 +310,6 @@ def test_openrouter_transform_request_multiple_cache_controls():
     When a message has 5 content blocks with cache_control at message level,
     only the 5th block should have cache_control, not all 5 blocks.
     """
-    import json
-
     config = OpenrouterConfig()
 
     messages = [
@@ -361,17 +334,12 @@ def test_openrouter_transform_request_multiple_cache_controls():
         headers={},
     )
 
-    print("\n=== Transformed Request (Multiple Blocks) ===")
-    print(json.dumps(transformed_request, indent=4, default=str))
-
     system_message = transformed_request["messages"][0]
     assert len(system_message["content"]) == 5
 
     # Only the last block should have cache_control
     for i in range(4):
-        assert (
-            "cache_control" not in system_message["content"][i]
-        ), f"Block {i} should not have cache_control"
+        assert "cache_control" not in system_message["content"][i], f"Block {i} should not have cache_control"
 
     assert system_message["content"][4]["cache_control"] == {"type": "ephemeral"}
     assert "cache_control" not in system_message
@@ -385,14 +353,11 @@ def test_openrouter_cost_tracking_non_streaming():
     1. Request includes usage.include=true to get cost data
     2. Response extracts cost from usage.cost and stores in _hidden_params
     """
-    from unittest.mock import Mock, patch
-    from litellm.types.utils import ModelResponse, Choices, Message, Usage
-
-    config = OpenrouterConfig()
+    config: Final = OpenrouterConfig()
 
     # Test request adds usage parameter
-    transformed_request = config.transform_request(
-        model="openrouter/anthropic/claude-sonnet-4.5",
+    transformed_request: Final = config.transform_request(
+        model="openrouter/test-model",
         messages=[{"role": "user", "content": "Hello"}],
         optional_params={},
         litellm_params={},
@@ -402,48 +367,96 @@ def test_openrouter_cost_tracking_non_streaming():
     assert transformed_request["usage"] == {"include": True}
 
     # Test response extracts cost
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.json.return_value = {
-        "id": "gen-123",
-        "model": "openrouter/anthropic/claude-sonnet-4.5",
-        "choices": [
-            {
-                "message": {"role": "assistant", "content": "Hello!"},
-                "finish_reason": "stop",
-                "index": 0,
-            }
-        ],
-        "usage": {
-            "prompt_tokens": 10,
-            "completion_tokens": 20,
-            "total_tokens": 30,
-            "cost": 0.00015,
+    raw_response: Final = httpx.Response(
+        200,
+        json={
+            "id": "gen-123",
+            "model": "openrouter/test-model",
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": "Hello!"},
+                    "finish_reason": "stop",
+                    "index": 0,
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 20,
+                "total_tokens": 30,
+                "cost": 0.00015,
+            },
         },
-    }
-    mock_response.headers = {}
-
-    model_response = ModelResponse(
-        id="gen-123",
-        choices=[
-            Choices(
-                finish_reason="stop",
-                index=0,
-                message=Message(content="Hello!", role="assistant"),
-            )
-        ],
-        created=1234567890,
-        model="openrouter/anthropic/claude-sonnet-4.5",
-        object="chat.completion",
-        usage=Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
     )
 
-    with patch.object(
-        OpenAIGPTConfig, "transform_response", return_value=model_response
-    ):
-        result = config.transform_response(
-            model="openrouter/anthropic/claude-sonnet-4.5",
-            raw_response=mock_response,
-            model_response=model_response,
+    result: Final = _transform_openrouter_response(raw_response, _openrouter_logging())
+
+    assert hasattr(result, "_hidden_params")
+    assert "llm_provider-x-litellm-response-cost" in result._hidden_params["additional_headers"]
+    assert result._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] == 0.00015
+
+
+def test_openrouter_cost_tracking_ignores_invalid_cost():
+    from unittest.mock import Mock
+    from litellm.types.utils import ModelResponse
+
+    raw_response = httpx.Response(
+        status_code=200,
+        json={
+            "id": "gen-123",
+            "created": 1234567890,
+            "object": "chat.completion",
+            "model": "openrouter/z-ai/glm-5.1",
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": "Hello!"},
+                    "finish_reason": "stop",
+                    "index": 0,
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 20,
+                "total_tokens": 30,
+                "cost": "N/A",
+            },
+        },
+        request=httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions"),
+    )
+
+    result = OpenrouterConfig().transform_response(
+        model="openrouter/z-ai/glm-5.1",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=Mock(),
+        request_data={},
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert result.choices[0].message.content == "Hello!"
+    assert result.usage.total_tokens == 30
+    additional_headers = result._hidden_params.get("additional_headers", {})
+    assert "llm_provider-x-litellm-response-cost" not in additional_headers
+
+
+def test_openrouter_transform_response_non_json_2xx_error():
+    from unittest.mock import Mock
+    from litellm.types.utils import ModelResponse
+
+    raw_response = httpx.Response(
+        status_code=200,
+        headers={"content-type": "text/plain", "x-request-id": "req_test"},
+        content=(b"         \n\n" * 100) + b". ",
+        request=httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions"),
+    )
+
+    with pytest.raises(OpenRouterException) as exc_info:
+        OpenrouterConfig().transform_response(
+            model="openrouter/z-ai/glm-5.1",
+            raw_response=raw_response,
+            model_response=ModelResponse(),
             logging_obj=Mock(),
             request_data={},
             messages=[{"role": "user", "content": "Hello"}],
@@ -452,17 +465,201 @@ def test_openrouter_cost_tracking_non_streaming():
             encoding=None,
         )
 
-    assert hasattr(result, "_hidden_params")
-    assert (
-        "llm_provider-x-litellm-response-cost"
-        in result._hidden_params["additional_headers"]
+    assert "OpenRouter returned a non-JSON response" in str(exc_info.value)
+    assert "Original Response" in str(exc_info.value)
+    assert "." in str(exc_info.value)
+    assert exc_info.value.status_code == 502
+
+
+def test_openrouter_transform_response_embedded_error_before_parent_parse():
+    from unittest.mock import Mock
+    from litellm.types.utils import ModelResponse
+
+    raw_response = httpx.Response(
+        status_code=200,
+        json={
+            "error": {
+                "message": "upstream provider rate limited",
+                "code": 429,
+                "metadata": {"headers": {"retry-after": "5"}},
+            }
+        },
+        request=httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions"),
     )
-    assert (
-        result._hidden_params["additional_headers"][
-            "llm_provider-x-litellm-response-cost"
-        ]
-        == 0.00015
+
+    with pytest.raises(OpenRouterException) as exc_info:
+        OpenrouterConfig().transform_response(
+            model="openrouter/z-ai/glm-5.1",
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            logging_obj=Mock(),
+            request_data={},
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+    assert "upstream provider rate limited" in str(exc_info.value)
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.headers["retry-after"] == "5"
+    assert exc_info.value.headers["content-type"] == raw_response.headers["content-type"]
+
+
+@pytest.fixture
+def openrouter_completion_payload() -> dict[str, object]:
+    return {
+        "id": "gen-regression",
+        "created": 1234567890,
+        "object": "chat.completion",
+        "model": "openrouter/test-model",
+        "choices": [{"message": {"role": "assistant", "content": "Hello!"}, "finish_reason": "stop", "index": 0}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+    }
+
+
+def _openrouter_logging(callback: CustomLogger | None = None) -> Logging:
+    logging_obj: Final = Logging(
+        model="openrouter/test-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="openrouter-regression",
+        function_id="openrouter-regression",
+        dynamic_failure_callbacks=[callback] if callback is not None else None,
     )
+    logging_obj.update_environment_variables(
+        model="openrouter/test-model",
+        user="test-user",
+        optional_params={},
+        litellm_params={"custom_llm_provider": "openrouter"},
+    )
+    return logging_obj
+
+
+def _transform_openrouter_response(raw_response: httpx.Response, logging_obj: Logging) -> ModelResponse:
+    return OpenrouterConfig().transform_response(
+        model="openrouter/test-model",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=logging_obj,
+        request_data={"model": "test-model"},
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+
+@pytest.mark.parametrize("error", ({}, None, {"message": ""}, {"code": None}, {"metadata": {"provider_name": "test"}}))
+def test_openrouter_valid_completion_with_empty_error_succeeds(
+    openrouter_completion_payload: dict[str, object], error: object
+) -> None:
+    raw_response: Final = httpx.Response(200, json={**openrouter_completion_payload, "error": error})
+    logging_obj: Final = _openrouter_logging()
+
+    result: Final = _transform_openrouter_response(raw_response, logging_obj)
+
+    assert result.choices[0].message.content == "Hello!"
+    assert result.usage.total_tokens == 30
+    assert logging_obj.model_call_details["original_response"] == raw_response.text
+
+
+@pytest.mark.parametrize(
+    ("body", "status_code"),
+    (
+        ("<html>" + "upstream failed " * 100 + "</html>", 502),
+        ('{"error":{"message":"rate limited","code":429}}', 429),
+        ("[]", 502),
+        ("null", 502),
+    ),
+    ids=("long-html", "embedded-429", "json-array", "json-null"),
+)
+def test_openrouter_failure_callback_receives_complete_raw_body(body: str, status_code: int) -> None:
+    class CaptureFailure(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.original_response: object = None
+
+        def log_failure_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        ) -> None:
+            self.original_response = kwargs.get("original_response")
+
+    callback: Final = CaptureFailure()
+    logging_obj: Final = _openrouter_logging(callback)
+    raw_response: Final = httpx.Response(200, text=body)
+
+    with pytest.raises(OpenRouterException) as exc_info:
+        _transform_openrouter_response(raw_response, logging_obj)
+
+    logging_obj.failure_handler(
+        exception=exc_info.value,
+        traceback_exception="test failure",
+        start_time=datetime(2026, 1, 1),
+        end_time=datetime(2026, 1, 1, 0, 0, 1),
+    )
+    assert exc_info.value.status_code == status_code
+    assert callback.original_response == body
+
+
+@pytest.mark.parametrize("encoding", ("utf-8", "utf-16"))
+@pytest.mark.parametrize("usage", (None, {}))
+def test_openrouter_completion_without_usage_preserves_json_decoding(
+    openrouter_completion_payload: dict[str, object], encoding: str, usage: object
+) -> None:
+    raw_response: Final = httpx.Response(
+        200, content=json.dumps({**openrouter_completion_payload, "usage": usage}).encode(encoding)
+    )
+
+    result: Final = _transform_openrouter_response(raw_response, _openrouter_logging())
+
+    assert result.choices[0].message.content == "Hello!"
+    assert "llm_provider-x-litellm-response-cost" not in result._hidden_params.get("additional_headers", {})
+
+
+@pytest.mark.parametrize("code", (True, False, 200, 302, 700, "429", None))
+def test_openrouter_embedded_error_never_uses_invalid_http_status(code: object) -> None:
+    raw_response: Final = httpx.Response(200, json={"error": {"message": "upstream failed", "code": code}})
+
+    with pytest.raises(OpenRouterException) as exc_info:
+        _transform_openrouter_response(raw_response, _openrouter_logging())
+
+    assert exc_info.value.status_code == 502
+
+
+@pytest.mark.parametrize(
+    "metadata", (None, "invalid", {"headers": None}, {"headers": ["invalid"]}, {"headers": {"retry-after": {}}})
+)
+def test_openrouter_embedded_error_preserves_http_headers_with_invalid_metadata(metadata: object) -> None:
+    raw_response: Final = httpx.Response(
+        200,
+        json={"error": {"message": "rate limited", "code": 429, "metadata": metadata}},
+        headers={"retry-after": "7", "x-request-id": "req-original"},
+    )
+
+    with pytest.raises(OpenRouterException) as exc_info:
+        _transform_openrouter_response(raw_response, _openrouter_logging())
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.headers["retry-after"] == "7"
+    assert exc_info.value.headers["x-request-id"] == "req-original"
+
+
+def test_openrouter_embedded_error_merges_metadata_and_http_headers() -> None:
+    raw_response: Final = httpx.Response(
+        200,
+        json={"error": {"message": "rate limited", "code": 429, "metadata": {"headers": {"Retry-After": "5"}}}},
+        headers={"retry-after": "7", "x-request-id": "req-original"},
+    )
+
+    with pytest.raises(OpenRouterException) as exc_info:
+        _transform_openrouter_response(raw_response, _openrouter_logging())
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.headers["retry-after"] == "5"
+    assert exc_info.value.headers["x-request-id"] == "req-original"
 
 
 def test_openrouter_cost_tracking_streaming():
@@ -488,9 +685,7 @@ def test_openrouter_cost_tracking_streaming():
     assert transformed_request["usage"] == {"include": True}
 
     # Test streaming chunks preserve cost data
-    handler = OpenRouterChatCompletionStreamingHandler(
-        streaming_response=None, sync_stream=True
-    )
+    handler = OpenRouterChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
 
     # First chunk - content only
     chunk1 = {
@@ -544,9 +739,7 @@ def test_openrouter_reasoning_models_allow_reasoning_effort_param():
     """
     config = OpenrouterConfig()
 
-    supported_params = config.get_supported_openai_params(
-        model="openrouter/deepseek/deepseek-v3.2"
-    )
+    supported_params = config.get_supported_openai_params(model="openrouter/deepseek/deepseek-v3.2")
 
     assert "reasoning_effort" in supported_params
     assert supported_params.count("reasoning_effort") == 1
@@ -555,9 +748,7 @@ def test_openrouter_reasoning_models_allow_reasoning_effort_param():
 def test_openrouter_non_reasoning_models_support_reasoning_params():
     config = OpenrouterConfig()
 
-    supported_params = config.get_supported_openai_params(
-        model="openrouter/anthropic/claude-3-5-haiku"
-    )
+    supported_params = config.get_supported_openai_params(model="openrouter/anthropic/claude-3-5-haiku")
 
     assert "reasoning_effort" in supported_params
     assert "thinking" in supported_params
@@ -684,9 +875,10 @@ def test_openrouter_streaming_completion_assembles_text_and_finish_reason() -> N
     assert tuple(
         chunk.choices[0].finish_reason for chunk in stream_chunks if chunk.choices[0].finish_reason is not None
     ) == ("stop",)
-    assert "".join(
-        chunk.choices[0].delta.content or "" for chunk in stream_chunks if chunk.choices
-    ) == "The Supreme Court hears federal cases."
+    assert (
+        "".join(chunk.choices[0].delta.content or "" for chunk in stream_chunks if chunk.choices)
+        == "The Supreme Court hears federal cases."
+    )
     assembled: Final = litellm.stream_chunk_builder(chunks=list(stream_chunks), messages=messages)
     assert assembled is not None
     assert assembled.choices[0].message.content == "The Supreme Court hears federal cases."
@@ -754,9 +946,7 @@ def test_openrouter_streaming_reasoning_is_preserved() -> None:
     stream_chunks: Final = tuple(stream)
     assert json.loads(route.calls.last.request.content)["reasoning"] == {"effort": "high"}
     reasoning_deltas: Final = tuple(
-        getattr(chunk.choices[0].delta, "reasoning_content", None)
-        for chunk in stream_chunks
-        if chunk.choices
+        getattr(chunk.choices[0].delta, "reasoning_content", None) for chunk in stream_chunks if chunk.choices
     )
     assert reasoning_deltas == ("Consider the evidence. ", "Apply the rule.", None)
     assembled: Final = litellm.stream_chunk_builder(chunks=list(stream_chunks), messages=messages)

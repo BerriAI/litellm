@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.common_utils import OpenAIError
+from litellm.llms.openrouter.common_utils import OpenRouterException
 from litellm.types.utils import LlmProviders
 
 
@@ -399,6 +400,26 @@ def test_openai_compatible_429_still_maps_to_rate_limit():
         )
 
     assert excinfo.value.status_code == 429
+
+
+def test_openrouter_502_maps_to_bad_gateway_error():
+    original_exception = OpenRouterException(
+        status_code=502,
+        message="OpenRouter returned a non-JSON response",
+        headers={"content-type": "text/plain"},
+    )
+
+    with pytest.raises(litellm.BadGatewayError) as excinfo:
+        exception_type(
+            model="openrouter/z-ai/glm-5.1",
+            original_exception=original_exception,
+            custom_llm_provider="openrouter",
+        )
+
+    assert excinfo.value.status_code == 502
+    assert excinfo.value.llm_provider == "openrouter"
+    assert excinfo.value.model == "openrouter/z-ai/glm-5.1"
+    assert "OpenRouter returned a non-JSON response" in str(excinfo.value)
 
 
 @pytest.mark.parametrize(
