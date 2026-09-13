@@ -1,7 +1,10 @@
 from typing import Any, Final
 
 import litellm
-from litellm.llms.anthropic.common_utils import normalize_cache_control_in_anthropic_payload
+from litellm.llms.anthropic.common_utils import (
+    AnthropicError,
+    normalize_cache_control_in_anthropic_payload,
+)
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -74,19 +77,42 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         headers: dict,  # mutable-ok: matches dict-typed base signature
     ) -> dict:  # mutable-ok: matches dict-typed base signature
         """
-        Anthropic ignores prompt-caching hints it cannot honor, but strict
-        non-Anthropic implementations of the Messages API 400 the whole request
-        on Anthropic-only ``cache_control`` extensions (``cache_control.ttl: 1h
-        is not supported``), so unless the provider declares ttl support the
-        hints are reduced to their portable ``{"type": ...}`` core.
+        For native passthrough requests the payload must be forwarded
+        unchanged.  The parent class applies several adaptive-thinking
+        translations (e.g. dropping ``thinking: {"type": "adaptive"}`` and
+        ``output_config.effort`` when the model map does not recognise the
+        model as adaptive).  Those translations are wrong here because the
+        backend speaks the Anthropic Messages API natively and expects to
+        receive the original fields.
+
+        We only keep the cache-control normalisation that the base class
+        applies, since non-Anthropic backends may reject Anthropic-only
+        ``cache_control`` extensions.
         """
-        request: Final = super().transform_anthropic_messages_request(
-            model=model,
-            messages=messages,
-            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
-            litellm_params=litellm_params,
-            headers=headers,
-        )
+        max_tokens: Final = anthropic_messages_optional_request_params.get("max_tokens")
+        if max_tokens is None:
+            raise AnthropicError(
+                message="max_tokens is required for Anthropic /v1/messages API",
+                status_code=400,
+            )
+
+        request: Final = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            **anthropic_messages_optional_request_params,
+        }
+
+        # Strip billing metadata if configured.
+        if self.should_strip_billing_metadata():
+            system_param: Final = request.get("system")
+            if system_param is not None:
+                filtered: Final = self._filter_billing_headers_from_system(system_param)
+                if filtered is not None and len(filtered) > 0:
+                    request["system"] = filtered
+                else:
+                    request.pop("system", None)
+
         if self.supports_cache_control_ttl():
             return request
         return normalize_cache_control_in_anthropic_payload(request)

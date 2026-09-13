@@ -217,7 +217,8 @@ def test_validate_environment_merges_existing_anthropic_beta(config):
     assert "fast-mode-2026-02-01" in beta_values
 
 
-def test_request_strips_advisor_blocks_when_advisor_tool_absent(config):
+def test_request_preserves_advisor_blocks_for_native_passthrough(config):
+    """Native passthrough must forward advisor blocks unchanged."""
     messages = [
         {"role": "user", "content": "hello"},
         {
@@ -245,11 +246,13 @@ def test_request_strips_advisor_blocks_when_advisor_tool_absent(config):
         for block in message["content"]
         if isinstance(block, dict)
     ]
-    assert "advisor_tool_result" not in flattened_types
-    assert "server_tool_use" not in flattened_types
+    # Native passthrough must forward advisor blocks unchanged
+    assert "advisor_tool_result" in flattened_types, "advisor_tool_result should be preserved"
+    assert "server_tool_use" in flattened_types, "server_tool_use should be preserved"
 
 
-def test_request_maps_reasoning_effort_to_thinking(config):
+def test_request_preserves_reasoning_effort_for_native_passthrough(config):
+    """Native passthrough must forward reasoning_effort unchanged."""
     payload = config.transform_anthropic_messages_request(
         model="claude-sonnet-4-20250514",
         messages=[{"role": "user", "content": "hi"}],
@@ -261,10 +264,9 @@ def test_request_maps_reasoning_effort_to_thinking(config):
         headers={},
     )
 
-    assert "reasoning_effort" not in payload
-    assert isinstance(payload.get("thinking"), dict)
-    assert payload["thinking"].get("type") == "enabled"
-    assert payload["thinking"]["budget_tokens"] < payload["max_tokens"]
+    # Native passthrough forwards reasoning_effort unchanged (no translation)
+    assert payload.get("reasoning_effort") == "medium"
+    assert "thinking" not in payload, "thinking should not be auto-generated for native passthrough"
 
 
 def test_passthrough_disables_anthropic_beta_filtering(config):
