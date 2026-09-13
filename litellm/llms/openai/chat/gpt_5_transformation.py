@@ -300,6 +300,19 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                         message=(f"reasoning_effort={effective_effort} is not supported for this model."),
                         status_code=400,
                     )
+        elif effective_effort == "none":
+            # "none" is a declared capability: if the model map says the model does not
+            # support it, drop or refuse rather than forwarding it to the provider.
+            # Example: gpt-5 and gpt-5-mini are marked supports_none_reasoning_effort=false.
+            if not self._supports_reasoning_effort_level(model, effective_effort):
+                if litellm.drop_params or drop_params:
+                    non_default_params.pop("reasoning_effort", None)
+                    optional_params.pop("reasoning_effort", None)
+                else:
+                    raise litellm.utils.UnsupportedParamsError(
+                        message=(f"reasoning_effort={effective_effort} is not supported for this model."),
+                        status_code=400,
+                    )
 
         ################################################################
         # max_tokens is not supported for gpt-5 models on OpenAI API
