@@ -32,6 +32,14 @@ core telemetry no matter how many vocabularies are configured.
 """
 
 
+MAX_MESSAGE_ATTRS_PER_SPAN: Final = DEFAULT_SPAN_ATTRIBUTE_LIMIT // 8
+"""Span-wide ceiling on per-index chat message attributes, prompt and response together.
+
+An eighth is the largest share that still fits beside the tool ceiling and the core
+of every vocabulary at once. The complete conversation still rides the JSON blobs.
+"""
+
+
 def tool_attr_budget(vocabularies: int) -> int:
     """Split the span-wide tool-definition ceiling across active vocabularies."""
     return MAX_TOOL_DEFINITION_ATTRS_PER_SPAN // max(vocabularies, 1)
