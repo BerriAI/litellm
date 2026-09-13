@@ -116,6 +116,33 @@ def test_extract_partial_responses_usage_bridge_iterator_no_completed_response()
     assert Router._extract_partial_responses_usage(iterator) is None
 
 
+def test_extract_partial_responses_usage_no_completed_response_attr():
+    """
+    Regression for #38511: the native fallback path must not crash with
+    AttributeError when the source iterator lacks a ``completed_response``
+    attribute entirely. The original error handler read
+    ``source_iterator.completed_response`` as a bare attribute access, which
+    masks the real streaming error with an AttributeError. Using getattr
+    lets the original exception propagate intact.
+    """
+    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+        LiteLLMCompletionStreamingIterator,
+    )
+
+    class _NoCompletedResponseBridge(LiteLLMCompletionStreamingIterator):
+        """A bridge iterator whose __init__ never ran, leaving no
+        ``completed_response`` attribute — the scenario that triggers #38511.
+        """
+
+        def __init__(self) -> None:
+            self.collected_chat_completion_chunks: list = []
+
+    iterator = _NoCompletedResponseBridge()
+    assert not hasattr(iterator, "completed_response")
+    usage = Router._extract_partial_responses_usage(iterator)
+    assert usage is None
+
+
 # -------- _combine_responses_fallback_usage --------
 
 
