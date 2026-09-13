@@ -332,7 +332,9 @@ class LLMCachingHandler:
         cached_result: Any | None = None
 
         # Check if caching should be performed BEFORE doing expensive kwargs copy
-        if litellm.cache is not None and self._is_call_type_supported_by_cache(original_function=original_function, call_type=call_type, kwargs=kwargs):
+        if litellm.cache is not None and self._is_call_type_supported_by_cache(
+            original_function=original_function, call_type=call_type, kwargs=kwargs
+        ):
             args = args or ()
             # Now that we confirmed caching will happen, prepare kwargs
             new_kwargs: Final = kwargs.copy()
@@ -1025,9 +1027,7 @@ class LLMCachingHandler:
         new_kwargs["parent_otel_span"] = parent_otel_span
 
         call_type: Final = (
-            CallTypes.aembedding.value
-            if isinstance(result, litellm.EmbeddingResponse)
-            else new_kwargs.get("call_type")
+            CallTypes.aembedding.value if isinstance(result, litellm.EmbeddingResponse) else new_kwargs.get("call_type")
         )
 
         # [OPTIONAL] ADD TO CACHE
@@ -1083,9 +1083,7 @@ class LLMCachingHandler:
             return
 
         call_type: Final = (
-            CallTypes.embedding.value
-            if isinstance(result, litellm.EmbeddingResponse)
-            else new_kwargs.get("call_type")
+            CallTypes.embedding.value if isinstance(result, litellm.EmbeddingResponse) else new_kwargs.get("call_type")
         )
 
         if self._should_store_result_in_cache(
