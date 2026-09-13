@@ -371,6 +371,12 @@ async def release_budget_reservation_on_cancel(
     surrounding task is being cancelled. The `finalized` guard makes this a no-op
     when success/failure handling already reconciled, so calling it on every
     cancellation path is safe.
+
+    A reconcile failure here (e.g. a Redis timeout) falls back to
+    invalidate_budget_reservation_counters, mirroring release_or_invalidate_budget_reservation's
+    handling of the same failure on the non-cancel release path: dropping the reserved counters
+    forces the next read to reseed from the DB instead of leaving the pre-charge stuck in Redis
+    with nothing left to correct it, since this is the terminal handler for a cancelled request.
     """
     if not budget_reservation or budget_reservation.get("finalized") is True:
         return
@@ -379,8 +385,20 @@ async def release_budget_reservation_on_cancel(
         await asyncio.shield(
             reconcile_budget_reservation(budget_reservation=budget_reservation, actual_cost=incurred_cost)
         )
-    except (asyncio.CancelledError, Exception):
+    except asyncio.CancelledError:
         pass
+    except Exception:
+        verbose_proxy_logger.exception(
+            "Failed to reconcile budget reservation on cancel; invalidating reserved counters"
+        )
+        try:
+            await invalidate_budget_reservation_counters(budget_reservation=budget_reservation)
+        except Exception:
+            verbose_proxy_logger.exception(
+                "Failed to invalidate budget reservation counters after cancel-path reconcile failed"
+            )
+        finally:
+            budget_reservation["finalized"] = True
 
 
 async def invalidate_budget_reservation_counters(
