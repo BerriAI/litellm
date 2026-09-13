@@ -603,6 +603,7 @@ text_completion_codestral_models: Set = set()
 text_completion_inception_models: Set = set()
 anthropic_models: Set = set()
 openrouter_models: Set = set()
+requesty_models: Set = set()  # mutable-ok: populated at import time like the sibling provider model sets
 datarobot_models: Set = set()
 vertex_language_models: Set = set()
 vertex_vision_models: Set = set()
@@ -761,6 +762,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             empower_models.add(key)
         elif value.get("litellm_provider") == "openrouter":
             openrouter_models.add(key)
+        elif value.get("litellm_provider") == "requesty":
+            requesty_models.add(key)
         elif value.get("litellm_provider") == "vercel_ai_gateway":
             vercel_ai_gateway_models.add(key)
         elif value.get("litellm_provider") == "datarobot":
@@ -1038,6 +1041,7 @@ model_list = list(
     | anthropic_models
     | set(replicate_models)
     | openrouter_models
+    | requesty_models
     | datarobot_models
     | set(huggingface_models)
     | vertex_chat_models
@@ -1136,6 +1140,7 @@ def _build_models_by_provider() -> dict:
         "together_ai": together_ai_models,
         "baseten": baseten_models,
         "openrouter": openrouter_models,
+        "requesty": requesty_models,
         "vercel_ai_gateway": vercel_ai_gateway_models,
         "datarobot": datarobot_models,
         "vertex_ai": vertex_chat_models
@@ -1561,6 +1566,7 @@ if TYPE_CHECKING:
     from .llms.openrouter.chat.transformation import (
         OpenrouterConfig as OpenrouterConfig,
     )
+    from .llms.requesty.chat.transformation import RequestyConfig as RequestyConfig
     from .llms.datarobot.chat.transformation import DataRobotConfig as DataRobotConfig
     from .llms.anthropic.chat.transformation import AnthropicConfig as AnthropicConfig
     from .llms.bedrock.claude_platform.transformation import (
