@@ -6923,25 +6923,33 @@ class MCPServerManager:
 
         if not should_skip_health_check:
             try:
-                resolved_static_headers: Final = await self._resolve_static_headers_with_env_vars(
-                    server=server,
-                    user_api_key_auth=None,
-                    raise_on_missing=False,
-                )
-                extra_headers: Final = dict(resolved_static_headers) if resolved_static_headers else {}
-                client: Final = await self._create_mcp_client(
-                    server=server,
-                    mcp_auth_header=None,
-                    extra_headers=extra_headers,
-                    stdio_env=None,
-                )
+                if server.spec_path:
+                    # url is a REST base, not an MCP endpoint, so the spec is the only thing to probe
+                    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+                        load_openapi_spec_async,
+                    )
 
-                async def _noop(session):
-                    return "ok"
+                    await asyncio.wait_for(load_openapi_spec_async(server.spec_path), timeout=MCP_HEALTH_CHECK_TIMEOUT)
+                else:
+                    resolved_static_headers: Final = await self._resolve_static_headers_with_env_vars(
+                        server=server,
+                        user_api_key_auth=None,
+                        raise_on_missing=False,
+                    )
+                    extra_headers: Final = dict(resolved_static_headers) if resolved_static_headers else {}
+                    client: Final = await self._create_mcp_client(
+                        server=server,
+                        mcp_auth_header=None,
+                        extra_headers=extra_headers,
+                        stdio_env=None,
+                    )
 
-                # Add timeout wrapper to prevent hanging
-                await asyncio.wait_for(client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT)
-                self._remember_upstream_initialize_instructions(server, client)
+                    async def _noop(session):
+                        return "ok"
+
+                    # Add timeout wrapper to prevent hanging
+                    await asyncio.wait_for(client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT)
+                    self._remember_upstream_initialize_instructions(server, client)
                 status = "healthy"
             except asyncio.TimeoutError:
                 health_check_error = f"Health check timed out after {MCP_HEALTH_CHECK_TIMEOUT} seconds"
