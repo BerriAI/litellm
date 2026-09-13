@@ -4489,7 +4489,17 @@ def get_optional_params(
         BedrockModelInfo: Final = getattr(sys.modules[__name__], "BedrockModelInfo")
         bedrock_route: Final = BedrockModelInfo.get_bedrock_route(model)
         bedrock_base_model: Final = BedrockModelInfo.get_base_model(model)
-        if bedrock_route == "converse" or bedrock_route == "converse_like":
+        if not BedrockModelInfo.has_explicit_route(model) and model_supports_native_endpoint(
+            "/v1/chat/completions", model, LlmProviders.BEDROCK
+        ):
+            native_provider_config: Final = provider_config or litellm.AmazonBedrockOpenAIChatCompletionsConfig()
+            optional_params = native_provider_config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=bool(drop_params),
+            )
+        elif bedrock_route == "converse" or bedrock_route == "converse_like":
             optional_params = litellm.AmazonConverseConfig().map_openai_params(
                 model=model,
                 non_default_params=non_default_params,
@@ -8075,7 +8085,7 @@ def _get_model_cost_entry_for_provider_config(
     model: str,
     provider: LlmProviders,
 ) -> dict[str, Any]:
-    candidate_keys: Final = (model, f"{provider.value}/{model}")
+    candidate_keys: Final = (f"{provider.value}/{model}", model)
     for model_key in candidate_keys:
         model_info = litellm.model_cost.get(model_key)
         if model_info is not None:
@@ -8087,6 +8097,22 @@ def _get_model_cost_entry_for_provider_config(
         if model_info is not None:
             return model_info
     return {}
+
+
+def model_supports_native_endpoint(endpoint: str, model: str, provider: LlmProviders) -> bool:
+    bedrock_model_info: Final = litellm.BedrockModelInfo
+    base_model: Final = bedrock_model_info.get_base_model(model) if provider is LlmProviders.BEDROCK else model
+    candidate_models: Final = (model, base_model) if base_model != model else (model,)
+    return any(
+        isinstance(
+            supported_endpoints := _get_model_cost_entry_for_provider_config(candidate_model, provider).get(
+                "supported_endpoints"
+            ),
+            (list, tuple),
+        )
+        and endpoint in supported_endpoints
+        for candidate_model in candidate_models
+    )
 
 
 class ProviderConfigManager:
@@ -8547,6 +8573,22 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> BaseAnthropicMessagesConfig | None:
+        if (
+            provider is LlmProviders.BEDROCK
+            and not litellm.BedrockModelInfo.has_explicit_route(model)
+            and model_supports_native_endpoint("/v1/messages", model, LlmProviders.BEDROCK)
+        ):
+            from litellm.llms.bedrock.messages.native_transformation import (
+                AmazonBedrockNativeMessagesConfig,
+            )
+
+            return AmazonBedrockNativeMessagesConfig()
+        if provider is LlmProviders.BEDROCK_MANTLE and model_supports_native_endpoint(
+            "/v1/messages", model, LlmProviders.BEDROCK_MANTLE
+        ):
+            from litellm.llms.bedrock.messages.native_transformation import mantle_native_messages_config
+
+            return mantle_native_messages_config()
         return ProviderConfigManager._get_provider_anthropic_messages_config_cached(model=model, provider=provider)
 
     @staticmethod
@@ -8819,6 +8861,12 @@ class ProviderConfigManager:
             return litellm.BedrockMantleResponsesAPIConfig(
                 use_openai_path=mantle_base_segment(model, litellm.model_cost) == "openai/v1"
             )
+        elif litellm.LlmProviders.BEDROCK == provider:
+            if model is None or not model_supports_native_endpoint("/v1/responses", model, LlmProviders.BEDROCK):
+                return None
+            from litellm.llms.bedrock.responses.transformation import AmazonBedrockResponsesAPIConfig
+
+            return AmazonBedrockResponsesAPIConfig()
         return None
 
     @staticmethod

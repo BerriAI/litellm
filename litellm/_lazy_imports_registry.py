@@ -204,6 +204,7 @@ LLM_CONFIG_NAMES: Final = (
     "AmazonTwelveLabsPegasusConfig",
     "AmazonInvokeConfig",
     "AmazonBedrockOpenAIConfig",
+    "AmazonBedrockOpenAIChatCompletionsConfig",
     "AmazonStabilityConfig",
     "AmazonStability3Config",
     "AmazonNovaCanvasConfig",
@@ -243,6 +244,7 @@ LLM_CONFIG_NAMES: Final = (
     "DatabricksResponsesAPIConfig",
     "OpenRouterResponsesAPIConfig",
     "BedrockMantleResponsesAPIConfig",
+    "AmazonBedrockResponsesAPIConfig",
     "GoogleAIStudioInteractionsConfig",
     "VertexAIInteractionsConfig",
     "OpenAIOSeriesConfig",
@@ -847,6 +849,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         ".llms.bedrock.chat.invoke_transformations.amazon_openai_transformation",
         "AmazonBedrockOpenAIConfig",
     ),
+    "AmazonBedrockOpenAIChatCompletionsConfig": (
+        ".llms.bedrock.chat.openai_chat_completions_transformation",
+        "AmazonBedrockOpenAIChatCompletionsConfig",
+    ),
     "AmazonStabilityConfig": (
         ".llms.bedrock.image_generation.amazon_stability1_transformation",
         "AmazonStabilityConfig",
@@ -985,6 +991,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "BedrockMantleResponsesAPIConfig": (
         ".llms.bedrock_mantle.responses.transformation",
         "BedrockMantleResponsesAPIConfig",
+    ),
+    "AmazonBedrockResponsesAPIConfig": (
+        ".llms.bedrock.responses.transformation",
+        "AmazonBedrockResponsesAPIConfig",
     ),
     "GoogleAIStudioInteractionsConfig": (
         ".llms.gemini.interactions.transformation",
