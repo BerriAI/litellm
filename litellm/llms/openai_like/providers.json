@@ -115,6 +115,14 @@
       "max_completion_tokens": "max_tokens"
     }
   },
+  "edenai": {
+    "base_url": "https://api.edenai.run/v3",
+    "api_key_env": "EDENAI_API_KEY",
+    "api_base_env": "EDENAI_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
   "darkbloom": {
     "base_url": "https://api.darkbloom.dev/v1",
     "api_key_env": "DARKBLOOM_API_KEY",
