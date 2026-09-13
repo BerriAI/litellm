@@ -1693,6 +1693,12 @@ RESET_BUDGET_JOB_NAME: Final = "reset_budget_job"
 # leader keeps the lease across its own run, and a crashed one strands the sweep for
 # at most a single tick.
 RESET_BUDGET_JOB_LOCK_TTL_SECONDS: Final[int] = 900
+RESET_BUDGET_SPEND_COUNTER_RESET_MAX_ATTEMPTS: Final = max(
+    1, int(os.getenv("RESET_BUDGET_SPEND_COUNTER_RESET_MAX_ATTEMPTS", "3"))
+)
+RESET_BUDGET_SPEND_COUNTER_RESET_RETRY_DELAY_SECONDS: Final = float(
+    os.getenv("RESET_BUDGET_SPEND_COUNTER_RESET_RETRY_DELAY_SECONDS", "0.25")
+)
 PROXY_BATCH_POLLING_INTERVAL: Final = int(os.getenv("PROXY_BATCH_POLLING_INTERVAL", 3600))
 MAX_OBJECTS_PER_POLL_CYCLE: Final = max(1, int(os.getenv("MAX_OBJECTS_PER_POLL_CYCLE", 50)))
 MANAGED_OBJECT_STALENESS_CUTOFF_DAYS: Final = max(1, int(os.getenv("MANAGED_OBJECT_STALENESS_CUTOFF_DAYS", 7)))
