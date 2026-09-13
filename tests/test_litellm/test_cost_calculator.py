@@ -1213,6 +1213,47 @@ def test_tiered_pricing_only_deployment_completion_cost_is_nonzero():
     assert cost > 0
 
 
+def test_per_query_priced_rerank_deployment_completion_cost_is_nonzero():
+    """A rerank deployment priced only via ``input_cost_per_query`` must resolve
+    cost against its ``router_model_id`` entry: the shared backend alias has
+    custom pricing stripped, so pricing it there bills every search unit as $0.
+    """
+    from litellm import Router
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "semantic-ranker-default-004",
+                "litellm_params": {
+                    "model": "vertex_ai/semantic-ranker-default-004",
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-east5",
+                },
+                "model_info": {"input_cost_per_query": 0.001},
+            },
+        ]
+    )
+    router_model_id: Final = router.model_list[0]["model_info"]["id"]
+    assert litellm.model_cost["vertex_ai/semantic-ranker-default-004"].get("input_cost_per_query") is None
+
+    response: Final = RerankResponse(
+        id="vertex_ai_rerank_test",
+        results=[{"index": 3, "relevance_score": 0.48}],
+        meta={"billed_units": {"search_units": 3}},
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="vertex_ai/semantic-ranker-default-004",
+        custom_llm_provider="vertex_ai",
+        call_type="arerank",
+        custom_pricing=True,
+        router_model_id=router_model_id,
+    )
+
+    assert cost == pytest.approx(3 * 0.001)
+
+
 def test_azure_realtime_cost_calculator(_local_model_cost_map):
 
     cost = handle_realtime_stream_cost_calculation(
