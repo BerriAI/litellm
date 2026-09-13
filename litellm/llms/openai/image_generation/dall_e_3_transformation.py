@@ -20,7 +20,7 @@ class DallE3ImageGenerationConfig(BaseImageGenerationConfig):
     """
 
     def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
-        return ["n", "response_format", "quality", "size", "user", "style"]
+        return ["n", "response_format", "quality", "size", "user", "style", "extra_headers"]
 
     def map_openai_params(
         self,

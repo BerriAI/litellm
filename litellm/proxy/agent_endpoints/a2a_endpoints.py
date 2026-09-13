@@ -405,6 +405,7 @@ async def _handle_stream_message(
     request_data: dict[str, object] | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
     served_version: A2AVersion = "0.3",
+    agent_card_params: dict[str, Any] | None = None,
 ) -> StreamingResponse:
     """Handle message/stream method via SDK functions.
 
@@ -474,6 +475,7 @@ async def _handle_stream_message(
                 metadata=metadata,
                 proxy_server_request=proxy_server_request,
                 agent_extra_headers=agent_extra_headers,
+                agent_card_params=agent_card_params,
             )
 
             if (
@@ -863,6 +865,7 @@ async def invoke_agent_a2a(
                 proxy_server_request=data.get("proxy_server_request"),
                 litellm_logging_obj=logging_obj,
                 agent_extra_headers=agent_extra_headers,
+                agent_card_params=agent_card_params,
             )
 
             try:
@@ -906,6 +909,7 @@ async def invoke_agent_a2a(
                 request_data=data,
                 proxy_logging_obj=proxy_logging_obj,
                 served_version=served_version,
+                agent_card_params=agent_card_params,
             )
         elif method in {
             "tasks/get",
