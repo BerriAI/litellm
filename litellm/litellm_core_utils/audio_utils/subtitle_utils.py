@@ -3,6 +3,7 @@
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
+from html import escape
 from itertools import accumulate, groupby
 from typing import Final
 
@@ -210,7 +211,7 @@ def _render_vtt(cues: Sequence[SubtitleCue]) -> str:
         for cue in cues
         for line in (
             f"{_format_timestamp(cue.start_ms, '.')} --> {_format_timestamp(cue.end_ms, '.')}",
-            cue.text,
+            escape(cue.text, quote=False),
             "",
         )
     )

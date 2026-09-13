@@ -1,3 +1,7 @@
+from typing import Final
+
+import pytest
+
 from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
     SubtitleToken,
     _merge_tokens_into_words,
@@ -105,6 +109,19 @@ class TestRenderSubtitleTokensAsSrt:
 
 
 class TestRenderSubtitleTokensAsVtt:
+    @pytest.mark.parametrize(
+        ("text", "payload"),
+        (
+            ("Use <b>bold</b>.", "Use &lt;b&gt;bold&lt;/b&gt;."),
+            ("Write &amp; literally.", "Write &amp;amp; literally."),
+            ("A --> B", "A --&gt; B"),
+            ("\"नमस्ते\" & 'hello'", "\"नमस्ते\" &amp; 'hello'"),
+        ),
+    )
+    def test_transcript_text_is_escaped_for_cue_payload(self, text: str, payload: str) -> None:
+        tokens: Final = (SubtitleToken(text=text, start_ms=0, end_ms=1000),)
+        assert render_subtitle_tokens_as_vtt(tokens) == f"WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n{payload}\n"
+
     def test_single_cue_full_document(self):
         tokens = (
             SubtitleToken(text="Hello ", start_ms=0, end_ms=500),
@@ -130,6 +147,20 @@ class TestRenderSubtitleTokensAsVtt:
 
 
 class TestSynthesizeSubtitleDocument:
+    @pytest.mark.parametrize(
+        ("response_format", "expected"),
+        (
+            ("vtt", "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n&lt;word&gt; &amp;amp;\n"),
+            ("srt", "1\n00:00:00,000 --> 00:00:01,000\n<word> &amp;\n"),
+        ),
+    )
+    def test_transcript_escaping_is_specific_to_vtt(self, response_format: str, expected: str) -> None:
+        words: Final = (
+            {"word": "<word>", "start": 0.0, "end": 0.5},
+            {"word": "&amp;", "start": 0.5, "end": 1.0},
+        )
+        assert synthesize_subtitle_document(words, response_format) == expected
+
     WORDS = [
         {"word": "Four", "start": 0.4, "end": 0.7, "speaker": "spk:0"},
         {"word": "score", "start": 0.7, "end": 1.1, "speaker": "spk:0"},
