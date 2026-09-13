@@ -28937,9 +28937,7 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
-            budget_limits?: {
-                [key: string]: unknown;
-            }[] | null;
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /**
@@ -30510,9 +30508,7 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
-            budget_limits?: {
-                [key: string]: unknown;
-            }[] | null;
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /**
@@ -39064,9 +39060,7 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
-            budget_limits?: {
-                [key: string]: unknown;
-            }[] | null;
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /**
