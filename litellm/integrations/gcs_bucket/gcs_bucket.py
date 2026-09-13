@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import math
 import os
 import time
 from collections.abc import Sequence
@@ -403,12 +404,22 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         """
         Override flush_queue to work with asyncio.Queue.
         """
-        await self.flush_queue_and_report()
+        async with self.flush_lock:
+            await self._send_queued_events()
+            self.last_flush_time = time.time()
 
     async def flush_queue_and_report(self) -> GCSFlushResult:
-        result: Final = await self._send_queued_events()
-        self.last_flush_time = time.time()
-        return result
+        """
+        Flush everything queued at call time, waiting for any in-flight periodic flush first, and report every event id.
+        """
+        async with self.flush_lock:
+            batch_count: Final = math.ceil(self.log_queue.qsize() / self.batch_size)
+            results: Final = tuple([await self._send_queued_events() for _ in range(batch_count)])
+            self.last_flush_time = time.time()
+        return GCSFlushResult(
+            sent_ids=tuple(event_id for result in results for event_id in result.sent_ids),
+            failed_ids=tuple(event_id for result in results for event_id in result.failed_ids),
+        )
 
     async def periodic_flush(self):
         """

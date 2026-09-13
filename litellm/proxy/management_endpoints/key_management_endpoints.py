@@ -7146,14 +7146,12 @@ async def flush_gcs_and_describe_failures(gcs_logger: CustomLogger | None, healt
 
     if not isinstance(gcs_logger, GCSBucketLogger):
         return "gcs_bucket callback was selected but no GCS logger was initialized"
-    flush_rounds: Final = max(1, math.ceil(gcs_logger.log_queue.qsize() / gcs_logger.batch_size))
-    for _ in range(flush_rounds):
-        flush_result = await gcs_logger.flush_queue_and_report()
-        if health_check_event_id in flush_result.failed_ids:
-            return (
-                f"GCS upload failed for the /key/health event and {flush_result.failed - 1} other event(s), "
-                f"{flush_result.sent} uploaded"
-            )
+    flush_result: Final = await gcs_logger.flush_queue_and_report()
+    if health_check_event_id in flush_result.failed_ids:
+        return (
+            f"GCS upload failed for the /key/health event and {flush_result.failed - 1} other event(s), "
+            f"{flush_result.sent} uploaded"
+        )
     return None
 
 

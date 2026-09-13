@@ -1,4 +1,5 @@
 from typing import Final
+import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -18415,7 +18416,12 @@ async def test_key_health_rejects_key_logging_entries_without_a_callback_name():
     assert "callback_name is required" in exc.value.message
 
 
-def _fake_upload_gcs_logger(broken_bucket: str | None = None, batch_size: int = 2048, enqueue_error: str | None = None):
+def _fake_upload_gcs_logger(
+    broken_bucket: str | None = None,
+    batch_size: int = 2048,
+    enqueue_error: str | None = None,
+    upload_gate: asyncio.Event | None = None,
+):
     from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
     from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
     from litellm.types.integrations.gcs_bucket import GCSLoggingConfig, GCSLogQueueItem
@@ -18456,11 +18462,32 @@ def _fake_upload_gcs_logger(broken_bucket: str | None = None, batch_size: int = 
         async def _log_json_data_on_gcs(
             self, headers: dict[str, str], bucket_name: str, object_name: str, logging_payload: StandardLoggingPayload | str
         ) -> None:
+            if upload_gate is not None:
+                await upload_gate.wait()
             if bucket_name == broken_bucket:
                 raise RuntimeError("storage.googleapis.com returned 403")
             self.uploaded_buckets.append(bucket_name)
 
     return _FakeUploadGCSLogger()
+
+
+@pytest.mark.asyncio
+async def test_flush_gcs_waits_for_an_in_flight_periodic_flush_that_took_the_health_event():
+    from litellm.proxy.management_endpoints.key_management_endpoints import flush_gcs_and_describe_failures
+
+    upload_gate = asyncio.Event()
+    logger = _fake_upload_gcs_logger(broken_bucket="team-bucket", upload_gate=upload_gate)
+    await logger.enqueue("health-event", "team-bucket")
+    periodic_flush = asyncio.create_task(logger.flush_queue())
+    await asyncio.sleep(0)
+    assert logger.log_queue.empty()
+
+    health_flush = asyncio.create_task(flush_gcs_and_describe_failures(logger, "health-event"))
+    await asyncio.sleep(0)
+    upload_gate.set()
+    await periodic_flush
+
+    assert await health_flush == "GCS upload failed for the /key/health event and 0 other event(s), 0 uploaded"
 
 
 @pytest.mark.asyncio
