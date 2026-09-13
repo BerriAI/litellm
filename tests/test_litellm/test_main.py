@@ -1659,6 +1659,68 @@ async def test_async_mock_delay():
     assert delay >= 0.01
 
 
+def test_stream_chunk_builder_keeps_tool_calls_carried_only_by_a_later_choice_of_a_multi_choice_chunk():
+    from litellm import stream_chunk_builder
+    from litellm.types.utils import (
+        ChatCompletionDeltaToolCall,
+        Delta,
+        Function,
+        ModelResponseStream,
+        StreamingChoices,
+    )
+
+    def chunk(choices: list[StreamingChoices]) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-multi-choice",
+            created=1751934860,
+            model="gpt-4.1-mini",
+            object="chat.completion.chunk",
+            choices=choices,
+        )
+
+    chunks = [
+        chunk(
+            [
+                StreamingChoices(index=0, delta=Delta(role="assistant", content="hello")),
+                StreamingChoices(
+                    index=1,
+                    delta=Delta(
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionDeltaToolCall(
+                                id="call_1",
+                                index=0,
+                                type="function",
+                                function=Function(name="lookup_fruit", arguments='{"fruit":'),
+                            )
+                        ],
+                    ),
+                ),
+            ]
+        ),
+        chunk(
+            [
+                StreamingChoices(index=0, delta=Delta(content=" world"), finish_reason="stop"),
+                StreamingChoices(
+                    index=1,
+                    delta=Delta(
+                        tool_calls=[ChatCompletionDeltaToolCall(index=0, function=Function(arguments='"kiwi"}'))]
+                    ),
+                    finish_reason="tool_calls",
+                ),
+            ]
+        ),
+    ]
+
+    response = stream_chunk_builder(chunks=chunks)
+
+    tool_calls = response.choices[0].message.tool_calls
+    assert tool_calls is not None
+    assert [(call.id, call.function.name, call.function.arguments) for call in tool_calls] == [
+        ("call_1", "lookup_fruit", '{"fruit":"kiwi"}')
+    ]
+
+
 def test_stream_chunk_builder_thinking_blocks():
     from litellm import stream_chunk_builder
     from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
