@@ -8386,6 +8386,41 @@ async def test_handle_llm_api_exception_forwards_provider_headers_on_http_status
     assert exc_info.value.headers["llm_provider-x-amzn-requestid"] == "req-passthrough-500"
 
 
+@pytest.mark.asyncio
+async def test_handle_llm_api_exception_forwards_litellm_response_headers_when_response_is_synthetic():
+    """Exception mapping hands the proxy a mapped error whose ``response`` is a synthetic empty
+    ``httpx.Response`` and parks the provider's real headers on ``litellm_response_headers``.
+    The client must still get the provider request id, as it does on a 200.
+    """
+    import httpx
+
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+    mapped = litellm.BadRequestError(
+        message="OpenAIException - max_tokens is too large: 999999999.",
+        model="gpt-4o-mini",
+        llm_provider="openai",
+    )
+    mapped.litellm_response_headers = httpx.Headers({"x-request-id": "req_openai_400"})
+    assert dict(mapped.response.headers) == {}
+
+    processor = ProxyBaseLLMRequestProcessing(data={})
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+    with pytest.raises(ProxyException) as exc_info:
+        await processor._handle_llm_api_exception(
+            e=mapped,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert exc_info.value.code == "400"
+    assert "max_tokens is too large: 999999999." in exc_info.value.message
+    assert exc_info.value.headers["llm_provider-x-request-id"] == "req_openai_400"
+
+
 class TestBackgroundResponseRetrievalGovernance:
     """LIT-7175: retrieving a background Response attaches the model's post_call policy pipelines."""
 
