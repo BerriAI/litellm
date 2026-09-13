@@ -263,7 +263,7 @@ class ValkeySemanticCache(RedisSemanticCache):
                 print_verbose("No prompt provided for semantic caching")
                 return
 
-            embedding: Final = self._get_embedding(prompt)
+            embedding: Final = self._get_embedding(prompt, metadata=self._embedding_metadata(kwargs))
             self._ensure_index_sync(len(embedding))
 
             doc_key: Final = self._doc_key(key)
@@ -282,7 +282,7 @@ class ValkeySemanticCache(RedisSemanticCache):
                 self._record_similarity(kwargs, 0.0)
                 return None
 
-            embedding: Final = self._get_embedding(prompt)
+            embedding: Final = self._get_embedding(prompt, metadata=self._embedding_metadata(kwargs))
             self._ensure_index_sync(len(embedding))
 
             search_result: Final = self.sync_client.ft(self.index_name).search(
