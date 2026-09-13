@@ -67,6 +67,7 @@ IGNORE_FUNCTIONS = [
     "_redact_agent_params_tree",  # max depth set (default 10), same shape as _redact_sensitive_litellm_params.
     "_restore_redacted_nested_value",  # max depth set (default 10), mirrors _redact_agent_params_tree on the write side.
     "_unqualified",  # bounded by the qualifier depth of a static TypedDict annotation (Annotated, Required/NotRequired, ReadOnly around one type, no cycles possible).
+    "_query_param_aliases",  # bounded by the route's Depends() tree, fixed at registration and already resolved acyclically by fastapi itself.
 ]
 
 
