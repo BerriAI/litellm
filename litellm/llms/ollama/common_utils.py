@@ -11,6 +11,16 @@ class OllamaError(BaseLLMException):
         super().__init__(status_code=status_code, message=message, headers=headers)
 
 
+def resolve_ollama_tool_calling_provider(custom_llm_provider: str, add_function_to_prompt: bool) -> str:
+    """
+    For requests with tools: /api/generate has no native tool calling, so ollama/ goes through the
+    ollama_chat adapter unless add_function_to_prompt opts back into the legacy JSON prompt emulation
+    """
+    if custom_llm_provider == "ollama" and not add_function_to_prompt:
+        return "ollama_chat"
+    return custom_llm_provider
+
+
 def _convert_image(image):
     """
     Convert image to base64 encoded image if not already in base64 format

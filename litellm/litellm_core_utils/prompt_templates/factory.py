@@ -32,6 +32,7 @@ from litellm.types.llms.openai import (
     ChatCompletionFileObject,
     ChatCompletionFunctionMessage,
     ChatCompletionImageObject,
+    ChatCompletionSystemMessage,
     ChatCompletionTextObject,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolMessage,
@@ -5130,25 +5131,24 @@ def _bedrock_tools_pt(tools: list, model: str | None = None) -> list[BedrockTool
     return tool_block_list
 
 
-# Function call template
-def function_call_prompt(messages: list, functions: list):
-    function_prompt = """Produce JSON OUTPUT ONLY! Adhere to this format {"name": "function_name", "arguments":{"argument_name": "argument_value"}} The following functions are available to you:"""
-    for function in functions:
-        function_prompt += f"""\n{function}\n"""
+def _append_function_prompt(message: ChatCompletionSystemMessage, text: str) -> ChatCompletionSystemMessage:
+    content: Final = message["content"]
+    if isinstance(content, str):
+        return {**message, "content": content + text}
+    return {**message, "content": [*content, ChatCompletionTextObject(type="text", text=text)]}
 
-    function_added_to_prompt = False
-    for message in messages:
-        if "system" in message["role"]:
-            if isinstance(message["content"], str):
-                message["content"] += f""" {function_prompt}"""
-            else:
-                message["content"].append({"type": "text", "text": f""" {function_prompt}"""})
-            function_added_to_prompt = True
 
-    if function_added_to_prompt is False:
-        messages.append({"role": "system", "content": f"""{function_prompt}"""})
-
-    return messages
+def function_call_prompt(messages: Sequence[AllMessageValues], function_descriptions: str) -> list[AllMessageValues]:
+    function_prompt: Final = (
+        'Produce JSON OUTPUT ONLY! Adhere to this format {"name": "function_name", "arguments":{"argument_name": '
+        '"argument_value"}} The following functions are available to you:' + function_descriptions
+    )
+    if not any(message["role"] == "system" for message in messages):
+        return [*messages, ChatCompletionSystemMessage(role="system", content=function_prompt)]
+    return [
+        _append_function_prompt(message, f" {function_prompt}") if message["role"] == "system" else message
+        for message in messages
+    ]
 
 
 def response_schema_prompt(model: str, response_schema: dict) -> str:

@@ -180,7 +180,6 @@ from .litellm_core_utils.prompt_templates.common_utils import (
 )
 from .litellm_core_utils.prompt_templates.factory import (
     custom_prompt,
-    function_call_prompt,
     map_system_message_pt,
     ollama_pt,
     prompt_factory,
@@ -221,6 +220,7 @@ from .llms.nvidia_riva.audio_transcription.transformation import (
     NvidiaRivaAudioTranscriptionConfig,
 )
 from .llms.oci.chat.transformation import OCIChatConfig
+from .llms.ollama.common_utils import resolve_ollama_tool_calling_provider
 from .llms.ollama.completion import handler as ollama
 from .llms.oobabooga.chat import oobabooga
 from .llms.openai.completion.handler import OpenAITextCompletion
@@ -5344,6 +5344,10 @@ def completion(
                 GenericLiteLLMParams(**_supplemental_provider_params) if _supplemental_provider_params else None
             ),
         )
+        if tools or functions:
+            custom_llm_provider = resolve_ollama_tool_calling_provider(  # rebind-ok: ollama tools use the chat adapter
+                custom_llm_provider, add_function_to_prompt=litellm.add_function_to_prompt
+            )
 
         ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name
         responses_api_model_info, model = responses_api_bridge_check(
@@ -5500,12 +5504,6 @@ def completion(
             add_provider_specific_params=True,
             provider_config=provider_config,
         )
-
-        if litellm.add_function_to_prompt and optional_params.get(
-            "functions_unsupported_model", None
-        ):  # if user opts to add it to prompt, when API doesn't support function calling
-            functions_unsupported_model: Final = optional_params.pop("functions_unsupported_model")
-            messages = function_call_prompt(messages=messages, functions=functions_unsupported_model)
 
         # For logging - save the values of the litellm-specific params passed in
         litellm_params = get_litellm_params(

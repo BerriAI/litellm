@@ -2,6 +2,7 @@
 Test for GitHub issue #11267 - System message format issue with Ollama + tools
 """
 
+import copy
 from unittest.mock import patch
 
 
@@ -49,6 +50,8 @@ def test_system_message_format_issue_reproduction():
         }
     ]
 
+    original_messages = copy.deepcopy(messages)
+
     response = completion(
         model=model,
         messages=messages,
@@ -57,7 +60,7 @@ def test_system_message_format_issue_reproduction():
         mock_response=True,
     )
 
-    assert len(messages[1]["content"]) == 2
+    assert messages == original_messages
 
 
 if __name__ == "__main__":
