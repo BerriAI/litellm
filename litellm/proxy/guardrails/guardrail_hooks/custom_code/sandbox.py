@@ -31,6 +31,7 @@ from RestrictedPython.Eval import default_guarded_getitem, default_guarded_getit
 from RestrictedPython.Guards import (
     full_write_guard,
     guarded_iter_unpack_sequence,
+    guarded_unpack_sequence,
     safer_getattr,
 )
 
@@ -44,7 +45,10 @@ class AsyncAwareTransformer(RestrictingNodeTransformer):
     has the same ``_fields`` as ``FunctionDef`` and the same security
     semantics, so we delegate to ``visit_FunctionDef`` — name check, argument
     check, print-scope wrapping, and any future additions to that method are
-    inherited automatically. ``AsyncFor``/``AsyncWith``/``Await`` delegate to
+    inherited automatically. ``AsyncWith`` gets the same treatment for the same
+    reason: ``node_contents_visit`` only recurses into children, so routing it
+    there left ``async with x as (a, b)`` without the unpack guard that
+    ``with x as (a, b)`` gets. ``AsyncFor``/``Await`` delegate to
     ``node_contents_visit`` so their children still get transformed.
     """
 
@@ -55,7 +59,7 @@ class AsyncAwareTransformer(RestrictingNodeTransformer):
         return self.node_contents_visit(node)
 
     def visit_AsyncWith(self, node: ast.AsyncWith) -> ast.AST:
-        return self.node_contents_visit(node)
+        return self.visit_With(node)
 
     def visit_Await(self, node: ast.Await) -> ast.AST:
         return self.node_contents_visit(node)
@@ -115,6 +119,12 @@ def build_sandbox_globals() -> dict[str, object]:
         "_getitem_": default_guarded_getitem,
         "_getiter_": default_guarded_getiter,
         "_iter_unpack_sequence_": guarded_iter_unpack_sequence,
+        # RestrictedPython emits _unpack_sequence_ for every tuple-unpacking
+        # target that is not a for-loop target — ``a, b = pair``,
+        # ``a, *rest = seq``, ``with x as (a, b)`` — and, like _inplacevar_,
+        # ships no default. Without it those statements compile and then raise
+        # NameError the first time the guardrail runs.
+        "_unpack_sequence_": guarded_unpack_sequence,
         "_write_": full_write_guard,
         "_inplacevar_": _inplacevar_,
     }
