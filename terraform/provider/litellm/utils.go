@@ -42,7 +42,7 @@ func handleAPIResponse(resp *http.Response, reqBody interface{}, client *Client)
 		return nil, fmt.Errorf("failed to read response body: %v", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var errResp ErrorResponse
 		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
 			if isModelNotFoundError(errResp) {
@@ -132,7 +132,7 @@ func handleMCPAPIResponse(resp *http.Response, result interface{}, client *Clien
 		return fmt.Errorf("failed to read response body: %v", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var errResp ErrorResponse
 		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
 			if isMCPServerNotFoundError(errResp) {
@@ -213,7 +213,7 @@ func handleCredentialAPIResponse(resp *http.Response, result interface{}, client
 		return fmt.Errorf("credential_not_found")
 	}
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var errResp ErrorResponse
 		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
 			if isCredentialNotFoundError(errResp) {
@@ -272,7 +272,7 @@ func handleVectorStoreAPIResponse(resp *http.Response, result interface{}, clien
 		return fmt.Errorf("vector_store_not_found")
 	}
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var errResp ErrorResponse
 		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
 			if isVectorStoreNotFoundError(errResp) {
