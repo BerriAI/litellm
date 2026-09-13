@@ -1,8 +1,9 @@
 import json
 import os
 import time
+from collections.abc import Sequence
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import httpx
 
@@ -24,11 +25,19 @@ from litellm.utils import token_counter
 from ..common_utils import HuggingFaceError, hf_task_list, hf_tasks, output_parser
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+
+
+class _TokenEncoding(Protocol):
+    """Tokenizer handle the caller passes in; only `encode` is used, to count completion tokens."""
+
+    def encode(self, text: str, /) -> Sequence[object]: ...
 
 
 tgi_models_cache = None
@@ -369,7 +378,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         model_response: ModelResponse,
         task: hf_tasks | None,
         optional_params: dict,
-        encoding: Any,
+        encoding: "_TokenEncoding | None",
         messages: list[AllMessageValues],
         model: str,
     ):
@@ -439,9 +448,10 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         if output_text is not None and len(output_text) > 0:
             completion_tokens = 0
             try:
-                completion_tokens = len(
-                    encoding.encode(model_response["choices"][0]["message"].get("content", ""))
-                )  ##[TODO] use the llama2 tokenizer here
+                if encoding is not None:
+                    completion_tokens = len(
+                        encoding.encode(model_response["choices"][0]["message"].get("content", ""))
+                    )  ##[TODO] use the llama2 tokenizer here
             except Exception:
                 # this should remain non blocking we should not block a response returning if calculating usage fails
                 pass
@@ -469,7 +479,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

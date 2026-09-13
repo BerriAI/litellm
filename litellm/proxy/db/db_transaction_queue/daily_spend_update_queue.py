@@ -134,6 +134,10 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
                         payload.get("prompt_caching_savings_spend", 0) or 0
                     ) + daily_transaction.get("prompt_caching_savings_spend", 0)
 
+                    daily_transaction["gateway_injected_caching_savings_spend"] = (
+                        payload.get("gateway_injected_caching_savings_spend", 0) or 0
+                    ) + daily_transaction.get("gateway_injected_caching_savings_spend", 0)
+
                     daily_transaction["autorouter_savings_spend"] = (
                         payload.get("autorouter_savings_spend", 0) or 0
                     ) + daily_transaction.get("autorouter_savings_spend", 0)

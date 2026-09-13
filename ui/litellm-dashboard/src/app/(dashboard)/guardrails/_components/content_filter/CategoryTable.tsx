@@ -64,7 +64,7 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
             <SelectTrigger size="sm" className="w-[150px]" aria-label="Severity Threshold">
               <SelectValue />
             </SelectTrigger>
-            <SelectContent alignItemWithTrigger={false}>
+            <SelectContent>
               {SEVERITY_ITEMS.map((item) => (
                 <SelectItem key={item.value} value={item.value}>
                   {item.label}
@@ -93,7 +93,7 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
             <SelectTrigger size="sm" className="w-[120px]" aria-label="Action">
               <SelectValue />
             </SelectTrigger>
-            <SelectContent alignItemWithTrigger={false}>
+            <SelectContent>
               {ACTION_ITEMS.map((item) => (
                 <SelectItem key={item.value} value={item.value}>
                   {item.label}

@@ -5,6 +5,20 @@ from typing import Final
 from fastapi import HTTPException
 
 
+class MCPServerURLCredentialsError(HTTPException):
+    """A fixed, sanitized URL-credential migration error safe for operator previews."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=500,
+            detail=(
+                "misconfigured: auth_type none cannot be used with credentials embedded in the upstream URL; "
+                "remove them from the URL and configure Basic Auth with auth_type: basic and "
+                "auth_value: username:password"
+            ),
+        )
+
+
 class MCPUpstreamAuthError(Exception):
     """Raised when an upstream MCP server returns an authentication failure
     (typically HTTP 401) and the gateway should surface it transparently to
@@ -73,6 +87,24 @@ class MCPUpstreamAuthError(Exception):
             detail=detail,
             headers={"www-authenticate": challenge} if challenge else None,
         )
+
+
+class MCPOpenApiUpstreamError(Exception):
+    """An OpenAPI-backed MCP tool's upstream answered with a non-2xx that is not a 401.
+
+    Carries the status only. The upstream's response body is deliberately dropped rather than served
+    as tool content: it crosses a trust boundary and may hold prose, urls, or an error document that
+    reads as data, which is how these failures came to be reported as successful tool output. This
+    matches ``outcome_wire_value``'s contract for listing faults, category and status and nothing
+    else. A 401 is raised as ``MCPUpstreamAuthError`` instead, so the caller learns to
+    re-authenticate; every other status stays here, mirroring the regular MCP path where a 403
+    deliberately does not produce a challenge.
+    """
+
+    def __init__(self, status_code: int, server_name: str) -> None:
+        self.status_code = status_code
+        self.server_name = server_name
+        super().__init__(f"upstream returned HTTP {status_code}")
 
 
 class MCPToolResultError(Exception):

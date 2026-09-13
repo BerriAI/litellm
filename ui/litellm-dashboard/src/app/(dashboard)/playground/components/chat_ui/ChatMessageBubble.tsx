@@ -3,6 +3,8 @@ import React from "react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
+
+import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
 import { CodeInterpreterResult } from "@/components/llm_calls/code_interpreter_handler";
 import A2AMetrics from "./A2AMetrics";
 import AudioRenderer from "./AudioRenderer";
@@ -38,35 +40,34 @@ function ChatMessageBubble({
   codeInterpreterResult,
   accessToken,
 }: ChatMessageBubbleProps) {
+  const syntaxTheme = useSyntaxTheme(coy);
   const isUser = message.role === "user";
 
   return (
     <div className={`mb-4 min-w-0 ${isUser ? "text-right" : "text-left"}`}>
       <div
-        className="inline-block min-w-0 max-w-[92%] overflow-hidden rounded-lg p-3 shadow-xs sm:max-w-[85%] sm:px-4"
-        style={{
-          backgroundColor: isUser ? "#f0f8ff" : "#ffffff",
-          border: isUser ? "1px solid #e6f0fa" : "1px solid #f0f0f0",
-          textAlign: "left",
-        }}
+        data-testid="message-surface"
+        className={`inline-block min-w-0 max-w-[92%] overflow-hidden rounded-lg border p-3 text-left text-card-foreground shadow-xs sm:max-w-[85%] sm:px-4 ${
+          isUser ? "border-info/20 bg-info/10" : "border-border bg-card"
+        }`}
       >
         {/* Header: role icon + name + model badge */}
         <div className="mb-1.5 flex min-w-0 items-center gap-2">
           <div
-            className="flex items-center justify-center w-6 h-6 rounded-full mr-1"
-            style={{
-              backgroundColor: isUser ? "#e6f0fa" : "#f5f5f5",
-            }}
+            data-testid="message-avatar"
+            className={`flex items-center justify-center w-6 h-6 rounded-full mr-1 ${
+              isUser ? "bg-info/20" : "bg-muted"
+            }`}
           >
             {isUser ? (
-              <User className="size-3 text-blue-600" aria-hidden="true" />
+              <User className="size-3 text-info" aria-hidden="true" />
             ) : (
-              <Bot className="size-3 text-gray-600" aria-hidden="true" />
+              <Bot className="size-3 text-muted-foreground" aria-hidden="true" />
             )}
           </div>
           <strong className="text-sm capitalize">{message.role}</strong>
           {message.role === "assistant" && message.model && (
-            <span className="max-w-48 truncate rounded-sm bg-gray-100 px-2 py-0.5 text-xs font-normal text-gray-600 sm:max-w-80">
+            <span className="max-w-48 truncate rounded-sm bg-muted px-2 py-0.5 text-xs font-normal text-muted-foreground sm:max-w-80">
               {message.model}
             </span>
           )}
@@ -117,7 +118,7 @@ function ChatMessageBubble({
             <img
               src={typeof message.content === "string" ? message.content : ""}
               alt="Generated image"
-              className="max-w-full rounded-md border border-gray-200 shadow-xs"
+              className="max-w-full rounded-md border border-border shadow-xs"
               style={{ maxHeight: "500px" }}
             />
           ) : message.isAudio ? (
@@ -143,19 +144,19 @@ function ChatMessageBubble({
                     const match = /language-(\w+)/.exec(className || "");
                     return !inline && match ? (
                       <SyntaxHighlighter
-                        style={coy as any}
+                        {...props}
+                        style={syntaxTheme}
                         language={match[1]}
                         PreTag="div"
                         className="rounded-md my-2"
                         wrapLines={true}
                         wrapLongLines={true}
-                        {...props}
                       >
                         {String(children).replace(/\n$/, "")}
                       </SyntaxHighlighter>
                     ) : (
                       <code
-                        className={`${className} px-1.5 py-0.5 rounded-sm bg-gray-100 text-sm font-mono`}
+                        className={`${className} px-1.5 py-0.5 rounded-sm bg-muted text-sm font-mono`}
                         style={{ wordBreak: "break-word" }}
                         {...props}
                       >
@@ -175,7 +176,7 @@ function ChatMessageBubble({
                   <img
                     src={message.image.url}
                     alt="Generated image"
-                    className="max-w-full rounded-md border border-gray-200 shadow-xs"
+                    className="max-w-full rounded-md border border-border shadow-xs"
                     style={{ maxHeight: "500px" }}
                   />
                 </div>

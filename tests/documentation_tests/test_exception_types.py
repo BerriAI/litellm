@@ -11,9 +11,6 @@ import re
 # Backup the original sys.path
 original_sys_path = sys.path.copy()
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 
 public_exceptions = litellm.LITELLM_EXCEPTION_TYPES

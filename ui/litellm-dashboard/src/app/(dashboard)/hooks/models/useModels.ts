@@ -2,6 +2,7 @@ import { useQuery, useInfiniteQuery, useQueryClient, UseQueryResult } from "@tan
 import { createQueryKeys } from "../common/queryKeysFactory";
 import { modelInfoCall, modelHubCall, modelAvailableCall } from "@/components/networking";
 import useAuthorized from "../useAuthorized";
+import { EndpointType, isModeCompatibleWithEndpoint } from "@/components/chat_ui/mode_endpoint_mapping";
 
 export interface ProxyModel {
   id: string;
@@ -38,6 +39,9 @@ export const useModelsInfo = (
   sortBy?: string,
   sortOrder?: string,
   excludeAutoRouters: boolean = false,
+  modelName?: string,
+  accessGroup?: string,
+  wildcardOnly: boolean = false,
 ) => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<PaginatedModelInfoResponse>({
@@ -48,6 +52,7 @@ export const useModelsInfo = (
         page,
         size,
         ...(search && { search }),
+        ...(modelName && { modelName }),
         ...(modelId && { modelId }),
         ...(teamId && { teamId }),
         ...(sortBy && { sortBy }),
@@ -55,6 +60,8 @@ export const useModelsInfo = (
         // Part of the key: callers that exclude auto-routers must not share a cache entry
         // with callers that keep them.
         ...(excludeAutoRouters && { excludeAutoRouters: "true" }),
+        ...(accessGroup && { accessGroup }),
+        ...(wildcardOnly && { wildcardOnly: "true" }),
       },
     }),
     queryFn: async () =>
@@ -70,6 +77,9 @@ export const useModelsInfo = (
         sortBy,
         sortOrder,
         excludeAutoRouters,
+        modelName,
+        accessGroup,
+        wildcardOnly,
       ),
     enabled: Boolean(accessToken && userId && userRole),
   });
@@ -78,6 +88,7 @@ export const useModelsInfo = (
 const AUTO_ROUTER_MODEL_PREFIX = "auto_router/";
 const AUTO_ROUTER_LOOKUP_PAGE_SIZE = 1000;
 const NO_AUTO_ROUTERS: ReadonlySet<string> = new Set<string>();
+const NO_DEPLOYMENTS: AutoRouterDeployment[] = [];
 
 export interface AutoRouterCandidateDeployment {
   model_name?: string | null;
@@ -87,6 +98,7 @@ export interface AutoRouterCandidateDeployment {
 export interface AutoRouterDeployment extends AutoRouterCandidateDeployment {
   litellm_params?: {
     model?: string | null;
+    base_model?: string | null;
     complexity_router_config?: unknown;
     complexity_router_default_model?: string | null;
     auto_router_config?: unknown;
@@ -102,6 +114,7 @@ export interface AutoRouterDeployment extends AutoRouterCandidateDeployment {
     /** False for config.yaml-defined deployments, which the update and delete routes refuse. */
     db_model?: boolean | null;
     base_model?: string | null;
+    mode?: string | null;
     created_at?: string | null;
     updated_at?: string | null;
     team_id?: string | null;
@@ -122,6 +135,32 @@ export const selectAutoRouterModelGroups = (deployments: AutoRouterCandidateDepl
 
 export const selectAutoRouterDeployments = (deployments: AutoRouterDeployment[]): AutoRouterDeployment[] =>
   deployments.filter(isAutoRouterDeployment);
+
+export const selectPlainModelGroups = (deployments: AutoRouterCandidateDeployment[]): ReadonlySet<string> => {
+  const autoRouterGroups = selectAutoRouterModelGroups(deployments);
+  return new Set(
+    deployments
+      .map((deployment) => deployment.model_name)
+      .filter((modelName): modelName is string => Boolean(modelName))
+      .filter((modelName) => !autoRouterGroups.has(modelName)),
+  );
+};
+
+export const selectPlainChatModelDeployments = (deployments: AutoRouterDeployment[]): AutoRouterDeployment[] => {
+  const plainGroups = selectPlainModelGroups(deployments);
+  return deployments.filter(
+    (deployment) =>
+      plainGroups.has(deployment.model_name ?? "") &&
+      isModeCompatibleWithEndpoint(deployment.model_info?.mode, EndpointType.CHAT),
+  );
+};
+
+export const selectPlainChatModelGroups = (deployments: AutoRouterDeployment[]): ReadonlySet<string> =>
+  new Set(
+    selectPlainChatModelDeployments(deployments)
+      .map((deployment) => deployment.model_name)
+      .filter((name): name is string => Boolean(name)),
+  );
 
 export const fetchAllModelDeployments = async (
   accessToken: string,
@@ -161,26 +200,32 @@ export const autoRouterListKey = (userId: string | null, userRole: string | null
     },
   });
 
-export const useAutoRouterModelGroups = (): ReadonlySet<string> => {
+const useDeployments = <TSelected>(
+  select: (deployments: AutoRouterDeployment[]) => TSelected,
+): UseQueryResult<TSelected, Error> => {
   const { accessToken, userId, userRole } = useAuthorized();
-  const { data } = useQuery<AutoRouterDeployment[], Error, ReadonlySet<string>>({
+  return useQuery<AutoRouterDeployment[], Error, TSelected>({
     queryKey: autoRouterListKey(userId, userRole),
     queryFn: async () => await fetchAllModelDeployments(accessToken!, userId!, userRole!),
     enabled: Boolean(accessToken && userId && userRole),
-    select: selectAutoRouterModelGroups,
+    select,
   });
-  return data ?? NO_AUTO_ROUTERS;
 };
 
-export const useAutoRouters = (): UseQueryResult<AutoRouterDeployment[], Error> => {
-  const { accessToken, userId, userRole } = useAuthorized();
-  return useQuery<AutoRouterDeployment[], Error, AutoRouterDeployment[]>({
-    queryKey: autoRouterListKey(userId, userRole),
-    queryFn: async () => await fetchAllModelDeployments(accessToken!, userId!, userRole!),
-    enabled: Boolean(accessToken && userId && userRole),
-    select: selectAutoRouterDeployments,
-  });
-};
+export const useAutoRouterModelGroups = (): ReadonlySet<string> =>
+  useDeployments(selectAutoRouterModelGroups).data ?? NO_AUTO_ROUTERS;
+
+export const usePlainModelGroups = (): ReadonlySet<string> =>
+  useDeployments(selectPlainModelGroups).data ?? NO_AUTO_ROUTERS;
+
+export const usePlainChatModelGroups = (): ReadonlySet<string> =>
+  useDeployments(selectPlainChatModelGroups).data ?? NO_AUTO_ROUTERS;
+
+export const usePlainChatModelDeployments = (): AutoRouterDeployment[] =>
+  useDeployments(selectPlainChatModelDeployments).data ?? NO_DEPLOYMENTS;
+
+export const useAutoRouters = (): UseQueryResult<AutoRouterDeployment[], Error> =>
+  useDeployments(selectAutoRouterDeployments);
 
 export const useInvalidateAutoRouters = (): (() => Promise<void>) => {
   const queryClient = useQueryClient();

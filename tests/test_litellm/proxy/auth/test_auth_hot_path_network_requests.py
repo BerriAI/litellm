@@ -18,15 +18,12 @@ NOTE: This test does NOT require proxy extras (apscheduler, etc.) because
 it tests at the auth_checks level, not the full proxy_server level.
 """
 
-import os
-import sys
 import time
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -540,7 +537,7 @@ async def test_get_user_object_missing_user_negative_cache():
     mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
     for _ in range(3):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="User doesn't exist in db\\."):
             await get_user_object(
                 user_id=user_id,
                 prisma_client=mock_prisma,
@@ -570,7 +567,7 @@ async def test_get_user_object_missing_user_rechecks_after_expiry():
     mock_prisma.db.litellm_usertable = MagicMock()
     mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="User doesn't exist in db\\."):
         await get_user_object(
             user_id=user_id,
             prisma_client=mock_prisma,
@@ -586,7 +583,7 @@ async def test_get_user_object_missing_user_rechecks_after_expiry():
         time.time() - (db_cache_expiry + 1),
     )
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="User doesn't exist in db\\."):
         await get_user_object(
             user_id=user_id,
             prisma_client=mock_prisma,

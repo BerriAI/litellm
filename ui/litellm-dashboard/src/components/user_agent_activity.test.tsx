@@ -206,9 +206,9 @@ describe("UserAgentActivity", () => {
     const xPositions = new Set(rectangles.map((rect) => rect.getAttribute("d")?.match(/^M\s*([\d.]+)/)?.[1]));
     expect(xPositions.size).toBe(1);
 
-    expect(chart.textContent).toContain("Chrome/1.0");
-    expect(chart.textContent).toContain("Firefox/2.0");
-    expect(chart.textContent).toContain(firstBucketLabel);
+    expect(chart).toHaveTextContent(/Chrome\/1\.0/);
+    expect(chart).toHaveTextContent(/Firefox\/2\.0/);
+    expect(chart).toHaveTextContent(new RegExp(firstBucketLabel));
 
     const tickTexts = Array.from(chart.querySelectorAll(".recharts-cartesian-axis-tick-value")).map(
       (tick) => tick.textContent ?? "",

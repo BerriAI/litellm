@@ -1,15 +1,18 @@
 import asyncio
+import contextlib
 import importlib
 import json
 import os
+import re
 import socket
 import subprocess
-import sys
+import time
 import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Final
 from unittest import mock
-from unittest.mock import AsyncMock, MagicMock, mock_open, patch
+from unittest.mock import AsyncMock, MagicMock, create_autospec, mock_open, patch
 
 import click
 import httpx
@@ -19,7 +22,6 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system-path
 
 import litellm
 import litellm.proxy.proxy_server as proxy_server_module
@@ -27,7 +29,7 @@ from litellm.caching.caching import RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 from litellm.caching.dual_cache import DualCache
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, TokenCountRequest, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app, initialize
 from litellm.utils import _invalidate_model_cost_lowercase_map
@@ -79,6 +81,16 @@ def client_no_auth():
     return TestClient(app)
 
 
+def test_cors_exposes_cache_key_header_to_browser_js():
+    from fastapi.middleware.cors import CORSMiddleware
+
+    from litellm.constants import LITELLM_UI_ALLOW_HEADERS
+
+    cors_middleware = next(m for m in app.user_middleware if m.cls is CORSMiddleware)
+    assert cors_middleware.kwargs["expose_headers"] is LITELLM_UI_ALLOW_HEADERS
+    assert "x-litellm-cache-key" in cors_middleware.kwargs["expose_headers"]
+
+
 def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
     mock_login_result = {"user_id": "test-user"}
     mock_prisma_client = MagicMock()
@@ -120,6 +132,7 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
         password="secret",
         master_key="test-master-key",
         prisma_client=mock_prisma_client,
+        general_settings={},
     )
     mock_create_ui_token_object.assert_called_once_with(
         login_result=mock_login_result,
@@ -135,6 +148,72 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
     assert set(payload.keys()) == {"user_id", "exp"}
     assert secret == "test-master-key"
     assert mock_jwt_encode.call_args.kwargs == {"algorithm": "HS256"}
+
+
+def _mock_login_v2_deps(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.authenticate_user",
+        AsyncMock(return_value={"user_id": "test-user"}),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.create_ui_token_object",
+        MagicMock(return_value={"user_id": "test-user"}),
+    )
+    monkeypatch.setattr("jwt.encode", MagicMock(return_value="signed-token"))
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+    monkeypatch.setattr("litellm.proxy.utils.get_server_root_path", lambda: "")
+    monkeypatch.setattr("litellm.proxy.utils.get_proxy_base_url", lambda: None)
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+
+
+def test_login_v2_sets_secure_cookie_over_direct_https(monkeypatch):
+    """Regression: the token cookie previously carried no Secure/HttpOnly/SameSite
+    attributes at all, so it was always sent over plain HTTP."""
+    _mock_login_v2_deps(monkeypatch)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    client = TestClient(app, base_url="https://testserver")
+    response = client.post("/v2/login", json={"username": "alice", "password": "secret"})
+
+    assert response.status_code == 200
+    cookie = response.headers.get("set-cookie")
+    assert "Secure" in cookie
+    assert "HttpOnly" not in cookie  # deliberate: the dashboard reads this cookie via JS
+    assert "samesite=lax" in cookie.lower()
+
+
+def test_login_v2_does_not_set_secure_cookie_over_direct_http(monkeypatch):
+    _mock_login_v2_deps(monkeypatch)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    client = TestClient(app, base_url="http://testserver")
+    response = client.post("/v2/login", json={"username": "alice", "password": "secret"})
+
+    assert response.status_code == 200
+    assert "Secure" not in response.headers.get("set-cookie")
+
+
+def test_login_v2_sets_secure_cookie_behind_trusted_tls_terminating_proxy(monkeypatch):
+    """THE regression: litellm only sees a plain-HTTP hop when TLS terminates at a
+    reverse proxy, but the token cookie must still be Secure when the direct peer is
+    a configured trusted proxy reporting X-Forwarded-Proto: https."""
+    _mock_login_v2_deps(monkeypatch)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"use_x_forwarded_for": True, "mcp_trusted_proxy_ranges": ["10.0.0.0/8"]},
+    )
+
+    client = TestClient(app, base_url="http://testserver", client=("10.0.0.5", 50000))
+    response = client.post(
+        "/v2/login",
+        json={"username": "alice", "password": "secret"},
+        headers={"X-Forwarded-Proto": "https"},
+    )
+
+    assert response.status_code == 200
+    assert "Secure" in response.headers.get("set-cookie")
 
 
 def test_login_v2_returns_json_on_proxy_exception(monkeypatch):
@@ -343,6 +422,51 @@ def test_login_v3_exchange_happy_path(monkeypatch):
     assert exchange_data["token"] == "signed-token"
     assert "redirect_url" in exchange_data
     assert exchange_response.cookies.get("token") == "signed-token"
+
+
+def test_login_v3_exchange_sets_secure_cookie_behind_trusted_tls_terminating_proxy(monkeypatch):
+    """Regression: /v3/login/exchange's token cookie must be Secure behind a trusted
+    TLS-terminating reverse proxy even though litellm only sees a plain-HTTP hop."""
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.authenticate_user",
+        AsyncMock(return_value={"user_id": "test-user"}),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.create_ui_token_object",
+        MagicMock(return_value={"user_id": "test-user"}),
+    )
+    monkeypatch.setattr("jwt.encode", MagicMock(return_value="signed-token"))
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {
+            "control_plane_url": "https://cp.example.com",
+            "use_x_forwarded_for": True,
+            "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+        },
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mock_config = MagicMock()
+    mock_config.worker_registry = []
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", mock_config)
+    monkeypatch.setattr("litellm.proxy.utils.get_server_root_path", lambda: "")
+    monkeypatch.setattr("litellm.proxy.utils.get_proxy_base_url", lambda: None)
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+
+    client = TestClient(app, base_url="http://testserver", client=("10.0.0.5", 50000))
+
+    login_response = client.post("/v3/login", json={"username": "alice", "password": "secret"})
+    code = login_response.json()["code"]
+
+    exchange_response = client.post(
+        "/v3/login/exchange",
+        json={"code": code},
+        headers={"X-Forwarded-Proto": "https"},
+    )
+    assert exchange_response.status_code == 200
+    assert "Secure" in exchange_response.headers.get("set-cookie")
 
 
 def test_login_v3_exchange_single_use(monkeypatch):
@@ -686,45 +810,38 @@ def test_restructure_always_happens(monkeypatch):
     assert ui_path == packaged_ui_path
 
 
+def _mock_scheduled_proxy_config() -> MagicMock:
+    config: Final = proxy_server_module.ProxyConfig()
+    return MagicMock(
+        spec=proxy_server_module.ProxyConfig,
+        check_periodic_reloads=create_autospec(config.check_periodic_reloads),
+        get_credentials=create_autospec(config.get_credentials),
+        add_deployment=create_autospec(config.add_deployment),
+        reload_search_tools_from_db=create_autospec(config.reload_search_tools_from_db),
+        reload_mcp_servers_from_db=create_autospec(config.reload_mcp_servers_from_db),
+    )
+
+
 @pytest.mark.asyncio
-async def test_initialize_scheduled_jobs_credentials(monkeypatch):
-    """
-    Test that get_credentials is only called when store_model_in_db is True
-    """
+async def test_initialize_scheduled_jobs_loads_credentials_only_through_add_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
     monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
 
-    # Mock dependencies
     mock_prisma_client = MagicMock()
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
-    mock_proxy_config = AsyncMock()
+    mock_proxy_config = _mock_scheduled_proxy_config()
 
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
         patch("litellm.proxy.proxy_server.store_model_in_db", False),
-    ):  # set store_model_in_db to False
-        # Test when store_model_in_db is False
-        await ProxyStartupEvent.initialize_scheduled_background_jobs(
-            general_settings={},
-            prisma_client=mock_prisma_client,
-            proxy_budget_rescheduler_min_time=1,
-            proxy_budget_rescheduler_max_time=2,
-            proxy_batch_write_at=5,
-            proxy_logging_obj=mock_proxy_logging,
-        )
-
-        # Verify get_credentials was not called
-        mock_proxy_config.get_credentials.assert_not_called()
-
-    # Now test with store_model_in_db = True
-    with (
-        patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
-        patch("litellm.proxy.proxy_server.store_model_in_db", True),
-        patch("litellm.proxy.proxy_server.get_secret_bool", return_value=True),
     ):
         await ProxyStartupEvent.initialize_scheduled_background_jobs(
             general_settings={},
@@ -735,12 +852,31 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
             proxy_logging_obj=mock_proxy_logging,
         )
 
-        # Verify get_credentials was called both directly and scheduled
-        assert mock_proxy_config.get_credentials.call_count == 1  # Direct call
+        mock_proxy_config.get_credentials.assert_not_called()
+        mock_proxy_config.add_deployment.assert_not_called()
 
-        # Verify a scheduled job was added for get_credentials
-        mock_scheduler_calls = [call[0] for call in mock_proxy_config.get_credentials.mock_calls]
-        assert len(mock_scheduler_calls) > 0
+    scheduler = AsyncIOScheduler()
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=scheduler),
+        ):
+            await ProxyStartupEvent.initialize_scheduled_background_jobs(
+                general_settings={},
+                prisma_client=mock_prisma_client,
+                proxy_budget_rescheduler_min_time=1,
+                proxy_budget_rescheduler_max_time=2,
+                proxy_batch_write_at=5,
+                proxy_logging_obj=mock_proxy_logging,
+            )
+
+        assert scheduler.get_job("get_credentials_job") is None
+        assert scheduler.get_job("add_deployment_job") is not None
+        mock_proxy_config.get_credentials.assert_not_called()
+        assert mock_proxy_config.add_deployment.call_count == 1
+    finally:
+        scheduler.shutdown(wait=False)
 
 
 @pytest.mark.asyncio
@@ -761,7 +897,7 @@ async def test_periodic_reload_job_scheduled_without_store_model_in_db(monkeypat
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
-    mock_proxy_config = AsyncMock()
+    mock_proxy_config = _mock_scheduled_proxy_config()
     scheduler = AsyncIOScheduler()
 
     try:
@@ -789,7 +925,7 @@ async def test_periodic_reload_job_scheduled_without_store_model_in_db(monkeypat
 @pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_uses_configured_config_reload_interval(monkeypatch):
     """
-    The DB config-reload jobs (add_deployment, get_credentials) that keep multi-pod
+    The DB config-reload job (add_deployment) that keeps multi-pod
     deployments in sync must be scheduled at the configured
     proxy_config_reload_interval_seconds, not a hardcoded value.
     """
@@ -802,7 +938,7 @@ async def test_initialize_scheduled_jobs_uses_configured_config_reload_interval(
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
-    mock_proxy_config = AsyncMock()
+    mock_proxy_config = _mock_scheduled_proxy_config()
     mock_scheduler = MagicMock()
 
     configured_interval = 47
@@ -832,7 +968,7 @@ async def test_initialize_scheduled_jobs_uses_configured_config_reload_interval(
         if "id" in job_call.kwargs
     }
     assert scheduled_seconds["add_deployment_job"] == configured_interval
-    assert scheduled_seconds["get_credentials_job"] == configured_interval
+    assert "get_credentials_job" not in scheduled_seconds
 
 
 @pytest.mark.asyncio
@@ -851,7 +987,7 @@ async def test_initialize_scheduled_jobs_rejects_non_positive_config_reload_inte
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
-    mock_proxy_config = AsyncMock()
+    mock_proxy_config = _mock_scheduled_proxy_config()
     mock_scheduler = MagicMock()
 
     with (
@@ -876,7 +1012,7 @@ async def test_initialize_scheduled_jobs_rejects_non_positive_config_reload_inte
         if "id" in job_call.kwargs
     }
     assert scheduled_seconds["add_deployment_job"] == 30
-    assert scheduled_seconds["get_credentials_job"] == 30
+    assert "get_credentials_job" not in scheduled_seconds
 
 
 @pytest.mark.asyncio
@@ -898,7 +1034,7 @@ async def test_initialize_scheduled_jobs_hydrates_mcp_when_store_model_in_db_fal
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
-    mock_proxy_config = AsyncMock()
+    mock_proxy_config = _mock_scheduled_proxy_config()
 
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
@@ -1507,7 +1643,7 @@ def test_team_info_masking():
         "langfuse_public_key": "public-test-key",
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match="secr\\*\\*\\*\\*\\*\\*\\*-key', 'langfuse_public_key':") as exc_info:
         proxy_config._get_team_config(
             team_id="test_dev",
             all_teams_config=[team1_info],
@@ -1852,6 +1988,38 @@ def test_add_team_models_to_all_models_excludes_other_teams_byok_with_shared_nam
 
 
 @pytest.mark.asyncio
+async def test_non_admin_all_models_returns_user_models_when_user_row_missing():
+    """
+    Regression test: /key/generate mints keys without a LiteLLM_UserTable row, so
+    find_unique returns None for such a user. That miss must neither raise (a 400
+    here, or the AttributeError on `user_row.teams` that used to surface as a 500)
+    nor leak team models: the user belongs to no team, so only the models they
+    added themselves come back.
+    """
+    from litellm.proxy.proxy_server import non_admin_all_models
+
+    user_added_model = {"model_name": "my-model", "model_info": {"id": "user-model-1"}}
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=MagicMock(created_by="ghost-user"))
+
+    llm_router = MagicMock()
+    llm_router.get_model_list.return_value = [
+        user_added_model,
+        {"model_name": "team-model", "model_info": {"id": "team-model-1", "team_id": "team-a"}},
+    ]
+
+    result = await non_admin_all_models(
+        all_models=[user_added_model],
+        llm_router=llm_router,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="ghost-user"),
+        prisma_client=prisma_client,
+    )
+
+    assert result == [user_added_model]
+
+
+@pytest.mark.asyncio
 async def test_apply_search_filter_matches_team_public_model_name():
     """
     Regression test: team BYOK models persist an internal model_name
@@ -2083,6 +2251,53 @@ async def test_apply_search_filter_bounds_db_fetch_by_page_and_cap():
     take = prisma_client.db.litellm_proxymodeltable.find_many.call_args.kwargs["take"]
     assert take == _SORTED_SEARCH_DB_FETCH_CAP
     assert take < 10_000, "sorted search must cap below the full match set"
+
+
+@pytest.mark.asyncio
+async def test_apply_search_filter_honours_exact_model_name_in_db_query():
+    """
+    `/v2/model/info?model=<group>&search=<term>`: the router list is already
+    narrowed to the exact group, so the DB count and fetch must be too, or
+    other groups' rows leak into the page and inflate total_count.
+    """
+    from litellm.proxy.proxy_server import _apply_search_filter_to_models
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.count = AsyncMock(return_value=0)
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    proxy_config = MagicMock()
+    proxy_config.decrypt_model_list_from_db = lambda rows: []
+
+    await _apply_search_filter_to_models(
+        all_models=[],
+        search="sonnet",
+        prisma_client=prisma_client,
+        proxy_config=proxy_config,
+        model_name="anthropic-sonnet-5",
+    )
+    where = prisma_client.db.litellm_proxymodeltable.count.call_args.kwargs["where"]
+    assert where["model_name"] == "anthropic-sonnet-5"
+    assert prisma_client.db.litellm_proxymodeltable.find_many.call_args.kwargs["where"] == where
+
+    prisma_client.db.litellm_proxymodeltable.count.reset_mock()
+    _, total_count = await _apply_search_filter_to_models(
+        all_models=[],
+        search="opus",
+        prisma_client=prisma_client,
+        proxy_config=proxy_config,
+        model_name="anthropic-sonnet-5",
+    )
+    prisma_client.db.litellm_proxymodeltable.count.assert_not_called()
+    assert total_count == 0
+
+    await _apply_search_filter_to_models(
+        all_models=[],
+        search="sonnet",
+        prisma_client=prisma_client,
+        proxy_config=proxy_config,
+    )
+    where = prisma_client.db.litellm_proxymodeltable.count.call_args.kwargs["where"]
+    assert where["model_name"] == {"contains": "sonnet", "mode": "insensitive"}
 
 
 @pytest.mark.asyncio
@@ -2683,7 +2898,7 @@ async def test_get_config_from_file(tmp_path, monkeypatch):
     with open(empty_file, "w") as f:
         f.write("")  # Write empty content which will result in None when loaded
 
-    with pytest.raises(Exception, match="Config cannot be None or Empty."):
+    with pytest.raises(Exception, match=re.escape("Config cannot be None or Empty.")):
         await proxy_config._get_config_from_file(str(empty_file))
 
     # Test Case 5: Using global user_config_file_path when no config_file_path provided
@@ -2950,6 +3165,47 @@ async def test_custom_ui_sso_sign_in_handler_config_loading():
         import os
 
         os.unlink(config_file_path)
+
+
+@pytest.mark.asyncio
+async def test_startup_initializes_string_callbacks_after_all_litellm_settings_load(tmp_path, monkeypatch):
+    from litellm.integrations.s3_v2 import S3Logger
+    from litellm.litellm_core_utils import litellm_logging
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.utils import ProxyLogging
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "model_list: []\n"
+        "litellm_settings:\n"
+        "  success_callback:\n"
+        "    - s3_v2\n"
+        "  failure_callback:\n"
+        "    - s3_v2\n"
+        "  s3_callback_params:\n"
+        "    s3_bucket_name: ordering-regression-bucket\n"
+        "    s3_region_name: us-west-2\n"
+    )
+
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "s3_callback_params", None)
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+
+    await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+    ProxyLogging(user_api_key_cache=MagicMock())._init_litellm_callbacks(llm_router=None)
+
+    success_loggers = [cb for cb in litellm._async_success_callback if isinstance(cb, S3Logger)]
+    failure_loggers = [cb for cb in litellm._async_failure_callback if isinstance(cb, S3Logger)]
+    assert len(success_loggers) == 1
+    assert len(failure_loggers) == 1
+    assert success_loggers[0].s3_bucket_name == "ordering-regression-bucket"
+    assert success_loggers[0].s3_region_name == "us-west-2"
+    assert "s3_v2" not in litellm.success_callback
+    assert "s3_v2" not in litellm.failure_callback
 
 
 @pytest.mark.asyncio
@@ -3344,7 +3600,7 @@ async def test_write_config_to_file(monkeypatch):
     """
     Do not write config to file if store_model_in_db is True
     """
-    from unittest.mock import AsyncMock, MagicMock, mock_open, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -3392,7 +3648,7 @@ async def test_write_config_to_file_when_store_model_in_db_false(monkeypatch):
     """
     Test that config IS written to file when store_model_in_db is False
     """
-    from unittest.mock import AsyncMock, MagicMock, mock_open, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -4698,6 +4954,90 @@ async def test_add_router_settings_from_db_config_merge_logic():
         "setting3": "db_value3",
     }
     assert combined_settings["nested_config"] == expected_nested
+
+
+@pytest.mark.asyncio
+async def test_add_router_settings_from_db_config_empty_db_lists_do_not_clobber_config_fallbacks():
+    """
+    Regression test for DB router_settings rows carrying explicit empty lists
+    (e.g. {"fallbacks": []} written by the dashboard's delete-last-fallback flow):
+    empty lists are "no value" and must not clobber config.yaml fallbacks,
+    matching _deep_merge_dicts semantics. Non-empty DB lists still win.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    mock_router = MagicMock()
+    mock_router.update_settings = MagicMock()
+
+    config_data = {
+        "router_settings": {
+            "fallbacks": [{"gpt-oss-120b": ["granite-4-h-small"]}],
+            "context_window_fallbacks": [{"gpt-oss-120b": ["granite-4-h-small"]}],
+            "content_policy_fallbacks": [{"gpt-oss-120b": ["granite-4-h-small"]}],
+        }
+    }
+
+    mock_db_config = MagicMock()
+    mock_db_config.param_value = {
+        "fallbacks": [],
+        "context_window_fallbacks": [],
+        "content_policy_fallbacks": [{"gpt-oss-120b": ["other-model"]}],
+        "model_group_alias": {},
+        "num_retries": 3,
+    }
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
+
+    await proxy_config._add_router_settings_from_db_config(
+        config_data=config_data,
+        llm_router=mock_router,
+        prisma_client=mock_prisma_client,
+    )
+
+    combined_settings = mock_router.update_settings.call_args.kwargs
+    assert combined_settings["fallbacks"] == [{"gpt-oss-120b": ["granite-4-h-small"]}]
+    assert combined_settings["context_window_fallbacks"] == [{"gpt-oss-120b": ["granite-4-h-small"]}]
+    assert combined_settings["content_policy_fallbacks"] == [{"gpt-oss-120b": ["other-model"]}]
+    assert combined_settings["num_retries"] == 3
+
+
+@pytest.mark.asyncio
+async def test_add_router_settings_from_db_config_empty_db_list_still_clears_unconfigured_key():
+    """
+    An empty DB list only yields to config.yaml where the yaml configures that key.
+    When the yaml router_settings has no fallbacks, a DB {"fallbacks": []} (the
+    dashboard's delete-last-fallback write) must still reach the router so the
+    running pods drop the deleted fallback without a restart.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    mock_router = MagicMock()
+    mock_router.update_settings = MagicMock()
+
+    config_data = {"router_settings": {"num_retries": 1}}
+
+    mock_db_config = MagicMock()
+    mock_db_config.param_value = {"fallbacks": [], "model_group_alias": {}}
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
+
+    await proxy_config._add_router_settings_from_db_config(
+        config_data=config_data,
+        llm_router=mock_router,
+        prisma_client=mock_prisma_client,
+    )
+
+    combined_settings = mock_router.update_settings.call_args.kwargs
+    assert combined_settings["fallbacks"] == []
+    assert combined_settings["num_retries"] == 1
 
 
 @pytest.mark.asyncio
@@ -6973,6 +7313,88 @@ async def test_update_general_settings_apply_user_budget_to_team_keys_yaml_wins(
         assert ps.general_settings["apply_user_budget_to_team_keys"] is True
 
 
+def _fill_user_api_key_cache(cache: DualCache, count: int) -> None:
+    for index in range(count):
+        cache.set_cache(key=f"key-{index}", value={"token": f"key-{index}"}, local_only=True)
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_user_api_key_cache_max_size_resizes_the_running_cache(monkeypatch):
+    """The Admin UI writes the capacity to the DB config, so the running cache has
+    to pick it up on reload; otherwise the knob only works after a restart."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    cache = UserApiKeyCache()
+    monkeypatch.setattr(proxy_server_module, "general_settings", {})
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
+    await ProxyConfig()._update_general_settings(db_general_settings={"user_api_key_cache_max_size": 300})
+
+    assert proxy_server_module.general_settings["user_api_key_cache_max_size"] == 300
+
+    _fill_user_api_key_cache(cache, 250)
+    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_clearing_user_api_key_cache_max_size_restores_the_default(monkeypatch):
+    """Blanking the field in the dashboard deletes the key, so the cache must fall
+    back to the default capacity rather than keep the last configured size."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    cache = UserApiKeyCache()
+    cache.update_in_memory_max_size(5000)
+    monkeypatch.setattr(proxy_server_module, "general_settings", {"user_api_key_cache_max_size": 5000})
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
+    await ProxyConfig()._update_general_settings(db_general_settings={"store_model_in_db": True})
+
+    assert "user_api_key_cache_max_size" not in proxy_server_module.general_settings
+
+    _fill_user_api_key_cache(cache, 201)
+    assert cache.get_cache(key="key-0", local_only=True) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("db_value", [0, -5, "lots"])
+async def test_update_general_settings_ignores_an_invalid_user_api_key_cache_max_size(db_value, monkeypatch):
+    """A non-positive capacity would make the eviction loop pop an empty heap on the
+    next write, so a bad DB value must leave the running cache untouched."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    cache = UserApiKeyCache()
+    cache.update_in_memory_max_size(300)
+    monkeypatch.setattr(proxy_server_module, "general_settings", {})
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
+    await ProxyConfig()._update_general_settings(db_general_settings={"user_api_key_cache_max_size": db_value})
+
+    assert "user_api_key_cache_max_size" not in proxy_server_module.general_settings
+
+    _fill_user_api_key_cache(cache, 250)
+    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_user_api_key_cache_max_size_yaml_wins(monkeypatch):
+    """A DB value must not silently override an explicit YAML capacity on reload."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config._yaml_general_settings_keys = {"user_api_key_cache_max_size"}
+    cache = UserApiKeyCache()
+    cache.update_in_memory_max_size(300)
+    monkeypatch.setattr(proxy_server_module, "general_settings", {"user_api_key_cache_max_size": 300})
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
+    await proxy_config._update_general_settings(db_general_settings={"user_api_key_cache_max_size": 10})
+
+    assert proxy_server_module.general_settings["user_api_key_cache_max_size"] == 300
+
+    _fill_user_api_key_cache(cache, 250)
+    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "db_value,expected",
@@ -7071,6 +7493,44 @@ async def test_update_general_settings_store_model_in_db_none_keeps_current():
 
 
 @pytest.mark.asyncio
+async def test_batch_cost_poller_is_confirmed_before_serving(monkeypatch):
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.openai_files_endpoints.common_utils import batch_cost_poller_is_active
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=None)
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", _mock_scheduled_proxy_config()),
+        patch("litellm.proxy.proxy_server.store_model_in_db", False),
+        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+        patch("litellm.proxy.proxy_server.PROXY_BATCH_POLLING_ENABLED", True),
+        patch("litellm.constants.PROXY_BATCH_POLLING_ENABLED", True),
+        patch("litellm.proxy.proxy_server.get_secret_bool", return_value=False),
+    ):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+        poller = proxy_server_module.scheduler.get_job("check_batch_cost_job").func.__self__
+        assert poller.batch_processed_support_confirmed is True
+        assert batch_cost_poller_is_active() is True
+        probe_where = mock_prisma_client.db.litellm_managedobjecttable.find_first.call_args[1]["where"]
+        assert probe_where["batch_processed"] is False
+
+
+@pytest.mark.asyncio
 async def test_store_model_in_db_db_override_when_config_false():
     """
     Verify the early DB check in initialize_scheduled_background_jobs
@@ -7089,7 +7549,7 @@ async def test_store_model_in_db_db_override_when_config_false():
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
-    mock_proxy_config = AsyncMock()
+    mock_proxy_config = _mock_scheduled_proxy_config()
 
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
@@ -7110,10 +7570,8 @@ async def test_store_model_in_db_db_override_when_config_false():
         # store_model_in_db should now be True (overridden by DB)
         assert ps.store_model_in_db is True
 
-        # add_deployment and get_credentials should have been called
-        # since store_model_in_db is now True
         assert mock_proxy_config.add_deployment.call_count == 1
-        assert mock_proxy_config.get_credentials.call_count == 1
+        mock_proxy_config.get_credentials.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -7132,7 +7590,7 @@ async def test_store_model_in_db_db_check_skipped_when_already_true(monkeypatch)
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
-    mock_proxy_config = AsyncMock()
+    mock_proxy_config = _mock_scheduled_proxy_config()
 
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
@@ -7175,7 +7633,7 @@ async def test_store_model_in_db_db_failure_graceful(monkeypatch):
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
-    mock_proxy_config = AsyncMock()
+    mock_proxy_config = _mock_scheduled_proxy_config()
 
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
@@ -7374,7 +7832,7 @@ async def test_increment_spend_counters_team_and_member():
 
 
 @pytest.mark.asyncio
-async def test_init_and_increment_spend_counter_reseeds_from_db_on_counter_miss():
+async def test_prepare_spend_counter_increment_reseeds_from_db_on_counter_miss():
     """When the Redis counter is missing, the reseed path reads the
     authoritative spend from the DB (not a stale cache), so the next
     increment continues from the correct base value."""
@@ -7387,8 +7845,17 @@ async def test_init_and_increment_spend_counter_reseeds_from_db_on_counter_miss(
         recorded_increments.append({"key": key, "value": value, "ttl": ttl})
         return value
 
+    async def record_pipeline(increment_list, **kwargs):
+        results = []
+        for op in increment_list:
+            await record_increment(key=op["key"], value=op["increment_value"], ttl=op["ttl"])
+            results.append(op["increment_value"])
+        return results
+
     fake_redis = AsyncMock()
     fake_redis.async_increment = AsyncMock(side_effect=record_increment)
+    fake_redis.async_increment_pipeline = AsyncMock(side_effect=record_pipeline)
+    fake_redis.get_ttl = MagicMock(return_value=None)
     fake_redis.async_get_cache = AsyncMock(return_value=None)  # counter missing
     fake_redis.async_set_cache = AsyncMock(return_value=True)  # SET NX wins
     counter_cache.redis_cache = fake_redis
@@ -7407,7 +7874,10 @@ async def test_init_and_increment_spend_counter_reseeds_from_db_on_counter_miss(
     stale_cache.in_memory_cache.set_cache(key="team_id:team-9", value=stale_team)
 
     import litellm.proxy.proxy_server as ps
-    from litellm.proxy.proxy_server import _init_and_increment_spend_counter
+    from litellm.proxy.proxy_server import (
+        _apply_spend_counter_increments,
+        _prepare_spend_counter_increment,
+    )
 
     orig_user, orig_counter, orig_prisma = (
         ps.user_api_key_cache,
@@ -7418,11 +7888,12 @@ async def test_init_and_increment_spend_counter_reseeds_from_db_on_counter_miss(
     ps.spend_counter_cache = counter_cache
     ps.prisma_client = fake_prisma
     try:
-        await _init_and_increment_spend_counter(
+        pending = await _prepare_spend_counter_increment(
             counter_key="spend:team:team-9",
             source_cache_key="team_id:team-9",
             increment=1.5,
         )
+        await _apply_spend_counter_increments(pending=(pending,))
 
         fake_prisma.db.litellm_teamtable.find_unique.assert_awaited_once_with(where={"team_id": "team-9"})
         # Seed uses SET NX with db_spend (42) — cross-pod safe, no INCR of 42.
@@ -7601,11 +8072,15 @@ async def test_reseed_spend_from_db_skips_window_variant_keys():
 @pytest.mark.asyncio
 async def test_window_spend_counter_reseeds_from_spend_logs_on_counter_miss():
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import _init_and_increment_window_spend_counter
+    from litellm.proxy.proxy_server import (
+        _apply_spend_counter_increments,
+        _prepare_window_spend_counter_increment,
+    )
 
     counter_cache = DualCache()
     window_start = datetime.now(timezone.utc) - timedelta(hours=1)
     fake_prisma = MagicMock()
+    fake_prisma.db.litellm_budgetwindowspend.find_unique = AsyncMock(return_value=None)
     fake_prisma.db.litellm_spendlogs.group_by = AsyncMock(
         return_value=[{"api_key": "key-window", "_sum": {"spend": 2.25}}]
     )
@@ -7616,13 +8091,15 @@ async def test_window_spend_counter_reseeds_from_spend_logs_on_counter_miss():
     ps.spend_counter_cache = counter_cache
     ps.prisma_client = fake_prisma
     try:
-        await _init_and_increment_window_spend_counter(
+        pending = await _prepare_window_spend_counter_increment(
             counter_key="spend:key:key-window:window:1h",
             entity_type="Key",
             entity_id="key-window",
+            window_duration="1h",
             window_start=window_start,
             increment=0.5,
         )
+        await _apply_spend_counter_increments(pending=(pending,) if pending is not None else ())
 
         fake_prisma.db.litellm_spendlogs.group_by.assert_awaited_once_with(
             by=["api_key"],
@@ -7638,7 +8115,10 @@ async def test_window_spend_counter_reseeds_from_spend_logs_on_counter_miss():
 @pytest.mark.asyncio
 async def test_init_spend_counter_redis_clean_miss_skips_stale_in_memory():
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import _init_and_increment_spend_counter
+    from litellm.proxy.proxy_server import (
+        _apply_spend_counter_increments,
+        _prepare_spend_counter_increment,
+    )
 
     counter_cache = DualCache()
     counter_key = "spend:team:team-stale-local"
@@ -7660,6 +8140,15 @@ async def test_init_spend_counter_redis_clean_miss_skips_stale_in_memory():
     fake_redis.async_get_cache = AsyncMock(return_value=None)
     fake_redis.async_increment = AsyncMock(side_effect=redis_increment)
     fake_redis.async_set_cache = AsyncMock(side_effect=redis_set_cache)
+
+    async def redis_increment_pipeline(increment_list, **_):
+        results = []
+        for op in increment_list:
+            results.append(await redis_increment(key=op["key"], value=op["increment_value"]))
+        return results
+
+    fake_redis.async_increment_pipeline = AsyncMock(side_effect=redis_increment_pipeline)
+    fake_redis.get_ttl = MagicMock(return_value=None)
     counter_cache.redis_cache = fake_redis
 
     db_row = MagicMock()
@@ -7678,11 +8167,12 @@ async def test_init_spend_counter_redis_clean_miss_skips_stale_in_memory():
     ps.prisma_client = fake_prisma
     ps.user_api_key_cache = DualCache()
     try:
-        await _init_and_increment_spend_counter(
+        pending = await _prepare_spend_counter_increment(
             counter_key=counter_key,
             source_cache_key="team_id:team-stale-local",
             increment=1.5,
         )
+        await _apply_spend_counter_increments(pending=(pending,))
 
         fake_prisma.db.litellm_teamtable.find_unique.assert_awaited_once_with(where={"team_id": "team-stale-local"})
         # Seed via SET NX (42) + delta via INCRBYFLOAT (1.5) = 43.5.
@@ -7697,7 +8187,10 @@ async def test_init_spend_counter_redis_clean_miss_skips_stale_in_memory():
 @pytest.mark.asyncio
 async def test_window_spend_counter_redis_clean_miss_skips_stale_in_memory():
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import _init_and_increment_window_spend_counter
+    from litellm.proxy.proxy_server import (
+        _apply_spend_counter_increments,
+        _prepare_window_spend_counter_increment,
+    )
 
     counter_cache = DualCache()
     counter_key = "spend:key:key-window-stale-local:window:1h"
@@ -7720,9 +8213,19 @@ async def test_window_spend_counter_redis_clean_miss_skips_stale_in_memory():
     fake_redis.async_get_cache = AsyncMock(return_value=None)
     fake_redis.async_set_cache = AsyncMock(side_effect=redis_set_cache)
     fake_redis.async_increment = AsyncMock(side_effect=redis_increment)
+
+    async def redis_increment_pipeline(increment_list, **_):
+        results = []
+        for op in increment_list:
+            results.append(await redis_increment(key=op["key"], value=op["increment_value"]))
+        return results
+
+    fake_redis.async_increment_pipeline = AsyncMock(side_effect=redis_increment_pipeline)
+    fake_redis.get_ttl = MagicMock(return_value=None)
     counter_cache.redis_cache = fake_redis
 
     fake_prisma = MagicMock()
+    fake_prisma.db.litellm_budgetwindowspend.find_unique = AsyncMock(return_value=None)
     fake_prisma.db.litellm_spendlogs.group_by = AsyncMock(
         return_value=[{"api_key": "key-window-stale-local", "_sum": {"spend": 2.25}}]
     )
@@ -7733,13 +8236,15 @@ async def test_window_spend_counter_redis_clean_miss_skips_stale_in_memory():
     ps.spend_counter_cache = counter_cache
     ps.prisma_client = fake_prisma
     try:
-        await _init_and_increment_window_spend_counter(
+        pending = await _prepare_window_spend_counter_increment(
             counter_key=counter_key,
             entity_type="Key",
             entity_id="key-window-stale-local",
+            window_duration="1h",
             window_start=window_start,
             increment=0.5,
         )
+        await _apply_spend_counter_increments(pending=(pending,) if pending is not None else ())
 
         fake_prisma.db.litellm_spendlogs.group_by.assert_awaited_once_with(
             by=["api_key"],
@@ -7759,7 +8264,10 @@ async def test_window_spend_counter_redis_clean_miss_skips_stale_in_memory():
 @pytest.mark.asyncio
 async def test_window_spend_counter_redis_concurrent_seed_does_not_double_seed():
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import _init_and_increment_window_spend_counter
+    from litellm.proxy.proxy_server import (
+        _apply_spend_counter_increments,
+        _prepare_window_spend_counter_increment,
+    )
 
     counter_cache = DualCache()
     counter_key = "spend:key:key-window-concurrent-seed:window:1h"
@@ -7782,9 +8290,19 @@ async def test_window_spend_counter_redis_concurrent_seed_does_not_double_seed()
     fake_redis.async_get_cache = AsyncMock(side_effect=redis_get_cache)
     fake_redis.async_set_cache = AsyncMock(return_value=False)
     fake_redis.async_increment = AsyncMock(side_effect=redis_increment)
+
+    async def redis_increment_pipeline(increment_list, **_):
+        results = []
+        for op in increment_list:
+            results.append(await redis_increment(key=op["key"], value=op["increment_value"]))
+        return results
+
+    fake_redis.async_increment_pipeline = AsyncMock(side_effect=redis_increment_pipeline)
+    fake_redis.get_ttl = MagicMock(return_value=None)
     counter_cache.redis_cache = fake_redis
 
     fake_prisma = MagicMock()
+    fake_prisma.db.litellm_budgetwindowspend.find_unique = AsyncMock(return_value=None)
     fake_prisma.db.litellm_spendlogs.group_by = AsyncMock(
         return_value=[{"api_key": "key-window-concurrent-seed", "_sum": {"spend": 2.25}}]
     )
@@ -7795,13 +8313,15 @@ async def test_window_spend_counter_redis_concurrent_seed_does_not_double_seed()
     ps.spend_counter_cache = counter_cache
     ps.prisma_client = fake_prisma
     try:
-        await _init_and_increment_window_spend_counter(
+        pending = await _prepare_window_spend_counter_increment(
             counter_key=counter_key,
             entity_type="Key",
             entity_id="key-window-concurrent-seed",
+            window_duration="1h",
             window_start=window_start,
             increment=0.5,
         )
+        await _apply_spend_counter_increments(pending=(pending,) if pending is not None else ())
 
         fake_redis.async_set_cache.assert_awaited_once_with(
             key=counter_key,
@@ -7818,7 +8338,7 @@ async def test_window_spend_counter_redis_concurrent_seed_does_not_double_seed()
 @pytest.mark.asyncio
 async def test_window_spend_counter_skips_invalid_window_start():
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import _init_and_increment_window_spend_counter
+    from litellm.proxy.proxy_server import _prepare_window_spend_counter_increment
 
     counter_cache = DualCache()
 
@@ -7827,13 +8347,15 @@ async def test_window_spend_counter_skips_invalid_window_start():
     orig_counter = ps.spend_counter_cache
     ps.spend_counter_cache = counter_cache
     try:
-        await _init_and_increment_window_spend_counter(
+        pending = await _prepare_window_spend_counter_increment(
             counter_key="spend:key:key-invalid-window:window:not-a-duration",
             entity_type="Key",
             entity_id="key-invalid-window",
+            window_duration="not-a-duration",
             window_start=None,
             increment=0.5,
         )
+        assert pending is None
 
         assert counter_cache.in_memory_cache.get_cache(key="spend:key:key-invalid-window:window:not-a-duration") is None
     finally:
@@ -7858,6 +8380,7 @@ async def test_window_spend_counter_does_not_seed_zero_when_db_unavailable():
             counter_key=counter_key,
             entity_type="Key",
             entity_id="key-window-db-unavailable",
+            window_duration="1h",
             window_start=datetime.now(timezone.utc) - timedelta(hours=1),
         )
 
@@ -7896,6 +8419,9 @@ async def test_increment_spend_counters_finalizes_after_unreserved_increments():
     async def assert_reservation_not_finalized_yet(**kwargs):
         assert budget_reservation["finalized"] is False
         incremented_counters.append(kwargs["counter_key"])
+        return ps.PendingSpendIncrement(
+            counter_key=kwargs["counter_key"], increment=kwargs["increment"]
+        )
 
     import litellm.proxy.proxy_server as ps
 
@@ -7904,7 +8430,7 @@ async def test_increment_spend_counters_finalizes_after_unreserved_increments():
     ps.user_api_key_cache = DualCache()
     try:
         with patch(
-            "litellm.proxy.proxy_server._init_and_increment_spend_counter",
+            "litellm.proxy.proxy_server._prepare_spend_counter_increment",
             new=AsyncMock(side_effect=assert_reservation_not_finalized_yet),
         ):
             await increment_spend_counters(
@@ -7973,8 +8499,8 @@ async def test_increment_spend_counters_reseeds_from_db_on_bad_reserved_counter(
     """When the reservation reconcile finds the counter in an inconsistent state
     (here: missing), it must NOT delete the counter and fail open (the old
     behavior, which left the counter unenforced after a Redis reload). It reseeds
-    from the authoritative DB so the counter reflects the recorded total and
-    budget gating continues."""
+    from the authoritative DB and adds this request's settled cost, which the
+    async spend flush has not written yet, so budget gating continues."""
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.proxy_server import increment_spend_counters
     from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
@@ -8011,9 +8537,7 @@ async def test_increment_spend_counters_reseeds_from_db_on_bad_reserved_counter(
             )
 
         assert budget_reservation["finalized"] is True
-        # counter reseeded to the authoritative DB value, not deleted/left None
-        # and not double-counted via a direct increment
-        assert counter_cache.in_memory_cache.get_cache(key="spend:key:key-bad-reserved-counter") == pytest.approx(0.6)
+        assert counter_cache.in_memory_cache.get_cache(key="spend:key:key-bad-reserved-counter") == pytest.approx(0.85)
     finally:
         ps.spend_counter_cache = orig_counter
         ps.prisma_client = orig_prisma
@@ -8239,7 +8763,7 @@ async def test_get_current_spend_uses_db_zero_over_stale_fallback():
 async def test_concurrent_read_and_write_paths_share_one_db_query():
     """
     The read path (`get_current_spend`) and the write path
-    (`_init_and_increment_spend_counter`) both reseed cold counters from
+    (`_prepare_spend_counter_increment`) both reseed cold counters from
     the DB. They must share the per-counter lock so a concurrent pre-call
     enforcement read and post-call increment for the same counter collapse
     to one DB query, not two.
@@ -8248,7 +8772,7 @@ async def test_concurrent_read_and_write_paths_share_one_db_query():
 
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.proxy_server import (
-        _init_and_increment_spend_counter,
+        _prepare_spend_counter_increment,
         get_current_spend,
     )
 
@@ -8302,7 +8826,7 @@ async def test_concurrent_read_and_write_paths_share_one_db_query():
     try:
         results = await _asyncio.gather(
             get_current_spend(counter_key=counter_key, fallback_spend=0.0),
-            _init_and_increment_spend_counter(
+            _prepare_spend_counter_increment(
                 counter_key=counter_key,
                 source_cache_key="ignored",
                 increment=1.5,
@@ -8742,6 +9266,126 @@ class TestLazyFeatureMiddleware:
     """Behavior of the middleware itself, exercised in isolation."""
 
     @pytest.mark.asyncio
+    async def test_llm_passthrough_loads_on_first_provider_request(self, monkeypatch):
+        """An app that never registered the provider passthrough routes 404s a
+        provider request; behind the middleware the same request registers the
+        routes and is forwarded to the provider with the configured key."""
+        import respx
+        from fastapi import FastAPI
+
+        from litellm.proxy._lazy_features import LAZY_FEATURES, LazyFeatureMiddleware
+
+        monkeypatch.setenv("MISTRAL_API_KEY", "sk-upstream")
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        feat = next(f for f in LAZY_FEATURES if f.name == "llm_passthrough")
+        target_app = FastAPI()
+        target_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-virtual")
+        mw = LazyFeatureMiddleware(target_app, fastapi_app=target_app, features=(feat,))
+
+        with respx.mock() as upstream:
+            route = upstream.get("https://api.mistral.ai/v1/models").mock(
+                return_value=httpx.Response(200, json={"object": "list", "data": []})
+            )
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=target_app), base_url="http://t") as bare:
+                assert (await bare.get("/mistral/v1/models")).status_code == 404
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=mw), base_url="http://t") as lazy:
+                response = await lazy.get("/mistral/v1/models")
+
+            assert (response.status_code, response.json()) == (200, {"object": "list", "data": []})
+            assert route.calls.last.request.headers["authorization"] == "Bearer sk-upstream"
+
+    def test_llm_passthrough_prefixes_cover_every_route_the_module_registers(self):
+        """A route the module registers under a prefix the feature does not claim
+        would 404 until an unrelated provider request happens to load the module."""
+        from litellm.proxy._lazy_features import LAZY_FEATURES
+
+        feat = next(f for f in LAZY_FEATURES if f.name == "llm_passthrough")
+        paths = [r.path for r in importlib.import_module(feat.module_path).router.routes]
+
+        assert {"/mistral/{endpoint:path}", "/openai/{endpoint:path}"} <= set(paths)
+        unreachable = [p for p in paths if not feat.matches(p.replace("{endpoint:path}", "x"))]
+        assert unreachable == [], f"routes the middleware would never load: {unreachable}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("first_hit", ["/v1/realtime/calls", "/openai/v1/models"])
+    async def test_lazy_routes_land_in_registry_order_not_first_hit_order(self, first_hit):
+        """Two lazy features with overlapping paths must answer a request with the
+        same handler no matter which one a deployment happens to hit first."""
+        from fastapi import APIRouter, FastAPI
+
+        from litellm.proxy._lazy_features import LazyFeature, LazyFeatureMiddleware
+
+        def make_register(path, handler):
+            def register(app, module):
+                router = APIRouter()
+                router.add_api_route(path, lambda: {"handler": handler}, methods=["POST"])
+                app.include_router(router)
+
+            return register
+
+        catch_all = LazyFeature(
+            name="catch_all",
+            module_path="json",
+            path_prefixes=("/openai/",),
+            register_fn=make_register("/openai/{endpoint:path}", "catch_all"),
+        )
+        specific = LazyFeature(
+            name="specific",
+            module_path="base64",
+            path_prefixes=("/openai/v1/realtime", "/v1/realtime"),
+            register_fn=make_register("/openai/v1/realtime/calls", "specific"),
+        )
+
+        target_app = FastAPI()
+        mw = LazyFeatureMiddleware(target_app, fastapi_app=target_app, features=(catch_all, specific))
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=mw), base_url="http://t") as client:
+            await client.post(first_hit)
+            await client.post("/openai/v1/models")
+            response = await client.post("/openai/v1/realtime/calls")
+
+        assert response.json() == {"handler": "catch_all"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("root_path", ["", "/api"])
+    async def test_reserved_slot_keeps_lazy_catch_all_ahead_of_later_eager_routes(self, root_path):
+        """/{mcp_server_name}/mcp is registered after the provider passthrough router
+        at startup, so /mistral/mcp must keep reaching the provider catch-all once
+        that router loads lazily instead of being swallowed by the MCP route. The
+        native /mistral/v1/files route sits ahead of it, so that path neither loads
+        the feature nor changes owner, with or without a SERVER_ROOT_PATH prefix."""
+        from fastapi import APIRouter, FastAPI
+
+        from litellm.proxy._lazy_features import LazyFeature, LazyFeatureMiddleware, reserve_lazy_slot
+
+        def register(app, module):
+            router = APIRouter()
+            router.add_api_route("/mistral/{endpoint:path}", lambda: {"handler": "passthrough"}, methods=["POST"])
+            app.include_router(router)
+
+        passthrough = LazyFeature(
+            name="llm_passthrough", module_path="json", path_prefixes=("/mistral/",), register_fn=register
+        )
+        target_app = FastAPI(root_path=root_path)
+        target_app.add_api_route("/mistral/v1/files", lambda: {"handler": "files"}, methods=["POST"])
+        reserve_lazy_slot(target_app, "llm_passthrough", features=(passthrough,))
+        target_app.add_api_route("/{mcp_server_name}/mcp", lambda: {"handler": "mcp"}, methods=["POST"])
+        target_app.add_middleware(LazyFeatureMiddleware, fastapi_app=target_app, features=(passthrough,))
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=target_app), base_url="http://t") as client:
+            files_first = (await client.post(f"{root_path}/mistral/v1/files")).json()["handler"]
+            loaded_after_files = frozenset(target_app.state.lazy_loaded)
+            handlers = [
+                (await client.post(f"{root_path}{path}")).json()["handler"]
+                for path in ("/mistral/mcp", "/mistral/v1/files")
+            ]
+
+        assert (files_first, loaded_after_files) == ("files", frozenset())
+        assert handlers == ["passthrough", "files"]
+
+    @pytest.mark.asyncio
     async def test_first_request_triggers_load_subsequent_does_not(self):
         from fastapi import FastAPI
 
@@ -8881,6 +9525,82 @@ class TestLazyFeatureMiddleware:
             assert loads == [], f"{case}: feature must not load"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "env_root_path,scope_root_path,request_path,should_load,case",
+        [
+            # Per-request root_path (PerRequestRootPathMiddleware under
+            # SERVER_ROOT_PATHS) with no scalar env: strip and match.
+            ("", "/tenant-a", "/tenant-a/dummy/x", True, "per-request root_path strip"),
+            # scope root_path is authoritative over the cached env scalar.
+            ("/api/v1", "/tenant-a", "/tenant-a/dummy/x", True, "scope wins over env scalar"),
+            # Boundary check still applies to the per-request value.
+            ("", "/tenant-a", "/tenant-ab/dummy/x", False, "boundary check on scope root_path"),
+            # Empty scope root_path falls back to the env scalar.
+            ("/api/v1", "", "/api/v1/dummy/x", True, "empty scope falls back to env"),
+        ],
+    )
+    async def test_per_request_root_path_handling(
+        self, monkeypatch, env_root_path, scope_root_path, request_path, should_load, case
+    ):
+        """
+        ``scope["root_path"]`` must be stripped before prefix matching when
+        set — the scalar SERVER_ROOT_PATH lands there via
+        ``FastAPI(root_path=...)``, and PerRequestRootPathMiddleware
+        (SERVER_ROOT_PATHS) resolves a per-request prefix there. Otherwise
+        lazily-registered features — the MCP OAuth discovery router among
+        them — stay unloaded under a client-visible prefix and 404.
+        """
+        from fastapi import FastAPI
+
+        from litellm.proxy._lazy_features import (
+            LazyFeature,
+            LazyFeatureMiddleware,
+        )
+
+        monkeypatch.setenv("SERVER_ROOT_PATH", env_root_path)
+
+        loads = []
+
+        def fake_register(app, module):
+            loads.append(getattr(module, "__name__", "?"))
+
+        feat = LazyFeature(
+            name=f"dummy_prr_{case}",
+            module_path="json",
+            path_prefixes=("/dummy",),
+            register_fn=fake_register,
+        )
+
+        async def downstream(scope, receive, send):
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+        target_app = FastAPI()
+        mw = LazyFeatureMiddleware(downstream, fastapi_app=target_app, features=(feat,))
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            pass
+
+        await mw(
+            {
+                "type": "http",
+                "path": request_path,
+                "root_path": scope_root_path,
+                "method": "GET",
+                "headers": [],
+            },
+            receive,
+            send,
+        )
+        if should_load:
+            assert loads == ["json"], f"{case}: expected feature to load"
+        else:
+            assert loads == [], f"{case}: feature must not load"
+
+    @pytest.mark.asyncio
     async def test_concurrent_first_requests_only_register_once(self):
         """
         Two requests to the same prefix arriving in parallel must result in
@@ -8987,6 +9707,78 @@ class TestLazyFeatureMiddleware:
         assert attempts == ["called"], (
             f"failing register_fn should be invoked once, not on every request; got {attempts}"
         )
+
+
+class TestInjectLazyStubs:
+    """Stub injection keys off the app-tracked loaded set, never sys.modules:
+    proxy boot imports several feature modules (mcp_management, cloudzero,
+    vantage, config_overrides) without mounting their routers, and their
+    /openapi.json entries must survive that (LIT-6275)."""
+
+    def test_imported_but_unregistered_module_still_gets_stub(self):
+        import sys
+
+        from litellm.proxy._lazy_features import LazyFeature, inject_lazy_stubs
+
+        feat = LazyFeature(
+            name="dummy_lazy_test",
+            module_path="json",
+            path_prefixes=("/dummy-lazy-test",),
+        )
+        assert feat.module_path in sys.modules
+
+        schema = inject_lazy_stubs({"paths": {}}, loaded_modules=frozenset(), features=(feat,))
+        assert "/dummy-lazy-test" in schema["paths"]
+
+    def test_registered_module_gets_no_stub(self):
+        from litellm.proxy._lazy_features import LazyFeature, inject_lazy_stubs
+
+        feat = LazyFeature(
+            name="dummy_lazy_test",
+            module_path="json",
+            path_prefixes=("/dummy-lazy-test",),
+        )
+        schema = inject_lazy_stubs({"paths": {}}, loaded_modules=frozenset({"json"}), features=(feat,))
+        assert "/dummy-lazy-test" not in schema["paths"]
+
+    def test_snapshot_fragments_injected_for_boot_imported_features(self):
+        from litellm.proxy._lazy_features import LAZY_FEATURES, inject_lazy_stubs
+        from litellm.proxy._lazy_openapi_snapshot import load_snapshot
+
+        snapshot = load_snapshot()
+        assert snapshot
+        boot_imported = tuple(
+            f for f in LAZY_FEATURES if f.name in ("mcp_management", "cloudzero", "vantage", "config_overrides")
+        )
+        assert len(boot_imported) == 4
+
+        schema = inject_lazy_stubs({"paths": {}}, loaded_modules=frozenset(), features=boot_imported)
+        for feat in boot_imported:
+            missing = [p for p in snapshot[feat.name]["paths"] if p not in schema["paths"]]
+            assert not missing, f"{feat.name} snapshot paths missing from /openapi.json: {missing}"
+
+    def test_persistent_stub_survives_load(self):
+        from litellm.proxy._lazy_features import LazyFeature, inject_lazy_stubs
+
+        feat = LazyFeature(
+            name="dummy_lazy_test",
+            module_path="json",
+            path_prefixes=("/dummy-lazy-test",),
+            persistent_swagger_stub=True,
+        )
+        schema = inject_lazy_stubs({"paths": {}}, loaded_modules=frozenset({"json"}), features=(feat,))
+        assert "/dummy-lazy-test" in schema["paths"]
+
+    def test_loaded_lazy_modules_reads_app_state(self):
+        from fastapi import FastAPI
+
+        from litellm.proxy._lazy_features import loaded_lazy_modules
+
+        app = FastAPI()
+        assert loaded_lazy_modules(app) == frozenset()
+
+        app.state.lazy_loaded = {"litellm.proxy.spend_tracking.cloudzero_endpoints"}
+        assert loaded_lazy_modules(app) == frozenset({"litellm.proxy.spend_tracking.cloudzero_endpoints"})
 
 
 @pytest.mark.asyncio
@@ -9103,6 +9895,222 @@ def test_realtime_websocket_route_aliases_registered():
             f"{expected!r} missing from API_ROUTE_TO_CALL_TYPES; call-type "
             f"resolution will return None and break call-type-aware features."
         )
+
+
+def _lit6973_fake_realtime_ws() -> MagicMock:
+    ws = MagicMock()
+    ws.headers = {}
+    ws.scope = {"headers": [], "type": "websocket"}
+    ws.url = "ws://testserver/v1/realtime"
+    ws.accept = AsyncMock()
+    ws.send_text = AsyncMock()
+    ws.close = AsyncMock()
+    return ws
+
+
+async def _lit6973_drive_realtime_session(
+    reservation: dict,
+    *,
+    backend_logged_success: bool,
+    phase_one_exit: str | None = None,
+    websocket: MagicMock | None = None,
+) -> MagicMock:
+    """Drive realtime_websocket_endpoint through one of its reservation-settling exits.
+
+    phase_one_exit picks a rejection before the relay: "model_access" makes the
+    key/model check raise ProxyException, "pre_call" makes pre-call processing
+    (rate limits, guardrails) raise. Neither reaches route_request, so no success
+    log can own the reservation and the endpoint has to release it on that exit.
+
+    route_request resolves normally in both cases: the relay owns the session
+    once route_request returns. A successful session enqueues its success cost
+    callback and stamps REALTIME_SESSION_SUCCESS_LOGGED_KEY on the shared logging
+    object; a refused one does neither. The endpoint keys its reservation cleanup
+    off that stamp, so backend_logged_success reproduces both branches. The fake
+    logging object carries a real model_call_details dict so the stamp is
+    observable, and the reservation has empty entries so the real release touches
+    no counter store."""
+    from litellm.litellm_core_utils.realtime_streaming import REALTIME_SESSION_SUCCESS_LOGGED_KEY
+    from litellm.proxy import proxy_server as ps
+
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key="sk-test", token="hashed-token")
+    user_api_key_dict.budget_reservation = reservation
+
+    logging_obj: Final = MagicMock()
+    logging_obj.model_call_details = {}
+
+    async def fake_llm_call() -> None:
+        if backend_logged_success:
+            logging_obj.model_call_details[REALTIME_SESSION_SUCCESS_LOGGED_KEY] = True
+
+    from litellm.proxy._types import ProxyException
+
+    model_access_error: Final = (
+        ProxyException(message="key cannot access model", type="auth_error", param="model", code=401)
+        if phase_one_exit == "model_access"
+        else None
+    )
+    pre_call_error: Final = Exception("Rate limit exceeded") if phase_one_exit == "pre_call" else None
+    pre_call: Final = AsyncMock(
+        side_effect=pre_call_error, return_value=({"model": "vertex_ai/gemini-live-2.5-flash"}, logging_obj)
+    )
+    ws: Final = websocket if websocket is not None else _lit6973_fake_realtime_ws()
+    can_call = patch.object(ps, "can_key_call_resolved_model", new=AsyncMock(side_effect=model_access_error))  # test-quality-ok: no HTTP boundary; fakes in-process auth to reach the exit under test
+    pre = patch.object(ps.ProxyBaseLLMRequestProcessing, "common_processing_pre_call_logic", new=pre_call)  # test-quality-ok: fakes phase-1 wiring; assertion checks observable reservation state
+    route = patch.object(ps, "route_request", new=AsyncMock(return_value=fake_llm_call()))  # test-quality-ok: fakes the relay whose success/refusal outcome the endpoint reads off the logging object
+    with can_call, pre, route:
+        await ps.realtime_websocket_endpoint(
+            websocket=ws,
+            model="vertex_ai/gemini-live-2.5-flash",
+            intent=None,
+            guardrails=None,
+            user_api_key_dict=user_api_key_dict,
+        )
+    return ws
+
+
+@pytest.mark.asyncio
+async def test_refused_realtime_session_releases_the_budget_reservation():
+    """LIT-6973: a refused realtime session enqueues no success cost callback, so
+    the pre-call reservation would stay open and pin the key/team/user spend
+    counters, locking the key after a couple of refusals. The endpoint sees no
+    success stamp and reconciles it: the reservation ends up finalized."""
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+
+    await _lit6973_drive_realtime_session(reservation, backend_logged_success=False)
+
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_realtime_session_rejected_in_pre_call_releases_the_budget_reservation():
+    """A rate-limit or guardrail rejection happens before route_request, so the
+    relay never runs and no success log can own the reservation. The endpoint
+    must release it on that exit too, or the key stays pinned at the reserved
+    amount and its next requests 429 with budget_exceeded while /key/info shows
+    spend 0 (reproduced live with rpm_limit=1). The client still gets the
+    pre-call error event and the 1011 close it got before."""
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+
+    ws: Final = await _lit6973_drive_realtime_session(
+        reservation, backend_logged_success=False, phase_one_exit="pre_call"
+    )
+
+    assert reservation["finalized"] is True
+    assert json.loads(ws.send_text.await_args.args[0])["error"]["message"] == "Rate limit exceeded"
+    ws.close.assert_awaited_once_with(code=1011, reason="Pre-call error")
+
+
+@pytest.mark.asyncio
+async def test_realtime_session_denied_model_access_releases_the_budget_reservation():
+    """The key/model access check rejects before the socket is even accepted;
+    that exit skipped the release as well, pinning the reservation."""
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+
+    ws: Final = await _lit6973_drive_realtime_session(
+        reservation, backend_logged_success=False, phase_one_exit="model_access"
+    )
+
+    assert reservation["finalized"] is True
+    ws.close.assert_awaited_once_with(code=1008, reason="key cannot access model")
+
+
+@pytest.mark.asyncio
+async def test_rejected_realtime_session_closes_the_client_before_releasing_the_reservation():
+    """The counter release can block on a slow or unreachable store, and a
+    rejected client must not sit behind it: the relay's own failure path closes
+    the client first and releases in its finally, so the pre-relay rejection
+    has to close first as well. The fake close checks the reservation is still
+    open when the client is closed."""
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+    ws: Final = _lit6973_fake_realtime_ws()
+
+    async def close_while_reservation_is_still_open(**_: object) -> None:
+        assert reservation["finalized"] is False, "client was closed only after the reservation release"
+
+    ws.close = AsyncMock(side_effect=close_while_reservation_is_still_open)
+
+    await _lit6973_drive_realtime_session(
+        reservation, backend_logged_success=False, phase_one_exit="pre_call", websocket=ws
+    )
+
+    ws.close.assert_awaited_once_with(code=1011, reason="Pre-call error")
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_rejected_realtime_session_releases_the_reservation_when_the_client_is_already_gone():
+    """A client that hung up before the rejection makes the close raise; the
+    reservation must still be released, or the key stays pinned."""
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+    ws: Final = _lit6973_fake_realtime_ws()
+    ws.close = AsyncMock(side_effect=RuntimeError("client already disconnected"))
+
+    with pytest.raises(RuntimeError, match="client already disconnected"):
+        await _lit6973_drive_realtime_session(
+            reservation, backend_logged_success=False, phase_one_exit="model_access", websocket=ws
+        )
+
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_successful_realtime_session_leaves_the_reservation_for_the_cost_callback():
+    """A billable realtime session settles its reservation through the enqueued
+    success cost callback, not the endpoint. The endpoint must not finalize it in
+    its finally, or it would reconcile the reservation to zero before the cost
+    callback applies real spend, so billable sessions stop counting against budget.
+    With the success stamp present, the endpoint leaves the reservation untouched."""
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+
+    await _lit6973_drive_realtime_session(reservation, backend_logged_success=True)
+
+    assert reservation["finalized"] is False
+
+
+@pytest.mark.asyncio
+async def test_release_or_invalidate_falls_back_to_invalidating_the_counters():
+    """If releasing the reservation itself fails (e.g. the counter store is down),
+    the reserved counters must be invalidated directly so the estimate does not
+    stay pinned, and the reservation is finalized so nothing reprocesses it."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy.spend_tracking import budget_reservation as br
+
+    reservation: Final = {
+        "reserved_cost": 0.55,
+        "input_cost": 0.0,
+        "finalized": False,
+        "entries": [{"counter_key": "spend:key:hashed-token"}],
+    }
+    invalidated: Final[list[str]] = []
+
+    async def _record(counter_key: str) -> None:
+        invalidated.append(counter_key)
+
+    failing_release = patch.object(br, "release_budget_reservation", new=AsyncMock(side_effect=RuntimeError("counter store down")))  # test-quality-ok: forces the failure branch; assertion observes which counter key got invalidated
+    sink = patch.object(ps, "_invalidate_spend_counter", new=_record)  # test-quality-ok: fakes the counter-store sink so the invalidated key is observable
+    with failing_release, sink:
+        await br.release_or_invalidate_budget_reservation(budget_reservation=reservation)
+
+    assert invalidated == ["spend:key:hashed-token"]
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_release_or_invalidate_finalizes_even_when_the_invalidate_fallback_fails():
+    """Both counter-store calls failing must not raise out of the realtime
+    endpoint's finally (it would mask the session's own outcome) and must still
+    stamp finalized so nothing retries the same reservation."""
+    from litellm.proxy.spend_tracking import budget_reservation as br
+
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+    failing_release = patch.object(br, "release_budget_reservation", new=AsyncMock(side_effect=RuntimeError("counter store down")))  # test-quality-ok: forces the fallback branch
+    failing_invalidate = patch.object(br, "invalidate_budget_reservation_counters", new=AsyncMock(side_effect=RuntimeError("still down")))  # test-quality-ok: forces the fallback itself to fail
+
+    with failing_release, failing_invalidate:
+        await br.release_or_invalidate_budget_reservation(budget_reservation=reservation)
+
+    assert reservation["finalized"] is True
 
 
 class TestTransformRequestBannedParams:
@@ -9283,6 +10291,76 @@ class TestDeleteDeploymentSync:
 
         assert result is None, f"Expected None on DB failure to signal fetch error, got {result!r}"
 
+    @pytest.mark.asyncio
+    async def test_get_models_from_db_reads_from_writer_not_replica(self):
+        """
+        Regression for #38556: with DATABASE_URL_READ_REPLICA configured, the model
+        reconcile after /model/new used to read via the replica, so a lagging replica
+        made the reload miss the just-committed row and fail the request with a 500.
+        The reconcile read must be pinned to the writer.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy.db.prisma_client import PrismaWrapper
+        from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        writer_inner = MagicMock(name="writer_prisma")
+        reader_inner = MagicMock(name="reader_prisma")
+        committed_row = MagicMock(name="just_committed_model_row")
+        writer_inner.litellm_proxymodeltable.find_many = AsyncMock(return_value=[committed_row])
+        reader_inner.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = RoutingPrismaWrapper(
+            writer=PrismaWrapper(original_prisma=writer_inner, iam_token_db_auth=False),
+            reader=PrismaWrapper(original_prisma=reader_inner, iam_token_db_auth=False),
+        )
+
+        result = await ProxyConfig()._get_models_from_db(prisma_client=mock_prisma)
+
+        assert result == [committed_row], f"Expected the writer's just-committed row, got {result!r}"
+        reader_inner.litellm_proxymodeltable.find_many.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_get_models_from_db_falls_back_to_replica_when_writer_down(self):
+        """
+        The writer pin must not break reader-only degraded mode: a proxy that
+        starts during a primary outage (writer connect failed, replica healthy)
+        must still load DB-backed models through the replica instead of sending
+        the reconcile read to the unavailable writer.
+        """
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy.db.prisma_client import PrismaWrapper
+        from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        writer_inner = MagicMock(name="writer_prisma")
+        reader_inner = MagicMock(name="reader_prisma")
+        replica_row = MagicMock(name="replica_model_row")
+        writer_inner.litellm_proxymodeltable = SimpleNamespace(
+            find_many=AsyncMock(side_effect=RuntimeError("writer unreachable")),
+            create=MagicMock(name="writer_create"),
+        )
+        reader_inner.litellm_proxymodeltable = SimpleNamespace(
+            find_many=AsyncMock(return_value=[replica_row]),
+            create=MagicMock(name="reader_create"),
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = RoutingPrismaWrapper(
+            writer=PrismaWrapper(original_prisma=writer_inner, iam_token_db_auth=False),
+            reader=PrismaWrapper(original_prisma=reader_inner, iam_token_db_auth=False),
+        )
+        mock_prisma.db._writer_unavailable = True
+
+        result = await ProxyConfig()._get_models_from_db(prisma_client=mock_prisma)
+
+        assert result == [replica_row], f"Expected the replica's rows in degraded mode, got {result!r}"
+        writer_inner.litellm_proxymodeltable.find_many.assert_not_awaited()
+
 
 def test_get_config_list_includes_cancel_on_disconnect(monkeypatch):
     """Follow-up to #30223: the flag must be discoverable via /config/list,
@@ -9344,6 +10422,27 @@ def test_get_config_list_includes_apply_user_budget_to_team_keys(monkeypatch):
         fields = {item["field_name"]: item for item in resp.json()}
         assert "apply_user_budget_to_team_keys" in fields
         assert fields["apply_user_budget_to_team_keys"]["field_type"] == "Boolean"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_get_config_list_includes_user_api_key_cache_max_size(monkeypatch):
+    """The Admin UI General Settings table renders whatever /config/list returns,
+    so the cache capacity has to be exposed there as an Integer to be editable."""
+    mock_prisma = MagicMock()
+    mock_config_table = MagicMock()
+    mock_config_table.find_first = AsyncMock(return_value=None)
+    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", mock_prisma)
+    app.dependency_overrides[proxy_server_module.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        client = TestClient(app)
+        resp = client.get("/config/list", params={"config_type": "general_settings"})
+        assert resp.status_code == 200, resp.text
+        fields = {item["field_name"]: item for item in resp.json()}
+        assert fields["user_api_key_cache_max_size"]["field_type"] == "Integer"
     finally:
         app.dependency_overrides.clear()
 
@@ -10085,6 +11184,75 @@ async def test_update_config_general_settings_emits_audit_log(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_config_field_rejects_out_of_range_alerting_args(monkeypatch):
+    """Out-of-range alerting_args must be rejected at save time. If they land in the
+    DB, SlackAlertingArgs raises during the config reload and alerting breaks."""
+    from unittest.mock import MagicMock
+
+    from fastapi import HTTPException
+
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", MagicMock())
+
+    admin = UserAPIKeyAuth(
+        api_key="hashed-admin",
+        user_id="admin-1",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await update_config_general_settings(
+            data=ConfigFieldUpdate(
+                field_name="alerting_args",
+                field_value={
+                    "daily_spend_per_user_threshold": -5.0,
+                    "user_spend_check_interval": 20,
+                },
+                config_type="general_settings",
+            ),
+            user_api_key_dict=admin,
+        )
+
+    assert exc_info.value.status_code == 400
+    error_msg = exc_info.value.detail["error"]
+    assert "daily_spend_per_user_threshold" in error_msg
+    assert "user_spend_check_interval" in error_msg
+
+
+@pytest.mark.asyncio
+async def test_update_config_field_accepts_valid_alerting_args(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    fake = _fake_prisma_with_config({})
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+
+    admin = UserAPIKeyAuth(
+        api_key="hashed-admin",
+        user_id="admin-1",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="alerting_args",
+            field_value={
+                "daily_spend_per_user_threshold": 5.0,
+                "user_spend_check_interval": 60,
+            },
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+
+    written = json.loads(fake.db.litellm_config.upsert.call_args.kwargs["data"]["update"]["param_value"])
+    assert written["alerting_args"]["daily_spend_per_user_threshold"] == 5.0
+
+
+@pytest.mark.asyncio
 async def test_update_config_general_settings_applies_ssrf_globals(monkeypatch):
     import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import ConfigFieldUpdate
@@ -10352,10 +11520,53 @@ def test_update_config_redacts_all_environment_variable_values(_update_config_se
 class _EnvBuiltRedisCache(RedisCache):
     """RedisCache stand-in that records its constructor kwargs and never
     opens a network connection, so tests can assert which connection params
-    the proxy used to build its coordination Redis."""
+    the proxy used to build its coordination Redis. `ping()` reports reachable
+    by default, matching a real Redis the env fallback should adopt."""
 
     def __init__(self, **kwargs):
         self.init_kwargs = kwargs
+
+    async def ping(self) -> bool:
+        return True
+
+
+class _UnreachableRedisCache(_EnvBuiltRedisCache):
+    """Same stand-in, but `ping()` fails like a REDIS_* env var naming a Redis
+    that is not actually reachable (wrong host, no service running, ...)."""
+
+    async def ping(self) -> bool:
+        raise ConnectionError("connection refused")
+
+
+@contextlib.contextmanager
+def _patched_coordination_redis_module_state(
+    *,
+    spend_cache: DualCache,
+    config_cache: types.SimpleNamespace,
+    redis_cache_class: type = _EnvBuiltRedisCache,
+):
+    """Stub every `litellm.proxy.proxy_server` global that
+    `_attach_redis_usage_cache` (and its callers) can write to, shared by the
+    whole coordination-Redis test family below.
+
+    Centralizing this is not just DRY: `_attach_redis_usage_cache` always sets
+    `cli_sso_session_cache.redis_cache` unconditionally, and a call site that
+    forgets to patch that one real (persistent) global leaks a throwaway
+    Redis stand-in into it for the rest of the pytest session, breaking
+    unrelated tests that run later. One patched-state helper means a new call
+    site cannot forget a global this family already knows to isolate.
+    """
+    with (
+        patch.object(proxy_server_module, "redis_usage_cache", None),
+        patch.object(proxy_server_module, "spend_counter_cache", spend_cache),
+        patch.object(proxy_server_module, "user_api_key_cache", DualCache()),
+        patch.object(proxy_server_module, "cli_sso_session_cache", DualCache()),
+        patch.object(proxy_server_module, "llm_router", None),
+        patch.object(proxy_server_module, "litellm_config_cache", config_cache),
+        patch.object(proxy_server_module, "RedisCache", redis_cache_class),
+        patch.object(proxy_server_module, "RedisClusterCache", _EnvBuiltClusterCache),
+    ):
+        yield
 
 
 def _run_init_cache_with_backend(cache_backend, redis_env_kwargs):
@@ -10368,12 +11579,7 @@ def _run_init_cache_with_backend(cache_backend, redis_env_kwargs):
     fresh_config_cache = types.SimpleNamespace(redis_cache=None)
 
     with (
-        patch.object(proxy_server_module, "redis_usage_cache", None),
-        patch.object(proxy_server_module, "spend_counter_cache", fresh_spend_cache),
-        patch.object(proxy_server_module, "user_api_key_cache", DualCache()),
-        patch.object(proxy_server_module, "llm_router", None),
-        patch.object(proxy_server_module, "litellm_config_cache", fresh_config_cache),
-        patch.object(proxy_server_module, "RedisCache", _EnvBuiltRedisCache),
+        _patched_coordination_redis_module_state(spend_cache=fresh_spend_cache, config_cache=fresh_config_cache),
         patch(
             "litellm._redis._redis_kwargs_from_environment",
             return_value=redis_env_kwargs,
@@ -10448,12 +11654,7 @@ def _run_init_coordination_redis(config, env=None):
     fresh_config_cache = types.SimpleNamespace(redis_cache=None)
 
     with (
-        patch.object(proxy_server_module, "redis_usage_cache", None),
-        patch.object(proxy_server_module, "spend_counter_cache", fresh_spend_cache),
-        patch.object(proxy_server_module, "user_api_key_cache", DualCache()),
-        patch.object(proxy_server_module, "litellm_config_cache", fresh_config_cache),
-        patch.object(proxy_server_module, "RedisCache", _EnvBuiltRedisCache),
-        patch.object(proxy_server_module, "RedisClusterCache", _EnvBuiltClusterCache),
+        _patched_coordination_redis_module_state(spend_cache=fresh_spend_cache, config_cache=fresh_config_cache),
         mock.patch.dict(os.environ, env or {}, clear=False),
     ):
         built = proxy_server_module.ProxyConfig()._init_coordination_redis(config=config)
@@ -10541,13 +11742,7 @@ def test_explicit_coordination_redis_takes_precedence_over_cache_backend():
     mock_litellm_cache.cache = cache_backend
 
     with (
-        patch.object(proxy_server_module, "redis_usage_cache", None),
-        patch.object(proxy_server_module, "spend_counter_cache", fresh_spend_cache),
-        patch.object(proxy_server_module, "user_api_key_cache", DualCache()),
-        patch.object(proxy_server_module, "llm_router", None),
-        patch.object(proxy_server_module, "litellm_config_cache", fresh_config_cache),
-        patch.object(proxy_server_module, "RedisCache", _EnvBuiltRedisCache),
-        patch.object(proxy_server_module, "RedisClusterCache", _EnvBuiltClusterCache),
+        _patched_coordination_redis_module_state(spend_cache=fresh_spend_cache, config_cache=fresh_config_cache),
         patch("litellm.Cache", return_value=mock_litellm_cache),
     ):
         litellm.cache = None
@@ -10563,6 +11758,95 @@ def test_explicit_coordination_redis_takes_precedence_over_cache_backend():
         assert usage_cache is not cache_backend
         assert usage_cache.init_kwargs["host"] == "explicit-coord-host"
         assert fresh_spend_cache.redis_cache is usage_cache
+
+
+async def _run_init_coordination_redis_env_fallback(
+    litellm_settings, redis_env_kwargs, redis_cache_class=_EnvBuiltRedisCache
+):
+    """Run ProxyConfig._init_coordination_redis_env_fallback against a
+    stubbed module state and a controlled REDIS_* environment, returning
+    (built, spend_counter redis)."""
+    fresh_spend_cache = DualCache()
+    fresh_config_cache = types.SimpleNamespace(redis_cache=None)
+
+    with (
+        _patched_coordination_redis_module_state(
+            spend_cache=fresh_spend_cache, config_cache=fresh_config_cache, redis_cache_class=redis_cache_class
+        ),
+        patch(
+            "litellm._redis._redis_kwargs_from_environment",
+            return_value=redis_env_kwargs,
+        ),
+    ):
+        built = await proxy_server_module.ProxyConfig._init_coordination_redis_env_fallback(
+            litellm_settings=litellm_settings
+        )
+        return built, fresh_spend_cache.redis_cache
+
+
+@pytest.mark.asyncio
+async def test_init_coordination_redis_env_fallback_builds_from_environment():
+    """A deployment with no coordination_redis block and no litellm_settings.cache
+    but with bare REDIS_HOST/REDIS_PORT env vars must still get a coordination
+    Redis: otherwise spend counters, budget-window enforcement, and the
+    reset_spend cache-eviction broadcast stay per-pod local and a reset issued
+    on one pod never clears another pod's stale enforcement."""
+    built, spend_redis = await _run_init_coordination_redis_env_fallback(
+        litellm_settings={},
+        redis_env_kwargs={"host": "env-fallback-host", "port": "6390"},
+    )
+
+    assert isinstance(built, _EnvBuiltRedisCache)
+    assert built.init_kwargs["host"] == "env-fallback-host"
+    assert spend_redis is built
+
+
+@pytest.mark.asyncio
+async def test_init_coordination_redis_env_fallback_without_redis_env_returns_none():
+    """With no REDIS_* connection info at all, the fallback must leave the
+    coordination Redis unset rather than building a broken client."""
+    built, spend_redis = await _run_init_coordination_redis_env_fallback(
+        litellm_settings={},
+        redis_env_kwargs={},
+    )
+
+    assert built is None
+    assert spend_redis is None
+
+
+@pytest.mark.asyncio
+async def test_init_coordination_redis_env_fallback_unreachable_stays_in_memory():
+    """REDIS_* env vars can name a Redis that is not actually reachable (wrong
+    host, leftover from an unrelated job/service). Guessing "coordination
+    available" from bare env vars must not turn a previously harmless
+    in-memory-only proxy into one that raises on its next cache write, so an
+    unreachable ping must leave everything exactly as if no REDIS_* vars were
+    set at all."""
+    built, spend_redis = await _run_init_coordination_redis_env_fallback(
+        litellm_settings={},
+        redis_env_kwargs={"host": "unreachable-host", "port": "6390"},
+        redis_cache_class=_UnreachableRedisCache,
+    )
+
+    assert built is None
+    assert spend_redis is None
+
+
+@pytest.mark.asyncio
+async def test_init_coordination_redis_env_fallback_malformed_cluster_nodes_stays_in_memory():
+    """REDIS_CLUSTER_NODES can be set to a malformed value nothing here ever
+    asked to be parsed. Unlike the explicit coordination_redis block (a
+    deliberate opt-in, so a bad value there should fail loudly), this
+    inferred fallback must not abort proxy startup over it -- it has to
+    decline the same way it does for an absent or unreachable Redis."""
+    with mock.patch.dict(os.environ, {"REDIS_CLUSTER_NODES": "not-valid-json"}, clear=False):
+        built, spend_redis = await _run_init_coordination_redis_env_fallback(
+            litellm_settings={},
+            redis_env_kwargs={},
+        )
+
+    assert built is None
+    assert spend_redis is None
 
 
 def test_env_fallback_builds_cluster_client_from_cluster_nodes_env():
@@ -10606,11 +11890,7 @@ async def test_startup_applies_coordination_redis_saved_in_database():
     fresh_config_cache = types.SimpleNamespace(redis_cache=None)
 
     with (
-        patch.object(proxy_server_module, "spend_counter_cache", fresh_spend_cache),
-        patch.object(proxy_server_module, "user_api_key_cache", DualCache()),
-        patch.object(proxy_server_module, "litellm_config_cache", fresh_config_cache),
-        patch.object(proxy_server_module, "RedisCache", _EnvBuiltRedisCache),
-        patch.object(proxy_server_module, "RedisClusterCache", _EnvBuiltClusterCache),
+        _patched_coordination_redis_module_state(spend_cache=fresh_spend_cache, config_cache=fresh_config_cache),
         patch.object(
             proxy_server_module,
             "get_persisted_coordination_redis_settings",
@@ -10848,6 +12128,224 @@ def test_startup_is_silent_when_mock_testing_params_disabled(caplog):
     assert MOCK_TESTING_CONFIG_KEY not in caplog.text
 
 
+# ---------------------------------------------------------------------------
+# Budget window spend row enqueue (LiteLLM_BudgetWindowSpend writer)
+# ---------------------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def _window_spend_enqueue_env(cached_objects: dict):
+    """Point increment_spend_counters at throwaway caches and a real
+    WindowSpendUpdateQueue, and hand back the queue to inspect."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
+        WindowSpendUpdateQueue,
+    )
+    import litellm.proxy.proxy_server as ps
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_get_cache = AsyncMock(side_effect=lambda key, **_: cached_objects.get(key))
+
+    queue = WindowSpendUpdateQueue()
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.window_spend_update_queue = queue
+
+    originals = (
+        ps.user_api_key_cache,
+        ps.spend_counter_cache,
+        ps.prisma_client,
+        ps.proxy_logging_obj,
+    )
+    ps.user_api_key_cache = user_api_key_cache
+    ps.spend_counter_cache = DualCache()
+    ps.prisma_client = None
+    ps.proxy_logging_obj = proxy_logging_obj
+    try:
+        yield queue
+    finally:
+        (
+            ps.user_api_key_cache,
+            ps.spend_counter_cache,
+            ps.prisma_client,
+            ps.proxy_logging_obj,
+        ) = originals
+
+
+async def _drain(queue):
+    return list(await queue.flush_and_get_aggregated_window_spend_transactions())
+
+
+@pytest.mark.asyncio
+async def test_key_window_spend_row_is_enqueued_with_the_actual_cost():
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    reset_at = datetime.now(timezone.utc) + timedelta(days=10)
+    key_obj = MagicMock()
+    key_obj.budget_limits = [{"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}]
+
+    with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
+        await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.25)
+        enqueued = await _drain(queue)
+
+    assert len(enqueued) == 1
+    assert enqueued[0]["entity_type"] == "key"
+    assert enqueued[0]["entity_id"] == "hashed-token"
+    assert enqueued[0]["window_duration"] == "30d"
+    assert enqueued[0]["spend"] == pytest.approx(0.25)
+    assert enqueued[0]["window_start"] == (reset_at - timedelta(days=30)).astimezone(timezone.utc).replace(
+        tzinfo=None
+    ).isoformat(timespec="microseconds")
+
+
+@pytest.mark.asyncio
+async def test_team_window_spend_row_is_enqueued():
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    reset_at = datetime.now(timezone.utc) + timedelta(days=3)
+    team_obj = MagicMock()
+    team_obj.budget_limits = [{"budget_duration": "7d", "max_budget": 50.0, "reset_at": reset_at.isoformat()}]
+
+    with _window_spend_enqueue_env({"team_id:team-1": team_obj}) as queue:
+        await increment_spend_counters(token=None, team_id="team-1", user_id=None, response_cost=1.5)
+        enqueued = await _drain(queue)
+
+    assert len(enqueued) == 1
+    assert enqueued[0]["entity_type"] == "team"
+    assert enqueued[0]["entity_id"] == "team-1"
+    assert enqueued[0]["window_duration"] == "7d"
+    assert enqueued[0]["spend"] == pytest.approx(1.5)
+
+
+@pytest.mark.asyncio
+async def test_window_spend_row_is_enqueued_even_when_the_counter_was_reserved():
+    """A reservation only pre-charged the cache counter with an estimate; the
+    row still owes the actual cost, so the enqueue must not be skipped."""
+    from litellm.proxy.proxy_server import increment_spend_counters
+    import litellm.proxy.spend_tracking.budget_reservation as br
+
+    reset_at = datetime.now(timezone.utc) + timedelta(days=10)
+    key_obj = MagicMock()
+    key_obj.budget_limits = [{"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}]
+    reservation = {
+        "entries": [
+            {"counter_key": "spend:key:hashed-token", "reserved": 1.0},
+            {"counter_key": "spend:key:hashed-token:window:30d", "reserved": 1.0},
+        ]
+    }
+
+    original_reconcile = br.reconcile_budget_reservation
+    br.reconcile_budget_reservation = AsyncMock(return_value=None)
+    try:
+        with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
+            await increment_spend_counters(
+                token="hashed-token",
+                team_id=None,
+                user_id=None,
+                response_cost=0.25,
+                budget_reservation=reservation,
+            )
+            enqueued = await _drain(queue)
+    finally:
+        br.reconcile_budget_reservation = original_reconcile
+
+    assert len(enqueued) == 1
+    assert enqueued[0]["spend"] == pytest.approx(0.25)
+
+
+@pytest.mark.asyncio
+async def test_sliding_window_without_reset_at_is_not_enqueued():
+    """Windows with no reset_at slide with wall clock, so window_start moves on
+    every request and no single row can represent them; the read path keeps
+    using its LiteLLM_SpendLogs fallback instead."""
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    key_obj = MagicMock()
+    key_obj.budget_limits = [{"budget_duration": "30d", "max_budget": 100.0}]
+
+    with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
+        await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.25)
+        enqueued = await _drain(queue)
+
+    assert enqueued == []
+
+
+@pytest.mark.asyncio
+async def test_each_configured_window_gets_its_own_row_enqueue():
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    now = datetime.now(timezone.utc)
+    key_obj = MagicMock()
+    key_obj.budget_limits = [
+        {"budget_duration": "1d", "max_budget": 5.0, "reset_at": (now + timedelta(hours=5)).isoformat()},
+        {"budget_duration": "30d", "max_budget": 100.0, "reset_at": (now + timedelta(days=10)).isoformat()},
+    ]
+
+    with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
+        await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.25)
+        enqueued = await _drain(queue)
+
+    assert sorted(item["window_duration"] for item in enqueued) == ["1d", "30d"]
+    assert all(item["spend"] == pytest.approx(0.25) for item in enqueued)
+
+
+@pytest.mark.asyncio
+async def test_no_window_spend_row_enqueued_without_budget_limits():
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    key_obj = MagicMock()
+    key_obj.budget_limits = None
+
+    with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
+        await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.25)
+        enqueued = await _drain(queue)
+
+    assert enqueued == []
+
+
+@pytest.mark.asyncio
+async def test_window_spend_row_carries_the_request_start_time():
+    """The seed sums LiteLLM_SpendLogs only up to this point, so it must be the
+    same start the spend log row was written with."""
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    reset_at = datetime.now(timezone.utc) + timedelta(days=10)
+    key_obj = MagicMock()
+    key_obj.budget_limits = [{"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}]
+
+    with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
+        await increment_spend_counters(
+            token="hashed-token",
+            team_id=None,
+            user_id=None,
+            response_cost=0.25,
+            request_started_at=datetime(2026, 8, 10, 12, 0, 0, 500_000, tzinfo=timezone.utc),
+        )
+        enqueued = await _drain(queue)
+
+    assert enqueued[0]["started_at"] == "2026-08-10T12:00:00.500000"
+
+
+@pytest.mark.asyncio
+async def test_team_window_spend_row_carries_the_request_start_time():
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    reset_at = datetime.now(timezone.utc) + timedelta(days=3)
+    team_obj = MagicMock()
+    team_obj.budget_limits = [{"budget_duration": "7d", "max_budget": 50.0, "reset_at": reset_at.isoformat()}]
+
+    with _window_spend_enqueue_env({"team_id:team-1": team_obj}) as queue:
+        await increment_spend_counters(
+            token=None,
+            team_id="team-1",
+            user_id=None,
+            response_cost=1.5,
+            request_started_at=datetime(2026, 8, 10, 12, 0, 0, 500_000, tzinfo=timezone.utc),
+        )
+        enqueued = await _drain(queue)
+
+    assert enqueued[0]["started_at"] == "2026-08-10T12:00:00.500000"
+
+
 def _mock_startup_prisma_client(health_check_error=None, connect_error=None):
     client = MagicMock()
     client.connect = AsyncMock(side_effect=connect_error)
@@ -10972,7 +12470,7 @@ async def _run_scheduled_background_jobs():
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
-    mock_proxy_config = AsyncMock()
+    mock_proxy_config = _mock_scheduled_proxy_config()
 
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
@@ -11011,6 +12509,35 @@ async def test_ptu_rollup_job_registered_at_startup(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ptu_rollup_job_hands_the_rollup_the_proxys_router(monkeypatch):
+    """The rollup prices PTU deployments declared in config.yaml, which only the router
+    knows about. It takes the router as an argument, so nothing but this call site puts the
+    proxy's own router in front of it: without it that half of the feature is dead."""
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.spend_tracking import ptu_flat_cost_rollup
+    from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
+    from litellm.proxy.spend_tracking.ptu_flat_cost_rollup import PTU_ROLLUP_JOB_ID
+
+    monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, "true")
+    calls = []
+    monkeypatch.setattr(
+        ptu_flat_cost_rollup,
+        "run_scheduled_ptu_rollup",
+        AsyncMock(side_effect=lambda *args, **kwargs: calls.append(kwargs)),
+    )
+
+    scheduler = await _run_scheduled_background_jobs()
+
+    import litellm.proxy.proxy_server as ps
+
+    router = MagicMock()
+    monkeypatch.setattr(ps, "llm_router", router)
+    await scheduler.get_job(PTU_ROLLUP_JOB_ID).func()
+
+    assert [call["router"] for call in calls] == [router]
+
+
+@pytest.mark.asyncio
 async def test_ptu_rollup_job_not_registered_without_opt_in(monkeypatch):
     """Without LITELLM_ENABLE_PTU_COST_ATTRIBUTION the rollup never runs, so no sentinel row
     is ever written. This is the gate that keeps the whole feature inert by default."""
@@ -11026,3 +12553,726 @@ async def test_ptu_rollup_job_not_registered_without_opt_in(monkeypatch):
 
     assert scheduler.get_job(PTU_ROLLUP_JOB_ID) is None
     assert len(scheduler.get_jobs()) > 0
+
+
+@pytest.mark.asyncio
+async def test_moderations_reraises_proxy_exception_unwrapped():
+    """A 400 ProxyException from request validation must surface as-is,
+    not be re-wrapped into a code-500 ProxyException."""
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+    exc = ProxyException(
+        message="Invalid type for 'metadata': expected an object, but got a string instead.",
+        type=ProxyErrorTypes.bad_request_error,
+        param="metadata",
+        code=400,
+    )
+
+    request = MagicMock()
+    request.body = AsyncMock(return_value=b'{"input": "hi", "metadata": "abc"}')
+
+    with (
+        patch.object(proxy_server_module, "add_litellm_data_to_request", new=AsyncMock(side_effect=exc)),
+        patch.object(proxy_server_module, "proxy_logging_obj") as mock_logging,
+    ):
+        mock_logging.post_call_failure_hook = AsyncMock()
+        with pytest.raises(ProxyException) as exc_info:
+            await proxy_server_module.moderations(
+                request=request,
+                fastapi_response=MagicMock(),
+                user_api_key_dict=MagicMock(),
+            )
+
+    assert exc_info.value is exc
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == "metadata"
+    mock_logging.post_call_failure_hook.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_init_agents_in_db_rebuilds_registry_under_agent_reconcile_lock(monkeypatch):
+    from litellm.proxy.agent_endpoints.agent_registry import (
+        AGENT_RECONCILE_LOCK,
+        global_agent_registry,
+    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    lock_states: list[bool] = []
+
+    async def fake_get_all_agents_from_db(prisma_client) -> list:
+        lock_states.append(AGENT_RECONCILE_LOCK.locked())
+        return []
+
+    def fake_load_agents_from_db_and_config(db_agents) -> None:
+        lock_states.append(AGENT_RECONCILE_LOCK.locked())
+
+    monkeypatch.setattr(global_agent_registry, "get_all_agents_from_db", fake_get_all_agents_from_db)
+    monkeypatch.setattr(global_agent_registry, "load_agents_from_db_and_config", fake_load_agents_from_db_and_config)
+
+    await ProxyConfig()._init_agents_in_db(prisma_client=MagicMock())
+
+    assert lock_states == [True, True]
+    assert not AGENT_RECONCILE_LOCK.locked()
+
+
+@pytest.mark.asyncio
+async def test_init_guardrails_in_db_snapshots_and_reconciles_under_guardrail_reconcile_lock(monkeypatch):
+    from litellm.proxy.guardrails.guardrail_registry import (
+        GUARDRAIL_RECONCILE_LOCK,
+        IN_MEMORY_GUARDRAIL_HANDLER,
+        GuardrailRegistry,
+    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    lock_states: list[bool] = []
+
+    async def fake_get_all_guardrails_from_db(prisma_client) -> list:
+        lock_states.append(GUARDRAIL_RECONCILE_LOCK.locked())
+        return []
+
+    def fake_reconcile_db_guardrails(db_guardrail_ids) -> list:
+        lock_states.append(GUARDRAIL_RECONCILE_LOCK.locked())
+        return []
+
+    monkeypatch.setattr(GuardrailRegistry, "get_all_guardrails_from_db", fake_get_all_guardrails_from_db)
+    monkeypatch.setattr(IN_MEMORY_GUARDRAIL_HANDLER, "reconcile_db_guardrails", fake_reconcile_db_guardrails)
+
+    await ProxyConfig()._init_guardrails_in_db(prisma_client=MagicMock())
+
+    assert lock_states == [True, True]
+    assert not GUARDRAIL_RECONCILE_LOCK.locked()
+
+
+@pytest.mark.asyncio
+async def test_init_prompts_in_db_reloads_rows_patched_on_another_worker(monkeypatch):
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    def db_row(content: str) -> MagicMock:
+        row = MagicMock()
+        row.model_dump.return_value = {
+            "prompt_id": "greeting_sync",
+            "version": 1,
+            "environment": "development",
+            "created_by": None,
+            "litellm_params": json.dumps(
+                {
+                    "prompt_id": "greeting_sync",
+                    "prompt_integration": "dotprompt",
+                    "prompt_data": {"content": content, "metadata": {}},
+                }
+            ),
+            "prompt_info": json.dumps({"prompt_type": "db"}),
+            "created_at": None,
+            "updated_at": None,
+        }
+        return row
+
+    def served_callback():
+        spec = IN_MEMORY_PROMPT_REGISTRY.resolve_prompt_spec("greeting_sync")
+        assert spec is not None
+        callback = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_for_prompt(prompt=spec)
+        assert callback is not None
+        return callback
+
+    def served_content() -> str:
+        return served_callback().prompt_manager.get_prompt("greeting_sync").content
+
+    prisma_client = MagicMock()
+    try:
+        prisma_client.db.litellm_prompttable.find_many = AsyncMock(return_value=[db_row("Begin every reply with AHOY")])
+        await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
+        assert served_content() == "Begin every reply with AHOY"
+
+        prisma_client.db.litellm_prompttable.find_many = AsyncMock(
+            return_value=[db_row("Begin every reply with HOWDY")]
+        )
+        await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
+
+        assert served_content() == "Begin every reply with HOWDY"
+        assert litellm.callbacks == [served_callback()]
+    finally:
+        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id("greeting_sync")
+
+
+@pytest.mark.asyncio
+async def test_init_prompts_in_db_syncs_remaining_rows_when_one_row_fails(monkeypatch):
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    def db_row(prompt_id: str, integration: str) -> MagicMock:
+        row = MagicMock()
+        row.model_dump.return_value = {
+            "prompt_id": prompt_id,
+            "version": 1,
+            "environment": "development",
+            "created_by": None,
+            "litellm_params": json.dumps(
+                {
+                    "prompt_id": prompt_id,
+                    "prompt_integration": integration,
+                    "prompt_data": {"content": "Begin every reply with AHOY", "metadata": {}},
+                }
+            ),
+            "prompt_info": json.dumps({"prompt_type": "db"}),
+            "created_at": None,
+            "updated_at": None,
+        }
+        return row
+
+    prisma_client = MagicMock()
+    try:
+        prisma_client.db.litellm_prompttable.find_many = AsyncMock(
+            return_value=[db_row("broken_sync", "does_not_exist"), db_row("healthy_sync", "dotprompt")]
+        )
+        await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
+
+        assert IN_MEMORY_PROMPT_REGISTRY.resolve_prompt_spec("broken_sync") is None
+        healthy_spec = IN_MEMORY_PROMPT_REGISTRY.resolve_prompt_spec("healthy_sync")
+        assert healthy_spec is not None
+        healthy_callback = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_for_prompt(prompt=healthy_spec)
+        assert healthy_callback is not None
+        assert litellm.callbacks == [healthy_callback]
+    finally:
+        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id("healthy_sync")
+        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id("broken_sync")
+
+
+@pytest.mark.asyncio
+async def test_init_prompts_in_db_syncs_every_environment_sharing_a_versioned_id(monkeypatch):
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    def db_row(environment: str, content: str) -> MagicMock:
+        row = MagicMock()
+        row.model_dump.return_value = {
+            "prompt_id": "greeting_env",
+            "version": 1,
+            "environment": environment,
+            "created_by": None,
+            "litellm_params": json.dumps(
+                {
+                    "prompt_id": "greeting_env",
+                    "prompt_integration": "dotprompt",
+                    "prompt_data": {"content": content, "metadata": {}},
+                }
+            ),
+            "prompt_info": json.dumps({"prompt_type": "db"}),
+            "created_at": None,
+            "updated_at": None,
+        }
+        return row
+
+    def served_content(environment: str | None) -> str:
+        spec = IN_MEMORY_PROMPT_REGISTRY.resolve_prompt_spec("greeting_env", environment=environment)
+        assert spec is not None
+        callback = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_for_prompt(prompt=spec)
+        assert callback is not None
+        return callback.prompt_manager.get_prompt("greeting_env").content
+
+    prisma_client = MagicMock()
+    try:
+        prisma_client.db.litellm_prompttable.find_many = AsyncMock(
+            return_value=[
+                db_row("development", "Begin every reply with AHOY"),
+                db_row("production", "Begin every reply with HOWDY"),
+            ]
+        )
+        await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
+
+        assert served_content("development") == "Begin every reply with AHOY"
+        assert served_content("production") == "Begin every reply with HOWDY"
+        assert served_content(None) == "Begin every reply with HOWDY"
+
+        prisma_client.db.litellm_prompttable.find_many = AsyncMock(
+            return_value=[
+                db_row("development", "Begin every reply with YO"),
+                db_row("production", "Begin every reply with HOWDY"),
+            ]
+        )
+        await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
+
+        assert served_content("development") == "Begin every reply with YO"
+        assert served_content("production") == "Begin every reply with HOWDY"
+    finally:
+        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id("greeting_env")
+
+
+def _prompt_db_row(prompt_id: str, litellm_params: str) -> MagicMock:
+    row = MagicMock()
+    row.model_dump.return_value = {
+        "prompt_id": prompt_id,
+        "version": 1,
+        "environment": "development",
+        "created_by": None,
+        "litellm_params": litellm_params,
+        "prompt_info": json.dumps({"prompt_type": "db"}),
+        "created_at": None,
+        "updated_at": None,
+    }
+    return row
+
+
+def _dotprompt_params(prompt_id: str) -> str:
+    return json.dumps(
+        {
+            "prompt_id": prompt_id,
+            "prompt_integration": "dotprompt",
+            "prompt_data": {"content": "Begin every reply with AHOY", "metadata": {}},
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_init_prompts_in_db_unloads_rows_deleted_on_another_worker(monkeypatch):
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    prisma_client = MagicMock()
+    try:
+        prisma_client.db.litellm_prompttable.find_many = AsyncMock(
+            return_value=[_prompt_db_row("greeting_del", _dotprompt_params("greeting_del"))]
+        )
+        await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
+        loaded_spec = IN_MEMORY_PROMPT_REGISTRY.resolve_prompt_spec("greeting_del")
+        assert loaded_spec is not None
+        assert IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_for_prompt(prompt=loaded_spec) is not None
+
+        prisma_client.db.litellm_prompttable.find_many = AsyncMock(return_value=[])
+        await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
+
+        assert IN_MEMORY_PROMPT_REGISTRY.resolve_prompt_spec("greeting_del") is None
+        assert litellm.callbacks == []
+    finally:
+        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id("greeting_del")
+
+
+@pytest.mark.asyncio
+async def test_init_prompts_in_db_keeps_config_prompts_when_their_id_has_no_db_row(monkeypatch):
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.types.prompts.init_prompts import PromptInfo, PromptLiteLLMParams, PromptSpec
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    config_prompt = PromptSpec(
+        prompt_id="greeting_cfg",
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="greeting_cfg",
+            prompt_integration="dotprompt",
+            prompt_data={"content": "Begin every reply with AHOY", "metadata": {}},
+        ),
+        prompt_info=PromptInfo(prompt_type="config"),
+    )
+
+    prisma_client = MagicMock()
+    try:
+        IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(prompt=config_prompt)
+        prisma_client.db.litellm_prompttable.find_many = AsyncMock(return_value=[])
+
+        await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
+
+        surviving_spec = IN_MEMORY_PROMPT_REGISTRY.resolve_prompt_spec("greeting_cfg")
+        assert surviving_spec is not None
+        assert IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_for_prompt(prompt=surviving_spec) is not None
+        assert len(litellm.callbacks) == 1
+    finally:
+        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id("greeting_cfg")
+
+
+@pytest.mark.asyncio
+async def test_init_prompts_in_db_keeps_the_in_memory_copy_when_a_row_fails_to_parse(monkeypatch):
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    prisma_client = MagicMock()
+    try:
+        prisma_client.db.litellm_prompttable.find_many = AsyncMock(
+            return_value=[_prompt_db_row("greeting_broken", _dotprompt_params("greeting_broken"))]
+        )
+        await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
+        loaded_spec = IN_MEMORY_PROMPT_REGISTRY.resolve_prompt_spec("greeting_broken")
+        assert loaded_spec is not None
+        loaded_callback = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_for_prompt(prompt=loaded_spec)
+        assert loaded_callback is not None
+
+        prisma_client.db.litellm_prompttable.find_many = AsyncMock(
+            return_value=[_prompt_db_row("greeting_broken", "this is not json")]
+        )
+        await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
+
+        kept_spec = IN_MEMORY_PROMPT_REGISTRY.resolve_prompt_spec("greeting_broken")
+        assert kept_spec is not None
+        assert IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_for_prompt(prompt=kept_spec) is loaded_callback
+        assert litellm.callbacks == [loaded_callback]
+    finally:
+        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id("greeting_broken")
+
+
+@pytest.mark.asyncio
+async def test_init_prompts_in_db_keeps_a_prompt_created_while_the_sync_was_reading(monkeypatch):
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.types.prompts.init_prompts import PromptInfo, PromptLiteLLMParams, PromptSpec
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    prisma_client = MagicMock()
+    try:
+
+        async def create_prompt_behind_the_select() -> list:
+            IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(
+                prompt=PromptSpec(
+                    prompt_id="greeting_race.v1",
+                    litellm_params=PromptLiteLLMParams(
+                        prompt_id="greeting_race",
+                        prompt_integration="dotprompt",
+                        prompt_data={"content": "Begin every reply with AHOY", "metadata": {}},
+                    ),
+                    prompt_info=PromptInfo(prompt_type="db"),
+                )
+            )
+            return []
+
+        prisma_client.db.litellm_prompttable.find_many = AsyncMock(side_effect=create_prompt_behind_the_select)
+        await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
+
+        surviving_spec = IN_MEMORY_PROMPT_REGISTRY.resolve_prompt_spec("greeting_race")
+        assert surviving_spec is not None
+        surviving_callback = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_for_prompt(prompt=surviving_spec)
+        assert surviving_callback is not None
+        assert litellm.callbacks == [surviving_callback]
+    finally:
+        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id("greeting_race")
+
+
+class TestEmbeddingsFailureHookRequestData:
+    @pytest.mark.asyncio
+    async def test_failure_hook_gets_post_setup_data_with_logging_obj(self):
+        """Request setup replaces the processor's data dict (adding the logging
+        object the failure hook needs to lift token usage from); the embeddings
+        exception handler must pass that replaced dict, not the raw request body
+        dict it was rebuilt from."""
+        from litellm.proxy._types import ProxyException
+
+        captured = {}
+        logging_obj_sentinel = MagicMock()
+
+        async def fake_process(self, **kwargs):
+            self.data = {**self.data, "litellm_logging_obj": logging_obj_sentinel}
+            captured["processor_data"] = self.data
+            raise RuntimeError("provider timeout")
+
+        with (
+            patch.object(
+                proxy_server_module,
+                "_read_request_body",
+                new=AsyncMock(return_value={"model": "my-embed", "input": "hello"}),
+            ),
+            patch.object(
+                proxy_server_module.ProxyBaseLLMRequestProcessing,
+                "base_process_llm_request",
+                new=fake_process,
+            ),
+            patch.object(proxy_server_module, "proxy_logging_obj") as mock_logging,
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock(return_value=None)
+            with pytest.raises(ProxyException):
+                await proxy_server_module.embeddings(
+                    request=MagicMock(),
+                    fastapi_response=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
+                )
+
+        hook_request_data = mock_logging.post_call_failure_hook.await_args.kwargs["request_data"]
+        assert hook_request_data is captured["processor_data"]
+        assert hook_request_data["litellm_logging_obj"] is logging_obj_sentinel
+
+
+@pytest.mark.asyncio
+async def test_authoritative_floor_spend_keeps_a_reset_marker_written_during_the_db_read():
+    """A team-member spend reset writes the post-reset floor to the spend_db_floor marker
+    (auth_checks.invalidate_team_member_spend_state). A floor read already in flight when the
+    reset commits would otherwise cache its stale pre-reset DB value over the fresh marker,
+    letting a budget check raise the counter right back above the just-reset spend
+    (regression: PR #37971 Greptile finding)."""
+    from litellm.proxy.proxy_server import _authoritative_floor_spend
+
+    real_spend_counter_cache = DualCache()
+    counter_key = "spend:team_member:user-1:team-1"
+    marker_key = f"spend_db_floor:{counter_key}"
+
+    async def db_read_racing_with_a_reset(prisma_client, counter_key):
+        real_spend_counter_cache.in_memory_cache.set_cache(key=marker_key, value=0.0)
+        return 999.0
+
+    with (
+        patch.object(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
+            proxy_server_module, "spend_counter_cache", real_spend_counter_cache
+        ),
+        patch.object(  # test-quality-ok: the DB read must race the reset; no injectable seam for module-global prisma reads
+            proxy_server_module.SpendCounterReseed,
+            "from_db",
+            AsyncMock(side_effect=db_read_racing_with_a_reset),
+        ),
+    ):
+        result = await _authoritative_floor_spend(counter_key=counter_key)
+
+    assert result == 0.0
+    assert real_spend_counter_cache.in_memory_cache.get_cache(key=marker_key) == 0.0, (
+        "the in-flight DB read clobbered the post-reset floor marker with the stale pre-reset value"
+    )
+
+
+@pytest.mark.asyncio
+async def test_load_config_router_authorizes_fallback_targets_against_the_calling_key(tmp_path):
+    from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        yaml.dump({"model_list": [{"model_name": "m", "litellm_params": {"model": "openai/m", "api_key": "k"}}]})
+    )
+
+    router, _, _ = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    assert router.fallback_access_check is router_fallback_access_check
+
+
+@pytest.mark.asyncio
+async def test_load_config_user_api_key_cache_max_size_keeps_more_than_200_entries(tmp_path, monkeypatch):
+    """The auth cache used to be pinned at InMemoryCache's 200 entry default, so a
+    deployment with more keys than that evicted constantly and every request
+    fell through to the DB. The YAML knob has to raise the cap on the live cache."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump({"general_settings": {"user_api_key_cache_max_size": "1000"}}))
+
+    cache = UserApiKeyCache()
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
+    await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    _fill_user_api_key_cache(cache, 999)
+    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_value", [0, -1, "unbounded"])
+async def test_load_config_rejects_a_non_positive_user_api_key_cache_max_size(tmp_path, bad_value, monkeypatch):
+    """InMemoryCache treats 0 as 'cache nothing' and a negative cap makes eviction
+    pop an empty heap, so the proxy must refuse to boot with such a value instead
+    of silently disabling auth caching."""
+    from pydantic import ValidationError
+
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump({"general_settings": {"user_api_key_cache_max_size": bad_value}}))
+
+    cache = UserApiKeyCache()
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
+    with pytest.raises(ValidationError):
+        await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    _fill_user_api_key_cache(cache, 150)
+    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
+
+
+def test_docs_redoc_openapi_are_reachable_by_default():
+    """
+    LIT-6745: the interactive/machine-readable docs surfaces are on by
+    default (the customer-facing production toggle is opt-in, not opt-out).
+    """
+    client = TestClient(app)
+
+    assert client.get("/redoc").status_code == 200
+    openapi_response = client.get("/openapi.json")
+    assert openapi_response.status_code == 200
+    assert "paths" in openapi_response.json()
+
+
+def test_production_app_docs_urls_are_wired_to_the_real_env_helpers():
+    """
+    LIT-6745: pins the actual `FastAPI(docs_url=..., redoc_url=..., openapi_url=...)`
+    construction in proxy_server.py to _get_docs_url/_get_redoc_url/_get_openapi_url,
+    so a hardcoded or drifted value at that call site fails this test even though
+    the helpers themselves are covered separately.
+    """
+    from litellm.proxy import utils as proxy_utils
+
+    assert app.docs_url == proxy_utils._get_docs_url()
+    assert app.redoc_url == proxy_utils._get_redoc_url()
+    assert app.openapi_url == proxy_utils._get_openapi_url()
+
+
+def _build_app_with_docs_env(monkeypatch, *, disabled: bool) -> FastAPI:
+    from litellm.proxy import utils as proxy_utils
+    from litellm.proxy.health_endpoints._health_endpoints import router as health_router
+
+    for flag in ("DOCS_URL", "REDOC_URL", "OPENAPI_URL"):
+        monkeypatch.delenv(flag, raising=False)
+    for flag in ("NO_DOCS", "NO_REDOC", "NO_OPENAPI"):
+        if disabled:
+            monkeypatch.setenv(flag, "True")
+        else:
+            monkeypatch.delenv(flag, raising=False)
+
+    # Mirrors the exact FastAPI() construction in proxy_server.py, so this
+    # exercises the real gating mechanism rather than a reimplementation of it.
+    app_under_test = FastAPI(
+        docs_url=proxy_utils._get_docs_url(),
+        redoc_url=proxy_utils._get_redoc_url(),
+        openapi_url=proxy_utils._get_openapi_url(),
+    )
+    app_under_test.include_router(health_router)
+    return app_under_test
+
+
+def test_docs_endpoints_enabled_when_env_unset(monkeypatch):
+    app_under_test = _build_app_with_docs_env(monkeypatch, disabled=False)
+    assert app_under_test.docs_url == "/"
+    assert app_under_test.redoc_url == "/redoc"
+    assert app_under_test.openapi_url == "/openapi.json"
+
+    client = TestClient(app_under_test)
+    assert client.get(app_under_test.docs_url).status_code == 200
+    assert client.get(app_under_test.redoc_url).status_code == 200
+    assert client.get(app_under_test.openapi_url).status_code == 200
+
+
+def test_no_docs_no_redoc_no_openapi_disable_every_documentation_surface(monkeypatch):
+    """
+    LIT-6745: NO_DOCS, NO_REDOC and NO_OPENAPI must each 404 their surface
+    with no schema in the body, so a production/air-gapped deployment can
+    restrict every doc route consistently.
+    """
+    app_under_test = _build_app_with_docs_env(monkeypatch, disabled=True)
+    assert app_under_test.docs_url is None
+    assert app_under_test.redoc_url is None
+    assert app_under_test.openapi_url is None
+
+    client = TestClient(app_under_test)
+    for route in ("/", "/redoc", "/openapi.json"):
+        response = client.get(route)
+        assert response.status_code == 404
+        assert "openapi" not in response.text.lower()
+        assert "paths" not in response.text.lower()
+
+
+def test_disabling_docs_does_not_disable_other_routes(monkeypatch):
+    """
+    LIT-6745: disabling the doc surfaces must not affect inference/management
+    routes, since NO_DOCS/NO_REDOC/NO_OPENAPI only remove the routes FastAPI
+    itself auto-registers for docs_url/redoc_url/openapi_url.
+    """
+    app_under_test = _build_app_with_docs_env(monkeypatch, disabled=True)
+    client = TestClient(app_under_test)
+
+    assert client.get("/redoc").status_code == 404
+    assert client.get("/health/liveliness").status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "db_general_settings, expected",
+    [
+        ({"enable_openai_websocket_passthrough": True}, True),
+        ({"enable_openai_websocket_passthrough": False}, False),
+        ({}, None),
+    ],
+)
+async def test_update_general_settings_propagates_openai_websocket_passthrough(db_general_settings, expected):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    with patch("litellm.proxy.proxy_server.general_settings", {"enable_openai_websocket_passthrough": True}):
+        await proxy_config._update_general_settings(db_general_settings=db_general_settings)
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["enable_openai_websocket_passthrough"] is expected
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_keeps_yaml_openai_websocket_passthrough():
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config._yaml_general_settings_keys = {"enable_openai_websocket_passthrough"}
+
+    with patch("litellm.proxy.proxy_server.general_settings", {"enable_openai_websocket_passthrough": False}):
+        await proxy_config._update_general_settings(db_general_settings={"enable_openai_websocket_passthrough": True})
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["enable_openai_websocket_passthrough"] is False
+
+
+async def test_token_counter_keeps_the_event_loop_free_during_a_huggingface_count(monkeypatch):
+    from tests.large_text import text
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    warm_tokenizer("claude-fable-5")
+
+    response, took, lags = await timed_with_loop_lags(
+        lambda: proxy_server_module.token_counter(TokenCountRequest(model="claude-fable-5", prompt=text * 100))
+    )
+
+    assert response.total_tokens > 0
+    assert_loop_stayed_free(took, lags)
+
+
+async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeypatch):
+    from tokenizers import Tokenizer
+
+    from litellm import Router
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import assert_loop_stayed_free, timed_with_loop_lags
+
+    claude_tokenizer: Final = litellm.utils._select_tokenizer("claude-fable-5")["tokenizer"]
+
+    class SlowHubTokenizer:
+        @staticmethod
+        def from_pretrained(identifier: str, revision: str = "main", token: str | None = None) -> Tokenizer:
+            time.sleep(0.3)
+            return claude_tokenizer
+
+    monkeypatch.setattr(litellm.utils, "Tokenizer", SlowHubTokenizer)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "self-hosted",
+                    "litellm_params": {"model": "openai/self-hosted-model", "api_base": "http://localhost:8080/v1"},
+                    "model_info": {"custom_tokenizer": {"identifier": "my-org/tokenizer", "revision": "main", "auth_token": None}},
+                }
+            ]
+        ),
+    )
+
+    response, took, lags = await timed_with_loop_lags(
+        lambda: proxy_server_module.token_counter(TokenCountRequest(model="self-hosted", prompt="count me off the loop"))
+    )
+
+    assert response.tokenizer_type == "huggingface_tokenizer"
+    assert response.total_tokens > 0
+    assert_loop_stayed_free(took, lags)

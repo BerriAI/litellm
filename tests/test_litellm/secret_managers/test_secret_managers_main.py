@@ -7,7 +7,14 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from litellm.secret_managers.main import get_secret, normalize_nonempty_secret_str
+import litellm
+from litellm.integrations.custom_secret_manager import CustomSecretManager
+from litellm.secret_managers.main import (
+    get_secret,
+    normalize_nonempty_secret_str,
+    secret_manager_would_be_consulted,
+)
+from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 
 # Set up logging for debugging
 logging.basicConfig(level=logging.DEBUG)
@@ -364,3 +371,63 @@ def test_unsupported_oidc_provider():
 )
 def test_normalize_nonempty_secret_str(raw, expected):
     assert normalize_nonempty_secret_str(raw) == expected
+
+
+class _SpySecretManager(CustomSecretManager):
+    """Records every name the manager is actually asked for."""
+
+    def __init__(self, asked):
+        self.asked = asked
+
+    def sync_read_secret(self, secret_name, optional_params=None, timeout=None, **kwargs):
+        self.asked.append(secret_name)
+        return "a-value"
+
+    async def async_read_secret(self, secret_name, optional_params=None, timeout=None, **kwargs):
+        self.asked.append(secret_name)
+        return "a-value"
+
+
+@pytest.mark.parametrize(
+    ("access_mode", "hosted_keys", "secret_name", "expected"),
+    [
+        ("read_only", None, "ANY_NAME", True),
+        ("read_only", ["ALLOWED"], "ALLOWED", True),
+        ("read_only", ["ALLOWED"], "NOT_ALLOWED", False),
+        ("read_and_write", ["ALLOWED"], "ALLOWED", True),
+        ("write_only", None, "ANY_NAME", False),
+        ("write_only", ["ALLOWED"], "ALLOWED", False),
+    ],
+)
+def test_secret_manager_would_be_consulted_matches_get_secret(
+    monkeypatch, access_mode, hosted_keys, secret_name, expected
+):
+    """The predicate must agree with what get_secret actually does, not with a reading of it.
+
+    Callers use it to tell "the manager does not have this key" apart from "the manager was
+    never asked", so a predicate that drifts from get_secret's gating makes them state a
+    lookup that never happened.
+    """
+    asked = []
+    monkeypatch.setattr(litellm, "secret_manager_client", _SpySecretManager(asked))
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
+    monkeypatch.setattr(
+        litellm,
+        "_key_management_settings",
+        KeyManagementSettings(access_mode=access_mode, hosted_keys=hosted_keys),
+    )
+    monkeypatch.delenv(secret_name, raising=False)
+
+    predicted = secret_manager_would_be_consulted(f"os.environ/{secret_name}")
+    get_secret(f"os.environ/{secret_name}")
+
+    assert {"predicted": predicted, "actually_consulted": bool(asked)} == {
+        "predicted": expected,
+        "actually_consulted": expected,
+    }
+
+
+def test_secret_manager_would_be_consulted_is_false_without_a_client(monkeypatch):
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+
+    assert secret_manager_would_be_consulted("os.environ/ANY_NAME") is False

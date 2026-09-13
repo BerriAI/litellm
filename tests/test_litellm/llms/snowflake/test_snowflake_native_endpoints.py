@@ -338,7 +338,7 @@ class TestAnthropicConfigRequest:
             litellm_params={},
             headers={},
         )
-        assert body["system"] == "You are helpful."
+        assert body["system"] == [{"type": "text", "text": "You are helpful."}]
         assert all(m["role"] != "system" for m in body["messages"])
         assert body["messages"][0] == {"role": "user", "content": "Hello"}
 
@@ -421,6 +421,64 @@ class TestAnthropicConfigResponse:
         assert result.usage.prompt_tokens == 10
         assert result.usage.completion_tokens == 5
         assert result.usage.total_tokens == 15
+
+    def test_prompt_cache_usage_is_surfaced(self):
+        """Cortex reports cache creation/read counts; dropping them hides caching and bills cached input at full price."""
+        raw = httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "hi"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 18, "cache_creation_input_tokens": 1323, "cache_read_input_tokens": 0},
+            },
+        )
+        result = self.cfg.transform_response(
+            model="snowflake/claude-sonnet-4-6",
+            raw_response=raw,
+            model_response=ModelResponse(),
+            logging_obj=_mock_logging(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+        assert result.usage.prompt_tokens == 1341
+        assert result.usage.prompt_tokens_details.cache_creation_tokens == 1323
+        assert result.usage.prompt_tokens_details.cached_tokens == 0
+
+    def test_thinking_block_and_signature_are_preserved(self):
+        """The signature must survive so a client can echo the thinking block on the next turn."""
+        raw = httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "model": "claude-sonnet-4-6",
+                "content": [
+                    {"type": "thinking", "thinking": "391", "signature": "Eto"},
+                    {"type": "text", "text": "391"},
+                ],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            },
+        )
+        result = self.cfg.transform_response(
+            model="snowflake/claude-sonnet-4-6",
+            raw_response=raw,
+            model_response=ModelResponse(),
+            logging_obj=_mock_logging(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+        message = result.choices[0].message
+        assert message.content == "391"
+        assert message.reasoning_content == "391"
+        assert message.thinking_blocks[0]["signature"] == "Eto"
 
     def test_stop_reason_end_turn_maps_to_stop(self):
         raw = _make_anthropic_response()

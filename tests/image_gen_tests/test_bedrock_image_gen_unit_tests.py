@@ -1,14 +1,9 @@
 import logging
-import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
 from openai.types.image import Image
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.bedrock.image_generation.amazon_nova_canvas_transformation import (
     AmazonNovaCanvasConfig,
@@ -18,13 +13,9 @@ logging.basicConfig(level=logging.DEBUG)
 load_dotenv()
 import asyncio
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 from litellm.llms.bedrock.image_generation.cost_calculator import cost_calculator
 from litellm.types.utils import ImageResponse, ImageObject
-import os
 
 import litellm
 from litellm.llms.bedrock.image_generation.amazon_stability3_transformation import (

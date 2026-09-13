@@ -7,10 +7,11 @@
 import asyncio
 import json
 import os
-from collections.abc import AsyncGenerator
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
+from typing import TYPE_CHECKING, Final, TypeAlias
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 from websockets.asyncio.client import ClientConnection, connect
 
 from litellm import DualCache
@@ -26,13 +27,14 @@ from litellm.proxy.guardrails._content_utils import (
     apply_redacted_messages_back,
     build_inspection_messages,
     has_non_string_content,
+    is_non_conversational_call_type,
+    is_string_batch_input,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     CallTypesLiteral,
     Choices,
-    EmbeddingResponse,
-    ImageResponse,
+    LLMResponseTypes,
     ModelResponse,
     ModelResponseStream,
 )
@@ -45,6 +47,61 @@ class AimGuardrailMissingSecrets(Exception):
     pass
 
 
+class AimRequiredAction(TypedDict):
+    """The ``required_action`` block of an Aim ``/fw/v1/analyze`` response."""
+
+    action_type: ReadOnly[NotRequired[str]]
+    detection_message: ReadOnly[str]
+
+
+class AimAnalysisResult(TypedDict):
+    """The ``analysis_result`` block of an Aim ``/fw/v1/analyze`` response."""
+
+    policy_drill_down: ReadOnly[Mapping[str, object]]
+
+
+class AimRedactedMessage(TypedDict):
+    """One entry of Aim's ``redacted_chat.all_redacted_messages``."""
+
+    role: ReadOnly[str]
+    content: ReadOnly[str]
+
+
+class AimRedactedChat(TypedDict):
+    """The ``redacted_chat`` block of an Aim ``/fw/v1/analyze`` response."""
+
+    all_redacted_messages: ReadOnly[Sequence[AimRedactedMessage]]
+
+
+_REDACTED_CHAT_ADAPTER: Final = TypeAdapter(AimRedactedChat)
+
+
+class AimAnalyzeResponse(TypedDict):
+    """Body returned by Aim's ``POST /fw/v1/analyze``."""
+
+    required_action: ReadOnly[AimRequiredAction]
+    analysis_result: ReadOnly[AimAnalysisResult]
+    redacted_chat: ReadOnly[NotRequired[AimRedactedChat]]
+
+
+class AimOutputGuardrailResult(TypedDict, total=False):
+    """Outcome of inspecting one model completion with Aim."""
+
+    detection_message: ReadOnly[str]
+    redacted_output: ReadOnly[str]
+
+
+class AimStreamMessage(TypedDict, total=False):
+    """One frame of Aim's ``/fw/v1/analyze/stream`` websocket protocol."""
+
+    verified_chunk: ReadOnly[Mapping[str, object]]
+    done: ReadOnly[bool]
+    blocking_message: ReadOnly[str]
+
+
+AimStreamChunk: TypeAlias = BaseModel | Mapping[str, object] | str | bytes
+
+
 class AimGuardrail(CustomGuardrail):
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
@@ -54,8 +111,15 @@ class AimGuardrail(CustomGuardrail):
             GuardrailEventHooks.post_call,
         ]
 
-    def __init__(self, api_key: str | None = None, api_base: str | None = None, **kwargs):
+    def __init__(
+        self,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        inspect_embeddings: bool | None = None,
+        **kwargs,
+    ):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
+        self.inspect_embeddings: Final = inspect_embeddings is True
         ssl_verify: Final = kwargs.pop("ssl_verify", None)
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
@@ -82,6 +146,12 @@ class AimGuardrail(CustomGuardrail):
         call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         verbose_proxy_logger.debug("Inside AIM Pre-Call Hook")
+        # /embeddings carries ``input`` — documents being indexed, not a prompt — which
+        # the flatten lifts into synthetic chat messages. A verdict on that text then
+        # blocks or silently rewrites a request that was never a conversation.
+        if is_non_conversational_call_type(call_type) and not self.inspect_embeddings:
+            verbose_proxy_logger.debug("Aim: skipping non-conversational call type %s", call_type)
+            return data
         return await self.call_aim_guardrail(data, hook="pre_call", key_alias=user_api_key_dict.key_alias)
 
     async def async_moderation_hook(
@@ -91,6 +161,9 @@ class AimGuardrail(CustomGuardrail):
         call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         verbose_proxy_logger.debug("Inside AIM Moderation Hook")
+        if is_non_conversational_call_type(call_type) and not self.inspect_embeddings:
+            verbose_proxy_logger.debug("Aim: skipping non-conversational call type %s", call_type)
+            return data
 
         await self.call_aim_guardrail(data, hook="moderation", key_alias=user_api_key_dict.key_alias)
         return data
@@ -110,7 +183,7 @@ class AimGuardrail(CustomGuardrail):
             json={"messages": self._build_aim_inspection_messages(data)},
         )
         response.raise_for_status()
-        res: Final = response.json()
+        res: Final[AimAnalyzeResponse] = response.json()
         required_action: Final = res.get("required_action")
         action_type: Final = required_action and required_action.get("action_type", None)
         if action_type is None:
@@ -145,7 +218,7 @@ class AimGuardrail(CustomGuardrail):
             openai_code=openai_code,
         )
 
-    def _handle_block_action(self, analysis_result: Any, required_action: Any) -> None:
+    def _handle_block_action(self, analysis_result: AimAnalysisResult, required_action: AimRequiredAction) -> None:
         detection_message: Final = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
             "Aim: Violation detected enabled policies: {policies}".format(
@@ -154,7 +227,7 @@ class AimGuardrail(CustomGuardrail):
         )
         raise self._rejection(detection_message, openai_code="content_policy_violation")
 
-    def _anonymize_request(self, res: Any, data: dict) -> dict:
+    def _anonymize_request(self, res: AimAnalyzeResponse, data: dict) -> dict:
         verbose_proxy_logger.info("Aim: anonymize action")
         redacted_chat: Final = res.get("redacted_chat")
         if not redacted_chat:
@@ -163,29 +236,41 @@ class AimGuardrail(CustomGuardrail):
         # ``data["messages"]`` with that would silently strip image/audio
         # parts from a multimodal request — degrade to block so the
         # multimodal payload is never silently rewritten.
-        if has_non_string_content(data):
+        if has_non_string_content(data) and not is_string_batch_input(data):
             raise self._rejection(
                 "Aim: anonymize action requested for multimodal input "
                 "but mask-in-place would drop non-text parts. Send the "
                 "request with plain string content to use anonymize, "
                 "or rely on block-mode policies."
             )
-        redacted_messages: Final = [
-            {
-                "role": message["role"],
-                "content": message["content"],
-            }
-            for message in redacted_chat["all_redacted_messages"]
-        ]
+        try:
+            redacted_chat_model: Final = _REDACTED_CHAT_ADAPTER.validate_python(redacted_chat)
+        except ValidationError:
+            raise self._rejection(
+                "Aim: anonymize action returned malformed redacted messages, "
+                "so the request cannot be rewritten without forwarding unredacted text."
+            ) from None
+        redacted_messages: Final = list(redacted_chat_model["all_redacted_messages"])
+        if len(redacted_messages) != len(build_inspection_messages(data)):
+            raise self._rejection(
+                "Aim: anonymize action returned a redacted batch of a different "
+                "size than the inspected input, so the request cannot be "
+                "rewritten without forwarding unredacted text."
+            )
         # Write back to ``messages`` AND ``input``. The Responses-API
         # backend reads ``input``; writing only to ``messages`` would let
         # unredacted text reach the LLM for ``/v1/responses`` calls.
-        apply_redacted_messages_back(data, redacted_messages)
+        if not apply_redacted_messages_back(data, redacted_messages):
+            raise self._rejection(
+                "Aim: anonymize action returned a redacted batch of a different "
+                "size than the inspected input, so the request cannot be "
+                "rewritten without forwarding unredacted text."
+            )
         return data
 
     async def call_aim_guardrail_on_output(
         self, request_data: dict, output: str, hook: str, key_alias: str | None
-    ) -> dict | None:
+    ) -> AimOutputGuardrailResult | None:
         user_email: Final = request_data.get("metadata", {}).get("headers", {}).get("x-aim-user-email")
         call_id: Final = request_data.get("litellm_call_id")
         response: Final = await self.async_handler.post(
@@ -202,18 +287,40 @@ class AimGuardrail(CustomGuardrail):
             },
         )
         response.raise_for_status()
-        res: Final = response.json()
+        res: Final[AimAnalyzeResponse] = response.json()
         required_action: Final = res.get("required_action")
         action_type: Final = required_action and required_action.get("action_type", None)
         if action_type and action_type == "block_action":
             return self._handle_block_action_on_output(res["analysis_result"], required_action)
         redacted_chat: Final = res.get("redacted_chat", None)
 
-        if action_type and action_type == "anonymize_action" and redacted_chat:
-            return {"redacted_output": redacted_chat["all_redacted_messages"][-1]["content"]}
-        return {"redacted_output": output}
+        if action_type != "anonymize_action":
+            return {"redacted_output": output}
+        try:
+            redacted_chat_model: Final = _REDACTED_CHAT_ADAPTER.validate_python(redacted_chat)
+        except ValidationError:
+            raise self._rejection(
+                "Aim: anonymize action returned malformed redacted output, "
+                "so the response cannot be rewritten without forwarding unredacted text."
+            ) from None
+        redacted_messages: Final = redacted_chat_model["all_redacted_messages"]
+        inspected_messages: Final = self._build_aim_inspection_messages(request_data)
+        if len(redacted_messages) != len(inspected_messages) + 1:
+            raise self._rejection(
+                "Aim: anonymize action returned an invalid redacted output count, "
+                "so the response cannot be rewritten without forwarding unredacted text."
+            )
+        redacted_output: Final = redacted_messages[-1]["content"]
+        if not redacted_output:
+            raise self._rejection(
+                "Aim: anonymize action returned empty redacted output, "
+                "so the response cannot be rewritten without forwarding unredacted text."
+            )
+        return {"redacted_output": redacted_output}
 
-    def _handle_block_action_on_output(self, analysis_result: Any, required_action: Any) -> dict | None:
+    def _handle_block_action_on_output(
+        self, analysis_result: AimAnalysisResult, required_action: AimRequiredAction
+    ) -> AimOutputGuardrailResult | None:
         detection_message: Final = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
             "Aim: detected: {detected}, enabled policies: {policies}".format(
@@ -260,8 +367,8 @@ class AimGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any | ModelResponse | EmbeddingResponse | ImageResponse,
-    ) -> Any:
+        response: LLMResponseTypes,
+    ) -> LLMResponseTypes:
         if not (isinstance(response, ModelResponse) and response.choices):
             return response
         # Inspect every choice — when ``n>1`` the additional completions
@@ -289,9 +396,11 @@ class AimGuardrail(CustomGuardrail):
         for choice, aim_output_guardrail_result in zip(choices_to_inspect, results):
             if isinstance(aim_output_guardrail_result, BaseException):
                 raise aim_output_guardrail_result
-            if aim_output_guardrail_result and aim_output_guardrail_result.get("detection_message"):
+            if aim_output_guardrail_result and (
+                detection_message := aim_output_guardrail_result.get("detection_message")
+            ):
                 raise self._rejection(
-                    aim_output_guardrail_result.get("detection_message"),
+                    detection_message,
                     openai_code="content_policy_violation",
                 )
             if aim_output_guardrail_result and aim_output_guardrail_result.get("redacted_output"):
@@ -301,7 +410,7 @@ class AimGuardrail(CustomGuardrail):
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: AsyncIterator[AimStreamChunk],
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream, None]:
         user_email: Final = request_data.get("metadata", {}).get("headers", {}).get("x-aim-user-email")
@@ -317,7 +426,7 @@ class AimGuardrail(CustomGuardrail):
         ) as websocket:
             sender: Final = asyncio.create_task(self.forward_the_stream_to_aim(websocket, response))
             while True:
-                result = json.loads(await websocket.recv())
+                result: AimStreamMessage = json.loads(await websocket.recv())
                 if verified_chunk := result.get("verified_chunk"):
                     yield ModelResponseStream.model_validate(verified_chunk)
                 else:
@@ -334,7 +443,7 @@ class AimGuardrail(CustomGuardrail):
     async def forward_the_stream_to_aim(
         self,
         websocket: ClientConnection,
-        response_iter,
+        response_iter: AsyncIterator[AimStreamChunk],
     ) -> None:
         async for chunk in response_iter:
             if isinstance(chunk, BaseModel):

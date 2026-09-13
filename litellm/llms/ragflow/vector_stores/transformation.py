@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -91,7 +92,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: dict[str, Any] | None = None,
+        extra_body: Mapping[str, object] | None = None,
     ) -> tuple[str, dict]:
         """RAGFlow vector stores are management-only, search is not supported."""
         raise NotImplementedError("RAGFlow vector stores support dataset management only, not search/retrieval")
@@ -121,7 +122,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
             raise ValueError("name is required for RAGFlow dataset creation")
 
         # Build request body
-        request_body: Final[dict[str, Any]] = {
+        request_body: Final[dict[str, object]] = {
             "name": name,
         }
 

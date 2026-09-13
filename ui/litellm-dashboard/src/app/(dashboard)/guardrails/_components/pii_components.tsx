@@ -13,6 +13,7 @@ import {
   ComboboxEmpty,
   ComboboxItem,
   ComboboxList,
+  useComboboxAnchor,
 } from "@/components/ui/combobox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -41,6 +42,7 @@ export interface CategoryFilterProps {
 }
 
 export const CategoryFilter: React.FC<CategoryFilterProps> = ({ categories, selectedCategories, onChange }) => {
+  const anchor = useComboboxAnchor();
   const categoryNames = categories.map((cat) => cat.category);
 
   return (
@@ -50,18 +52,17 @@ export const CategoryFilter: React.FC<CategoryFilterProps> = ({ categories, sele
         <span className="font-medium text-muted-foreground">Filter by category</span>
       </div>
       <Combobox items={categoryNames} value={selectedCategories} onValueChange={onChange} multiple>
-        <ComboboxChips className="mb-4 w-full">
+        <ComboboxChips render={<div ref={anchor} />} className="mb-4 w-full">
           {selectedCategories.map((category) => (
             <ComboboxChip key={category} aria-label={category}>
               {category}
             </ComboboxChip>
           ))}
           <ComboboxChipsInput
-            className="border-0 bg-transparent"
             placeholder={selectedCategories.length === 0 ? "Select categories to filter by" : undefined}
           />
         </ComboboxChips>
-        <ComboboxContent>
+        <ComboboxContent anchor={anchor}>
           <ComboboxEmpty>No matching categories</ComboboxEmpty>
           <ComboboxList>
             {(category: string) => (
@@ -178,7 +179,7 @@ export const PiiEntityList: React.FC<PiiEntityListProps> = ({
                     <SelectTrigger className={`w-[120px] ${isSelected ? "" : "opacity-50"}`} aria-label="Action">
                       <SelectValue />
                     </SelectTrigger>
-                    <SelectContent alignItemWithTrigger={false}>
+                    <SelectContent>
                       {actions.map((action) => (
                         <SelectItem key={action} value={action}>
                           <span className="flex items-center">

@@ -1,6 +1,4 @@
 import json
-import os
-import sys
 import traceback
 from unittest import mock
 from unittest.mock import MagicMock, patch
@@ -12,9 +10,6 @@ from fastapi.testclient import TestClient
 
 from litellm.passthrough.utils import CommonUtils
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 from unittest.mock import Mock
 
@@ -97,3 +92,13 @@ def test_encode_bedrock_runtime_modelid_arn_edge_cases():
     expected = "model/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile%2Ftest-profile.v1/invoke"
     result = CommonUtils.encode_bedrock_runtime_modelid_arn(endpoint)
     assert result == expected
+
+
+def test_encode_bedrock_runtime_modelid_arn_partition_arns() -> None:
+    endpoint = "model/arn:aws-cn:bedrock:cn-north-1:123456789012:application-inference-profile/r742sbn2zckd/converse"
+    expected = "model/arn:aws-cn:bedrock:cn-north-1:123456789012:application-inference-profile%2Fr742sbn2zckd/converse"
+    assert CommonUtils.encode_bedrock_runtime_modelid_arn(endpoint) == expected
+
+    endpoint = "model/arn:aws-us-gov:bedrock:us-gov-west-1:123456789012:inference-profile/test-profile/invoke"
+    expected = "model/arn:aws-us-gov:bedrock:us-gov-west-1:123456789012:inference-profile%2Ftest-profile/invoke"
+    assert CommonUtils.encode_bedrock_runtime_modelid_arn(endpoint) == expected

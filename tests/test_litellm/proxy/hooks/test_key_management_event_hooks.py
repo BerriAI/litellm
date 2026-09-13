@@ -4,13 +4,13 @@ Tests for KeyManagementEventHooks.
 Validates that email and secret manager operations are independent and non-blocking.
 """
 
-import os
-import sys
+import asyncio
+import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 
@@ -153,6 +153,44 @@ class TestKeyManagementEventHooksIndependentOperations:
 
         # Email should have been called despite secret manager failure
         assert email_called["called"] is True
+
+
+@pytest.mark.parametrize(
+    ("premium_user", "expected_audit_log_calls"),
+    ((True, 1), (False, 0)),
+)
+@pytest.mark.asyncio
+async def test_key_generated_audit_log_uses_license_default(
+    monkeypatch: pytest.MonkeyPatch,
+    premium_user: bool,
+    expected_audit_log_calls: int,
+):
+    from litellm.proxy._types import GenerateKeyRequest, GenerateKeyResponse, UserAPIKeyAuth
+
+    monkeypatch.setattr("litellm.store_audit_logs", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", premium_user)
+    monkeypatch.delenv("LITELLM_STORE_AUDIT_LOGS", raising=False)
+
+    response = GenerateKeyResponse(key="sk-test-key", token_id="token-123")
+    with (
+        patch(
+            "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+            new_callable=AsyncMock,
+        ) as mock_create_audit_log,
+        patch.object(
+            KeyManagementEventHooks,
+            "_store_virtual_key_in_secret_manager",
+            new_callable=AsyncMock,
+        ),
+    ):
+        await KeyManagementEventHooks.async_key_generated_hook(
+            data=GenerateKeyRequest(),
+            response=response,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin-key", user_id="admin"),
+        )
+        await asyncio.sleep(0.01)
+
+    assert mock_create_audit_log.await_count == expected_audit_log_calls
 
 
 class TestRotateVirtualKeyInSecretManager:
@@ -439,7 +477,7 @@ class TestRotateVirtualKeyInSecretManager:
 class TestKeyUpdatedAuditLogObjectId:
     """Tests that /key/update audit logs never store the raw virtual key (issue #31620)."""
 
-    async def _run_updated_hook_and_capture_audit_log(self, request_key: str):
+    async def _run_updated_hook_and_capture_audit_log(self, request_key: str, detach_project: bool = False):
         import asyncio
 
         from litellm.proxy._types import (
@@ -457,6 +495,11 @@ class TestKeyUpdatedAuditLogObjectId:
         existing_key_row = LiteLLM_VerificationToken(
             token=hash_token("sk-raw-test-key-31620"),
             key_name="sk-...1620",
+            project_id="project-orbit",
+        )
+
+        data: Final = UpdateKeyRequest(
+            key=request_key, max_budget=2000.0, **({"project_id": None} if detach_project else {})
         )
 
         with (
@@ -467,7 +510,7 @@ class TestKeyUpdatedAuditLogObjectId:
             ),
         ):
             await KeyManagementEventHooks.async_key_updated_hook(
-                data=UpdateKeyRequest(key=request_key, max_budget=2000.0),
+                data=data,
                 existing_key_row=existing_key_row,
                 response=MagicMock(),
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin-key", user_id="admin"),
@@ -494,13 +537,22 @@ class TestKeyUpdatedAuditLogObjectId:
         assert raw_key not in str(audit_row.updated_values)
         assert raw_key not in str(audit_row.before_value)
 
+    @pytest.mark.parametrize("detach_project", [False, True])
     @pytest.mark.asyncio
-    async def test_update_audit_log_passes_through_hashed_key(self):
+    async def test_update_audit_log_passes_through_hashed_key(self, detach_project: bool):
         """An already-hashed token sent to /key/update is stored unchanged."""
         from litellm.proxy.utils import hash_token
 
         hashed_key = hash_token("sk-raw-test-key-31620")
 
-        audit_row = await self._run_updated_hook_and_capture_audit_log(request_key=hashed_key)
+        audit_row: Final = await self._run_updated_hook_and_capture_audit_log(
+            request_key=hashed_key, detach_project=detach_project,
+        )
 
         assert audit_row.object_id == hashed_key
+        updated_values: Final = json.loads(audit_row.updated_values)
+        assert ("project_id" in updated_values) is detach_project
+        if detach_project:
+            assert updated_values["project_id"] is None
+            assert json.loads(audit_row.before_value)["project_id"] == "project-orbit"
+        assert updated_values["max_budget"] == 2000.0

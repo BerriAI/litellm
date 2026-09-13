@@ -56,6 +56,18 @@ class BlockEverything:
         return context
 
 
+class MessageRecorder:
+    """Records what each plugin pass was handed, then blocks so the request stops there."""
+
+    def __init__(self):
+        self.seen = []
+
+    async def run(self, context: RoutingContext) -> RoutingContext:
+        self.seen.append(list(context.raw_messages))
+        context.candidate_models = []
+        return context
+
+
 def _smart_router_model_list():
     return [
         {
@@ -165,6 +177,71 @@ async def test_async_completion_with_unsupported_strategy_rejects_configured_plu
 
 
 @pytest.mark.asyncio
+async def test_prompt_management_model_still_runs_the_plugin_pipeline():
+    """
+    A prompt-management model routes through its own factory, which picked the deployment
+    on the synchronous path. Plugins never run there, so the guard turned every such request
+    into an error message about the caller's own API choice, on an async call the caller made
+    correctly. It also read the in-flight counts with a blocking call inside the event loop.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "cached-claude",
+                "litellm_params": {
+                    "model": "anthropic_cache_control_hook/claude-sonnet-5",
+                    "prompt_id": "cache-points",
+                },
+            }
+        ],
+        routing_strategy="least-busy",
+        plugins=[BlockEverything()],
+    )
+
+    with pytest.raises(ValueError, match="No deployments left after routing-plugin filtering"):
+        await router.acompletion(
+            model="cached-claude",
+            messages=[{"role": "user", "content": "hi"}],
+            litellm_call_id="lit-7039",
+        )
+
+
+@pytest.mark.asyncio
+async def test_prompt_management_plugins_see_the_callers_own_messages():
+    """
+    The prompt-management factory picks its deployment with a placeholder message, which was
+    harmless while that pick ran on the synchronous path (plugins never ran there at all). Now
+    that the pick runs the plugin pipeline, a plugin that classifies request content would score
+    the placeholder instead of the conversation, and the narrowing it produces decides which
+    deployments the real call is allowed to use.
+    """
+    recorder = MessageRecorder()
+    router = Router(
+        model_list=[
+            {
+                "model_name": "cached-claude",
+                "litellm_params": {
+                    "model": "anthropic_cache_control_hook/claude-sonnet-5",
+                    "prompt_id": "cache-points",
+                },
+            }
+        ],
+        routing_strategy="least-busy",
+        plugins=[recorder],
+    )
+    messages = [{"role": "user", "content": "wire me $40,000 to account 12345"}]
+
+    with pytest.raises(ValueError, match="No deployments left after routing-plugin filtering"):
+        await router.acompletion(
+            model="cached-claude",
+            messages=messages,
+            litellm_call_id="lit-7039",
+        )
+
+    assert recorder.seen == [messages]
+
+
+@pytest.mark.asyncio
 async def test_router_without_plugins_is_unaffected():
     """Regression guard: a Router with no `plugins` configured behaves exactly as before."""
     router = Router(
@@ -221,7 +298,7 @@ def test_filter_by_routing_plugin_candidates_narrows_and_raises_when_empty():
 
 
 def test_json_default_stable_id_is_stable_across_instances():
-    """_generate_model_id's json.dumps `default=` fallback must not embed an object's
+    """generate_model_id's json.dumps `default=` fallback must not embed an object's
     memory address (e.g. plain str() on an object with no custom __repr__ falls back
     to object.__repr__'s `<module.Class object at 0x...>`) -- that would make the
     deployment id churn on every process restart for any deployment whose
@@ -232,7 +309,7 @@ def test_json_default_stable_id_is_stable_across_instances():
     assert router._json_default_stable_id(LanguageDetector()) != router._json_default_stable_id(TenantPolicy())
 
 
-def test_generate_model_id_is_stable_when_litellm_params_contain_a_plugin_instance():
+def testgenerate_model_id_is_stable_when_litellm_params_contain_a_plugin_instance():
     """End-to-end: a deployment id built from litellm_params containing a routing
     plugin instance (e.g. complexity_router_config.plugins) must be identical across
     separate calls, not just non-crashing."""
@@ -242,8 +319,8 @@ def test_generate_model_id_is_stable_when_litellm_params_contain_a_plugin_instan
         "complexity_router_config": {"plugins": [LanguageDetector()]},
     }
 
-    id1 = router._generate_model_id("smart-router", litellm_params)
-    id2 = router._generate_model_id(
+    id1 = router.generate_model_id("smart-router", litellm_params)
+    id2 = router.generate_model_id(
         "smart-router",
         {
             "model": "auto_router/complexity_router",

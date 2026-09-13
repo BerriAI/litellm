@@ -1,3 +1,42 @@
-litellm-python-bridge is the PyO3 cdylib that exposes Rust to the litellm Python SDK — a thin adapter (Python objects → Rust calls → Python results) over the litellm-core route entrypoints (e.g. `litellm_core::messages::messages`).
-
-Keep it thin: no business logic, no transforms, no I/O orchestration — just marshal in/out and call the core entrypoint.
+- Target invariants, not completion claims; these supersede older conflicting bridge guidance
+- Keep this crate the product-specific PyO3 consumer of `litellm-python-interop`
+  - Own registration, input projection, retained Python state, callback invocation, public response/error construction and host scheduling
+  - Keep value-oriented execution, sync waiting, nested-runtime checks, signal polling and panic containment in `execution.rs`; native async work uses `pyo3-async-runtimes`, Serde output uses `Pythonized<T>`
+  - Core owns typed native state, admission, lifecycle sequencing, provider preparation/I/O, normalization and terminal-outcome/dispatch decisions
+  - Python, Rust SDK and gateway use one lifecycle-bearing core route entrypoint; provider helpers stay private, never bridge-accessible transport drivers
+  - Built-in provider/config/secret/auth/document preparation stays in Rust; caller-authored callbacks and focused Python-file reads run only at core-selected points
+- Target GIL-enabled CPython explicitly with `#[pymodule(gil_used = true)]`; detach Rust-only work
+  - Free-threading requires separate runtime/concurrency validation; omitting the attribute does not opt out on PyO3 0.28+
+- Preserve public argument binding and Python object provenance
+  - Retain complete boundary arguments, opaque unknown values, aliases, omitted/default distinctions and deliberate copies; preserve the established deployment-hook kwargs view
+  - Retain independently captured body/header roots; in-place mutation and logging-envelope field replacement have different effects
+  - Project only consumed fields at reference read points; no eager whole-graph serialization or equality-based alias reconstruction
+  - Preserve provider-specific upload/submission/poll observation and encoding boundaries; signed/build-captured bytes must not be silently reserialized
+- Only core's typed, effect-free admission may return `Declined`; conversion errors and all post-admission failures are terminal
+  - Admission cannot invoke hooks, acquire credentials, consume files/iterators, prepare requests or perform I/O
+  - Disabled/unavailable native execution or an admission decline may select legacy once; callback exceptions never authorize fallback or replay
+- Use one ordinary inline `async def` driver in `litellm/rust_bridge/lifecycle.py`, with the native handle in `src/lifecycle.rs`
+  - Contract: `start`, `resume_value`, `resume_error`, idempotent `close`; explicitly tagged `Await`/`Complete` preserve awaitable final values
+  - Validate Created/Running/Suspended/Closed protocol states; core alone chooses lifecycle phases and result/error policy
+  - Defer effectful setup/context reads/timestamps until start; unstarted-handle destruction releases inputs independently of Python `finally`
+  - Catch only the selected await's errors; start/resume errors propagate, `GeneratorExit` closes without further awaits
+  - Inline hooks preserve caller task/thread/loop and context writes; `into_future` creates a separate task and cannot satisfy this contract
+  - Delivery follows the binding, not callable type; keep direct, awaited, worker, background and deferred behavior distinct
+- Finalize fallible public response/error construction, replacements and metadata under core control before terminal dispatch
+  - Success/failure handler entry receives the exact selected public response/exception; logging projections/redaction/snapshots retain their own copy contracts
+  - Ordinary failure-callback errors cannot suppress later eligible sync/async callbacks or replace the mapped provider error; control-flow exceptions have phase-specific policy
+  - Dispatch errors never replay provider work/accepted dispatch or trigger the opposite outcome; proxy acceptance/rejection releases core-owned deferred success at most once
+- Make ownership safe across suspension, re-entry, cancellation and GC
+  - Keep native provider state typed in core; do not shuttle it through opaque Python transport/response classes
+  - Prefer one retained `Py<PyBaseException>` via `PyErr::into_value(py)`; reconstruct transient `PyErr`s, preserving identity, traceback, cause and context
+  - Traverse every owned Python edge, including duplicate references; traversal cannot call Python
+  - Take state out and mark Running under a short borrow, release borrows/locks before Python invocation, publish terminal state before finalizer-capable drops
+  - Close/GC/deferred release are idempotent and re-entry-safe, including during Rust unwinding; release only owned references, never clear caller containers or mask the selected error
+  - Cancellation signaling is not termination; retain captures until work actually finishes and use a Rust-selected awaited acknowledgement where required, never synchronous close/GC
+- Verify behavior through a fresh, provenance-checked installed extension and positive native execution evidence before replacing the custom coroutine
+  - Cover admitted provider workflows, binding/read-point/identity behavior, failure continuation, finalization, no replay, deferred gates, re-entry, GC and cancellation termination
+  - Measure real conversion/copy costs before optimizing; preserve input contracts and capture lifetimes with `PyBackedBytes`, and lookup timing when interning names
+  - Ship accurate `_native.pyi` declarations and typing markers; distinguish Future-returning bindings from coroutine-returning bindings
+- References: [ownership](https://pyo3.rs/v0.29.2/types.html), [GC](https://pyo3.rs/v0.29.2/class/protocols.html#garbage-collector-integration), [exception transfer](https://docs.rs/pyo3/0.29.2/pyo3/struct.PyErr.html#method.into_value), [re-entry](https://pyo3.rs/v0.29.2/class/call.html)
+  - [GIL policy](https://pyo3.rs/v0.29.2/free-threading.html), [experimental async limits](https://pyo3.rs/v0.29.2/async-await.html), [task conversion](https://docs.rs/pyo3-async-runtimes/0.29.0/pyo3_async_runtimes/fn.into_future_with_locals.html), [native cancellation/delivery](https://docs.rs/pyo3-async-runtimes/0.29.0/pyo3_async_runtimes/tokio/fn.future_into_py.html)
+  - [performance](https://pyo3.rs/v0.29.2/performance.html), [PyBackedBytes](https://docs.rs/pyo3/0.29.2/pyo3/pybacked/struct.PyBackedBytes.html), [typing](https://pyo3.rs/v0.29.2/python-typing-hints.html)

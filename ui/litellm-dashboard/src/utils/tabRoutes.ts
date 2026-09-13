@@ -1,4 +1,4 @@
-import { migratedHref } from "@/utils/migratedPages";
+import { uiHref } from "@/utils/uiHref";
 
 export interface TabRoutes<Slug extends string> {
   baseSegment: string;
@@ -9,7 +9,7 @@ export interface TabRoutes<Slug extends string> {
 
 export function createTabRoutes<Slug extends string>(baseSegment: string, slugs: readonly Slug[]): TabRoutes<Slug> {
   const tabHref = (slug: string): string => {
-    const base = migratedHref(baseSegment);
+    const base = uiHref(baseSegment);
     return slug ? `${base}/${slug}/` : `${base}/`;
   };
 

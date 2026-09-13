@@ -107,7 +107,9 @@
         "required": true,
         "field_type": "text",
         "default_value": null,
-        "include_in_litellm_params": false
+        "include_in_litellm_params": false,
+        "validation_pattern": "^arn:aws[a-zA-Z0-9-]*:bedrock-agentcore:[a-z0-9-]+:[0-9]{12}:runtime/.+$",
+        "validation_message": "Enter the complete Bedrock AgentCore runtime ARN, including the runtime ID after \"runtime/\" (e.g. arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/my-agent-runtime)."
       }
     ],
     "litellm_params_template": {

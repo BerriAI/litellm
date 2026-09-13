@@ -2,6 +2,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 from typing_extensions import (
+    ReadOnly,
     Required,
     TypedDict,
 )
@@ -57,6 +58,14 @@ class DatabricksMessage(TypedDict, total=False):
     role: Required[str]
     content: Required[AllDatabricksContentValues]
     tool_calls: list[DatabricksTool] | None
+    reasoning_content: ReadOnly[str | None]
+    reasoning: ReadOnly[str | None]
+
+
+class DatabricksDelta(TypedDict, total=False):
+    role: ReadOnly[str]
+    content: ReadOnly[AllDatabricksContentValues | None]
+    reasoning_content: ReadOnly[str | None]
 
 
 class DatabricksChoice(TypedDict, total=False):

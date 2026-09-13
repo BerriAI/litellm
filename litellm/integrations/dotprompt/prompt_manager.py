@@ -3,12 +3,28 @@ Based on Google's GenAI Kit dotprompt implementation: https://google.github.io/d
 """
 
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Final
 
 import yaml
 from jinja2 import DictLoader, select_autoescape
 from jinja2.sandbox import ImmutableSandboxedEnvironment
+from typing_extensions import NotRequired, ReadOnly, TypedDict
+
+
+class _PromptFileJson(TypedDict):
+    """JSON form of a .prompt file: rendered template text plus its frontmatter."""
+
+    content: ReadOnly[NotRequired[str]]
+    metadata: ReadOnly[NotRequired[dict[str, object]]]
+
+
+def strip_version_suffix(prompt_id: str) -> str | None:
+    base, separator, version = prompt_id.rpartition(".v")
+    if separator and base and version.isdigit():
+        return base
+    return None
 
 
 class PromptTemplate:
@@ -124,11 +140,13 @@ class PromptManager:
             "content": "template content",
             "metadata": {"model": "gpt-4", "temperature": 0.7, ...}
         } + prompt_id
-        """
-        if prompt_id:
-            prompt_data = {prompt_id: prompt_data}
 
-        for prompt_id, prompt_info in prompt_data.items():
+        A dict carrying a "content" key is a single flat template registered under
+        prompt_id; anything else is treated as already keyed by template ID.
+        """
+        keyed_prompts: Final = {prompt_id: prompt_data} if prompt_id and "content" in prompt_data else prompt_data
+
+        for template_id, prompt_info in keyed_prompts.items():
             try:
                 content = prompt_info.get("content", "")
                 metadata = prompt_info.get("metadata", {})
@@ -136,11 +154,10 @@ class PromptManager:
                 template = PromptTemplate(
                     content=content,
                     metadata=metadata,
-                    template_id=prompt_id,
+                    template_id=template_id,
                 )
-                self.prompts[prompt_id] = template
+                self.prompts[template_id] = template
             except Exception:
-                # Optional: print(f"Error loading prompt from JSON: {prompt_id}")
                 pass
 
     def _load_prompt_file(self, file_path: str | Path, prompt_id: str) -> PromptTemplate:
@@ -159,7 +176,7 @@ class PromptManager:
             template_id=prompt_id,
         )
 
-    def _parse_frontmatter(self, content: str) -> tuple[dict[str, Any], str]:
+    def _parse_frontmatter(self, content: str) -> tuple[dict[str, object], str]:
         """Parse YAML frontmatter from prompt content."""
         # Match YAML frontmatter between --- delimiters
         frontmatter_pattern: Final = r"^---\s*\n(.*?)\n---\s*\n(.*)$"
@@ -170,7 +187,7 @@ class PromptManager:
             template_content = match.group(2)
 
             try:
-                frontmatter = yaml.safe_load(frontmatter_yaml) or {}
+                frontmatter: dict[str, object] = yaml.safe_load(frontmatter_yaml) or {}
             except yaml.YAMLError as e:
                 raise ValueError(f"Invalid YAML frontmatter: {e}")
         else:
@@ -183,7 +200,7 @@ class PromptManager:
     def render(
         self,
         prompt_id: str,
-        prompt_variables: dict[str, Any] | None = None,
+        prompt_variables: Mapping[str, object] | None = None,
         version: int | None = None,
     ) -> str:
         """
@@ -223,7 +240,7 @@ class PromptManager:
         except Exception as e:
             raise ValueError(f"Error rendering template '{prompt_id}': {e}")
 
-    def _validate_input(self, variables: dict[str, Any], schema: dict[str, Any]) -> None:
+    def _validate_input(self, variables: Mapping[str, object], schema: Mapping[str, str]) -> None:
         """Basic validation of input variables against schema."""
         for field_name, field_type in schema.items():
             if field_name in variables:
@@ -272,14 +289,18 @@ class PromptManager:
             if versioned_id in self.prompts:
                 return self.prompts[versioned_id]
 
-        # Fall back to base prompt_id
-        return self.prompts.get(prompt_id)
+        direct_match: Final = self.prompts.get(prompt_id)
+        if direct_match is not None:
+            return direct_match
+
+        base_prompt_id: Final = strip_version_suffix(prompt_id)
+        return self.prompts.get(base_prompt_id) if base_prompt_id else None
 
     def list_prompts(self) -> list[str]:
         """Get a list of all available prompt IDs."""
         return list(self.prompts.keys())
 
-    def get_prompt_metadata(self, prompt_id: str) -> dict[str, Any] | None:
+    def get_prompt_metadata(self, prompt_id: str) -> dict[str, object] | None:
         """Get metadata for a specific prompt."""
         template: Final = self.prompts.get(prompt_id)
         return template.metadata if template else None
@@ -290,12 +311,12 @@ class PromptManager:
         if self.prompt_directory:
             self._load_prompts()
 
-    def add_prompt(self, prompt_id: str, content: str, metadata: dict[str, Any] | None = None) -> None:
+    def add_prompt(self, prompt_id: str, content: str, metadata: dict[str, object] | None = None) -> None:
         """Add a prompt template programmatically."""
         template: Final = PromptTemplate(content=content, metadata=metadata or {}, template_id=prompt_id)
         self.prompts[prompt_id] = template
 
-    def prompt_file_to_json(self, file_path: str | Path) -> dict[str, Any]:
+    def prompt_file_to_json(self, file_path: str | Path) -> _PromptFileJson:
         """Convert a .prompt file to JSON format.
 
         Args:
@@ -312,7 +333,7 @@ class PromptManager:
 
         return {"content": template_content.strip(), "metadata": frontmatter}
 
-    def json_to_prompt_file(self, prompt_data: dict[str, Any]) -> str:
+    def json_to_prompt_file(self, prompt_data: _PromptFileJson) -> str:
         """Convert JSON prompt data to .prompt file format.
 
         Args:

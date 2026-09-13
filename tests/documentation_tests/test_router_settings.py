@@ -2,11 +2,7 @@ import os
 import re
 import inspect
 from typing import Type
-import sys
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 
 
@@ -61,7 +57,7 @@ try:
             documented_keys.update(doc_key_pattern.findall(table_content))
 except Exception as e:
     raise Exception(
-        f"Error reading documentation: {e}, \n repo base - {os.listdir(repo_base)}"
+        f"Error reading documentation: {e}, \n repo base - {os.listdir(_repo_root)}"
     )
 
 

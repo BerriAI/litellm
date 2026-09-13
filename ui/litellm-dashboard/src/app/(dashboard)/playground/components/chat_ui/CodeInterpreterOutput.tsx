@@ -2,6 +2,8 @@ import React, { useEffect, useState } from "react";
 import { Code, Download, FileImage, FileText, Loader2 } from "lucide-react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
+
+import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -33,6 +35,7 @@ function isImageFilename(filename: string | undefined): boolean {
 }
 
 const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({ code, annotations = [], accessToken }) => {
+  const syntaxTheme = useSyntaxTheme(coy);
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
   const [loadingImages, setLoadingImages] = useState<Record<string, boolean>>({});
   const [codeOpen, setCodeOpen] = useState(false);
@@ -129,14 +132,14 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({ code, ann
   return (
     <div className="mt-3 space-y-3">
       {code && (
-        <Collapsible open={codeOpen} onOpenChange={setCodeOpen} className="rounded-md border border-gray-200">
+        <Collapsible open={codeOpen} onOpenChange={setCodeOpen} className="rounded-md border border-border">
           <CollapsibleTrigger
             render={
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="w-full justify-start gap-2 text-sm text-gray-600"
+                className="w-full justify-start gap-2 text-sm text-muted-foreground"
               />
             }
           >
@@ -144,10 +147,10 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({ code, ann
             Python Code Executed
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <div className="border-t border-gray-200 p-2">
+            <div className="border-t border-border p-2">
               <SyntaxHighlighter
                 language="python"
-                style={coy}
+                style={syntaxTheme}
                 customStyle={{
                   margin: 0,
                   borderRadius: "6px",
@@ -164,11 +167,11 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({ code, ann
       )}
 
       {imageAnnotations.map((annotation) => (
-        <div key={annotation.file_id} className="overflow-hidden rounded-lg border border-gray-200">
+        <div key={annotation.file_id} className="overflow-hidden rounded-lg border border-border">
           {loadingImages[annotation.file_id] ? (
-            <div className="flex items-center justify-center bg-gray-50 p-8">
-              <Loader2 className="size-4 animate-spin text-gray-500" aria-hidden="true" />
-              <span className="ml-2 text-sm text-gray-500">Loading image...</span>
+            <div className="flex items-center justify-center bg-muted p-8">
+              <Loader2 className="size-4 animate-spin text-muted-foreground" aria-hidden="true" />
+              <span className="ml-2 text-sm text-muted-foreground">Loading image...</span>
             </div>
           ) : imageUrls[annotation.file_id] ? (
             <div>
@@ -177,8 +180,8 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({ code, ann
                 alt={annotation.filename || "Generated chart"}
                 className="max-h-[400px] max-w-full"
               />
-              <div className="flex items-center justify-between border-t border-gray-200 bg-gray-50 px-3 py-2">
-                <span className="flex items-center gap-1 text-xs text-gray-500">
+              <div className="flex items-center justify-between border-t border-border bg-muted px-3 py-2">
+                <span className="flex items-center gap-1 text-xs text-muted-foreground">
                   <FileImage className="size-3" aria-hidden="true" />
                   {annotation.filename}
                 </span>
@@ -186,7 +189,7 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({ code, ann
                   type="button"
                   variant="ghost"
                   size="xs"
-                  className="h-auto gap-1 px-1 py-0 text-xs text-blue-500 hover:text-blue-700"
+                  className="h-auto gap-1 px-1 py-0 text-xs text-info hover:text-info/80"
                   onClick={() => void handleDownload(annotation)}
                 >
                   <Download className="size-3" />
@@ -195,8 +198,8 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({ code, ann
               </div>
             </div>
           ) : (
-            <div className="flex items-center justify-center bg-gray-50 p-4">
-              <span className="text-sm text-gray-400">Image not available</span>
+            <div className="flex items-center justify-center bg-muted p-4">
+              <span className="text-sm text-muted-foreground">Image not available</span>
             </div>
           )}
         </div>
@@ -210,12 +213,12 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({ code, ann
               type="button"
               variant="outline"
               size="sm"
-              className="h-auto gap-2 border-gray-200 bg-gray-50 px-3 py-2 hover:bg-gray-100"
+              className="h-auto gap-2 border-border bg-muted px-3 py-2 hover:bg-accent"
               onClick={() => void handleDownload(annotation)}
             >
-              <FileText className="size-4 text-blue-500" aria-hidden="true" />
+              <FileText className="size-4 text-info" aria-hidden="true" />
               <span className="text-sm">{annotation.filename}</span>
-              <Download className="size-3 text-gray-400" aria-hidden="true" />
+              <Download className="size-3 text-muted-foreground" aria-hidden="true" />
             </Button>
           ))}
         </div>

@@ -1,4 +1,4 @@
-import type { DateRangePickerValue } from "@tremor/react";
+import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import type { Team } from "@/components/key_team_helpers/key_list";
 
 export type ExportFormat = "csv" | "json";

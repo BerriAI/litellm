@@ -1,8 +1,6 @@
 import asyncio
 import datetime
 import json
-import os
-import sys
 import time
 import unittest
 from typing import Final, List, Optional, Tuple
@@ -10,12 +8,11 @@ from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system-path
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.proxy._types import CallInfo, Litellm_EntityType
-from litellm.types.integrations.slack_alerting import SlackAlertingCacheKeys
+from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingCacheKeys
 
 
 class TestSlackAlerting(unittest.TestCase):
@@ -47,6 +44,21 @@ class TestSlackAlerting(unittest.TestCase):
         user_info = CallInfo(max_budget=100.0, spend=120.0, event_group=Litellm_EntityType.KEY)
         result = self.slack_alerting._get_percent_of_max_budget_left(user_info)
         self.assertEqual(result, -0.2)
+
+    def test_get_user_info_str_omits_absent_token_for_user_alert(self):
+        user_info = CallInfo(
+            spend=85.0,
+            max_budget=100.0,
+            user_id="user-1",
+            user_email="person@example.com",
+            event_group=Litellm_EntityType.USER,
+        )
+
+        result = self.slack_alerting._get_user_info_str(user_info)
+
+        self.assertIn("*user_id:* `user-1`", result)
+        self.assertIn("*user_email:* `person@example.com`", result)
+        self.assertNotIn("*token:*", result)
 
     def test_get_event_and_event_message_max_budget(self):
         # Initial setup with no event
@@ -369,3 +381,56 @@ async def test_scheduled_daily_report_threads_the_pod_lock_manager_through():
 
     _, kwargs = slack_alerting._run_scheduler_helper.await_args
     assert kwargs["pod_lock_manager"] is pod_lock_manager
+
+
+def _slack_alerting_with_env_resolution() -> SlackAlerting:
+    slack_alerting: Final = SlackAlerting(alerting=["slack"], internal_usage_cache=DualCache())
+    slack_alerting.periodic_started = True
+    return slack_alerting
+
+
+@pytest.mark.asyncio
+async def test_send_alert_falls_back_to_alerting_webhook_url_env(monkeypatch):
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    monkeypatch.setenv("ALERTING_WEBHOOK_URL", "https://chat.example.com/hooks/abc")
+    slack_alerting: Final = _slack_alerting_with_env_resolution()
+
+    await slack_alerting.send_alert(
+        message="budget crossed",
+        level="High",
+        alert_type=AlertType.budget_alerts,
+        alerting_metadata={},
+    )
+
+    assert slack_alerting.log_queue[0]["url"] == "https://chat.example.com/hooks/abc"
+
+
+@pytest.mark.asyncio
+async def test_send_alert_prefers_slack_webhook_url_over_fallback(monkeypatch):
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T0/B0/X0")
+    monkeypatch.setenv("ALERTING_WEBHOOK_URL", "https://chat.example.com/hooks/abc")
+    slack_alerting: Final = _slack_alerting_with_env_resolution()
+
+    await slack_alerting.send_alert(
+        message="budget crossed",
+        level="High",
+        alert_type=AlertType.budget_alerts,
+        alerting_metadata={},
+    )
+
+    assert slack_alerting.log_queue[0]["url"] == "https://hooks.slack.com/services/T0/B0/X0"
+
+
+@pytest.mark.asyncio
+async def test_send_alert_raises_when_no_webhook_url_configured(monkeypatch):
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    monkeypatch.delenv("ALERTING_WEBHOOK_URL", raising=False)
+    slack_alerting: Final = _slack_alerting_with_env_resolution()
+
+    with pytest.raises(ValueError, match="SLACK_WEBHOOK_URL / ALERTING_WEBHOOK_URL"):
+        await slack_alerting.send_alert(
+            message="budget crossed",
+            level="High",
+            alert_type=AlertType.budget_alerts,
+            alerting_metadata={},
+        )

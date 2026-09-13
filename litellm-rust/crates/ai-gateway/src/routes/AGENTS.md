@@ -13,7 +13,7 @@ private). This is the norm — don't split until it hurts.
 pub fn router() -> Router<AppState> { Router::new().route(PATH, get(handle)) }
 async fn handle(...) -> impl IntoResponse { ... }
 ```
-`health.rs` and `gil.rs` are examples.
+`health.rs` is the example.
 
 ## Split out `service` when there's real logic
 When a route has business logic worth testing without axum, put it in a sibling

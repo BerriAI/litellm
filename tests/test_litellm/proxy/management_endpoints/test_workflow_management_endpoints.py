@@ -4,8 +4,6 @@ Uses FastAPI TestClient with a mocked prisma_client.
 """
 
 import asyncio
-import os
-import sys
 from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -15,7 +13,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from prisma.errors import UniqueViolationError
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.proxy.management_endpoints.workflow_management_endpoints import (
     _read_scope_caller,

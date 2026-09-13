@@ -49,6 +49,7 @@ const SESSION_ROLE_AN_ORG_ADMIN_ACTUALLY_CARRIES = "Internal User";
 
 const ORG_ADMIN_BACKEND_ACCESS: ReadonlyArray<readonly [Capability, string, boolean]> = [
   ["viewDeletedTeams", "GET /v2/team/list?status=deleted -> 200 (scoped to their orgs)", true],
+  ["viewOrganizationUsage", "GET /organization/daily/activity -> 200 (scoped to orgs they administer)", true],
   ["viewToolPolicies", "GET /v1/tool/list -> 401", false],
   ["viewPolicies", "GET /policies/list -> 401", false],
   ["viewPrompts", "GET /prompts/list -> 401", false],
@@ -64,6 +65,14 @@ describe("hasCapability for organization admins", () => {
     expect(hasCapability(role, "viewDeletedTeams", true)).toBe(true);
   });
 
+  // An org admin is an internal_user whose org-admin-ness lives in the
+  // membership table, so their session role never distinguishes them. Gating
+  // the Organization Usage view on the session role alone hid the whole view
+  // from them and left the tab's data fetch disabled.
+  it.each(NON_ADMIN_ROLES)("grants viewOrganizationUsage to an org admin whose session role is %s", (role) => {
+    expect(hasCapability(role, "viewOrganizationUsage", true)).toBe(true);
+  });
+
   it.each(ADMIN_ONLY_CAPABILITIES)("leaves %s denied when the caller is not an org admin", (capability) => {
     expect(hasCapability(SESSION_ROLE_AN_ORG_ADMIN_ACTUALLY_CARRIES, capability, false)).toBe(false);
     expect(hasCapability(SESSION_ROLE_AN_ORG_ADMIN_ACTUALLY_CARRIES, capability)).toBe(false);
@@ -73,7 +82,7 @@ describe("hasCapability for organization admins", () => {
     const orgAdminCapabilities = ADMIN_ONLY_CAPABILITIES.filter((capability) =>
       hasCapability(SESSION_ROLE_AN_ORG_ADMIN_ACTUALLY_CARRIES, capability, true),
     );
-    expect(orgAdminCapabilities).toEqual(["viewDeletedTeams"]);
+    expect(orgAdminCapabilities).toEqual(["viewDeletedTeams", "viewOrganizationUsage"]);
   });
 
   it("does not let the org-admin allowance reopen the proxy-admin-only viewGlobalSpend gate", () => {
