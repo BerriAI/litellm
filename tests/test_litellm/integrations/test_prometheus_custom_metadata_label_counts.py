@@ -157,3 +157,120 @@ def test_virtual_key_rate_limit_metrics_preserve_zero_remaining_values(
     assert any(sample.value == 0 for sample in token_samples)
     assert not any(sample.value == sys.maxsize for sample in request_samples)
     assert not any(sample.value == sys.maxsize for sample in token_samples)
+
+
+def _request_metadata_with_custom_labels() -> dict:
+    """Raw request metadata carrying the configured labels under spend_logs_metadata."""
+    return {
+        "spend_logs_metadata": {
+            "department": "engineering",
+            "environment": "production",
+        }
+    }
+
+
+def _has_custom_labels(metric_name: str) -> bool:
+    return any(
+        sample.labels.get("metadata_department") == "engineering"
+        and sample.labels.get("metadata_environment") == "production"
+        for sample in _metric_samples(metric_name)
+    )
+
+
+def _deployment_failure_kwargs() -> dict:
+    payload = _standard_logging_payload_with_requester_metadata()
+    return {
+        "model": "gpt-4o-mini",
+        "exception": Exception("upstream 503"),
+        "litellm_params": {"custom_llm_provider": "openai", "metadata": {}},
+        "standard_logging_object": payload,
+    }
+
+
+def test_deployment_failure_metrics_accept_custom_metadata_labels(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    set_llm_deployment_failure_metrics declared the configured labels but never
+    filled them, so both series it emits exported the literal string "None".
+    """
+    prometheus_logger = _create_prometheus_logger_with_custom_labels(monkeypatch)
+
+    prometheus_logger.set_llm_deployment_failure_metrics(_deployment_failure_kwargs())
+
+    assert _has_custom_labels("litellm_deployment_failure_responses_total")
+    assert _has_custom_labels("litellm_deployment_total_requests_total")
+
+
+def test_deployment_failure_metrics_omit_custom_labels_when_absent(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Nothing supplies the labels, so none must be attributed."""
+    prometheus_logger = _create_prometheus_logger_with_custom_labels(monkeypatch)
+    kwargs = _deployment_failure_kwargs()
+    kwargs["standard_logging_object"]["metadata"]["requester_metadata"] = None
+
+    prometheus_logger.set_llm_deployment_failure_metrics(kwargs)
+
+    assert not _has_custom_labels("litellm_deployment_failure_responses_total")
+
+
+@pytest.mark.asyncio
+async def test_success_fallback_event_accepts_custom_metadata_labels(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    prometheus_logger = _create_prometheus_logger_with_custom_labels(monkeypatch)
+
+    await prometheus_logger.log_success_fallback_event(
+        original_model_group="gpt-4o-mini",
+        kwargs={
+            "model": "gpt-4o-mini-fallback",
+            "metadata": _request_metadata_with_custom_labels(),
+        },
+        original_exception=Exception("upstream 503"),
+    )
+
+    assert _has_custom_labels("litellm_deployment_successful_fallbacks_total")
+
+
+@pytest.mark.asyncio
+async def test_failure_fallback_event_accepts_custom_metadata_labels(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    prometheus_logger = _create_prometheus_logger_with_custom_labels(monkeypatch)
+
+    await prometheus_logger.log_failure_fallback_event(
+        original_model_group="gpt-4o-mini",
+        kwargs={
+            "model": "gpt-4o-mini-fallback",
+            "metadata": _request_metadata_with_custom_labels(),
+        },
+        original_exception=Exception("upstream 503"),
+    )
+
+    assert _has_custom_labels("litellm_deployment_failed_fallbacks_total")
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_accepts_custom_metadata_labels(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    This hook holds raw request metadata, which the payload-shaped helper does not
+    flatten on its own, so both proxy-level series it emits missed the labels.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    prometheus_logger = _create_prometheus_logger_with_custom_labels(monkeypatch)
+
+    await prometheus_logger.async_post_call_failure_hook(
+        request_data={
+            "model": "gpt-4o-mini",
+            "metadata": _request_metadata_with_custom_labels(),
+        },
+        original_exception=Exception("upstream 503"),
+        user_api_key_dict=UserAPIKeyAuth(token="test_token"),
+    )
+
+    assert _has_custom_labels("litellm_proxy_failed_requests_metric_total")
+    assert _has_custom_labels("litellm_proxy_total_requests_metric_total")
