@@ -1005,6 +1005,37 @@ class Logging(LiteLLMLoggingBaseClass):
                     AnthropicCacheControlHook.count_request_cache_breakpoints(messages) - breakpoints_before,
                     injected_for_every_deployment=injected_for_every_deployment,
                 )
+
+        if (
+            not isinstance(custom_logger, AnthropicCacheControlHook)
+            and (
+                cache_control_logger := AnthropicCacheControlHook.get_custom_logger_for_anthropic_cache_control_hook(
+                    non_default_params or {}
+                )
+            )
+        ):
+            cache_breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
+            (
+                model,
+                messages,
+                non_default_params,
+            ) = cache_control_logger.get_chat_completion_prompt(
+                model=model,
+                messages=messages,
+                non_default_params=non_default_params or {},
+                prompt_id=prompt_id,
+                prompt_spec=prompt_spec,
+                prompt_variables=prompt_variables,
+                dynamic_callback_params=self.standard_callback_dynamic_params,
+                prompt_label=prompt_label,
+                prompt_version=prompt_version,
+            )
+            if request_kwargs is not None:
+                AnthropicCacheControlHook.record_gateway_injection(
+                    request_kwargs,
+                    AnthropicCacheControlHook.count_request_cache_breakpoints(messages) - cache_breakpoints_before,
+                    injected_for_every_deployment=injected_for_every_deployment,
+                )
         self.messages = messages
         return model, messages, non_default_params
 
@@ -1057,6 +1088,39 @@ class Logging(LiteLLMLoggingBaseClass):
                 AnthropicCacheControlHook.record_gateway_injection(
                     request_kwargs,
                     AnthropicCacheControlHook.count_request_cache_breakpoints(messages) - breakpoints_before,
+                    injected_for_every_deployment=injected_for_every_deployment,
+                )
+
+        if (
+            not isinstance(custom_logger, AnthropicCacheControlHook)
+            and (
+                cache_control_logger := AnthropicCacheControlHook.get_custom_logger_for_anthropic_cache_control_hook(
+                    non_default_params or {}
+                )
+            )
+        ):
+            cache_breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
+            (
+                model,
+                messages,
+                non_default_params,
+            ) = await cache_control_logger.async_get_chat_completion_prompt(
+                model=model,
+                messages=messages,
+                non_default_params=non_default_params or {},
+                prompt_id=prompt_id,
+                prompt_spec=prompt_spec,
+                prompt_variables=prompt_variables,
+                dynamic_callback_params=self.standard_callback_dynamic_params,
+                litellm_logging_obj=self,
+                tools=tools,
+                prompt_label=prompt_label,
+                prompt_version=prompt_version,
+            )
+            if request_kwargs is not None:
+                AnthropicCacheControlHook.record_gateway_injection(
+                    request_kwargs,
+                    AnthropicCacheControlHook.count_request_cache_breakpoints(messages) - cache_breakpoints_before,
                     injected_for_every_deployment=injected_for_every_deployment,
                 )
         self.messages = messages
@@ -1177,17 +1241,18 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["prompt_integration"] = logger.__class__.__name__
             return logger
 
-        if (
-            anthropic_cache_control_logger
-            := AnthropicCacheControlHook.get_custom_logger_for_anthropic_cache_control_hook(non_default_params)
-        ):
-            self.model_call_details["prompt_integration"] = anthropic_cache_control_logger.__class__.__name__
-            return anthropic_cache_control_logger
-
         #########################################################
         # Vector Store / Knowledge Base hooks
         #########################################################
-        if litellm.vector_store_registry is not None:
+        if (
+            litellm.vector_store_registry is not None
+            and (
+                litellm.vector_store_registry.get_vector_store_to_run(
+                    non_default_params=non_default_params, tools=tools
+                )
+                or non_default_params.get("vector_store_ids")
+            )
+        ):
             vector_store_custom_logger: Final = _init_custom_logger_compatible_class(
                 logging_integration="vector_store_pre_call_hook",
                 internal_usage_cache=None,
@@ -1198,6 +1263,13 @@ class Logging(LiteLLMLoggingBaseClass):
             if vector_store_custom_logger and vector_store_custom_logger not in litellm.callbacks:
                 litellm.logging_callback_manager.add_litellm_callback(vector_store_custom_logger)
             return vector_store_custom_logger
+
+        if (
+            anthropic_cache_control_logger
+            := AnthropicCacheControlHook.get_custom_logger_for_anthropic_cache_control_hook(non_default_params)
+        ):
+            self.model_call_details["prompt_integration"] = anthropic_cache_control_logger.__class__.__name__
+            return anthropic_cache_control_logger
 
         return None
 

@@ -1,6 +1,7 @@
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Protocol
 
 import pytest
@@ -567,3 +568,85 @@ async def test_a_crash_outside_the_search_names_the_requested_vector_stores(
     assert [record.getMessage() for record in warnings] == [
         "Error in VectorStorePreCallHook for vector_store_ids=('vs-one', 'vs-two'): the registry blew up"
     ]
+
+
+@pytest.mark.asyncio
+async def test_vector_store_hook_selected_when_prompt_caching_enabled(
+    registry_with: RegisterStores,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression (#40908): prompt caching must not starve vector store pre-call hook."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    registry_with("vs-test")
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+
+    logging_obj = Logging(
+        model="claude-3-5-sonnet-20241022",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(timezone.utc),
+        litellm_call_id="call-40908",
+        function_id="fn-40908",
+    )
+    non_default_params = {
+        "vector_store_ids": ["vs-test"],
+        "cache_control_injection_points": [{"location": "message", "index": -1}],
+    }
+
+    custom_logger = logging_obj.get_custom_logger_for_prompt_management(
+        model="claude-3-5-sonnet-20241022",
+        non_default_params=non_default_params,
+    )
+
+    assert isinstance(custom_logger, VectorStorePreCallHook)
+
+
+@pytest.mark.asyncio
+async def test_vector_store_and_anthropic_prompt_caching_composition(
+    registry_with: RegisterStores,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression (#40908): vector store retrieval and prompt caching must compose cleanly."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy import proxy_server
+
+    registry_with("vs-test")
+    router = RecordingRouter()
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+
+    logging_obj = Logging(
+        model="claude-3-5-sonnet-20241022",
+        messages=[{"role": "user", "content": "what is litellm?"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(timezone.utc),
+        litellm_call_id="call-40908",
+        function_id="fn-40908",
+    )
+    non_default_params = {
+        "vector_store_ids": ["vs-test"],
+        "cache_control_injection_points": [{"location": "message", "index": -1}],
+    }
+    messages = [{"role": "user", "content": "what is litellm?"}]
+
+    model, updated_messages, remaining_params = await logging_obj.async_get_chat_completion_prompt(
+        model="claude-3-5-sonnet-20241022",
+        messages=messages,
+        non_default_params=non_default_params,
+        prompt_id=None,
+        prompt_variables=None,
+    )
+
+    assert model == "claude-3-5-sonnet-20241022"
+
+    # 1. Vector store context retrieved and prepended
+    assert any("context from vs-test" in str(msg.get("content", "")) for msg in updated_messages)
+    # 2. vector_store_ids popped so upstream provider doesn't fail with unexpected parameter
+    assert "vector_store_ids" not in remaining_params
+    # 3. Prompt caching cache_control breakpoint injected on the enriched messages
+    assert any("cache_control" in msg for msg in updated_messages)
+
