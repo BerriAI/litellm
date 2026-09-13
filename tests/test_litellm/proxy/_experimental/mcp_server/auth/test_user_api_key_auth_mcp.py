@@ -4341,9 +4341,7 @@ class TestAgentMCPPermissions:
                 stack.enter_context(patcher)
             stack.enter_context(
                 patch.object(  # test-quality-ok: key resolution has its own tests; pin its grants here
-                    MCPRequestHandler,
-                    "_get_allowed_mcp_servers_for_key",
-                    AsyncMock(return_value=["server-a", "server-b"]),
+                    MCPRequestHandler, "_get_allowed_mcp_servers_for_key", AsyncMock(return_value=["server-a", "server-b"])
                 )
             )
             stack.enter_context(
@@ -4369,9 +4367,7 @@ class TestAgentMCPPermissions:
                 await MCPRequestHandler._get_allowed_mcp_servers_for_agent(user_api_key_auth)
             stack.enter_context(
                 patch.object(  # test-quality-ok: key resolution has its own tests; pin its grants here
-                    MCPRequestHandler,
-                    "_get_allowed_mcp_servers_for_key",
-                    AsyncMock(return_value=["server-a", "server-b"]),
+                    MCPRequestHandler, "_get_allowed_mcp_servers_for_key", AsyncMock(return_value=["server-a", "server-b"])
                 )
             )
             stack.enter_context(
@@ -4395,15 +4391,9 @@ class TestAgentMCPPermissions:
         with contextlib.ExitStack() as stack:
             for patcher in self._agent_toolset_patches(agent_object_permission, mock_manager):
                 stack.enter_context(patcher)
-            server_a_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server(
-                "server-a", user_api_key_auth
-            )
-            server_b_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server(
-                "server-b", user_api_key_auth
-            )
-            server_c_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server(
-                "server-c", user_api_key_auth
-            )
+            server_a_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server("server-a", user_api_key_auth)
+            server_b_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server("server-b", user_api_key_auth)
+            server_c_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server("server-c", user_api_key_auth)
 
         assert sorted(server_a_tools) == ["tool_direct", "tool_via_toolset"]
         assert server_b_tools == ["tool_b"]
