@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 import litellm
@@ -67,7 +69,7 @@ def test_azure_config_uses_azure_capability_map_for_effort() -> None:
     the OpenAI lookup would wrongly reject an effort Azure supports.
     """
     openai_config = OpenAIResponsesAPIConfig()
-    with pytest.raises(litellm.UnsupportedParamsError, match="reasoning.effort=minimal"):
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape("reasoning.effort=minimal")):
         openai_config.map_openai_params(
             response_api_optional_params={"reasoning": {"effort": "minimal"}},
             model="gpt-5.4",
