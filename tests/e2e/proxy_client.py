@@ -68,6 +68,8 @@ from models import (
     ModelUpdateBody,
     OcrBody,
     OcrResponse,
+    RouterCurrentValues,
+    RouterSettingsResponse,
     SpendLogRow,
     SpendLogs,
     SpendLogsPage,
@@ -541,6 +543,18 @@ class ProxyClient:
                 response_type=ModelInfoResponse,
             )
         ).data
+
+    def router_settings(self) -> RouterCurrentValues:
+        """The router knobs the proxy is running with, for a test whose behavior
+        needs one of them switched on in the proxy config."""
+        return unwrap(
+            self.transport.get(
+                "/router/settings",
+                headers=self.transport.master,
+                params=NoBody(),
+                response_type=RouterSettingsResponse,
+            )
+        ).current_values
 
     def model_cost_map(self) -> dict[str, CostMapEntry]:
         return unwrap(
