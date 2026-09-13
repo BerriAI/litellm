@@ -14,19 +14,14 @@ response.completed chunk before storing it as completed_response.
 """
 
 import json
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import httpx
-
-sys.path.insert(0, os.path.abspath("../../.."))
 
 
 def _make_iterator():
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-    from litellm.responses import streaming_iterator as _si_mod
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 
     logging_obj = MagicMock(spec=LiteLLMLoggingObj)
@@ -36,16 +31,14 @@ def _make_iterator():
 
     response = httpx.Response(200, headers={"content-type": "text/event-stream"}, text="")
 
-    # Patch get_api_base to avoid triggering chatgpt device-auth during construction.
-    with patch.object(_si_mod, "get_api_base", return_value=None):
-        return BaseResponsesAPIStreamingIterator(
-            response=response,
-            model="chatgpt/gpt-5.4",
-            responses_api_provider_config=OpenAIResponsesAPIConfig(),
-            logging_obj=logging_obj,
-            custom_llm_provider="chatgpt",
-            request_data={},
-        )
+    return BaseResponsesAPIStreamingIterator(
+        response=response,
+        model="chatgpt/gpt-5.4",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=logging_obj,
+        custom_llm_provider="chatgpt",
+        request_data={},
+    )
 
 
 _OUTPUT_ITEM = {
