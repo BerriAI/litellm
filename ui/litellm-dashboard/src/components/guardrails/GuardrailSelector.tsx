@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
-import { Select } from "antd";
 import { Guardrail } from "./types";
 import { getGuardrailsList } from "../networking";
+import { MultiSelect } from "@/components/shared/MultiSelect";
 
 interface GuardrailSelectorProps {
   onChange: (selectedGuardrails: string[]) => void;
@@ -22,9 +22,7 @@ const GuardrailSelector: React.FC<GuardrailSelectorProps> = ({ onChange, value, 
       setLoading(true);
       try {
         const response = await getGuardrailsList(accessToken);
-        console.log("Guardrails response:", response);
         if (response.guardrails) {
-          console.log("Guardrails data:", response.guardrails);
           setGuardrails(response.guardrails);
         }
       } catch (error) {
@@ -38,31 +36,25 @@ const GuardrailSelector: React.FC<GuardrailSelectorProps> = ({ onChange, value, 
   }, [accessToken]);
 
   const handleGuardrailChange = (selectedValues: string[]) => {
-    console.log("Selected guardrails:", selectedValues);
     onChange(selectedValues);
   };
 
   return (
-    <div>
-      <Select
-        mode="multiple"
+    <div className="min-w-0">
+      <MultiSelect
         disabled={disabled}
         placeholder={disabled ? "Setting guardrails is a premium feature." : "Select guardrails"}
-        onChange={handleGuardrailChange}
+        onValueChange={handleGuardrailChange}
         value={value}
         loading={loading}
         className={className}
-        allowClear
-        options={guardrails.map((guardrail) => {
-          console.log("Mapping guardrail:", guardrail);
-          return {
-            label: `${guardrail.guardrail_name}`,
-            value: guardrail.guardrail_name,
-          };
+        options={guardrails.flatMap((guardrail) => {
+          const name = guardrail.guardrail_name;
+          if (name == null || name === "") {
+            return [];
+          }
+          return [{ label: name, value: name }];
         })}
-        optionFilterProp="label"
-        showSearch
-        style={{ width: "100%" }}
       />
     </div>
   );

@@ -1,6 +1,5 @@
 import json
 import os
-import sys
 from datetime import datetime
 from typing import AsyncIterator, Dict, Any
 import asyncio
@@ -9,9 +8,6 @@ from unittest.mock import MagicMock
 import pytest
 from litellm.router import Router
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 import litellm
 from base_anthropic_unified_messages_test import BaseAnthropicMessagesTest
 

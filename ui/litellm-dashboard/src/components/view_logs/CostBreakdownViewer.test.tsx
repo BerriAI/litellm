@@ -174,6 +174,27 @@ describe("CostBreakdownViewer", () => {
     expect(screen.getByText("Azure Model Router Flat Cost:")).toBeInTheDocument();
   });
 
+  it("labels provider prompt cache line items as Prompt Cache Read/Write Cost", async () => {
+    renderWithProviders(
+      <CostBreakdownViewer
+        costBreakdown={{
+          input_cost: 0.01,
+          output_cost: 0.02,
+          cache_read_cost: 0.001,
+          cache_creation_cost: 0.002,
+        }}
+        totalSpend={0.03}
+        cacheReadTokens={100}
+        cacheCreationTokens={50}
+      />,
+    );
+
+    await expandCostBreakdown();
+
+    expect(screen.getByText("Prompt Cache Read Cost:")).toBeInTheDocument();
+    expect(screen.getByText("Prompt Cache Write Cost:")).toBeInTheDocument();
+  });
+
   it("shows '(Cached)' in the header when cacheHit is true", () => {
     const breakdown: CostBreakdown = {
       input_cost: 0.001,

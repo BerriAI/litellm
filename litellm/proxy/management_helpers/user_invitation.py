@@ -1,4 +1,5 @@
 from datetime import timedelta
+from typing import Final
 
 from fastapi import HTTPException
 
@@ -22,11 +23,11 @@ async def create_invitation_for_user(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    current_time = litellm.utils.get_utc_datetime()
-    expires_at = current_time + timedelta(days=7)
+    current_time: Final = litellm.utils.get_utc_datetime()
+    expires_at: Final = current_time + timedelta(days=7)
 
     try:
-        response = await InvitationLinkRepository(prisma_client).table.create(
+        response: Final = await InvitationLinkRepository(prisma_client).table.create(
             data={
                 "user_id": data.user_id,
                 "created_at": current_time,
@@ -34,7 +35,7 @@ async def create_invitation_for_user(
                 "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                 "updated_at": current_time,
                 "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-            }  # type: ignore
+            }
         )
         return response
     except Exception as e:
