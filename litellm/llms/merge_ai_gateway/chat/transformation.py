@@ -6,7 +6,7 @@ Calls done in OpenAI/openai.py as Merge AI Gateway is openai-compatible.
 Docs: https://docs.merge.dev/
 """
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import Final
 
 import httpx
@@ -99,30 +99,34 @@ class MergeAIGatewayConfig(OpenAIGPTConfig):
         *,
         root: str,
         api_key: str | None,
-        cursor: str | None = None,
-        remaining: int = MAX_PAGES,
     ) -> tuple[Mapping[str, object], ...]:
         """Every catalog page's items, following ``next_cursor`` up to ``MAX_PAGES``."""
-        if remaining <= 0:
-            return ()
+        return tuple(self._iter_catalog_items(root=root, api_key=api_key))
 
-        response: Final = litellm.module_level_client.get(
-            url=f"{root}/models",
-            params=page_query_params(cursor, PAGE_LIMIT),
-            headers=bearer_auth_headers(api_key),
-            timeout=CATALOG_TIMEOUT_SECONDS,
-        )
-        if response.status_code != 200:
-            raise Exception(f"Failed to get models: {response.text}")
+    @staticmethod
+    def _iter_catalog_items(
+        *,
+        root: str,
+        api_key: str | None,
+    ) -> Iterator[Mapping[str, object]]:
+        cursor: str | None = None  # rebind-ok: pagination cursor
+        for _ in range(MAX_PAGES):
+            response = litellm.module_level_client.get(
+                url=f"{root}/models",
+                params=page_query_params(cursor, PAGE_LIMIT),
+                headers=bearer_auth_headers(api_key),
+                timeout=CATALOG_TIMEOUT_SECONDS,
+            )
+            if response.status_code != 200:
+                raise Exception(f"Failed to get models: {response.text}")
 
-        page: Final = as_mapping(response.json())
-        items: Final = tuple(as_mapping(item) for item in as_sequence(page.get("data")))
-        next_cursor: Final = page.get("next_cursor")
-        if not page.get("has_more") or not isinstance(next_cursor, str) or not next_cursor:
-            return items
-        return items + self._fetch_catalog_items(
-            root=root, api_key=api_key, cursor=next_cursor, remaining=remaining - 1
-        )
+            page = as_mapping(response.json())
+            for item in as_sequence(page.get("data")):
+                yield as_mapping(item)
+            next_cursor = page.get("next_cursor")
+            if not page.get("has_more") or not isinstance(next_cursor, str) or not next_cursor:
+                break
+            cursor = next_cursor  # rebind-ok: advance pagination cursor
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: dict | httpx.Headers
