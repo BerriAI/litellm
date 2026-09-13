@@ -4084,8 +4084,6 @@ def _capped_completion_kwargs(metadata_key: str, metadata: object) -> dict[str, 
 @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
 @pytest.mark.parametrize("cap, metadata, refused", _RETRY_CAP_CASES)
 def test_num_retries_per_request_reads_attempted_retries_sync(monkeypatch, metadata_key, cap, metadata, refused):
-    """num_retries_per_request is enforced from the Router's attempted_retries counter in whichever
-    metadata bucket the call carries, so callers on litellm_metadata and caps above four both work"""
     monkeypatch.setattr(litellm, "num_retries_per_request", cap)
     kwargs: Final = _capped_completion_kwargs(metadata_key, metadata)
     if refused:

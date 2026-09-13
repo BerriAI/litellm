@@ -10746,12 +10746,12 @@ def _always_failing_router(num_retries):
     )
 
 
-async def _fail_one_proxy_shaped_request(router, request_marker):
+async def _fail_one_proxy_shaped_request(router, request_marker, expected_error=litellm.InternalServerError):
     """The proxy hands the router a metadata dict and a proxy_server_request whose body is a
     shallow copy of the request, so body["metadata"] is the very same dict the router later
     stamps previous_models onto."""
     metadata = {"request_marker": request_marker}
-    with pytest.raises((litellm.InternalServerError, litellm.APIConnectionError)):
+    with pytest.raises(expected_error):
         await router.acompletion(
             model="broken-group",
             messages=[{"role": "user", "content": "hi"}],
@@ -10808,13 +10808,10 @@ async def test_retry_records_keep_only_the_last_four_attempts():
 
 @pytest.mark.asyncio
 async def test_num_retries_per_request_stops_retries_at_caps_above_four(monkeypatch):
-    """The cap used to be read off len(previous_models), which never exceeds four, so any cap above
-    four was inert. Reading the Router's attempted_retries counter instead lets a cap of five refuse
-    retries five and six before they reach the deployment."""
     monkeypatch.setattr(litellm, "num_retries_per_request", 5)
     router = _always_failing_router(num_retries=6)
 
-    records = await _fail_one_proxy_shaped_request(router, "request-1")
+    records = await _fail_one_proxy_shaped_request(router, "request-1", expected_error=litellm.APIConnectionError)
 
     assert [record["attempted_retries"] for record in records] == [3, 4, 5, 6]
     assert ["Max retries per request hit!" in record["exception_string"] for record in records] == [
