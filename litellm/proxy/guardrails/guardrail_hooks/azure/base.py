@@ -1,5 +1,9 @@
+import asyncio
 import re
+from collections.abc import Callable
+from functools import cache
 from typing import TYPE_CHECKING, Any, Final
+from urllib.parse import urlparse
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -8,6 +12,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
+)
+from litellm.secret_managers.get_azure_ad_token_provider import (
+    get_azure_ad_token_provider,
 )
 
 if TYPE_CHECKING:
@@ -19,6 +26,42 @@ AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH: Final = 10000
 # Azure Content Safety bills text in 1,000-character "text records"; a submitted
 # chunk of N characters consumes ceil(N / 1000) text records.
 AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH: Final = 1000
+
+AZURE_CONTENT_SAFETY_ENTRA_SCOPE: Final = "https://cognitiveservices.azure.com/.default"
+
+AZURE_CONTENT_SAFETY_ENTRA_HOST_SUFFIXES: Final = (
+    ".cognitiveservices.azure.com",
+    ".cognitiveservices.azure.us",
+    ".cognitiveservices.azure.cn",
+    ".services.ai.azure.com",
+)
+
+
+def _assert_entra_destination_is_azure(api_base: str) -> None:
+    """An Entra token is scoped to every Cognitive Services resource the identity can reach,
+    not to one resource, so it is only ever sent to an Azure endpoint over TLS. Entra also
+    requires the resource's custom subdomain, so any other host is not a valid destination."""
+    parsed: Final = urlparse(api_base)
+    host: Final = (parsed.hostname or "").lower()
+    if parsed.scheme == "https" and host.endswith(AZURE_CONTENT_SAFETY_ENTRA_HOST_SUFFIXES):
+        return
+    raise ValueError(
+        f"Azure Content Safety: refusing to send a Microsoft Entra token to api_base {api_base!r}. "
+        "Entra authentication needs the resource's HTTPS custom subdomain endpoint, for example "
+        "https://your-resource.cognitiveservices.azure.com. Set api_key to reach any other host"
+    )
+
+
+@cache
+def _default_entra_token_provider() -> Callable[[], str]:
+    """Entra token provider for the Content Safety data plane, one credential per process."""
+    try:
+        return get_azure_ad_token_provider(azure_scope=AZURE_CONTENT_SAFETY_ENTRA_SCOPE)
+    except ImportError as e:
+        raise ValueError(
+            "Azure Content Safety: api_key is not set and azure-identity is not installed. "
+            "Set api_key, or install azure-identity to authenticate with Microsoft Entra ID"
+        ) from e
 
 
 class AzureGuardrailBase:
@@ -32,8 +75,10 @@ class AzureGuardrailBase:
 
     def __init__(
         self,
-        api_key: str,
+        *,
         api_base: str,
+        api_key: str | None = None,
+        entra_token_provider: Callable[[], str] | None = None,
         **kwargs: Any,
     ):
         # Forward remaining kwargs to the next class in the MRO
@@ -44,6 +89,33 @@ class AzureGuardrailBase:
         self.api_key = api_key
         self.api_base = api_base
         self.api_version: str = kwargs.get("api_version") or "2024-09-01"
+        if not api_key:
+            _assert_entra_destination_is_azure(api_base)
+        self._entra_token_provider: Final = entra_token_provider or (
+            None if api_key else _default_entra_token_provider()
+        )
+
+    async def _auth_header(self) -> tuple[str, str]:
+        """Credential header name and value for a single request.
+
+        Azure Content Safety accepts an API key or a Microsoft Entra token and rejects each
+        on the other's header, so exactly one is sent.
+        """
+        if self.api_key:
+            return ("Ocp-Apim-Subscription-Key", self.api_key)
+
+        _assert_entra_destination_is_azure(self.api_base)
+        minter: Final = self._entra_token_provider or _default_entra_token_provider()
+        try:
+            token: Final = await asyncio.to_thread(minter)
+        except Exception as e:
+            verbose_proxy_logger.exception("Azure Content Safety: Entra token request failed")
+            raise ValueError(
+                "Azure Content Safety: no credential available. Set api_key, or configure an Entra "
+                "identity (AZURE_CLIENT_ID / AZURE_CLIENT_SECRET / AZURE_TENANT_ID, workload identity, "
+                "managed identity, or az login) holding the Cognitive Services User role on the resource"
+            ) from e
+        return ("Authorization", f"Bearer {token}")
 
     async def _post_to_content_safety(self, endpoint_path: str, request_body: dict[str, object]) -> dict[str, Any]:
         """POST to an Azure Content Safety endpoint with standard auth headers.
@@ -57,8 +129,9 @@ class AzureGuardrailBase:
             Parsed JSON response dict.
         """
         url: Final = f"{self.api_base}/contentsafety/{endpoint_path}?api-version={self.api_version}"
-        headers: Final = {
-            "Ocp-Apim-Subscription-Key": self.api_key,
+        auth_name, auth_value = await self._auth_header()
+        headers: Final = {  # mutable-ok: AsyncHTTPHandler.post types headers as `dict | None`
+            auth_name: auth_value,
             "Content-Type": "application/json",
         }
 
