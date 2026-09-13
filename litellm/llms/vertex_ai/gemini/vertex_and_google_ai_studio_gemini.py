@@ -2380,8 +2380,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     logprobs=chat_completion_logprobs,
                     enhancements=None,
                 )
-                if chat_completion_message.get("provider_specific_fields"):
-                    choice.provider_specific_fields = chat_completion_message["provider_specific_fields"]
+                psf_value = chat_completion_message.get("provider_specific_fields")
+                if psf_value:
+                    choice.provider_specific_fields = psf_value
                 model_response.choices.append(choice)
 
         return (
@@ -2509,18 +2510,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 citation_metadata  # older approach - maintaining to prevent regressions
             )
 
-            ## ADD TRAFFIC TYPE ##
+            ## ADD TRAFFIC TYPE / FINISH REASON ##
             traffic_type: Final = completion_response.get("usageMetadata", {}).get("trafficType")
-            if traffic_type:
-                model_response._hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
-
-            if _candidates and _candidates[0].get("finishReason"):
-                model_response._hidden_params.setdefault("provider_specific_fields", {})["finish_reason"] = _candidates[
-                    0
-                ]["finishReason"]
-                model_response._hidden_params.setdefault("provider_specific_fields", {})["gemini_finish_reason"] = (
-                    _candidates[0]["finishReason"]
-                )
+            candidate_finish_reason: Final = _candidates[0].get("finishReason") if _candidates else None
+            if traffic_type or candidate_finish_reason:
+                psf: Final = model_response._hidden_params.setdefault("provider_specific_fields", {})
+                if traffic_type:
+                    psf["traffic_type"] = traffic_type
+                if candidate_finish_reason:
+                    psf["finish_reason"] = candidate_finish_reason
+                    psf["gemini_finish_reason"] = candidate_finish_reason
 
             ## ADD SERVICE TIER ##
             if getattr(raw_response, "headers", None):
