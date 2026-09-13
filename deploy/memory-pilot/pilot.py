@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import os
 import secrets
+from collections.abc import Callable
 from contextvars import ContextVar
 from typing import Final
 
@@ -65,11 +66,11 @@ forward_credential: Final = ForwardCredential()
 
 
 class PilotGateway:
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, clock: Callable[[], float] | None = None) -> None:
         self.app = app
         self.registered_validation_slots = asyncio.Semaphore(12)
         self.enrollment_validation_slots = asyncio.Semaphore(4)
-        self.recently_validated = InMemoryCache(max_size_in_memory=1000, default_ttl=60)
+        self.recently_validated = InMemoryCache(max_size_in_memory=1000, default_ttl=60, clock=clock)
         self.upstream = get_async_httpx_client(
             httpxSpecialProvider.PassThroughEndpoint,
             params={"timeout": 20, "client_alias": "memory-pilot-upstream"},
@@ -146,6 +147,7 @@ class PilotGateway:
             if models.status_code in (401, 403):
                 self.recently_validated.delete_cache(digest)
             elif models.is_success:
+                self.recently_validated.delete_cache(digest)
                 self.recently_validated.set_cache(digest, True)
         except httpx.HTTPError:
             await JSONResponse({"error": "Upstream gateway unavailable"}, status_code=503)(scope, receive, send)

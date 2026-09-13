@@ -21,7 +21,8 @@ async def test_unknown_keys_cannot_consume_registered_validation_capacity_and_sl
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    gateway = module.PilotGateway(Starlette())
+    clock = MagicMock(return_value=0.0)
+    gateway = module.PilotGateway(Starlette(), clock=clock)
     entered = asyncio.Event()
     release = asyncio.Event()
     count = 0
@@ -59,13 +60,20 @@ async def test_unknown_keys_cannot_consume_registered_validation_capacity_and_sl
             refused = await client.get("/v1/models", headers={"Authorization": "Bearer sk-overload"})
             assert refused.status_code == 503 and refused.headers["retry-after"] == "1"
             assert upstream.get.await_count == 5
+            clock.return_value = 59.0
             established = await client.get("/v1/models", headers={"Authorization": "Bearer sk-established"})
             assert established.status_code == 200 and established.json() == {"data": [{"id": "model"}]}
+            clock.return_value = 61.0
+            refreshed = await client.get("/v1/models", headers={"Authorization": "Bearer sk-established"})
+            assert refreshed.status_code == 200
+            clock.return_value = 122.0
+            expired = await client.get("/v1/models", headers={"Authorization": "Bearer sk-established"})
+            assert expired.status_code == 503 and expired.headers["retry-after"] == "1"
             release.set()
             assert all(response.status_code == 503 for response in await asyncio.gather(*pending))
             again = await client.get("/v1/models", headers={"Authorization": "Bearer sk-next"})
             assert again.status_code == 503 and "unavailable" in again.text
-            assert upstream.get.await_count == 7
+            assert upstream.get.await_count == 8
 
 
 @pytest.mark.asyncio
