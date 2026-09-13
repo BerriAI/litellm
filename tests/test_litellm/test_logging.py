@@ -1,5 +1,6 @@
 import ast
 import asyncio
+import base64
 import json
 import logging
 import re
@@ -16,6 +17,20 @@ from litellm._logging import (
     _COLOR_LOG_FORMAT,
     _MAX_SCRUBBED_ACCESS_ARG,
     _PLAIN_LOG_FORMAT,
+    _get_uvicorn_json_log_config,
+    _initialize_loggers_with_handler,
+    _parse_json_logs_env,
+    _plain_log_format,
+    _stdout_truncation_marker,
+    _turn_on_json,
+    format_base64_size,
+    session_id_var,
+    set_session_id,
+    set_trace_id,
+    trace_id_var,
+    verbose_logger,
+    verbose_proxy_logger,
+    verbose_router_logger,
     ALL_LOGGERS,
     AccessLogRedactionFilter,
     CorrelationContextFilter,
@@ -24,22 +39,10 @@ from litellm._logging import (
     LevelRoutingStreamHandler,
     SecretRedactionFilter,
     StdoutLogTruncationFilter,
-    _get_uvicorn_json_log_config,
-    _initialize_loggers_with_handler,
-    _parse_json_logs_env,
-    _plain_log_format,
-    _stdout_truncation_marker,
-    _turn_on_json,
-    session_id_var,
-    set_session_id,
-    set_trace_id,
-    trace_id_var,
-    verbose_logger,
-    verbose_proxy_logger,
-    verbose_router_logger,
 )
 from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils import secret_redaction
 from litellm.types.utils import StandardLoggingPayload
 
 
@@ -685,10 +688,17 @@ def _make_record(level: int, msg: str, args=(), exc_info=None) -> logging.LogRec
     )
 
 
+def _oversized_text(length: int) -> str:
+    return ("payload " * (length // 8 + 1))[:length]
+
+
+_OVERSIZED_TEXT = _oversized_text(100_000)
+
+
 def test_oversized_info_record_is_truncated(monkeypatch):
     """An error string echoing a huge request payload must not reach stdout in full."""
     monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
-    payload = "p" * 100_000
+    payload = _OVERSIZED_TEXT
     record = _make_record(logging.INFO, "litellm.acompletion(model=%s) Exception %s", ("gpt-4", payload))
 
     assert StdoutLogTruncationFilter().filter(record) is True
@@ -696,8 +706,8 @@ def test_oversized_info_record_is_truncated(monkeypatch):
     message = record.getMessage()
     assert LITELLM_TRUNCATED_PAYLOAD_FIELD in message
     assert len(message) <= 500
-    assert message.startswith("litellm.acompletion(model=gpt-4) Exception ppp")
-    assert message.endswith("ppp")
+    assert message.startswith("litellm.acompletion(model=gpt-4) Exception payload payload")
+    assert message.endswith("payload ")
 
     marker = _extract_marker(message)
     assert marker is not None
@@ -721,7 +731,7 @@ def test_truncated_message_fits_the_configured_cap(monkeypatch):
 @pytest.mark.parametrize("payload_len", [501, 512, 1000, 9999, 100_000])
 def test_truncated_message_never_exceeds_the_cap(monkeypatch, payload_len):
     monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
-    record = _make_record(logging.ERROR, "%s", ("p" * payload_len,))
+    record = _make_record(logging.ERROR, "%s", (_oversized_text(payload_len),))
 
     assert StdoutLogTruncationFilter().filter(record) is True
 
@@ -747,7 +757,7 @@ def test_cap_leaving_no_room_for_the_marker_still_bounds_output(monkeypatch, cap
 def test_debug_record_is_not_truncated(monkeypatch):
     """--detailed_debug exists to dump full payloads, so DEBUG records pass through."""
     monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
-    payload = "p" * 100_000
+    payload = _OVERSIZED_TEXT
     record = _make_record(logging.DEBUG, "raw request %s", (payload,))
 
     assert StdoutLogTruncationFilter().filter(record) is True
@@ -757,7 +767,7 @@ def test_debug_record_is_not_truncated(monkeypatch):
 
 def test_truncation_disabled_by_zero_limit(monkeypatch):
     monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "0")
-    payload = "p" * 100_000
+    payload = _OVERSIZED_TEXT
     record = _make_record(logging.ERROR, "Exception %s", (payload,))
 
     assert StdoutLogTruncationFilter().filter(record) is True
@@ -769,7 +779,7 @@ def test_oversized_traceback_is_truncated(monkeypatch):
     """verbose_proxy_logger.exception() re-logs the payload inside the traceback too."""
     monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
     try:
-        raise ValueError("payload " + "p" * 100_000)
+        raise ValueError("payload " + _OVERSIZED_TEXT)
     except ValueError:
         exc_info = sys.exc_info()
     record = _make_record(logging.ERROR, "Exception occured", exc_info=exc_info)
@@ -785,7 +795,7 @@ def test_oversized_traceback_is_truncated(monkeypatch):
 def test_falsy_exc_info_is_not_formatted(monkeypatch):
     """Callers pass exc_info=False, which logging leaves on the record as a bool."""
     monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
-    record = _make_record(logging.WARNING, "skipping malformed endpoint %s", ("p" * 100_000,), exc_info=False)
+    record = _make_record(logging.WARNING, "skipping malformed endpoint %s", (_OVERSIZED_TEXT,), exc_info=False)
 
     assert StdoutLogTruncationFilter().filter(record) is True
 
@@ -798,7 +808,7 @@ def test_secret_filter_keeps_truncated_traceback(monkeypatch):
     traceback instead of reformatting the full one from exc_info."""
     monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
     try:
-        raise ValueError("sk-1234567890abcdefghij payload " + "p" * 100_000)
+        raise ValueError("sk-1234567890abcdefghij payload " + _OVERSIZED_TEXT)
     except ValueError:
         exc_info = sys.exc_info()
     record = _make_record(logging.ERROR, "Exception occured", exc_info=exc_info)
@@ -824,11 +834,203 @@ def test_oversized_error_is_truncated_end_to_end(monkeypatch, caplog):
     monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
 
     with caplog.at_level(logging.INFO, logger="LiteLLM Router"):
-        verbose_router_logger.info("litellm.acompletion(model=%s) Exception %s", "gpt-4", "p" * 100_000)
+        verbose_router_logger.info("litellm.acompletion(model=%s) Exception %s", "gpt-4", _OVERSIZED_TEXT)
 
     emitted = "".join(record.getMessage() for record in caplog.records)
     assert LITELLM_TRUNCATED_PAYLOAD_FIELD in emitted
     assert len(emitted) <= 500
+
+
+_PDF_BASE64 = base64.b64encode(bytes(range(256)) * 18).decode()
+_IMAGE_BASE64 = base64.b64encode(bytes(range(256)) * 24).decode()
+_SHA256_HEX = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+_LIMIT_SIZED_TOKEN = "t" * 4096
+
+
+def _base64_run(length: int) -> str:
+    return (_PDF_BASE64 * (length // len(_PDF_BASE64) + 1))[:length]
+
+
+def test_debug_record_collapses_long_base64_runs():
+    """A DEBUG line dumping a document upload keeps its text but not the megabytes of
+    base64, which cost seconds of event-loop time per line in the secret regex alone."""
+    record = _make_record(
+        logging.DEBUG,
+        "receiving data: %s",
+        (
+            f"{{'document': 'data:application/pdf;base64,{_PDF_BASE64}', "
+            f"'base64Source': '{_IMAGE_BASE64}', "
+            f"'sha256': '{_SHA256_HEX}', 'token': '{_LIMIT_SIZED_TOKEN}'}}",
+        ),
+    )
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert record.getMessage() == (
+        "receiving data: {'document': 'data:application/pdf;base64,[base64_data truncated: 4.5KB]', "
+        "'base64Source': '[base64_data truncated: 6.0KB]', "
+        f"'sha256': '{_SHA256_HEX}', 'token': '{_LIMIT_SIZED_TOKEN}'}}"
+    )
+
+
+@pytest.mark.parametrize("run_length,collapses", ((4096, False), (4097, True)))
+def test_base64_run_collapses_only_past_the_limit(run_length, collapses):
+    record = _make_record(logging.DEBUG, "%s", (_base64_run(run_length),))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert ("[base64_data truncated: " in record.getMessage()) is collapses
+
+
+@pytest.mark.parametrize("limit,collapses", (("0", False), ("100", True)))
+def test_base64_collapse_limit_follows_the_env(monkeypatch, limit, collapses):
+    monkeypatch.setenv("MAX_BASE64_LENGTH_STDOUT_LOG", limit)
+    record = _make_record(logging.DEBUG, "%s", (_base64_run(200),))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert ("[base64_data truncated: " in record.getMessage()) is collapses
+
+
+def test_info_record_collapses_base64_before_truncating(monkeypatch):
+    """The collapse runs at every level ahead of the INFO+ cap, so an error echoing a
+    document upload comes out as its text around a size placeholder, not a head and tail."""
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
+    record = _make_record(logging.ERROR, "Exception: bad document %s (status 400)", (_base64_run(100_000),))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert record.getMessage() == "Exception: bad document [base64_data truncated: 73.2KB] (status 400)"
+
+
+@pytest.mark.parametrize(
+    "run",
+    (_SHA256_HEX * 80, _SHA256_HEX.upper() * 80, "0123456789" * 512, "0f" * 2100),
+    ids=("hex", "upper_hex", "digits", "two_char_hex_dump"),
+)
+def test_hex_and_decimal_runs_are_not_mistaken_for_base64(run):
+    """A long hex dump or numeric id stays in the log line even past the limit, since it
+    is not a payload and the operator asked for the full debug output."""
+    record = _make_record(logging.DEBUG, "checksum %s", (run,))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert record.getMessage() == f"checksum {run}"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (bytes(6000), b"\x01" * 6000, b"\x55" * 6000, b"\xaa" * 6000),
+    ids=("zero_filled", "0x01_filled", "0x55_filled", "0xaa_filled"),
+)
+def test_constant_byte_payloads_still_collapse(payload):
+    """A zero-filled buffer encodes to one repeated character, and other constant bytes to
+    a single-case cycle: neither is a digest or an id, so the secret regex never sees them
+    in full and the event loop is not blocked by a degenerate upload."""
+    encoded = base64.b64encode(payload).decode()
+    record = _make_record(logging.DEBUG, "upload %s", (encoded,))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert record.getMessage() == f"upload [base64_data truncated: {format_base64_size(len(encoded))}]"
+
+
+def test_debug_traceback_collapses_base64_runs():
+    """An exception that echoes a document upload gets the same collapse in its traceback
+    as the message does, at DEBUG too, so the secret regex never sees the payload in full."""
+    try:
+        raise ValueError(f"bad document: {_base64_run(100_000)}")
+    except ValueError:
+        exc_info = sys.exc_info()
+    record = _make_record(logging.DEBUG, "call failed", exc_info=exc_info)
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert record.exc_text is not None
+    assert "Traceback (most recent call last)" in record.exc_text
+    assert record.exc_text.endswith("ValueError: bad document: [base64_data truncated: 73.2KB]")
+
+
+def test_base64_collapse_applies_end_to_end(caplog):
+    """The proxy's own request dump must come out collapsed, not just the filter in isolation."""
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        verbose_proxy_logger.debug("receiving data: %s", f"{{'document': 'data:application/pdf;base64,{_PDF_BASE64}'}}")
+
+    emitted = "".join(record.getMessage() for record in caplog.records)
+    assert emitted == "receiving data: {'document': 'data:application/pdf;base64,[base64_data truncated: 4.5KB]'}"
+
+
+class _CountingPattern:
+    def __init__(self, pattern: "re.Pattern[str]"):
+        self._pattern = pattern
+        self.calls = 0
+        self.scanned_chars = 0
+
+    def sub(self, repl: str, string: str, count: int = 0) -> str:
+        self.calls += 1
+        self.scanned_chars += len(string)
+        return self._pattern.sub(repl, string, count)
+
+
+_REQUEST_DUMP = "{'model': 'gpt-4', 'messages': [{'role': 'user', 'content': 'hello world'}]}"
+
+
+@pytest.mark.parametrize(
+    "formatter",
+    (CorrelationPlainFormatter(_PLAIN_LOG_FORMAT), JsonFormatter()),
+    ids=("plain", "json"),
+)
+def test_scrubbed_record_is_scanned_for_secrets_once(monkeypatch, formatter):
+    """Every pass of the secret regex over a multi-megabyte debug line costs seconds of
+    event-loop time, so a formatter must not rescan what SecretRedactionFilter scrubbed."""
+    counting = _CountingPattern(secret_redaction._SECRET_RE)
+    monkeypatch.setattr(secret_redaction, "_SECRET_RE", counting)
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.DEBUG, "receiving data: %s", (_REQUEST_DUMP,))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+    assert SecretRedactionFilter().filter(record) is True
+    rendered = formatter.format(record)
+
+    assert _REQUEST_DUMP in rendered
+    assert "litellm_redacted" not in rendered
+    assert counting.calls == 1
+    assert counting.scanned_chars == len(f"receiving data: {_REQUEST_DUMP}")
+
+
+def test_stack_info_is_scrubbed_before_the_plain_formatter(monkeypatch):
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.INFO, "call failed")
+    record.stack_info = "Stack (most recent call last):\n  api_key=sk-1234567890abcdefghij"
+
+    assert SecretRedactionFilter().filter(record) is True
+    rendered = CorrelationPlainFormatter(_PLAIN_LOG_FORMAT).format(record)
+
+    assert "sk-1234567890abcdefghij" not in rendered
+    assert "Stack (most recent call last):" in rendered
+
+
+@pytest.mark.parametrize("extra", ({1, "a"}, {"nested": {1, "a"}}), ids=("mixed_set", "nested_mixed_set"))
+def test_unserializable_extra_never_breaks_the_filter(monkeypatch, extra):
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.WARNING, "request sent")
+    record.payload = extra
+
+    assert SecretRedactionFilter().filter(record) is True
+    rendered = json.loads(JsonFormatter().format(record))
+
+    assert rendered["message"] == "request sent"
+    assert "payload" in rendered
+
+
+def test_unscrubbed_record_is_still_redacted_by_the_formatter(monkeypatch):
+    """Records that never met SecretRedactionFilter (uvicorn's, in JSON mode) keep
+    their formatter-side redaction."""
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.INFO, "key sk-1234567890abcdefghij")
+
+    assert "sk-1234567890abcdefghij" not in JsonFormatter().format(record)
+    assert "sk-1234567890abcdefghij" not in CorrelationPlainFormatter(_PLAIN_LOG_FORMAT).format(record)
 
 
 def test_set_session_id_bounds_length():

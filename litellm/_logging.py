@@ -1,7 +1,10 @@
 import ast
 import contextvars
+import functools
+import json
 import logging
 import os
+import re
 import sys
 from datetime import datetime
 from logging import Formatter
@@ -12,6 +15,7 @@ import litellm
 from litellm.constants import (
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_STDOUT_SAFEGUARD_NOTE,
+    MAX_BASE64_LENGTH_STDOUT_LOG,
     MAX_STRING_LENGTH_STDOUT_LOG,
 )
 from litellm.litellm_core_utils.env_utils import get_env_int
@@ -74,6 +78,21 @@ def _redact_structured_value(key: str | None, value: str) -> str:
     if not _ENABLE_SECRET_REDACTION:
         return value
     return redact_structured_value(key, value)
+
+
+_REDACTED_RECORD_ATTR: Final = "litellm_redacted"
+_UNREDACTED_SCALAR_TYPES: Final = (bool, int, float, type(None))
+
+
+def _is_redacted(record: logging.LogRecord) -> bool:
+    return getattr(record, _REDACTED_RECORD_ATTR, False) is True
+
+
+def _redact_extra_value(key: str, value: object) -> object:
+    try:
+        return json.loads(safe_dumps({key: value}, value_transform=_redact_structured_value))[key]
+    except (TypeError, ValueError, KeyError):
+        return _redact_string(str(value))
 
 
 def redact_secrets(value: str) -> str:
@@ -148,11 +167,19 @@ class SecretRedactionFilter(logging.Filter):
             except Exception:
                 pass
 
+        if isinstance(record.stack_info, str):
+            record.stack_info = _redact_string(record.stack_info)  # rebind-ok: a Filter scrubs records in place
+
         # Redact extra fields passed via logger.debug("msg", extra={...})
         for key, value in list(record.__dict__.items()):
-            if key not in _STANDARD_RECORD_ATTRS and isinstance(value, str):
-                setattr(record, key, _redact_string(value))
+            if key in _STANDARD_RECORD_ATTRS:
+                continue
+            if isinstance(value, str):
+                setattr(record, key, _redact_structured_value(key, value))
+            elif not isinstance(value, _UNREDACTED_SCALAR_TYPES):
+                setattr(record, key, _redact_extra_value(key, value))
 
+        setattr(record, _REDACTED_RECORD_ATTR, True)
         return True
 
 
@@ -247,6 +274,51 @@ def _truncate_for_stdout_log(text: str, limit: int) -> str:
     return f"{text[:head_chars]}{_stdout_truncation_marker(len(text) - kept_chars)}{text[-tail_chars:]}"
 
 
+_BYTES_PER_KIB: Final = 1024
+_BYTES_PER_MIB: Final = 1024 * 1024
+
+
+def format_base64_size(num_chars: int) -> str:
+    """Return a human-readable byte-size estimate from a base64 character count."""
+    num_bytes: Final = num_chars * 3 / 4
+    if num_bytes >= _BYTES_PER_MIB:
+        return f"{num_bytes / _BYTES_PER_MIB:.2f}MB"
+    if num_bytes >= _BYTES_PER_KIB:
+        return f"{num_bytes / _BYTES_PER_KIB:.1f}KB"
+    return f"{int(num_bytes)}B"
+
+
+def _get_max_base64_length_stdout_log() -> int:
+    return get_env_int("MAX_BASE64_LENGTH_STDOUT_LOG", MAX_BASE64_LENGTH_STDOUT_LOG)
+
+
+@functools.lru_cache(maxsize=8)
+def _base64_run_pattern(min_chars: int) -> "re.Pattern[str]":
+    return re.compile(rf"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{{{min_chars},}}={{0,2}}")
+
+
+_LOWER_HEX_DIGITS: Final = "0123456789abcdef"
+_UPPER_HEX_DIGITS: Final = "0123456789ABCDEF"
+
+
+def _looks_like_base64(run: str) -> bool:
+    unpadded: Final = run.rstrip("=")
+    is_hex_or_decimal: Final = not unpadded.strip(_LOWER_HEX_DIGITS) or not unpadded.strip(_UPPER_HEX_DIGITS)
+    is_one_repeated_char: Final = not unpadded.strip(unpadded[0])
+    return not is_hex_or_decimal or is_one_repeated_char
+
+
+def _replace_base64_run(match: "re.Match[str]") -> str:
+    run: Final = match.group(0)
+    if not _looks_like_base64(run):
+        return run
+    return f"[base64_data truncated: {format_base64_size(len(run))}]"
+
+
+def _collapse_base64_runs(text: str, limit: int) -> str:
+    return _base64_run_pattern(limit + 1).sub(_replace_base64_run, text)
+
+
 class StdoutLogTruncationFilter(logging.Filter):
     """Bounds how much of an oversized log line reaches stdout.
 
@@ -254,36 +326,42 @@ class StdoutLogTruncationFilter(logging.Filter):
     request writes hundreds of KB to stdout, repeatedly as the exception propagates from
     the router to the proxy handler and into its traceback, all inline on the event loop.
 
-    DEBUG records pass through untouched, since dumping full payloads is the point of
+    At every level, in the message and in the traceback alike, a base64 run longer than
+    MAX_BASE64_LENGTH_STDOUT_LOG collapses to a size placeholder first: a multi-megabyte
+    document upload otherwise costs seconds of event-loop time per DEBUG line in the
+    secret regex alone. Hex and decimal runs (digests, numeric ids) are left alone unless
+    they are one repeated character, which is what a zero-filled payload encodes to.
+    The text around a run stays, since dumping payloads is the point of
     `--detailed_debug`, and logging callbacks (OTEL, Datadog, etc.) don't run through
-    logging filters at all, so they still get the untruncated error.
+    logging filters at all, so they still get the untouched record.
     """
 
     _formatter = logging.Formatter()
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if record.levelno < logging.INFO:
-            return True
-
-        limit: Final = _get_max_string_length_stdout_log()
-        if limit <= 0:
-            return True
-
         try:
             message: Final = record.getMessage()
         except (TypeError, ValueError):
             return True
 
-        if len(message) > limit:
-            record.msg = _truncate_for_stdout_log(message, limit)  # rebind-ok: the Filter interface mutates the record
-            record.args = None  # rebind-ok: args are consumed by the truncated message above
+        base64_limit: Final = _get_max_base64_length_stdout_log()
+        collapsed: Final = _collapse_base64_runs(message, base64_limit) if base64_limit > 0 else message
+        limit: Final = _get_max_string_length_stdout_log() if record.levelno >= logging.INFO else 0
+        bounded: Final = _truncate_for_stdout_log(collapsed, limit) if 0 < limit < len(collapsed) else collapsed
+        if bounded != message:
+            record.msg = bounded  # rebind-ok: the Filter interface mutates the record
+            record.args = None  # rebind-ok: args are consumed by the rewritten message above
 
-        if isinstance(record.exc_info, tuple):
-            exc_text: Final = record.exc_text or self._formatter.formatException(record.exc_info)
-            if len(exc_text) > limit:
-                record.exc_text = _truncate_for_stdout_log(  # rebind-ok: the Filter interface mutates the record
-                    exc_text, limit
-                )
+        if not isinstance(record.exc_info, tuple):
+            return True
+
+        exc_text: Final = record.exc_text or self._formatter.formatException(record.exc_info)
+        collapsed_exc: Final = _collapse_base64_runs(exc_text, base64_limit) if base64_limit > 0 else exc_text
+        bounded_exc: Final = (
+            _truncate_for_stdout_log(collapsed_exc, limit) if 0 < limit < len(collapsed_exc) else collapsed_exc
+        )
+        if bounded_exc != exc_text:
+            record.exc_text = bounded_exc  # rebind-ok: the Filter interface mutates the record
 
         return True
 
@@ -440,6 +518,7 @@ def _get_standard_record_attrs() -> frozenset:
 
 
 _STANDARD_RECORD_ATTRS: Final = _get_standard_record_attrs()
+_NON_EXTRA_RECORD_ATTRS: Final = _STANDARD_RECORD_ATTRS | {_REDACTED_RECORD_ATTR}
 
 # CorrelationContextFilter is the only legitimate source for these two JSON fields;
 # see JsonFormatter.format() for why they're excluded from the generic message-content
@@ -480,7 +559,7 @@ class JsonFormatter(Formatter):
 
         # Include extra attributes passed via logger.debug("msg", extra={...})
         for key, value in record.__dict__.items():
-            if key not in _STANDARD_RECORD_ATTRS and key not in json_record:
+            if key not in _NON_EXTRA_RECORD_ATTRS and key not in json_record:
                 json_record[key] = value
 
         # trace_id/session_id are reserved: CorrelationContextFilter is the only
@@ -504,7 +583,7 @@ class JsonFormatter(Formatter):
         if record.exc_info:
             json_record["stacktrace"] = record.exc_text or self.formatException(record.exc_info)
 
-        return safe_dumps(json_record, value_transform=_redact_structured_value)
+        return safe_dumps(json_record, value_transform=None if _is_redacted(record) else _redact_structured_value)
 
 
 class CorrelationPlainFormatter(logging.Formatter):
@@ -515,7 +594,8 @@ class CorrelationPlainFormatter(logging.Formatter):
     """
 
     def format(self, record: logging.LogRecord) -> str:
-        formatted: Final = _redact_string(super().format(record))
+        rendered: Final = super().format(record)
+        formatted: Final = rendered if _is_redacted(record) else _redact_string(rendered)
         trace_id: Final = getattr(record, "trace_id", None)
         session_id: Final = getattr(record, "session_id", None)
         if not trace_id and not session_id:
@@ -533,8 +613,8 @@ def _setup_json_exception_handlers(formatter):
     # Create a handler with JSON formatting for exceptions
     error_handler: Final = logging.StreamHandler()
     error_handler.setFormatter(formatter)
-    error_handler.addFilter(_secret_filter)
     error_handler.addFilter(_stdout_truncation_filter)
+    error_handler.addFilter(_secret_filter)
     error_handler.addFilter(_correlation_filter)
 
     # Setup excepthook for uncaught exceptions
