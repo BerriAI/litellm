@@ -14,6 +14,7 @@ from fastapi import HTTPException
 
 import inspect
 
+from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from litellm.proxy._types import (
     GenerateKeyRequest,
     KeyHealthResponse,
@@ -64,7 +65,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     validate_key_list_check,
     validate_key_team_change,
 )
-from litellm.proxy.proxy_server import app
+from litellm.proxy.proxy_server import ProxyConfig, app
 
 client = TestClient(app)
 
@@ -18295,9 +18296,7 @@ async def test_key_creator_cannot_detach_project_without_admin_access():
     assert "Only proxy admins, team admins, or org admins" in str(exc.value.detail)
 
 
-def _default_team_gcs_proxy_config(team_id: str):
-    from litellm.proxy.proxy_server import ProxyConfig
-
+def _default_team_gcs_proxy_config(team_id: str) -> ProxyConfig:
     pc: Final = ProxyConfig()
     pc.config = {
         "litellm_settings": {
@@ -18424,8 +18423,7 @@ def _fake_upload_gcs_logger(
     batch_size: int = 2048,
     enqueue_error: str | None = None,
     upload_gate: asyncio.Event | None = None,
-):
-    from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
+) -> GCSBucketLogger:
     from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
     from litellm.types.integrations.gcs_bucket import GCSLoggingConfig, GCSLogQueueItem
     from litellm.types.utils import StandardLoggingPayload
@@ -18449,10 +18447,11 @@ def _fake_upload_gcs_logger(
             kwargs: Final = {"standard_callback_dynamic_params": {"gcs_bucket_name": bucket_name}}
             await self._enqueue(GCSLogQueueItem(payload=payload, kwargs=kwargs, response_obj=None))
 
-        async def get_gcs_logging_config(self, kwargs: dict | None = None) -> GCSLoggingConfig:
-            dynamic_params: Final = (kwargs or {}).get("standard_callback_dynamic_params") or {}
+        async def get_gcs_logging_config(self, kwargs: dict[str, object] | None = None) -> GCSLoggingConfig:
+            dynamic_params: Final = (kwargs or {}).get("standard_callback_dynamic_params")
+            bucket_name: Final = dynamic_params.get("gcs_bucket_name") if isinstance(dynamic_params, dict) else None
             return GCSLoggingConfig(
-                bucket_name=dynamic_params.get("gcs_bucket_name") or "team-bucket",
+                bucket_name=bucket_name if isinstance(bucket_name, str) else "team-bucket",
                 vertex_instance=None,
                 path_service_account=None,
             )
@@ -18510,7 +18509,7 @@ async def test_flush_gcs_reports_only_when_the_health_event_itself_failed_to_upl
     assert await flush_gcs_and_describe_failures(logger, "health-event-already-uploaded") is None
 
 
-async def _key_logging_status_with_gcs_logger(gcs_logger) -> LoggingCallbackStatus:
+async def _key_logging_status_with_gcs_logger(gcs_logger: GCSBucketLogger) -> LoggingCallbackStatus:
     from starlette.requests import Request as StarletteRequest
 
     from litellm.proxy.management_endpoints.key_management_endpoints import test_key_logging
