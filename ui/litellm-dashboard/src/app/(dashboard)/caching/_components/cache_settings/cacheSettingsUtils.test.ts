@@ -70,21 +70,50 @@ describe("buildCachePayload", () => {
     expect(payload).not.toHaveProperty("redis_startup_nodes");
   });
 
-  it("should send type redis-semantic when saving a semantic cache", () => {
-    const payload = buildCachePayload("semantic", { similarity_threshold: 0.9 }, { forTesting: false });
+  it("should send type redis-semantic when saving with semantic caching enabled", () => {
+    const payload = buildCachePayload(
+      "node",
+      { similarity_threshold: 0.9 },
+      { forTesting: false, semanticEnabled: true },
+    );
     expect(payload.type).toBe("redis-semantic");
     expect(payload.similarity_threshold).toBe(0.9);
   });
 
-  it("should send the semantic cache scope only for a semantic cache", () => {
-    const semantic = buildCachePayload("semantic", { semantic_cache_scope: "end_user" }, { forTesting: false });
-    expect(semantic.semantic_cache_scope).toBe("end_user");
-    const node = buildCachePayload("node", { semantic_cache_scope: "end_user" }, { forTesting: false });
-    expect(node).not.toHaveProperty("semantic_cache_scope");
+  it("should omit semantic fields when semantic caching is disabled, even if they hold values", () => {
+    const payload = buildCachePayload(
+      "node",
+      { similarity_threshold: 0.9, redis_semantic_cache_embedding_model: "text-embedding-3-small" },
+      { forTesting: false, semanticEnabled: false },
+    );
+    expect(payload.type).toBe("redis");
+    expect(payload).not.toHaveProperty("similarity_threshold");
+    expect(payload).not.toHaveProperty("redis_semantic_cache_embedding_model");
   });
 
-  it("should keep type redis when testing a semantic cache so the test endpoint accepts it", () => {
-    const payload = buildCachePayload("semantic", { similarity_threshold: 0.9 }, { forTesting: true });
+  it("should send the semantic cache scope only when semantic caching is enabled", () => {
+    const enabled = buildCachePayload(
+      "node",
+      { semantic_cache_scope: "end_user" },
+      { forTesting: false, semanticEnabled: true },
+    );
+    expect(enabled.semantic_cache_scope).toBe("end_user");
+    // Disabled must omit the scope rather than send null: the backend rejects a null scope
+    // when it rebuilds the cache, while an omitted one falls back to its default.
+    const disabled = buildCachePayload(
+      "node",
+      { semantic_cache_scope: "end_user" },
+      { forTesting: false, semanticEnabled: false },
+    );
+    expect(disabled).not.toHaveProperty("semantic_cache_scope");
+  });
+
+  it("should keep type redis when testing with semantic caching enabled so the test endpoint accepts it", () => {
+    const payload = buildCachePayload(
+      "node",
+      { similarity_threshold: 0.9 },
+      { forTesting: true, semanticEnabled: true },
+    );
     expect(payload.type).toBe("redis");
   });
 

@@ -63,12 +63,35 @@ describe("CacheSettings", () => {
     });
   });
 
-  describe("when the redis type is semantic", () => {
-    it("should reveal the semantic fields", async () => {
+  describe("semantic caching", () => {
+    it("should not offer Semantic as a redis type, since it is not a topology", async () => {
+      renderSettings();
+      await screen.findByText("Redis Type");
+      expect(screen.queryByText("Semantic")).not.toBeInTheDocument();
+    });
+
+    it("should stay collapsed until the toggle is switched on", async () => {
+      const user = userEvent.setup();
+      renderSettings();
+      expect(await screen.findByText("Enable Semantic Caching")).toBeInTheDocument();
+      expect(screen.queryByText("Similarity Threshold")).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("switch"));
+      expect(await screen.findByText("Similarity Threshold")).toBeInTheDocument();
+      expect(screen.getByText("Embedding Model")).toBeInTheDocument();
+    });
+
+    it("should reveal the semantic fields for a config saved under the old redis_type", async () => {
       getCacheSettingsCall.mockResolvedValue({ current_values: { redis_type: "semantic" } });
       renderSettings();
       expect(await screen.findByText("Similarity Threshold")).toBeInTheDocument();
       expect(screen.getByText("Embedding Model")).toBeInTheDocument();
+    });
+
+    it("should reveal the semantic fields when only the semantic values are set", async () => {
+      getCacheSettingsCall.mockResolvedValue({ current_values: { redis_type: "node", similarity_threshold: 0.9 } });
+      renderSettings();
+      expect(await screen.findByText("Similarity Threshold")).toBeInTheDocument();
     });
   });
 
