@@ -1833,6 +1833,31 @@ class TestDestinationOwnership:
         langtrace.tracer_provider.force_flush()
         assert [s.name for s in sinks[_COLLECTOR].get_finished_spans()] == ["chat"]
 
+    def test_a_mapper_only_preset_serving_the_collector_honors_callback_settings_otel(self, monkeypatch):
+        """``callbacks: [langtrace, otel]`` plus ``callback_settings.otel``: the one logger that serves the
+        operator's collector must carry the operator's ``otel`` settings, or reusing it for ``otel`` drops them."""
+        sinks = self._capture_exporters(monkeypatch)
+        self._operator_with(monkeypatch, "langfuse_otel")
+        monkeypatch.setattr(
+            litellm,
+            "callback_settings",
+            MappingProxyType({"otel": MappingProxyType({"service_name": "ops-collector", "message_logging": False})}),
+        )
+        loggers: list[CustomLogger] = []  # mutable-ok: stands in for the process-wide _in_memory_loggers list
+        monkeypatch.setattr(litellm_logging, "_in_memory_loggers", loggers)
+
+        langtrace = in_fresh_context(_maybe_construct_otel_v2, "langtrace", loggers)
+        generic = in_fresh_context(_init_custom_logger_compatible_class, "otel", None, None)
+        is_otel_v2_enabled.cache_clear()
+
+        assert isinstance(langtrace, OpenTelemetryV2) and generic is langtrace
+        assert "langtrace" in langtrace.config.mapper_names
+        assert langtrace.message_logging is False
+        emit(langtrace.tracer_provider, "chat")
+        langtrace.tracer_provider.force_flush()
+        (span,) = sinks[_COLLECTOR].get_finished_spans()
+        assert span.resource.attributes["service.name"] == "ops-collector"
+
     @pytest.mark.parametrize("otel_first", [True, False])
     def test_the_otel_callback_holds_the_proxy_slot_whatever_the_order(self, monkeypatch, otel_first):
         from litellm.proxy import proxy_server

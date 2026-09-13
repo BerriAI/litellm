@@ -4875,6 +4875,7 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
     if not is_otel_v2_enabled():
         return None
     from litellm.integrations.otel.logger import OpenTelemetryV2, build_otel_v2_logger
+    from litellm.integrations.otel.model.config import OpenTelemetryV2Config
     from litellm.integrations.otel.plumbing.context import destination_backends
     from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
 
@@ -4905,7 +4906,20 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
             "OTel V2: no operator credentials for '%s'; only key/team destinations will receive its traces",
             callback_name,
         )
-    v2_logger: Final = build_otel_v2_logger(config=config, callback_name=callback_name)
+    serves_generic_collector: Final = all(spec.owner is None for spec in config.exporters)
+    otel_settings: Final[Mapping[str, object]] = (
+        _get_custom_logger_settings_from_proxy_server(callback_name="otel")
+        if serves_generic_collector
+        else MappingProxyType({})
+    )
+    collector_config: Final = (
+        preset_fn(config_overrides=OpenTelemetryV2Config(**otel_settings), allow_missing_credentials=carried)
+        if otel_settings
+        else config
+    )
+    v2_logger: Final = build_otel_v2_logger(
+        config=collector_config, callback_name=callback_name, settings=otel_settings
+    )
     _in_memory_loggers.append(v2_logger)
     return v2_logger
 
