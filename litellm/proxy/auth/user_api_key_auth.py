@@ -191,6 +191,7 @@ def _get_model_from_request_context(
     route: str,
     request: Request | None,
     llm_router: Any | None = None,
+    team_id: str | None = None,
 ) -> str | list[str] | None:
     return get_model_from_request(
         request_data=request_data,
@@ -199,6 +200,7 @@ def _get_model_from_request_context(
         request_query_params=_safe_get_request_query_params(request=request),
         llm_router=llm_router,
         request=request,
+        team_id=team_id,
     )
 
 
@@ -217,7 +219,7 @@ async def _normalize_claude_model(
         return
     if request is not None and request.scope.get(_CLAUDE_MODEL_NORMALIZED) is True:
         return
-    requested: Final = _get_model_from_request_context(request_data, route, request, llm_router)
+    requested: Final = _get_model_from_request_context(request_data, route, request, llm_router, valid_token.team_id)
     if not isinstance(requested, str) or requested != request_data.get("model"):
         return
     if not requested.startswith("claude-router-") and not requested.lower().endswith("[1m]"):
@@ -1647,6 +1649,7 @@ async def _user_api_key_auth_builder(
                         route=route,
                         request=request,
                         llm_router=llm_router,
+                        team_id=valid_token.team_id,
                     )
                     skip_budget_checks = False
                     if model is not None and llm_router is not None:
@@ -1687,6 +1690,7 @@ async def _user_api_key_auth_builder(
                                     route=route,
                                     request=request,
                                     llm_router=llm_router,
+                                    team_id=valid_token.team_id,
                                 )
                             ),
                         )
@@ -2086,6 +2090,7 @@ async def _user_api_key_auth_builder(
                 route=route,
                 request=request,
                 llm_router=llm_router,
+                team_id=valid_token.team_id,
             )
             skip_budget_checks = False
             if model is not None and llm_router is not None:
@@ -2204,6 +2209,7 @@ async def _user_api_key_auth_builder(
                         route=route,
                         request=request,
                         llm_router=llm_router,
+                        team_id=valid_token.team_id,
                     )
                     current_models = _get_model_names_for_budget_checks(model=current_model)
 
@@ -2234,6 +2240,7 @@ async def _user_api_key_auth_builder(
                             route=route,
                             request=request,
                             llm_router=llm_router,
+                            team_id=valid_token.team_id,
                         )
                         current_models = _get_model_names_for_budget_checks(model=current_model)
 
@@ -2729,6 +2736,7 @@ async def _run_centralized_common_checks(
         route=route,
         request=request,
         llm_router=llm_router,
+        team_id=user_api_key_auth_obj.team_id,
     )
 
     # Pin the metadata variable name (litellm_metadata vs metadata) before
@@ -2845,12 +2853,14 @@ def _should_skip_budget_checks(
     route: str,
     request: Request | None,
     llm_router: Any | None,
+    team_id: str | None = None,
 ) -> bool:
     model: Final = _get_model_from_request_context(
         request_data=request_data,
         route=route,
         request=request,
         llm_router=llm_router,
+        team_id=team_id,
     )
     if model is not None and llm_router is not None:
         return _is_model_cost_zero(model=model, llm_router=llm_router)
@@ -3296,6 +3306,7 @@ async def _enforce_key_and_fallback_model_access(
             route=route,
             request=request,
             llm_router=llm_router,
+            team_id=valid_token.team_id,
         )
 
         if model is not None:
@@ -3403,6 +3414,7 @@ async def _run_post_custom_auth_checks(
         route=route,
         request=request,
         llm_router=llm_router,
+        team_id=valid_token.team_id,
     )
     current_models = _get_model_names_for_budget_checks(model=current_model)
 
@@ -3444,6 +3456,7 @@ async def _run_post_custom_auth_checks(
             route=route,
             request=request,
             llm_router=llm_router,
+            team_id=valid_token.team_id,
         )
         current_models = _get_model_names_for_budget_checks(model=current_model)
 
