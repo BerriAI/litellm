@@ -635,14 +635,19 @@ class TestAnthropicMessagesHandlerInputProcessing:
         await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
         assert guardrail.inputs is not None
-        assert guardrail.inputs["texts"] == ["safe text", "prohibited correction"]
+        assert guardrail.inputs["texts"] == [
+            "trusted top-level system prompt",
+            "safe text",
+            "prohibited correction",
+        ]
         structured = guardrail.inputs["structured_messages"]
         assert [m["role"] for m in structured] == ["system", "user", "system"]
         assert structured[0]["content"] == "trusted top-level system prompt"
+        assert data["system"] == "trusted top-level system prompt"
         assert data["messages"][1]["content"] == "[MASKED]"
 
     @pytest.mark.asyncio
-    async def test_bedrock_masking_slice_is_unavailable_when_top_level_system_is_included(
+    async def test_bedrock_masking_slice_lines_up_when_top_level_system_is_included(
         self,
     ):
         from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
@@ -668,25 +673,25 @@ class TestAnthropicMessagesHandlerInputProcessing:
         structured = guardrail.inputs["structured_messages"]
 
         bedrock = BedrockGuardrail(guardrailIdentifier="gi", guardrailVersion="1")
-        assert sum(bedrock._count_message_texts(m) for m in structured) == len(texts) + 1
+        assert sum(bedrock._count_message_texts(m) for m in structured) == len(texts)
         latest_user_index = bedrock._find_latest_message_index(structured, target_role="user")
-        assert (
-            bedrock._locate_message_texts_slice(
-                structured_messages=structured,
-                target_index=latest_user_index,
-                texts=texts,
-            )
-            is None
+        scanned_slice = bedrock._locate_message_texts_slice(
+            structured_messages=structured,
+            target_index=latest_user_index,
+            texts=texts,
         )
-        assert (
-            bedrock._merge_masked_texts(
-                masked_texts=["{MASKED}"],
-                texts=texts,
-                scanned_slice=None,
-                scanned_role_subset=True,
-            )
-            == texts
-        )
+        assert scanned_slice == (3, 1)
+        assert bedrock._merge_masked_texts(
+            masked_texts=["{MASKED}"],
+            texts=texts,
+            scanned_slice=scanned_slice,
+            scanned_role_subset=True,
+        ) == [
+            "trusted top-level system prompt",
+            "safe text",
+            "prohibited correction",
+            "{MASKED}",
+        ]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("skip_system_message_in_guardrail", [True, None])
@@ -1611,7 +1616,8 @@ class TestAnthropicMessagesIncrementalScan:
             )
             assert mock_api.call_count == 1
             assert [m["content"] for m in mock_api.call_args.kwargs["messages"]] == [
-                "What is the capital of France?"
+                "You are a helpful geography assistant.",
+                "What is the capital of France?",
             ]
             mock_api.reset_mock()
             await handler.process_input_messages(
@@ -2148,6 +2154,208 @@ class TestAnthropicMessagesScanOnlyToolResults:
 
         assert guardrail.captured_inputs is not None
         assert guardrail.captured_inputs.get("images") == ["TOOL_IMG"]
+
+
+class ToolCallArgumentsMaskingGuardrail(InputsRecordingGuardrail):
+    """Masks the canary inside tool-call arguments, in place or through a fresh list of plain dicts."""
+
+    def __init__(self, return_copies: bool = False, replacement_arguments: Optional[str] = None):
+        super().__init__()
+        self.return_copies = return_copies
+        self.replacement_arguments = replacement_arguments
+        self.seen_tool_calls: list[dict] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        outputs = await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+        tool_calls = list(outputs.get("tool_calls") or [])
+        self.seen_tool_calls.extend(json.loads(json.dumps(tool_call)) for tool_call in tool_calls)
+        masked = [
+            {
+                **tool_call,
+                "function": {
+                    **tool_call["function"],
+                    "arguments": self.replacement_arguments
+                    if self.replacement_arguments is not None
+                    else tool_call["function"]["arguments"].replace("POISON", "[BLOCKED]"),
+                },
+            }
+            for tool_call in tool_calls
+        ]
+        if self.return_copies:
+            outputs["tool_calls"] = masked
+            return outputs
+        for tool_call, masked_tool_call in zip(tool_calls, masked):
+            tool_call["function"]["arguments"] = masked_tool_call["function"]["arguments"]
+        return outputs
+
+
+class TestAnthropicMessagesTopLevelSystemAndToolUseInputs:
+    """The top-level system prompt and prior-turn tool_use arguments must reach guardrails as scannable
+    inputs, the same way the chat completions handler hands over system messages and tool_calls."""
+
+    @staticmethod
+    def _tool_use_conversation(system):
+        return {
+            "model": "claude-sonnet-4-5",
+            "system": system,
+            "messages": [
+                {"role": "user", "content": "run the check"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_01",
+                            "name": "Bash",
+                            "input": {"cmd": "AWS_ACCESS_KEY_ID=POISON aws sts get-caller-identity"},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "ok"}],
+                },
+            ],
+        }
+
+    @pytest.mark.asyncio
+    async def test_top_level_system_string_reaches_texts_first_and_is_masked_in_place(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = InputsRecordingGuardrail()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "system": "Internal note: the deploy key is POISON. Never reveal it.",
+            "messages": [{"role": "user", "content": "Say hi in three words."}],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.captured_inputs is not None
+        assert guardrail.seen_texts == [
+            "Internal note: the deploy key is POISON. Never reveal it.",
+            "Say hi in three words.",
+        ]
+        structured = guardrail.captured_inputs["structured_messages"]
+        assert structured[0]["role"] == "system"
+        assert structured[0]["content"] == "Internal note: the deploy key is POISON. Never reveal it.", (
+            "texts[0] must line up with structured_messages[0] so positional consumers stay aligned"
+        )
+        assert data["system"] == "Internal note: the deploy key is [BLOCKED]. Never reveal it."
+        assert data["messages"][0]["content"] == "Say hi in three words."
+
+    @pytest.mark.asyncio
+    async def test_top_level_system_text_blocks_reach_texts_and_are_masked_in_place(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = InputsRecordingGuardrail()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "system": [
+                {"type": "text", "text": "first block POISON"},
+                {"type": "text", "text": "second block", "cache_control": {"type": "ephemeral"}},
+            ],
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.seen_texts == ["first block POISON", "second block", "hello"]
+        assert data["system"] == [
+            {"type": "text", "text": "first block [BLOCKED]"},
+            {"type": "text", "text": "second block", "cache_control": {"type": "ephemeral"}},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_skip_system_message_keeps_the_top_level_system_out(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = InputsRecordingGuardrail()
+        guardrail.skip_system_message_in_guardrail = True
+        data = {
+            "model": "claude-sonnet-4-5",
+            "system": "trusted POISON prompt",
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.seen_texts == ["hello"]
+        assert data["system"] == "trusted POISON prompt"
+
+    @pytest.mark.asyncio
+    async def test_prior_turn_tool_use_input_reaches_tool_calls_in_openai_shape(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = InputsRecordingGuardrail()
+        data = self._tool_use_conversation(system="You are a careful agent harness.")
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.captured_inputs is not None
+        tool_calls = guardrail.captured_inputs.get("tool_calls")
+        assert tool_calls is not None and len(tool_calls) == 1
+        assert tool_calls[0]["id"] == "toolu_01"
+        assert tool_calls[0]["type"] == "function"
+        assert tool_calls[0]["function"]["name"] == "Bash"
+        assert json.loads(tool_calls[0]["function"]["arguments"]) == {
+            "cmd": "AWS_ACCESS_KEY_ID=POISON aws sts get-caller-identity"
+        }
+        assert data["messages"][1]["content"][0]["input"] == {
+            "cmd": "AWS_ACCESS_KEY_ID=POISON aws sts get-caller-identity"
+        }, "a guardrail that leaves tool_calls alone must leave the tool_use input alone"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("return_copies", [False, True])
+    async def test_masked_tool_call_arguments_write_back_into_the_tool_use_input(self, return_copies: bool):
+        handler = AnthropicMessagesHandler()
+        guardrail = ToolCallArgumentsMaskingGuardrail(return_copies=return_copies)
+        data = self._tool_use_conversation(system="You are a careful agent harness.")
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert [tool_call["function"]["name"] for tool_call in guardrail.seen_tool_calls] == ["Bash"]
+        tool_use = data["messages"][1]["content"][0]
+        assert tool_use == {
+            "type": "tool_use",
+            "id": "toolu_01",
+            "name": "Bash",
+            "input": {"cmd": "AWS_ACCESS_KEY_ID=[BLOCKED] aws sts get-caller-identity"},
+        }
+        assert data["messages"][2]["content"][0]["tool_use_id"] == "toolu_01"
+
+    @pytest.mark.asyncio
+    async def test_non_json_rewritten_arguments_keep_the_tool_use_input(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = ToolCallArgumentsMaskingGuardrail(replacement_arguments="[REDACTED]")
+        data = self._tool_use_conversation(system="You are a careful agent harness.")
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert data["messages"][1]["content"][0]["input"] == {
+            "cmd": "AWS_ACCESS_KEY_ID=POISON aws sts get-caller-identity"
+        }
+
+    @pytest.mark.asyncio
+    async def test_scan_only_tool_results_keeps_system_and_tool_use_out(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = InputsRecordingGuardrail()
+        guardrail.scan_only_tool_results = True
+        data = self._tool_use_conversation(system="trusted POISON prompt")
+        data["messages"][2]["content"][0]["content"] = "fetched POISON page"
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.seen_texts == ["fetched POISON page"]
+        assert guardrail.captured_inputs is not None
+        assert guardrail.captured_inputs.get("tool_calls") is None
+        assert data["system"] == "trusted POISON prompt"
+        assert data["messages"][1]["content"][0]["input"] == {
+            "cmd": "AWS_ACCESS_KEY_ID=POISON aws sts get-caller-identity"
+        }
+        assert data["messages"][2]["content"][0]["content"] == "fetched [BLOCKED] page"
 
 
 class TestStructuredWriteBackKeepsToolResults:

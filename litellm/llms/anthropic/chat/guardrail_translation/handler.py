@@ -20,6 +20,7 @@ from itertools import chain, repeat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, overload, runtime_checkable
 
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_proxy_logger
@@ -103,9 +104,24 @@ class ToolResultBlockTextTarget:
     block_idx: int
 
 
-InputWriteBackTarget = (
-    MessageContentTarget | ContentBlockTextTarget | ToolResultStringTarget | ToolResultBlockTextTarget
-)
+@dataclass(frozen=True, slots=True)
+class SystemStringTarget:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class SystemBlockTextTarget:
+    block_idx: int
+
+
+@dataclass(frozen=True, slots=True)
+class ToolUseInputTarget:
+    msg_idx: int
+    content_idx: int
+
+
+MessageTextTarget = MessageContentTarget | ContentBlockTextTarget | ToolResultStringTarget | ToolResultBlockTextTarget
+InputWriteBackTarget = SystemStringTarget | SystemBlockTextTarget | MessageTextTarget
 
 
 def _as_str_mapping(value: Mapping[str, object]) -> Mapping[str, object]:
@@ -147,9 +163,16 @@ class ScannedText:
 
 
 @dataclass(frozen=True, slots=True)
+class ScannedToolCall:
+    tool_call: ChatCompletionToolCallChunk
+    target: ToolUseInputTarget
+
+
+@dataclass(frozen=True, slots=True)
 class ExtractedInput:
     scanned: tuple[ScannedText, ...]
     images: tuple[str, ...]
+    tool_calls: tuple[ScannedToolCall, ...] = ()
 
 
 EMPTY_EXTRACTED_INPUT: Final = ExtractedInput(scanned=(), images=())
@@ -159,6 +182,73 @@ EMPTY_EXTRACTED_INPUT: Final = ExtractedInput(scanned=(), images=())
 class _ToolCallShape:
     name: str | None
     arguments: str
+
+
+def _is_client_tool_use(block: Mapping[str, object]) -> bool:
+    return (
+        block.get("type") == "tool_use"
+        and isinstance(block.get("id"), str)
+        and isinstance(block.get("name"), str)
+        and isinstance(block.get("input"), dict)
+    )
+
+
+def _write_back_system_block(system: object, block_idx: int, response: str) -> None:
+    if not isinstance(system, list):
+        return
+    text_blocks: Final = tuple(block for block in system if isinstance(block, dict) and block.get("type") == "text")
+    if block_idx < len(text_blocks):
+        text_blocks[block_idx]["text"] = (
+            response  # mutable-ok: guardrails rewrite the caller's request payload in place
+        )
+
+
+def _write_back_message_text(message: _WritableMessage, target: MessageTextTarget, response: str) -> None:
+    content: Final = message.get("content", None)
+    if content is None:
+        return
+    match target:
+        case MessageContentTarget():
+            if isinstance(content, str):
+                message["content"] = response  # mutable-ok: guardrails rewrite the caller's request payload in place
+        case ContentBlockTextTarget(content_idx=content_idx):
+            if isinstance(content, list):
+                content[content_idx]["text"] = (
+                    response  # mutable-ok: guardrails rewrite the caller's request payload in place
+                )
+        case ToolResultStringTarget(content_idx=content_idx):
+            if isinstance(content, list):
+                content[content_idx]["content"] = (
+                    response  # mutable-ok: guardrails rewrite the caller's request payload in place
+                )
+        case ToolResultBlockTextTarget(content_idx=content_idx, block_idx=block_idx):
+            if isinstance(content, list):
+                content[content_idx]["content"][block_idx]["text"] = (
+                    response  # mutable-ok: guardrails rewrite the caller's request payload in place
+                )
+        case _:
+            assert_never(target)
+
+
+_TOOL_USE_INPUT_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+def _write_back_tool_use(message: _WritableMessage, target: ToolUseInputTarget, shape: _ToolCallShape) -> None:
+    content: Final = message.get("content", None)
+    block: Final = content[target.content_idx] if isinstance(content, list) else None
+    if not isinstance(block, dict):
+        return
+    try:
+        rewritten_input: Final = _TOOL_USE_INPUT_ADAPTER.validate_json(shape.arguments)
+    except ValidationError:
+        verbose_proxy_logger.warning(
+            "Anthropic Messages: guardrail returned arguments that are not a JSON object for tool_use %s; keeping its input",
+            block.get("id"),
+        )
+        return
+    block["input"] = rewritten_input  # mutable-ok: guardrails rewrite the caller's request payload in place
+    if shape.name is not None and shape.name != block.get("name"):
+        block["name"] = shape.name  # mutable-ok: guardrails rewrite the caller's request payload in place
 
 
 @dataclass(frozen=True, slots=True)
@@ -452,9 +542,8 @@ class AnthropicMessagesHandler(BaseTranslation):
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
         scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
 
-        # Exclude only the trusted top-level prompt. In-sequence system entries are untrusted
-        # and must stay aligned with texts_to_check for positional masking. When the top-level
-        # prompt is included, the pre-existing count mismatch disables positional masking.
+        # The top-level prompt is translated on its own below so it can be hoisted in front of
+        # any mid-turn system entries and scanned first, aligned with that structured position.
         translation_source: Final = {  # mutable-ok: API message payload
             key: value for key, value in data.items() if key != "system"
         }
@@ -490,7 +579,12 @@ class AnthropicMessagesHandler(BaseTranslation):
             ]
         )
 
-        # Step 1: Extract all text content and images
+        # Step 1: Extract all text content, images, and tool calls
+        top_level_system_scanned: Final = (
+            ()
+            if hoisted_system_message is None or scan_only_tool_results
+            else self._extract_top_level_system_text(hoisted_system_message)
+        )
         extracted: Final = tuple(
             self._extract_input_text_and_images(
                 message=message,
@@ -501,17 +595,27 @@ class AnthropicMessagesHandler(BaseTranslation):
             )
             for msg_idx, message in enumerate(messages)
         )
-        scanned: Final = tuple(item for one_message in extracted for item in one_message.scanned)
+        scanned: Final = (
+            *top_level_system_scanned,
+            *(item for one_message in extracted for item in one_message.scanned),
+        )
         texts_to_check: Final = [item.text for item in scanned]  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
         images_to_check: Final = [
             image for one_message in extracted for image in one_message.images
         ]  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
+        scanned_tool_calls: Final = tuple(item for one_message in extracted for item in one_message.tool_calls)
+        tool_calls_to_check: Final = [
+            item.tool_call for item in scanned_tool_calls
+        ]  # mutable-ok: GenericGuardrailAPIInputs takes list[ChatCompletionToolCallChunk]
+        pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_to_check)
 
-        # Step 2: Apply guardrail to all texts in batch
-        if texts_to_check:
+        # Step 2: Apply guardrail to all texts and tool calls in batch
+        if texts_to_check or tool_calls_to_check:
             inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
+            if tool_calls_to_check:
+                inputs["tool_calls"] = tool_calls_to_check
             if tools_to_check:
                 inputs["tools"] = tools_to_check
             original_structured_messages: Final = structured_messages
@@ -572,9 +676,15 @@ class AnthropicMessagesHandler(BaseTranslation):
             else:
                 # Step 3: Map guardrail responses back to original message structure
                 await self._apply_guardrail_responses_to_input(
-                    messages=messages,
+                    data=data,
                     responses=guardrailed_texts,
                     scanned=scanned,
+                )
+                self._apply_guardrail_tool_calls_to_input(
+                    messages=messages,
+                    scanned_tool_calls=scanned_tool_calls,
+                    pre_guardrail_tool_calls=pre_guardrail_tool_calls,
+                    returned_tool_calls=guardrailed_inputs.get("tool_calls"),
                 )
 
         verbose_proxy_logger.debug("Anthropic Messages: Processed input messages: %s", messages)
@@ -597,6 +707,19 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
         hoisted: Final = probe.get("messages") or []  # mutable-ok: API message payload
         return hoisted[0] if hoisted else None
+
+    @staticmethod
+    def _extract_top_level_system_text(hoisted_system_message: AllMessageValues) -> tuple[ScannedText, ...]:
+        content: Final = hoisted_system_message.get("content")
+        if isinstance(content, str):
+            return (ScannedText(content, SystemStringTarget()),)
+        if not isinstance(content, list):
+            return ()
+        return tuple(
+            ScannedText(text_str, SystemBlockTextTarget(block_idx))
+            for block_idx, block in enumerate(content)
+            if isinstance(block, dict) and isinstance(text_str := block.get("text"), str) and text_str
+        )
 
     @staticmethod
     def _openai_system_message_to_anthropic(
@@ -852,9 +975,25 @@ class AnthropicMessagesHandler(BaseTranslation):
             for content_idx, content_item in enumerate(content)
             if isinstance(content_item, dict)
         )
+        tool_use_blocks: Final = (
+            ()
+            if scan_only_tool_results
+            else tuple(
+                (content_idx, content_item)
+                for content_idx, content_item in enumerate(content)
+                if isinstance(content_item, dict) and _is_client_tool_use(content_item)
+            )
+        )
         return ExtractedInput(
             scanned=tuple(item for block in blocks for item in block.scanned),
             images=tuple(image for block in blocks for image in block.images),
+            tool_calls=tuple(
+                ScannedToolCall(
+                    tool_call=AnthropicConfig.convert_tool_use_to_openai_format(content_item, tool_call_idx),
+                    target=ToolUseInputTarget(msg_idx, content_idx),
+                )
+                for tool_call_idx, (content_idx, content_item) in enumerate(tool_use_blocks)
+            ),
         )
 
     @classmethod
@@ -940,43 +1079,48 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     async def _apply_guardrail_responses_to_input(
         self,
-        messages: Sequence[_WritableMessage],
+        data: dict,
         responses: list[str],
         scanned: tuple[ScannedText, ...],
     ) -> None:
         """
-        Apply guardrail responses back to input messages.
+        Apply guardrail responses back to the top-level system prompt and the input messages.
         """
+        messages: Final[Sequence[_WritableMessage]] = data.get("messages") or ()
         for item, guardrail_response in zip(scanned, responses):
-            target = item.target
-            message = messages[target.msg_idx]
-            content = message.get("content", None)
-            if content is None:
-                continue
-
-            match target:
-                case MessageContentTarget():
-                    if isinstance(content, str):
-                        message["content"] = (
+            match item.target:
+                case SystemStringTarget():
+                    if isinstance(data.get("system"), str):
+                        data["system"] = (
                             guardrail_response  # mutable-ok: guardrails rewrite the caller's request payload in place
                         )
-                case ContentBlockTextTarget(content_idx=content_idx):
-                    if isinstance(content, list):
-                        content[content_idx]["text"] = (
-                            guardrail_response  # mutable-ok: guardrails rewrite the caller's request payload in place
-                        )
-                case ToolResultStringTarget(content_idx=content_idx):
-                    if isinstance(content, list):
-                        content[content_idx]["content"] = (
-                            guardrail_response  # mutable-ok: guardrails rewrite the caller's request payload in place
-                        )
-                case ToolResultBlockTextTarget(content_idx=content_idx, block_idx=block_idx):
-                    if isinstance(content, list):
-                        content[content_idx]["content"][block_idx]["text"] = (
-                            guardrail_response  # mutable-ok: guardrails rewrite the caller's request payload in place
-                        )
+                case SystemBlockTextTarget(block_idx=block_idx):
+                    _write_back_system_block(data.get("system"), block_idx, guardrail_response)
+                case (
+                    MessageContentTarget()
+                    | ContentBlockTextTarget()
+                    | ToolResultStringTarget()
+                    | ToolResultBlockTextTarget() as message_target
+                ):
+                    _write_back_message_text(messages[message_target.msg_idx], message_target, guardrail_response)
                 case _:
-                    assert_never(target)
+                    assert_never(item.target)
+
+    @staticmethod
+    def _apply_guardrail_tool_calls_to_input(
+        messages: Sequence[_WritableMessage],
+        scanned_tool_calls: tuple[ScannedToolCall, ...],
+        pre_guardrail_tool_calls: tuple[_ToolCallShape, ...],
+        returned_tool_calls: Sequence[object] | None,
+    ) -> None:
+        post_guardrail_tool_calls: Final = _tool_call_shapes(
+            returned_tool_calls
+            if returned_tool_calls is not None and len(returned_tool_calls) == len(pre_guardrail_tool_calls)
+            else tuple(item.tool_call for item in scanned_tool_calls)
+        )
+        for item, before, after in zip(scanned_tool_calls, pre_guardrail_tool_calls, post_guardrail_tool_calls):
+            if before != after:
+                _write_back_tool_use(messages[item.target.msg_idx], item.target, after)
 
     async def process_output_response(
         self,

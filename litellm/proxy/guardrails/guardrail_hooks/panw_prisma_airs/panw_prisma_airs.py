@@ -1600,8 +1600,8 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         Args:
             texts: Flattened text entries from the framework.
-            messages: Original request messages (request_data["messages"]),
-                      NOT structured_messages (which may have injected system content).
+            messages: The structured messages the framework flattened into ``texts``,
+                      hoisted top-level system prompt included, so positions line up.
 
         Returns a set of scannable indices, or None on count mismatch or no user/developer
         message (safety fallback to existing role-filter behavior).
@@ -1788,15 +1788,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             structured_messages: Final = inputs.get("structured_messages")
             if structured_messages:
                 # For Anthropic /v1/messages: default to latest-user-only scanning.
-                # Uses request_data["messages"] (original format), NOT structured_messages
-                # (which has injected system content from adapter translation).
                 if self._use_latest_user_only(request_data, logging_obj):
-                    original_messages: Final = request_data.get("messages")
-                    if original_messages:
-                        scannable_indices = self._get_latest_user_text_indices(texts, original_messages)
+                    scannable_indices = self._get_latest_user_text_indices(texts, structured_messages)
                 # Fall through to existing role filtering if:
                 # - not Anthropic, OR flag explicitly False, OR
-                # - no original messages, OR
                 # - latest-user extraction returned None (no user / count mismatch)
                 if scannable_indices is None:
                     scannable_indices = self._get_scannable_text_indices(texts, structured_messages)
