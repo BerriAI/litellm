@@ -103,6 +103,12 @@ class ToolResultBlockTextTarget:
     block_idx: int
 
 
+@dataclass(frozen=True, slots=True)
+class ToolCallTarget:
+    msg_idx: int
+    content_idx: int
+
+
 InputWriteBackTarget = (
     MessageContentTarget | ContentBlockTextTarget | ToolResultStringTarget | ToolResultBlockTextTarget
 )
@@ -150,6 +156,8 @@ class ScannedText:
 class ExtractedInput:
     scanned: tuple[ScannedText, ...]
     images: tuple[str, ...]
+    tool_calls: tuple[ChatCompletionToolCallChunk, ...] = ()
+    tool_call_targets: tuple[ToolCallTarget, ...] = ()
 
 
 EMPTY_EXTRACTED_INPUT: Final = ExtractedInput(scanned=(), images=())
@@ -502,16 +510,22 @@ class AnthropicMessagesHandler(BaseTranslation):
             for msg_idx, message in enumerate(messages)
         )
         scanned: Final = tuple(item for one_message in extracted for item in one_message.scanned)
+        tool_calls_to_check: Final = [  # mutable-ok: GenericGuardrailAPIInputs takes a list of tool calls
+            tool_call for one_message in extracted for tool_call in one_message.tool_calls
+        ]
+        tool_call_targets: Final = [target for one_message in extracted for target in one_message.tool_call_targets]
         texts_to_check: Final = [item.text for item in scanned]  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
         images_to_check: Final = [
             image for one_message in extracted for image in one_message.images
         ]  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
 
         # Step 2: Apply guardrail to all texts in batch
-        if texts_to_check:
+        if texts_to_check or tool_calls_to_check:
             inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
+            if tool_calls_to_check:
+                inputs["tool_calls"] = tool_calls_to_check
             if tools_to_check:
                 inputs["tools"] = tools_to_check
             original_structured_messages: Final = structured_messages
@@ -529,6 +543,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             )
 
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
+            guardrailed_tool_calls: Final = guardrailed_inputs.get("tool_calls", [])
             guardrailed_tools: Final = guardrailed_inputs.get("tools")
             if guardrailed_tools is not None:
                 # Convert tools back from OpenAI format to Anthropic format
@@ -576,10 +591,68 @@ class AnthropicMessagesHandler(BaseTranslation):
                     responses=guardrailed_texts,
                     scanned=scanned,
                 )
+                if guardrailed_tool_calls:
+                    self._apply_guardrail_responses_to_input_tool_calls(
+                        messages=messages,
+                        tool_calls=guardrailed_tool_calls,
+                        targets=tool_call_targets,
+                    )
 
         verbose_proxy_logger.debug("Anthropic Messages: Processed input messages: %s", messages)
 
         return data
+
+    @staticmethod
+    def _tool_call_field(tool_call: object, field: str) -> object:
+        if isinstance(tool_call, Mapping):
+            return tool_call.get(field)
+        return getattr(tool_call, field, None)
+
+    @classmethod
+    def _tool_call_to_anthropic_block(cls, tool_call: object) -> dict[str, object] | None:
+        tool_id: Final = cls._tool_call_field(tool_call, "id")
+        function: Final = cls._tool_call_field(tool_call, "function")
+        name: Final = cls._tool_call_field(function, "name")
+        arguments: Final = cls._tool_call_field(function, "arguments")
+        if not isinstance(tool_id, str) or not isinstance(name, str):
+            return None
+
+        if isinstance(arguments, str):
+            try:
+                tool_input: Final = json.loads(arguments)
+            except json.JSONDecodeError:
+                return None
+        else:
+            tool_input = arguments
+        if not isinstance(tool_input, dict):
+            return None
+
+        block: Final[dict[str, object]] = {
+            "type": "tool_use",
+            "id": tool_id,
+            "name": name,
+            "input": tool_input,
+        }
+        caller: Final = cls._tool_call_field(tool_call, "caller")
+        if caller is not None:
+            block["caller"] = caller
+        return block
+
+    @classmethod
+    def _apply_guardrail_responses_to_input_tool_calls(
+        cls,
+        messages: Sequence[_WritableMessage],
+        tool_calls: Sequence[object],
+        targets: Sequence[ToolCallTarget],
+    ) -> None:
+        """Write guardrail-modified OpenAI tool calls back to Anthropic blocks."""
+        for tool_call, target in zip(tool_calls, targets):
+            anthropic_block = cls._tool_call_to_anthropic_block(tool_call)
+            if anthropic_block is None:
+                continue
+            content = messages[target.msg_idx].get("content")
+            if isinstance(content, list) and target.content_idx < len(content):
+                content[target.content_idx] = anthropic_block  # mutable-ok: guardrail rewrite
 
     def _hoisted_top_level_system_message(
         self, data: dict
@@ -855,6 +928,8 @@ class AnthropicMessagesHandler(BaseTranslation):
         return ExtractedInput(
             scanned=tuple(item for block in blocks for item in block.scanned),
             images=tuple(image for block in blocks for image in block.images),
+            tool_calls=tuple(tool_call for block in blocks for tool_call in block.tool_calls),
+            tool_call_targets=tuple(target for block in blocks for target in block.tool_call_targets),
         )
 
     @classmethod
@@ -873,6 +948,19 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         if scan_only_tool_results:
             return EMPTY_EXTRACTED_INPUT
+
+        if content_item.get("type") == "tool_use":
+            return ExtractedInput(
+                scanned=(),
+                images=(),
+                tool_calls=(
+                    AnthropicConfig.convert_tool_use_to_openai_format(
+                        anthropic_tool_content=dict(content_item),  # mutable-ok: conversion helper requires a dict
+                        index=content_idx,
+                    ),
+                ),
+                tool_call_targets=(ToolCallTarget(msg_idx=msg_idx, content_idx=content_idx),),
+            )
 
         text_str: Final[str | None] = content_item.get("text")
         return ExtractedInput(

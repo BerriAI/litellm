@@ -1948,6 +1948,102 @@ class TestAnthropicMessagesToolResultScanning:
         assert messages[0]["content"] == "keep me [BLOCKED]"
 
 
+class TestAnthropicMessagesToolUseScanning:
+    def _data(self, messages):
+        return {"model": "claude-sonnet-4-5", "messages": messages}
+
+    @pytest.mark.asyncio
+    async def test_historical_tool_use_is_passed_to_pre_call_guardrail(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = InputsRecordingGuardrail()
+        messages = [
+            {"role": "user", "content": "store my key"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "tu1",
+                        "name": "store_credential",
+                        "input": {"value": "secret-value"},
+                    }
+                ],
+            },
+            {"role": "user", "content": "what did you store?"},
+        ]
+
+        await handler.process_input_messages(data=self._data(messages), guardrail_to_apply=guardrail)
+
+        assert guardrail.captured_inputs is not None
+        tool_calls = guardrail.captured_inputs.get("tool_calls")
+        assert tool_calls is not None
+        assert len(tool_calls) == 1
+        assert tool_calls[0]["function"]["name"] == "store_credential"
+        assert json.loads(tool_calls[0]["function"]["arguments"]) == {"value": "secret-value"}
+
+    @pytest.mark.asyncio
+    async def test_tool_use_only_request_still_invokes_pre_call_guardrail(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = InputsRecordingGuardrail()
+        messages = [
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "tu1", "name": "run", "input": {"command": "pwd"}}],
+            }
+        ]
+
+        await handler.process_input_messages(data=self._data(messages), guardrail_to_apply=guardrail)
+
+        assert guardrail.captured_inputs is not None
+        assert guardrail.captured_inputs.get("texts") == []
+        assert guardrail.captured_inputs.get("tool_calls")
+
+    @pytest.mark.asyncio
+    async def test_scan_only_tool_results_excludes_tool_use(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = InputsRecordingGuardrail()
+        guardrail.scan_only_tool_results = True
+        messages = [
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "tu1", "name": "run", "input": {"command": "pwd"}}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "tu1", "content": "done"}],
+            },
+        ]
+
+        await handler.process_input_messages(data=self._data(messages), guardrail_to_apply=guardrail)
+
+        assert guardrail.captured_inputs is not None
+        assert guardrail.captured_inputs.get("tool_calls") is None
+
+    @pytest.mark.asyncio
+    async def test_guardrail_tool_call_rewrite_is_written_back_to_tool_use(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = ToolCallRewritingGuardrail()
+        data = self._data(
+            [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "tu1",
+                            "name": "store_credential",
+                            "input": {"value": "secret-value"},
+                        }
+                    ],
+                }
+            ]
+        )
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert data["messages"][0]["content"][0]["input"] == {"value": "[MASKED]"}
+
+
 class InputsRecordingGuardrail(MockCanaryMaskingGuardrail):
     def __init__(self):
         super().__init__(guardrail_name="scan-only-capture")
@@ -1962,6 +2058,26 @@ class InputsRecordingGuardrail(MockCanaryMaskingGuardrail):
     ) -> GenericGuardrailAPIInputs:
         self.captured_inputs = inputs
         return await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+
+
+class ToolCallRewritingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        tool_calls = inputs.get("tool_calls")
+        if not tool_calls:
+            return inputs
+        rewritten = inputs.copy()
+        rewritten_call = dict(tool_calls[0])
+        rewritten_function = dict(rewritten_call["function"])
+        rewritten_function["arguments"] = json.dumps({"value": "[MASKED]"})
+        rewritten_call["function"] = rewritten_function
+        rewritten["tool_calls"] = [rewritten_call]
+        return rewritten
 
 
 class StructuredMessagesRewritingGuardrail(CustomGuardrail):
