@@ -11,9 +11,9 @@ import json
 from collections.abc import Mapping
 from typing import Final, SupportsInt, TypeAlias, cast  # noqa: TID251  # int() re-checks the cast below at runtime
 
-from litellm.constants import RESPONSES_SSE_MAX_CONTENT_INDEX, STREAM_SSE_DONE_STRING
+from litellm.constants import STREAM_SSE_DONE_STRING
 
-_MAX_CONTENT_INDEX: Final = RESPONSES_SSE_MAX_CONTENT_INDEX
+_MAX_CONTENT_INDEX: Final = 1024
 
 _ConvertibleToInt: TypeAlias = SupportsInt | str
 

@@ -20,7 +20,6 @@ import litellm
 from litellm.constants import (
     EMPTY_MAPPING,
     LITELLM_MAX_STREAMING_DURATION_SECONDS,
-    RESPONSES_SSE_MAX_CONTENT_INDEX,
     STREAM_SSE_DONE_STRING,
 )
 from litellm.exceptions import MidStreamFallbackError, RateLimitError
@@ -139,6 +138,7 @@ def _typed_gets_litellm_params(fn: _GetsLitellmParams) -> _GetsLitellmParams:
 
 _SHOULD_STORE_RESULT_IN_CACHE_ATTR: Final = "_should_store_result_in_cache"
 _UNMASK_PII_TEXT_ATTR: Final = "_unmask_pii_text"
+_MAX_CONTENT_INDEX: Final = 1024
 
 
 def _load_json_object(payload: str | bytes) -> dict[str, object]:
@@ -726,7 +726,7 @@ class BaseResponsesAPIStreamingIterator:
                 and _text_output_index not in self._streamed_output_items
             ):
                 _content_index: Final = getattr(chunk, "content_index", 0) or 0
-                if 0 <= _content_index <= RESPONSES_SSE_MAX_CONTENT_INDEX:
+                if 0 <= _content_index <= _MAX_CONTENT_INDEX:
                     _item_id: Final = getattr(chunk, "item_id", None) or f"msg_{_text_output_index}"
                     _existing: Final = self._streamed_text_only_items.get(_text_output_index)
                     _existing_content: Final = list(  # mutable-ok: copy existing content for slot replacement
