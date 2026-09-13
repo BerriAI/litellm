@@ -20,6 +20,7 @@ from itertools import chain, repeat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, overload, runtime_checkable
 
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_proxy_logger
@@ -188,7 +189,7 @@ def _is_client_tool_use(block: Mapping[str, object]) -> bool:
         block.get("type") == "tool_use"
         and isinstance(block.get("id"), str)
         and isinstance(block.get("name"), str)
-        and isinstance(block.get("input"), Mapping)
+        and isinstance(block.get("input"), dict)
     )
 
 
@@ -229,22 +230,19 @@ def _write_back_message_text(message: _WritableMessage, target: MessageTextTarge
             assert_never(target)
 
 
+_TOOL_USE_INPUT_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
 def _write_back_tool_use(message: _WritableMessage, target: ToolUseInputTarget, shape: _ToolCallShape) -> None:
     content: Final = message.get("content", None)
     block: Final = content[target.content_idx] if isinstance(content, list) else None
     if not isinstance(block, dict):
         return
     try:
-        rewritten_input: Final = json.loads(shape.arguments)
-    except json.JSONDecodeError:
+        rewritten_input: Final = _TOOL_USE_INPUT_ADAPTER.validate_json(shape.arguments)
+    except ValidationError:
         verbose_proxy_logger.warning(
-            "Anthropic Messages: guardrail returned non-JSON arguments for tool_use %s; keeping its input",
-            block.get("id"),
-        )
-        return
-    if not isinstance(rewritten_input, dict):
-        verbose_proxy_logger.warning(
-            "Anthropic Messages: guardrail returned non-object arguments for tool_use %s; keeping its input",
+            "Anthropic Messages: guardrail returned arguments that are not a JSON object for tool_use %s; keeping its input",
             block.get("id"),
         )
         return
@@ -1113,11 +1111,11 @@ class AnthropicMessagesHandler(BaseTranslation):
         messages: Sequence[_WritableMessage],
         scanned_tool_calls: tuple[ScannedToolCall, ...],
         pre_guardrail_tool_calls: tuple[_ToolCallShape, ...],
-        returned_tool_calls: object,
+        returned_tool_calls: Sequence[object] | None,
     ) -> None:
         post_guardrail_tool_calls: Final = _tool_call_shapes(
             returned_tool_calls
-            if isinstance(returned_tool_calls, list) and len(returned_tool_calls) == len(pre_guardrail_tool_calls)
+            if returned_tool_calls is not None and len(returned_tool_calls) == len(pre_guardrail_tool_calls)
             else tuple(item.tool_call for item in scanned_tool_calls)
         )
         for item, before, after in zip(scanned_tool_calls, pre_guardrail_tool_calls, post_guardrail_tool_calls):
