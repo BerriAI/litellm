@@ -18441,8 +18441,7 @@ async def test_flush_gcs_reports_the_failed_upload_count_from_the_registered_log
     assert await flush_gcs_and_describe_failures(_gcs_logger_whose_flush_reports(sent=2, failed=0)) is None
 
 
-@pytest.mark.asyncio
-async def test_key_logging_marks_the_key_unhealthy_when_the_gcs_flush_leaves_events_undelivered():
+async def _key_logging_status_after_gcs_flush(sent: int, failed: int) -> LoggingCallbackStatus:
     from starlette.requests import Request as StarletteRequest
 
     from litellm.proxy.management_endpoints.key_management_endpoints import test_key_logging
@@ -18455,13 +18454,27 @@ async def test_key_logging_marks_the_key_unhealthy_when_the_gcs_flush_leaves_eve
         patch("litellm.proxy.proxy_server.proxy_config", _default_team_gcs_proxy_config("team-gcs")),  # test-quality-ok: test_key_logging reads the module-level proxy config
         patch(  # test-quality-ok: the registered logger is a process-wide registry, not an injectable
             "litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class",
-            return_value=_gcs_logger_whose_flush_reports(sent=1, failed=3),
+            return_value=_gcs_logger_whose_flush_reports(sent=sent, failed=failed),
         ),
     ):
-        status = await test_key_logging(user_api_key_dict=caller, request=request, logging_callbacks=("gcs_bucket",))
+        return await test_key_logging(user_api_key_dict=caller, request=request, logging_callbacks=("gcs_bucket",))
+
+
+@pytest.mark.asyncio
+async def test_key_logging_marks_the_key_unhealthy_when_the_gcs_flush_leaves_events_undelivered():
+    status = await _key_logging_status_after_gcs_flush(sent=1, failed=3)
 
     assert status["status"] == "unhealthy"
     assert "GCS upload failed for 3 event(s), 1 uploaded" in (status["details"] or "")
+
+
+@pytest.mark.asyncio
+async def test_key_logging_stays_healthy_when_the_gcs_flush_delivers_every_event():
+    status = await _key_logging_status_after_gcs_flush(sent=1, failed=0)
+
+    assert status["status"] == "healthy"
+    assert status["callbacks"] == ("gcs_bucket",)
+    assert "Manually check if logs were sent to gcs_bucket" in (status["details"] or "")
 
 
 @pytest.mark.asyncio

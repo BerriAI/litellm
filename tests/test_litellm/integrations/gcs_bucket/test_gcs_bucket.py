@@ -19,6 +19,7 @@ class _FakeUploadGCSLogger(GCSBucketLogger):
             super().__init__(bucket_name="test-bucket")
         self.log_queue = asyncio.Queue(maxsize=queue_maxsize)
         self.failing_ids: frozenset[str] = frozenset()
+        self.arriving_during_upload: tuple[str, ...] = ()
         self.uploaded: list[list[str]] = []
 
     async def enqueue(self, request_id: str) -> None:
@@ -44,6 +45,8 @@ class _FakeUploadGCSLogger(GCSBucketLogger):
             if isinstance(logging_payload, str)
             else [logging_payload["id"]]
         )
+        for request_id in self.arriving_during_upload:
+            await self.enqueue(request_id)
         if self.failing_ids.intersection(ids):
             raise RuntimeError("storage.googleapis.com returned 404")
         self.uploaded.append(ids)
@@ -95,6 +98,20 @@ async def test_enqueue_on_a_full_queue_whose_flush_failed_drops_the_oldest_event
     await logger.enqueue("req-3")
 
     assert logger.queued_ids() == ["req-2", "req-3"]
+
+
+@pytest.mark.asyncio
+async def test_failed_batch_is_dropped_when_new_events_filled_the_queue_during_the_upload():
+    logger = _FakeUploadGCSLogger(queue_maxsize=2)
+    logger.failing_ids = frozenset({"req-1"})
+    logger.arriving_during_upload = ("req-3", "req-4")
+    await logger.enqueue("req-1")
+    await logger.enqueue("req-2")
+
+    result = await logger.flush_queue_and_report()
+
+    assert result == GCSFlushResult(sent=0, failed=2)
+    assert logger.queued_ids() == ["req-3", "req-4"]
 
 
 @pytest.mark.asyncio
