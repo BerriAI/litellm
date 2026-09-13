@@ -7,7 +7,7 @@ so this implementation skips the embedding step and directly uploads files.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Final, cast
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -83,7 +83,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         """
         vector_store_id = self.vector_store_config.get("vector_store_id")
 
-        vector_store_config: Final = cast(dict[str, Any], self.vector_store_config)
+        vector_store_config: Final = self.vector_store_config
 
         # Get API credentials
         api_key: Final = cast(str | None, vector_store_config.get("api_key")) or GeminiModelInfo.get_api_key()
@@ -228,7 +228,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         url: Final = f"{api_base}/upload/v1beta/{vector_store_id}:uploadToFileSearchStore"
 
         # Build request body with chunking config and metadata if provided
-        request_body: Final[dict[str, Any]] = {"displayName": filename}
+        request_body: Final[dict[str, object]] = {"displayName": filename}
 
         # Add chunking configuration if provided
         chunking_strategy: Final = self.chunking_strategy
@@ -244,7 +244,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
 
         # Add custom metadata if provided in vector_store_config
         custom_metadata: Final = cast(
-            list[dict[str, Any]] | None,
+            list[dict[str, object]] | None,
             self.vector_store_config.get("custom_metadata"),
         )
         if custom_metadata:

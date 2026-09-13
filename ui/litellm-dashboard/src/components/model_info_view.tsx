@@ -53,6 +53,7 @@ interface ModelInfoViewProps {
   accessToken: string | null;
   userID: string | null;
   userRole: string | null;
+  isViewOnly: boolean;
   onModelUpdate?: (updatedModel: any) => void;
   modelAccessGroups: string[] | null;
 }
@@ -117,6 +118,7 @@ export default function ModelInfoView({
   accessToken,
   userID,
   userRole,
+  isViewOnly,
   onModelUpdate,
   modelAccessGroups,
 }: ModelInfoViewProps) {
@@ -167,7 +169,7 @@ export default function ModelInfoView({
   // Keep modelData variable name for backwards compatibility
   const modelData = transformedModelData;
 
-  const canEditModel = canModifyModel({ userRole, userID }, teams ?? null, {
+  const canEditModel = canModifyModel({ userRole, userID, isViewOnly }, teams ?? null, {
     teamId: modelData?.model_info?.team_id,
     isDbModel: modelData?.model_info?.db_model === true,
   });

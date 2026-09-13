@@ -9,7 +9,7 @@ The actual message transformation reuses OpenAIGPTConfig since Gemma uses OpenAI
 """
 
 from collections.abc import Callable
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 
@@ -22,6 +22,11 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
+
+if TYPE_CHECKING:
+    import tiktoken
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class VertexGemmaConfig(OpenAIGPTConfig):
@@ -210,7 +215,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         custom_prompt_dict: dict,
         model_response: ModelResponse,
         print_verbose: Callable,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         optional_params: dict,
         acompletion: bool,
         litellm_params: dict,
@@ -265,12 +270,12 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         api_key: str,
         model_response: ModelResponse,
         print_verbose: Callable,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         optional_params: dict,
         litellm_params: dict,
         client: HTTPHandler | httpx.Client | None = None,
         timeout: float | httpx.Timeout | None = None,
-        encoding: Any = None,
+        encoding: "tiktoken.Encoding | None" = None,
     ):
         """Synchronous completion request"""
         from litellm.utils import convert_to_model_response_object
@@ -355,12 +360,12 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         api_key: str,
         model_response: ModelResponse,
         print_verbose: Callable,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         optional_params: dict,
         litellm_params: dict,
         client: AsyncHTTPHandler | httpx.AsyncClient | None = None,
         timeout: float | httpx.Timeout | None = None,
-        encoding: Any = None,
+        encoding: "tiktoken.Encoding | None" = None,
     ):
         """Asynchronous completion request"""
         from litellm.utils import convert_to_model_response_object

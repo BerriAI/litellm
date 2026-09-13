@@ -5,6 +5,8 @@ export interface TeamAccessGroupModelGrant {
   access_group_id: string;
   access_group_name: string;
   models: string[];
+  mcp_server_ids?: string[];
+  agent_ids?: string[];
 }
 
 export type TeamModelBadgeKind = "all-proxy" | "no-default" | "direct" | "access-group";
@@ -19,7 +21,7 @@ export function normalizeTeamModelSelection(models: string[] | undefined): strin
   return models && models.length > 0 ? models : [NO_DEFAULT_MODELS];
 }
 
-const describeGroups = (names: string[]): string =>
+export const describeGroups = (names: string[]): string =>
   names.length > 1 ? `access groups ${names.join(", ")}` : `access group ${names[0]}`;
 
 export function computeTeamModelBadges(

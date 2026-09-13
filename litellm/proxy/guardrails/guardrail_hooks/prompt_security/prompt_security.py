@@ -4,10 +4,12 @@ import os
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
+import httpx
 from fastapi import HTTPException
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.exceptions import Timeout as LiteLLMTimeout
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -22,6 +24,9 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+
+
+_SANITIZE_FILE_FAIL_OPEN_TIMEOUT_SECONDS: Final = 30.0
 
 
 class PromptSecurityGuardrailMissingSecrets(Exception):
@@ -63,6 +68,13 @@ class _SanitizeStatusResponse(TypedDict, total=False):
     metadata: ReadOnly[_SanitizeMetadata]
 
 
+class _SanitizeResult(TypedDict):
+    action: ReadOnly[str]
+    content: ReadOnly[str | None]
+    metadata: ReadOnly[_SanitizeMetadata]
+    violations: ReadOnly[Sequence[str]]
+
+
 class PromptSecurityGuardrail(CustomGuardrail):
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
@@ -79,6 +91,9 @@ class PromptSecurityGuardrail(CustomGuardrail):
         user: str | None = None,
         system_prompt: str | None = None,
         check_tool_results: bool | None = None,
+        file_sanitization_timeout: float = _SANITIZE_FILE_FAIL_OPEN_TIMEOUT_SECONDS,
+        file_sanitization_fail_open: bool | None = None,
+        block_on_file_modify: bool | None = None,
         **kwargs,
     ):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
@@ -108,6 +123,9 @@ class PromptSecurityGuardrail(CustomGuardrail):
         # Configuration for file sanitization
         self.max_poll_attempts = 30  # Maximum number of polling attempts
         self.poll_interval = 2  # Seconds between polling attempts
+        self.file_sanitization_timeout = file_sanitization_timeout
+        self.file_sanitization_fail_open = file_sanitization_fail_open is not False
+        self.block_on_file_modify = block_on_file_modify is not False
 
         super().__init__(**kwargs)
 
@@ -356,13 +374,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
                     result = await self.sanitize_file_content(
                         file_data, filename, user_api_key_alias=user_api_key_alias
                     )
-
-                    if result.get("action") == "block":
-                        violations = result.get("violations", [])
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Image blocked by Prompt Security. Violations: {', '.join(violations)}",
-                        )
+                    self._raise_if_file_blocked(result, "Image")
                 except HTTPException:
                     raise
                 except Exception as e:
@@ -392,11 +404,44 @@ class PromptSecurityGuardrail(CustomGuardrail):
         file_data: bytes,
         filename: str,
         user_api_key_alias: str | None = None,
-    ) -> dict:
+    ) -> _SanitizeResult:
         """
         Sanitize file content using Prompt Security API.
         Returns: dict with keys 'action', 'content', 'metadata'
         """
+        try:
+            return await asyncio.wait_for(
+                self._sanitize_file_content(file_data, filename, user_api_key_alias),
+                timeout=self.file_sanitization_timeout,
+            )
+        except (asyncio.TimeoutError, httpx.TimeoutException, LiteLLMTimeout) as exc:
+            if not self.file_sanitization_fail_open:
+                verbose_proxy_logger.error(
+                    "Prompt Security Guardrail: file sanitization for %s timed out with %s; failing closed",
+                    filename,
+                    type(exc).__name__,
+                )
+                raise HTTPException(status_code=408, detail="File sanitization timeout") from exc
+
+            verbose_proxy_logger.error(
+                "Prompt Security Guardrail: file sanitization for %s timed out with %s; failing open",
+                filename,
+                type(exc).__name__,
+            )
+            fail_open_result: Final[_SanitizeResult] = {
+                "action": "allow",
+                "content": None,
+                "metadata": {},
+                "violations": (),
+            }
+            return fail_open_result
+
+    async def _sanitize_file_content(
+        self,
+        file_data: bytes,
+        filename: str,
+        user_api_key_alias: str | None,
+    ) -> _SanitizeResult:
         headers: Final = {"APP-ID": self.api_key}
         if user_api_key_alias:
             headers["X-LiteLLM-Key-Alias"] = user_api_key_alias
@@ -479,6 +524,17 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
         raise HTTPException(status_code=408, detail="File sanitization timeout")
 
+    def _raise_if_file_blocked(self, sanitization_result: _SanitizeResult, resource_name: str) -> None:
+        action: Final = sanitization_result.get("action")
+        if action != "block" and not (action == "modify" and self.block_on_file_modify):
+            return
+
+        violations: Final = sanitization_result.get("violations", ())
+        raise HTTPException(
+            status_code=400,
+            detail=f"{resource_name} blocked by Prompt Security. Violations: {', '.join(violations)}",
+        )
+
     async def _process_image_url_item(self, item: dict, user_api_key_alias: str | None) -> dict:
         """Process and sanitize image_url items."""
         image_url_data: Final = item.get("image_url", {})
@@ -498,13 +554,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 file_data, filename, user_api_key_alias=user_api_key_alias
             )
             action: Final = sanitization_result.get("action")
-
-            if action == "block":
-                violations: Final = sanitization_result.get("violations", [])
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"File blocked by Prompt Security. Violations: {', '.join(violations)}",
-                )
+            self._raise_if_file_blocked(sanitization_result, "File")
 
             if action == "modify":
                 sanitized_content: Final = sanitization_result.get("content", "")
@@ -566,13 +616,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 file_data, filename, user_api_key_alias=user_api_key_alias
             )
             action: Final = sanitization_result.get("action")
-
-            if action == "block":
-                violations: Final = sanitization_result.get("violations", [])
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Document blocked by Prompt Security. Violations: {', '.join(violations)}",
-                )
+            self._raise_if_file_blocked(sanitization_result, "Document")
 
             if action == "modify":
                 sanitized_content: Final = sanitization_result.get("content", "")

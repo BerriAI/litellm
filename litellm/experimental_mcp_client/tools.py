@@ -1,14 +1,22 @@
 import json
 from typing import Final, Literal
 
+import anyio
 from mcp import ClientSession
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
+from mcp.types import PaginatedRequestParams
 from mcp.types import Tool as MCPTool
 from openai.types.chat import ChatCompletionToolParam
 from openai.types.responses.function_tool_param import FunctionToolParam
 from openai.types.shared_params.function_definition import FunctionDefinition
 
+from litellm._logging import verbose_logger
+from litellm.constants import (
+    MCP_CLIENT_TIMEOUT,
+    MCP_TOOL_LISTING_MAX_PAGES,
+    MCP_TOOL_LISTING_TIMEOUT,
+)
 from litellm.types.llms.anthropic import AnthropicMessagesTool
 from litellm.types.utils import ChatCompletionMessageToolCall
 
@@ -90,6 +98,64 @@ def transform_mcp_tool_to_anthropic_tool(mcp_tool: MCPTool) -> AnthropicMessages
     )
 
 
+async def list_tools_with_pagination(
+    session: ClientSession, listing_deadline: float | None = None
+) -> list[MCPTool]:  # mutable-ok: list return contract
+    """Collect tools from every tools/list page by following nextCursor.
+
+    Stops and returns the tools collected so far when the upstream repeats a
+    cursor, the page cap is reached, or the whole-walk deadline expires, so a
+    buggy or slow upstream yields a partial catalog instead of an error.
+    listing_deadline overrides the default whole-walk deadline; callers with a
+    per-server timeout above the global default pass it through here.
+    """
+    tools: Final[list[MCPTool]] = []  # mutable-ok: accumulates each page's tools
+    seen_cursors: Final[set[str]] = set()  # mutable-ok: guards against cursor loops
+    cursor: str | None = None  # rebind-ok: advances to each page's nextCursor
+    # The per-request session read timeout restarts on every page, so a multi-page
+    # walk needs its own overall deadline. max() keeps the pre-pagination guarantee
+    # that a single page slower than the listing timeout but within the client
+    # timeout still succeeds.
+    effective_deadline: Final = (
+        listing_deadline if listing_deadline is not None else max(MCP_CLIENT_TIMEOUT, MCP_TOOL_LISTING_TIMEOUT)
+    )
+
+    with anyio.move_on_after(effective_deadline):
+        for _ in range(MCP_TOOL_LISTING_MAX_PAGES):
+            result = (
+                await session.list_tools()
+                if cursor is None
+                else await session.list_tools(params=PaginatedRequestParams(cursor=cursor))
+            )
+            tools.extend(result.tools)
+
+            next_cursor = getattr(result, "nextCursor", None)
+            if not isinstance(next_cursor, str) or not next_cursor:
+                return tools
+            if next_cursor in seen_cursors:
+                verbose_logger.warning(
+                    "MCP server repeated a tools/list cursor while listing tools; returning %s tools collected so far",
+                    len(tools),
+                )
+                return tools
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+
+        verbose_logger.warning(
+            "MCP server tools/list pagination exceeded the maximum of %s pages; returning %s tools collected so far",
+            MCP_TOOL_LISTING_MAX_PAGES,
+            len(tools),
+        )
+        return tools
+
+    verbose_logger.warning(
+        "MCP server tools/list pagination exceeded the %s second listing deadline; returning %s tools collected so far",
+        effective_deadline,
+        len(tools),
+    )
+    return tools
+
+
 async def load_mcp_tools(
     session: ClientSession, format: Literal["mcp", "openai"] = "mcp"
 ) -> list[MCPTool] | list[ChatCompletionToolParam]:
@@ -103,10 +169,12 @@ async def load_mcp_tools(
 
     If format is set to "openai", the tools are converted to OpenAI API compatible tools.
     """
-    tools: Final = await session.list_tools()
+    tools: Final = await list_tools_with_pagination(session)
     if format == "openai":
-        return [transform_mcp_tool_to_openai_tool(mcp_tool=tool) for tool in tools.tools]
-    return tools.tools
+        return [  # mutable-ok: public API returns a list
+            transform_mcp_tool_to_openai_tool(mcp_tool=tool) for tool in tools
+        ]
+    return tools
 
 
 ########################################################

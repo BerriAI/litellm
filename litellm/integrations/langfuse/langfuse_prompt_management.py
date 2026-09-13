@@ -2,6 +2,7 @@
 Call Hook for LiteLLM Proxy which allows Langfuse prompt management.
 """
 
+import inspect
 import os
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
@@ -108,6 +109,9 @@ def langfuse_client_init(
             verify=get_ssl_configuration(),
             cert=os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate),
         )
+
+    if "environment" in inspect.signature(Langfuse.__init__).parameters:
+        parameters["environment"] = LangFuseLogger.resolve_deployment_environment()
 
     client: Final = Langfuse(**parameters)
 

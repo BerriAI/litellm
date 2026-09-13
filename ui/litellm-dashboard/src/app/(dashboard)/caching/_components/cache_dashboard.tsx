@@ -35,6 +35,11 @@ const REQUEST_SERIES = {
   failed: "Failed requests",
 } as const;
 
+const UNKNOWN_CALL_TYPE = "Unknown";
+
+const UNKNOWN_CALL_TYPE_NOTE =
+  "Unknown groups spend logs that recorded no endpoint. Older proxy versions wrote those for requests rejected before routing, so they are not necessarily LLM API requests.";
+
 const toChartDatum = (group: CacheActivityGroup) => ({
   name: group.call_type,
   [REQUEST_SERIES.apiRequests]: group.api_requests,
@@ -103,6 +108,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
   const uniqueApiKeys = activity?.filter_options.key_aliases ?? [];
   const uniqueModels = activity?.filter_options.models ?? [];
   const chartData = (activity?.groups ?? []).map(toChartDatum);
+  const hasUnknownGroup = (activity?.groups ?? []).some((group) => group.call_type === UNKNOWN_CALL_TYPE);
   const activeDrilldownCallType = resolveDrilldownCallType(errorDrilldownCallType, activity?.groups ?? []);
 
   const handleRefreshClick = () => {
@@ -288,6 +294,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                 <p className="text-sm text-muted-foreground">
                   Click a red failed-requests segment to see which error codes caused those failures.
                 </p>
+                {hasUnknownGroup && <p className="mt-1 text-sm text-muted-foreground">{UNKNOWN_CALL_TYPE_NOTE}</p>}
                 <BarChart
                   data={chartData}
                   stack={true}

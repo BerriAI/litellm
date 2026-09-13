@@ -3,6 +3,7 @@ Domain models for LiteLLM backend.
 """
 
 from litellm.models.access_group import LiteLLM_AccessGroupTable
+from litellm.models.autorouter_session import LiteLLM_AutoRouterSession
 from litellm.models.budget import (
     LiteLLM_BudgetTable,
     LiteLLM_BudgetTableFull,
@@ -40,6 +41,7 @@ __all__ = [
     "CredentialBase",
     "CredentialItem",
     "LiteLLM_AccessGroupTable",
+    "LiteLLM_AutoRouterSession",
     "LiteLLM_BudgetTable",
     "LiteLLM_BudgetTableFull",
     "LiteLLM_Config",

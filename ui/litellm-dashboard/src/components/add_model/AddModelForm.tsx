@@ -25,7 +25,6 @@ import {
 } from "../common_components/MountedFormField";
 import type { Team } from "../key_team_helpers/key_list";
 import { type CredentialItem, type ProviderCreateInfo, modelAvailableCall } from "../networking";
-import { Providers } from "../provider_info_helpers";
 import { ProviderLogo } from "../molecules/models/ProviderLogo";
 import AccessGroupTagsCombobox from "./AccessGroupTagsCombobox";
 import AdvancedSettings from "./advanced_settings";
@@ -42,11 +41,11 @@ interface AddModelFormProps {
   registry: MountRegistry;
   mountedValues: () => MountedFormValues;
   handleOk: () => Promise<boolean>;
-  selectedProvider: Providers;
-  setSelectedProvider: (provider: Providers) => void;
+  selectedProvider: string | null;
+  setSelectedProvider: (provider: string | null) => void;
   providerModels: string[];
-  setProviderModelsFn: (provider: Providers) => void;
-  getPlaceholder: (provider: Providers) => string;
+  setProviderModelsFn: (provider: string | null) => void;
+  getPlaceholder: (provider: string) => string;
   showAdvancedSettings: boolean;
   setShowAdvancedSettings: (show: boolean) => void;
   teams: Team[] | null;
@@ -82,7 +81,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   // Using a unique ID to force the ConnectionErrorDisplay to remount and run a fresh test
   const [connectionTestId, setConnectionTestId] = useState<string>("");
 
-  const { accessToken, userRole, premiumUser, userId } = useAuthorized();
+  const { accessToken, userRole, premiumUser, userId, isViewOnly } = useAuthorized();
   const {
     data: providerMetadata,
     isLoading: isProviderMetadataLoading,
@@ -140,7 +139,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
     [credentials],
   );
 
-  const applyProviderSelection = (provider: Providers) => {
+  const applyProviderSelection = (provider: string | null) => {
     setSelectedProvider(provider);
     setProviderModelsFn(provider);
     form.setValue("model", []);
@@ -157,7 +156,10 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   const isTeamAdmin = isUserTeamAdminForAnyTeam(teams, userId);
   // Same owner the Auto-Routers tab uses, so the two creation forms cannot disagree about
   // who has to name a team. This form is only reachable when creation is allowed at all.
-  const createScope = modelCreationScope({ userRole, userID: userId }, { teams, disabledForInternalUsers: false });
+  const createScope = modelCreationScope(
+    { userRole, userID: userId, isViewOnly },
+    { teams, disabledForInternalUsers: false },
+  );
   const requiresTeamScope = createScope === "team-required";
 
   return (
@@ -224,10 +226,10 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                             options={providerOptions}
                             emptyText={providerMetadataErrorText ?? "No providers found"}
                             placeholder={isProviderMetadataLoading ? "Loading providers..." : "Select a provider"}
-                            value={(control.value as string | undefined) ?? ""}
+                            value={typeof control.value === "string" ? control.value : null}
                             onValueChange={(value) => {
                               control.onChange(value);
-                              applyProviderSelection(value as Providers);
+                              applyProviderSelection(value);
                             }}
                           />
                         )}
@@ -476,7 +478,6 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
             />
           )}
           <DialogFooter>
-            {" "}
             <Button
               variant="outline"
               onClick={() => {
@@ -486,7 +487,6 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
             >
               Close
             </Button>
-            , ]
           </DialogFooter>
         </DialogContent>
       </Dialog>

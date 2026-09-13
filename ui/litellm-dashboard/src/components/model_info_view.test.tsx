@@ -87,6 +87,7 @@ describe("ModelInfoView", () => {
     accessToken: "test-token",
     userID: "123",
     userRole: "Admin",
+    isViewOnly: false,
     onModelUpdate: vi.fn(),
     modelAccessGroups: ["group1", "group2"],
   };
@@ -326,6 +327,16 @@ describe("ModelInfoView", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /delete model/i })).toBeInTheDocument();
     });
+  });
+
+  // A proxy_admin_viewer session reads "Admin" through effectiveSessionRole, but the update
+  // and delete endpoints 403 it, so the write buttons must not be offered.
+  it("should disable delete and update buttons for a view-only admin session", async () => {
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} isViewOnly={true} />, { wrapper });
+    await waitFor(() => {
+      expect(screen.getByTestId("delete-model-button")).toBeDisabled();
+    });
+    expect(screen.getByTestId("update-api-key-button")).toBeDisabled();
   });
 
   it("should disable delete button when model is not a DB model", async () => {
@@ -1718,5 +1729,77 @@ describe("ModelInfoView", () => {
         expect(payload.litellm_params.cache_control_injection_points).toEqual([{ location: "message", index: "2" }]);
       });
     });
+
+    const setInputCost = (value: string) => {
+      fireEvent.change(screen.getByPlaceholderText("Enter input cost"), { target: { value } });
+    };
+
+    it("carries an edited input cost and the model identifier onto the wire", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+      setInputCost("5");
+      const payload = await save(user);
+
+      expect(mockModelPatchUpdateCall.mock.calls[0][2]).toBe("123");
+      expect(payload.litellm_params.input_cost_per_token).toBe(5 / 1_000_000);
+    });
+
+    it.fails(
+      "sends only the edited input cost (expected to fail until the forms revamp, tri-state PATCH tracker)",
+      async () => {
+        const user = userEvent.setup();
+        await enterEditMode(user);
+        setInputCost("5");
+        const payload = await save(user);
+
+        expect(payload).toStrictEqual({ litellm_params: { input_cost_per_token: 5 / 1_000_000 } });
+      },
+    );
+
+    const savePayloadAfterCostEditOnResolvedModel = async () => {
+      const resolved = {
+        ...defaultModelData,
+        model_info: {
+          ...defaultModelData.model_info,
+          max_input_tokens: 128_000,
+          mode: "chat",
+          supports_vision: true,
+          supports_function_calling: true,
+        },
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [resolved] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [resolved] });
+      const user = userEvent.setup();
+      await enterEditMode(user);
+      setInputCost("5");
+      return save(user);
+    };
+
+    it.fails(
+      "leaves max_input_tokens off the wire when only the input cost is edited (expected to fail until the forms revamp, tri-state PATCH tracker)",
+      async () => {
+        const payload = await savePayloadAfterCostEditOnResolvedModel();
+
+        expect(payload.model_info).not.toHaveProperty("max_input_tokens");
+      },
+    );
+
+    it.fails(
+      "leaves mode off the wire when only the input cost is edited (expected to fail until the forms revamp, tri-state PATCH tracker)",
+      async () => {
+        const payload = await savePayloadAfterCostEditOnResolvedModel();
+
+        expect(payload.model_info).not.toHaveProperty("mode");
+      },
+    );
+
+    it.fails(
+      "leaves every supports_ capability off the wire when only the input cost is edited (expected to fail until the forms revamp, tri-state PATCH tracker)",
+      async () => {
+        const payload = await savePayloadAfterCostEditOnResolvedModel();
+
+        expect(Object.keys(payload.model_info).filter((key) => key.startsWith("supports_"))).toStrictEqual([]);
+      },
+    );
   });
 });

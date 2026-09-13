@@ -5,10 +5,11 @@ For handling OpenAI-like chat completions, like IBM WatsonX, etc.
 """
 
 import json
-from collections.abc import Callable
-from typing import Any, Final
+from collections.abc import Callable, Mapping, Sequence
+from typing import Final, TypedDict
 
 import httpx
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm import LlmProviders
@@ -23,6 +24,23 @@ from litellm.utils import CustomStreamWrapper, ProviderConfigManager
 
 from ..common_utils import OpenAILikeBase, OpenAILikeError
 from .transformation import OpenAILikeChatConfig
+
+
+class _OpenAILikeChatCompletion(TypedDict, total=False):
+    """The chat-completion JSON body an OpenAI-like provider returns for a non-streamed call."""
+
+    id: ReadOnly[str]
+    choices: ReadOnly[Sequence[Mapping[str, object]]]
+    created: ReadOnly[int]
+    model: ReadOnly[str]
+    system_fingerprint: ReadOnly[str]
+    usage: ReadOnly[Mapping[str, object]]
+    object: ReadOnly[str]
+
+
+def _fake_streamed_model_response(payload: _OpenAILikeChatCompletion) -> ModelResponse:
+    """Build the single response a fake-streamed provider call replays as one chunk."""
+    return ModelResponse(**payload)
 
 
 async def make_call(
@@ -42,9 +60,9 @@ async def make_call(
     response: Final = await client.post(api_base, headers=headers, data=data, stream=not fake_stream)
 
     if streaming_decoder is not None:
-        completion_stream: Any = streaming_decoder.aiter_bytes(response.aiter_bytes(chunk_size=1024))
+        completion_stream = streaming_decoder.aiter_bytes(response.aiter_bytes(chunk_size=1024))
     elif fake_stream:
-        model_response: Final = ModelResponse(**response.json())
+        model_response: Final = _fake_streamed_model_response(response.json())
         completion_stream = MockResponseIterator(model_response=model_response)
     else:
         completion_stream = ModelResponseIterator(streaming_response=response.aiter_lines(), sync_stream=False)
@@ -82,7 +100,7 @@ def make_sync_call(
     if streaming_decoder is not None:
         completion_stream = streaming_decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
     elif fake_stream:
-        model_response: Final = ModelResponse(**response.json())
+        model_response: Final = _fake_streamed_model_response(response.json())
         completion_stream = MockResponseIterator(model_response=model_response)
     else:
         completion_stream = ModelResponseIterator(streaming_response=response.iter_lines(), sync_stream=True)

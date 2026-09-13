@@ -860,6 +860,7 @@ def _map_bedrock_exception(
                 message=mantle_context_window_message,
                 model=model,
                 llm_provider=custom_llm_provider,
+                response=getattr(original_exception, "response", None),
             )
     if (
         "too many tokens" in error_str
@@ -873,6 +874,7 @@ def _map_bedrock_exception(
             message=f"BedrockException: Context Window Error - {error_str}",
             model=model,
             llm_provider="bedrock",
+            response=getattr(original_exception, "response", None),
         )
     elif "Conversation blocks and tool result blocks cannot be provided in the same turn." in error_str:
         raise BadRequestError(
@@ -924,12 +926,14 @@ def _map_bedrock_exception(
             message=f"BedrockException: Timeout Error - {error_str}",
             model=model,
             llm_provider="bedrock",
+            response=getattr(original_exception, "response", None),
         )
     elif "Could not process image" in error_str:
         raise litellm.InternalServerError(
             message=f"BedrockException - {error_str}",
             model=model,
             llm_provider="bedrock",
+            response=getattr(original_exception, "response", None),
         )
     elif hasattr(original_exception, "status_code"):
         if original_exception.status_code == 500:
@@ -937,10 +941,7 @@ def _map_bedrock_exception(
                 message=f"BedrockException - {original_exception.message}",
                 llm_provider="bedrock",
                 model=model,
-                response=httpx.Response(
-                    status_code=500,
-                    request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
-                ),
+                response=getattr(original_exception, "response", None),
             )
         elif original_exception.status_code == 401:
             raise AuthenticationError(
@@ -969,6 +970,7 @@ def _map_bedrock_exception(
                 model=model,
                 llm_provider=custom_llm_provider,
                 litellm_debug_info=extra_information,
+                response=getattr(original_exception, "response", None),
             )
         elif original_exception.status_code == 422:
             raise BadRequestError(
@@ -1001,6 +1003,7 @@ def _map_bedrock_exception(
                 llm_provider=custom_llm_provider,
                 litellm_debug_info=extra_information,
                 exception_status_code=original_exception.status_code,
+                response=getattr(original_exception, "response", None),
             )
 
 
@@ -2222,6 +2225,8 @@ def _map_exception_by_status(
     status_code: Final = original_exception.status_code if hasattr(original_exception, "status_code") else None
     if not isinstance(status_code, int) or status_code < 400:
         return
+    if getattr(original_exception, "status_code_is_synthesized", False):
+        return
     message: Final = f"{exception_provider} - {error_str}"
     response: Final = original_exception.response if hasattr(original_exception, "response") else None
     match status_code:
@@ -2341,6 +2346,7 @@ def exception_type(
     litellm_response_headers: Final = _get_response_headers(original_exception=original_exception)
     try:
         error_str = redact_string(str(original_exception)) if _ENABLE_SECRET_REDACTION else str(original_exception)
+        extra_information = ""
         if model or custom_llm_provider:
             if hasattr(original_exception, "message"):
                 error_str = (
@@ -2357,7 +2363,6 @@ def exception_type(
             # Common Extra information needed for all providers
             # We pass num retries, api_base, vertex_deployment etc to the exception here
             ################################################################################
-            extra_information = ""
             try:
                 _api_base: Final = litellm.get_api_base(model=model, optional_params=extra_kwargs)
                 messages: Final = litellm.get_first_chars_messages(kwargs=completion_kwargs)

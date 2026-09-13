@@ -424,17 +424,14 @@ describe("UsagePage", () => {
     // Check that key metrics are displayed
     const totalRequestElements = screen.getAllByText("Total Requests");
     expect(totalRequestElements.length).toBeGreaterThan(0);
-    expect(screen.getByText("1,500")).toBeInTheDocument();
     const successfulRequestLabelElements = screen.getAllByText("Successful Requests");
     expect(successfulRequestLabelElements.length).toBeGreaterThan(0);
-    // Successful and Failed Requests both read the gateway counter, not the
-    // spend-derived 1,450 / 50 that the same payload carries for the per-key and
-    // per-model breakdowns. They must share a source, or the tiles contradict the
-    // endpoint breakdown chart below them.
     await waitFor(() => {
       expect(screen.getAllByText("424,242").length).toBeGreaterThan(0);
     });
     expect(screen.getAllByText("909").length).toBeGreaterThan(0);
+    expect(screen.getByText("425,151")).toBeInTheDocument();
+    expect(screen.queryByText("1,500")).not.toBeInTheDocument();
     expect(screen.queryByText("1,450")).not.toBeInTheDocument();
   });
 
@@ -454,7 +451,7 @@ describe("UsagePage", () => {
 
     renderWithProviders(<UsagePage {...defaultProps} />);
     await waitFor(() => {
-      expect(screen.getAllByText("1,500").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("75,000").length).toBeGreaterThan(0);
     });
 
     await act(async () => {
@@ -464,13 +461,13 @@ describe("UsagePage", () => {
     await waitFor(() => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(2);
     });
-    expect(screen.queryByText("1,500")).not.toBeInTheDocument();
+    expect(screen.queryByText("75,000")).not.toBeInTheDocument();
 
     await act(async () => {
       releaseSecondFetch();
     });
     await waitFor(() => {
-      expect(screen.getAllByText("1,500").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("75,000").length).toBeGreaterThan(0);
     });
   });
 
@@ -485,8 +482,10 @@ describe("UsagePage", () => {
     await waitFor(() => {
       expect(screen.getAllByText("1,450").length).toBeGreaterThan(0);
     });
+    expect(screen.getByText("1,500")).toBeInTheDocument();
     expect(screen.queryByText("424,242")).not.toBeInTheDocument();
     expect(screen.queryByText("909")).not.toBeInTheDocument();
+    expect(screen.queryByText("425,151")).not.toBeInTheDocument();
     expect(screen.queryByTestId("gateway-requests-by-endpoint")).not.toBeInTheDocument();
   });
 
@@ -499,6 +498,7 @@ describe("UsagePage", () => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
     });
     expect(mockGatewayDailyActivityCall).not.toHaveBeenCalled();
+    expect(screen.getByText("1,500")).toBeInTheDocument();
     expect(screen.queryByText("424,242")).not.toBeInTheDocument();
     expect(screen.queryByTestId("gateway-requests-by-endpoint")).not.toBeInTheDocument();
   });
@@ -584,6 +584,66 @@ describe("UsagePage", () => {
       const entityUsageElements = screen.getAllByText("Entity Usage");
       expect(entityUsageElements.length).toBeGreaterThan(0);
     });
+  });
+
+  it("should withhold the tag list until it resolves so no empty state is shown while loading", async () => {
+    let resolveTagList: (tags: Record<string, unknown>) => void = () => {};
+    mockTagListCall.mockReturnValue(
+      new Promise((resolve) => {
+        resolveTagList = resolve;
+      }) as ReturnType<typeof networking.tagListCall>,
+    );
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    act(() => {
+      fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "tag" } });
+    });
+
+    const entityUsage = await screen.findByTestId("entity-usage");
+    expect(entityUsage).toHaveAttribute("data-entity-list", "null");
+
+    await act(async () => {
+      resolveTagList({});
+    });
+
+    expect(screen.getByTestId("entity-usage")).toHaveAttribute("data-entity-list", "[]");
+  });
+
+  it("should drop the previous range's tags as soon as the range changes", async () => {
+    mockTagListCall.mockResolvedValue({ "old-range-tag": { name: "old-range-tag" } } as never);
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    act(() => {
+      fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "tag" } });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("entity-usage")).toHaveAttribute(
+        "data-entity-list",
+        JSON.stringify([{ label: "old-range-tag", value: "old-range-tag" }]),
+      );
+    });
+
+    let resolveNewRange: (tags: Record<string, unknown>) => void = () => {};
+    mockTagListCall.mockReturnValue(
+      new Promise((resolve) => {
+        resolveNewRange = resolve;
+      }) as ReturnType<typeof networking.tagListCall>,
+    );
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("pick-a-different-range"));
+    });
+
+    expect(screen.getByTestId("entity-usage")).toHaveAttribute("data-entity-list", "null");
+
+    await act(async () => {
+      resolveNewRange({});
+    });
+
+    expect(screen.getByTestId("entity-usage")).toHaveAttribute("data-entity-list", "[]");
   });
 
   it("should show tag usage selector option for internal users", async () => {
@@ -692,6 +752,19 @@ describe("UsagePage", () => {
       const entityUsageElements = screen.getAllByText("Entity Usage");
       expect(entityUsageElements.length).toBeGreaterThan(0);
     });
+  });
+
+  it("should withhold the customer list while it is still loading", async () => {
+    mockUseCustomers.mockReturnValue({ data: undefined, isLoading: true, error: null } as any);
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    act(() => {
+      fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "customer" } });
+    });
+
+    const entityUsage = await screen.findByTestId("entity-usage");
+    expect(entityUsage).toHaveAttribute("data-entity-list", "null");
   });
 
   it("should show agent usage view for admins", async () => {
@@ -972,7 +1045,7 @@ describe("UsagePage", () => {
       });
 
       // Should still render the data from the paginated fallback, which lands a render after the call
-      expect(await screen.findByText("1,500")).toBeInTheDocument();
+      expect(await screen.findByText("75,000")).toBeInTheDocument();
     });
 
     it("should stop showing the previous range's paginated pages while a new range is in flight", async () => {
@@ -996,7 +1069,7 @@ describe("UsagePage", () => {
 
       renderWithProviders(<UsagePage {...defaultProps} />);
       await waitFor(() => {
-        expect(screen.getAllByText("1,500").length).toBeGreaterThan(0);
+        expect(screen.getAllByText("75,000").length).toBeGreaterThan(0);
       });
 
       await act(async () => {
@@ -1006,13 +1079,13 @@ describe("UsagePage", () => {
       await waitFor(() => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(2);
       });
-      expect(screen.queryByText("1,500")).not.toBeInTheDocument();
+      expect(screen.queryByText("75,000")).not.toBeInTheDocument();
 
       await act(async () => {
         releaseSecondAggregated();
       });
       await waitFor(() => {
-        expect(screen.getAllByText("1,500").length).toBeGreaterThan(0);
+        expect(screen.getAllByText("75,000").length).toBeGreaterThan(0);
       });
     });
 

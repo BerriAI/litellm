@@ -23,6 +23,12 @@ const GITHUB_HOST = "github.com";
 
 const SKILL_FILE_EXTENSION_REGEX = /\.(md|markdown|txt|json|ya?ml|toml)$/i;
 
+const ZIP_ARCHIVE_REGEX = /\.zip$/i;
+
+export const SHA256_REGEX = /^[0-9a-fA-F]{64}$/;
+
+export const isValidSha256 = (digest: string): boolean => digest.trim() === "" || SHA256_REGEX.test(digest.trim());
+
 // WHATWG normalizes obfuscated IPv4 (e.g. 2130706433, 0x7f.0.0.1) to dotted-decimal, so this
 // catches every IPv4 form; bracketed IPv6 is rejected separately.
 const IPV4_HOST_REGEX = /^\d{1,3}(\.\d{1,3}){3}$/;
@@ -160,15 +166,25 @@ const parseRawGitSource = (url: URL, subPath?: string): SkillSourcePreview | nul
   };
 };
 
+const parseArchiveSource = (url: URL): SkillSourcePreview => ({
+  parsed: { source: "archive", url: url.href },
+  label: `Zip archive — ${url.host}${url.pathname}`,
+  suggestedName: toKebabCase(lastSegment(url.pathname).replace(ZIP_ARCHIVE_REGEX, "")),
+});
+
 /**
- * Parse any git-accessible repository URL into a registerable skill source.
- * GitHub URLs keep their `github`/`git-subdir` shorthand; every other host is
- * treated as a raw repo URL, with an optional subfolder turning it into git-subdir.
+ * Parse any git-accessible repository URL or https zip archive URL into a registerable skill
+ * source. A `.zip` path is an `archive` source (S3, Artifactory, any static host). GitHub URLs
+ * keep their `github`/`git-subdir` shorthand; every other host is treated as a raw repo URL,
+ * with an optional subfolder turning it into git-subdir.
  */
 export const parseSkillSource = (rawUrl: string, subPath?: string): SkillSourcePreview | null => {
   const url = parseRepoUrl(rawUrl);
   if (!url) {
     return null;
+  }
+  if (ZIP_ARCHIVE_REGEX.test(url.pathname)) {
+    return parseArchiveSource(url);
   }
   if (url.hostname.replace(/^www\./, "") === GITHUB_HOST) {
     return parseGitHubSource(url, subPath);
@@ -245,7 +261,7 @@ export const getSourceDisplayText = (source: PluginSource): string => {
   if (source.source === "git-subdir" && source.url && source.path) {
     return `${source.url} @ ${source.path}`;
   }
-  if (source.source === "url" && source.url) {
+  if ((source.source === "url" || source.source === "archive") && source.url) {
     return source.url;
   }
   return "Unknown source";
@@ -258,10 +274,8 @@ export const getSourceLink = (source: PluginSource): string | null => {
   if (source.source === "github" && source.repo) {
     return `https://github.com/${source.repo}`;
   }
-  if ((source.source === "url" || source.source === "git-subdir") && source.url) {
-    return source.url;
-  }
-  return null;
+  const linksToUrl = source.source === "url" || source.source === "git-subdir" || source.source === "archive";
+  return linksToUrl && source.url ? source.url : null;
 };
 
 /**

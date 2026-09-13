@@ -292,8 +292,8 @@ class TestUnifiedGuardrailCallTypeResolution:
 
         with patch.object(
             unified_guardrail_module,
-            "endpoint_guardrail_translation_mappings",
-            {CallTypes.pass_through: mock_handler_class},
+            "load_guardrail_translation_mappings",
+            lambda: {CallTypes.pass_through: mock_handler_class},
         ):
             result = await unified.async_post_call_success_hook(
                 data=data,

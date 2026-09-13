@@ -8,8 +8,15 @@ litellm-regression-tests/tests/test_inference_endpoints.py.
 
 from __future__ import annotations
 
+from typing import Final
+
 import pytest
-from e2e_config import provider_edge_base, unique_marker
+from e2e_config import (
+    STREAM_MIN_LEAD_SECONDS,
+    provider_edge_base,
+    provider_paces_stream,
+    unique_marker,
+)
 from e2e_http import assert_client_error, require_successful_call, unwrap
 from endpoints_client import EndpointsClient, MessagesResult
 from lifecycle import ResourceManager
@@ -159,19 +166,21 @@ class TestAnthropicMessages:
         """Edge-wired like its non-streaming siblings, so record and replay both
         carry the streamed response.
 
-        Asserts the shape of the event sequence, not just that deltas and a stop
-        appeared somewhere in it: the answer arrives across several deltas, and the
-        usage event sits between the last of them and ``message_stop``. A replay that
-        coalesced the response into one buffered body could not satisfy either."""
+        Asserts what the proxy controls: the event grammar (usage between the last
+        content delta and ``message_stop``) and, on the clock, that the relay is
+        incremental. How many deltas a reply is split into is the provider's choice, so
+        the first content delta must instead reach the client well before
+        ``message_stop``, which a buffered response cannot do. Replay serves chunks back
+        to back, so only live and record runs judge the timing."""
         model, key = self._register(endpoints_client, resources)
 
         result = endpoints_client.proxy.messages_stream(
             key,
             AnthropicMessagesBody(
                 model=model,
-                max_tokens=64,
+                max_tokens=800,
                 stream=True,
-                messages=[ChatMessage(role="user", content="Count from 1 to 20, one number per line.")],
+                messages=[ChatMessage(role="user", content="Count from 1 to 200, one number per line.")],
             ),
         )
         require_successful_call(result)
@@ -186,10 +195,7 @@ class TestAnthropicMessages:
         delta_positions = [
             index for index, event in enumerate(events) if event.type == "content_block_delta"
         ]
-        assert len(delta_positions) >= 2, (
-            f"stream carried {len(delta_positions)} content deltas, so it was not "
-            f"incremental: {types}"
-        )
+        assert delta_positions, f"stream carried no content deltas: {types}"
         text = "".join(
             event.delta.text
             for event in events
@@ -208,6 +214,15 @@ class TestAnthropicMessages:
         assert delta_positions[-1] < usage_positions[0] < stop_position, (
             f"usage did not land between the last content delta and message_stop: {types}"
         )
+
+        first_delta_at: Final = result.stream_event_arrivals[delta_positions[0]]
+        stop_at: Final = result.stream_event_arrivals[stop_position]
+        if provider_paces_stream():
+            assert stop_at - first_delta_at >= STREAM_MIN_LEAD_SECONDS, (
+                f"first content delta reached the client {first_delta_at:.2f}s after the request "
+                f"and message_stop {stop_at:.2f}s after it; a relayed stream shows the first delta "
+                f"at least {STREAM_MIN_LEAD_SECONDS}s before the end, so the response was buffered"
+            )
 
     @pytest.mark.covers("llm.messages.anthropic.tool_use.nonstream.works")
     def test_messages_tool_use(

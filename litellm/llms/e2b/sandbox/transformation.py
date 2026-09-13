@@ -8,7 +8,7 @@ Talks to e2b's REST API directly over httpx (no e2b SDK dependency):
 """
 
 import json
-from typing import Final, cast
+from typing import Final
 
 import httpx
 
@@ -68,13 +68,10 @@ class E2BSandboxConfig(BaseSandboxConfig):
         if metadata:
             body["metadata"] = metadata
 
-        response: Final = cast(
-            httpx.Response,
-            await self._http(client).post(
-                url=f"{base}/sandboxes",
-                headers={"X-API-Key": key, "Content-Type": "application/json"},
-                json=body,
-            ),
+        response: Final = await self._http(client).post(
+            url=f"{base}/sandboxes",
+            headers={"X-API-Key": key, "Content-Type": "application/json"},
+            json=body,
         )
         data: Final = response.json()
 
@@ -117,14 +114,11 @@ class E2BSandboxConfig(BaseSandboxConfig):
             headers["E2B-Traffic-Access-Token"] = traffic_token
 
         url: Final = f"https://{JUPYTER_PORT}-{handle.id}.{handle.domain}/execute"
-        response: Final = cast(
-            httpx.Response,
-            await self._http(client).post(
-                url=url,
-                headers=headers,
-                json={"code": code, "context_id": None, "env_vars": env_vars},
-                stream=True,
-            ),
+        response: Final = await self._http(client).post(
+            url=url,
+            headers=headers,
+            json={"code": code, "context_id": None, "env_vars": env_vars},
+            stream=True,
         )
         lines: Final = await self._read_capped_lines(response)
         return self._parse_lines(lines)
@@ -142,12 +136,9 @@ class E2BSandboxConfig(BaseSandboxConfig):
         key: Final = api_key or handle._hidden_params.get("api_key") or self.validate_environment()
         base: Final = api_base or handle._hidden_params.get("api_base") or E2B_API_BASE
         try:
-            response: Final = cast(
-                httpx.Response,
-                await self._http(client).delete(
-                    url=f"{base}/sandboxes/{handle.id}",
-                    headers={"X-API-Key": key},
-                ),
+            response: Final = await self._http(client).delete(
+                url=f"{base}/sandboxes/{handle.id}",
+                headers={"X-API-Key": key},
             )
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:

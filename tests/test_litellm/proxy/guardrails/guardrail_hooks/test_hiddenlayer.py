@@ -1,4 +1,6 @@
 import os
+import threading
+import time
 import uuid
 from typing import List, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -6,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 from httpx import Request, Response
+import requests
 
 
 import litellm
@@ -14,6 +17,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy.guardrails.guardrail_hooks.hiddenlayer.hiddenlayer import (
     HiddenlayerGuardrail,
     HiddenlayerGuardrailV2,
+    _get_jwt,
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.types.utils import (
@@ -428,7 +432,7 @@ class TestHiddenlayerGuardrail:
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_request_with_image(self, monkeypatch: pytest.MonkeyPatch):
-        """Test apply_guardrail sends multimodal content (image) to HiddenLayer v1."""
+        """Test apply_guardrail strips images from multimodal content before sending to HiddenLayer v1."""
         monkeypatch.setenv("HIDDENLAYER_API_BASE", "https://my.hiddenlayer")
 
         guardrail = HiddenlayerGuardrail(
@@ -481,12 +485,13 @@ class TestHiddenlayerGuardrail:
                 logging_obj=logging_obj,
             )
 
-        # v1 API requires string content — multimodal list is stringified
+        # v1 API requires string content — image_url items are stripped and the
+        # remaining (text-only) content is stringified before being sent.
         mock_post.assert_called_once()
         call_kwargs = mock_post.call_args.kwargs
         sent_content = call_kwargs["json"]["input"]["messages"][0]["content"]
         assert isinstance(sent_content, str)
-        assert sent_content == str(multimodal_content)
+        assert sent_content == str([{"type": "text", "text": "how much is on this receipt?"}])
 
         # Result should be returned without error
         assert result is not None
@@ -1088,3 +1093,47 @@ class TestHiddenlayerGuardrailV2:
         config_model = HiddenlayerGuardrailV2.get_config_model()
         assert config_model is not None
         assert config_model.__name__ == "HiddenlayerGuardrailConfigModel"
+
+
+@pytest.fixture
+def hanging_auth_server():
+    """A server that accepts the connection and never answers, so only a timeout ends the call."""
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from socketserver import ThreadingMixIn
+
+    stop: threading.Event = threading.Event()
+
+    class SilentRequestHandler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self):
+            stop.wait(timeout=30)
+
+        def log_message(self, format, *args):
+            pass
+
+    class ThreadedServer(ThreadingMixIn, HTTPServer):
+        daemon_threads = True
+
+    server = ThreadedServer(("127.0.0.1", 0), SilentRequestHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        stop.set()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_get_jwt_gives_up_at_the_timeout_instead_of_blocking_the_event_loop(hanging_auth_server):
+    """
+    `_get_jwt` runs synchronously inside `_call_hiddenlayer`, so an auth host that
+    accepts and never answers used to park the whole worker's event loop.
+    """
+    started = time.monotonic()
+    with pytest.raises(requests.exceptions.Timeout):
+        _get_jwt(auth_url=hanging_auth_server, api_id="id", api_key="secret", timeout=1)
+
+    assert time.monotonic() - started < 10

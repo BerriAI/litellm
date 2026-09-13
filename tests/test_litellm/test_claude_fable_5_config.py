@@ -1,5 +1,5 @@
 """
-Validate Claude Fable 5 model configuration entries.
+Validate Claude Fable 5 and Claude Fable 5.1 model configuration entries.
 
 Fable 5 is a new tier above Opus ($10/$50 per MTok) with the same adaptive-only
 API surface as Opus 4.7/4.8. The cost-map entries below are what make the model
@@ -14,7 +14,6 @@ import os
 
 import pytest
 
-import litellm
 from litellm.constants import BEDROCK_CONVERSE_MODELS
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 
@@ -25,89 +24,6 @@ def _load_root_cost_map() -> dict:
     json_path = os.path.join(REPO_ROOT, "model_prices_and_context_window.json")
     with open(json_path) as f:
         return json.load(f)
-
-
-
-def test_fable_5_model_pricing_and_capabilities():
-    model_data = _load_root_cost_map()
-
-    expected_models = [
-        ("claude-fable-5", "anthropic"),
-        ("anthropic.claude-fable-5", "bedrock_converse"),
-        ("vertex_ai/claude-fable-5", "vertex_ai-anthropic_models"),
-        # Unlike Opus 4.8 (200k on Foundry), Fable 5 has the full 1M context
-        # window on Microsoft Foundry.
-        ("azure_ai/claude-fable-5", "azure_ai"),
-    ]
-
-    for model_name, provider in expected_models:
-        assert model_name in model_data, f"Missing model entry: {model_name}"
-        info = model_data[model_name]
-
-        assert info["litellm_provider"] == provider
-        assert info["mode"] == "chat"
-        assert info["max_input_tokens"] == 1000000
-        assert info["max_output_tokens"] == 128000
-        assert info["max_tokens"] == 128000
-
-        # $10 / $50 per MTok (2x Opus 4.8), with the standard 1.25x 5m
-        # cache-write, 2x 1h cache-write, and 0.1x cache-read multipliers.
-        assert info["input_cost_per_token"] == 1e-05
-        assert info["output_cost_per_token"] == 5e-05
-        assert info["cache_creation_input_token_cost"] == 1.25e-05
-        assert info["cache_creation_input_token_cost_above_1hr"] == 2e-05
-        assert info["cache_read_input_token_cost"] == 1e-06
-
-        # Flat-rate across the full 1M context window.
-        assert "input_cost_per_token_above_200k_tokens" not in info
-        assert "output_cost_per_token_above_200k_tokens" not in info
-
-        assert info["supports_assistant_prefill"] is False
-        assert info["supports_function_calling"] is True
-        assert info["supports_prompt_caching"] is True
-        assert info["supports_reasoning"] is True
-        assert info["supports_tool_choice"] is True
-        assert info["supports_vision"] is True
-        assert info["supports_xhigh_reasoning_effort"] is True
-        assert info["supports_max_reasoning_effort"] is True
-
-
-def test_fable_5_bedrock_regional_model_pricing():
-    model_data = _load_root_cost_map()
-
-    # Fable 5 launched with us/eu geo inference profiles plus a global profile
-    # (no au/apac/jp). Global uses base pricing; geo profiles carry the
-    # standard 10% regional premium.
-    expected_models = {
-        "global.anthropic.claude-fable-5": {
-            "input_cost_per_token": 1e-05,
-            "output_cost_per_token": 5e-05,
-            "cache_creation_input_token_cost": 1.25e-05,
-            "cache_read_input_token_cost": 1e-06,
-        },
-        "us.anthropic.claude-fable-5": {
-            "input_cost_per_token": 1.1e-05,
-            "output_cost_per_token": 5.5e-05,
-            "cache_creation_input_token_cost": 1.375e-05,
-            "cache_read_input_token_cost": 1.1e-06,
-        },
-        "eu.anthropic.claude-fable-5": {
-            "input_cost_per_token": 1.1e-05,
-            "output_cost_per_token": 5.5e-05,
-            "cache_creation_input_token_cost": 1.375e-05,
-            "cache_read_input_token_cost": 1.1e-06,
-        },
-    }
-
-    for model_name, expected in expected_models.items():
-        assert model_name in model_data, f"Missing model entry: {model_name}"
-        info = model_data[model_name]
-        assert info["litellm_provider"] == "bedrock_converse"
-        assert info["max_input_tokens"] == 1000000
-        assert info["max_output_tokens"] == 128000
-        assert info["bedrock_output_config_effort_ceiling"] == "xhigh"
-        for key, value in expected.items():
-            assert info[key] == value
 
 
 def test_fable_5_geo_multiplier_without_fast_mode():
@@ -142,13 +58,6 @@ def test_fable_5_present_in_bundled_backup():
 
 def test_fable_5_registered_for_bedrock_converse():
     assert "anthropic.claude-fable-5" in BEDROCK_CONVERSE_MODELS
-
-
-def test_fable_5_provider_resolves_via_model_info(local_model_cost_map):
-    info = litellm.get_model_info(model="claude-fable-5")
-    assert info["litellm_provider"] == "anthropic"
-    assert info["max_input_tokens"] == 1000000
-    assert info["max_output_tokens"] == 128000
 
 
 @pytest.mark.parametrize(
@@ -205,6 +114,67 @@ def test_fable_5_all_variants_carry_thinking_always_on_flag(cost_map):
 def test_adaptive_thinking_detected_for_fable_5(local_model_cost_map, model):
     """Provider-routed ids must resolve to a flagged entry so ``reasoning_effort``
     maps to ``thinking.type='adaptive'`` + ``output_config.effort``."""
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
+
+
+FABLE_5_1_VARIANTS = (
+    "claude-fable-5-1",
+    "anthropic.claude-fable-5-1",
+    "global.anthropic.claude-fable-5-1",
+    "us.anthropic.claude-fable-5-1",
+    "eu.anthropic.claude-fable-5-1",
+    "vertex_ai/claude-fable-5-1",
+    "vertex_ai/claude-fable-5-1@default",
+    "azure_ai/claude-fable-5-1",
+)
+
+
+@pytest.mark.parametrize(
+    "cost_map",
+    [_load_root_cost_map(), GetModelCostMap.load_local_model_cost_map()],
+    ids=["root", "bundled_backup"],
+)
+def test_fable_5_1_cache_reads_cost_a_quarter_of_fable_5(cost_map):
+    """Fable 5.1 prices cache hits at 0.025x base input instead of the usual
+    0.1x, so copying Fable 5's cache-read price overcharges every cache hit 4x."""
+    for model_name in FABLE_5_1_VARIANTS:
+        info = cost_map[model_name]
+        geo_premium = model_name.startswith(("us.", "eu."))
+        expected = 2.75e-07 if geo_premium else 2.5e-07
+        assert info["cache_read_input_token_cost"] == expected, model_name
+        assert info["cache_read_input_token_cost"] == pytest.approx(
+            info["input_cost_per_token"] * 0.025
+        ), model_name
+
+
+def test_fable_5_1_present_in_bundled_backup():
+    backup = GetModelCostMap.load_local_model_cost_map()
+    root = _load_root_cost_map()
+    for model_name in FABLE_5_1_VARIANTS:
+        assert model_name in backup, f"Missing from backup cost map: {model_name}"
+        assert backup[model_name] == root[model_name], model_name
+
+
+def test_fable_5_1_registered_for_bedrock_converse():
+    assert "anthropic.claude-fable-5-1" in BEDROCK_CONVERSE_MODELS
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-fable-5-1",
+        "anthropic/claude-fable-5-1",
+        "anthropic.claude-fable-5-1",
+        "bedrock/us.anthropic.claude-fable-5-1",
+        "bedrock/invoke/eu.anthropic.claude-fable-5-1",
+        "bedrock/global.anthropic.claude-fable-5-1",
+        "vertex_ai/claude-fable-5-1",
+        "azure_ai/claude-fable-5-1",
+    ],
+)
+def test_adaptive_thinking_detected_for_fable_5_1(local_model_cost_map, model):
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
     assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True

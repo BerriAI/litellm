@@ -5,7 +5,7 @@ The Model Router is a special Azure AI deployment that automatically routes requ
 to the best available model. It has specific cost tracking requirements.
 """
 
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final
 
 from httpx import Response
 
@@ -13,6 +13,9 @@ from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
+
+if TYPE_CHECKING:
+    import tiktoken
 
 
 class AzureModelRouterConfig(AzureAIStudioConfig):
@@ -56,7 +59,7 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

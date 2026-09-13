@@ -91,6 +91,9 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
         if (value === "") {
           continue;
         }
+        if (key === "litellm_credential_name" && value == null) {
+          continue;
+        }
         // Skip the custom_pricing and pricing_model fields as they're only used for UI control
         if (key === "custom_pricing" || key === "pricing_model" || key === "cache_control") {
           continue;
@@ -124,12 +127,12 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
           if (value && value != undefined) {
             try {
               litellmExtraParams = JSON.parse(value);
-              if ("litellm_credential_name" in litellmExtraParams) {
-                delete litellmExtraParams.litellm_credential_name;
-              }
             } catch (error) {
               toast.fromError("Failed to parse LiteLLM Extra Params: " + error);
               throw new Error("Failed to parse litellm_extra_params: " + error);
+            }
+            if ("litellm_credential_name" in litellmExtraParams && formValues.litellm_credential_name) {
+              delete litellmExtraParams.litellm_credential_name;
             }
             for (const [key, value] of Object.entries(litellmExtraParams)) {
               litellmParamsObj[key] = value;

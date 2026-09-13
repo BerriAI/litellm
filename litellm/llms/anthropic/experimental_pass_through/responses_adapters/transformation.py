@@ -13,11 +13,16 @@ from typing import Any, Final, cast
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
-    responses_reasoning_item_from_thinking_blocks,
+    encrypted_reasoning_signature,
+    responses_reasoning_items_from_thinking_blocks,
     with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
+)
+from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+    refusal_stop_details,
+    responses_output_refusal_text,
 )
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_reasoning_auto_summary_enabled,
@@ -29,6 +34,7 @@ from litellm.types.llms.anthropic import (
     AnthropicFinishReason,
     AnthropicMessagesRequest,
     AnthropicMessagesToolChoice,
+    AnthropicResponseContentBlockRedactedThinking,
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockThinking,
     AnthropicResponseContentBlockToolUse,
@@ -39,10 +45,12 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicUsage,
 )
 from litellm.types.llms.openai import (
-    ChatCompletionThinkingBlock,
     ResponseAPIUsage,
     ResponsesAPIResponse,
 )
+
+REASONING_SUMMARY_PART_SEPARATOR: Final = "\n\n"
+RESPONSES_INCLUDE_ENCRYPTED_REASONING: Final = "reasoning.encrypted_content"
 
 
 class LiteLLMAnthropicToResponsesAPIAdapter:
@@ -159,54 +167,60 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         return str(getattr(part, "text", None) or "")
 
     @classmethod
-    def _thinking_blocks_from_reasoning_item(
+    def _thinking_block_from_reasoning_item(
         cls,
         summary: Iterable[object],
-    ) -> tuple[dict[str, Any], ...]:  # mutable-ok: API message payload
-        """Anthropic thinking blocks for one Responses reasoning item.
+        encrypted_content: object,
+    ) -> dict[str, Any] | None:  # mutable-ok: API message payload
+        """The one Anthropic block for a Responses reasoning item.
 
-        The signature stays empty: only Anthropic can sign a thinking block, and a stand-in
-        value would be replayed as a real one and rejected by every backend that verifies it.
+        The item's encrypted reasoning rides the block's opaque field (`signature`, or
+        `data` when there is no summary text) so the client echoes it back and the next
+        turn replays the very item OpenAI produced; without it the signature stays empty,
+        since only Anthropic can sign a thinking block.
         """
-        return tuple(
-            AnthropicResponseContentBlockThinking(
-                type="thinking",
-                thinking=text,
-                signature=None,
-            ).model_dump()
-            for part in summary
-            if (text := cls._summary_part_text(part))
+        text: Final = REASONING_SUMMARY_PART_SEPARATOR.join(
+            part_text for part in summary if (part_text := cls._summary_part_text(part))
         )
+        if not isinstance(encrypted_content, str) or not encrypted_content:
+            if not text:
+                return None
+            return AnthropicResponseContentBlockThinking(type="thinking", thinking=text, signature=None).model_dump()
+        signature: Final = encrypted_reasoning_signature(encrypted_content)
+        if not text:
+            return AnthropicResponseContentBlockRedactedThinking(type="redacted_thinking", data=signature).model_dump()
+        return AnthropicResponseContentBlockThinking(type="thinking", thinking=text, signature=signature).model_dump()
 
     @staticmethod
-    def _assistant_block_group_key(indexed_block: tuple[int, Mapping[str, Any]]) -> str:
+    def _assistant_block_group_key(indexed_block: tuple[int, Mapping[str, object]]) -> str:
         """Group a run of consecutive thinking blocks together; keep every other block alone."""
         index, block = indexed_block
-        return "thinking" if block.get("type") == "thinking" else f"block:{index}"
+        return "thinking" if block.get("type") in ("thinking", "redacted_thinking") else f"block:{index}"
 
     @classmethod
-    def _assistant_group_to_input_item(
-        cls, group: tuple[Mapping[str, Any], ...]
-    ) -> dict[str, Any] | None:  # mutable-ok: API message payload
+    def _assistant_group_to_input_items(
+        cls, group: tuple[Mapping[str, object], ...]
+    ) -> tuple[dict[str, Any], ...]:  # mutable-ok: API message payload
         first: Final = group[0]
         btype: Final = first.get("type")
-        if btype == "thinking":
-            blocks: Final = cast(tuple[ChatCompletionThinkingBlock, ...], group)  # cast-ok: untrusted client payload
-            reasoning_item: Final = responses_reasoning_item_from_thinking_blocks(blocks)
-            return None if reasoning_item is None else dict(reasoning_item)  # mutable-ok: API message payload
+        if btype in ("thinking", "redacted_thinking"):
+            replayed: Final = responses_reasoning_items_from_thinking_blocks(group)
+            return tuple(dict(item) for item in replayed)  # mutable-ok: API message payload
         if btype == "tool_use":
-            return {  # mutable-ok: API message payload
-                "type": "function_call",
-                "call_id": first.get("id", ""),
-                "name": first.get("name", ""),
-                "arguments": json.dumps(first.get("input", {})),  # mutable-ok: API message payload
-            }
-        return None
+            return (
+                {  # mutable-ok: API message payload
+                    "type": "function_call",
+                    "call_id": first.get("id", ""),
+                    "name": first.get("name", ""),
+                    "arguments": json.dumps(first.get("input", {})),  # mutable-ok: API message payload
+                },
+            )
+        return ()
 
     def translate_messages_to_responses_input(
         self,
         messages: list[AllAnthropicPassThroughMessageValues],
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, object]]:
         """
         Convert Anthropic messages list to Responses API `input` items.
 
@@ -220,7 +234,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
           assistant thinking -> reasoning
           assistant tool_use -> function_call
         """
-        input_items: Final[list[dict[str, Any]]] = []
+        input_items: Final[list[dict[str, object]]] = []
 
         for m in messages:
             if m["role"] == "system":
@@ -248,7 +262,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         }
                     )
                 elif isinstance(content, list):
-                    user_parts: list[dict[str, Any]] = []
+                    user_parts: list[Mapping[str, object]] = []
                     tool_image_parts: list[dict[str, Any]] = []  # mutable-ok: json content parts
                     for block in content:
                         if not isinstance(block, dict):
@@ -358,7 +372,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                     input_items.extend(
                         item
                         for _, group in groupby(enumerate(blocks), key=self._assistant_block_group_key)
-                        if (item := self._assistant_group_to_input_item(tuple(block for _, block in group))) is not None
+                        for item in self._assistant_group_to_input_items(tuple(block for _, block in group))
                     )
                     asst_parts: list[dict[str, Any]] = [  # mutable-ok: API message payload
                         {"type": "output_text", "text": block.get("text", "")}  # mutable-ok: API message payload
@@ -379,9 +393,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     def translate_tools_to_responses_api(
         self,
         tools: list[AllAnthropicToolsValues],
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, object]]:
         """Convert Anthropic tool definitions to Responses API function tools."""
-        result: Final[list[dict[str, Any]]] = []
+        result: Final[list[dict[str, object]]] = []
         for tool in tools:
             tool_dict = cast(dict[str, Any], tool)
             tool_type = tool_dict.get("type", "")
@@ -392,7 +406,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 continue
             # Responses turns strict mode on when `strict` is omitted, silently rewriting
             # `required` to every property. Anthropic tools are non-strict unless asked.
-            func_tool: dict[str, Any] = {
+            func_tool: dict[str, object] = {
                 "type": "function",
                 "name": tool_name,
                 "strict": bool(tool_dict.get("strict")),
@@ -407,7 +421,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     @staticmethod
     def translate_tool_choice_to_responses_api(
         tool_choice: AnthropicMessagesToolChoice,
-    ) -> str | dict[str, Any]:
+    ) -> str | dict[str, object]:
         """Convert Anthropic tool_choice to Responses API tool_choice."""
         tc_type: Final = tool_choice.get("type")
         if tc_type == "any":
@@ -420,8 +434,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
     @staticmethod
     def translate_context_management_to_responses_api(
-        context_management: dict[str, Any],
-    ) -> list[dict[str, Any]] | None:
+        context_management: dict[str, object],
+    ) -> list[dict[str, object]] | None:
         """
         Convert Anthropic context_management dict to OpenAI Responses API array format.
 
@@ -435,13 +449,13 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if not isinstance(edits, list):
             return None
 
-        result: Final[list[dict[str, Any]]] = []
+        result: Final[list[dict[str, object]]] = []
         for edit in edits:
             if not isinstance(edit, dict):
                 continue
             edit_type = edit.get("type", "")
             if edit_type == "compact_20260112":
-                entry: dict[str, Any] = {"type": "compaction"}
+                entry: dict[str, object] = {"type": "compaction"}
                 trigger = edit.get("trigger")
                 if isinstance(trigger, dict) and trigger.get("value") is not None:
                     entry["compact_threshold"] = int(trigger["value"])
@@ -451,9 +465,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
     @staticmethod
     def translate_thinking_to_reasoning(
-        thinking: dict[str, Any],
-        output_config: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
+        thinking: dict[str, object],
+        output_config: dict[str, object] | None = None,
+    ) -> dict[str, object] | None:
         """
         Convert Anthropic thinking param to Responses API reasoning param.
 
@@ -473,12 +487,14 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if isinstance(output_config, dict) and output_config.get("effort"):
                 effort = output_config["effort"]
         elif thinking_type == "enabled":
-            effort = reasoning_effort_from_thinking_budget(thinking.get("budget_tokens", 0))
+            raw_budget: Final = thinking.get("budget_tokens", 0)
+            budget_tokens: Final = int(raw_budget) if isinstance(raw_budget, (int, float)) else 0
+            effort = reasoning_effort_from_thinking_budget(budget_tokens)
         else:
             return None
 
         auto_summary: Final = is_reasoning_auto_summary_enabled()
-        result: Final[dict[str, Any]] = {"effort": effort}
+        result: Final[dict[str, object]] = {"effort": effort}
         summary: Final = thinking.get("summary")
         if summary:
             result["summary"] = summary
@@ -489,10 +505,16 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     def translate_request(
         self,
         anthropic_request: AnthropicMessagesRequest,
+        include_encrypted_reasoning: bool = True,
     ) -> dict[str, Any]:
         """
         Translate a full Anthropic /v1/messages request dict to
         litellm.responses() / litellm.aresponses() kwargs.
+
+        ``include_encrypted_reasoning`` asks the provider for ``reasoning.encrypted_content``
+        on every call, so a reasoning model's items can be replayed intact next turn even
+        when the client sent no ``thinking`` block; pass False for a provider whose
+        Responses API rejects ``include``.
         """
         model: Final[str] = anthropic_request["model"]
         messages_list: Final = cast(
@@ -522,6 +544,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             "model": model,
             "input": input_items,
         }
+        if include_encrypted_reasoning:
+            responses_kwargs["include"] = [RESPONSES_INCLUDE_ENCRYPTED_REASONING]  # mutable-ok: API request payload
 
         if system and not developer_parts:
             if isinstance(system, str):
@@ -570,7 +594,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         # output_format / output_config.format -> text format
         # output_format: {"type": "json_schema", "schema": {...}}
         # output_config: {"format": {"type": "json_schema", "schema": {...}}}
-        output_format: Any = anthropic_request.get("output_format")
+        output_format: object = anthropic_request.get("output_format")
         output_config = anthropic_request.get("output_config")
         if not isinstance(output_format, dict) and isinstance(output_config, dict):
             output_format = output_config.get("format")
@@ -620,18 +644,30 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             ResponseReasoningItem,
         )
 
-        content: Final[list[dict[str, Any]]] = []
+        content: Final[list[dict[str, object]]] = []
         stop_reason: AnthropicFinishReason = "end_turn"
+        refusal_text: Final = responses_output_refusal_text(
+            cast(Iterable[object], response.output)  # cast-ok: output items re-validated per item
+        )
 
         for item in response.output:
             if isinstance(item, ResponseReasoningItem):
-                content.extend(self._thinking_blocks_from_reasoning_item(item.summary))
+                reasoning_block = self._thinking_block_from_reasoning_item(item.summary, item.encrypted_content)
+                if reasoning_block is not None:
+                    content.append(reasoning_block)
 
             elif isinstance(item, ResponseOutputMessage):
                 for part in item.content:
-                    if getattr(part, "type", None) == "output_text":
+                    part_type = getattr(part, "type", None)
+                    if part_type == "output_text":
                         content.append(
                             AnthropicResponseContentBlockText(type="text", text=getattr(part, "text", "")).model_dump()
+                        )
+                    elif part_type == "refusal":
+                        content.append(
+                            AnthropicResponseContentBlockText(
+                                type="text", text=getattr(part, "refusal", "") or ""
+                            ).model_dump()
                         )
 
             elif isinstance(item, ResponseFunctionToolCall):
@@ -645,24 +681,35 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         id=item.call_id or item.id or "",
                         name=item.name,
                         input=input_data,
-                    ).model_dump()
+                    ).model_dump(exclude_none=True)
                 )
                 stop_reason = "tool_use"
 
             elif isinstance(item, dict):
                 item_type = item.get("type")
                 if item_type == "message":
-                    for part in item.get("content", []):
-                        if isinstance(part, dict) and part.get("type") == "output_text":
-                            content.append(
-                                AnthropicResponseContentBlockText(type="text", text=part.get("text", "")).model_dump()
-                            )
+                    for part in item.get("content", ()):
+                        if isinstance(part, dict):
+                            part_type = part.get("type")
+                            if part_type == "output_text":
+                                content.append(
+                                    AnthropicResponseContentBlockText(
+                                        type="text", text=part.get("text", "")
+                                    ).model_dump()
+                                )
+                            elif part_type == "refusal":
+                                content.append(
+                                    AnthropicResponseContentBlockText(
+                                        type="text", text=part.get("refusal", "") or ""
+                                    ).model_dump()
+                                )
                 elif item_type == "reasoning":
-                    content.extend(
-                        self._thinking_blocks_from_reasoning_item(
-                            cast(Iterable[object], item.get("summary") or ()),  # cast-ok: untyped provider json
-                        )
+                    reasoning_block = self._thinking_block_from_reasoning_item(
+                        cast(Iterable[object], item.get("summary") or ()),  # cast-ok: untyped provider json
+                        item.get("encrypted_content"),
                     )
+                    if reasoning_block is not None:
+                        content.append(reasoning_block)
                 elif item_type == "function_call":
                     try:
                         input_data = json.loads(item.get("arguments", "{}"))
@@ -674,13 +721,13 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             id=item.get("call_id") or item.get("id", ""),
                             name=item.get("name", ""),
                             input=input_data,
-                        ).model_dump()
+                        ).model_dump(exclude_none=True)
                     )
                     stop_reason = "tool_use"
-
-        # status -> stop_reason override
         if response.status == "incomplete":
             stop_reason = "max_tokens"
+        elif refusal_text is not None:
+            stop_reason = "refusal"
 
         anthropic_usage: Final = self.translate_responses_api_usage_to_anthropic_usage(response.usage)
 
@@ -693,4 +740,5 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             usage=anthropic_usage,
             content=content,
             stop_reason=stop_reason,
+            stop_details=(refusal_stop_details(refusal_text) if stop_reason == "refusal" else None),
         )

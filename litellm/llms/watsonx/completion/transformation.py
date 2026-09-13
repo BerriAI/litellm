@@ -16,10 +16,13 @@ from ..common_utils import (
     IBMWatsonXMixin,
     WatsonXAIError,
     _get_api_params,
+    aconvert_watsonx_messages_to_prompt,
     convert_watsonx_messages_to_prompt,
 )
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -234,7 +237,11 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             **watsonx_auth_payload,
         }
 
-    async def atransform_request(
+    @property
+    def uses_async_transform_request(self) -> bool:
+        return True
+
+    async def async_transform_request(
         self,
         model: str,
         messages: list[AllMessageValues],
@@ -242,11 +249,6 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        """Async version of transform_request"""
-        from litellm.llms.watsonx.common_utils import (
-            aconvert_watsonx_messages_to_prompt,
-        )
-
         provider: Final = model.split("/")[0]
         prompt: Final = await aconvert_watsonx_messages_to_prompt(
             model=model, messages=messages, provider=provider, custom_prompt_dict={}
@@ -278,7 +280,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: str,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

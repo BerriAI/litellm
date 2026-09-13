@@ -12,8 +12,7 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 
-// Mock networking calls used by the component's mutation handlers. entityLinks -> migratedPages
-// imports serverRootPath from the same module, so the mock must export it too.
+// Mock networking calls used by the component's mutation handlers.
 vi.mock("../networking", () => {
   return {
     __esModule: true,
@@ -108,7 +107,7 @@ beforeEach(() => {
 test("renders organization view after loading data", async () => {
   mockUseOrganization.mockReturnValue({ data: mockOrg, isLoading: false } as any);
 
-  const { findAllByText } = renderWithProviders(
+  renderWithProviders(
     <OrganizationInfoView
       organizationId="org_123"
       onClose={() => {}}
@@ -120,7 +119,7 @@ test("renders organization view after loading data", async () => {
     />,
   );
 
-  const [orgName] = await findAllByText("Acme Corp");
+  const [orgName] = await screen.findAllByText("Acme Corp");
   expect(orgName).toBeInTheDocument();
 });
 

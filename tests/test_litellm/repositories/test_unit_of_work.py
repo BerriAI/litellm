@@ -1,9 +1,11 @@
+from dataclasses import fields
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Tuple
 
 import pytest
 
 from litellm.repositories.unit_of_work import (
+    LinkedSpendResetWrites,
     budget_cascade_unit_of_work,
     spend_reset_unit_of_work,
 )
@@ -32,6 +34,7 @@ class FakeBatch:
         self.litellm_teammembership = FakeBatchTable("litellm_teammembership", self.calls)
         self.litellm_organizationtable = FakeBatchTable("litellm_organizationtable", self.calls)
         self.litellm_tagtable = FakeBatchTable("litellm_tagtable", self.calls)
+        self.litellm_modelaccessgroupbudgettable = FakeBatchTable("litellm_modelaccessgroupbudgettable", self.calls)
         self.litellm_endusertable = FakeBatchTable("litellm_endusertable", self.calls)
 
     async def commit(self) -> None:
@@ -90,6 +93,7 @@ async def test_budget_cascade_dependents_and_window_advance_share_one_batch():
         uow.keys.queue_spend_zero(where=linked)
         uow.organizations.queue_spend_zero(where=linked)
         uow.tags.queue_spend_zero(where=linked)
+        uow.model_access_groups.queue_spend_zero(where=linked)
         uow.endusers.queue_spend_zero(where={"user_id": {"in": ["enduser-1"]}})
         uow.budgets.queue_window_advance(budget_id="budget-1", budget_reset_at=reset_at)
         assert batch.commit_count == 0
@@ -100,6 +104,7 @@ async def test_budget_cascade_dependents_and_window_advance_share_one_batch():
         ("litellm_verificationtoken.update_many", linked, {"spend": 0}),
         ("litellm_organizationtable.update_many", linked, {"spend": 0}),
         ("litellm_tagtable.update_many", linked, {"spend": 0}),
+        ("litellm_modelaccessgroupbudgettable.update_many", linked, {"spend": 0}),
         ("litellm_endusertable.update_many", {"user_id": {"in": ["enduser-1"]}}, {"spend": 0}),
         ("litellm_budgettable.update_many", {"budget_id": "budget-1"}, {"budget_reset_at": reset_at}),
     ]
@@ -115,6 +120,39 @@ async def test_budget_window_advance_tolerates_a_tier_deleted_mid_chunk():
         uow.budgets.queue_window_advance(budget_id="budget-1", budget_reset_at=datetime.now(timezone.utc))
 
     assert [call[0] for call in batch.calls] == ["litellm_budgettable.update_many"]
+
+
+async def test_every_cascade_dependent_writes_to_its_own_table_on_the_one_batch():
+    """Walks the dataclass instead of naming tables, so a dependent added to
+    BudgetCascadeUnitOfWork later cannot go uncovered.
+
+    The named test above only proves the tables it lists, and an unbound
+    dependent surfaces as an AttributeError from whichever tests happen to
+    open a cascade. This pins the real contract: every field writes, each to a
+    distinct table, all on the same batch.
+    """
+    reset_at = datetime(2026, 8, 3, 12, 0, tzinfo=timezone.utc)
+    batches: List[FakeBatch] = []
+
+    def _new_batch() -> FakeBatch:
+        # Fresh per call like db.batch_(), unlike the `lambda: batch` above: a
+        # second transaction would otherwise alias onto the first and hide.
+        batches.append(FakeBatch())
+        return batches[-1]
+
+    async with budget_cascade_unit_of_work(_new_batch) as uow:
+        writes = [getattr(uow, field.name) for field in fields(uow)]
+        for write in writes:
+            if isinstance(write, LinkedSpendResetWrites):
+                write.queue_spend_zero(where={"budget_id": "budget-1"})
+            else:
+                write.queue_window_advance(budget_id="budget-1", budget_reset_at=reset_at)
+
+    assert len(batches) == 1, "the cascade must open exactly one transaction"
+    batch = batches[0]
+    assert len(batch.calls) == len(writes), "a dependent bound to a batch of its own would not land here"
+    assert len({call[0] for call in batch.calls}) == len(writes), "two dependents share one table"
+    assert batch.commit_count == 1
 
 
 async def test_budget_cascade_raising_inside_block_skips_commit():

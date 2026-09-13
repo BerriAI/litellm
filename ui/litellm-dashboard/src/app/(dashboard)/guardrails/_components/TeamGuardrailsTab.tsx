@@ -48,7 +48,10 @@ const GUARDRAIL_MODES = [
 ] as const;
 
 const submitGuardrailSchema = z.object({
-  team_id: z.string().min(1, "Select a team"),
+  team_id: z
+    .string()
+    .nullable()
+    .pipe(z.string({ error: "Select a team" }).min(1, "Select a team")),
   guardrail_name: z.string().min(1, "Enter a guardrail name"),
   mode: z.string().min(1, "Select a mode"),
   api_base: z.string().min(1, "Enter the API base URL").refine(isValidUrl, "Must be a valid URL"),
@@ -1106,7 +1109,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
                       >
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent alignItemWithTrigger={false}>
+                      <SelectContent>
                         {GUARDRAIL_MODES.map((mode) => (
                           <SelectItem key={mode.value} value={mode.value} title={mode.label}>
                             {mode.label}
