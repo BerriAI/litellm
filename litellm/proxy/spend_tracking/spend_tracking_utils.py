@@ -134,12 +134,11 @@ def _resolve_spend_for_spend_log(
     response_cost: Final = kwargs.get("response_cost")
     if isinstance(response_cost, (int, float)) and not isinstance(response_cost, bool) and response_cost:
         return float(response_cost)
-    cost_breakdown: Final = (
-        standard_logging_payload.get("cost_breakdown") if standard_logging_payload is not None else None
-    )
-    total_cost: Final = cost_breakdown.get("total_cost") if cost_breakdown is not None else None
-    if isinstance(total_cost, (int, float)) and not isinstance(total_cost, bool):
-        return float(total_cost)
+    if standard_logging_payload is not None and standard_logging_payload.get("cache_hit") is not True:
+        cost_breakdown: Final = standard_logging_payload.get("cost_breakdown")
+        total_cost: Final = cost_breakdown.get("total_cost") if cost_breakdown is not None else None
+        if isinstance(total_cost, (int, float)) and not isinstance(total_cost, bool):
+            return float(total_cost)
     return 0.0
 
 

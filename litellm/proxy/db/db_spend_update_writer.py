@@ -275,7 +275,8 @@ class DBSpendUpdateWriter:
                 start_time=start_time,
                 end_time=end_time,
             )
-            payload["spend"] = response_cost or 0.0
+            resolved_spend: Final = response_cost or payload["spend"]
+            payload["spend"] = resolved_spend
             if isinstance(payload["startTime"], datetime):
                 payload["startTime"] = payload["startTime"].isoformat()
             if isinstance(payload["endTime"], datetime):
@@ -311,7 +312,7 @@ class DBSpendUpdateWriter:
             # Single task replaces 11 create_task() calls
             asyncio.create_task(
                 self._batch_database_updates(
-                    response_cost=response_cost,
+                    response_cost=resolved_spend,
                     user_id=user_id,
                     hashed_token=hashed_token,
                     team_id=team_id,

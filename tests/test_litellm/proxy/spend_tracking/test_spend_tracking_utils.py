@@ -4122,9 +4122,6 @@ def test_autorouter_savings_flow_from_logging_payload_into_spend_log_metadata():
 
 @pytest.mark.parametrize("response_cost", [None, 0.0])
 def test_spend_reads_cost_breakdown_when_response_cost_is_missing_or_zero(response_cost):
-    """A streamed request can finish with no usable response_cost on kwargs while its
-    logged breakdown holds the real price, so the spend column must read the breakdown
-    instead of writing zero."""
     kwargs = {
         "model": "azure_ai/gpt-5.5",
         "litellm_params": {"metadata": {"user_api_key": "test-key"}},
@@ -4147,6 +4144,30 @@ def test_spend_reads_cost_breakdown_when_response_cost_is_missing_or_zero(respon
         end_time=datetime.datetime.now(timezone.utc),
     )
     assert payload["spend"] == pytest.approx(0.42)
+
+
+def test_spend_stays_zero_on_a_cache_hit_with_a_cost_breakdown():
+    payload = get_logging_payload(
+        kwargs={
+            "model": "azure_ai/gpt-5.5",
+            "response_cost": 0.0,
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            "standard_logging_object": {
+                "cache_hit": True,
+                "cost_breakdown": {"total_cost": 0.42},
+                "metadata": {},
+                "model_map_information": None,
+            },
+        },
+        response_obj=litellm.ModelResponse(
+            id="chatcmpl-azure-cache-hit",
+            choices=[],
+            usage=litellm.Usage(prompt_tokens=1000, completion_tokens=100),
+        ),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["spend"] == 0.0
 
 
 @pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])

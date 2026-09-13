@@ -75,6 +75,42 @@ async def test_daily_spend_tracking_with_disabled_spend_logs():
         assert call_args["payload"]["custom_llm_provider"] == "openai"
 
 
+@pytest.mark.asyncio
+async def test_update_database_keeps_breakdown_spend_when_response_cost_is_zero():
+    db_writer = DBSpendUpdateWriter()
+    db_writer._insert_spend_log_to_db = AsyncMock()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _tool_usage_prisma()
+    payload = _minimal_spend_payload()
+    payload["spend"] = 0.42
+
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", False),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
+        patch(
+            "litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload",
+            return_value=payload,
+        ),
+    ):
+        await db_writer.update_database(
+            token="test-token",
+            user_id="test-user",
+            end_user_id=None,
+            team_id=None,
+            org_id=None,
+            kwargs={"model": "azure_ai/gpt-5.5"},
+            completion_response=None,
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc),
+            response_cost=0.0,
+        )
+        await asyncio.sleep(0)
+
+    assert db_writer._insert_spend_log_to_db.call_args[1]["payload"]["spend"] == pytest.approx(0.42)
+    assert db_writer._batch_database_updates.call_args[1]["response_cost"] == pytest.approx(0.42)
+
+
 def _tool_call_response(*names: str) -> object:
     from types import SimpleNamespace
 

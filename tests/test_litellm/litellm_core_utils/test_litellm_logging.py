@@ -2178,8 +2178,6 @@ def test_response_cost_calculator_with_response_cost_in_hidden_params(logging_ob
 
 
 def test_response_cost_calculator_recomputes_when_hidden_response_cost_is_zero():
-    """A zero stashed in _hidden_params must not short-circuit token pricing: streamed
-    azure_ai responses arrive with a zero hidden cost while their usage is billable."""
     logging_obj = LitellmLogging(
         model="gpt-4o",
         messages=[{"role": "user", "content": "Hey"}],
