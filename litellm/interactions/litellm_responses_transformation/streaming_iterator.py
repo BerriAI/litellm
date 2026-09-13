@@ -135,7 +135,7 @@ class LiteLLMResponsesInteractionsStreamingIterator:
             index=0,
         )
 
-    def _build_completion_event(self, response_id: str) -> InteractionsAPIStreamingResponse:
+    def _build_completion_event(self, response_id: str, usage: dict | None = None) -> InteractionsAPIStreamingResponse:
         if self._use_legacy:
             return InteractionsAPIStreamingResponse(
                 event_type="interaction.complete",
@@ -144,6 +144,7 @@ class LiteLLMResponsesInteractionsStreamingIterator:
                 status="completed",
                 model=self.model,
                 outputs=[{"type": "text", "text": self.collected_text}],
+                usage=usage,
             )
         return InteractionsAPIStreamingResponse(
             event_type="interaction.completed",
@@ -157,6 +158,7 @@ class LiteLLMResponsesInteractionsStreamingIterator:
                     "content": [{"type": "text", "text": self.collected_text}],
                 }
             ],
+            usage=usage,
         )
 
     # ------------------------------------------------------------------
@@ -218,11 +220,14 @@ class LiteLLMResponsesInteractionsStreamingIterator:
             self.finished = True
             response: Final = responses_chunk.response
             response_id = self._interaction_id or getattr(response, "id", None) or f"interaction_{id(self)}"
+            # Extract usage from the response if available and convert to dict
+            usage_obj = getattr(response, "usage", None)
+            usage = usage_obj.model_dump() if usage_obj is not None else None
 
             terminal: Final[list[InteractionsAPIStreamingResponse]] = []
             if self.sent_content_start:
                 terminal.append(self._build_content_stop_event(response_id))
-            terminal.append(self._build_completion_event(response_id))
+            terminal.append(self._build_completion_event(response_id, usage))
             self._sent_completion_event = True
             return terminal
 
