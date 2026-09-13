@@ -72,6 +72,19 @@ class _VertexEndpointPayloadView(TypedDict):
     payload: ReadOnly[_VertexEndpointResponse]
 
 
+def _gateway_api_base_or_none(api_base: str | None) -> str | None:
+    """
+    A deployment `api_base` whose path names a concrete Vertex resource (contains `/projects/`,
+    e.g. the `.../endpoints/<id>:rawPredict` url configured for online inference) is not a Vertex
+    API gateway; grafting `batchPredictionJobs` or resource-GET paths onto it can only produce
+    urls Google answers with an HTML 404 (LIT-7386). Batch operations ignore it and use the real
+    Vertex host; only a host-level or `/v1`-style gateway mount passes through.
+    """
+    if api_base and "/projects/" in urlparse(api_base).path:
+        return None
+    return api_base
+
+
 def _vertex_batch_payload(response: _VertexBatchJsonSource) -> VertexBatchPredictionResponse:
     return response.json()
 
@@ -126,11 +139,12 @@ class VertexAIBatchPrediction(VertexLLM):
                 vertex_location=vertex_location or "us-central1",
             )
         )
+        gateway_api_base: Final = _gateway_api_base_or_none(api_base)
         vertex_batch_request: Final = self._resolve_fine_tuned_endpoint_model(
             vertex_batch_request=transformed_batch_request,
             headers=headers,
             sync_handler=sync_handler,
-            api_base=api_base,
+            api_base=gateway_api_base,
             vertex_location=vertex_location or "us-central1",
         )
 
@@ -145,7 +159,7 @@ class VertexAIBatchPrediction(VertexLLM):
             endpoint = ""
 
         _, api_base = self._check_custom_proxy(
-            api_base=api_base,
+            api_base=gateway_api_base,
             custom_llm_provider="vertex_ai",
             gemini_api_key=None,
             endpoint=endpoint,
@@ -325,7 +339,7 @@ class VertexAIBatchPrediction(VertexLLM):
             endpoint = ""
 
         _, api_base = self._check_custom_proxy(
-            api_base=api_base,
+            api_base=_gateway_api_base_or_none(api_base),
             custom_llm_provider="vertex_ai",
             gemini_api_key=None,
             endpoint=endpoint,
@@ -481,7 +495,7 @@ class VertexAIBatchPrediction(VertexLLM):
             endpoint = ""
 
         _, api_base = self._check_custom_proxy(
-            api_base=api_base,
+            api_base=_gateway_api_base_or_none(api_base),
             custom_llm_provider="vertex_ai",
             gemini_api_key=None,
             endpoint=endpoint,
@@ -579,7 +593,7 @@ class VertexAIBatchPrediction(VertexLLM):
         cancel_api_base_default: Final = f"{retrieve_api_base_default}:cancel"
 
         _, api_base = self._check_custom_proxy(
-            api_base=api_base,
+            api_base=_gateway_api_base_or_none(api_base),
             custom_llm_provider="vertex_ai",
             gemini_api_key=None,
             endpoint="cancel",

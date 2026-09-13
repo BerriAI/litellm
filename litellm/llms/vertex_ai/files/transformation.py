@@ -809,11 +809,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             object_name = f"{object_prefix}/{object_name}"
         encoded_object_name: Final = encode_gcs_object_name_for_url(object_name)
         endpoint: Final = f"upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={encoded_object_name}"
-        api_base = api_base or "https://storage.googleapis.com"
-        if not api_base:
-            raise ValueError("api_base is required")
-
-        return f"{api_base}/{endpoint}"
+        return f"https://storage.googleapis.com/{endpoint}"
 
     def get_supported_openai_params(self, model: str) -> list[OpenAICreateFileRequestOptionalParams]:
         return []

@@ -158,6 +158,32 @@ class TestCreateFileUrl:
         assert ".." not in object_name
         assert "?" not in object_name
 
+    def test_should_upload_to_gcs_host_even_when_deployment_sets_api_base(self, config):
+        """The deployment api_base points at the inference endpoint (often a full
+        `.../endpoints/<id>:rawPredict` URL); grafting the GCS upload onto it produces a
+        guaranteed 404 from Google, so the storage host must stay storage.googleapis.com
+        (LIT-7386)."""
+        url = config.get_complete_file_url(
+            api_base=(
+                "https://us-central1-aiplatform.googleapis.com/v1/projects/my-project"
+                "/locations/us-central1/endpoints/6335039103326748672:rawPredict"
+            ),
+            api_key=None,
+            model="",
+            optional_params={},
+            litellm_params={
+                "gcs_bucket_name": "my-bucket",
+                "model": "vertex_ai/gemini/6335039103326748672",
+            },
+            data={
+                "file": ("batch.jsonl", b'{"body": {"model": "gemini-2.5-flash"}}', "application/jsonl"),
+                "purpose": "batch",
+            },
+        )
+        assert url.startswith("https://storage.googleapis.com/upload/storage/v1/b/my-bucket/o?")
+        assert "aiplatform" not in url
+        assert "rawPredict" not in url
+
 
 class TestBatchObjectNaming:
     def test_should_store_publisher_model_under_publishers_path(self, config):
