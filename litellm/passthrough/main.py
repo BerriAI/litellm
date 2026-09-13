@@ -17,7 +17,7 @@ from httpx._types import CookieTypes, QueryParamTypes, RequestContent, RequestFi
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig, PassthroughStreamCollector
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.passthrough.utils import CommonUtils
@@ -36,6 +36,35 @@ def _as_generator(iterable: Iterator[bytes]) -> Generator[bytes, bytes, None]:
     yield from iterable
 
 
+class _SpendCollection:
+    """Feeds relayed chunks to the provider's stream collector without letting spend tracking break the relay."""
+
+    def __init__(self, provider_config: BasePassthroughConfig, litellm_logging_obj: LiteLLMLoggingObj) -> None:
+        self.collector: Final[PassthroughStreamCollector] = provider_config.create_stream_collector(
+            model=litellm_logging_obj.model,
+            custom_llm_provider=litellm_logging_obj.model_call_details.get("custom_llm_provider", ""),
+            endpoint=litellm_logging_obj.model_call_details.get("endpoint", ""),
+        )
+        self.chunk_count = 0
+        self._failed = False
+
+    def add(self, chunk: bytes) -> None:
+        self.chunk_count += 1
+        if self._failed:
+            return
+        try:
+            self.collector.add(chunk)
+        except Exception as e:  # noqa: BLE001 # Safe catch-all: spend tracking must never break the relayed stream
+            self._failed = True
+            verbose_logger.exception(
+                "Passthrough spend-tracking collector failed; spend dropped for this stream: %s", e
+            )
+
+    @property
+    def should_flush(self) -> bool:
+        return self.chunk_count > 0 and not self._failed
+
+
 class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
     def __init__(
         self,
@@ -50,8 +79,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
         self._response: httpx.Response
         self._iterator: AsyncGenerator[bytes, bytes]
         self._litellm_logging_obj = litellm_logging_obj
-        self._provider_config = provider_config
-        self._raw_bytes: list[bytes] = []  # mutable-ok: instance buffer for streaming chunks
+        self._spend = _SpendCollection(provider_config, litellm_logging_obj)
         self._flush_scheduled = False
         self._background_tasks: set[asyncio.Task] = set()  # mutable-ok: instance set for background task tracking
         self._hidden_params: dict[str, object] = {}  # mutable-ok: router attaches response headers here in place
@@ -101,16 +129,13 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
         return _init().__await__()
 
     def _start_flush(self) -> None:
-        if self._flush_scheduled or not self._raw_bytes:
+        if self._flush_scheduled or not self._spend.should_flush:
             return
         self._flush_scheduled = True
 
         try:
             task: Final = asyncio.create_task(
-                self._litellm_logging_obj.async_flush_passthrough_collected_chunks(
-                    raw_bytes=self._raw_bytes,
-                    provider_config=self._provider_config,
-                )
+                self._litellm_logging_obj.async_flush_passthrough_collected_chunks(collector=self._spend.collector)
             )
 
             self._background_tasks.add(task)
@@ -118,8 +143,8 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
             task.add_done_callback(self._background_tasks.discard)
         except Exception as e:  # noqa: BLE001 # Safe catch-all for verbose logging
             verbose_logger.exception(
-                "Failed to schedule passthrough spend-tracking flush; %d buffered chunks dropped: %s",
-                len(self._raw_bytes),
+                "Failed to schedule passthrough spend-tracking flush; %d collected chunks dropped: %s",
+                self._spend.chunk_count,
                 e,
             )
 
@@ -134,7 +159,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
             await self  # pyright: ignore[reportGeneralTypeIssues]  # structural type check misses __await__
         try:
             chunk: Final = await anext(self._iterator)
-            self._raw_bytes.append(chunk)
+            self._spend.add(chunk)
         except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
             self._start_flush()
             try:
@@ -181,13 +206,12 @@ class PassthroughStreamingResponse(Generator[bytes, bytes, None]):
         self.headers = response.headers
         self.status_code = response.status_code
         self._litellm_logging_obj = litellm_logging_obj
-        self._provider_config = provider_config
         self._iterator: Generator[bytes, bytes, None] = _as_generator(response.iter_bytes())
-        self._raw_bytes: list[bytes] = []  # mutable-ok: instance buffer for streaming chunks
+        self._spend = _SpendCollection(provider_config, litellm_logging_obj)
         self._flush_scheduled = False
 
     def _start_flush(self) -> None:
-        if self._flush_scheduled or not self._raw_bytes:
+        if self._flush_scheduled or not self._spend.should_flush:
             return
         self._flush_scheduled = True
 
@@ -195,14 +219,12 @@ class PassthroughStreamingResponse(Generator[bytes, bytes, None]):
 
         try:
             executor.submit(
-                self._litellm_logging_obj.flush_passthrough_collected_chunks,
-                raw_bytes=self._raw_bytes,
-                provider_config=self._provider_config,
+                self._litellm_logging_obj.flush_passthrough_collected_chunks, collector=self._spend.collector
             )
         except Exception as e:  # noqa: BLE001 # Safe catch-all for verbose logging
             verbose_logger.exception(
-                "Failed to schedule passthrough spend-tracking flush; %d buffered chunks dropped: %s",
-                len(self._raw_bytes),
+                "Failed to schedule passthrough spend-tracking flush; %d collected chunks dropped: %s",
+                self._spend.chunk_count,
                 e,
             )
 
@@ -212,7 +234,7 @@ class PassthroughStreamingResponse(Generator[bytes, bytes, None]):
     def __next__(self) -> bytes:
         try:
             chunk: Final = next(self._iterator)
-            self._raw_bytes.append(chunk)
+            self._spend.add(chunk)
         except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
             self._start_flush()
             try:

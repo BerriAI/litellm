@@ -10,9 +10,7 @@ import time
 from dataclasses import dataclass
 
 import jwt
-
 from e2e_config import MASTER_KEY
-from proxy_client import ProxyClient
 from e2e_http import (
     AuthHeaders,
     NetworkError,
@@ -37,6 +35,8 @@ from models import (
     KeyDeleteBody,
     KeyGenerateBody,
     KeyGenerateResponse,
+    KeyInfoParams,
+    KeyInfoResponse,
     KeyListParams,
     KeyListResponse,
     KeyRegenerateBody,
@@ -81,6 +81,7 @@ from models import (
     UserNewResponse,
     UserUpdateBody,
 )
+from proxy_client import ProxyClient
 
 MODEL_ACCESS_DENIED_MARKER = "key_model_access_denied"
 ROUTE_NOT_ALLOWED_MARKER = "not allowed to call this route"
@@ -152,13 +153,21 @@ class ManagementClient:
     def update_key_models(self, key: str, models: list[str]) -> None:
         _ = unwrap(self.update_key(KeyUpdateBody(key=key, models=models)))
 
-    def delete_key_strict(self, key: str) -> None:
+    def key_info_as(self, key: str, *, caller_key: str) -> Result[KeyInfoResponse]:
+        return self.proxy.transport.get(
+            "/key/info",
+            headers=self.proxy.transport.bearer(caller_key),
+            params=KeyInfoParams(key=key),
+            response_type=KeyInfoResponse,
+        )
+
+    def delete_key_strict(self, key: str, *, caller_key: str | None = None) -> None:
         """Strict delete for the act phase of a test: a failed delete is a hard
         failure, unlike the warn-only ProxyClient.delete_key used at teardown."""
         _ = unwrap(
             self.proxy.transport.post(
                 "/key/delete",
-                headers=self.proxy.transport.master,
+                headers=self.proxy.transport.master if caller_key is None else self.proxy.transport.bearer(caller_key),
                 json=KeyDeleteBody(keys=[key]),
                 response_type=NoBody,
             )

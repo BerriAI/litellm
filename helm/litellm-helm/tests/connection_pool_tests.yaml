@@ -59,3 +59,54 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: "4"
+
+  - it: should give the collector sidecar the same pool env as the proxy container
+    template: deployment.yaml
+    set:
+      collector.enabled: true
+      db.connectionPool.enabled: true
+      db.connectionPool.maxDbConnections: 8
+      db.connectionPool.maxClientConn: 400
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: litellm-collector
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_PGBOUNCER_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS
+            value: "8"
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_PGBOUNCER_MAX_CLIENT_CONN
+            value: "400"
+
+  - it: should give the collector sidecar no pool env when the pool is off
+    template: deployment.yaml
+    set:
+      collector.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: litellm-collector
+      - notContains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_PGBOUNCER_ENABLED
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_PGBOUNCER_MAX_CLIENT_CONN
+          any: true

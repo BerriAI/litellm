@@ -81,7 +81,7 @@ class RecordingLogger(CustomLogger):
         await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=timeout)
         return tuple(event for event in self.events if event.name == name)
 
-    def log_pre_api_call(self, model, _messages, kwargs):
+    def log_pre_api_call(self, model, messages, kwargs):
         self._record("log_pre_api_call", kwargs)
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):

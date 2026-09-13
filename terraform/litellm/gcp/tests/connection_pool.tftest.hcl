@@ -79,6 +79,45 @@ run "pool_enabled_renders_the_three_vars_with_configured_sizes" {
   }
 }
 
+run "collector_sidecar_gets_the_same_pool_env_as_the_gateway" {
+  command = plan
+
+  variables {
+    collector_enabled               = true
+    gateway_connection_pool_enabled = true
+    gateway_pool_max_db_connections = 8
+    gateway_pool_max_client_conn    = 250
+  }
+
+  assert {
+    condition = alltrue([
+      for c in google_cloud_run_v2_service.gateway[0].template[0].containers : (
+        { for e in c.env : e.name => e.value }["LITELLM_PGBOUNCER_ENABLED"] == "true" &&
+        { for e in c.env : e.name => e.value }["LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS"] == "8" &&
+        { for e in c.env : e.name => e.value }["LITELLM_PGBOUNCER_MAX_CLIENT_CONN"] == "250"
+      ) if c.name == "spend-collector"
+    ]) && length([for c in google_cloud_run_v2_service.gateway[0].template[0].containers : c.name if c.name == "spend-collector"]) == 1
+    error_message = "The spend-collector sidecar must carry the same three LITELLM_PGBOUNCER_* vars as the gateway so its Prisma connects to the instance-local pool."
+  }
+}
+
+run "collector_sidecar_gets_no_pool_env_when_the_pool_is_off" {
+  command = plan
+
+  variables {
+    collector_enabled = true
+  }
+
+  assert {
+    condition = !anytrue(flatten([
+      for c in google_cloud_run_v2_service.gateway[0].template[0].containers : [
+        for e in c.env : startswith(e.name, "LITELLM_PGBOUNCER_")
+      ] if c.name == "spend-collector"
+    ])) && length([for c in google_cloud_run_v2_service.gateway[0].template[0].containers : c.name if c.name == "spend-collector"]) == 1
+    error_message = "The spend-collector sidecar must get no LITELLM_PGBOUNCER_* env unless gateway_connection_pool_enabled is set."
+  }
+}
+
 run "pool_enabled_uses_the_module_default_sizes" {
   command = plan
 
