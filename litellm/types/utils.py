@@ -48,6 +48,7 @@ from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.types.llms.base import (
     BaseLiteLLMOpenAIResponseObject,
+    CachedTokensDetails,
     LiteLLMPydanticObjectBase,
 )
 from litellm.types.mcp import MCPServerCostInfo
@@ -60,7 +61,6 @@ from .llms.base import HiddenParams
 from .llms.openai import (
     AllMessageValues,
     Batch,
-    CachedTokensDetails,
     ChatCompletionAnnotation,
     ChatCompletionReasoningItem,
     ChatCompletionRedactedThinkingBlock,

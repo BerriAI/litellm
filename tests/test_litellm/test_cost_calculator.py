@@ -19,6 +19,7 @@ from litellm.cost_calculator import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse, OCRUsageInfo
+from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
@@ -4894,6 +4895,48 @@ def test_realtime_combine_sums_nested_cached_tokens_details():
     assert combined.prompt_tokens_details.cached_tokens_details.audio_tokens == 228
     assert combined.prompt_tokens_details.cached_tokens_details.text_tokens == 64
     assert combined.prompt_tokens_details.cached_tokens_details.image_tokens is None
+
+
+@pytest.mark.parametrize("details_first", [True, False])
+def test_realtime_combine_keeps_cached_split_when_only_one_usage_has_details(details_first: bool):
+    with_details: Final = {
+        "type": "response.done",
+        "response": {
+            "usage": {
+                "input_tokens": 283,
+                "output_tokens": 0,
+                "total_tokens": 283,
+                "input_token_details": {
+                    "text_tokens": 116,
+                    "audio_tokens": 167,
+                    "cached_tokens": 192,
+                    "cached_tokens_details": {"text_tokens": 64, "audio_tokens": 128},
+                },
+            }
+        },
+    }
+    without_details: Final = {
+        "type": "response.done",
+        "response": {
+            "usage": {
+                "input_tokens": 150,
+                "output_tokens": 0,
+                "total_tokens": 150,
+                "input_token_details": {"text_tokens": 50, "audio_tokens": 100, "cached_tokens": 100},
+            }
+        },
+    }
+    results: OpenAIRealtimeStreamList = (
+        [with_details, without_details] if details_first else [without_details, with_details]
+    )
+
+    combined = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results,
+    )
+
+    assert combined.prompt_tokens_details is not None
+    assert combined.prompt_tokens_details.cached_tokens == 292
+    assert combined.prompt_tokens_details.cached_tokens_details == CachedTokensDetails(text_tokens=64, audio_tokens=128)
 
 
 def test_usage_without_cached_tokens_details_omits_key():

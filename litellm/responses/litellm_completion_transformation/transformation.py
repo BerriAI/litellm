@@ -43,9 +43,9 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
+from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import (
     AllMessageValues,
-    CachedTokensDetails,
     ChatCompletionAssistantMessage,
     ChatCompletionImageObject,
     ChatCompletionImageUrlObject,

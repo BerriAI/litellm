@@ -97,6 +97,7 @@ from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_ro
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
+from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
     ImageGenerationRequestQuality,
@@ -109,7 +110,6 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.rerank import RerankBilledUnits, RerankResponse
 from litellm.types.utils import (
-    CachedTokensDetails,
     CallTypesLiteral,
     LiteLLMRealtimeStreamLoggingObject,
     LlmProviders,
