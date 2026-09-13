@@ -4,6 +4,8 @@ import random
 import re
 import shutil
 import subprocess
+import sys
+import sysconfig
 import tempfile
 import time
 from dataclasses import dataclass, replace
@@ -36,7 +38,7 @@ def str_to_bool(value: Optional[str]) -> bool:
 
 
 def _get_prisma_env() -> dict:
-    """Get environment variables for Prisma, handling offline mode if configured."""
+    """Get environment variables for Prisma, including this interpreter's scripts."""
     prisma_env = os.environ.copy()
     if str_to_bool(os.getenv("PRISMA_OFFLINE_MODE")):
         # These env vars prevent Prisma from attempting downloads
@@ -44,6 +46,16 @@ def _get_prisma_env() -> dict:
         prisma_env["NPM_CONFIG_CACHE"] = os.getenv(
             "NPM_CONFIG_CACHE", "/app/.cache/npm"
         )
+
+    scripts_dir = sysconfig.get_path("scripts") or os.path.dirname(
+        os.path.abspath(sys.executable)
+    )
+    existing_path = prisma_env.get("PATH", "")
+    path_entries = existing_path.split(os.pathsep) if existing_path else []
+    # Prisma's Python wrapper starts this entry point through /bin/sh.
+    prisma_env["PATH"] = os.pathsep.join(
+        [scripts_dir, *(entry for entry in path_entries if entry != scripts_dir)]
+    )
     return prisma_env
 
 
