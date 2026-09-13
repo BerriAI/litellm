@@ -597,7 +597,11 @@ class TestHookHeaderMergePriority:
                             "Authorization": "Bearer oauth2-token",
                             "X-OAuth": "yes",
                         },
-                        raw_headers=None,
+                        raw_headers={
+                            "x-litellm-api-key": "Bearer sk-litellm-key",
+                            "authorization": "Bearer oauth2-token",
+                        },
+                        user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-key"),
                         proxy_logging_obj=None,
                         hook_extra_headers={
                             "Authorization": "Bearer hook-jwt",
