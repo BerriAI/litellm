@@ -4,6 +4,7 @@ import json
 import os
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from types import MappingProxyType
 from typing import (
     Final,
@@ -1018,6 +1019,56 @@ async def get_sso_settings():
     }
 
 
+def _restored_sso_secret(
+    secret_field: str,
+    incoming_secret: JsonValue,
+    submitted_fields: AbstractSet[str],
+    before_sso_data: Mapping[str, JsonValue] | None,
+) -> JsonValue:
+    """Return the value to persist for one SSO secret field.
+
+    The stored secret is kept when the client could not have meant to change it:
+    the field was not submitted at all, or the submitted value is exactly the
+    mask of the currently effective secret. Anything else -- a new secret,
+    ``""`` or ``None`` -- is an explicit instruction and passes through, so
+    "Clear SSO Settings" still clears. The effective secret is the stored row
+    value, falling back to the process environment (the precedence
+    get_sso_settings uses when it masks the field).
+    """
+    db_secret: Final = before_sso_data.get(secret_field) if before_sso_data else None
+    stored_secret: Final = db_secret or os.environ.get(SSO_FIELD_ENV_VARS.get(secret_field, ""))
+    if not stored_secret:
+        return incoming_secret
+    masked: Final = mask_sensitive_keys({secret_field: stored_secret}, {secret_field})  # mutable-ok: dict/set API
+    if secret_field not in submitted_fields or incoming_secret == masked[secret_field]:
+        return stored_secret
+    return incoming_secret
+
+
+def _restore_masked_sso_secrets(
+    sso_data: Mapping[str, JsonValue],
+    submitted_fields: AbstractSet[str],
+    before_sso_data: Mapping[str, JsonValue] | None,
+) -> dict[str, JsonValue]:  # mutable-ok: dict API downstream
+    """Return a copy of ``sso_data`` with stored SSO secrets restored where the
+    client could not have meant to change them (#38177); see _restored_sso_secret.
+
+    Secret fields are masked before they are sent to the UI (see
+    get_sso_settings), so a client that edits only unrelated fields either
+    omits the secret or sends the masked placeholder back unchanged; persisting
+    either would overwrite e.g. the OAuth client_secret with ``abcd****wxyz``
+    and break SSO login.
+    """
+    return {  # mutable-ok: fresh copy; the original request mapping is never mutated
+        field_name: (
+            _restored_sso_secret(field_name, value, submitted_fields, before_sso_data)
+            if field_name in SSO_SECRET_FIELDS
+            else value
+        )
+        for field_name, value in sso_data.items()
+    }
+
+
 @router.patch(
     "/update/sso_settings",
     tags=["SSO Settings"],
@@ -1080,11 +1131,11 @@ async def update_sso_settings(
         config["general_settings"] = {}
 
     # Update environment variables in config and in memory
-    sso_data: Final = sso_config.model_dump()
+    sso_data: Final = _restore_masked_sso_secrets(sso_config.model_dump(), sso_config.model_fields_set, before_sso_data)
     for field_name, value in sso_data.items():
         if field_name in SSO_FIELD_ENV_VARS:
             env_var_name = SSO_FIELD_ENV_VARS[field_name]
-            if value:
+            if isinstance(value, str) and value:
                 os.environ[env_var_name] = value
             else:
                 # Clear environment variable if value is null/empty
@@ -1154,7 +1205,9 @@ async def update_sso_settings(
     return {
         "message": "SSO settings updated successfully",
         "status": "success",
-        "settings": sso_data,
+        # Never echo plaintext secrets back; the response is masked the same way
+        # get_sso_settings masks them.
+        "settings": mask_sensitive_keys(sso_data, set(SSO_SECRET_FIELDS)),  # mutable-ok: set API
     }
 
 
