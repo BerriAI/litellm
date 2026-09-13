@@ -833,16 +833,12 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         the original fields.
         """
         max_str_length: Final = 10_000
-        error_str, messages, response = (
-            self._truncate_field(field_value=standard_logging_object.get(field), max_length=max_str_length)
+        candidates: Final = {
+            field: self._truncate_field(field_value=standard_logging_object.get(field), max_length=max_str_length)
             for field in ("error_str", "messages", "response")
-        )
-        return {
-            **standard_logging_object,
-            "error_str": standard_logging_object["error_str"] if error_str is None else error_str,
-            "messages": standard_logging_object["messages"] if messages is None else messages,
-            "response": standard_logging_object["response"] if response is None else response,
         }
+        truncated_fields: Final = {field: text for field, text in candidates.items() if text is not None}
+        return {**standard_logging_object, **truncated_fields}
 
     def _truncate_field(self, field_value: object, max_length: int) -> str | None:
         """
