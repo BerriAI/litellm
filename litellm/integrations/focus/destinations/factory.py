@@ -9,6 +9,7 @@ from .base import FocusDestination
 from .gcs_destination import FocusGCSDestination
 from .mavvrik_destination import FocusMavvrikDestination
 from .s3_destination import FocusS3Destination
+from .ternary_destination import FocusTernaryDestination
 from .vantage_destination import FocusVantageDestination
 
 
@@ -33,6 +34,8 @@ class FocusDestinationFactory:
             return FocusGCSDestination(prefix=prefix, config=normalized_config)
         if provider_lower == "mavvrik":
             return FocusMavvrikDestination(prefix=prefix, config=normalized_config)
+        if provider_lower == "ternary":
+            return FocusTernaryDestination(prefix=prefix, config=normalized_config)
         raise NotImplementedError(f"Provider '{provider}' not supported for Focus export")
 
     @staticmethod
@@ -79,5 +82,18 @@ class FocusDestinationFactory:
                 "api_endpoint": overrides.get("api_endpoint") or os.getenv("MAVVRIK_API_ENDPOINT"),
                 "connection_id": overrides.get("connection_id") or os.getenv("MAVVRIK_CONNECTION_ID"),
             }
+            return {k: v for k, v in resolved.items() if v is not None}
+        if provider == "ternary":
+            resolved = {
+                "api_key": overrides.get("api_key") or os.getenv("TERNARY_API_KEY"),
+                "connection_id": overrides.get("connection_id") or os.getenv("TERNARY_CONNECTION_ID"),
+                "base_url": overrides.get("base_url") or os.getenv("TERNARY_BASE_URL"),
+            }
+            if not resolved.get("api_key"):
+                raise ValueError("TERNARY_API_KEY must be provided for Ternary exports")
+            if not resolved.get("connection_id"):
+                raise ValueError("TERNARY_CONNECTION_ID must be provided for Ternary exports")
+            if not resolved.get("base_url"):
+                raise ValueError("TERNARY_BASE_URL must be provided for Ternary exports")
             return {k: v for k, v in resolved.items() if v is not None}
         raise NotImplementedError(f"Provider '{provider}' not supported for Focus export configuration")
