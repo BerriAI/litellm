@@ -157,6 +157,7 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     BudgetConfig,
+    ModelResponse,
     PersonalUIKeyGenerationConfig,
     TeamUIKeyGenerationConfig,
 )
@@ -7140,15 +7141,20 @@ def _callback_entry_error(entry: Mapping[str, object]) -> str | None:
     return None
 
 
-async def flush_gcs_and_describe_failures(gcs_logger: CustomLogger | None) -> str | None:
+async def flush_gcs_and_describe_failures(gcs_logger: CustomLogger | None, health_check_event_id: str) -> str | None:
     from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 
     if not isinstance(gcs_logger, GCSBucketLogger):
         return "gcs_bucket callback was selected but no GCS logger was initialized"
-    flush_result: Final = await gcs_logger.flush_queue_and_report()
-    if flush_result.failed == 0:
-        return None
-    return f"GCS upload failed for {flush_result.failed} event(s), {flush_result.sent} uploaded"
+    flush_rounds: Final = max(1, math.ceil(gcs_logger.log_queue.qsize() / gcs_logger.batch_size))
+    for _ in range(flush_rounds):
+        flush_result = await gcs_logger.flush_queue_and_report()
+        if health_check_event_id in flush_result.failed_ids:
+            return (
+                f"GCS upload failed for the /key/health event and {flush_result.failed - 1} other event(s), "
+                f"{flush_result.sent} uploaded"
+            )
+    return None
 
 
 async def test_key_logging(
@@ -7194,7 +7200,7 @@ async def test_key_logging(
             request=request,
         )
         data["mock_response"] = "test response"
-        await litellm.acompletion(**data)  # make mock completion call to trigger key based callbacks
+        health_check_response: Final = await litellm.acompletion(**data)
     except Exception as e:
         return LoggingCallbackStatus(
             callbacks=logging_callbacks,
@@ -7203,20 +7209,26 @@ async def test_key_logging(
         )
 
     await asyncio.sleep(2)  # wait for callbacks to run, callbacks use batching so wait for the flush event
+    callback_log_contents: Final = log_capture_string.getvalue()
 
+    health_check_event_id: Final = health_check_response.id if isinstance(health_check_response, ModelResponse) else ""
     gcs_failure: Final = (
-        await flush_gcs_and_describe_failures(get_custom_logger_compatible_class("gcs_bucket"))
+        await flush_gcs_and_describe_failures(get_custom_logger_compatible_class("gcs_bucket"), health_check_event_id)
         if "gcs_bucket" in logging_callbacks
         else None
     )
-
-    log_contents: Final = log_capture_string.getvalue()
     logger.removeHandler(ch)
-    if gcs_failure is not None or log_contents:
+    flush_log_contents: Final = (
+        log_capture_string.getvalue()[len(callback_log_contents) :] if gcs_failure is not None else ""
+    )
+    if gcs_failure is not None or callback_log_contents:
         return LoggingCallbackStatus(
             callbacks=logging_callbacks,
             status="unhealthy",
-            details=f"Logger exceptions triggered, system is unhealthy: {gcs_failure or ''} {log_contents}".strip(),
+            details=(
+                "Logger exceptions triggered, system is unhealthy: "
+                f"{gcs_failure or ''} {callback_log_contents}{flush_log_contents}"
+            ).strip(),
         )
     return LoggingCallbackStatus(
         callbacks=logging_callbacks,

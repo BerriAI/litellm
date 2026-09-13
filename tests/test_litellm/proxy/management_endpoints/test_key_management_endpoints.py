@@ -18415,33 +18415,72 @@ async def test_key_health_rejects_key_logging_entries_without_a_callback_name():
     assert "callback_name is required" in exc.value.message
 
 
-def _gcs_logger_whose_flush_reports(sent: int, failed: int):
+def _fake_upload_gcs_logger(broken_bucket: str | None = None, batch_size: int = 2048, enqueue_error: str | None = None):
     from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
-    from litellm.types.integrations.gcs_bucket import GCSFlushResult
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+    from litellm.types.integrations.gcs_bucket import GCSLoggingConfig, GCSLogQueueItem
+    from litellm.types.utils import StandardLoggingPayload
 
-    class _FixedFlushGCSLogger(GCSBucketLogger):
+    class _FakeUploadGCSLogger(GCSBucketLogger):
+        """Skips GCP auth; an upload to `broken_bucket` raises, every other upload records its bucket"""
+
         def __init__(self) -> None:
             with patch("litellm.proxy.proxy_server.premium_user", True):  # test-quality-ok: GCS logging is premium-gated
-                super().__init__(bucket_name="test-bucket")
+                super().__init__(bucket_name="team-bucket")
+            self.batch_size = batch_size
+            self.uploaded_buckets: list[str] = []
 
-        async def flush_queue_and_report(self) -> GCSFlushResult:
-            return GCSFlushResult(sent=sent, failed=failed)
+        async def _enqueue(self, item: GCSLogQueueItem) -> None:
+            if enqueue_error is not None:
+                raise RuntimeError(enqueue_error)
+            await super()._enqueue(item)
 
-    return _FixedFlushGCSLogger()
+        async def enqueue(self, request_id: str, bucket_name: str) -> None:
+            payload: Final = StandardLoggingPayload(id=request_id)  # pyright: ignore[reportCallIssue]  # partial payload is enough for queueing
+            kwargs: Final = {"standard_callback_dynamic_params": {"gcs_bucket_name": bucket_name}}
+            await self._enqueue(GCSLogQueueItem(payload=payload, kwargs=kwargs, response_obj=None))
+
+        async def get_gcs_logging_config(self, kwargs: dict | None = None) -> GCSLoggingConfig:
+            dynamic_params: Final = (kwargs or {}).get("standard_callback_dynamic_params") or {}
+            return GCSLoggingConfig(
+                bucket_name=dynamic_params.get("gcs_bucket_name") or "team-bucket",
+                vertex_instance=None,
+                path_service_account=None,
+            )
+
+        async def construct_request_headers(
+            self, service_account_json: str | None, vertex_instance: VertexBase | None = None
+        ) -> dict[str, str]:
+            return {}
+
+        async def _log_json_data_on_gcs(
+            self, headers: dict[str, str], bucket_name: str, object_name: str, logging_payload: StandardLoggingPayload | str
+        ) -> None:
+            if bucket_name == broken_bucket:
+                raise RuntimeError("storage.googleapis.com returned 403")
+            self.uploaded_buckets.append(bucket_name)
+
+    return _FakeUploadGCSLogger()
 
 
 @pytest.mark.asyncio
-async def test_flush_gcs_reports_the_failed_upload_count_from_the_registered_logger():
+async def test_flush_gcs_reports_only_when_the_health_event_itself_failed_to_upload():
     from litellm.proxy.management_endpoints.key_management_endpoints import flush_gcs_and_describe_failures
 
+    logger = _fake_upload_gcs_logger(broken_bucket="team-bucket")
+    await logger.enqueue("req-1", "team-bucket")
+    await logger.enqueue("req-2", "team-bucket")
+    await logger.enqueue("req-3", "ok-bucket")
+    await logger.enqueue("health-event", "team-bucket")
+
     assert (
-        await flush_gcs_and_describe_failures(_gcs_logger_whose_flush_reports(sent=0, failed=3))
-        == "GCS upload failed for 3 event(s), 0 uploaded"
+        await flush_gcs_and_describe_failures(logger, "health-event")
+        == "GCS upload failed for the /key/health event and 2 other event(s), 1 uploaded"
     )
-    assert await flush_gcs_and_describe_failures(_gcs_logger_whose_flush_reports(sent=2, failed=0)) is None
+    assert await flush_gcs_and_describe_failures(logger, "health-event-already-uploaded") is None
 
 
-async def _key_logging_status_after_gcs_flush(sent: int, failed: int) -> LoggingCallbackStatus:
+async def _key_logging_status_with_gcs_logger(gcs_logger) -> LoggingCallbackStatus:
     from starlette.requests import Request as StarletteRequest
 
     from litellm.proxy.management_endpoints.key_management_endpoints import test_key_logging
@@ -18454,28 +18493,52 @@ async def _key_logging_status_after_gcs_flush(sent: int, failed: int) -> Logging
         patch("litellm.proxy.proxy_server.proxy_config", _default_team_gcs_proxy_config("team-gcs")),  # test-quality-ok: test_key_logging reads the module-level proxy config
         patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: the mock completion's GCS success event is premium-gated
         patch(  # test-quality-ok: the mock completion and the flush both look the logger up in this process-wide registry
-            "litellm.litellm_core_utils.litellm_logging._in_memory_loggers",
-            [_gcs_logger_whose_flush_reports(sent=sent, failed=failed)],
+            "litellm.litellm_core_utils.litellm_logging._in_memory_loggers", [gcs_logger]
         ),
     ):
         return await test_key_logging(user_api_key_dict=caller, request=request, logging_callbacks=("gcs_bucket",))
 
 
 @pytest.mark.asyncio
-async def test_key_logging_marks_the_key_unhealthy_when_the_gcs_flush_leaves_events_undelivered():
-    status = await _key_logging_status_after_gcs_flush(sent=1, failed=3)
+async def test_key_logging_marks_the_key_unhealthy_when_its_own_gcs_upload_fails():
+    status = await _key_logging_status_with_gcs_logger(_fake_upload_gcs_logger(broken_bucket="team-bucket"))
 
     assert status["status"] == "unhealthy"
-    assert "GCS upload failed for 3 event(s), 1 uploaded" in (status["details"] or "")
+    assert "GCS upload failed for the /key/health event and 0 other event(s), 0 uploaded" in (status["details"] or "")
+    assert "storage.googleapis.com returned 403" in (status["details"] or "")
 
 
 @pytest.mark.asyncio
-async def test_key_logging_stays_healthy_when_the_gcs_flush_delivers_every_event():
-    status = await _key_logging_status_after_gcs_flush(sent=1, failed=0)
+async def test_key_logging_reports_the_callback_error_when_the_event_never_reaches_the_gcs_queue():
+    status = await _key_logging_status_with_gcs_logger(_fake_upload_gcs_logger(enqueue_error="queue closed"))
+
+    assert status["status"] == "unhealthy"
+    assert "GCS Bucket logging error: queue closed" in (status["details"] or "")
+    assert "GCS upload failed" not in (status["details"] or "")
+
+
+@pytest.mark.asyncio
+async def test_key_logging_stays_healthy_when_only_another_teams_queued_upload_fails():
+    logger = _fake_upload_gcs_logger(broken_bucket="other-team-bucket")
+    await logger.enqueue("req-other-team", "other-team-bucket")
+
+    status = await _key_logging_status_with_gcs_logger(logger)
 
     assert status["status"] == "healthy"
     assert status["callbacks"] == ("gcs_bucket",)
     assert "Manually check if logs were sent to gcs_bucket" in (status["details"] or "")
+    assert logger.uploaded_buckets == ["team-bucket"]
+
+
+@pytest.mark.asyncio
+async def test_key_logging_flushes_past_the_first_batch_to_reach_its_own_event():
+    logger = _fake_upload_gcs_logger(broken_bucket="team-bucket", batch_size=1)
+    await logger.enqueue("req-other-team", "other-team-bucket")
+
+    status = await _key_logging_status_with_gcs_logger(logger)
+
+    assert status["status"] == "unhealthy"
+    assert logger.uploaded_buckets == ["other-team-bucket"]
 
 
 @pytest.mark.asyncio
@@ -18483,6 +18546,6 @@ async def test_flush_gcs_names_a_missing_logger_when_the_callback_never_initiali
     from litellm.proxy.management_endpoints.key_management_endpoints import flush_gcs_and_describe_failures
 
     assert (
-        await flush_gcs_and_describe_failures(None)
+        await flush_gcs_and_describe_failures(None, "health-event")
         == "gcs_bucket callback was selected but no GCS logger was initialized"
     )

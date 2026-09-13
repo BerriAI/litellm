@@ -242,10 +242,14 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         Send each log individually as separate GCS objects (legacy behavior).
         This is used when GCS_USE_BATCHED_LOGGING is disabled.
         """
-        failed_items: Final = tuple([item for item in items if not await self._send_single_log_item(item)])
+        outcomes: Final = tuple([(item, await self._send_single_log_item(item)) for item in items])
+        failed_items: Final = tuple(item for item, sent in outcomes if not sent)
         if failed_items:
             self._requeue(failed_items)
-        return GCSFlushResult(sent=len(items) - len(failed_items), failed=len(failed_items))
+        return GCSFlushResult(
+            sent_ids=tuple(item["payload"]["id"] for item, sent in outcomes if sent),
+            failed_ids=tuple(item["payload"]["id"] for item in failed_items),
+        )
 
     async def _send_single_log_item(self, item: GCSLogQueueItem) -> bool:
         """
@@ -288,8 +292,12 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             if group_failed:
                 self._requeue(group_items)
         return GCSFlushResult(
-            sent=sum(group_sent for _, (group_sent, _) in results),
-            failed=sum(group_failed for _, (_, group_failed) in results),
+            sent_ids=tuple(
+                item["payload"]["id"] for group_items, (_, failed) in results if not failed for item in group_items
+            ),
+            failed_ids=tuple(
+                item["payload"]["id"] for group_items, (_, failed) in results if failed for item in group_items
+            ),
         )
 
     async def async_send_batch(self) -> None:
@@ -307,7 +315,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         items_to_process: Final = self._drain_queue_batch()
 
         if not items_to_process:
-            return GCSFlushResult(sent=0, failed=0)
+            return GCSFlushResult(sent_ids=(), failed_ids=())
 
         if self.use_batched_logging:
             return await self._send_grouped_batches(items_to_process)

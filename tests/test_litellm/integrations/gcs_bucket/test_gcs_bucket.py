@@ -61,14 +61,14 @@ async def test_failed_batch_stays_queued_and_is_retried_on_the_next_flush():
 
     failed_flush = await logger.flush_queue_and_report()
 
-    assert failed_flush == GCSFlushResult(sent=0, failed=2)
+    assert failed_flush == GCSFlushResult(sent_ids=(), failed_ids=("req-1", "req-2"))
     assert logger.log_queue.qsize() == 2
     assert logger.uploaded == []
 
     logger.failing_ids = frozenset()
     retried_flush = await logger.flush_queue_and_report()
 
-    assert retried_flush == GCSFlushResult(sent=2, failed=0)
+    assert retried_flush == GCSFlushResult(sent_ids=("req-1", "req-2"), failed_ids=())
     assert logger.log_queue.qsize() == 0
     assert logger.uploaded == [["req-1", "req-2"]]
 
@@ -83,7 +83,7 @@ async def test_individual_mode_requeues_only_the_failed_items():
 
     result = await logger.flush_queue_and_report()
 
-    assert result == GCSFlushResult(sent=1, failed=1)
+    assert result == GCSFlushResult(sent_ids=("req-ok",), failed_ids=("req-fail",))
     assert logger.uploaded == [["req-ok"]]
     assert logger.queued_ids() == ["req-fail"]
 
@@ -110,7 +110,7 @@ async def test_failed_batch_is_dropped_when_new_events_filled_the_queue_during_t
 
     result = await logger.flush_queue_and_report()
 
-    assert result == GCSFlushResult(sent=0, failed=2)
+    assert result == GCSFlushResult(sent_ids=(), failed_ids=("req-1", "req-2"))
     assert logger.queued_ids() == ["req-3", "req-4"]
 
 
@@ -118,4 +118,4 @@ async def test_failed_batch_is_dropped_when_new_events_filled_the_queue_during_t
 async def test_empty_queue_flush_reports_nothing_sent_or_failed():
     logger = _FakeUploadGCSLogger()
 
-    assert await logger.flush_queue_and_report() == GCSFlushResult(sent=0, failed=0)
+    assert await logger.flush_queue_and_report() == GCSFlushResult(sent_ids=(), failed_ids=())

@@ -38,5 +38,13 @@ class GCSLogQueueItem(TypedDict):
 
 @dataclass(frozen=True, slots=True)
 class GCSFlushResult:
-    sent: int
-    failed: int
+    sent_ids: tuple[str, ...]
+    failed_ids: tuple[str, ...]
+
+    @property
+    def sent(self) -> int:
+        return len(self.sent_ids)
+
+    @property
+    def failed(self) -> int:
+        return len(self.failed_ids)
