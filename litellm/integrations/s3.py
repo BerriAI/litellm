@@ -250,7 +250,7 @@ def get_s3_object_key(
     start_time: datetime,
     s3_file_name: str,
 ) -> str:
-    sanitized_s3_file_name: Final = s3_file_name.replace("/", "_")
+    sanitized_s3_file_name: Final = s3_file_name.replace("/", "_").replace(":", "_")
     configured_prefix: Final = (s3_path.rstrip("/") + "/" if s3_path else "") + prefix
     date_segment: Final = start_time.strftime("%Y-%m-%d") + "/"
     # we need the s3 key to include the time, so we log cache hits too
