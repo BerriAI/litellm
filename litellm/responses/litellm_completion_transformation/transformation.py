@@ -2829,6 +2829,14 @@ class LiteLLMCompletionResponsesConfig:
             if hasattr(prompt_details, "audio_tokens") and prompt_details.audio_tokens is not None:
                 input_details_dict["audio_tokens"] = prompt_details.audio_tokens
 
+            # The cost path reads the grounding counters off the input details, and a realtime
+            # session's usage is rebuilt from its own response.done, so dropping them here bills
+            # no per-query grounding fee at all.
+            for counter in ("web_search_requests", "google_maps_grounding_requests"):
+                counter_value = getattr(prompt_details, counter, None)
+                if counter_value is not None:
+                    input_details_dict[counter] = counter_value
+
             cache_write_tokens = getattr(prompt_details, "cache_write_tokens", None) or getattr(
                 prompt_details, "cache_creation_tokens", None
             )
