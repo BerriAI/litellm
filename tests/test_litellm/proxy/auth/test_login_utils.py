@@ -1348,7 +1348,6 @@ async def test_counters_do_not_share_the_key_authentication_cache(monkeypatch):
 
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
-    monkeypatch.setattr(ps, "redis_usage_cache", None)
 
     auth_cache_keys_before = set(ps.user_api_key_cache.in_memory_cache.cache_dict)
 
@@ -1356,7 +1355,7 @@ async def test_counters_do_not_share_the_key_authentication_cache(monkeypatch):
     request.headers = {}
     request.client = MagicMock()
     request.client.host = "1.2.3.4"
-    throttle = LoginThrottle.from_request(request)
+    throttle = LoginThrottle.from_request(request, general_settings={}, redis_cache=None)
 
     for i in range(25):
         with pytest.raises(ProxyException, match="Invalid credentials"):
@@ -1368,30 +1367,28 @@ async def test_counters_do_not_share_the_key_authentication_cache(monkeypatch):
     )
 
 
-def test_settings_that_arrive_as_environment_strings_are_honored(monkeypatch):
+def test_settings_that_arrive_as_environment_strings_are_honored():
     """An `os.environ/VAR` reference in general_settings resolves to a string, not an int.
 
     Regression: a digit string fell back to the default with only a log line, so an operator
     tightening the limits through environment substitution silently kept the stock ceilings.
     """
-    from litellm.proxy import proxy_server as ps
     from litellm.proxy.auth.login_throttle import LoginThrottle
 
-    monkeypatch.setattr(
-        ps,
-        "general_settings",
-        {
-            "max_failed_login_attempts": "7",
-            "max_failed_login_attempts_per_source": " 70 ",
-            "failed_login_window_seconds": "not-a-number",
-        },
-    )
     request = MagicMock()
     request.headers = {}
     request.client = MagicMock()
     request.client.host = "1.2.3.4"
 
-    throttle = LoginThrottle.from_request(request)
+    throttle = LoginThrottle.from_request(
+        request,
+        general_settings={
+            "max_failed_login_attempts": "7",
+            "max_failed_login_attempts_per_source": " 70 ",
+            "failed_login_window_seconds": "not-a-number",
+        },
+        redis_cache=None,
+    )
 
     assert throttle.max_attempts == 7
     assert throttle.max_attempts_per_source == 70
@@ -1404,41 +1401,37 @@ def test_the_disable_flag_is_read_once_not_per_login_attempt(monkeypatch):
     With a hosted secret manager in read mode that is a synchronous network call per guess, so a
     flood of wrong passwords could exhaust the secret manager even after the source was refused.
     """
-    from litellm.proxy import proxy_server as ps
     from litellm.proxy.auth import login_throttle
 
     reads: Final[list[str]] = []  # mutable-ok: test-only call recorder
     monkeypatch.setattr(login_throttle, "get_secret_bool", lambda name, default: reads.append(name) or default)
     login_throttle._rate_limit_disabled.cache_clear()
-    monkeypatch.setattr(ps, "general_settings", {})
     request = MagicMock()
     request.headers = {}
     request.client = MagicMock()
     request.client.host = "1.2.3.4"
 
     for _ in range(50):
-        assert login_throttle.LoginThrottle.from_request(request).enabled is True
+        assert login_throttle.LoginThrottle.from_request(request, general_settings={}, redis_cache=None).enabled is True
 
     login_throttle._rate_limit_disabled.cache_clear()
     assert reads == ["LITELLM_DISABLE_LOGIN_RATE_LIMIT"]
 
 
-def test_a_negative_or_boolean_setting_falls_back_to_the_default(monkeypatch):
+def test_a_negative_or_boolean_setting_falls_back_to_the_default():
     """A limit below one would refuse everyone; a bool is a typo, not a count."""
-    from litellm.proxy import proxy_server as ps
     from litellm.proxy.auth.login_throttle import LoginThrottle
 
-    monkeypatch.setattr(
-        ps,
-        "general_settings",
-        {"max_failed_login_attempts": "-7", "max_failed_login_attempts_per_source": True},
-    )
     request = MagicMock()
     request.headers = {}
     request.client = MagicMock()
     request.client.host = "1.2.3.4"
 
-    throttle = LoginThrottle.from_request(request)
+    throttle = LoginThrottle.from_request(
+        request,
+        general_settings={"max_failed_login_attempts": "-7", "max_failed_login_attempts_per_source": True},
+        redis_cache=None,
+    )
 
     assert throttle.max_attempts == 50
     assert throttle.max_attempts_per_source == 250

@@ -15853,7 +15853,7 @@ async def login(request: Request):
             password=password,
             master_key=master_key,
             prisma_client=prisma_client,
-            throttle=LoginThrottle.from_request(request),
+            throttle=LoginThrottle.from_request(request, general_settings, redis_usage_cache),
             general_settings=general_settings,
         )
     except ProxyException as exc:
@@ -15946,7 +15946,7 @@ async def login_v2(request: Request):
             password=password,
             master_key=master_key,
             prisma_client=prisma_client,
-            throttle=LoginThrottle.from_request(request),
+            throttle=LoginThrottle.from_request(request, general_settings, redis_usage_cache),
             general_settings=general_settings,
         )
 
@@ -16018,7 +16018,7 @@ async def login_v3(request: Request):
             password=password,
             master_key=master_key,
             prisma_client=prisma_client,
-            throttle=LoginThrottle.from_request(request),
+            throttle=LoginThrottle.from_request(request, general_settings, redis_usage_cache),
             general_settings=general_settings,
         )
 

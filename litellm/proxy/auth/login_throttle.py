@@ -11,7 +11,7 @@ startup and can be reassigned later.
 
 import asyncio
 import hashlib
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from functools import cache
 from types import MappingProxyType
@@ -134,10 +134,10 @@ class LoginThrottle:
     enabled: bool = True
 
     @classmethod
-    def from_request(cls, request: Request) -> "LoginThrottle":
-        """Build the throttle for this request from the live proxy settings and caches."""
-        from litellm.proxy.proxy_server import general_settings, redis_usage_cache
-
+    def from_request(
+        cls, request: Request, general_settings: Mapping[str, object] | None, redis_cache: RedisCache | None
+    ) -> "LoginThrottle":
+        """Build the throttle for this request from the proxy's general_settings and shared Redis cache."""
         settings: Final = general_settings or _NO_SETTINGS
         cidrs: Final = normalize_cidr_ranges(
             settings.get(TRUSTED_PROXY_RANGES_KEY), setting_name=TRUSTED_PROXY_RANGES_KEY
@@ -167,7 +167,7 @@ class LoginThrottle:
             ),
             username_cache=_FAILED_LOGIN_USERNAME_CACHE,
             source_cache=_FAILED_LOGIN_SOURCE_CACHE,
-            redis_cache=redis_usage_cache,
+            redis_cache=redis_cache,
             enabled=not _rate_limit_disabled(),
         )
 
