@@ -5031,26 +5031,26 @@ async def test_get_tools_from_mcp_servers_takes_list_tools_tags_from_x_litellm_t
         return dummy_logging_obj, None
 
     with (
-        patch(
+        patch(  # test-quality-ok: server allowlist is a module-level function; the suite has no injection seam
             "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
             new=AsyncMock(return_value=[server_a]),
         ),
-        patch(
+        patch(  # test-quality-ok: header prep is a module-level function; the suite has no injection seam
             "litellm.proxy._experimental.mcp_server.server._prepare_mcp_server_headers",
             return_value=(None, None),
         ),
-        patch(
+        patch(  # test-quality-ok: manager is a module-level singleton; patching it is the suite established seam
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
         ) as mock_manager,
-        patch(
+        patch(  # test-quality-ok: tool filter is a module-level function; the suite has no injection seam
             "litellm.proxy._experimental.mcp_server.server.filter_tools_by_allowed_tools",
             side_effect=lambda tools, _server: tools,
         ),
-        patch(
+        patch(  # test-quality-ok: permission filter is a module-level async function; the suite has no injection seam
             "litellm.proxy._experimental.mcp_server.server.filter_tools_by_key_team_permissions",
             new=AsyncMock(side_effect=lambda tools, **_: tools),
         ),
-        patch(
+        patch(  # test-quality-ok: logging setup is a module-level function; patched to capture spend-log metadata kwargs
             "litellm.proxy._experimental.mcp_server.server.function_setup",
             side_effect=_capture_function_setup,
         ),
@@ -5073,7 +5073,8 @@ async def test_get_tools_from_mcp_servers_takes_list_tools_tags_from_x_litellm_t
 
 @pytest.mark.asyncio
 async def test_get_tools_from_mcp_servers_prefers_explicit_request_tags_over_the_header():
-    """`request_tags` is the resolved value a caller passes in; a header must not override it."""
+    """`request_tags` is the resolved value a caller passes in; a header must not override it.
+    An explicit empty list resolves to no tags rather than falling back to the header."""
     try:
         from litellm.proxy._experimental.mcp_server.server import (
             _get_tools_from_mcp_servers,
@@ -5105,26 +5106,26 @@ async def test_get_tools_from_mcp_servers_prefers_explicit_request_tags_over_the
         return dummy_logging_obj, None
 
     with (
-        patch(
+        patch(  # test-quality-ok: server allowlist is a module-level function; the suite has no injection seam
             "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
             new=AsyncMock(return_value=[server_a]),
         ),
-        patch(
+        patch(  # test-quality-ok: header prep is a module-level function; the suite has no injection seam
             "litellm.proxy._experimental.mcp_server.server._prepare_mcp_server_headers",
             return_value=(None, None),
         ),
-        patch(
+        patch(  # test-quality-ok: manager is a module-level singleton; patching it is the suite established seam
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
         ) as mock_manager,
-        patch(
+        patch(  # test-quality-ok: tool filter is a module-level function; the suite has no injection seam
             "litellm.proxy._experimental.mcp_server.server.filter_tools_by_allowed_tools",
             side_effect=lambda tools, _server: tools,
         ),
-        patch(
+        patch(  # test-quality-ok: permission filter is a module-level async function; the suite has no injection seam
             "litellm.proxy._experimental.mcp_server.server.filter_tools_by_key_team_permissions",
             new=AsyncMock(side_effect=lambda tools, **_: tools),
         ),
-        patch(
+        patch(  # test-quality-ok: logging setup is a module-level function; patched to capture spend-log metadata kwargs
             "litellm.proxy._experimental.mcp_server.server.function_setup",
             side_effect=_capture_function_setup,
         ),
@@ -5141,8 +5142,22 @@ async def test_get_tools_from_mcp_servers_prefers_explicit_request_tags_over_the
             list_tools_log_source="mcp_protocol",
             request_tags=["explicit"],
         )
+        explicit_metadata = dict(function_setup_kwargs["metadata"])
 
-    assert function_setup_kwargs["metadata"]["tags"] == ["explicit"]
+        await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_auth,
+            mcp_auth_header=None,
+            mcp_servers=["server_a"],
+            mcp_server_auth_headers=None,
+            raw_headers={"x-litellm-tags": "from-header"},
+            log_list_tools_to_spendlogs=True,
+            list_tools_log_source="mcp_protocol",
+            request_tags=[],
+        )
+        empty_metadata = dict(function_setup_kwargs["metadata"])
+
+    assert explicit_metadata["tags"] == ["explicit"]
+    assert "tags" not in empty_metadata
 
 
 @pytest.mark.parametrize(

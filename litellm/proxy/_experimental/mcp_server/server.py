@@ -213,7 +213,7 @@ def _request_tags_from_raw_headers(
 ) -> Sequence[str] | None:
     """The caller's tags, parsed by the same helper the LLM routes use so an MCP operation and a
     chat completion attribute an identical header identically."""
-    header_value = _request_tags_header(raw_headers)
+    header_value: Final = _request_tags_header(raw_headers)
     if header_value is None:
         return None
     return LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
@@ -2190,7 +2190,11 @@ if MCP_AVAILABLE:
             list_tools_call_id: Final = str(uuid.uuid4())
             # Derive trace_id from raw_headers when not explicitly passed (same as A2A / MCP call_tool)
             effective_litellm_trace_id: Final = litellm_trace_id or get_chain_id_from_headers(raw_headers)
-            effective_request_tags: Final = request_tags or _request_tags_from_raw_headers(raw_headers)
+            # An explicit [] means the caller resolved to no tags; only fall back to the
+            # header when nothing was passed at all.
+            effective_request_tags: Final = (
+                request_tags if request_tags is not None else _request_tags_from_raw_headers(raw_headers)
+            )
             spend_logs_metadata: Final[dict[str, object]] = {
                 "mcp_operation": "list_tools",
             }
