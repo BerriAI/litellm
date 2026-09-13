@@ -139,38 +139,17 @@ async def search(
         search_tool_name_value: Final = data["search_tool_name"]
 
         # Authorization check: verify key can access this search tool
-        from litellm.proxy.auth.auth_checks import (
-            can_key_call_search_tool,
-            can_team_call_search_tool,
-            get_team_object,
+        from litellm.proxy.search_endpoints.search_tool_access import (
+            authorize_search_tool,
+            resolve_allowlist_teams,
         )
 
         try:
-            # Check key-level access
-            await can_key_call_search_tool(
+            await authorize_search_tool(
                 search_tool_name=search_tool_name_value,
-                valid_token=user_api_key_dict,
+                user_api_key_dict=user_api_key_dict,
+                teams=await resolve_allowlist_teams(user_api_key_dict),
             )
-
-            # Check team-level access if key is associated with a team
-            if user_api_key_dict.team_id:
-                from litellm.proxy.proxy_server import (
-                    prisma_client,
-                    proxy_logging_obj,
-                    user_api_key_cache,
-                )
-
-                team_object: Final = await get_team_object(
-                    team_id=user_api_key_dict.team_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=user_api_key_dict.parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                )
-                await can_team_call_search_tool(
-                    search_tool_name=search_tool_name_value,
-                    team_object=team_object,
-                )
         except Exception as e:
             verbose_proxy_logger.error("Search tool authorization failed for %s: %s", search_tool_name_value, e)
             raise
