@@ -360,7 +360,7 @@ class TestMockedCompletion:
             api_key="sk-fake",
         )
 
-        uuid.UUID(respx_mock.calls[0].request.headers["x-opencode-session"])
+        assert uuid.UUID(respx_mock.calls[0].request.headers["x-opencode-session"]).version == 4
 
     def test_zen_chat_sends_no_session_header(self, respx_mock, monkeypatch):
         """Only the Go surface requires the header."""
