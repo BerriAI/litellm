@@ -31,7 +31,12 @@ from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import LitellmUserRoles, TokenCountRequest, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.proxy_server import app, initialize
+from litellm.proxy.proxy_server import (
+    _enrich_model_info_with_litellm_data,
+    _get_proxy_model_info,
+    app,
+    initialize,
+)
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
 example_embedding_result = {
@@ -13276,3 +13281,58 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
     assert response.tokenizer_type == "huggingface_tokenizer"
     assert response.total_tokens > 0
     assert_loop_stayed_free(took, lags)
+
+
+# ModelInfo.set_model_info writes None over input_cost_per_token,
+# output_cost_per_token, max_tokens, mode and base_model when the caller does not
+# supply them, so an absent key becomes a key that is present and None. Cost-map
+# enrichment must treat that as unset, otherwise a model priced in the built-in
+# cost map reads back as unpriced and pre-call budget reservation stops bounding
+# concurrent spend. An explicitly configured 0.0 is a deliberate free model.
+_PRICED_MODEL = "gpt-4o"
+_PRICED_BACKEND = f"openai/{_PRICED_MODEL}"
+
+
+def _priced_model_deployment(model_info: dict) -> dict:
+    return {
+        "model_name": _PRICED_MODEL,
+        "litellm_params": {"model": _PRICED_BACKEND},
+        "model_info": dict(model_info),
+    }
+
+
+def _builtin_input_cost() -> float:
+    cost = litellm.get_model_info(model=_PRICED_BACKEND).get("input_cost_per_token")
+    if not cost:
+        pytest.skip(f"{_PRICED_BACKEND} carries no input_cost_per_token in the cost map")
+    return cost
+
+
+@pytest.mark.parametrize(
+    "enrich",
+    [_get_proxy_model_info, _enrich_model_info_with_litellm_data],
+    ids=["_get_proxy_model_info", "_enrich_model_info_with_litellm_data"],
+)
+@pytest.mark.parametrize(
+    "model_info",
+    [{"id": "d1", "input_cost_per_token": None}, {"id": "d1"}],
+    ids=["present_as_none", "absent"],
+)
+def test_model_info_unset_cost_is_filled_from_cost_map(enrich, model_info):
+    """An unset cost key, whether absent or present as None, takes the cost-map value."""
+    enriched = enrich(model=_priced_model_deployment(model_info))
+
+    assert enriched["model_info"]["input_cost_per_token"] == _builtin_input_cost()
+
+
+@pytest.mark.parametrize(
+    "enrich",
+    [_get_proxy_model_info, _enrich_model_info_with_litellm_data],
+    ids=["_get_proxy_model_info", "_enrich_model_info_with_litellm_data"],
+)
+@pytest.mark.parametrize("configured", [0.0, 9.9e-07], ids=["free", "custom_rate"])
+def test_model_info_configured_cost_is_not_overwritten(enrich, configured):
+    """A cost the operator set is kept, including a deliberate 0.0."""
+    enriched = enrich(model=_priced_model_deployment({"id": "d1", "input_cost_per_token": configured}))
+
+    assert enriched["model_info"]["input_cost_per_token"] == configured
