@@ -6,6 +6,7 @@ from unittest.mock import mock_open, patch
 import pytest
 
 from litellm.llms.chatgpt.authenticator import Authenticator
+from litellm.llms.chatgpt.common_utils import GetAccessTokenError
 
 
 def _make_jwt(payload: dict) -> str:
@@ -55,9 +56,7 @@ class TestChatGPTAuthenticator:
             assert token == "token-new"
 
     def test_get_account_id_from_id_token(self, authenticator):
-        id_token = _make_jwt(
-            {"https://api.openai.com/auth": {"chatgpt_account_id": "acct-123"}}
-        )
+        id_token = _make_jwt({"https://api.openai.com/auth": {"chatgpt_account_id": "acct-123"}})
         auth_data = json.dumps({"id_token": id_token})
 
         with (
@@ -68,3 +67,25 @@ class TestChatGPTAuthenticator:
             assert account_id == "acct-123"
             mock_write.assert_called_once()
             assert mock_write.call_args[0][0]["account_id"] == "acct-123"
+
+    def test_can_run_interactive_device_login(self, authenticator):
+        with patch("sys.stdin.isatty", return_value=True):
+            assert authenticator._can_run_interactive_device_login() is True
+
+        with patch("sys.stdin.isatty", return_value=False):
+            assert authenticator._can_run_interactive_device_login() is False
+
+    def test_get_access_token_headless_environment_raises_promptly(self, authenticator):
+        with (
+            patch("builtins.open", side_effect=FileNotFoundError),
+            patch("sys.stdin.isatty", return_value=False),
+            pytest.raises(GetAccessTokenError) as exc_info,
+        ):
+            authenticator.get_access_token()
+
+        assert exc_info.value.status_code == 401
+        assert "cannot run in a non-interactive/headless environment" in str(exc_info.value)
+
+    def test_headless_wait_for_access_token_returns_none_immediately(self, authenticator):
+        with patch("sys.stdin.isatty", return_value=False):
+            assert authenticator._wait_for_access_token(timeout_seconds=900) is None
