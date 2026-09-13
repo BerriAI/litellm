@@ -540,6 +540,22 @@ class TestCodexModelSync:
         assert entries["gpt-5.4"]["upgrade"] == _STOCK_MODELS["gpt-5.4"]["upgrade"]
         assert [entries["gpt-5.4"]["priority"], entries["gpt-5.6-terra"]["priority"]] == [0, 1]
 
+    def test_stock_catalog_is_decoded_as_utf8_regardless_of_locale(self, tmp_path):
+        description = "Modelo equilibrado para el trabajo diario, con acentos y ñ."
+        catalog = {"models": [{**_STOCK_MODELS["gpt-5.5"], "description": description}]}
+        stock = json.dumps(catalog, ensure_ascii=False).encode("utf-8")
+
+        def locale_bound_run(args, **kwargs):
+            if "model_catalog_json=" in str(args):
+                return subprocess.CompletedProcess(args, 0, "", "")
+            return subprocess.CompletedProcess(args, 0, stock.decode(kwargs.get("encoding") or "ascii"), "")
+
+        _, result = self._sync(self._listing(self._row("gpt-5.5")), tmp_path, run=locale_bound_run)
+
+        assert isinstance(result, ModelSyncArgs)
+        written = json.loads((tmp_path / "litellm-models.json").read_text(encoding="utf-8"))["models"]
+        assert [m["description"] for m in written] == [description]
+
     def test_unparseable_stock_catalog_is_reported(self, tmp_path):
         _, result = self._sync(self._listing(self._row("m")), tmp_path, run=_FakeRun(stock="not json"))
         assert isinstance(result, ModelSyncSkipped)
@@ -708,7 +724,7 @@ class TestCodexModelSync:
             assert options["env"] == {"CODEX_HOME": str(tmp_path)}
             assert options["stdin"] is subprocess.DEVNULL
             assert options["capture_output"] is True
-            assert options["text"] is True
+            assert options["encoding"] == "utf-8"
             assert options["timeout"] == 10
 
     def test_codex_rejecting_the_catalog_skips_the_sync_and_keeps_the_file(self, tmp_path):

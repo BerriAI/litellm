@@ -546,7 +546,7 @@ def _codex_debug_models(
             env=dict(env),
             stdin=subprocess.DEVNULL,
             capture_output=True,
-            text=True,
+            encoding="utf-8",
             timeout=_CODEX_PREFLIGHT_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired) as e:
