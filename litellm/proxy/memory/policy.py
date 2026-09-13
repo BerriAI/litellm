@@ -169,7 +169,7 @@ class MemoryAccess:
         return MemoryStatus(
             active=self.active,
             activation=self.policy.activation if self.policy else "disabled",
-            scope=self.policy.scope if self.policy else None,
+            scope=self.policy.scope if self.policy and self.namespace else None,
             opted_in=self.opted_in,
             policy_id=self.policy.policy_id if self.policy else None,
         )

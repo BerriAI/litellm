@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import datetime
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final
 
@@ -68,7 +69,12 @@ class MemoryStore:
         return current.namespace
 
     async def search(
-        self, search: MemorySearch, *, require_active: bool = True, recent_first: bool = False
+        self,
+        search: MemorySearch,
+        *,
+        require_active: bool = True,
+        recent_first: bool = False,
+        before: tuple[datetime, str] | None = None,
     ) -> tuple[MemoryEntry, ...]:
         entries: Final = await self.entries(require_active=require_active)
         ranked: Final = await asyncio.to_thread(fuzzy_memories, search.query, entries)
@@ -78,7 +84,15 @@ class MemoryStore:
             if recent_first
             else tuple(entry for entry, _, _ in ranked)
         )
-        return ordered[search.offset : search.offset + search.limit]
+        page: Final = tuple(
+            entry
+            for entry in ordered
+            if before is None
+            or entry.updated_at < before[0]
+            or entry.updated_at == before[0]
+            and entry.memory_id > before[1]
+        )
+        return page[search.offset : search.offset + search.limit]
 
     async def entries(self, *, require_active: bool = True) -> tuple[MemoryEntry, ...]:
         namespace: Final = await self.authorize_namespace(require_active=require_active)

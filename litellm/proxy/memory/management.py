@@ -1,6 +1,7 @@
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import AwareDatetime
 
 from litellm.proxy._types import UI_TEAM_ID, LitellmUserRoles, UserAPIKeyAuth, user_api_key_has_admin_view
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -259,11 +260,18 @@ async def list_entries(
     offset: int = Query(0, ge=0),
     key_id: str | None = Query(None, pattern=r"^[a-f0-9]{64}$"),
     auth: UserAPIKeyAuth = _AUTH,
+    before_updated_at: Annotated[AwareDatetime | None, Query()] = None,
+    before_memory_id: Annotated[str | None, Query(min_length=1, max_length=128)] = None,
 ) -> tuple[MemoryEntry, ...]:
+    if (before_updated_at is None) != (before_memory_id is None):
+        raise HTTPException(status_code=422, detail="Provide both memory cursor fields")
     prisma: Final = memory_primary_client(require_memory_prisma())
     access: Final = await access_for_key(auth, key_id)
     return await MemoryStore(prisma, access).search(
-        MemorySearch(query=query, limit=limit, offset=offset), require_active=False, recent_first=True
+        MemorySearch(query=query, limit=limit, offset=offset),
+        require_active=False,
+        recent_first=True,
+        before=(before_updated_at, before_memory_id) if before_updated_at and before_memory_id else None,
     )
 
 

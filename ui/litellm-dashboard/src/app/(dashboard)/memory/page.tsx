@@ -30,7 +30,7 @@ export default function Memory() {
 
   return (
     <div className="space-y-8 px-8 py-8">
-      {userId && <AutomaticMemoryEntries userId={userId} proxyAdmin={proxyAdmin} readOnly={isViewOnly} />}
+      {userId && <AutomaticMemoryEntries key={userId} userId={userId} proxyAdmin={proxyAdmin} readOnly={isViewOnly} />}
       {canManage && userId && (
         <Collapsible open={advanced} onOpenChange={setAdvanced} className="border-t pt-4">
           <CollapsibleTrigger render={<Button variant="ghost" className="gap-2 text-muted-foreground" />}>

@@ -67301,6 +67301,8 @@ export interface operations {
                 limit?: number;
                 offset?: number;
                 key_id?: string | null;
+                before_updated_at?: string | null;
+                before_memory_id?: string | null;
             };
             header?: never;
             path?: never;

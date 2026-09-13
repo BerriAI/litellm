@@ -22,13 +22,17 @@ import { MemoryKeyPicker } from "./MemoryTargetPicker";
 
 type Entry = components["schemas"]["MemoryEntry"];
 type Capture = components["schemas"]["MemoryCapture"];
+type Cursor = { before_updated_at: string; before_memory_id: string } | null;
 type Status = components["schemas"]["MemoryStatus"];
 
 function memoryDescription(status?: Status) {
   if (!status) return "What your assistants remember across conversations.";
-  if (status.activation === "automatic") return "Memory is on for this key. Your administrator manages this setting.";
   if (status.activation === "disabled" || !status.scope)
     return "Memory is off. Your administrator can make it available for this key.";
+  if (status.activation === "automatic") {
+    if (status.active) return "Memory is on for this key. Your administrator manages this setting.";
+    return "Memory is off. Your administrator can make it available for this key.";
+  }
   if (status.active) return "Your assistants can save and recall memories. You can turn this off at any time.";
   return "Your assistants won't save or recall memories. Turn it on whenever you're ready.";
 }
@@ -63,7 +67,14 @@ type DashboardProps = Readonly<{ userId: string; readOnly: boolean; proxyAdmin: 
 
 export function AutomaticMemoryEntries({ userId, readOnly, proxyAdmin }: DashboardProps) {
   const [selection, setSelection] = useState<string>();
-  const keys = useKeys(1, 1, { userID: proxyAdmin ? undefined : userId, sortBy: "created_at", sortOrder: "desc" });
+  const keyOptions = {
+    userID: proxyAdmin ? undefined : userId,
+    sortBy: "created_at",
+    sortOrder: "desc",
+    includeTeamKeys: proxyAdmin,
+    includeCreatedByKeys: proxyAdmin,
+  };
+  const keys = useKeys(1, 1, keyOptions);
   const keyId = selection ?? keys.data?.keys[0]?.token ?? "";
   return (
     <MemoryDashboard key={`${userId}:${keyId}`} userId={userId} keyId={keyId} readOnly={readOnly}>
@@ -115,16 +126,20 @@ function MemoryDashboard({
   const entriesOptions = {
     queryKey: ["memoryEntries", userId, keyId, query],
     enabled: !!keyId && !!status.data?.scope,
-    initialPageParam: 0,
-    queryFn: async ({ signal, pageParam }: { signal: AbortSignal; pageParam: number }) =>
+    initialPageParam: null as Cursor,
+    queryFn: async ({ signal, pageParam }: { signal: AbortSignal; pageParam: Cursor }) =>
       (
         await fetchClient.GET("/v2/memory/entries", {
-          params: { query: { key_id: keyId, query, offset: pageParam, limit: 20 } },
+          params: { query: { key_id: keyId, query, limit: 20, ...pageParam } },
           signal,
         })
       ).data ?? [],
-    getNextPageParam: (lastPage: Entry[], _pages: Entry[][], offset: number) =>
-      lastPage.length === 20 ? offset + 20 : undefined,
+    getNextPageParam: (lastPage: Entry[]) => {
+      const last = lastPage.at(-1);
+      return lastPage.length === 20 && last
+        ? { before_updated_at: last.updated_at, before_memory_id: last.memory_id }
+        : undefined;
+    },
   };
   const entries = useInfiniteQuery(entriesOptions);
   const save = useMutation({

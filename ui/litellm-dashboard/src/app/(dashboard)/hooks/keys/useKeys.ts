@@ -33,6 +33,8 @@ export interface DeletedKeysResponse {
 }
 
 export interface KeyListCallOptions {
+  includeTeamKeys?: boolean;
+  includeCreatedByKeys?: boolean;
   organizationID?: string | null;
   teamID?: string | null;
   projectID?: string | null;
@@ -71,8 +73,8 @@ const keyListCall = async (accessToken: string, page: number, pageSize: number, 
         expand: options.expand,
         status: options.status,
         return_full_object: "true",
-        include_team_keys: "true",
-        include_created_by_keys: "true",
+        include_team_keys: options.includeTeamKeys ?? true,
+        include_created_by_keys: options.includeCreatedByKeys ?? true,
         // Opt into substring matching so the admin key-list search box keeps
         // matching partial user_id/key_alias. /key/list is exact by default.
         substring_matching: "true",

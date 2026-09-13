@@ -354,3 +354,55 @@ async def test_dashboard_search_keeps_recency_before_pagination_while_agent_sear
         "older",
         "newer",
     ]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_cursor_survives_deletion_of_earlier_entries(database: MagicMock) -> None:
+    database.db.litellm_memorypolicy.find_many.return_value = [policy()]
+    now = datetime(2026, 9, 12, tzinfo=timezone.utc)
+    rows = [
+        SimpleNamespace(
+            memory_id=identifier,
+            key=f"memory-v2:namespace:{identifier}",
+            value=f"Memory {identifier}",
+            metadata={"title": identifier},
+            updated_at=now,
+            created_at=now,
+            created_by="owner",
+        )
+        for identifier in ("a", "b", "c")
+    ]
+    database.db.litellm_memorytable.find_many.return_value = rows
+    first = await management.list_entries("", 1, 0, None, auth())
+    assert first[0].memory_id == "a"
+    database.db.litellm_memorytable.find_many.return_value = rows[1:]
+    second = await management.list_entries("", 1, 0, None, auth(), first[0].updated_at, first[0].memory_id)
+    assert second[0].memory_id == "b"
+    third = await management.list_entries("", 1, 0, None, auth(), second[0].updated_at, second[0].memory_id)
+    assert third[0].memory_id == "c"
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"before_memory_id": "a"},
+        {"before_updated_at": "2026-09-12T00:00:00Z"},
+        {"before_memory_id": "a", "before_updated_at": "2026-09-12T00:00:00"},
+    ],
+)
+def test_dashboard_cursor_rejects_partial_or_naive_dates(database: MagicMock, params: dict[str, str]) -> None:
+    app = FastAPI()
+    app.include_router(management.router)
+    app.dependency_overrides[user_api_key_auth] = auth
+    with TestClient(app) as client:
+        assert client.get("/v2/memory/entries", params=params).status_code == 422
+    database.db.litellm_memorytable.find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("activation", ["automatic", "opt_in"])
+async def test_status_does_not_offer_an_unresolvable_namespace(database: MagicMock, activation: str) -> None:
+    database.db.litellm_verificationtoken.find_unique.return_value["user_id"] = None
+    database.db.litellm_memorypolicy.find_many.return_value = [policy(activation=activation, scope="user")]
+    status = await management.get_status("a" * 64, auth())
+    assert not status.active and status.scope is None

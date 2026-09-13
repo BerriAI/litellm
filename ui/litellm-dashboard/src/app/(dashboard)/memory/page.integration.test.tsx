@@ -13,6 +13,7 @@ const fetchMock = vi.fn<typeof fetch>();
 const calls: { path: string; method: string; body: unknown; keyId: string | null }[] = [];
 let enabled = false;
 let activation = "opt_in";
+let available = true;
 let paginated = false;
 let failPreference = false;
 const entry = {
@@ -41,6 +42,7 @@ beforeEach(async () => {
   calls.length = 0;
   enabled = false;
   activation = "opt_in";
+  available = true;
   paginated = false;
   failPreference = false;
   vi.clearAllMocks();
@@ -49,7 +51,12 @@ beforeEach(async () => {
       input instanceof Request ? input : new Request(new URL(String(input), window.location.origin), init);
     const path = new URL(request.url).pathname;
     const text = request.method === "GET" ? "" : await request.text();
-    const keyId = new URL(request.url).searchParams.get("key_id");
+    const url = new URL(request.url);
+    const keyId = url.searchParams.get("key_id");
+    if (url.pathname === "/key/list" && url.searchParams.get("user_id")) {
+      expect(url.searchParams.get("include_team_keys")).toBe("false");
+      expect(url.searchParams.get("include_created_by_keys")).toBe("false");
+    }
     const call = { path, method: request.method, body: text ? JSON.parse(text) : undefined, keyId };
     calls.push(call);
     if (path === "/v2/memory/preference" && request.method === "PUT" && failPreference) {
@@ -66,13 +73,18 @@ beforeEach(async () => {
       if (path === "/v2/memory/policies") return [];
       if (path === "/v1/memory") return { memories: [], total: 0 };
       if (path === "/v2/memory/status")
-        return { active: activation === "automatic" || enabled, opted_in: enabled, activation, scope: "key" };
+        return {
+          active: available && (activation === "automatic" || enabled),
+          opted_in: enabled,
+          activation,
+          scope: available ? "key" : null,
+        };
       if (path === "/v2/memory/entries") {
         if (request.method === "POST") return entry;
         if (keyId === "b".repeat(64))
           return [{ ...entry, memory_id: "other", title: "Other key memory", content: "Another project" }];
         if (paginated) {
-          const offset = Number(new URL(request.url).searchParams.get("offset"));
+          const offset = new URL(request.url).searchParams.get("before_memory_id") === "entry-19" ? 20 : 0;
           return Array.from({ length: offset ? 1 : 20 }, (_, i) => ({
             ...entry,
             memory_id: `entry-${offset + i}`,
@@ -209,6 +221,17 @@ describe("Memory dashboard", () => {
     expect(toggle).toBeChecked();
     expect(toggle).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByText(/Your administrator manages this setting/)).toBeVisible();
+  });
+
+  it("shows memory as unavailable when an automatic policy cannot resolve a sharing scope", async () => {
+    session("internal_user");
+    activation = "automatic";
+    available = false;
+    renderWithProviders(<Memory />);
+    const toggle = await screen.findByRole("switch", { name: "Memory" });
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByText("Memory is off. Your administrator can make it available for this key.")).toBeVisible();
   });
 
   it("keeps the actual state off when saving a preference fails", async () => {
