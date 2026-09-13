@@ -44,10 +44,12 @@ vi.mock("../EndpointUsage/EndpointUsage", () => ({
 }));
 
 vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
-  default: ({ topKeys }: { topKeys: { api_key: string; spend: number }[] }) => (
+  default: ({ topKeys }: { topKeys: { api_key: string; user_email: string | null; spend: number }[] }) => (
     <div>
       <span>Top Keys</span>
-      <span>{`top-keys:${topKeys.map((row) => `${row.api_key}=${row.spend}`).join("|")}`}</span>
+      <span>
+        {`top-keys:${topKeys.map((row) => `${row.api_key}=${row.spend}=${row.user_email ?? "-"}`).join("|")}`}
+      </span>
     </div>
   ),
 }));
@@ -1082,7 +1084,12 @@ describe("EntityUsage", () => {
           breakdown: {
             ...mockSpendData.results[0].breakdown,
             model_groups: { "gpt-4o": { metrics: { ...usageMetrics, spend: 70.25 }, metadata: {} } },
-            api_keys: { "sk-abc": { metrics: usageMetrics, metadata: { key_alias: "prod-key", team_id: null } } },
+            api_keys: {
+              "sk-abc": {
+                metrics: usageMetrics,
+                metadata: { key_alias: "prod-key", team_id: null, user_email: "alice@example.com" },
+              },
+            },
           },
         },
       ],
@@ -1091,7 +1098,7 @@ describe("EntityUsage", () => {
     render(<EntityUsage {...defaultProps} entityType="team" />);
 
     await waitFor(() => {
-      expect(screen.getByText("top-keys:sk-abc=30.75")).toBeInTheDocument();
+      expect(screen.getByText("top-keys:sk-abc=30.75=alice@example.com")).toBeInTheDocument();
     });
     expect(screen.getByText("top-models:gpt-4o=70.25")).toBeInTheDocument();
     expect(screen.getByText(/^top-models:Code Review Agent=/)).toBeInTheDocument();
