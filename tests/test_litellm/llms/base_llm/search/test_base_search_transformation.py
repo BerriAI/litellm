@@ -338,19 +338,22 @@ class TestSearchHTTPErrorHandling:
         expected_exception: type[BaseLLMException],
     ) -> None:
         """Verify that synchronous search raises mapped exceptions on error status codes."""
-        mock_response = httpx.Response(
-            status_code=status_code,
-            request=httpx.Request("POST", "https://api.tavily.com/search"),
-            json={"error": "Test error message"},
-        )
 
-        with patch.object(HTTPHandler, "post", return_value=mock_response):
-            with pytest.raises(expected_exception):
-                litellm.search(
-                    query="test query",
-                    search_provider="tavily",
-                    api_key="tvly-testkey",
-                )
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                status_code=status_code,
+                request=request,
+                json={"error": "Test error message"},
+            )
+
+        client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler)))
+        with pytest.raises(expected_exception):
+            litellm.search(
+                query="test query",
+                search_provider="tavily",
+                api_key="tvly-testkey",
+                client=client,
+            )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -368,88 +371,90 @@ class TestSearchHTTPErrorHandling:
         expected_exception: type[BaseLLMException],
     ) -> None:
         """Verify that asynchronous search raises mapped exceptions on error status codes."""
-        mock_response = httpx.Response(
-            status_code=status_code,
-            request=httpx.Request("POST", "https://api.tavily.com/search"),
-            json={"error": "Async test error message"},
-        )
 
-        with patch.object(AsyncHTTPHandler, "post", new_callable=AsyncMock) as mock_post:
-            mock_post.return_value = mock_response
-            with pytest.raises(expected_exception):
-                await litellm.asearch(
-                    query="test query",
-                    search_provider="tavily",
-                    api_key="tvly-testkey",
-                )
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                status_code=status_code,
+                request=request,
+                json={"error": "Async test error message"},
+            )
 
-    def test_sync_search_plumbs_custom_client(self) -> None:
-        """Verify that a custom HTTPHandler passed to litellm.search is forwarded to the underlying handler."""
-        custom_client = HTTPHandler()
-        mock_response = httpx.Response(
-            status_code=200,
-            request=httpx.Request("POST", "https://api.tavily.com/search"),
-            json={"results": [{"title": "Test", "url": "https://example.com", "content": "Sample"}]},
-        )
-
-        with (
-            patch.object(custom_client, "post", return_value=mock_response) as mock_post,
-            patch.object(BaseLLMHTTPHandler, "search", wraps=BaseLLMHTTPHandler().search) as mock_handler_search,
-        ):
-            response = litellm.search(
+        client = AsyncHTTPHandler()
+        client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        with pytest.raises(expected_exception):
+            await litellm.asearch(
                 query="test query",
                 search_provider="tavily",
                 api_key="tvly-testkey",
-                client=custom_client,
+                client=client,
             )
-            assert isinstance(response, SearchResponse)
-            assert mock_handler_search.call_count == 1
-            assert mock_handler_search.call_args.kwargs["client"] is custom_client
-            assert mock_post.call_count == 1
+
+    def test_sync_search_plumbs_custom_client(self) -> None:
+        """Verify that a custom HTTPHandler passed to litellm.search is forwarded to the underlying handler."""
+        called = False
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal called
+            called = True
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={"results": [{"title": "Test", "url": "https://example.com", "content": "Sample"}]},
+            )
+
+        custom_client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler)))
+        response = litellm.search(
+            query="test query",
+            search_provider="tavily",
+            api_key="tvly-testkey",
+            client=custom_client,
+        )
+        assert isinstance(response, SearchResponse)
+        assert called
 
     @pytest.mark.asyncio
     async def test_async_search_plumbs_custom_client(self) -> None:
         """Verify that a custom AsyncHTTPHandler passed to litellm.asearch is forwarded to the underlying handler."""
-        custom_client = AsyncHTTPHandler()
-        mock_response = httpx.Response(
-            status_code=200,
-            request=httpx.Request("POST", "https://api.tavily.com/search"),
-            json={"results": [{"title": "Async Test", "url": "https://example.com", "content": "Async Sample"}]},
-        )
+        called = False
 
-        with (
-            patch.object(custom_client, "post", new_callable=AsyncMock) as mock_post,
-            patch.object(
-                BaseLLMHTTPHandler, "async_search", wraps=BaseLLMHTTPHandler().async_search
-            ) as mock_handler_asearch,
-        ):
-            mock_post.return_value = mock_response
-            response = await litellm.asearch(
-                query="test query",
-                search_provider="tavily",
-                api_key="tvly-testkey",
-                client=custom_client,
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal called
+            called = True
+            return httpx.Response(
+                status_code=200,
+                request=request,
+                json={"results": [{"title": "Async Test", "url": "https://example.com", "content": "Async Sample"}]},
             )
-            assert isinstance(response, SearchResponse)
-            assert mock_handler_asearch.call_count == 1
-            assert mock_handler_asearch.call_args.kwargs["client"] is custom_client
-            assert mock_post.call_count == 1
+
+        custom_client = AsyncHTTPHandler()
+        custom_client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        response = await litellm.asearch(
+            query="test query",
+            search_provider="tavily",
+            api_key="tvly-testkey",
+            client=custom_client,
+        )
+        assert isinstance(response, SearchResponse)
+        assert called
 
     def test_sync_search_handles_empty_error_response_body(self) -> None:
         """Verify that 500 responses with empty bodies still raise InternalServerError properly."""
-        mock_response = httpx.Response(
-            status_code=500,
-            request=httpx.Request("POST", "https://api.tavily.com/search"),
-            text="",
-        )
 
-        with patch.object(HTTPHandler, "post", return_value=mock_response):
-            with pytest.raises(litellm.InternalServerError):
-                litellm.search(
-                    query="test query",
-                    search_provider="tavily",
-                    api_key="tvly-testkey",
-                )
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                status_code=500,
+                request=request,
+                text="",
+            )
+
+        client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler)))
+        with pytest.raises(litellm.InternalServerError):
+            litellm.search(
+                query="test query",
+                search_provider="tavily",
+                api_key="tvly-testkey",
+                client=client,
+            )
 
     def test_sync_search_rejects_async_client(self) -> None:
         """Verify that passing an AsyncHTTPHandler to synchronous search raises a clear exception."""
