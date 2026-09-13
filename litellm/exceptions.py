@@ -814,6 +814,7 @@ class APIError(openai.APIError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
+        body: object | None = None,
     ):
         self.status_code = status_code
         self.message = f"litellm.APIError: {message}"
@@ -824,7 +825,7 @@ class APIError(openai.APIError):
         self.num_retries = num_retries
         if request is None:
             request = httpx.Request(method="POST", url="https://api.openai.com/v1")
-        super().__init__(self.message, request=request, body=None)
+        super().__init__(self.message, request=request, body=body)
 
     def __str__(self):
         _message = self.message

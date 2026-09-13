@@ -569,6 +569,11 @@ class BaseResponsesAPIStreamingIterator:
             message=error_message,
             llm_provider=self.custom_llm_provider or "",
             model=self.model or "",
+            body={  # mutable-ok: OpenAI APIError reads code/type only from a dict body
+                "code": error_code,
+                "type": error_type,
+                "message": error_message,
+            },
         )
         if 400 <= status_code < 500 and status_code != 429:
             raise mapped_exception

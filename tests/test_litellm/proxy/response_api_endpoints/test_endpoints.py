@@ -3,15 +3,118 @@ Test for response_api_endpoints/endpoints.py
 """
 
 import unittest
-from typing import Any
+from typing import Any, Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 from fastapi.testclient import TestClient
 from httpx import Response
 
 import litellm
 from litellm.proxy.proxy_server import app
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path,error_kind",
+    [
+        ("/v1/responses", "rate_limit"),
+        ("/v1/responses", "numeric_rate_limit"),
+        ("/v1/responses", "server_error"),
+        ("/v1/responses", "response_failed"),
+        ("/cursor/chat/completions", "server_error"),
+        ("/v1/chat/completions", "server_error"),
+    ],
+)
+async def test_streaming_upstream_errors_keep_the_client_protocol(
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    error_kind: Literal["rate_limit", "numeric_rate_limit", "server_error", "response_failed"],
+) -> None:
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    model: Final = "gpt-6-astra"
+    message: Final = "Upstream cannot complete this response"
+    code: Final = {
+        "rate_limit": "rate_limit_exceeded", "numeric_rate_limit": "429",
+        "server_error": "server_error", "response_failed": "server_error",
+    }[error_kind]
+    error: Final = {"message": message, "code": code, "type": None, "param": "input"}
+    response: Final = {"id": "resp_upstream", "object": "response", "created_at": 1,
+                      "status": "in_progress", "model": model, "output": [],
+                      "parallel_tool_calls": True, "tool_choice": "auto", "tools": []}
+    created: Final = {"type": "response.created", "sequence_number": 0, "response": response}
+    tool_added: Final = {"type": "response.output_item.added", "sequence_number": 1, "output_index": 0,
+                        "item": {"type": "function_call", "id": "fc_partial", "call_id": "call_partial",
+                                 "name": "read_file", "arguments": "", "status": "in_progress"}}
+    tool_delta: Final = {"type": "response.function_call_arguments.delta", "sequence_number": 2,
+                        "item_id": "fc_partial", "output_index": 0, "delta": '{"path":"partial'}
+    failed: Final = (
+        {"type": "response.failed", "sequence_number": 9,
+         "response": {**response, "status": "failed", "error": error}}
+        if error_kind == "response_failed" else {"type": "error", "error": error}
+    )
+    chat: Final = {"id": "chatcmpl_partial", "object": "chat.completion.chunk", "created": 1,
+                  "model": model, "choices": [{"index": 0, "delta": {"content": "partial"},
+                                                "finish_reason": None}]}
+    is_chat: Final = path == "/v1/chat/completions"
+    partial: Final = path != "/v1/responses" or error_kind in ("numeric_rate_limit", "response_failed")
+    response_events: Final = (created, tool_added, tool_delta, failed) if partial else (failed,)
+    upstream_events: Final = (chat, {"error": error}) if is_chat else response_events
+    wire: Final = "".join("data: " + json.dumps(event) + "\n\n" for event in upstream_events)
+    upstream_url: Final = "https://streaming.example/v1"
+    router: Final = litellm.Router(
+        model_list=[{"model_name": model, "litellm_params": {
+            "model": "openai/" + model, "api_base": upstream_url, "api_key": "fixture-key"}}],
+        num_retries=0,
+    )
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, _auth_override)
+    with respx.mock as transport:
+        transport.post(upstream_url + ("/chat/completions" if is_chat else "/responses")).respond(
+            200, content=wire, headers={"Content-Type": "text/event-stream"}
+        )
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
+            result: Final = await client.post(
+                path, json={
+                    "model": model, "stream": True,
+                    **({"messages": [{"role": "user", "content": "hello"}]} if is_chat else {"input": "hello"}),
+                },
+            )
+    frames: Final = tuple(frame for frame in result.text.split("\n\n") if "data: " in frame)
+    events: Final = tuple(
+        json.loads(next(line[6:] for line in frame.splitlines() if line.startswith("data: ")))
+        for frame in frames if "data: [DONE]" not in frame
+    )
+
+    assert result.status_code == 200, result.text
+    assert message in result.text
+    if path == "/v1/responses":
+        assert frames[-1].startswith("event: response.failed\n"), result.text
+        if partial:
+            assert [event["type"] for event in events] == [
+                "response.created", "response.output_item.added",
+                "response.function_call_arguments.delta", "response.failed",
+            ]
+            assert events[2]["delta"] == tool_delta["delta"]
+            assert events[-1]["sequence_number"] == events[-2]["sequence_number"] + 1
+            assert events[-1]["response"]["id"] == events[0]["response"]["id"]
+        else:
+            assert [event["type"] for event in events] == ["response.failed"]
+            assert events[0]["sequence_number"] == 0
+            assert events[0]["response"]["id"].startswith("resp_")
+        assert events[-1]["response"]["status"] == "failed"
+        assert events[-1]["response"]["error"]["code"] == (
+            "rate_limit_exceeded" if error_kind in ("rate_limit", "numeric_rate_limit") else "server_error"
+        )
+    else:
+        assert events[0]["object"] == "chat.completion.chunk", result.text
+        assert "response.failed" not in result.text
+        assert "error" in events[-1]
 
 
 class TestResponsesAPIEndpoints(unittest.TestCase):
