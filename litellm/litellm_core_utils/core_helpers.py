@@ -304,9 +304,6 @@ def get_metadata_variable_name_from_kwargs(
 
 
 def max_retries_per_request_hit(kwargs: Mapping[str, object], num_retries_per_request: int | None) -> bool:
-    """
-    Whether the Router retry about to run (``attempted_retries`` >= 1 in the metadata bucket) is past the cap
-    """
     if num_retries_per_request is None:
         return False
     metadata: Final = kwargs.get(get_metadata_variable_name_from_kwargs(kwargs))
