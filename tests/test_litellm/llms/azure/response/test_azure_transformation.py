@@ -532,14 +532,16 @@ class TestAzureResponsesAPIConfig:
 
         assert "tools" not in response_api_params
 
-    def test_azure_responses_api_context_management_unsupported(self):
-        """Test that context_management is not in Azure supported params.
+    def test_azure_responses_api_supports_context_management(self):
+        """Regression for #36391: Azure Responses API supports server-side compaction."""
+        supported_params = self.config.get_supported_openai_params("gpt-5.1")
 
-        Azure does not support context_management (compaction). It should be
-        excluded from supported params so it gets dropped.
-        """
-        supported = self.config.get_supported_openai_params(self.model)
-        assert "context_management" not in supported
+        assert "context_management" in supported_params
+
+        o_series_config = AzureOpenAIOSeriesResponsesAPIConfig()
+        o_series_supported = o_series_config.get_supported_openai_params("o_series/gpt-o1")
+        assert "context_management" in o_series_supported
+        assert "temperature" not in o_series_supported
 
     def _anyof_tool(self):
         return {
