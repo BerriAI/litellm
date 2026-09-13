@@ -304,7 +304,14 @@ def pkce_pair() -> tuple[str, str]:
     return verifier, urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
 
-def authorize_url(contract: CliAuthContract, client_id: str, redirect_uri: str, state: str, code_challenge: str) -> str:
+def authorize_url(
+    contract: CliAuthContract,
+    client_id: str,
+    redirect_uri: str,
+    state: str,
+    code_challenge: str,
+    team: str | None = None,
+) -> str:
     query: Final = urlencode(
         _form(
             response_type="code",
@@ -314,6 +321,7 @@ def authorize_url(contract: CliAuthContract, client_id: str, redirect_uri: str, 
             code_challenge=code_challenge,
             code_challenge_method="S256",
             resource=contract.resource,
+            **({"team": team} if team is not None else {}),
         )
     )
     return f"{contract.authorization_endpoint}?{query}"
@@ -440,6 +448,7 @@ def run_pkce_login(
     open_browser: Callable[[str], object] = webbrowser.open,
     echo: Callable[[str], None] = print,
     timeout_seconds: float = LOGIN_TIMEOUT_SECONDS,
+    team: str | None = None,
 ) -> PkceCredential | PkceFailure:
     contract: Final = discover_cli_auth(base_url, http)
     if isinstance(contract, PkceFailure):
@@ -450,7 +459,7 @@ def run_pkce_login(
         client_id: Final = register_client(contract, server.redirect_uri, http)
         if isinstance(client_id, PkceFailure):
             return client_id
-        url: Final = authorize_url(contract, client_id, server.redirect_uri, state, challenge)
+        url: Final = authorize_url(contract, client_id, server.redirect_uri, state, challenge, team=team)
         echo(f"Opening browser to: {url}")
         echo("Approve the sign-in in your browser. Waiting...")
         threading.Thread(target=open_browser, args=(url,), name="lite-login-browser", daemon=True).start()

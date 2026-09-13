@@ -1879,6 +1879,7 @@ async def authorize(
     response_type: str | None = None,
     scope: str | None = None,
     resource: str | None = None,
+    team: str | None = None,
 ):
     # Redirect to real OAuth provider with PKCE support
     if mcp_server_name is None and client_id and is_gateway_dcr_client_id(client_id):
@@ -1893,6 +1894,7 @@ async def authorize(
                 response_type=response_type,
                 session_user_id=_session_cookie_user_id(request),
                 lookup_consent_teams=lookup_consent_teams,
+                requested_team=team,
             )
         return aggregate_authorize(
             request=request,

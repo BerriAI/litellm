@@ -2044,3 +2044,88 @@ class TestGetStoredApiKeyRefresh:
         assert captured.out == ""
         assert captured.err == "Could not renew the key: token request failed with 503: temporarily_unavailable\n"
         save.assert_not_called()
+
+
+class TestRequestedTeamLoginOption:
+    """`lite login --team` (or LITELLM_PROXY_TEAM) pre-picks a team in both login flows."""
+
+    _TEAMS = [
+        {"team_id": "team-alpha", "team_alias": "Alpha Team"},
+        {"team_id": "team-beta", "team_alias": "Beta Team"},
+    ]
+
+    def setup_method(self):
+        self.runner = CliRunner()
+
+    def test_match_requested_team_resolves_ids_and_aliases(self):
+        from litellm.proxy.client.cli.commands.auth import match_requested_team
+
+        assert match_requested_team(self._TEAMS, "team-beta") == "team-beta"
+        assert match_requested_team(self._TEAMS, "Alpha Team") == "team-alpha"
+
+    def test_match_requested_team_returns_none_without_a_match_or_a_request(self):
+        from litellm.proxy.client.cli.commands.auth import match_requested_team
+
+        assert match_requested_team(self._TEAMS, "no-such-team") is None
+        assert match_requested_team(self._TEAMS, None) is None
+        assert match_requested_team([], "team-alpha") is None
+
+    def test_matching_requested_team_skips_the_prompt_and_polls_for_that_team(self):
+        from litellm.proxy.client.cli.commands import auth
+
+        ready = Mock()
+        ready.status_code = 200
+        ready.json.return_value = {"status": "ready", "key": "jwt-beta"}
+
+        def prompt_must_not_run(*args, **kwargs):
+            raise AssertionError("the interactive team pick ran despite a matching --team")
+
+        with (
+            patch("requests.get", return_value=ready) as get,
+            patch("click.prompt", side_effect=prompt_must_not_run),
+        ):
+            jwt = auth._handle_team_selection_during_polling(
+                "https://test.example.com", "sess-1", "poll-secret", self._TEAMS, requested_team="Beta Team"
+            )
+
+        assert jwt == "jwt-beta"
+        assert "team_id=team-beta" in get.call_args.args[0]
+
+    def test_unknown_requested_team_warns_and_falls_back_to_the_prompt(self, capsys):
+        from litellm.proxy.client.cli.commands import auth
+
+        ready = Mock()
+        ready.status_code = 200
+        ready.json.return_value = {"status": "ready", "key": "jwt-alpha"}
+
+        with (
+            patch("requests.get", return_value=ready) as get,
+            patch("click.prompt", return_value="1") as prompt,
+        ):
+            jwt = auth._handle_team_selection_during_polling(
+                "https://test.example.com", "sess-1", "poll-secret", self._TEAMS, requested_team="no-such-team"
+            )
+
+        assert jwt == "jwt-alpha"
+        prompt.assert_called_once()
+        assert "team_id=team-alpha" in get.call_args.args[0]
+        assert "Team 'no-such-team' was not found among your teams; select one below." in capsys.readouterr().out
+
+    def test_env_vars_select_the_pkce_flow_and_pass_the_requested_team(self):
+        with (
+            patch(  # test-quality-ok: the click command exposes no injection seam for its login-flow dispatch
+                "litellm.proxy.client.cli.commands.auth._pkce_login"
+            ) as pkce_login,
+            patch(  # test-quality-ok: same; proves the SSO path stayed untouched
+                "litellm.proxy.client.cli.commands.auth._start_cli_sso_flow"
+            ) as sso_start,
+        ):
+            result = self.runner.invoke(
+                login,
+                obj={"base_url": PKCE_BASE_URL},
+                env={"LITELLM_PROXY_LOGIN_PKCE": "true", "LITELLM_PROXY_TEAM": "Beta Team"},
+            )
+
+        assert result.exit_code == 0, result.output
+        sso_start.assert_not_called()
+        assert pkce_login.call_args.args[3] == "Beta Team"
