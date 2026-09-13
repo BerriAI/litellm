@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.gemini import transformation
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
@@ -475,3 +475,82 @@ async def test_vertex_ai_async_transform_inlines_only_the_urls_gemini_cannot_fet
         {"file_data": {"mime_type": "application/pdf", "file_uri": files_api_pdf}},
     ]
     assert sorted(async_only_image_fetch.fetched) == sorted([plain_http_png, extensionless_https])
+
+
+KMS_KEY_NAME = "projects/qa-project/locations/us-central1/keyRings/litellm/cryptoKeys/context-cache"
+CACHE_NAME = "projects/qa-project/locations/us-central1/cachedContents/123"
+
+
+def _cmek_cache_transport(captured):
+    """Fake Vertex: the cache list is empty, so the cachedContents create is exercised for real."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={})
+        captured["cache_create"] = json.loads(request.content)
+        return httpx.Response(200, json={"name": CACHE_NAME, "model": "gemini-2.5-flash"})
+
+    return httpx.MockTransport(handle)
+
+
+def _cacheable_messages():
+    return [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": " ".join(f"clause {i}" for i in range(2000)),
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {"role": "user", "content": "Which clause covers termination?"},
+    ]
+
+
+def _transform_kwargs():
+    return {
+        "gemini_api_key": None,
+        "messages": _cacheable_messages(),
+        "api_base": None,
+        "model": "gemini-2.5-flash",
+        "timeout": None,
+        "extra_headers": None,
+        "optional_params": {"kms_key_name": KMS_KEY_NAME},
+        "logging_obj": Mock(),
+        "custom_llm_provider": "vertex_ai",
+        "litellm_params": {},
+        "vertex_project": "qa-project",
+        "vertex_location": "us-central1",
+        "vertex_auth_header": "qa-token",
+    }
+
+
+def _assert_key_encrypts_cache_without_leaking(captured, body):
+    assert captured["cache_create"]["encryptionSpec"] == {"kmsKeyName": KMS_KEY_NAME}
+    assert body["cachedContent"] == CACHE_NAME
+    assert KMS_KEY_NAME not in json.dumps(body)
+
+
+def test_sync_transform_request_body_forwards_kms_key_name_to_cache_creation():
+    """`kms_key_name` reaches the cachedContents POST as encryptionSpec and never the generateContent body."""
+    captured = {}
+    client = HTTPHandler()
+    client.client = httpx.Client(transport=_cmek_cache_transport(captured))
+
+    body = transformation.sync_transform_request_body(client=client, **_transform_kwargs())
+
+    _assert_key_encrypts_cache_without_leaking(captured, body)
+
+
+@pytest.mark.asyncio
+async def test_async_transform_request_body_forwards_kms_key_name_to_cache_creation():
+    """The async transform path pops and forwards the key independently of the sync one."""
+    captured = {}
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=_cmek_cache_transport(captured))
+
+    body = await transformation.async_transform_request_body(client=client, **_transform_kwargs())
+
+    _assert_key_encrypts_cache_without_leaking(captured, body)

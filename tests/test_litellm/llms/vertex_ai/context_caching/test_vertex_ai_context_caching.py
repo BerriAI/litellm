@@ -1,3 +1,4 @@
+import json
 from typing import List
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1558,6 +1559,207 @@ class TestContextCachingEndpoints:
         self.mock_async_client.get.assert_not_called()
         self.mock_async_client.post.assert_not_called()
 
+    KMS_KEY_NAME = "projects/test_project/locations/us-central1/keyRings/litellm/cryptoKeys/context-cache"
+
+    def _cmek_call_kwargs(self, custom_llm_provider):
+        return {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Cached reference material",
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                },
+                {"role": "user", "content": "Question about the material"},
+            ],
+            "optional_params": {},
+            "api_key": "test_key",
+            "api_base": None,
+            "model": "gemini-2.5-pro",
+            "timeout": 30.0,
+            "logging_obj": self.mock_logging,
+            "custom_llm_provider": custom_llm_provider,
+            "vertex_project": "test_project",
+            "vertex_location": "us-central1",
+            "vertex_auth_header": "test_token",
+        }
+
+    def _cached_contents_transport(self, posted_bodies):
+        """Fake Google: the cache list is empty (GET) and every create (POST) succeeds."""
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET":
+                return httpx.Response(200, json={})
+            posted_bodies.append(json.loads(request.content))
+            return httpx.Response(200, json={"name": "new_cache_name", "model": "gemini-2.5-pro"})
+
+        return httpx.MockTransport(handle)
+
+    def _assert_kms_key_only_adds_encryption_spec(self, posted_bodies):
+        plain_body, cmek_body = posted_bodies
+        assert "encryptionSpec" not in plain_body
+        assert cmek_body["encryptionSpec"] == {"kmsKeyName": self.KMS_KEY_NAME}
+        assert cmek_body["displayName"] != plain_body["displayName"]
+
+        untouched = ("encryptionSpec", "displayName")
+        assert {k: v for k, v in cmek_body.items() if k not in untouched} == {
+            k: v for k, v in plain_body.items() if k not in untouched
+        }
+        assert plain_body["contents"][0]["parts"][0]["text"] == "Cached reference material"
+        assert plain_body["model"].endswith("models/gemini-2.5-pro")
+
+    @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
+    def test_check_and_create_cache_kms_key_adds_encryption_spec(self, custom_llm_provider):
+        """kms_key_name becomes Vertex's `encryptionSpec` on the cache-creation POST and changes nothing else.
+
+        It is forwarded for every provider on purpose: Google AI Studio has no CMEK, so it rejects the field
+        instead of silently caching the content without the customer's key.
+        """
+        posted_bodies = []
+        client = HTTPHandler()
+        client.client = httpx.Client(transport=self._cached_contents_transport(posted_bodies))
+        kwargs = self._cmek_call_kwargs(custom_llm_provider)
+
+        self.context_caching.check_and_create_cache(client=client, **kwargs)
+        _, _, returned_cache = self.context_caching.check_and_create_cache(
+            client=client, kms_key_name=self.KMS_KEY_NAME, **kwargs
+        )
+
+        assert returned_cache == "new_cache_name"
+        self._assert_kms_key_only_adds_encryption_spec(posted_bodies)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
+    async def test_async_check_and_create_cache_kms_key_adds_encryption_spec(self, custom_llm_provider):
+        """Async variant of test_check_and_create_cache_kms_key_adds_encryption_spec."""
+        posted_bodies = []
+        client = AsyncHTTPHandler()
+        client.client = httpx.AsyncClient(transport=self._cached_contents_transport(posted_bodies))
+        kwargs = self._cmek_call_kwargs(custom_llm_provider)
+
+        await self.context_caching.async_check_and_create_cache(client=client, **kwargs)
+        _, _, returned_cache = await self.context_caching.async_check_and_create_cache(
+            client=client, kms_key_name=self.KMS_KEY_NAME, **kwargs
+        )
+
+        assert returned_cache == "new_cache_name"
+        self._assert_kms_key_only_adds_encryption_spec(posted_bodies)
+    def _existing_cache_transport(self, listed_display_names, hits):
+        """Fake Google holding caches already created under `listed_display_names`."""
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET":
+                return httpx.Response(
+                    200,
+                    json={
+                        "cachedContents": [
+                            {"name": f"cache-for-{name}", "displayName": name} for name in listed_display_names
+                        ]
+                    },
+                )
+            hits.append(json.loads(request.content))
+            return httpx.Response(200, json={"name": "freshly_created_cache", "model": "gemini-2.5-pro"})
+
+        return httpx.MockTransport(handle)
+
+    def _display_name_for(self, custom_llm_provider, kms_key_name):
+        recorded = []
+        client = HTTPHandler()
+        client.client = httpx.Client(transport=self._cached_contents_transport(recorded))
+        self.context_caching.check_and_create_cache(
+            client=client, kms_key_name=kms_key_name, **self._cmek_call_kwargs(custom_llm_provider)
+        )
+        return recorded[0]["displayName"]
+
+    @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
+    def test_check_and_create_cache_does_not_reuse_cache_encrypted_under_another_policy(self, custom_llm_provider):
+        """A CMEK request must not reuse content cached with no key or a different key.
+
+        `encryptionSpec` is input-only, so a cache listing never reveals which key an existing entry
+        uses. The displayName is therefore scoped by the key, and the only reusable cache is one
+        created under the very same key.
+        """
+        unencrypted_name = self._display_name_for(custom_llm_provider, None)
+        other_key_name = self._display_name_for(
+            custom_llm_provider, "projects/test_project/locations/us-central1/keyRings/litellm/cryptoKeys/rotated"
+        )
+        wanted_name = self._display_name_for(custom_llm_provider, self.KMS_KEY_NAME)
+
+        assert len({unencrypted_name, other_key_name, wanted_name}) == 3
+
+        for already_cached in ([], [unencrypted_name], [other_key_name], [unencrypted_name, other_key_name]):
+            created = []
+            client = HTTPHandler()
+            client.client = httpx.Client(transport=self._existing_cache_transport(already_cached, created))
+
+            _, _, returned_cache = self.context_caching.check_and_create_cache(
+                client=client, kms_key_name=self.KMS_KEY_NAME, **self._cmek_call_kwargs(custom_llm_provider)
+            )
+
+            assert returned_cache == "freshly_created_cache", f"reused a foreign-policy cache from {already_cached}"
+            assert created[0]["encryptionSpec"] == {"kmsKeyName": self.KMS_KEY_NAME}
+
+        reused = []
+        client = HTTPHandler()
+        client.client = httpx.Client(transport=self._existing_cache_transport([wanted_name], reused))
+
+        _, _, returned_cache = self.context_caching.check_and_create_cache(
+            client=client, kms_key_name=self.KMS_KEY_NAME, **self._cmek_call_kwargs(custom_llm_provider)
+        )
+
+        assert returned_cache == f"cache-for-{wanted_name}"
+        assert reused == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
+    async def test_async_check_and_create_cache_does_not_reuse_cache_encrypted_under_another_policy(
+        self, custom_llm_provider
+    ):
+        """Async variant: a cache created without CMEK is not reused for a CMEK request."""
+        unencrypted_name = self._display_name_for(custom_llm_provider, None)
+        wanted_name = self._display_name_for(custom_llm_provider, self.KMS_KEY_NAME)
+
+        created = []
+        client = AsyncHTTPHandler()
+        client.client = httpx.AsyncClient(transport=self._existing_cache_transport([unencrypted_name], created))
+
+        _, _, returned_cache = await self.context_caching.async_check_and_create_cache(
+            client=client, kms_key_name=self.KMS_KEY_NAME, **self._cmek_call_kwargs(custom_llm_provider)
+        )
+
+        assert returned_cache == "freshly_created_cache"
+        assert created[0]["encryptionSpec"] == {"kmsKeyName": self.KMS_KEY_NAME}
+
+        reused = []
+        client = AsyncHTTPHandler()
+        client.client = httpx.AsyncClient(transport=self._existing_cache_transport([wanted_name], reused))
+
+        _, _, returned_cache = await self.context_caching.async_check_and_create_cache(
+            client=client, kms_key_name=self.KMS_KEY_NAME, **self._cmek_call_kwargs(custom_llm_provider)
+        )
+
+        assert returned_cache == f"cache-for-{wanted_name}"
+        assert reused == []
+
+    @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
+    def test_check_and_create_cache_without_kms_key_still_reuses_existing_cache(self, custom_llm_provider):
+        """Scoping must not break plain caching: a no-key request still hits a no-key cache."""
+        unencrypted_name = self._display_name_for(custom_llm_provider, None)
+
+        created = []
+        client = HTTPHandler()
+        client.client = httpx.Client(transport=self._existing_cache_transport([unencrypted_name], created))
+
+        _, _, returned_cache = self.context_caching.check_and_create_cache(
+            client=client, **self._cmek_call_kwargs(custom_llm_provider)
+        )
+
+        assert returned_cache == f"cache-for-{unencrypted_name}"
+        assert created == []
 
 def test_cached_messages_end_on_supported_turn():
     from litellm.llms.vertex_ai.context_caching.transformation import (
