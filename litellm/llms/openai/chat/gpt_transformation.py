@@ -13,7 +13,10 @@ import httpx
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.litellm_core_utils.gateway_catalog_cache import bearer_auth_headers
+from litellm.litellm_core_utils.gateway_catalog_cache import (
+    CATALOG_TIMEOUT_SECONDS,
+    bearer_auth_headers,
+)
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _extract_reasoning_content,
     _handle_invalid_parallel_tool_calls,
@@ -769,6 +772,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         response: Final = litellm.module_level_client.get(
             url=models_url,
             headers=bearer_auth_headers(api_key),
+            timeout=CATALOG_TIMEOUT_SECONDS,
         )
 
         if response.status_code != 200:
