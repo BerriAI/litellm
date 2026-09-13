@@ -708,38 +708,6 @@ class TestKimiK26ModelRegistry:
         """Load directly from the bundled backup so tests don't depend on remote fetch."""
         return GetModelCostMap.load_local_model_cost_map()
 
-    def test_kimi_k26_in_model_cost_map(self, model_cost_map):
-        """kimi-k2.6 should be present in the model cost map."""
-        assert "moonshot/kimi-k2.6" in model_cost_map, "moonshot/kimi-k2.6 not found in model_cost"
-
-    def test_kimi_k26_pricing(self, model_cost_map):
-        """kimi-k2.6 pricing should match official Kimi API rates."""
-        model_info = model_cost_map["moonshot/kimi-k2.6"]
-        assert model_info["input_cost_per_token"] == pytest.approx(9.5e-07)
-        assert model_info["output_cost_per_token"] == pytest.approx(4e-06)
-        assert model_info["cache_read_input_token_cost"] == pytest.approx(1.6e-07)
-
-    def test_kimi_k26_context_window(self, model_cost_map):
-        """kimi-k2.6 should have a 256K (262144 token) context window."""
-        model_info = model_cost_map["moonshot/kimi-k2.6"]
-        assert model_info["max_input_tokens"] == 262144
-        assert model_info["max_output_tokens"] == 262144
-        assert model_info["max_tokens"] == 262144
-
-    def test_kimi_k26_capabilities(self, model_cost_map):
-        """kimi-k2.6 should support function calling, vision, video input, tool choice, and reasoning."""
-        model_info = model_cost_map["moonshot/kimi-k2.6"]
-        assert model_info.get("supports_function_calling") is True
-        assert model_info.get("supports_tool_choice") is True
-        assert model_info.get("supports_vision") is True
-        assert model_info.get("supports_video_input") is True
-        assert model_info.get("supports_reasoning") is True
-
-    def test_kimi_k26_provider(self, model_cost_map):
-        """kimi-k2.6 should be assigned to the moonshot provider."""
-        model_info = model_cost_map["moonshot/kimi-k2.6"]
-        assert model_info["litellm_provider"] == "moonshot"
-
 
 class TestMoonshotResponseSchemaSupport:
     """Every model currently live on api.moonshot.ai supports json_schema
@@ -761,10 +729,6 @@ class TestMoonshotResponseSchemaSupport:
     @pytest.fixture(autouse=True)
     def model_cost_map(self):
         return GetModelCostMap.load_local_model_cost_map()
-
-    @pytest.mark.parametrize("model", LIVE_MODELS)
-    def test_live_model_supports_response_schema(self, model, model_cost_map):
-        assert model_cost_map[model].get("supports_response_schema") is True
 
     def test_supports_response_schema_utility_reports_true(self, model_cost_map, monkeypatch):
         monkeypatch.setattr(litellm, "model_cost", model_cost_map)

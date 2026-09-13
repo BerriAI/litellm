@@ -1,6 +1,13 @@
+import json
+import sys
+import types
+
 import pytest
+import respx
+from httpx import Response
 from unittest.mock import AsyncMock, patch
 
+import litellm
 from litellm.types.utils import ModelResponse
 
 from litellm.responses.mcp import chat_completions_handler
@@ -1761,3 +1768,39 @@ async def test_acompletion_with_mcp_streaming_empty_initial_stream_terminates_cl
             all_chunks.append(chunk)
 
     assert all_chunks == [], "An empty initial stream must terminate cleanly with no chunks"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_acompletion_with_mcp_forwards_unserved_external_mcp_tool_to_the_provider(monkeypatch):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    zapier_tool = {"type": "mcp", "server_label": "zapier", "server_url": "https://mcp.zapier.com/api/mcp/mcp"}
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", types.SimpleNamespace(prisma_client=None))
+    monkeypatch.setattr(global_mcp_server_manager, "get_registry", lambda: {})
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    provider = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "chatcmpl-zapier",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-4.1",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    result = await acompletion_with_mcp(
+        model="openai/gpt-4.1",
+        messages=[{"role": "user", "content": "hello"}],
+        tools=[zapier_tool],
+        api_key="sk-test",
+        acompletion=True,
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.id == "chatcmpl-zapier"
+    assert json.loads(provider.calls.last.request.content)["tools"] == [zapier_tool]
