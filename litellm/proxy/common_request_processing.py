@@ -44,11 +44,10 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
-
 from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
+from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
 from litellm.proxy.common_utils.callback_utils import (
