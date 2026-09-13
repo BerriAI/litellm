@@ -374,7 +374,7 @@ async def test_save_background_health_checks_to_db():
     """Test the main background health check save function"""
     mock_prisma = MagicMock()
     mock_prisma.save_health_check_result = AsyncMock()
-    mock_prisma.get_all_latest_health_checks = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
 
     model_list = [
         {
@@ -398,9 +398,9 @@ async def test_save_background_health_checks_to_db():
         "background_health_check",
     )
 
-    # Should call get_all_latest_health_checks and save_health_check_result, and report completion
+    # Should read the latest rows and save_health_check_result, and report completion
     assert persisted is True
-    mock_prisma.get_all_latest_health_checks.assert_called_once()
+    mock_prisma.db.query_raw.assert_awaited_once()
     mock_prisma.save_health_check_result.assert_called_once()
 
     call_kwargs = mock_prisma.save_health_check_result.call_args[1]
@@ -493,7 +493,7 @@ def _one_model_setup():
 @pytest.mark.asyncio
 async def test_save_background_health_checks_to_db_returns_false_when_a_write_fails():
     mock_prisma = MagicMock()
-    mock_prisma.get_all_latest_health_checks = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
     mock_prisma.save_health_check_result = AsyncMock(return_value=None)
     model_list, healthy_endpoints, unhealthy_endpoints = _one_model_setup()
 
@@ -502,6 +502,23 @@ async def test_save_background_health_checks_to_db_returns_false_when_a_write_fa
     )
 
     assert (persisted, mock_prisma.save_health_check_result.await_count) == (False, 1)
+
+
+@pytest.mark.asyncio
+async def test_save_background_health_checks_to_db_writes_nothing_when_the_latest_row_read_fails(mock_prisma):
+    """
+    A failed dedup read must not read as an empty table. Treated that way, every model was written on every
+    cycle by every pod while the read kept failing, which is what filled the table in production.
+    """
+    mock_prisma.db.query_raw = AsyncMock(side_effect=RuntimeError("db down"))
+    mock_prisma.save_health_check_result = AsyncMock(return_value={"id": "row"})
+    model_list, healthy_endpoints, unhealthy_endpoints = _one_model_setup()
+
+    persisted = await _save_background_health_checks_to_db(
+        mock_prisma, model_list, healthy_endpoints, unhealthy_endpoints, 1234567890.0, "background_health_check"
+    )
+
+    assert (persisted, mock_prisma.save_health_check_result.await_count) == (False, 0)
 
 
 @pytest.mark.asyncio
@@ -515,7 +532,7 @@ async def test_save_background_health_checks_to_db_no_prisma():
 async def test_save_background_health_checks_to_db_exception_handling():
     """Test exception handling in background health check save"""
     mock_prisma = MagicMock()
-    mock_prisma.get_all_latest_health_checks = AsyncMock(side_effect=Exception("DB Error"))
+    mock_prisma.db.query_raw = AsyncMock(side_effect=Exception("DB Error"))
 
     model_list = [
         {
