@@ -2789,6 +2789,7 @@ class TestUsageTransformation:
         assert response_usage.input_tokens_details is not None
         assert response_usage.input_tokens_details.cached_tokens == 5
         assert response_usage.input_tokens_details.text_tokens == 8
+        assert "cache_write_tokens" not in response_usage.input_tokens_details.model_dump()
 
     def test_transform_usage_with_cached_tokens_gemini(self):
         """Test that cached_tokens from Gemini are properly transformed to input_tokens_details"""
@@ -2851,6 +2852,7 @@ class TestUsageTransformation:
         assert response_usage.input_tokens_details is not None
         assert response_usage.input_tokens_details.cached_tokens == 100
         assert getattr(response_usage.input_tokens_details, "cache_write_tokens", None) == 800
+        assert response_usage.input_tokens_details.model_dump()["cache_write_tokens"] == 800
 
     def test_transform_usage_with_reasoning_tokens_gemini(self):
         """Test that reasoning_tokens from Gemini are properly transformed to output_tokens_details"""
