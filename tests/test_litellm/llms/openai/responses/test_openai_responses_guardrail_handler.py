@@ -2338,6 +2338,109 @@ def _parallel_tool_call_input() -> list:
     ]
 
 
+SSN = "123-45-6789"
+REDACTED_SSN = "<US_SSN>"
+
+
+def _slot_texts(message: dict) -> list[str]:
+    content = message.get("content")
+    if isinstance(content, str):
+        return [content]
+    if isinstance(content, list):
+        return [part["text"] for part in content if isinstance(part, dict) and isinstance(part.get("text"), str)]
+    return []
+
+
+class PerMessageRedactionGuardrail(CustomGuardrail):
+    """Guardrail that answers one redacted text per message it was shown and hands
+    back only texts, the way Prompt Security in modify mode and a generic guardrail
+    API server that scans per message do."""
+
+    def __init__(self, extra_texts: int = 0):
+        super().__init__(guardrail_name="per-message-redactor")
+        self.extra_texts = extra_texts
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        messages = inputs.get("structured_messages") or []
+        texts = [text.replace(SSN, REDACTED_SSN) for message in messages for text in _slot_texts(message)]
+        return {**inputs, "texts": texts + ["junk"] * self.extra_texts}
+
+
+class TestPerMessageTextWriteBack:
+    """A guardrail that rewrites one text per message it saw must land on the
+    instructions and the input items those messages came from, not be rejected."""
+
+    @pytest.mark.asyncio
+    async def test_instructions_plus_tool_replay_gets_each_rewrite_in_place(self):
+        handler = OpenAIResponsesHandler()
+        function_call_item = {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "lookup_customer",
+            "arguments": '{"query": "' + SSN + '"}',
+        }
+        data = {
+            "model": "gpt-5.6",
+            "instructions": "Never repeat the SSN " + SSN + " back.",
+            "input": [
+                {"role": "user", "content": "Look up " + SSN + " for me."},
+                function_call_item,
+                {"type": "function_call_output", "call_id": "call_1", "output": '{"ssn": "' + SSN + '"}'},
+            ],
+        }
+
+        result = await handler.process_input_messages(data, PerMessageRedactionGuardrail())
+
+        assert result["instructions"] == "Never repeat the SSN " + REDACTED_SSN + " back."
+        assert [item.get("type", item.get("role")) for item in result["input"]] == [
+            "user",
+            "function_call",
+            "function_call_output",
+        ]
+        assert _slot_texts(result["input"][0]) == ["Look up " + REDACTED_SSN + " for me."]
+        assert result["input"][1] == function_call_item
+        assert result["input"][2]["output"] == '{"ssn": "' + REDACTED_SSN + '"}'
+        assert result["input"][2]["call_id"] == "call_1"
+
+    @pytest.mark.asyncio
+    async def test_string_input_with_instructions_keeps_the_two_apart(self):
+        handler = OpenAIResponsesHandler()
+        data = {
+            "model": "gpt-5.6",
+            "instructions": "Redact " + SSN + " everywhere.",
+            "input": "My SSN is " + SSN + ".",
+        }
+
+        result = await handler.process_input_messages(data, PerMessageRedactionGuardrail())
+
+        assert result["instructions"] == "Redact " + REDACTED_SSN + " everywhere."
+        assert [_slot_texts(item) for item in result["input"]] == [["My SSN is " + REDACTED_SSN + "."]]
+
+    @pytest.mark.asyncio
+    async def test_count_matching_neither_texts_nor_messages_is_still_rejected(self):
+        from litellm.proxy.policy_engine.pipeline_executor import UnappliableRequestRewrite
+
+        handler = OpenAIResponsesHandler()
+        original_input = [
+            {"role": "user", "content": "Look up " + SSN + " for me."},
+            {"type": "function_call_output", "call_id": "call_1", "output": '{"ssn": "' + SSN + '"}'},
+        ]
+        data = {"model": "gpt-5.6", "instructions": "Be terse.", "input": copy.deepcopy(original_input)}
+
+        with pytest.raises(UnappliableRequestRewrite) as excinfo:
+            await handler.process_input_messages(data, PerMessageRedactionGuardrail(extra_texts=1))
+
+        assert excinfo.value.guardrail_name == "per-message-redactor"
+        assert data["input"] == original_input
+        assert data["instructions"] == "Be terse."
+
+
 class TestProvenancePatching:
     """The O(n) provenance pass must keep patching rewritten rows in place for the
     shapes real agent loops produce, and fall back safely everywhere else."""
