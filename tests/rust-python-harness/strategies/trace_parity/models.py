@@ -18,6 +18,7 @@ class RouteFixture:
     provider_responses: tuple[RecordedResponse, ...]
     expected_failure: bool = False
     consume_stream: bool = False
+    environment: tuple[tuple[str, str], ...] = ()
 
     def derive(
         self,
@@ -32,6 +33,7 @@ class RouteFixture:
             provider_responses=self.provider_responses if provider_responses is None else provider_responses,
             expected_failure=self.expected_failure if expected_failure is None else expected_failure,
             consume_stream=self.consume_stream if consume_stream is None else consume_stream,
+            environment=self.environment,
         )
 
     def with_body(self, **updates: object) -> RouteFixture:

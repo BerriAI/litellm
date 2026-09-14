@@ -160,13 +160,11 @@ def _collect(
 def _projections(
     python_events: tuple[FunctionTraceEvent, ...],
     rust_events: tuple[FunctionTraceEvent, ...],
-    scenario: TraceScenario,
 ) -> tuple[PipelineProjection, PipelineProjection, str | None]:
-    mappings: Final = scenario.mappings
     try:
         return (
-            pipeline_projection("python", python_events, mappings),
-            pipeline_projection("rust", rust_events, mappings),
+            pipeline_projection("python", python_events),
+            pipeline_projection("rust", rust_events),
             None,
         )
     except ValueError as error:
@@ -184,7 +182,7 @@ def execute_gateway_trace(
     rust_error: Final = None if isinstance(rust_trace, tuple) else f"rust: {rust_trace.message}"
     python_events: Final = python_trace if isinstance(python_trace, tuple) else ()
     rust_events: Final = rust_trace if isinstance(rust_trace, tuple) else ()
-    python, rust, projection_error = _projections(python_events, rust_events, scenario)
+    python, rust, projection_error = _projections(python_events, rust_events)
     python_error: Final = projection_error or collection_python_error
     return TraceArtifact.from_traces(
         engine=engine,

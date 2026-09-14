@@ -120,21 +120,22 @@ def collect_trace(
                 provider.enqueue_response(response)
             fixture: Final = RouteFixture(
                 kwargs={
-                    **base_fixture.kwargs,
                     "api_key": "test-key",
+                    **base_fixture.kwargs,
                     "api_base": provider.url,
                     **({"timeout_seconds": 5} if engine == "rust" else {"timeout": 5}),
                 },
                 provider_responses=base_fixture.provider_responses,
                 expected_failure=base_fixture.expected_failure,
                 consume_stream=base_fixture.consume_stream,
+                environment=base_fixture.environment,
             )
             environment: Final = (
                 patch.dict(os.environ, {"LITELLM_RUST": "1" if python_rust_enabled else "0"})
                 if engine == "python"
                 else nullcontext()
             )
-            with environment:
+            with environment, patch.dict(os.environ, fixture.environment):
                 collected: Final = _collect(function, fixture, engine, asynchronous=asynchronous)
             provider.take_requests(len(fixture.provider_responses))
     except Exception as error:
@@ -160,7 +161,6 @@ def execute_trace(
     surface: Surface,
     engine: TraceEngine = "both",
 ) -> TraceArtifact:
-    mappings: Final = scenario.mappings
     scenario_route: Final = RouteSpec(
         route=route.route,
         python_entrypoints=route.python_entrypoints,
@@ -185,8 +185,8 @@ def execute_trace(
     python_events: Final = python_trace if isinstance(python_trace, tuple) else ()
     rust_events: Final = rust_trace if isinstance(rust_trace, tuple) else ()
     try:
-        python: Final = pipeline_projection("python", python_events, mappings)
-        rust: Final = pipeline_projection("rust", rust_events, mappings)
+        python: Final = pipeline_projection("python", python_events)
+        rust: Final = pipeline_projection("rust", rust_events)
     except ValueError as error:
         return TraceArtifact.from_traces(
             engine=engine,
