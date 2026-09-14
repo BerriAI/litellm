@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib
+import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Final, cast
 
 import pytest
@@ -10,11 +12,12 @@ import litellm
 
 from ...shared.reporting.models import Coverage, HarnessCase, HarnessRun, RunStatus, SdkFunction, Surface
 from ...shared.reporting.strategy import ModuleCaseSpec
+from ...shared.tracing.profiler import FunctionTraceEvent
 from ...shared.tracing.steps import Engine, PipelineStep
 from .models import GatewayRouteSpec, RouteFixture, RouteSpec, TraceScenario, TraceSuite
 from .reporting import TraceArtifact
 from .runner import run_trace_cases, run_trace_scenario, runner_selection, scenario_nodeids, validate_trace_suite
-from .sdk.execution import execute_trace
+from .sdk.execution import SdkCall, collect_trace, execute_trace
 
 
 def _fixture(_engine: Engine, _base_url: str) -> RouteFixture:
@@ -75,6 +78,34 @@ def test_python_engine_skips_native_bridge(monkeypatch: pytest.MonkeyPatch, tmp_
 
     assert exit_code == 0
     assert selected == [(frozenset({"mistral"}), "python")]
+
+
+def test_python_trace_controls_native_ocr_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    execution: Final = importlib.import_module("tests.rust-python-harness.strategies.trace_parity.sdk.execution")
+    route: Final = RouteSpec("ocr", ("ocr", "aocr"), ("ocr", "aocr"), _fixture)
+    observed: list[str | None] = []
+
+    def collect(
+        _function: SdkCall,
+        _fixture: RouteFixture,
+        _engine: Engine,
+        *,
+        asynchronous: bool,
+    ) -> SimpleNamespace:
+        observed.append(os.environ.get("LITELLM_RUST"))
+        return SimpleNamespace(
+            events=(FunctionTraceEvent(0, None, "aocr" if asynchronous else "ocr"),),
+            error=None,
+        )
+
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    monkeypatch.setattr(execution, "_collect", collect)
+
+    collect_trace(route, "python", asynchronous=False)
+    collect_trace(route, "python", asynchronous=True, python_rust_enabled=True)
+
+    assert observed == ["0", "1"]
+    assert os.environ["LITELLM_RUST"] == "1"
 
 
 def test_expected_provider_failure_omits_feedback_banner(

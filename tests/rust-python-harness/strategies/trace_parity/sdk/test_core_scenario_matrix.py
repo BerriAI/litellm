@@ -16,6 +16,7 @@ def _suite(module: str) -> TraceSuite:
 def test_core_sdk_scenario_matrix_keeps_distinct_migration_paths() -> None:
     chat: Final = _suite("tests.rust-python-harness.strategies.trace_parity.sdk.chat_completions.case")
     messages: Final = _suite("tests.rust-python-harness.strategies.trace_parity.sdk.messages.case")
+    ocr: Final = _suite("tests.rust-python-harness.strategies.trace_parity.sdk.ocr.case")
     responses: Final = _suite("tests.rust-python-harness.strategies.trace_parity.sdk.responses.case")
 
     assert {(scenario.name, scenario.asynchronous) for scenario in chat.scenarios} >= {
@@ -37,6 +38,11 @@ def test_core_sdk_scenario_matrix_keeps_distinct_migration_paths() -> None:
         ("async-bedrock-event-stream-error", True),
         ("async-bedrock-invalid-thinking-retry", True),
         ("sync-unsupported", False),
+    }
+    assert {(scenario.name, scenario.asynchronous) for scenario in ocr.scenarios} >= {
+        ("async-cohere", True),
+        ("sync-public-rust-dispatch", False),
+        ("async-public-rust-dispatch", True),
     }
     assert {(scenario.name, scenario.asynchronous) for scenario in responses.scenarios} >= {
         ("sync-openai", False),
