@@ -48,8 +48,8 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           ports:
-            - name: http
-              containerPort: 4000
+            - name: {{ .Values.gateway.service.portName | default "http" }}
+              containerPort: {{ .Values.gateway.service.containerPort | default .Values.gateway.service.port }}
               protocol: TCP
           env:
             {{- include "litellm.serverEnv" (dict "root" $ "component" .Values.gateway) | nindent 12 }}
