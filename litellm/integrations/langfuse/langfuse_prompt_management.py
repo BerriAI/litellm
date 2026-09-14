@@ -241,11 +241,8 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             langfuse_host=dynamic_callback_params.get("langfuse_host"),
             allow_env_credentials=dynamic_callback_params.get("langfuse_host") is None,
         )
-        langfuse_prompt_client: Final = self._get_prompt_from_id(
-            langfuse_prompt_id=prompt_id,
-            langfuse_client=langfuse_client,
-        )
-        return langfuse_prompt_client is not None
+        self._get_prompt_from_id(langfuse_prompt_id=prompt_id, langfuse_client=langfuse_client)
+        return True
 
     def _compile_prompt_helper(
         self,
