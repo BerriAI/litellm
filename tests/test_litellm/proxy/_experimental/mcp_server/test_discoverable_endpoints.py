@@ -7148,7 +7148,7 @@ def agent_365_guardrail():
         )
 
 
-async def _agent_365_gated_prm(scopes):
+async def _agent_365_gated_prm(scopes, extra_headers=None):
     from fastapi import Request
 
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
@@ -7168,6 +7168,7 @@ async def _agent_365_gated_prm(scopes):
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
         scopes=scopes,
+        extra_headers=extra_headers,
     )
     mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
@@ -7193,6 +7194,18 @@ async def test_agent_365_gated_server_prm_names_the_entra_tenant(agent_365_guard
 @pytest.mark.asyncio
 async def test_agent_365_prm_defaults_scopeless_server_to_the_gateway_app_scope(agent_365_guardrail):
     response = await _agent_365_gated_prm(scopes=None)
+    assert jsonable_encoder(response) == {
+        "authorization_servers": ["https://login.microsoftonline.com/tenant-abc/v2.0"],
+        "resource": "https://litellm.example.com/mcp/tools",
+        "scopes_supported": ["api://client-xyz/access_as_user"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_agent_365_prm_survives_a_forwarded_upstream_api_key_header(agent_365_guardrail):
+    """The forwarded ``x-api-key`` is the upstream's credential and rides in its own header, so the caller's
+    ``Authorization`` still carries the Entra assertion and discovery must keep naming the Entra tenant."""
+    response = await _agent_365_gated_prm(scopes=None, extra_headers=["x-api-key"])
     assert jsonable_encoder(response) == {
         "authorization_servers": ["https://login.microsoftonline.com/tenant-abc/v2.0"],
         "resource": "https://litellm.example.com/mcp/tools",

@@ -1107,6 +1107,15 @@ class TestAgent365AuthorizationServers:
     def test_leaves_servers_whose_own_auth_mode_owns_sign_in_alone(self, registered_guardrail, server):
         assert agent_365_authorization_servers(server, None) == ()
 
+    @pytest.mark.parametrize("header", ["x-api-key", "API-Key", "apikey"])
+    def test_forwarded_api_key_header_leaves_authorization_to_entra(self, registered_guardrail, header):
+        """An upstream API key rides in its own header, so the caller's ``Authorization`` still carries the
+        Entra assertion and a key-only client must be told where to sign in."""
+        server: Final = _mcp_server(MCPAuth.none, scopes=None, extra_headers=[header])
+
+        assert agent_365_authorization_servers(server, None) == (ENTRA_ISSUER,)
+        assert agent_365_scopes_supported(server, None) == ("api://client-xyz/access_as_user",)
+
     def test_dedupes_guardrails_sharing_a_tenant(self, registered_guardrail):
         twin: Final = _make_guardrail(FakeHandler([]))
         twin.guardrail_name = "agent-365-twin"
