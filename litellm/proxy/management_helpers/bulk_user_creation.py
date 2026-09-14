@@ -433,8 +433,8 @@ async def _insert_users(
     try:
         await table.create_many(data=payloads)
         return tuple(prepared), ()
-    except Exception as exc:  # noqa: BLE001  # fall back to per-row inserts so the failing row can be identified
-        verbose_proxy_logger.warning("/user/bulk_new: create_many failed, retrying rows individually - %s", exc)
+    except Exception:  # noqa: BLE001  # fall back to per-row inserts so the failing row can be identified
+        verbose_proxy_logger.warning("/user/bulk_new: create_many failed, retrying rows individually", exc_info=True)
     landed_rows: Final = await table.find_many(
         where={"user_id": {"in": [payload["user_id"] for payload in payloads]}}  # mutable-ok: Prisma filter
     )
@@ -585,7 +585,9 @@ async def _detach_failed_teams(
     )
     for outcome in await _bounded(BULK_NEW_USER_CONCURRENCY, updates):
         if isinstance(outcome, BaseException):
-            verbose_proxy_logger.warning("/user/bulk_new: could not detach failed teams from user - %s", outcome)
+            verbose_proxy_logger.warning(
+                "/user/bulk_new: could not detach failed teams from user - %s", type(outcome).__name__
+            )
 
 
 async def _publish_team_writes(writes: Sequence[_TeamWrite], user_api_key_cache: "UserApiKeyCache") -> None:
@@ -600,8 +602,8 @@ async def _publish_team_writes(writes: Sequence[_TeamWrite], user_api_key_cache:
                     members_with_roles=write.after,  # pyright: ignore[reportArgumentType]  # pydantic coerces the tuple into the declared list
                 )
             )
-        except Exception as exc:  # noqa: BLE001  # metrics are best-effort and must not fail the request
-            verbose_proxy_logger.debug("Prometheus: failed to emit team members metric: %s", exc)
+        except Exception:  # noqa: BLE001  # metrics are best-effort and must not fail the request
+            verbose_proxy_logger.debug("Prometheus: failed to emit team members metric", exc_info=True)
     evictions: Final = await _bounded(
         BULK_NEW_USER_CONCURRENCY,
         tuple(
@@ -614,7 +616,7 @@ async def _publish_team_writes(writes: Sequence[_TeamWrite], user_api_key_cache:
     )
     for eviction in evictions:
         if isinstance(eviction, BaseException):
-            verbose_proxy_logger.warning("/user/bulk_new: cache eviction failed - %s", eviction)
+            verbose_proxy_logger.warning("/user/bulk_new: cache eviction failed - %s", type(eviction).__name__)
 
 
 _KEY_FIELDS: Final = MappingProxyType(
@@ -714,7 +716,9 @@ async def _write_audit_logs(
     )
     for outcome in outcomes:
         if isinstance(outcome, BaseException):
-            verbose_proxy_logger.warning("Unable to create audit log for user on `/user/bulk_new` - %s", outcome)
+            verbose_proxy_logger.warning(
+                "Unable to create audit log for user on `/user/bulk_new` - %s", type(outcome).__name__
+            )
 
 
 def _row_teams(prepared: _PreparedUser, writes: Mapping[str, _TeamWrite]) -> tuple[tuple[str, ...], tuple[str, ...]]:
