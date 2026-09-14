@@ -11,14 +11,10 @@ from litellm._uuid import uuid
 
 
 class _DynamoTable(Protocol):
-    """The one boto3 DynamoDB table call this logger makes."""
-
     def put_item(self, *, Item: Mapping[str, object]) -> object: ...
 
 
 class _DynamoResource(Protocol):
-    """The one boto3 DynamoDB resource call this logger makes."""
-
     def Table(self, name: str) -> _DynamoTable: ...
 
 

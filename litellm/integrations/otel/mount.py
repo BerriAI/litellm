@@ -69,8 +69,6 @@ PASSTHROUGH_PREFIXES: Final = frozenset(
 
 
 class _RenameableSpan(Protocol):
-    """The span surface the passthrough naming hook drives."""
-
     def is_recording(self) -> bool: ...
 
     def update_name(self, name: str) -> None: ...
