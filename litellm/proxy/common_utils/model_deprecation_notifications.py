@@ -7,6 +7,7 @@ import os
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -95,7 +96,15 @@ def select_milestone(days_until: int, thresholds: Sequence[int]) -> int | None:
     return min((threshold for threshold in thresholds if days_until <= threshold), default=None)
 
 
-def _reached(info: ModelDeprecationInfo, thresholds: Sequence[int]) -> tuple[ModelDeprecationInfo, int] | None:
+def _max_age_days(alerting_args: SlackAlertingArgs) -> int:
+    return alerting_args.model_deprecation_email_ttl // (24 * 60 * 60)
+
+
+def _reached(
+    info: ModelDeprecationInfo, thresholds: Sequence[int], max_age_days: int
+) -> tuple[ModelDeprecationInfo, int] | None:
+    if info.days_until_deprecation < -max_age_days:
+        return None
     milestone: Final = select_milestone(info.days_until_deprecation, thresholds)
     return None if milestone is None else (info, milestone)
 
@@ -178,9 +187,12 @@ async def resolve_affected_teams(
     llm_router: Router,
     teams: Sequence[LiteLLM_TeamTable],
     thresholds: Sequence[int],
+    max_age_days: int,
 ) -> Mapping[str, tuple[AffectedModel, ...]]:
     """Per team id, the deprecating models it can reach that have crossed a threshold"""
-    reached: Final = tuple(pair for pair in (_reached(info, thresholds) for info in infos) if pair is not None)
+    reached: Final = tuple(
+        pair for pair in (_reached(info, thresholds, max_age_days) for info in infos) if pair is not None
+    )
     owners: Final = _deployment_owners(llm_router)
     per_team: Final = MappingProxyType(
         {
@@ -192,8 +204,8 @@ async def resolve_affected_teams(
     return MappingProxyType({team_id: models for team_id, models in per_team.items() if models})
 
 
-def email_sent_key(team_id: str, model_name: str, milestone: int) -> str:
-    return f"model_deprecation_email:{team_id}:{model_name}:{milestone}"
+def email_sent_key(team_id: str, model_name: str, deprecation_date: date, milestone: int) -> str:
+    return f"model_deprecation_email:{team_id}:{model_name}:{deprecation_date.isoformat()}:{milestone}"
 
 
 async def _unsent(
@@ -201,7 +213,10 @@ async def _unsent(
 ) -> tuple[AffectedModel, ...]:
     flags: Final = tuple(
         [
-            await cache.async_get_cache(key=email_sent_key(team_id, model.info.model_name, model.milestone)) is None
+            await cache.async_get_cache(
+                key=email_sent_key(team_id, model.info.model_name, model.info.deprecation_date, model.milestone)
+            )
+            is None
             for model in models
         ]
     )
@@ -360,7 +375,9 @@ async def _send_team_notification(notification: TeamNotification, ctx: Deprecati
         return False
     for model in notification.models:
         await ctx.cache.async_set_cache(
-            key=email_sent_key(notification.team_id, model.info.model_name, model.milestone),
+            key=email_sent_key(
+                notification.team_id, model.info.model_name, model.info.deprecation_date, model.milestone
+            ),
             value=time.time(),
             ttl=ctx.alerting_args.model_deprecation_email_ttl,
         )
@@ -380,7 +397,11 @@ async def send_model_deprecation_emails(ctx: DeprecationEmailContext) -> int:
         return 0
     teams: Final = await _load_teams(ctx.prisma_client)
     affected: Final = await resolve_affected_teams(
-        infos, ctx.llm_router, teams, ctx.alerting_args.model_deprecation_email_thresholds
+        infos,
+        ctx.llm_router,
+        teams,
+        ctx.alerting_args.model_deprecation_email_thresholds,
+        _max_age_days(ctx.alerting_args),
     )
     notifications: Final = await build_team_notifications(affected, teams, ctx.cache, ctx.prisma_client)
     if not notifications:

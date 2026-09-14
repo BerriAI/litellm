@@ -45,11 +45,16 @@ class TestSelectMilestone:
         assert select_milestone(5, (0, 7, 30)) == 7
 
 
-def _info(model_name: str, days_until: int, provider: str | None = "openai") -> ModelDeprecationInfo:
+def _info(
+    model_name: str,
+    days_until: int,
+    provider: str | None = "openai",
+    deprecation_date: date = date(2026, 10, 1),
+) -> ModelDeprecationInfo:
     return ModelDeprecationInfo(
         model_name=model_name,
         litellm_model=model_name,
-        deprecation_date=date(2026, 10, 1),
+        deprecation_date=deprecation_date,
         days_until_deprecation=days_until,
         status="deprecated" if days_until < 0 else ("imminent" if days_until <= 30 else "upcoming"),
         litellm_provider=provider,
@@ -75,14 +80,16 @@ class TestResolveAffectedTeams:
     @pytest.mark.asyncio
     async def test_should_include_team_listing_the_model_explicitly(self):
         affected: Final = await resolve_affected_teams(
-            (_info("gpt-old", 5),), _router([]), (_team("t1", ("gpt-old",)), _team("t2", ("other",))), THRESHOLDS
+            (_info("gpt-old", 5),), _router([]), (_team("t1", ("gpt-old",)), _team("t2", ("other",))), THRESHOLDS, 90
         )
         assert set(affected) == {"t1"}
         assert affected["t1"] == (AffectedModel(info=_info("gpt-old", 5), display_name="gpt-old", milestone=7),)
 
     @pytest.mark.asyncio
     async def test_should_include_unrestricted_team(self):
-        affected: Final = await resolve_affected_teams((_info("gpt-old", 5),), _router([]), (_team("t1"),), THRESHOLDS)
+        affected: Final = await resolve_affected_teams(
+            (_info("gpt-old", 5),), _router([]), (_team("t1"),), THRESHOLDS, 90
+        )
         assert set(affected) == {"t1"}
 
     @pytest.mark.asyncio
@@ -92,19 +99,22 @@ class TestResolveAffectedTeams:
             _router([]),
             (_team("t1", ("openai/*",)), _team("t2", ("azure/*",))),
             THRESHOLDS,
+            90,
         )
         assert set(affected) == {"t1"}
 
     @pytest.mark.asyncio
     async def test_should_skip_blocked_teams(self):
         affected: Final = await resolve_affected_teams(
-            (_info("gpt-old", 5),), _router([]), (_team("t1", blocked=True),), THRESHOLDS
+            (_info("gpt-old", 5),), _router([]), (_team("t1", blocked=True),), THRESHOLDS, 90
         )
         assert dict(affected) == {}
 
     @pytest.mark.asyncio
     async def test_should_skip_models_that_have_not_reached_a_threshold(self):
-        affected: Final = await resolve_affected_teams((_info("gpt-old", 45),), _router([]), (_team("t1"),), THRESHOLDS)
+        affected: Final = await resolve_affected_teams(
+            (_info("gpt-old", 45),), _router([]), (_team("t1"),), THRESHOLDS, 90
+        )
         assert dict(affected) == {}
 
     @pytest.mark.asyncio
@@ -117,7 +127,7 @@ class TestResolveAffectedTeams:
             }
         ]
         affected: Final = await resolve_affected_teams(
-            (_info("model_name_t2_abc", -3),), _router(deployments), (_team("t1"), _team("t2")), THRESHOLDS
+            (_info("model_name_t2_abc", -3),), _router(deployments), (_team("t1"), _team("t2")), THRESHOLDS, 90
         )
         assert set(affected) == {"t2"}
         assert affected["t2"][0].display_name == "gpt-old"
@@ -130,6 +140,7 @@ class TestResolveAffectedTeams:
             _router([]),
             (_team("t1", ("gpt-old", "gpt-older")),),
             THRESHOLDS,
+            90,
         )
         assert [m.info.model_name for m in affected["t1"]] == ["gpt-old", "gpt-older"]
 
@@ -139,7 +150,7 @@ class TestResolveAffectedTeams:
             {"model_name": "gpt-old", "litellm_params": {"model": "openai/gpt-old"}, "model_info": {"id": "1"}}
         ]
         affected: Final = await resolve_affected_teams(
-            (_info("gpt-old", 5),), _router(deployments), (_team("t1", ("gpt-old",)),), THRESHOLDS
+            (_info("gpt-old", 5),), _router(deployments), (_team("t1", ("gpt-old",)),), THRESHOLDS, 90
         )
         assert set(affected) == {"t1"}
         assert affected["t1"][0].display_name == "gpt-old"
@@ -154,9 +165,16 @@ class TestResolveAffectedTeams:
             }
         ]
         affected: Final = await resolve_affected_teams(
-            (_info("model_name_t2_abc", -3),), _router(deployments), (_team("t2"),), THRESHOLDS
+            (_info("model_name_t2_abc", -3),), _router(deployments), (_team("t2"),), THRESHOLDS, 90
         )
         assert affected["t2"][0].display_name == "model_name_t2_abc"
+
+    @pytest.mark.asyncio
+    async def test_should_skip_models_deprecated_longer_ago_than_the_marker_lifetime(self):
+        affected: Final = await resolve_affected_teams(
+            (_info("ancient", -200), _info("gpt-old", -10)), _router([]), (_team("t1"),), THRESHOLDS, 90
+        )
+        assert [model.info.model_name for model in affected["t1"]] == ["gpt-old"]
 
     @pytest.mark.asyncio
     async def test_should_deny_a_team_whose_allowlist_is_malformed_and_keep_going(self):
@@ -165,6 +183,7 @@ class TestResolveAffectedTeams:
             _router([]),
             (_team("t1", ("openai/[*",)), _team("t2", ("openai/gpt-old",))),
             THRESHOLDS,
+            90,
         )
         assert set(affected) == {"t2"}
 
@@ -315,7 +334,7 @@ class TestBuildTeamNotifications:
     @pytest.mark.asyncio
     async def test_should_skip_milestones_already_sent(self):
         cache: Final = DualCache()
-        await cache.async_set_cache(key=email_sent_key("t1", "gpt-old", 7), value=1.0)
+        await cache.async_set_cache(key=email_sent_key("t1", "gpt-old", date(2026, 10, 1), 7), value=1.0)
         sent: Final = AffectedModel(info=_info("gpt-old", 5), display_name="gpt-old", milestone=7)
         fresh: Final = AffectedModel(info=_info("gpt-older", -1), display_name="gpt-older", milestone=0)
         notifications: Final = await build_team_notifications(
@@ -326,7 +345,7 @@ class TestBuildTeamNotifications:
     @pytest.mark.asyncio
     async def test_should_drop_team_when_everything_was_already_sent(self):
         cache: Final = DualCache()
-        await cache.async_set_cache(key=email_sent_key("t1", "gpt-old", 7), value=1.0)
+        await cache.async_set_cache(key=email_sent_key("t1", "gpt-old", date(2026, 10, 1), 7), value=1.0)
         models: Final = (AffectedModel(info=_info("gpt-old", 5), display_name="gpt-old", milestone=7),)
         notifications: Final = await build_team_notifications(
             {"t1": models}, (_admin_team("t1"),), cache, _prisma_with_users(ADMIN_USERS)
@@ -343,25 +362,54 @@ class TestBuildTeamNotifications:
         assert notifications == ()
 
     @pytest.mark.asyncio
-    async def test_should_key_the_sent_marker_by_team_model_and_milestone(self):
-        assert email_sent_key("t1", "gpt-old", 7) == "model_deprecation_email:t1:gpt-old:7"
-        assert email_sent_key("t1", "gpt-old", 7) != email_sent_key("t2", "gpt-old", 7)
-        assert email_sent_key("t1", "gpt-old", 7) != email_sent_key("t1", "gpt-old", 0)
+    async def test_should_send_a_second_deployment_sharing_a_model_name_with_a_later_date(self):
+        cache: Final = DualCache()
+        await cache.async_set_cache(key=email_sent_key("t1", "gpt-old", date(2026, 10, 1), 7), value=1.0)
+        sent: Final = AffectedModel(info=_info("gpt-old", 5), display_name="gpt-old", milestone=7)
+        other_date: Final = AffectedModel(
+            info=_info("gpt-old", 5, deprecation_date=date(2027, 3, 1)), display_name="gpt-old", milestone=7
+        )
+        notifications: Final = await build_team_notifications(
+            {"t1": (sent, other_date)}, (_admin_team("t1"),), cache, _prisma_with_users(ADMIN_USERS)
+        )
+        assert notifications[0].models == (other_date,)
 
+    @pytest.mark.asyncio
+    async def test_should_key_the_sent_marker_by_team_model_date_and_milestone(self):
+        assert (
+            email_sent_key("t1", "gpt-old", date(2026, 10, 1), 7) == "model_deprecation_email:t1:gpt-old:2026-10-01:7"
+        )
+        assert email_sent_key("t1", "gpt-old", date(2026, 10, 1), 7) != email_sent_key(
+            "t2", "gpt-old", date(2026, 10, 1), 7
+        )
+        assert email_sent_key("t1", "gpt-old", date(2026, 10, 1), 7) != email_sent_key(
+            "t1", "gpt-old", date(2026, 10, 1), 0
+        )
+        assert email_sent_key("t1", "gpt-old", date(2026, 10, 1), 7) != email_sent_key(
+            "t1", "gpt-old", date(2027, 3, 1), 7
+        )
+
+
+TODAY: Final = datetime.now(timezone.utc).date()
+DEAD_DATE: Final = TODAY - timedelta(days=10)
+LONG_DEAD_DATE: Final = TODAY - timedelta(days=200)
+UPCOMING_DATE: Final = TODAY + timedelta(days=20)
+FAR_DATE: Final = TODAY + timedelta(days=40)
 
 DEAD_DEPLOYMENT: Final = {
     "model_name": "dead-alias",
     "litellm_params": {"model": "openai/dead-model"},
-    "model_info": {"id": "1", "deprecation_date": "2020-01-01", "litellm_provider": "openai"},
+    "model_info": {"id": "1", "deprecation_date": DEAD_DATE.isoformat(), "litellm_provider": "openai"},
+}
+LONG_DEAD_DEPLOYMENT: Final = {
+    "model_name": "ancient-alias",
+    "litellm_params": {"model": "openai/ancient-model"},
+    "model_info": {"id": "4", "deprecation_date": LONG_DEAD_DATE.isoformat(), "litellm_provider": "openai"},
 }
 UPCOMING_DEPLOYMENT: Final = {
     "model_name": "sunset-alias",
     "litellm_params": {"model": "openai/sunset-model"},
-    "model_info": {
-        "id": "2",
-        "deprecation_date": (datetime.now(timezone.utc).date() + timedelta(days=20)).isoformat(),
-        "litellm_provider": "openai",
-    },
+    "model_info": {"id": "2", "deprecation_date": UPCOMING_DATE.isoformat(), "litellm_provider": "openai"},
 }
 FRESH_DEPLOYMENT: Final = {
     "model_name": "fresh",
@@ -371,11 +419,7 @@ FRESH_DEPLOYMENT: Final = {
 FAR_DEPLOYMENT: Final = {
     "model_name": "far-alias",
     "litellm_params": {"model": "openai/far-model"},
-    "model_info": {
-        "id": "3",
-        "deprecation_date": (datetime.now(timezone.utc).date() + timedelta(days=40)).isoformat(),
-        "litellm_provider": "openai",
-    },
+    "model_info": {"id": "3", "deprecation_date": FAR_DATE.isoformat(), "litellm_provider": "openai"},
 }
 
 
@@ -466,7 +510,7 @@ class TestSendModelDeprecationEmails:
         assert await send_model_deprecation_emails(ctx) == 2
         assert sorted(recipients for recipients, _ in deliverer.sent) == [("a@x.io",), ("b@x.io",)]
         assert all("deprecated" in subject for _, subject in deliverer.sent)
-        assert await cache.async_get_cache(key=email_sent_key("t1", "dead-alias", 0)) is not None
+        assert await cache.async_get_cache(key=email_sent_key("t1", "dead-alias", DEAD_DATE, 0)) is not None
         assert await cache.async_get_cache(key=SlackAlertingCacheKeys.deprecation_email_pass_key.value) is not None
 
         assert await send_model_deprecation_emails(ctx) == 0
@@ -495,7 +539,7 @@ class TestSendModelDeprecationEmails:
     @pytest.mark.asyncio
     async def test_should_stamp_the_pass_but_send_nothing_when_every_milestone_was_already_sent(self):
         cache: Final = DualCache()
-        await cache.async_set_cache(key=email_sent_key("t1", "dead-alias", 0), value=1.0)
+        await cache.async_set_cache(key=email_sent_key("t1", "dead-alias", DEAD_DATE, 0), value=1.0)
         lock: Final = _Lock(True)
         deliverer: Final = _Deliverer()
         ctx: Final = _context(_router([DEAD_DEPLOYMENT]), _prisma(TWO_TEAMS[:1], TWO_ADMINS), deliverer, cache, lock)
@@ -569,8 +613,8 @@ class TestSendModelDeprecationEmails:
 
         assert await send_model_deprecation_emails(ctx) == 1
         assert deliverer.sent[0][1] == "[LiteLLM] 1 model(s) deprecating for team Alpha"
-        assert await cache.async_get_cache(key=email_sent_key("t1", "sunset-alias", 30)) is not None
-        assert await cache.async_get_cache(key=email_sent_key("t1", "sunset-alias", 7)) is None
+        assert await cache.async_get_cache(key=email_sent_key("t1", "sunset-alias", UPCOMING_DATE, 30)) is not None
+        assert await cache.async_get_cache(key=email_sent_key("t1", "sunset-alias", UPCOMING_DATE, 7)) is None
 
     @pytest.mark.asyncio
     async def test_should_email_an_upcoming_model_when_a_threshold_reaches_past_the_slack_window(self):
@@ -586,7 +630,7 @@ class TestSendModelDeprecationEmails:
 
         assert await send_model_deprecation_emails(ctx) == 1
         assert deliverer.sent[0][1] == "[LiteLLM] 1 model(s) deprecating for team Alpha"
-        assert await cache.async_get_cache(key=email_sent_key("t1", "far-alias", 45)) is not None
+        assert await cache.async_get_cache(key=email_sent_key("t1", "far-alias", FAR_DATE, 45)) is not None
 
     @pytest.mark.asyncio
     async def test_should_stamp_sent_keys_with_the_configured_ttl_and_the_pass_for_a_day(self):
@@ -595,11 +639,28 @@ class TestSendModelDeprecationEmails:
         ctx: Final = _context(_router([DEAD_DEPLOYMENT]), _prisma(TWO_TEAMS[:1], TWO_ADMINS), deliverer, cache)
 
         assert await send_model_deprecation_emails(ctx) == 1
-        assert cache.ttls[email_sent_key("t1", "dead-alias", 0)] == SlackAlertingArgs().model_deprecation_email_ttl
+        assert (
+            cache.ttls[email_sent_key("t1", "dead-alias", DEAD_DATE, 0)]
+            == SlackAlertingArgs().model_deprecation_email_ttl
+        )
         assert (
             cache.ttls[SlackAlertingCacheKeys.deprecation_email_pass_key.value]
             == DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS
         )
+
+    @pytest.mark.asyncio
+    async def test_should_not_email_a_model_deprecated_longer_ago_than_the_marker_lifetime(self):
+        cache: Final = DualCache()
+        deliverer: Final = _Deliverer()
+        lock: Final = _Lock(True)
+        ctx: Final = _context(
+            _router([LONG_DEAD_DEPLOYMENT]), _prisma(TWO_TEAMS[:1], TWO_ADMINS), deliverer, cache, lock
+        )
+
+        assert await send_model_deprecation_emails(ctx) == 0
+        assert deliverer.sent == []
+        assert lock.calls == []
+        assert await cache.async_get_cache(key=SlackAlertingCacheKeys.deprecation_email_pass_key.value) is not None
 
     @pytest.mark.asyncio
     async def test_should_keep_going_and_leave_keys_unstamped_when_one_team_fails(self):
@@ -609,8 +670,8 @@ class TestSendModelDeprecationEmails:
 
         assert await send_model_deprecation_emails(ctx) == 1
         assert [recipients for recipients, _ in deliverer.sent] == [("b@x.io",)]
-        assert await cache.async_get_cache(key=email_sent_key("t1", "dead-alias", 0)) is None
-        assert await cache.async_get_cache(key=email_sent_key("t2", "dead-alias", 0)) is not None
+        assert await cache.async_get_cache(key=email_sent_key("t1", "dead-alias", DEAD_DATE, 0)) is None
+        assert await cache.async_get_cache(key=email_sent_key("t2", "dead-alias", DEAD_DATE, 0)) is not None
 
 
 @pytest.mark.asyncio
