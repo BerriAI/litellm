@@ -51,11 +51,11 @@ class TestMistralReasoningSupport:
         assert "reasoning_effort" in supported_params
         assert "thinking" in supported_params
 
-        # Test non-magistral model doesn't include reasoning parameters
+        # Non-magistral models accept reasoning_effort (forwarded verbatim) but not thinking
         supported_params_normal = mistral_config.get_supported_openai_params(
             "mistral/mistral-large-latest"
         )
-        assert "reasoning_effort" not in supported_params_normal
+        assert "reasoning_effort" in supported_params_normal
         assert "thinking" not in supported_params_normal
 
     def test_map_openai_params_reasoning_effort(self):
@@ -73,7 +73,7 @@ class TestMistralReasoningSupport:
 
         assert result.get("_add_reasoning_prompt") is True
 
-        # Test reasoning_effort ignored for non-magistral model
+        # Test reasoning_effort forwarded verbatim for non-magistral model
         optional_params_normal = {}
         result_normal = mistral_config.map_openai_params(
             non_default_params={"reasoning_effort": "low"},
@@ -83,6 +83,33 @@ class TestMistralReasoningSupport:
         )
 
         assert "_add_reasoning_prompt" not in result_normal
+        assert result_normal["reasoning_effort"] == "low"
+
+    def test_reasoning_effort_not_unsupported_for_non_magistral(self):
+        """Codex sends reasoning_effort to every model; Mistral must not raise UnsupportedParamsError."""
+        import litellm
+
+        optional_params = litellm.get_optional_params(
+            model="mistral-medium-latest",
+            custom_llm_provider="mistral",
+            reasoning_effort="medium",
+        )
+        assert optional_params["reasoning_effort"] == "medium"
+
+    def test_client_metadata_stripped_from_request(self):
+        """client_metadata passed by Codex must not reach Mistral, whose schema rejects unknown fields."""
+        mistral_config = MistralConfig()
+
+        request = mistral_config.transform_request(
+            model="mistral-medium-latest",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"client_metadata": {"originator": "codex_cli_rs"}, "temperature": 0.2},
+            litellm_params={},
+            headers={},
+        )
+
+        assert "client_metadata" not in request
+        assert request["temperature"] == 0.2
 
     def test_map_openai_params_thinking(self):
         """Test that thinking parameter is properly mapped for magistral models."""
