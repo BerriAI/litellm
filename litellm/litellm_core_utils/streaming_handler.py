@@ -272,6 +272,7 @@ class CustomStreamWrapper:
         self.holding_chunk = ""
         self.complete_response = ""
         self.response_uptil_now = ""
+        self._emitted_disqualifying_content = False
         _model_info: Final[dict] = litellm_params.model_info or {}
 
         _api_base: Final = get_api_base(
@@ -1950,9 +1951,7 @@ class CustomStreamWrapper:
                     if response.choices:
                         choice = response.choices[0]
                         if isinstance(choice, StreamingChoices):
-                            self.response_uptil_now += choice.delta.get("content", "") or ""
-                        else:
-                            self.response_uptil_now += ""
+                            self._accumulate_streamed_delta(choice.delta)
                     self.rules.post_call_rules(input=self.response_uptil_now, model=self.model)
                     # HANDLE STREAM OPTIONS
                     self.chunks.append(response)
@@ -2150,9 +2149,7 @@ class CustomStreamWrapper:
                     if processed_chunk.choices:
                         choice = processed_chunk.choices[0]
                         if isinstance(choice, StreamingChoices):
-                            self.response_uptil_now += choice.delta.get("content", "") or ""
-                        else:
-                            self.response_uptil_now += ""
+                            self._accumulate_streamed_delta(choice.delta)
                     self.rules.post_call_rules(input=self.response_uptil_now, model=self.model)
                     # Add mcp_list_tools to first chunk if present
                     if not self.sent_first_chunk and processed_chunk.choices:
@@ -2216,9 +2213,7 @@ class CustomStreamWrapper:
 
                         choice = processed_chunk.choices[0]
                         if isinstance(choice, StreamingChoices):
-                            self.response_uptil_now += choice.delta.get("content", "") or ""
-                        else:
-                            self.response_uptil_now += ""
+                            self._accumulate_streamed_delta(choice.delta)
                         self.rules.post_call_rules(input=self.response_uptil_now, model=self.model)
                         # RETURN RESULT
                         self.chunks.append(processed_chunk)
@@ -2395,6 +2390,41 @@ class CustomStreamWrapper:
                 recover_error,
             )
 
+    _CONTINUATION_DISQUALIFYING_DELTA_FIELDS: Final = (
+        "tool_calls",
+        "function_call",
+        "thinking_blocks",
+        "reasoning_items",
+        "audio",
+        "images",
+        "annotations",
+    )
+
+    @classmethod
+    def _delta_disqualifies_continuation(cls, delta: object) -> bool:
+        """
+        True when a streamed delta carries output a text-only prefill
+        continuation cannot represent: tool/function calls, signed Anthropic
+        thinking blocks, structured reasoning items, audio or image parts, or
+        annotations. Plain ``reasoning_content`` is deliberately not here - it
+        is out-of-band, never reaches the caller as answer text, and so does
+        not block a continuation (parity with the Responses-API path).
+        """
+        get: Final = getattr(delta, "get", None)
+        if not callable(get):
+            return False
+        return any(get(field) for field in cls._CONTINUATION_DISQUALIFYING_DELTA_FIELDS)
+
+    def _accumulate_streamed_delta(self, delta: object) -> None:
+        """Grow the running answer text and latch whether anything a
+        continuation cannot carry has been streamed. One home for both so the
+        three iteration sites (sync, async, non-aiohttp) stay in step."""
+        get: Final = getattr(delta, "get", None)
+        content: Final = get("content", "") if callable(get) else ""
+        self.response_uptil_now += content or ""
+        if not self._emitted_disqualifying_content and self._delta_disqualifies_continuation(delta):
+            self._emitted_disqualifying_content = True
+
     def _handle_stream_fallback_error(self, e: Exception) -> "NoReturn":
         """
         Common error handling for both __next__ and __anext__.
@@ -2466,6 +2496,7 @@ class CustomStreamWrapper:
             original_exception=mapped_exception,
             generated_content=self.response_uptil_now,
             is_pre_first_chunk=not self.sent_first_chunk,
+            emitted_disqualifying_content=self._emitted_disqualifying_content,
         )
 
     @staticmethod
