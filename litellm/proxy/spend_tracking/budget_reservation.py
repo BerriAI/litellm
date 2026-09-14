@@ -379,7 +379,7 @@ async def release_budget_reservation_on_cancel(
         )
     except asyncio.CancelledError:
         pass  # a second cancellation while shielded; the reconcile keeps running detached regardless
-    except Exception:
+    except Exception:  # noqa: BLE001  # a reconcile failure must not pin the counter; retry, then drop it directly
         verbose_proxy_logger.exception(
             "Failed to reconcile budget reservation on cancel; retrying before invalidating reserved counters"
         )
@@ -389,7 +389,7 @@ async def release_budget_reservation_on_cancel(
             return
         try:
             await invalidate_budget_reservation_counters(budget_reservation=budget_reservation)
-        except Exception:
+        except Exception:  # noqa: BLE001  # nothing left to try; the finalized stamp below keeps it from being reprocessed
             verbose_proxy_logger.exception(
                 "Failed to invalidate budget reservation counters after cancel-path reconcile failed"
             )
@@ -408,7 +408,7 @@ async def _retry_reconcile_reservation_on_cancel(
         try:
             await reconcile_budget_reservation(budget_reservation=budget_reservation, actual_cost=incurred_cost)
             return True
-        except Exception:
+        except Exception:  # noqa: BLE001  # any reconcile failure is worth a retry here, not just specific ones
             is_last_attempt = attempt == _RELEASE_ON_CANCEL_RECONCILE_MAX_ATTEMPTS - 1
             verbose_proxy_logger.warning(
                 "Retry %d/%d to reconcile budget reservation on cancel failed",

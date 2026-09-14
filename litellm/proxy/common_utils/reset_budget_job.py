@@ -565,7 +565,7 @@ class ResetBudgetJob:
             )
             try:
                 await redis_cache.async_delete_cache(key=counter_key)
-            except Exception as delete_err:
+            except Exception as delete_err:  # noqa: BLE001  # any Redis failure here leaves the pre-reset value stuck; log and move on
                 verbose_proxy_logger.error(
                     "Failed to delete spend counter %s in Redis after its reset also failed; the "
                     "pre-reset value stays authoritative until its TTL expires: %s",
@@ -582,7 +582,7 @@ class ResetBudgetJob:
         try:
             current = await redis_cache.async_get_cache(key=counter_key)
             return float(current) if current is not None else 0.0
-        except Exception as redis_err:
+        except Exception as redis_err:  # noqa: BLE001  # any Redis failure here means no safe baseline; fall back to delete
             verbose_proxy_logger.warning(
                 "Failed to read spend counter %s in Redis before reset; skipping the delta-preserving "
                 "reset and falling back to delete: %s",
@@ -606,7 +606,7 @@ class ResetBudgetJob:
                     key=counter_key, new_base=new_spend, snapshot=snapshot, ttl=60
                 )
                 return True
-            except Exception as redis_err:
+            except Exception as redis_err:  # noqa: BLE001  # any Redis failure here is worth a retry, not just specific ones
                 is_last_attempt = attempt == RESET_BUDGET_SPEND_COUNTER_RESET_MAX_ATTEMPTS - 1
                 verbose_proxy_logger.warning(
                     "Attempt %d/%d to reset spend counter %s in Redis failed: %s",
