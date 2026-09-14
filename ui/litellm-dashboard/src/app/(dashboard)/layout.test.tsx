@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { AuthProvider } from "@/contexts/AuthContext";
 import Layout from "./layout";
@@ -116,5 +116,61 @@ describe("(dashboard) Layout", () => {
     expect(screen.queryByTestId("page-content")).not.toBeInTheDocument();
     expect(screen.queryByTestId("dashboard-header")).not.toBeInTheDocument();
     expect(screen.queryByTestId("sidebar")).not.toBeInTheDocument();
+  });
+
+  describe("forced password reset routing", () => {
+    const sessionCookie = (claims: Record<string, unknown>) => {
+      const encode = (part: Record<string, unknown>) =>
+        btoa(JSON.stringify(part)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      const exp = Math.floor(Date.now() / 1000) + 3600;
+      return `${encode({ alg: "HS256", typ: "JWT" })}.${encode({ ...claims, exp })}.sig`;
+    };
+
+    afterEach(() => {
+      document.cookie = "token=; Max-Age=0; Path=/";
+    });
+
+    it("routes a session flagged password_reset_required to the change-password page", async () => {
+      const flaggedClaims = {
+        user_id: "flagged-user",
+        key: "sk-session",
+        login_method: "username_password",
+        password_reset_required: true,
+      };
+      document.cookie = `token=${sessionCookie(flaggedClaims)}; Path=/`;
+
+      render(
+        <AuthProvider>
+          <Layout>
+            <div data-testid="page-content" />
+          </Layout>
+        </AuthProvider>,
+      );
+
+      pendingUiConfig.resolve();
+
+      await waitFor(() => expect(replaceMock).toHaveBeenCalledWith(expect.stringContaining("/change-password")));
+    });
+
+    it("does not reroute an unflagged session", async () => {
+      document.cookie = `token=${sessionCookie({
+        user_id: "normal-user",
+        key: "sk-session",
+        login_method: "username_password",
+      })}; Path=/`;
+
+      render(
+        <AuthProvider>
+          <Layout>
+            <div data-testid="page-content" />
+          </Layout>
+        </AuthProvider>,
+      );
+
+      pendingUiConfig.resolve();
+
+      expect(await screen.findByTestId("page-content")).toBeInTheDocument();
+      expect(replaceMock).not.toHaveBeenCalled();
+    });
   });
 });

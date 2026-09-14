@@ -24,6 +24,8 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     organization_id: str | None = None
     object_permission_id: str | None = None
     password: str | None = Field(default=None, exclude=True)
+    password_reset_required: bool | None = None
+    last_breach_check_at: datetime | None = None
     teams: list[str] = []
     user_role: str | None = None
     max_budget: float | None = None
