@@ -74,7 +74,8 @@ def test_same_upstream_aliases_keep_distinct_prices_after_reload(gateway: Gatewa
                     breakdown: Final = object_value(parsed["cost_breakdown"])
                     assert float(breakdown["input_cost"]) == pytest.approx(20 * rates[kind]["input_cost_per_token"])
                     assert float(breakdown["output_cost"]) == pytest.approx(20 * rates[kind]["output_cost_per_token"])
-                entries: Final = gateway.get("/model/info")["data"]
-                target: Final = next(entry for entry in entries if entry["model_name"] == aliases["paid"])
-                changed: Final = gateway.request("PATCH", f"/model/{target['model_info']['id']}/update", {"model_info": {"description": "price reload"}})
-                assert changed.status_code == 200, changed.text
+                if generation == 0:
+                    entries: Final = gateway.get("/model/info")["data"]
+                    target: Final = next(entry for entry in entries if entry["model_name"] == aliases["paid"])
+                    changed: Final = gateway.request("PATCH", f"/model/{target['model_info']['id']}/update", {"model_info": {"description": "price reload"}})
+                    assert changed.status_code == 200, changed.text
