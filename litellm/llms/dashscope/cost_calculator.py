@@ -122,6 +122,20 @@ def _flat_rates(
     )
 
 
+def _tier_cache_read_rate(
+    model_info: ModelInfo,
+    tier: dict[str, object],
+    cache_read_mode: QwenContextCacheMode | None,
+) -> float:
+    if cache_read_mode != "implicit":
+        return tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token")
+    if "implicit_cache_read_input_token_cost" in tier:
+        return tier_rate(tier, "implicit_cache_read_input_token_cost")
+    if model_info.get("implicit_cache_read_input_token_cost") is not None:
+        return _flat_cache_read_rate(model_info, cache_read_mode)
+    return tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token")
+
+
 def _tier_rates(
     model_info: ModelInfo,
     tier: dict[str, object],
@@ -133,10 +147,10 @@ def _tier_rates(
     flat_rates: Final = _flat_rates(model_info, cache_read_mode)
     tier_declares_output: Final = "output_cost_per_token" in tier
     tier_declares_reasoning: Final = "output_cost_per_reasoning_token" in tier
-    cache_read_rate: Final = (
-        tier_rate(tier, "implicit_cache_read_input_token_cost")
-        if cache_read_mode == "implicit" and "implicit_cache_read_input_token_cost" in tier
-        else tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token")
+    cache_read_rate: Final = _tier_cache_read_rate(
+        model_info=model_info,
+        tier=tier,
+        cache_read_mode=cache_read_mode,
     )
     return TokenRates(
         input_rate=tier_rate(tier, "input_cost_per_token"),

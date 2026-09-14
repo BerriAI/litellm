@@ -1586,6 +1586,14 @@ def calculate_prompt_caching_savings(
         threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
         missing_cache_read_uses_input=True,
     )
+    provider_cache_read_cost: Final = _resolve_cache_read_cost_rate(
+        custom_llm_provider=custom_llm_provider,
+        model_info=model_info,
+        usage=usage,
+        current_time=billed_at,
+    )
+    if provider_cache_read_cost is not None:
+        cache_read_cost = provider_cache_read_cost
     write_rate: Final = cache_creation_cost or prompt_base_cost
     write_rate_1h: Final = cache_creation_cost_above_1hr or write_rate
     prompt_tokens_details: Final = parse_prompt_tokens_details(usage)
