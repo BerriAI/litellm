@@ -9919,8 +9919,9 @@ async def _lit6973_drive_realtime_session(
 
     phase_one_exit picks a rejection before the relay: "model_access" makes the
     key/model check raise ProxyException, "pre_call" makes pre-call processing
-    (rate limits, guardrails) raise. Neither reaches route_request, so no success
-    log can own the reservation and the endpoint has to release it on that exit.
+    (rate limits, guardrails) raise, "pre_call_cancelled" cancels the task inside
+    pre-call processing. None reaches route_request, so no success log can own the
+    reservation and the endpoint has to release it on that exit.
 
     route_request resolves normally in both cases: the relay owns the session
     once route_request returns. A successful session enqueues its success cost
@@ -9950,7 +9951,13 @@ async def _lit6973_drive_realtime_session(
         if phase_one_exit == "model_access"
         else None
     )
-    pre_call_error: Final = Exception("Rate limit exceeded") if phase_one_exit == "pre_call" else None
+    pre_call_error: Final = (
+        asyncio.CancelledError()
+        if phase_one_exit == "pre_call_cancelled"
+        else Exception("Rate limit exceeded")
+        if phase_one_exit == "pre_call"
+        else None
+    )
     pre_call: Final = AsyncMock(
         side_effect=pre_call_error, return_value=({"model": "vertex_ai/gemini-live-2.5-flash"}, logging_obj)
     )
@@ -10069,15 +10076,16 @@ async def test_successful_realtime_session_leaves_the_reservation_for_the_cost_c
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("phase_one_exit", [None, "pre_call"])
+@pytest.mark.parametrize("phase_one_exit", [None, "pre_call", "pre_call_cancelled"])
 async def test_realtime_session_ending_without_llm_callbacks_releases_the_max_parallel_slot(
     phase_one_exit: str | None,
 ):
     """The rate limiter acquires the key's max_parallel_requests slot in pre-call and
     only frees it from the LLM success/failure callbacks. A realtime session that ends
-    without either callback (Bedrock closes without usage events, or a later pre-call
-    hook rejects the session) has to be released by the route itself, or the slot stays
-    occupied until its TTL and the key's next session is refused with a 429."""
+    without either callback (Bedrock closes without usage events, a later pre-call hook
+    rejects the session, or the task is cancelled while still in pre-call) has to be
+    released by the route itself, or the slot stays occupied until its TTL and the key's
+    next session is refused with a 429."""
     from litellm.caching.caching import DualCache
     from litellm.proxy import proxy_server as ps
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
@@ -10097,7 +10105,10 @@ async def test_realtime_session_ending_without_llm_callbacks_releases_the_max_pa
     stash_token: Final = _request_stash.set(stash)
     try:
         hooks: Final = patch.dict(ps.proxy_logging_obj.proxy_hook_mapping, {"parallel_request_limiter": limiter})  # test-quality-ok: registers a real limiter on the module-global hook map the route reads; assertion observes its counter
-        with hooks:
+        expected_exit: Final = (
+            pytest.raises(asyncio.CancelledError) if phase_one_exit == "pre_call_cancelled" else contextlib.nullcontext()
+        )
+        with hooks, expected_exit:
             await _lit6973_drive_realtime_session(
                 reservation, backend_logged_success=False, phase_one_exit=phase_one_exit
             )
