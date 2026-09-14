@@ -6494,6 +6494,56 @@ async def test_get_team_membership_coalesces_parallel_db_fetches():
 
 
 @pytest.mark.asyncio
+async def test_get_team_membership_invalidation_mid_flight_discards_stale_load():
+    from litellm.proxy._types import LiteLLM_TeamMembership
+    from litellm.proxy.auth.auth_checks import get_team_membership, invalidate_team_member_spend_state
+    from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
+    from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
+
+    started = asyncio.Event()
+    release_stale = asyncio.Event()
+    release_fresh = asyncio.Event()
+    loads = iter((("budget-old", release_stale), ("budget-new", release_fresh)))
+
+    async def _find_unique(*args, **kwargs):
+        budget_id, release = next(loads)
+        row = MagicMock()
+        row.dict = lambda: {"user_id": "u-inv", "team_id": "t-inv", "spend": 1.0, "budget_id": budget_id}
+        started.set()
+        await release.wait()
+        return row
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(side_effect=_find_unique)
+    cache = UserApiKeyCache()
+
+    async def _load():
+        return await get_team_membership(
+            user_id="u-inv", team_id="t-inv", prisma_client=mock_prisma_client, user_api_key_cache=cache
+        )
+
+    stale = asyncio.create_task(_load())
+    await started.wait()
+    await invalidate_team_member_spend_state(user_id="u-inv", team_id="t-inv", user_api_key_cache=cache)
+    started.clear()
+    fresh = asyncio.create_task(_load())
+    await asyncio.wait_for(started.wait(), timeout=2)
+    release_fresh.set()
+    fresh_result = await fresh
+    release_stale.set()
+    stale_result = await stale
+
+    assert stale_result is not None and stale_result.budget_id == "budget-old"
+    assert fresh_result is not None and fresh_result.budget_id == "budget-new"
+    assert mock_prisma_client.db.litellm_teammembership.find_unique.await_count == 2
+    cached = CacheCodec.deserialize(
+        await cache.async_get_cache(key=team_membership_reservation_cache_key(user_id="u-inv", team_id="t-inv")),
+        model_type=LiteLLM_TeamMembership,
+    )
+    assert cached is not None and cached.budget_id == "budget-new"
+
+
+@pytest.mark.asyncio
 async def test_common_checks_calls_get_team_membership_once_per_request():
     from fastapi import Request
 
