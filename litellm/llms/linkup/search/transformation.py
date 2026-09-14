@@ -121,30 +121,35 @@ class LinkupSearchConfig(BaseSearchConfig):
             # Linkup only supports single string queries, join with spaces
             query = " ".join(query)
 
-        # Copy for passthrough data (Done this way to avoid having to change / add to Perplexity unified spec parameters)
-        remaining = dict(optional_params)
+        consumed_keys: set[str] = {"depth", "outputType"}
 
         request_data: Final[LinkupSearchRequest] = {
             "q": query,
-            "depth": remaining.pop("depth", "standard"),
-            "outputType": remaining.pop("outputType", "searchResults"),
+            "depth": optional_params.get("depth", "standard"),
+            "outputType": optional_params.get("outputType", "searchResults"),
         }
 
         # Transform Perplexity unified spec parameters to Linkup format
-        if "max_results" in remaining:
-            request_data["maxResults"] = remaining.pop("max_results")
+        if "max_results" in optional_params:
+            consumed_keys.add("max_results")
+            request_data["maxResults"] = optional_params["max_results"]
 
-        if "search_domain_filter" in remaining:
-            request_data["includeDomains"] = remaining.pop("search_domain_filter")
+        if "search_domain_filter" in optional_params:
+            consumed_keys.add("search_domain_filter")
+            request_data["includeDomains"] = optional_params["search_domain_filter"]
 
-        if "start_date" in remaining:
-            request_data["fromDate"] = remaining.pop("start_date")
+        if "start_date" in optional_params:
+            consumed_keys.add("start_date")
+            request_data["fromDate"] = optional_params["start_date"]
 
-        if "end_date" in remaining:
-            request_data["toDate"] = remaining.pop("end_date")
+        if "end_date" in optional_params:
+            consumed_keys.add("end_date")
+            request_data["toDate"] = optional_params["end_date"]
 
-        if "max_tokens_per_page" in remaining:
-            remaining.pop("max_tokens_per_page")
+        if "max_tokens_per_page" in optional_params:
+            consumed_keys.add("max_tokens_per_page")
+
+        remaining = {k: v for k, v in optional_params.items() if k not in consumed_keys}
 
         # Convert to dict before dynamic key assignments
         result_data: Final = dict(request_data)

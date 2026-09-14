@@ -198,7 +198,7 @@ class BraveSearchConfig(BaseSearchConfig):
             # Brave Search API only supports single string queries
             query = " ".join(query)
 
-        remaining = dict(optional_params)
+        consumed_keys: set[str] = {"include_fetch_metadata"}
 
         request_data: Final[BraveSearchRequest] = {
             "q": query,
@@ -206,29 +206,31 @@ class BraveSearchConfig(BaseSearchConfig):
 
         # Only include "include_fetch_metadata" if it is not explicitly set to False
         # This parameter results (more often than not) in a timestamp which we can use for last_updated
-        if remaining.pop("include_fetch_metadata", None) is False:
+        if optional_params.get("include_fetch_metadata") is False:
             request_data["include_fetch_metadata"] = False
         else:
             request_data["include_fetch_metadata"] = True
 
         # Transform unified spec parameters to Brave Search API format
-        if "max_results" in remaining:
+        if "max_results" in optional_params:
+            consumed_keys.add("max_results")
             # Brave Search API supports 1-20 results per /web/search request
-            num_results: Final = min(remaining.pop("max_results"), 20)
+            num_results: Final = min(optional_params["max_results"], 20)
             request_data["count"] = num_results
 
-        if "search_domain_filter" in optional_params:
+        if optional_params.get("search_domain_filter"):
+            consumed_keys.add("search_domain_filter")
             # Convert to multiple "site:domain" clauses, joined by OR
-            domains: Final = remaining.pop("search_domain_filter")
+            domains: Final = optional_params["search_domain_filter"]
             if isinstance(domains, list) and len(domains) > 0:
                 request_data["q"] = self._append_domain_filters(request_data["q"], domains)
 
-        start_date = remaining.pop("start_date", None)
-        end_date = remaining.pop("end_date", None)
+        start_date = optional_params.get("start_date")
+        end_date = optional_params.get("end_date")
         if start_date and end_date:
             request_data["freshness"] = f"{start_date}to{end_date}"
             # unified value replaces native in this case
-            remaining.pop("freshness", None)
+            consumed_keys.add("freshness")
         elif start_date or end_date:
             message = (
                 "Brave's `freshness` field does not support one-sided date ranges; "
@@ -245,16 +247,18 @@ class BraveSearchConfig(BaseSearchConfig):
                 )
 
         # query is a required unified arg; it always wins over native `q`
-        remaining.pop("q", None)
+        consumed_keys.add("q")
 
         if optional_params.get("max_results"):
-            remaining.pop("count", None)
+            consumed_keys.add("count")
 
-        if "country" in remaining:
-            request_data["country"] = remaining.pop("country")
+        if "country" in optional_params:
+            consumed_keys.add("country")
+            request_data["country"] = optional_params["country"]
 
-        if "max_tokens_per_page" in remaining:
-            remaining.pop("max_tokens_per_page")
+        consumed_keys.add("max_tokens_per_page")
+
+        remaining = {k: v for k, v in optional_params.items() if k not in consumed_keys}
 
         # Convert to dict before dynamic key assignments
         result_data: Final = dict(request_data)

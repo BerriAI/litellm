@@ -172,3 +172,34 @@ class BaseSearchTest(ABC):
         print(f"\nSearch with optional params validated:")
         print(f"  - Requested max_results: 5")
         print(f"  - Received results: {len(response.results)}")
+
+    def test_search_with_date_range(self):
+        """
+        Test search with start_date and end_date optional parameters.
+        """
+        litellm.set_verbose = True
+        search_provider = self.get_search_provider()
+
+        response = litellm.search(
+            query="artificial intelligence recent news",
+            search_provider=search_provider,
+            start_date="2024-01-01",
+            end_date="2024-12-31",
+        )
+
+        # Validate response
+        assert hasattr(response, "results"), "Response should have 'results' attribute"
+        assert isinstance(response.results, list), "results should be a list"
+        assert len(response.results) > 0, "Should have at least one result"
+
+        first_result = response.results[0]
+        assert hasattr(first_result, "title"), "Result should have 'title' attribute"
+        assert hasattr(first_result, "url"), "Result should have 'url' attribute"
+        assert hasattr(
+            first_result, "snippet"
+        ), "Result should have 'snippet' attribute"
+
+        print(f"\nSearch with date range validated:")
+        print(f"  - start_date: 2024-01-01")
+        print(f"  - end_date: 2024-12-31")
+        print(f"  - Received results: {len(response.results)}")
