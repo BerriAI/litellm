@@ -3,35 +3,29 @@ Translates from OpenAI's `/v1/chat/completions` to DashScope's `/v1/chat/complet
 """
 
 from collections.abc import Coroutine
-from typing import TYPE_CHECKING, Any, Final, Literal, overload
+from typing import Any, Final, Literal, overload
 
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
-if TYPE_CHECKING:
-    from datetime import datetime
-
-    from litellm.types.utils import ModelInfo, Usage
-
 
 class DashScopeChatConfig(OpenAIGPTConfig):
-    def get_cache_read_input_token_cost(
+    def get_cache_read_input_token_cost_key(
         self,
-        model_info: "ModelInfo",
-        usage: "Usage",
-        current_time: "datetime | None" = None,
-    ) -> float | None:
-        from litellm.llms.dashscope.cost_calculator import (
-            resolve_cache_read_input_token_cost,
-        )
-
-        return resolve_cache_read_input_token_cost(
-            model_info=model_info,
-            usage=usage,
-            current_time=current_time,
-        )
+        usage: object,
+    ) -> str | None:
+        prompt_tokens_details: Final = getattr(usage, "prompt_tokens_details", None)
+        if prompt_tokens_details is None:
+            return None
+        cached_tokens: Final = getattr(prompt_tokens_details, "cached_tokens", 0)
+        cache_type: Final = getattr(prompt_tokens_details, "cache_type", None)
+        if not isinstance(cached_tokens, (int, float)) or cached_tokens <= 0:
+            return None
+        if cache_type is None:
+            return "implicit_cache_read_input_token_cost"
+        return None
 
     def remove_cache_control_flag_from_messages_and_tools(
         self,

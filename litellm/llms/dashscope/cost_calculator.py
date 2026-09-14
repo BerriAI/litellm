@@ -218,19 +218,6 @@ def get_token_breakdown_and_rates(
     return breakdown, rates
 
 
-def resolve_cache_read_input_token_cost(
-    model_info: ModelInfo,
-    usage: Usage,
-    current_time: datetime | None,
-) -> float:
-    _, rates = get_token_breakdown_and_rates(
-        model_info=model_info,
-        usage=usage,
-        current_time=current_time,
-    )
-    return rates.cache_read_rate
-
-
 def cost_per_token(
     model: str,
     usage: Usage,

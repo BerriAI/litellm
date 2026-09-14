@@ -437,6 +437,7 @@ def _resolve_cache_read_cost_rate(
     model_info: ModelInfo,
     usage: Usage,
     current_time: datetime | None,
+    service_tier: str | None = None,
 ) -> float | None:
     if custom_llm_provider is None:
         return None
@@ -450,10 +451,44 @@ def _resolve_cache_read_cost_rate(
     )
     if provider_config is None:
         return None
-    return provider_config.get_cache_read_input_token_cost(
-        model_info=model_info,
-        usage=usage,
-        current_time=current_time,
+    cache_read_cost_key: Final = provider_config.get_cache_read_input_token_cost_key(usage=usage)
+    if cache_read_cost_key is None:
+        return None
+
+    tier: Final = _select_priced_tier(model_info=model_info, usage=usage)
+    if tier is not None and cache_read_cost_key in tier:
+        cache_read_cost_rate = tier_rate(tier, cache_read_cost_key)
+    else:
+        model_cache_read_cost_rate: Final = _get_cost_per_unit(
+            model_info,
+            _get_service_tier_cost_key(cache_read_cost_key, service_tier),
+            default_value=None,
+        )
+        if model_cache_read_cost_rate is not None:
+            cache_read_cost_rate = model_cache_read_cost_rate
+        elif tier is not None:
+            cache_read_cost_rate = tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token")
+        else:
+            cache_read_cost_rate = cast(
+                float,
+                _get_cost_per_unit(
+                    model_info,
+                    _get_service_tier_cost_key("cache_read_input_token_cost", service_tier),
+                    default_value=_get_cost_per_unit(model_info, "input_cost_per_token") or 0.0,
+                ),
+            )
+
+    off_peak: Final = _open_off_peak_block(model_info, current_time)
+    if off_peak is None:
+        return cache_read_cost_rate
+    mode_specific_off_peak_rate: Final = _parse_off_peak_rate(off_peak.get(cache_read_cost_key))
+    generic_off_peak_rate: Final = _parse_off_peak_rate(off_peak.get("cache_read_input_token_cost"))
+    return (
+        mode_specific_off_peak_rate
+        if mode_specific_off_peak_rate is not None
+        else generic_off_peak_rate
+        if generic_off_peak_rate is not None
+        else cache_read_cost_rate
     )
 
 
@@ -1451,6 +1486,7 @@ def _cost_map_billed_rates(
         model_info=model_info,
         usage=usage,
         current_time=billing_time,
+        service_tier=service_tier,
     )
     if provider_cache_read_cost_rate is not None:
         cache_read_cost_rate = provider_cache_read_cost_rate
@@ -1591,6 +1627,7 @@ def calculate_prompt_caching_savings(
         model_info=model_info,
         usage=usage,
         current_time=billed_at,
+        service_tier=service_tier,
     )
     if provider_cache_read_cost is not None:
         cache_read_cost = provider_cache_read_cost

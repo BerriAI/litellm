@@ -21,9 +21,11 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_prompt_caching_savings,
     get_token_type_cost_breakdown,
 )
+from litellm.llms.dashscope.chat.transformation import DashScopeChatConfig
 from litellm.llms.dashscope.cost_calculator import (
     cost_per_token as dashscope_cost_per_token,
 )
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     ModelInfo,
@@ -68,6 +70,130 @@ class TestDashscopeCostCalculator:
             )
             is None
         )
+
+    def test_provider_default_cache_rate_key_uses_shared_pricing(self):
+        config = OpenAIGPTConfig()
+
+        assert config.get_cache_read_input_token_cost_key(usage=object()) is None
+        assert isinstance(config.get_config(), dict)
+
+    def test_dashscope_cache_rate_key_requires_cached_tokens(self):
+        config = DashScopeChatConfig()
+
+        assert config.get_cache_read_input_token_cost_key(usage=object()) is None
+        assert (
+            config.get_cache_read_input_token_cost_key(
+                usage=Usage(
+                    prompt_tokens=1,
+                    completion_tokens=0,
+                    prompt_tokens_details={"cached_tokens": 0},
+                )
+            )
+            is None
+        )
+
+    @pytest.mark.parametrize(
+        ("model_info", "current_time", "expected_cache_rate"),
+        [
+            (
+                {
+                    "key": "qwen-tier-mode-rate-test",
+                    "tiered_pricing": [
+                        {
+                            "range": [0, 2000],
+                            "input_cost_per_token": 1e-06,
+                            "cache_read_input_token_cost": 1e-07,
+                            "implicit_cache_read_input_token_cost": 2e-07,
+                        }
+                    ],
+                },
+                None,
+                2e-07,
+            ),
+            (
+                {
+                    "key": "qwen-tier-generic-fallback-test",
+                    "tiered_pricing": [
+                        {
+                            "range": [0, 2000],
+                            "input_cost_per_token": 1e-06,
+                            "cache_read_input_token_cost": 1e-07,
+                        }
+                    ],
+                },
+                None,
+                1e-07,
+            ),
+            (
+                {
+                    "key": "qwen-flat-generic-fallback-test",
+                    "input_cost_per_token": 1e-06,
+                    "cache_read_input_token_cost": 1e-07,
+                },
+                None,
+                1e-07,
+            ),
+            (
+                {
+                    "key": "qwen-off-peak-mode-rate-test",
+                    "input_cost_per_token": 1e-06,
+                    "implicit_cache_read_input_token_cost": 2e-07,
+                    "off_peak_pricing": {
+                        "hours_utc": "00:00-00:00",
+                        "implicit_cache_read_input_token_cost": 8e-08,
+                    },
+                },
+                datetime(2026, 9, 3, 17, 25, tzinfo=timezone.utc),
+                8e-08,
+            ),
+            (
+                {
+                    "key": "qwen-off-peak-generic-rate-test",
+                    "input_cost_per_token": 1e-06,
+                    "implicit_cache_read_input_token_cost": 2e-07,
+                    "off_peak_pricing": {
+                        "hours_utc": "00:00-00:00",
+                        "implicit_cache_read_input_token_cost": "invalid",
+                        "cache_read_input_token_cost": 5e-08,
+                    },
+                },
+                datetime(2026, 9, 3, 17, 25, tzinfo=timezone.utc),
+                5e-08,
+            ),
+            (
+                {
+                    "key": "qwen-off-peak-standard-fallback-test",
+                    "input_cost_per_token": 1e-06,
+                    "implicit_cache_read_input_token_cost": 2e-07,
+                    "off_peak_pricing": {
+                        "hours_utc": "00:00-00:00",
+                    },
+                },
+                datetime(2026, 9, 3, 17, 25, tzinfo=timezone.utc),
+                2e-07,
+            ),
+        ],
+    )
+    def test_provider_neutral_cache_rate_resolver_handles_qwen_rate_fallbacks(
+        self,
+        model_info: ModelInfo,
+        current_time: datetime | None,
+        expected_cache_rate: float,
+    ):
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=0,
+            prompt_tokens_details={"cached_tokens": 600},
+        )
+
+        cache_rate = _resolve_cache_read_cost_rate(
+            custom_llm_provider="dashscope",
+            model_info=model_info,
+            usage=usage,
+            current_time=current_time,
+        )
+
+        assert cache_rate == expected_cache_rate
 
     def test_dashscope_flat_pricing_fallback(self):
         """
