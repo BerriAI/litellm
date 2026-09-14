@@ -256,7 +256,7 @@ class BaseResponsesAPIStreamingIterator:
         # output_item.done events seen during the stream, keyed by output_index.
         # Some providers emit a terminal response.completed event with an empty
         # output array even though items were streamed; these are used to rebuild it.
-        self._streamed_output_items: dict[int, object] = {}
+        self._streamed_output_items: dict[int, object] = {}  # mutable-ok: streaming accumulator keyed by output_index
         self._stream_created_time: float = time.time()
 
         # track request context for hooks
@@ -451,15 +451,17 @@ class BaseResponsesAPIStreamingIterator:
             self._handle_failure(e)
             raise
 
-    def get_streamed_output_items(self) -> list[object]:
+    def get_streamed_output_items(self) -> list[object]:  # mutable-ok: response.output takes a real list
         """
         Output items received via response.output_item.done events, ordered by output_index.
 
         Used to rebuild a terminal response.completed payload whose output array is empty.
         """
         if not self._streamed_output_items:
-            return []
-        return [item for _, item in sorted(self._streamed_output_items.items())]
+            return []  # mutable-ok: response.output takes a real list
+        return [
+            item for _, item in sorted(self._streamed_output_items.items())
+        ]  # mutable-ok: response.output takes a real list
 
     def _log_completed_response(self, *, is_async: bool) -> None:
         if self._completed_response_logged:
