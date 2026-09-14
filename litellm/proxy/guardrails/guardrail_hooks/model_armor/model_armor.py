@@ -1,5 +1,5 @@
 import time
-from collections.abc import AsyncGenerator, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal
 
@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
@@ -146,6 +147,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         credentials: VERTEX_CREDENTIALS_TYPES | None = None,
         api_endpoint: str | None = None,
         sanitize_error_detail: "bool | None" = True,
+        async_handler: AsyncHTTPHandler | None = None,
+        access_token_provider: Callable[[], Awaitable[tuple[str, str]]] | None = None,
         **kwargs,
     ):
         # Set supported event hooks if not already provided
@@ -162,7 +165,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         VertexBase.__init__(self)
 
         # Then set our attributes (this ensures project_id is not overwritten)
-        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.async_handler = async_handler or get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.access_token_provider = access_token_provider
         self.template_id = template_id
         self.project_id = project_id
         self.location = location or "us-central1"
@@ -286,11 +290,14 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         If file_bytes and file_type are provided, file prompt sanitization is performed.
         """
         # Get access token using VertexBase auth
-        access_token, resolved_project_id = await self._ensure_access_token_async(
-            credentials=self.credentials,
-            project_id=self.project_id,
-            custom_llm_provider="vertex_ai",
-        )
+        if self.access_token_provider is not None:
+            access_token, resolved_project_id = await self.access_token_provider()
+        else:
+            access_token, resolved_project_id = await self._ensure_access_token_async(
+                credentials=self.credentials,
+                project_id=self.project_id,
+                custom_llm_provider="vertex_ai",
+            )
 
         # Use resolved project ID if not explicitly set
         if not self.project_id and resolved_project_id:
