@@ -3741,6 +3741,47 @@ async def test_ProxyConfig__init_agents_in_db_keeps_config_defined_agents(clean_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("agents_source", ["config", "db"])
+async def test_ProxyConfig_agent_loading_binds_registry_to_jwt_agent_claims(clean_agent_registry, agents_source):
+    """A JWT agent claim must resolve against the agents the proxy loaded, whichever source registered them."""
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(agent_id_jwt_field="appid"),
+    )
+    original_lookup = proxy_server.jwt_handler.agent_lookup
+    proxy_server.jwt_handler.bind_agent_lookup(jwt_handler.agent_lookup)
+    try:
+        if agents_source == "config":
+            await ProxyConfig()._init_non_llm_configs(
+                config={"agents": [_config_agent("loaded-agent")]},
+                config_file_path=None,
+            )
+        else:
+            prisma_client = MagicMock()
+            prisma_client.db.litellm_agentstable.find_many = AsyncMock(
+                return_value=[_FakeAgentRow("db-id", "loaded-agent")]
+            )
+            await ProxyConfig()._init_agents_in_db(prisma_client=prisma_client)
+
+        resolved = JWTAuthManager.resolve_agent_id(
+            jwt_handler=jwt_handler,
+            jwt_valid_token={"appid": "loaded-agent"},
+            agent_registry=proxy_server.jwt_handler.agent_lookup,
+        )
+    finally:
+        proxy_server.jwt_handler.bind_agent_lookup(original_lookup)
+
+    assert resolved == clean_agent_registry.get_agent_by_name(agent_name="loaded-agent").agent_id
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "config, expected_agent_names",
     [

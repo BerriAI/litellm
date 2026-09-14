@@ -6923,6 +6923,7 @@ async def test_auth_builder_propagates_agent_id_from_jwt_claim(monkeypatch, is_a
         azp="2f5c9b1e-6a4d-4c8e-9f0b-7d1a3e5c9b21",
         scope=LiteLLM_JWTAuth().admin_jwt_scope if is_admin_token else "",
     )
+    jwt_handler.bind_agent_lookup(_entra_agent_registry())
 
     result = await JWTAuthManager.auth_builder(
         api_key=token,
@@ -6934,7 +6935,6 @@ async def test_auth_builder_propagates_agent_id_from_jwt_claim(monkeypatch, is_a
         user_api_key_cache=None,
         parent_otel_span=None,
         proxy_logging_obj=None,
-        agent_registry=_entra_agent_registry(),
     )
 
     assert result["is_proxy_admin"] is is_admin_token
@@ -6949,6 +6949,7 @@ async def test_auth_builder_denies_jwt_naming_unregistered_agent_before_admin_ch
         azp="00000000-0000-0000-0000-000000000000",
         scope=LiteLLM_JWTAuth().admin_jwt_scope,
     )
+    jwt_handler.bind_agent_lookup(_entra_agent_registry())
 
     with pytest.raises(HTTPException) as exc_info:
         await JWTAuthManager.auth_builder(
@@ -6961,7 +6962,6 @@ async def test_auth_builder_denies_jwt_naming_unregistered_agent_before_admin_ch
             user_api_key_cache=None,
             parent_otel_span=None,
             proxy_logging_obj=None,
-            agent_registry=_entra_agent_registry(),
         )
 
     assert exc_info.value.status_code == 403
