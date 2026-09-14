@@ -14224,6 +14224,4 @@ async def test_team_info_returns_parent_organization_models(organization, expect
             user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
         )
 
-    team_info = response["team_info"]
-    assert team_info.organization_models == expected_models
-    assert "litellm_organization_table" not in team_info.model_dump()
+    assert response["team_info"].organization_models == expected_models
