@@ -43,8 +43,6 @@ def test_access_group_second_key_constraint_failure_rolls_back_all_writes(gatewa
                 assert connection.execute(sql.SQL("SELECT is_called FROM {}").format(sql.Identifier(witness))).fetchone() == (False,)
                 failed: Final = gateway.request("POST", "/v1/access_group", body)
                 assert failed.status_code == 500, failed.text
-                # Sequence advancement survives rollback and proves the rejecting
-                # constraint actually evaluated the second key's nonempty grant.
                 assert connection.execute(sql.SQL("SELECT is_called FROM {}").format(sql.Identifier(witness))).fetchone() == (True,)
                 assert read_rows('SELECT access_group_id FROM "LiteLLM_AccessGroupTable" WHERE access_group_name=%s', (name,)) == []
                 assert read_rows('SELECT token, access_group_ids FROM "LiteLLM_VerificationToken" WHERE token=ANY(%s) ORDER BY token', (tokens,)) == before
