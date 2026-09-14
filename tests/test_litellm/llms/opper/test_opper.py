@@ -231,6 +231,11 @@ def test_opper_streaming_dispatch_carries_cost(respx_mock, monkeypatch):
     complete_response = litellm.stream_chunk_builder(response.chunks, messages=[{"role": "user", "content": "Hello"}])
     assert complete_response.usage.cost == 3.3e-05
 
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response, "opper")
+    assert complete_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] == 3.3e-05
+
 
 @pytest.mark.respx()
 def test_opper_reasoning_effort_passes_through(respx_mock, monkeypatch):
