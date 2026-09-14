@@ -214,6 +214,23 @@ class TestDashscopeCostCalculator:
 
         assert cache_rate == expected_cache_rate
 
+    def test_provider_neutral_cache_rate_resolver_handles_service_tier_rate(self):
+        cache_rate = _resolve_cache_read_cost_rate(
+            model_info={
+                "key": "qwen-service-tier-mode-rate-test",
+                "implicit_cache_read_input_token_cost_priority": 3e-07,
+            },
+            usage=Usage(
+                prompt_tokens=1000,
+                completion_tokens=0,
+                prompt_tokens_details={"cached_tokens": 600},
+            ),
+            current_time=None,
+            service_tier="priority",
+        )
+
+        assert cache_rate == 3e-07
+
     def test_dashscope_flat_pricing_fallback(self):
         """
         Tests that the dashscope calculator falls back to flat pricing for models

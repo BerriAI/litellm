@@ -43,6 +43,18 @@ def test_cached_prompt_tokens_billed_at_cache_read_rate():
     assert prompt_cost < full_rate_cost
 
 
+def test_cost_per_token_dispatches_to_fireworks_calculator():
+    usage = _usage(prompt_tokens=100, cached_tokens=20, completion_tokens=10)
+
+    dispatched_cost = litellm.cost_per_token(
+        model=MODEL,
+        custom_llm_provider="fireworks_ai",
+        usage_object=usage,
+    )
+
+    assert dispatched_cost == cost_per_token(model=MODEL, usage=usage)
+
+
 def test_warm_call_cheaper_than_cold_call():
     prompt_tokens = 7036
     completion_tokens = 8

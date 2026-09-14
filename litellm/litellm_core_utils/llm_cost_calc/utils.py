@@ -437,6 +437,16 @@ def _resolve_cache_read_cost_rate(
     current_time: datetime | None,
     service_tier: str | None = None,
 ) -> float | None:
+    cache_read_cost_key: Final = "implicit_cache_read_input_token_cost"
+    service_cache_read_cost_key: Final = _get_service_tier_cost_key(cache_read_cost_key, service_tier)
+    if (
+        model_info.get(service_cache_read_cost_key) is None
+        and model_info.get(cache_read_cost_key) is None
+        and model_info.get("tiered_pricing") is None
+        and model_info.get("off_peak_pricing") is None
+    ):
+        return None
+
     prompt_tokens_details: Final = usage.prompt_tokens_details
     cache_type: Final = (
         getattr(prompt_tokens_details, "cache_type", None) if prompt_tokens_details is not None else None
@@ -444,12 +454,11 @@ def _resolve_cache_read_cost_rate(
     if parse_prompt_tokens_details(usage)["cache_hit_tokens"] <= 0 or cache_type is not None:
         return None
 
-    cache_read_cost_key: Final = "implicit_cache_read_input_token_cost"
     tier: Final = _select_priced_tier(model_info=model_info, usage=usage)
     off_peak: Final = _open_off_peak_block(model_info, current_time)
     model_cache_read_cost_rate: Final = _get_cost_per_unit(
         model_info,
-        _get_service_tier_cost_key(cache_read_cost_key, service_tier),
+        service_cache_read_cost_key,
         default_value=None,
     )
     tier_has_implicit_rate: Final = tier is not None and cache_read_cost_key in tier
