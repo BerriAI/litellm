@@ -471,6 +471,10 @@ class _ProtocolRejectionLogger(CustomLogger):
         self.failure_payloads.append(("UNEXPECTED_SUCCESS", kwargs.get("standard_logging_object")))
 
 
+def _set_protocol_test_callbacks(callbacks):
+    litellm.callbacks = callbacks  # test-quality-ok: integration tests require LiteLLM's public callback seam and every caller restores it
+
+
 def _jsonrpc_error_body(code, message="boom", _id=1):
     return json.dumps({"jsonrpc": "2.0", "id": _id, "error": {"code": code, "message": message}}).encode("utf-8")
 
@@ -496,7 +500,7 @@ async def test_mcp_protocol_rejection_emits_standard_logging_object():
     carrying the rejection metadata (#28929)."""
     litellm.logging_callback_manager._reset_all_callbacks()
     capture = _ProtocolRejectionLogger()
-    litellm.callbacks = [capture]
+    _set_protocol_test_callbacks([capture])
 
     user_auth = UserAPIKeyAuth(api_key="test", user_id="u1")
     sent_messages = []
@@ -520,7 +524,7 @@ async def test_mcp_protocol_rejection_emits_standard_logging_object():
         # async_failure_handler may dispatch on the loop; give it a tick.
         await asyncio.sleep(1)
     finally:
-        litellm.callbacks = []
+        _set_protocol_test_callbacks([])
 
     # Response forwarded byte-for-byte and unchanged.
     assert any(m.get("type") == "http.response.body" and m.get("body") == body for m in sent_messages), (
@@ -550,7 +554,7 @@ async def test_mcp_protocol_unknown_method_emits_slo():
     reason and no tool name (empty params)."""
     litellm.logging_callback_manager._reset_all_callbacks()
     capture = _ProtocolRejectionLogger()
-    litellm.callbacks = [capture]
+    _set_protocol_test_callbacks([capture])
 
     user_auth = UserAPIKeyAuth(api_key="test", user_id="u1")
 
@@ -575,7 +579,7 @@ async def test_mcp_protocol_unknown_method_emits_slo():
         )
         await asyncio.sleep(1)
     finally:
-        litellm.callbacks = []
+        _set_protocol_test_callbacks([])
 
     non_none = [p for p in capture.failure_payloads if isinstance(p, dict)]
     assert non_none, f"expected an SLO, got: {capture.failure_payloads!r}"
@@ -591,7 +595,7 @@ async def test_mcp_protocol_batch_rejection_emits_slo():
     Codex batch finding)."""
     litellm.logging_callback_manager._reset_all_callbacks()
     capture = _ProtocolRejectionLogger()
-    litellm.callbacks = [capture]
+    _set_protocol_test_callbacks([capture])
 
     user_auth = UserAPIKeyAuth(api_key="test", user_id="u1")
 
@@ -618,7 +622,7 @@ async def test_mcp_protocol_batch_rejection_emits_slo():
         )
         await asyncio.sleep(1)
     finally:
-        litellm.callbacks = []
+        _set_protocol_test_callbacks([])
 
     non_none = [p for p in capture.failure_payloads if isinstance(p, dict)]
     assert non_none, f"expected a batch SLO, got: {capture.failure_payloads!r}"
@@ -633,7 +637,7 @@ async def test_mcp_protocol_success_path_emits_no_failure_record():
     record, and the response must still be forwarded unchanged."""
     litellm.logging_callback_manager._reset_all_callbacks()
     capture = _ProtocolRejectionLogger()
-    litellm.callbacks = [capture]
+    _set_protocol_test_callbacks([capture])
 
     user_auth = UserAPIKeyAuth(api_key="test", user_id="u1")
     sent_messages = []
@@ -655,7 +659,7 @@ async def test_mcp_protocol_success_path_emits_no_failure_record():
         await wrapped({"type": "http.response.body", "body": body})
         await asyncio.sleep(1)
     finally:
-        litellm.callbacks = []
+        _set_protocol_test_callbacks([])
 
     assert capture.failure_payloads == [], (
         f"success path must not dispatch any failure record, got: {capture.failure_payloads!r}"
@@ -689,7 +693,7 @@ async def test_mcp_protocol_logging_failure_does_not_break_response():
     still forward the client response (observability must never drop a
     response)."""
     litellm.logging_callback_manager._reset_all_callbacks()
-    litellm.callbacks = []
+    _set_protocol_test_callbacks([])
 
     user_auth = UserAPIKeyAuth(api_key="test", user_id="u1")
     sent_messages = []
@@ -698,7 +702,7 @@ async def test_mcp_protocol_logging_failure_does_not_break_response():
         sent_messages.append(message)
 
     try:
-        with patch(
+        with patch(  # test-quality-ok: fault injection verifies logging failure cannot interrupt the already-forwarded MCP response
             "litellm.proxy._experimental.mcp_server.server.function_setup",
             side_effect=RuntimeError("logging init down"),
         ):
@@ -715,7 +719,7 @@ async def test_mcp_protocol_logging_failure_does_not_break_response():
             # Must not raise.
             await wrapped({"type": "http.response.body", "body": body})
     finally:
-        litellm.callbacks = []
+        _set_protocol_test_callbacks([])
 
     assert any(m.get("body") == body for m in sent_messages), "response must be forwarded even when logging init raises"
 
@@ -726,7 +730,7 @@ async def test_mcp_log_protocol_rejection_no_auth_is_noop():
     auth."""
     litellm.logging_callback_manager._reset_all_callbacks()
     capture = _ProtocolRejectionLogger()
-    litellm.callbacks = [capture]
+    _set_protocol_test_callbacks([capture])
     try:
         await _log_mcp_protocol_rejection(
             request_method="tools/call",
@@ -739,7 +743,7 @@ async def test_mcp_log_protocol_rejection_no_auth_is_noop():
         )
         await asyncio.sleep(0.2)
     finally:
-        litellm.callbacks = []
+        _set_protocol_test_callbacks([])
     assert capture.failure_payloads == []
 
 
@@ -750,7 +754,7 @@ async def test_mcp_protocol_wrapper_skips_oversized_body():
     happens to contain an error-shaped substring."""
     litellm.logging_callback_manager._reset_all_callbacks()
     capture = _ProtocolRejectionLogger()
-    litellm.callbacks = [capture]
+    _set_protocol_test_callbacks([capture])
 
     sent = []
 
@@ -772,7 +776,7 @@ async def test_mcp_protocol_wrapper_skips_oversized_body():
         await wrapped({"type": "http.response.body", "body": big})
         await asyncio.sleep(0.3)
     finally:
-        litellm.callbacks = []
+        _set_protocol_test_callbacks([])
 
     assert capture.failure_payloads == [], "oversized body must not be parsed/logged"
     assert any(m.get("body") == big for m in sent)
@@ -784,7 +788,7 @@ async def test_mcp_protocol_wrapper_skips_non_error_body():
     error envelope (no '"error"', or a '"result"' present) without json.loads."""
     litellm.logging_callback_manager._reset_all_callbacks()
     capture = _ProtocolRejectionLogger()
-    litellm.callbacks = [capture]
+    _set_protocol_test_callbacks([capture])
 
     async def fake_send(message):
         pass
@@ -810,7 +814,7 @@ async def test_mcp_protocol_wrapper_skips_non_error_body():
         )
         await asyncio.sleep(0.3)
     finally:
-        litellm.callbacks = []
+        _set_protocol_test_callbacks([])
 
     assert capture.failure_payloads == [], "non-error bodies must not be logged"
 
@@ -821,7 +825,7 @@ async def test_mcp_protocol_wrapper_ignores_non_body_messages_and_empty():
     attempting to log."""
     litellm.logging_callback_manager._reset_all_callbacks()
     capture = _ProtocolRejectionLogger()
-    litellm.callbacks = [capture]
+    _set_protocol_test_callbacks([capture])
 
     sent = []
 
@@ -842,7 +846,7 @@ async def test_mcp_protocol_wrapper_ignores_non_body_messages_and_empty():
         await wrapped({"type": "http.response.body", "body": b""})
         await asyncio.sleep(0.2)
     finally:
-        litellm.callbacks = []
+        _set_protocol_test_callbacks([])
 
     assert capture.failure_payloads == []
     assert len(sent) == 2  # both forwarded
@@ -854,7 +858,7 @@ async def test_mcp_protocol_wrapper_handles_malformed_error_body():
     and is swallowed (no SLO, response still forwarded)."""
     litellm.logging_callback_manager._reset_all_callbacks()
     capture = _ProtocolRejectionLogger()
-    litellm.callbacks = [capture]
+    _set_protocol_test_callbacks([capture])
 
     sent = []
 
@@ -877,7 +881,7 @@ async def test_mcp_protocol_wrapper_handles_malformed_error_body():
         await wrapped({"type": "http.response.body", "body": body})
         await asyncio.sleep(0.2)
     finally:
-        litellm.callbacks = []
+        _set_protocol_test_callbacks([])
 
     assert capture.failure_payloads == []
     assert any(m.get("body") == body for m in sent)
@@ -889,7 +893,7 @@ async def test_mcp_log_protocol_rejection_logging_obj_none_is_noop(monkeypatch):
     raising (covers the None-guard branch)."""
     litellm.logging_callback_manager._reset_all_callbacks()
     capture = _ProtocolRejectionLogger()
-    litellm.callbacks = [capture]
+    _set_protocol_test_callbacks([capture])
 
     import litellm.proxy._experimental.mcp_server.server as mcp_server_mod
 
@@ -909,7 +913,7 @@ async def test_mcp_log_protocol_rejection_logging_obj_none_is_noop(monkeypatch):
         )
         await asyncio.sleep(0.2)
     finally:
-        litellm.callbacks = []
+        _set_protocol_test_callbacks([])
 
     assert capture.failure_payloads == []
 
@@ -920,7 +924,7 @@ async def test_mcp_protocol_wrapper_logs_only_once_per_request():
     does not produce a second SLO (covers the early-return guard)."""
     litellm.logging_callback_manager._reset_all_callbacks()
     capture = _ProtocolRejectionLogger()
-    litellm.callbacks = [capture]
+    _set_protocol_test_callbacks([capture])
 
     async def fake_send(message):
         pass
@@ -939,7 +943,7 @@ async def test_mcp_protocol_wrapper_logs_only_once_per_request():
         await wrapped({"type": "http.response.body", "body": _jsonrpc_error_body(-32601)})
         await asyncio.sleep(1)
     finally:
-        litellm.callbacks = []
+        _set_protocol_test_callbacks([])
 
     non_none = [p for p in capture.failure_payloads if isinstance(p, dict)]
     assert len(non_none) == 1, f"exactly one SLO expected, got {len(non_none)}"
@@ -951,7 +955,7 @@ async def test_mcp_protocol_wrapper_swallows_unexpected_error(monkeypatch):
     by the broad guard and never breaks the response (covers the BLE001
     branch)."""
     litellm.logging_callback_manager._reset_all_callbacks()
-    litellm.callbacks = []
+    _set_protocol_test_callbacks([])
 
     import litellm.proxy._experimental.mcp_server.server as mcp_server_mod
 
@@ -1042,7 +1046,7 @@ def test_parse_jsonrpc_error_response_for_logging_accepts_sse():
 async def test_mcp_protocol_sse_rejection_emits_slo():
     litellm.logging_callback_manager._reset_all_callbacks()
     capture = _ProtocolRejectionLogger()
-    litellm.callbacks = [capture]
+    _set_protocol_test_callbacks([capture])
 
     async def fake_send(message):
         pass
@@ -1068,7 +1072,7 @@ async def test_mcp_protocol_sse_rejection_emits_slo():
         )
         await asyncio.sleep(1)
     finally:
-        litellm.callbacks = []
+        _set_protocol_test_callbacks([])
 
     payloads = [payload for payload in capture.failure_payloads if isinstance(payload, dict)]
     assert len(payloads) == 1
