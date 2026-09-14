@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
+from litellm.constants import PROXY_LLM_PROVIDER_FALLBACK
 from litellm.exceptions import (
     validate_rate_limit_category,
     validate_rate_limit_type,
@@ -41,7 +42,6 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     UserAPIKeyAuth,
 )
-from litellm.proxy.hooks.rate_limiter_utils import PROXY_LLM_PROVIDER_FALLBACK
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.team_repository import TeamRepository
