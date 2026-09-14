@@ -4152,8 +4152,8 @@ async def test_list_team_v2_org_admin_own_query_keeps_memberships_in_other_orgs(
 async def test_list_team_v1_org_admin_own_query_keeps_memberships_in_other_orgs():
     """
     /team/list: an org admin of org_A listing their own teams sees every team
-    in org_A plus the org_B team they are a member of, but a query for another
-    user stays scoped to org_A.
+    they belong to, including the org_B one. The bare admin listing stays the
+    org_A view and a query for another user stays scoped to org_A.
 
     Regression test for LIT-3723.
     """
@@ -4213,8 +4213,8 @@ async def test_list_team_v1_org_admin_own_query_keeps_memberships_in_other_orgs(
         )
         return [t.team_id for t in teams]
 
-    assert await list_teams("org_admin_user") == ["team_in_org_A", "other_team_in_org_A", "team_in_org_B"]
-    assert await list_teams(None) == ["team_in_org_A", "other_team_in_org_A", "team_in_org_B"]
+    assert await list_teams("org_admin_user") == ["team_in_org_A", "team_in_org_B"]
+    assert await list_teams(None) == ["team_in_org_A", "other_team_in_org_A"]
     assert await list_teams("other_user") == ["other_team_in_org_A"]
 
 
