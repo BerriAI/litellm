@@ -2954,6 +2954,24 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "Tiyuvta",
+    "provider_display_name": "Tiyuvta",
+    "litellm_provider": "tiyuvta",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "tiyuvta/zai/glm-5.3-flash"
+  },
+  {
     "provider": "TogetherAI",
     "provider_display_name": "TogetherAI",
     "litellm_provider": "together_ai",
