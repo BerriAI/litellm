@@ -38,9 +38,9 @@ interface MatchDetail {
 }
 
 interface GuardrailInformation {
-  duration: number;
-  end_time: number;
-  start_time: number;
+  duration: number | null;
+  end_time: number | null;
+  start_time: number | null;
   guardrail_mode: string | string[] | Record<string, unknown> | null;
   guardrail_name: string;
   guardrail_status: string;
@@ -121,7 +121,8 @@ const formatMode = (mode: GuardrailInformation["guardrail_mode"]): string => {
   return s.replace(/_/g, "-").toUpperCase();
 };
 
-const formatDurationMs = (seconds: number): string => {
+const formatDurationMs = (seconds: number | null): string => {
+  if (seconds == null) return "—";
   const ms = Math.round(seconds * 1000);
   return `${ms}ms`;
 };
@@ -364,8 +365,13 @@ interface TimelineEntry {
   outcome?: EntryOutcome;
 }
 
+type TimedGuardrailInformation = GuardrailInformation & { start_time: number; end_time: number };
+
+const isTimed = (e: GuardrailInformation): e is TimedGuardrailInformation =>
+  typeof e.start_time === "number" && typeof e.end_time === "number";
+
 const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
-  const sorted = useMemo(() => [...entries].sort((a, b) => (a.start_time ?? 0) - (b.start_time ?? 0)), [entries]);
+  const sorted = useMemo(() => entries.filter(isTimed).sort((a, b) => a.start_time - b.start_time), [entries]);
 
   const timeline = useMemo(() => {
     if (sorted.length === 0) return [];
@@ -667,6 +673,10 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
                 ))}
               </div>
             </div>
+          )}
+
+          {outcome === "not_run" && typeof guardrailResponse === "string" && (
+            <p className="text-sm text-muted-foreground">{guardrailResponse}</p>
           )}
 
           {/* Provider-specific details */}
