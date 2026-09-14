@@ -7537,3 +7537,75 @@ def test_eager_input_streaming_non_boolean_is_a_bad_request():
             "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             [_eager_openai_tool(eager_input_streaming="true")],
         )
+
+
+def test_mid_conversation_system_after_multiple_tool_results():
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "calling tools",
+            "tool_calls": [
+                {
+                    "id": "call_a",
+                    "type": "function",
+                    "function": {"name": "f", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "system", "content": "reminder"},
+        {"role": "tool", "tool_call_id": "call_a", "content": "r1"},
+        {"role": "tool", "tool_call_id": "call_b", "content": "r2"},
+        {"role": "user", "content": "done"},
+    ]
+    out_messages, system_blocks = config._transform_system_message(messages)
+    assert system_blocks == []
+    assert [m["role"] for m in out_messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "tool",
+        "user",
+        "user",
+    ]
+    assert out_messages[2]["content"] == "r1"
+    assert out_messages[3]["content"] == "r2"
+    # Reminder lands after ALL tool results, not between them.
+    assert out_messages[4]["content"][1]["text"] == "reminder"
+    assert out_messages[5]["content"] == "done"
+
+
+def test_mid_conversation_multi_system_run_after_multiple_tool_results():
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "calling tools",
+            "tool_calls": [
+                {
+                    "id": "call_a",
+                    "type": "function",
+                    "function": {"name": "f", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "system", "content": "reminder 1"},
+        {"role": "system", "content": "reminder 2"},
+        {"role": "tool", "tool_call_id": "call_a", "content": "r1"},
+        {"role": "tool", "tool_call_id": "call_b", "content": "r2"},
+        {"role": "user", "content": "done"},
+    ]
+    out_messages, _ = config._transform_system_message(messages)
+    assert [m["role"] for m in out_messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "tool",
+        "user",
+        "user",
+        "user",
+    ]
+    assert out_messages[4]["content"][1]["text"] == "reminder 1"
+    assert out_messages[5]["content"][1]["text"] == "reminder 2"
