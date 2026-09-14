@@ -8,7 +8,7 @@ Reuse the existing canned provider handlers through `_support/upstream.py`. It r
 
 The CircleCI workflow starts its own database and Redis, restricts test-phase egress to its owned services and writes JUnit plus an executed-node manifest. Missing setup, skipped tests, failed cleanup or a selected test without a passed call fail qualification. Existing GitHub Actions jobs do not own these tests
 
-Add contract definitions to the existing `tests/e2e/coverage_registry` and map canonical node IDs to those definitions in `contracts.json`. Every node must declare the same IDs with `covers`. The runner checks exact collected and passed selections against that mapping. Registry declarations alone do not mean a test passed
+Define integration contract IDs and their canonical test nodes in `contracts.json`. Every node must declare the same IDs with `covers`. The runner checks exact collected and passed selections against that mapping. These IDs belong to this CircleCI suite and must not be added to the separate E2E coverage registry. A manifest declaration alone does not mean a test passed
 
 Provider sentinels currently use the controlled server, not live recordings. The provider shard also runs the existing strict replay controls for changed requests, exhausted interactions, leftover interactions and no provider connection. Future recorded scenarios must use that replay-only implementation; missing recordings cannot fall back to a real provider. The observation endpoint is destructive and the current selection runs serially against one owned upstream
 
