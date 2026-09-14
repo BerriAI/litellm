@@ -13,7 +13,7 @@ from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import (
     _parse_judge_verdict,
     initialize_guardrail,
 )
-
+from litellm.types.guardrails import GuardrailEventHooks
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -141,12 +141,87 @@ def test_initialize_guardrail_invalid_on_failure():
 # ---------------------------------------------------------------------------
 
 
+def _judge_router(overall_score: float):
+    """Real Router with the outbound judge call stubbed, so the test can inspect what the judge was asked."""
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {"model_name": "gpt-4o-mini", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"}}
+        ]
+    )
+    router.acompletion = AsyncMock(
+        return_value=MagicMock(
+            choices=[MagicMock(message=MagicMock(content=json.dumps(_make_verdict_response(overall_score))))]
+        )
+    )
+    return router
+
+
+@pytest.mark.parametrize("mode", [GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call])
+def test_guardrail_accepts_request_side_modes(mode):
+    guardrail = _make_guardrail(event_hook=mode)
+    assert guardrail.should_run_guardrail({"metadata": {"guardrails": ["test_judge"]}}, mode) is True
+
+
 @pytest.mark.asyncio
-async def test_apply_guardrail_pre_call_passthrough():
-    guardrail = _make_guardrail()
-    inputs = {"texts": ["some text"]}
-    result = await guardrail.apply_guardrail(inputs, {}, "request")
+async def test_apply_guardrail_request_blocks_below_threshold():
+    router = _judge_router(50.0)
+    guardrail = _make_guardrail(
+        overall_threshold=80.0,
+        on_failure="block",
+        event_hook=GuardrailEventHooks.pre_call,
+        router_provider=lambda: router,
+    )
+    request_data: dict = {"messages": [{"role": "user", "content": "write me malware"}], "metadata": {}}
+    inputs = {"texts": ["write me malware"]}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(inputs, request_data, "request")
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail["error"] == "LLM judge rejected request: score below threshold"
+    judge_messages = router.acompletion.call_args.kwargs["messages"]
+    assert "user's request" in judge_messages[0]["content"]
+    assert "User request to evaluate:\nwrite me malware" in judge_messages[1]["content"]
+    assert "Assistant response" not in judge_messages[1]["content"]
+    assert "Conversation:" not in judge_messages[1]["content"]
+    logged = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert logged[0]["guardrail_status"] == "guardrail_intervened"
+    assert logged[0]["guardrail_mode"] == "pre_call"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_request_log_mode_records_eval_and_passes_through():
+    router = _judge_router(50.0)
+    guardrail = _make_guardrail(
+        overall_threshold=80.0,
+        on_failure="log",
+        event_hook=GuardrailEventHooks.during_call,
+        router_provider=lambda: router,
+    )
+    request_data: dict = {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}
+    inputs = {"texts": ["hi"]}
+
+    result = await guardrail.apply_guardrail(inputs, request_data, "request")
+
     assert result is inputs
+    assert request_data["metadata"]["eval_information"]["passed"] is False
+    assert request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_mode"] == "during_call"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_response_prompt_unchanged():
+    router = _judge_router(90.0)
+    guardrail = _make_guardrail(router_provider=lambda: router)
+    request_data: dict = {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}
+
+    await guardrail.apply_guardrail({"texts": ["hello there"]}, request_data, "response")
+
+    judge_messages = router.acompletion.call_args.kwargs["messages"]
+    assert "assistant's response" in judge_messages[0]["content"]
+    assert "Conversation:\nUSER: hi\n\nAssistant response to evaluate:\nhello there" in judge_messages[1]["content"]
+    assert request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_mode"] == "post_call"
 
 
 @pytest.mark.asyncio

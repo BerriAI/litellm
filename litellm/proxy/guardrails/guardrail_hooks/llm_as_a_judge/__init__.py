@@ -1,7 +1,8 @@
-"""LLM-as-a-Judge guardrail: uses an LLM to score responses against weighted criteria."""
+"""LLM-as-a-Judge guardrail: uses an LLM to score requests or responses against weighted criteria."""
 
 from collections.abc import Callable, Sequence
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, TypeVar
 
 from fastapi import HTTPException
@@ -26,15 +27,29 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
     from litellm.types.utils import StandardLoggingEvalInformation
 
-JUDGE_SYSTEM_PROMPT = """You are a quality judge. Evaluate the assistant's response against the criteria provided.
+JudgeInputType = Literal["request", "response"]
+
+_JUDGE_SYSTEM_PROMPT_TEMPLATE: Final = """You are a quality judge. Evaluate the {subject} against the criteria provided.
 For each criterion, assign a score from 0 to 100 and provide concise reasoning.
 Return ONLY valid JSON in this exact format:
-{
+{{
   "verdicts": [
-    {"criterion_name": "<name>", "score": <0-100>, "reasoning": "<one sentence>", "passed": <true|false>, "weight": <weight>}
+    {{"criterion_name": "<name>", "score": <0-100>, "reasoning": "<one sentence>", "passed": <true|false>, "weight": <weight>}}
   ],
   "overall_score": <weighted average 0-100>
-}"""
+}}"""
+
+JUDGE_SYSTEM_PROMPTS: Final[MappingProxyType[JudgeInputType, str]] = MappingProxyType(
+    {
+        "request": _JUDGE_SYSTEM_PROMPT_TEMPLATE.format(subject="user's request"),
+        "response": _JUDGE_SYSTEM_PROMPT_TEMPLATE.format(subject="assistant's response"),
+    }
+)
+JUDGE_SYSTEM_PROMPT: Final = JUDGE_SYSTEM_PROMPTS["response"]
+
+_JUDGE_SUBJECT_LABELS: Final[MappingProxyType[JudgeInputType, str]] = MappingProxyType(
+    {"request": "User request to evaluate", "response": "Assistant response to evaluate"}
+)
 
 _VALID_ON_FAILURE: Final = frozenset({"block", "log"})
 
@@ -89,7 +104,8 @@ def _get_litellm_param(
 def _build_judge_prompt(
     criteria: Sequence[JudgeCriterion],
     messages: Sequence[JudgeMessage],
-    response_text: str,
+    text_under_review: str,
+    input_type: JudgeInputType = "response",
 ) -> str:
     criteria_block: Final = "\n".join(
         f"- {c.get('name', '')} (weight {c.get('weight', 0)}%): {c.get('description', '')}" for c in criteria
@@ -99,15 +115,16 @@ def _build_judge_prompt(
         for m in messages
         if m.get("content") is not None
     )
+    conversation_block: Final = f"Conversation:\n{conversation}\n\n" if input_type == "response" else ""
     return (
         f"Criteria to evaluate:\n{criteria_block}\n\n"
-        f"Conversation:\n{conversation}\n\n"
-        f"Assistant response to evaluate:\n{response_text}"
+        f"{conversation_block}"
+        f"{_JUDGE_SUBJECT_LABELS[input_type]}:\n{text_under_review}"
     )
 
 
 class LLMAsAJudgeGuardrail(CustomGuardrail):
-    """Post-call guardrail that judges response quality via an LLM."""
+    """Guardrail that judges request (pre_call/during_call) or response (post_call) quality via an LLM."""
 
     def __init__(
         self,
@@ -143,18 +160,19 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
-        return [GuardrailEventHooks.post_call]
+        return [GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call, GuardrailEventHooks.post_call]
 
     async def _run_judge(
         self,
         messages: Sequence[JudgeMessage],
-        response_text: str,
+        text_under_review: str,
+        input_type: JudgeInputType = "response",
     ) -> dict[str, object]:
         judge_messages: Final[list[AllMessageValues]] = [
-            {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
+            {"role": "system", "content": JUDGE_SYSTEM_PROMPTS[input_type]},
             {
                 "role": "user",
-                "content": _build_judge_prompt(self.criteria, messages, response_text),
+                "content": _build_judge_prompt(self.criteria, messages, text_under_review, input_type),
             },
         ]
         response: Final = await judge_acompletion(
@@ -174,13 +192,9 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        # Only evaluate post-call (response text). Fail open on pre-call.
-        if input_type != "response":
-            return inputs
-
         texts: Final = inputs.get("texts") or []
-        response_text: Final = " ".join(texts)
-        if not response_text:
+        text_under_review: Final = " ".join(texts)
+        if not text_under_review:
             return inputs
 
         start_time: Final = datetime.now()
@@ -191,7 +205,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
             messages: Final[Sequence[JudgeMessage]] = request_data.get("messages") or []
 
             try:
-                judge_result = await self._run_judge(messages, response_text)
+                judge_result = await self._run_judge(messages, text_under_review, input_type)
             except Exception as judge_err:
                 verbose_logger.warning(
                     "llm_as_a_judge guardrail: judge call failed, failing open. Error: %s", judge_err
@@ -230,7 +244,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
                     raise HTTPException(
                         status_code=422,
                         detail={
-                            "error": "LLM judge rejected response: score below threshold",
+                            "error": f"LLM judge rejected {input_type}: score below threshold",
                             "overall_score": overall_score,
                             "threshold": self.overall_threshold,
                             "verdicts": judge_result.get("verdicts", []),
@@ -252,8 +266,15 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
                 guardrail_status=status,
                 start_time=start_time.timestamp(),
                 end_time=datetime.now().timestamp(),
-                event_type=GuardrailEventHooks.post_call,
+                event_type=self._event_type_for(input_type),
             )
+
+    def _event_type_for(self, input_type: JudgeInputType) -> GuardrailEventHooks:
+        if input_type == "response":
+            return GuardrailEventHooks.post_call
+        if self.event_hook is GuardrailEventHooks.during_call:
+            return GuardrailEventHooks.during_call
+        return GuardrailEventHooks.pre_call
 
 
 def initialize_guardrail(
