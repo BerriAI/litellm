@@ -17,8 +17,8 @@ _UNIX_TIMESTAMP: Final = re.compile(r"^\s*-?\d+(\.\d+)?\s*$")
 BRAVE_SECTIONS: Final = ["web", "discussions", "faqs", "faq", "news", "videos"]
 
 import litellm
-from litellm.exceptions import UnsupportedParamsError
 from litellm._logging import verbose_logger
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
