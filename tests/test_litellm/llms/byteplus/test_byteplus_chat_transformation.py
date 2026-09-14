@@ -106,31 +106,3 @@ class TestBytePlusChatConfig:
             )
             mock_create.assert_called_once()
             assert res.choices[0].message.content == "Hello from BytePlus!"
-
-    def test_litellm_completion_byteplus_make_request(self):
-        from unittest.mock import patch
-        from litellm import completion
-        from litellm.types.utils import Choices, Message, ModelResponse
-
-        model_response = ModelResponse(
-            id="chatcmpl-123",
-            choices=[
-                Choices(
-                    finish_reason="stop",
-                    index=0,
-                    message=Message(content="Hello from BytePlus!", role="assistant"),
-                )
-            ],
-            model="byteplus/seed-2-0-lite",
-        )
-
-        with patch(
-            "litellm.llms.openai.openai.OpenAIChatCompletion.make_sync_openai_chat_completion_request",
-            return_value=({}, model_response),
-        ):
-            res = completion(
-                model="byteplus/seed-2-0-lite",
-                messages=[{"role": "user", "content": "hello"}],
-                api_key="test-api-key",
-            )
-            assert res.choices[0].message.content == "Hello from BytePlus!"
