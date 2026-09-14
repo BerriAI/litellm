@@ -3723,6 +3723,7 @@ class LlmProviders(str, Enum):
     PARASAIL = "parasail"
     XIAOMI_MIMO = "xiaomi_mimo"
     TENSORMESH = "tensormesh"
+    TIYUVTA = "tiyuvta"
     LIBERTAI = "libertai"
     PINSTRIPES = "pinstripes"
     DARKBLOOM = "darkbloom"
