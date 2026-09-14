@@ -1,12 +1,96 @@
 import json
+from copy import deepcopy
 from unittest.mock import MagicMock, patch
 
+import pytest
 
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
 )
 from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
+
+
+@pytest.mark.parametrize("params", [{}, {"forward_reasoning_content": False}, {"forward_reasoning_content": True}])
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_forward_reasoning_content_preserves_only_explicit_history(params, is_async):
+    config = HostedVLLMChatConfig()
+    messages = [
+        {"role": "user", "content": "Check the counter"},
+        {
+            "role": "assistant",
+            "content": None,
+            "reasoning_content": "  synthetic history\n",
+            "thinking_blocks": [{"type": "thinking", "thinking": "Do not convert this", "signature": "sig"}],
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "7"},
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": [{"type": "thinking", "thinking": "Never synthesize history", "signature": "sig"}],
+            "tool_calls": [{"id": "call_2", "type": "function", "function": {"name": "verify", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "call_2", "content": "verified"},
+    ]
+    original = deepcopy(messages)
+    arguments = dict(
+        model="qwen3.8-flash-next", messages=messages, optional_params={}, litellm_params=params, headers={}
+    )
+    result = await config.async_transform_request(**arguments) if is_async else config.transform_request(**arguments)
+    expected = deepcopy(original)
+    expected[1].pop("thinking_blocks")
+    expected[3].pop("thinking_blocks")
+    if params.get("forward_reasoning_content") is not True:
+        expected[1].pop("reasoning_content")
+    assert result["messages"] == expected
+    assert messages == original
+    assert "forward_reasoning_content" not in result
+
+
+@pytest.mark.asyncio
+async def test_forward_reasoning_content_reused_config_and_caller_are_isolated():
+    config = HostedVLLMChatConfig()
+    messages = [{"role": "assistant", "content": "answer", "reasoning_content": "synthetic history"}]
+    original = deepcopy(messages)
+    for enabled in (False, True, False, True):
+        for transform in (config.transform_request, config.async_transform_request):
+            result = transform(
+                model="qwen3.8-flash-next",
+                messages=messages,
+                optional_params={},
+                litellm_params={"forward_reasoning_content": enabled},
+                headers={},
+            )
+            if transform == config.async_transform_request:
+                result = await result
+            assert result["messages"] == (original if enabled else [{"role": "assistant", "content": "answer"}])
+            assert messages == original
+
+
+@pytest.mark.asyncio
+async def test_forward_reasoning_content_keeps_async_content_conversion():
+    class AsyncContentConfig(HostedVLLMChatConfig):
+        async def _async_transform_content_item(self, content_item):
+            return {"type": "image_url", "image_url": {"url": "data:image/png;base64,c3ludGhldGlj"}}
+
+    config = AsyncContentConfig()
+    messages = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://example.invalid/image.png"}}]},
+        {"role": "assistant", "content": "answer", "reasoning_content": "synthetic history"},
+    ]
+    original = deepcopy(messages)
+    result = await config.async_transform_request(
+        model="qwen3.8-flash-next",
+        messages=messages,
+        optional_params={},
+        litellm_params={"forward_reasoning_content": True},
+        headers={},
+    )
+    assert result["messages"][0]["content"][0]["image_url"]["url"] == "data:image/png;base64,c3ludGhldGlj"
+    assert result["messages"][1]["reasoning_content"] == "synthetic history"
+    assert messages == original
 
 
 def test_hosted_vllm_chat_transformation_file_url():

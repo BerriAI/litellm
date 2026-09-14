@@ -2,7 +2,9 @@ import json
 from copy import deepcopy
 from typing import Final, Literal
 
+import httpx
 import pytest
+import respx
 from openai.types.responses.response_function_web_search import (
     ActionFind,
     ActionOpenPage,
@@ -28,6 +30,90 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_mode", [False, True], ids=["responses", "aresponses"])
+@pytest.mark.parametrize("forward", [None, False, True], ids=["absent", "false", "true"])
+@pytest.mark.parametrize("sequential", [False, True], ids=["parallel-tools", "sequential-tools"])
+async def test_hosted_vllm_responses_reasoning_and_parallel_tools_final_wire(
+    async_mode: bool, forward: bool | None, sequential: bool, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    reasoning: Final = "Inspect both tool results before answering."
+    next_reasoning: Final = "Use the first result to inspect the second."
+    input_items: Final = [
+        {"role": "user", "content": "Compare both records"},
+        {
+            "type": "reasoning",
+            "id": "rs_previous",
+            "summary": [],
+            "content": [{"type": "reasoning_text", "text": reasoning}],
+        },
+        {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+        *(
+            [
+                {"type": "function_call_output", "call_id": "call_1", "output": "first record"},
+                {
+                    "type": "reasoning",
+                    "id": "rs_next",
+                    "summary": [],
+                    "content": [{"type": "reasoning_text", "text": next_reasoning}],
+                },
+            ]
+            if sequential
+            else []
+        ),
+        {"type": "function_call", "call_id": "call_2", "name": "lookup", "arguments": "{}"},
+        *([] if sequential else [{"type": "function_call_output", "call_id": "call_1", "output": "first record"}]),
+        {"type": "function_call_output", "call_id": "call_2", "output": "second record"},
+    ]
+    original: Final = deepcopy(input_items)
+    kwargs: Final = {
+        "model": "hosted_vllm/reasoning-test",
+        "input": input_items,
+        "api_base": "https://responses-reasoning-test.invalid/v1",
+        "api_key": "test-key",
+        "use_chat_completions_api": True,
+        **({} if forward is None else {"forward_reasoning_content": forward}),
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        route: Final = mock.post("https://responses-reasoning-test.invalid/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-bridge-reasoning",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "reasoning-test",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "Compared"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+                },
+            )
+        )
+        response: Final = await litellm.aresponses(**kwargs) if async_mode else litellm.responses(**kwargs)
+        assert response.output[0].content[0].text == "Compared"
+        assert route.call_count == 1
+        payload: Final = json.loads(route.calls[0].request.content)
+        assert payload["model"] == "reasoning-test"
+        assert "forward_reasoning_content" not in route.calls[0].request.content.decode()
+        assert "use_chat_completions_api" not in payload
+        messages: Final = payload["messages"]
+        assert [message["role"] for message in messages] == (
+            ["user", "assistant", "tool", "assistant", "tool"] if sequential else ["user", "assistant", "tool", "tool"]
+        )
+        assert [tool["id"] for message in messages for tool in message.get("tool_calls", [])] == ["call_1", "call_2"]
+        results: Final = [message for message in messages if message["role"] == "tool"]
+        assert [message["tool_call_id"] for message in results] == ["call_1", "call_2"]
+        assert [message["content"] for message in results] == ["first record", "second record"]
+        assert messages[1].get("reasoning_content") == (reasoning if forward is True else None)
+        assert route.calls[0].request.content.decode().count(reasoning) == int(forward is True)
+        if sequential:
+            assert messages[3].get("reasoning_content") == (next_reasoning if forward is True else None)
+            assert route.calls[0].request.content.decode().count(next_reasoning) == int(forward is True)
+    assert input_items == original
 
 
 class TestLiteLLMCompletionResponsesConfig:

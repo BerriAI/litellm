@@ -16781,7 +16781,6 @@ export interface paths {
          *     - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
          *     - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-         *     - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
          *     - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
@@ -16887,7 +16886,6 @@ export interface paths {
          *         - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
          *         - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *         - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-         *         - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
          *         - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
          *         - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *         - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
@@ -29713,6 +29711,11 @@ export interface components {
             default_api_key_tpm_limit?: number | null;
             /** Drop Params */
             drop_params?: boolean | string | null;
+            /**
+             * Forward Reasoning Content
+             * @default false
+             */
+            forward_reasoning_content: boolean | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
             /** Google Maps Grounding Cost Per Query */
@@ -39927,6 +39930,11 @@ export interface components {
             default_api_key_tpm_limit?: number | null;
             /** Drop Params */
             drop_params?: boolean | string | null;
+            /**
+             * Forward Reasoning Content
+             * @default false
+             */
+            forward_reasoning_content: boolean | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
             /** Google Maps Grounding Cost Per Query */
