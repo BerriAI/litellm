@@ -27,7 +27,6 @@ from litellm.repositories.table_repositories import (
     DailyGuardrailUsageUnitsRepository,
     SpendLogGuardrailIndexRepository,
 )
-from litellm.types.utils import UNEVALUATED_GUARDRAIL_STATUSES
 
 if TYPE_CHECKING:
     from prisma import types as prisma_types
@@ -198,7 +197,7 @@ def guardrail_status_to_action(status: str | None) -> str:
     if not status:
         return "passed"
     s: Final = (status or "").lower()
-    if s in UNEVALUATED_GUARDRAIL_STATUSES:
+    if s == "skipped":
         return "skipped"
     if "intervened" in s or "block" in s:
         return "blocked"

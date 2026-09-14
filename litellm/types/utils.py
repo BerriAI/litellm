@@ -3123,8 +3123,6 @@ GuardrailStatus = Literal[
     "success", "guardrail_flagged", "guardrail_intervened", "guardrail_failed_to_respond", "not_run", "skipped"
 ]
 
-UNEVALUATED_GUARDRAIL_STATUSES: Final[frozenset[GuardrailStatus]] = frozenset({"not_run", "skipped"})
-
 # Fields on a guardrail record whose values can quote the caller's prompt: the payload sent to the
 # guardrail, the provider response that echoes it back, and the two first-party hooks that inline
 # prompt substrings (``block_code_execution`` and ``litellm_content_filter``). Every other field

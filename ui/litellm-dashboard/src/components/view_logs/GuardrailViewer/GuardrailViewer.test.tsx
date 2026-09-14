@@ -68,25 +68,22 @@ describe("GuardrailViewer", () => {
     expect(screen.queryByText("FAILED")).not.toBeInTheDocument();
   });
 
-  it.each(["skipped", "not_run"])(
-    "renders %s as SKIPPED (muted) and keeps it out of the evaluated and passed counts",
-    async (guardrail_status) => {
-      const user = userEvent.setup();
-      const data = makeGuardrailInformation({ ...skippedPreCall, guardrail_status });
-      renderWithProviders(<GuardrailViewer data={data} />);
+  it("renders skipped as SKIPPED (muted) and keeps it out of the evaluated and passed counts", async () => {
+    const user = userEvent.setup();
+    const data = makeGuardrailInformation(skippedPreCall);
+    renderWithProviders(<GuardrailViewer data={data} />);
 
-      expect(screen.getByText(/0 guardrails evaluated/)).toBeInTheDocument();
-      expect(screen.getByText(/0 Passed/)).toHaveClass("text-muted-foreground");
-      expect(screen.getByText(/1 Skipped/)).toBeInTheDocument();
-      const badge = screen.getByText("SKIPPED");
-      expect(badge).toHaveClass("text-muted-foreground");
-      expect(screen.queryByText("FAILED")).not.toBeInTheDocument();
-      expect(screen.queryByText(/^T\+/)).not.toBeInTheDocument();
+    expect(screen.getByText(/0 guardrails evaluated/)).toBeInTheDocument();
+    expect(screen.getByText(/0 Passed/)).toHaveClass("text-muted-foreground");
+    expect(screen.getByText(/1 Skipped/)).toBeInTheDocument();
+    const badge = screen.getByText("SKIPPED");
+    expect(badge).toHaveClass("text-muted-foreground");
+    expect(screen.queryByText("FAILED")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^T\+/)).not.toBeInTheDocument();
 
-      await user.click(screen.getByText("pii-rail"));
-      expect(screen.getByText("no scannable content after message scoping")).toBeInTheDocument();
-    },
-  );
+    await user.click(screen.getByText("pii-rail"));
+    expect(screen.getByText("no scannable content after message scoping")).toBeInTheDocument();
+  });
 
   it("anchors the lifecycle timeline on timed entries when an untimed skipped entry sorts first", () => {
     const skipped = makeGuardrailInformation({ ...skippedPreCall, guardrail_name: "skipped-rail" });

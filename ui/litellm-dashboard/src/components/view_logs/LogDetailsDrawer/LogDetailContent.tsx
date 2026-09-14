@@ -705,7 +705,7 @@ const GUARDRAIL_JUMP_LINK_STYLE = {
 
 const isPassedStatus = (status: unknown) => status === "pass" || status === "passed" || status === "success";
 const isFlaggedStatus = (status: unknown) => status === "flagged" || status === "guardrail_flagged";
-const isSkippedStatus = (status: unknown) => status === "skipped" || status === "not_run";
+const isSkippedStatus = (status: unknown) => status === "skipped";
 
 const guardrailJumpLinkOutcome = (evaluated: unknown[]): keyof typeof GUARDRAIL_JUMP_LINK_STYLE => {
   if (evaluated.length === 0) return "skipped";
