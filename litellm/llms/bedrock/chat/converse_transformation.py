@@ -1272,7 +1272,7 @@ class AmazonConverseConfig(BaseConfig):
         return isinstance(message, dict) and message.get("role") == "system"
 
     @staticmethod
-    def _as_user_content_blocks(value: object) -> list:  # mutable-ok: factory isinstance-checks content as list
+    def _as_user_content_blocks(value: object) -> list[object]:
         if value is None:
             return []  # mutable-ok: extended by the caller
         if isinstance(value, list):
@@ -1281,7 +1281,7 @@ class AmazonConverseConfig(BaseConfig):
             return [{"type": "text", "text": value}]  # mutable-ok: shared mutable content shape
         return [value]  # mutable-ok: shared mutable content shape
 
-    def _system_role_message_as_user(self, message: Mapping) -> Mapping[str, object]:
+    def _system_role_message_as_user(self, message: Mapping[str, object]) -> Mapping[str, object]:
         return {  # mutable-ok: joins the mutable message list the Converse transform walks
             "role": "user",
             "content": self._as_user_content_blocks(self._CONVERTED_SYSTEM_NOTE)
@@ -1305,30 +1305,30 @@ class AmazonConverseConfig(BaseConfig):
             and content[0].get("type") == "tool_result"
         )
 
-    def _system_turns_after_tool_results(self, messages: Sequence) -> tuple:
+    def _system_turns_after_tool_results(self, messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
         # a converted turn wedged between an assistant tool_call turn and its
         # tool-result turns would split the call from its results; the whole
         # tool-result run is emitted first and the system run follows it
-        result: Final = []  # mutable-ok: single-pass accumulator; the lookahead loop can't build it in one shot
-        i: int = 0
+        ordered: tuple[Mapping[str, Any], ...] = ()
+        i: int = 0  # rebind-ok: loop cursor, jumps ahead over reordered runs
         while i < len(messages):
             if self._is_system_role_message(messages[i]):
-                run_end: Final = next(
+                run_end = next(
                     (j for j in range(i, len(messages)) if not self._is_system_role_message(messages[j])),
                     len(messages),
                 )
-                follower: Final = messages[run_end] if run_end < len(messages) else None
+                follower = messages[run_end] if run_end < len(messages) else None
                 if follower is not None and self._opens_with_tool_results(follower):
-                    j: int = run_end
-                    while j < len(messages) and self._opens_with_tool_results(messages[j]):
-                        result.append(messages[j])
-                        j += 1
-                    result.extend(messages[i:run_end])
-                    i = j
+                    tool_result_end: int = run_end  # rebind-ok: loop cursor over the tool-result run
+                    while tool_result_end < len(messages) and self._opens_with_tool_results(messages[tool_result_end]):
+                        tool_result_end += 1
+                    ordered += tuple(messages[run_end:tool_result_end])
+                    ordered += tuple(messages[i:run_end])
+                    i = tool_result_end
                     continue
-            result.append(messages[i])
+            ordered += (messages[i],)
             i += 1
-        return tuple(result)
+        return ordered
 
     def _transform_inference_params(self, inference_params: dict) -> InferenceConfig:
         if "top_k" in inference_params:
