@@ -9,6 +9,7 @@ import pytest
 from psycopg.rows import dict_row
 from pytest_postgresql import factories
 
+from litellm.constants import PTU_SENTINEL_API_KEY
 from litellm.proxy.management_endpoints.common_daily_activity import (
     MAX_API_KEYS_IN_USAGE_BREAKDOWN,
     _adjust_dates_for_timezone,
@@ -1376,7 +1377,11 @@ _aggregated_postgresql: Final = factories.postgresql("_aggregated_postgresql_pro
 async def test_get_daily_activity_aggregated_bounds_api_key_rollups(
     _aggregated_postgresql: psycopg.Connection,
 ):
-    """key-004 and key-005 tie on spend at the cutoff: the api_key tiebreaker keeps key-004 only."""
+    """key-004 and key-005 tie on spend at the cutoff: the api_key tiebreaker keeps key-004 only.
+
+    The PTU sentinel row outspends every key but is hidden from per-key views, so it must
+    not take one of the visible slots.
+    """
     conn: Final = _aggregated_postgresql
     with conn.cursor() as cur:
         cur.execute(
@@ -1430,6 +1435,22 @@ async def test_get_daily_activity_aggregated_bounds_api_key_rollups(
                     1,
                 )
                 for i in range(MAX_API_KEYS_IN_USAGE_BREAKDOWN + 5)
+            ]
+            + [
+                (
+                    "row-ptu",
+                    "user-ptu",
+                    "2026-06-01",
+                    PTU_SENTINEL_API_KEY,
+                    "gpt-5",
+                    "",
+                    "openai",
+                    "/v1/chat/completions",
+                    0,
+                    1000.0,
+                    0,
+                    0,
+                )
             ],
         )
     conn.commit()
@@ -1469,7 +1490,7 @@ async def test_get_daily_activity_aggregated_bounds_api_key_rollups(
     api_key_sets: Final = 6
     assert row_counts == [keyless_sets + api_key_sets * (MAX_API_KEYS_IN_USAGE_BREAKDOWN + 1)]
 
-    assert result.metadata.total_spend == pytest.approx(5566.0)
+    assert result.metadata.total_spend == pytest.approx(6566.0)
     assert result.metadata.total_api_requests == MAX_API_KEYS_IN_USAGE_BREAKDOWN + 5
 
     expected_top: Final = {f"key-{i:03d}" for i in range(6, 105)} | {"key-004"}
@@ -1478,10 +1499,11 @@ async def test_get_daily_activity_aggregated_bounds_api_key_rollups(
     assert set(day.breakdown.api_keys) == expected_top
     assert day.breakdown.api_keys["key-004"].metrics.spend == 6.0
     assert "key-005" not in day.breakdown.api_keys
+    assert PTU_SENTINEL_API_KEY not in day.breakdown.api_keys
 
-    assert day.breakdown.models["gpt-5"].metrics.spend == pytest.approx(5566.0)
+    assert day.breakdown.models["gpt-5"].metrics.spend == pytest.approx(6566.0)
     assert set(day.breakdown.models["gpt-5"].api_key_breakdown) == expected_top
-    assert day.breakdown.providers["openai"].metrics.spend == pytest.approx(5566.0)
+    assert day.breakdown.providers["openai"].metrics.spend == pytest.approx(6566.0)
     assert set(day.breakdown.providers["openai"].api_key_breakdown) == expected_top
     assert set(day.breakdown.endpoints["/v1/chat/completions"].api_key_breakdown) == expected_top
 

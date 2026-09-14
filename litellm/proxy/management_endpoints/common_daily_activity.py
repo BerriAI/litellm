@@ -1,4 +1,5 @@
 import asyncio
+import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime, timedelta, timezone
@@ -52,7 +53,7 @@ _PRISMA_TO_PG_TABLE: Final[Mapping[str, str]] = {
     "litellm_dailytagspend": "LiteLLM_DailyTagSpend",
 }
 
-MAX_API_KEYS_IN_USAGE_BREAKDOWN: Final = 100
+MAX_API_KEYS_IN_USAGE_BREAKDOWN: Final = int(os.getenv("MAX_API_KEYS_IN_USAGE_BREAKDOWN", "100"))
 
 
 class DailySpendRecord(Protocol):
@@ -751,7 +752,7 @@ def _build_aggregated_sql_query(
         WITH top_api_keys AS (
             SELECT api_key AS top_api_key
             FROM "{pg_table}"
-            WHERE {where_clause}
+            WHERE {where_clause} AND api_key <> '{PTU_SENTINEL_API_KEY}'
             GROUP BY api_key
             ORDER BY SUM(spend) DESC, api_key
             LIMIT {MAX_API_KEYS_IN_USAGE_BREAKDOWN}
