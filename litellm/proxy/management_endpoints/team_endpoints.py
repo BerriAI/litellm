@@ -73,10 +73,10 @@ from litellm.proxy._types import (
     TeamModelDeleteRequest,
     UpdateTeamRequest,
     UserAPIKeyAuth,
+    UserNotFoundError,
 )
 from litellm.proxy.auth.auth_checks import (
     OrganizationNotFoundError,
-    UserNotFoundError,
     _cache_team_object,
     allowed_route_check_inside_route,
     can_org_access_model,
@@ -5107,9 +5107,9 @@ async def _enforce_list_team_v2_access(
         )
         verbose_proxy_logger.debug(
             "list_team_v2: org admin access for user=%s, org_ids=%s, user_id_filter=%s",
-            caller_user_id,
+            _sanitize_for_log(caller_user_id),
             org_admin_org_ids,
-            None if is_own_query else user_id,
+            _sanitize_for_log(None if is_own_query else user_id),
         )
         return None if is_own_query else user_id, org_admin_org_ids, own_team_ids
 
