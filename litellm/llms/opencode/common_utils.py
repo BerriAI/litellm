@@ -25,11 +25,6 @@ OPENCODE_RESPONSES_MODELS: Final = MappingProxyType(
     {
         "zen": frozenset(
             {
-                "gemini-3-flash",
-                "gemini-3.1-pro",
-                "gemini-3.5-flash",
-                "gemini-3.5-flash-lite",
-                "gemini-3.6-flash",
                 "gpt-5",
                 "gpt-5-codex",
                 "gpt-5-nano",

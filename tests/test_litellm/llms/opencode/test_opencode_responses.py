@@ -542,38 +542,14 @@ class TestCostMap:
         entry = self._check_base_entry("opencode_zen/grok-build-0.1")
         assert entry["mode"] == "responses"
 
-    # --- gemini 3.6 ---
-
-    def test_gemini_3_6_flash(self):
-        entry = self._check_base_entry("opencode_zen/gemini-3.6-flash")
-        assert entry["mode"] == "responses"
-
-    # --- gemini 3.5 ---
-
-    def test_gemini_3_5_flash_lite(self):
-        entry = self._check_base_entry("opencode_zen/gemini-3.5-flash-lite")
-        assert entry["mode"] == "responses"
-
-    def test_gemini_3_5_flash(self):
-        entry = self._check_base_entry("opencode_zen/gemini-3.5-flash")
-        assert entry["mode"] == "responses"
-
-    # --- gemini 3.1 ---
-
-    def test_gemini_3_1_pro(self):
-        entry = self._check_base_entry("opencode_zen/gemini-3.1-pro")
-        assert entry["mode"] == "responses"
-
-    # --- gemini 3.0 ---
-
-    def test_gemini_3_flash(self):
-        entry = self._check_base_entry("opencode_zen/gemini-3-flash")
-        assert entry["mode"] == "responses"
+    def test_zen_gemini_models_are_not_published(self):
+        """Zen serves Gemini only on Google's own API, which this provider cannot call."""
+        assert not [key for key in litellm.model_cost if key.startswith("opencode_zen/gemini-")]
 
     # --- count ---
 
-    def test_all_31_models_have_responses_mode(self):
-        """All 31 models must have mode=responses."""
+    def test_all_26_models_have_responses_mode(self):
+        """All 26 models must have mode=responses."""
         responses_models = [
             "opencode_zen/gpt-6-astra",
             "opencode_zen/grok-4.5",
@@ -601,17 +577,12 @@ class TestCostMap:
             "opencode_zen/gpt-5-codex",
             "opencode_zen/gpt-5-nano",
             "opencode_zen/grok-build-0.1",
-            "opencode_zen/gemini-3.6-flash",
-            "opencode_zen/gemini-3.5-flash-lite",
-            "opencode_zen/gemini-3.5-flash",
-            "opencode_zen/gemini-3.1-pro",
-            "opencode_zen/gemini-3-flash",
         ]
         for model in responses_models:
             entry = self._check_base_entry(model)
             assert entry["mode"] == "responses", f"{model} mode must be responses, got {entry['mode']}"
             assert entry["litellm_provider"] == "opencode_zen"
-        assert len(responses_models) == 31
+        assert len(responses_models) == 26
 
     def test_grok_4_5_long_context_tier_is_priced(self):
         """Zen bills grok-4.5 prompts above 200k tokens at the higher tier."""
