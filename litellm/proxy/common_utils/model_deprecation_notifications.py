@@ -348,23 +348,20 @@ async def _send_team_notification(notification: TeamNotification, ctx: Deprecati
 
 
 async def send_model_deprecation_emails(ctx: DeprecationEmailContext) -> int:
-    """One pass: resolve affected teams, drop what was already sent, deliver one digest per team
+    """One pass: claim the day, resolve affected teams, deliver one digest per team, then stamp the pass
 
-    The pass stamp is set whenever a resolution completed, sent or not, so the DB is consulted at most
-    once a day; the fleet lock is only claimed once there is something to send
+    An empty snapshot returns before the lock or the DB is touched, so a model added later is not
+    silenced for a day, and the stamp is written last, so a lost lock claim costs one poll, not a day
     """
     snapshot: Final = collect_model_deprecations(llm_router=ctx.llm_router)
     infos: Final = (*snapshot.deprecated, *snapshot.imminent, *snapshot.upcoming)
-    if not infos:
-        await _stamp_pass(ctx.cache)
+    if not infos or not await _claimed_email_window(ctx.pod_lock_manager):
         return 0
     teams: Final = await _load_teams(ctx.prisma_client)
     affected: Final = await resolve_affected_teams(
         infos, ctx.llm_router, teams, ctx.alerting_args.model_deprecation_email_thresholds
     )
     notifications: Final = await build_team_notifications(affected, teams, ctx.cache, ctx.prisma_client)
-    await _stamp_pass(ctx.cache)
-    if not notifications or not await _claimed_email_window(ctx.pod_lock_manager):
-        return 0
     results: Final = tuple([await _send_team_notification(notification, ctx) for notification in notifications])
+    await _stamp_pass(ctx.cache)
     return sum(results)

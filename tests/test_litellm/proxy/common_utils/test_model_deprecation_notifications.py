@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import MagicMock
@@ -342,6 +342,15 @@ DEAD_DEPLOYMENT: Final = {
     "litellm_params": {"model": "openai/dead-model"},
     "model_info": {"id": "1", "deprecation_date": "2020-01-01", "litellm_provider": "openai"},
 }
+UPCOMING_DEPLOYMENT: Final = {
+    "model_name": "sunset-alias",
+    "litellm_params": {"model": "openai/sunset-model"},
+    "model_info": {
+        "id": "2",
+        "deprecation_date": (datetime.now(timezone.utc).date() + timedelta(days=20)).isoformat(),
+        "litellm_provider": "openai",
+    },
+}
 FRESH_DEPLOYMENT: Final = {
     "model_name": "fresh",
     "litellm_params": {"model": "openai/fresh-model-with-no-cost-map-entry"},
@@ -368,6 +377,19 @@ class _Lock:
     async def acquire_lock(self, cronjob_id: str, ttl: int | None = None, allow_reentrant: bool = True) -> bool | None:
         self.calls.append({"cronjob_id": cronjob_id, "ttl": ttl, "allow_reentrant": allow_reentrant})
         return self.result
+
+
+class _RecordingCache:
+    def __init__(self):
+        self.values = {}
+        self.ttls = {}
+
+    async def async_get_cache(self, *, key: str) -> object:
+        return self.values.get(key)
+
+    async def async_set_cache(self, *, key: str, value: float, ttl: float) -> None:
+        self.values[key] = value
+        self.ttls[key] = ttl
 
 
 def _team_row(team_id: str, alias: str = "Team") -> Mapping[str, object]:
@@ -430,7 +452,7 @@ class TestSendModelDeprecationEmails:
         assert len(deliverer.sent) == 2
 
     @pytest.mark.asyncio
-    async def test_should_stamp_the_pass_and_touch_nothing_else_when_no_model_deprecates(self):
+    async def test_should_touch_nothing_when_no_model_deprecates(self):
         cache: Final = DualCache()
         deliverer: Final = _Deliverer()
         lock: Final = _Lock(True)
@@ -447,10 +469,10 @@ class TestSendModelDeprecationEmails:
         )
         assert deliverer.sent == []
         assert lock.calls == []
-        assert await cache.async_get_cache(key=SlackAlertingCacheKeys.deprecation_email_pass_key.value) is not None
+        assert await cache.async_get_cache(key=SlackAlertingCacheKeys.deprecation_email_pass_key.value) is None
 
     @pytest.mark.asyncio
-    async def test_should_not_claim_the_lock_when_every_milestone_was_already_sent(self):
+    async def test_should_stamp_the_pass_but_send_nothing_when_every_milestone_was_already_sent(self):
         cache: Final = DualCache()
         await cache.async_set_cache(key=email_sent_key("t1", "dead-alias", 0), value=1.0)
         lock: Final = _Lock(True)
@@ -459,7 +481,8 @@ class TestSendModelDeprecationEmails:
 
         assert await send_model_deprecation_emails(ctx) == 0
         assert deliverer.sent == []
-        assert lock.calls == []
+        assert len(lock.calls) == 1
+        assert await cache.async_get_cache(key=SlackAlertingCacheKeys.deprecation_email_pass_key.value) is not None
 
     @pytest.mark.parametrize(
         ("lock_result", "expected_sent"),
@@ -468,9 +491,10 @@ class TestSendModelDeprecationEmails:
     )
     @pytest.mark.asyncio
     async def test_should_send_only_from_the_pod_holding_the_daily_lock(self, lock_result, expected_sent):
+        cache: Final = DualCache()
         lock: Final = _Lock(lock_result)
         deliverer: Final = _Deliverer()
-        ctx: Final = _context(_router([DEAD_DEPLOYMENT]), _prisma(TWO_TEAMS[:1], TWO_ADMINS), deliverer, None, lock)
+        ctx: Final = _context(_router([DEAD_DEPLOYMENT]), _prisma(TWO_TEAMS[:1], TWO_ADMINS), deliverer, cache, lock)
 
         assert await send_model_deprecation_emails(ctx) == expected_sent
         assert len(deliverer.sent) == expected_sent
@@ -481,6 +505,52 @@ class TestSendModelDeprecationEmails:
                 "allow_reentrant": False,
             }
         ]
+        stamped: Final = await cache.async_get_cache(key=SlackAlertingCacheKeys.deprecation_email_pass_key.value)
+        assert (stamped is not None) is (expected_sent == 1)
+
+    @pytest.mark.asyncio
+    async def test_should_not_load_teams_or_stamp_when_the_lock_is_lost(self):
+        cache: Final = DualCache()
+        deliverer: Final = _Deliverer()
+
+        async def explode(where=None, take=None, skip=None, order=None):
+            raise AssertionError("teams must not be loaded without the lock")
+
+        prisma: Final = _prisma((), ())
+        prisma.db.litellm_teamtable.find_many = explode
+
+        assert (
+            await send_model_deprecation_emails(
+                _context(_router([DEAD_DEPLOYMENT]), prisma, deliverer, cache, _Lock(False))
+            )
+            == 0
+        )
+        assert deliverer.sent == []
+        assert await cache.async_get_cache(key=SlackAlertingCacheKeys.deprecation_email_pass_key.value) is None
+
+    @pytest.mark.asyncio
+    async def test_should_email_the_thirty_day_milestone_for_an_upcoming_model(self):
+        cache: Final = DualCache()
+        deliverer: Final = _Deliverer()
+        ctx: Final = _context(_router([UPCOMING_DEPLOYMENT]), _prisma(TWO_TEAMS[:1], TWO_ADMINS), deliverer, cache)
+
+        assert await send_model_deprecation_emails(ctx) == 1
+        assert deliverer.sent[0][1] == "[LiteLLM] 1 model(s) deprecating for team Alpha"
+        assert await cache.async_get_cache(key=email_sent_key("t1", "sunset-alias", 30)) is not None
+        assert await cache.async_get_cache(key=email_sent_key("t1", "sunset-alias", 7)) is None
+
+    @pytest.mark.asyncio
+    async def test_should_stamp_sent_keys_with_the_configured_ttl_and_the_pass_for_a_day(self):
+        cache: Final = _RecordingCache()
+        deliverer: Final = _Deliverer()
+        ctx: Final = _context(_router([DEAD_DEPLOYMENT]), _prisma(TWO_TEAMS[:1], TWO_ADMINS), deliverer, cache)
+
+        assert await send_model_deprecation_emails(ctx) == 1
+        assert cache.ttls[email_sent_key("t1", "dead-alias", 0)] == SlackAlertingArgs().model_deprecation_email_ttl
+        assert (
+            cache.ttls[SlackAlertingCacheKeys.deprecation_email_pass_key.value]
+            == DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS
+        )
 
     @pytest.mark.asyncio
     async def test_should_keep_going_and_leave_keys_unstamped_when_one_team_fails(self):
