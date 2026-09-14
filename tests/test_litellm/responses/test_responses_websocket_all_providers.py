@@ -2483,8 +2483,16 @@ class TestResponsesWebSocketCredentials:
             (None, "global-key", "global-key"),
         ],
     )
-    async def test_openai_websocket_authorization(self, monkeypatch, explicit_key, global_key, expected_key):
+    async def test_openai_websocket_authorization(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        explicit_key: str | None,
+        global_key: str | None,
+        expected_key: str,
+    ) -> None:
         from asyncio import Future, get_running_loop
+        from collections.abc import Mapping
+        from types import TracebackType
         from typing import Final
         from unittest.mock import AsyncMock, patch
 
@@ -2498,14 +2506,25 @@ class TestResponsesWebSocketCredentials:
         captured_authorization: Final[Future[str]] = get_running_loop().create_future()
 
         class FakeConnect:
-            def __init__(self, url, **kwargs):
-                captured_authorization.set_result(kwargs["additional_headers"]["Authorization"])
+            def __init__(
+                self,
+                _url: str,
+                *,
+                additional_headers: Mapping[str, str],
+                **_kwargs: object,
+            ) -> None:
+                captured_authorization.set_result(additional_headers["Authorization"])
 
-            async def __aenter__(self):
+            async def __aenter__(self) -> None:
                 raise RuntimeError("stop at upstream handshake")
 
-            async def __aexit__(self, *args):
-                pass
+            async def __aexit__(
+                self,
+                _exc_type: type[BaseException] | None,
+                _exc: BaseException | None,
+                _tb: TracebackType | None,
+            ) -> None:
+                return None
 
         websocket: Final = MagicMock()
         websocket.close = AsyncMock()
