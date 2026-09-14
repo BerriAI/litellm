@@ -1491,6 +1491,8 @@ def post_call_processing(
 
 
 def client(original_function):
+    from litellm.litellm_core_utils.core_helpers import max_retries_per_request_hit
+
     Rules: Final = litellm_utils.Rules
     rules_obj: Final = Rules()
 
@@ -1501,12 +1503,8 @@ def client(original_function):
         call_type = original_function.__name__
         if _is_async_request(kwargs):
             # [OPTIONAL] CHECK MAX RETRIES / REQUEST
-            if litellm.num_retries_per_request is not None:
-                # check if previous_models passed in as ['litellm_params']['metadata]['previous_models']
-                previous_models = (kwargs.get("metadata") or {}).get("previous_models", None)
-                if previous_models is not None:
-                    if litellm.num_retries_per_request <= len(previous_models):
-                        raise Exception("Max retries per request hit!")
+            if max_retries_per_request_hit(kwargs, litellm.num_retries_per_request):
+                raise Exception("Max retries per request hit!")
 
             # MODEL CALL
             result = original_function(*args, **kwargs)
@@ -1565,12 +1563,8 @@ def client(original_function):
                     )
 
             # [OPTIONAL] CHECK MAX RETRIES / REQUEST
-            if litellm.num_retries_per_request is not None:
-                # check if previous_models passed in as ['litellm_params']['metadata]['previous_models']
-                previous_models = (kwargs.get("metadata") or {}).get("previous_models", None)
-                if previous_models is not None:
-                    if litellm.num_retries_per_request <= len(previous_models):
-                        raise Exception("Max retries per request hit!")
+            if max_retries_per_request_hit(kwargs, litellm.num_retries_per_request):
+                raise Exception("Max retries per request hit!")
 
             # [OPTIONAL] CHECK CACHE
             print_verbose(
