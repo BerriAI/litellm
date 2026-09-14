@@ -58,11 +58,12 @@ tests/rust-python-harness/
 - A strategy is a folder under `strategies/` with a one-line `AGENTS.md` and an `__init__.py` exporting exactly one `STRATEGY: StrategyDefinition`; its id must equal the folder name
 - `shared/reporting/strategy.py` is the contract: runnable module/suite specs, not-implemented/skipped specs, the runner protocol, and `StrategyDefinition`
 - Every `STRATEGY` explicitly classifies every SDK function; surface-aware strategies declare their surfaces and classify the complete surface-by-function matrix
-- Run locally only; no CI integration
+- Run locally; `e2e_benchmark` also has a CodSpeed walltime job
 - `python -m tests.rust-python-harness run <strategy>|all` runs the selected strategy; `--function` is common, while each strategy exposes only its supported options
 - Examples: `run e2e_parity --surface sdk --function ocr`, `run unit_tests_parity --function ocr --pytest-arg=-x`, or `run all --function ocr`
 - `cli/catalog.py` discovers strategies, validates their Python definitions, and orders them; `cli/__init__.py` builds the Click command tree; `cli/commands.py` runs selected cases
 - `e2e_parity/` compares SDK objects, exceptions, callbacks, and streams, or gateway HTTP responses
+- `e2e_benchmark/` measures SDK latency, CPU time, and RSS with size-varied local provider replays in isolated processes
 - `trace_parity/` compares mapped operations, call counts, and required execution ordering; before running it rebuilds the native bridge with the `trace-parity` feature whenever `litellm-rust` sources are newer than the installed extension (`shared/native_build.py`)
 - E2E and trace strategies load their registered module cases and run surface-specific execution from their folders
 - `unit_tests_mapping/contracts.py` owns typed harness-side mapping contracts, per-function contracts live below `cases/`, and `mappings.py` exports the registry; live test discovery derives unmapped Python and Rust-only tests without an exhaustive manifest
