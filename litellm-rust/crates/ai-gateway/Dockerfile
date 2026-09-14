@@ -43,7 +43,9 @@ RUN cargo chef cook --locked --release \
         -p litellm-ai-gateway --features server,python-config \
         --recipe-path recipe.json
 # Now copy the real sources and build the gateway binary. Deps are already cooked
-# above, so this step only recompiles the gateway crate.
+# above, so this step only recompiles the gateway crate. The root manifest and
+# lockfile are re-copied because cook leaves its skeleton versions in place.
+COPY Cargo.toml Cargo.lock /build/
 COPY litellm-rust/ /build/litellm-rust/
 RUN cargo build --locked --release -p litellm-ai-gateway --bin litellm-ai-gateway --features server,python-config
 
