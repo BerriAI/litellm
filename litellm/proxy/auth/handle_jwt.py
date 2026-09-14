@@ -131,15 +131,21 @@ class _UserInfoResponse(Protocol):
 class AgentLookup(Protocol):
     """The registered-agent lookups a JWT agent claim is matched against."""
 
-    def get_agent_by_id(self, agent_id: str) -> AgentResponse | None: ...
+    def get_agent_by_id(self, agent_id: str) -> AgentResponse | None:
+        """The agent registered under ``agent_id``, if any."""
 
-    def get_agent_by_name(self, agent_name: str) -> AgentResponse | None: ...
+    def get_agent_by_name(self, agent_name: str) -> AgentResponse | None:
+        """The agent registered under ``agent_name``, if any."""
 
 
-def _global_agent_lookup() -> AgentLookup:
-    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+class _NoRegisteredAgents:
+    """The lookup in force until the proxy binds its agent registry: no agent is registered, so no claim matches."""
 
-    return global_agent_registry
+    def get_agent_by_id(self, agent_id: str) -> None:
+        return None
+
+    def get_agent_by_name(self, agent_name: str) -> None:
+        return None
 
 
 def _discovery_document(response: _OIDCDiscoveryResponse) -> _OIDCDiscoveryBody:
@@ -213,6 +219,10 @@ class JWTHandler:
         self.leeway = 0
         # Per-cache-key locks so a TTL lapse triggers one refresh instead of one per in-flight request.
         self._refresh_locks: dict[str, asyncio.Lock] = {}  # mutable-ok: lock registry, keyed by JWKS url
+        self.agent_lookup: AgentLookup = _NoRegisteredAgents()
+
+    def bind_agent_lookup(self, agent_lookup: AgentLookup) -> None:
+        self.agent_lookup = agent_lookup
 
     def update_environment(
         self,
@@ -2251,7 +2261,6 @@ class JWTAuthManager:
         proxy_logging_obj: ProxyLogging,
         request_headers: dict | None = None,
         request_method: str | None = None,
-        agent_registry: AgentLookup | None = None,
     ) -> JWTAuthBuilderResult:
         """Main authentication and authorization builder"""
         # Check if OIDC UserInfo endpoint is enabled, but fall back to standard
@@ -2314,7 +2323,7 @@ class JWTAuthManager:
         agent_id: Final = JWTAuthManager.resolve_agent_id(
             jwt_handler=jwt_handler,
             jwt_valid_token=jwt_valid_token,
-            agent_registry=agent_registry if agent_registry is not None else _global_agent_lookup(),
+            agent_registry=jwt_handler.agent_lookup,
         )
 
         # Check admin access
