@@ -15,10 +15,12 @@ from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, create_autospec, mock_open, patch
 
 import click
+import fastapi.routing
 import httpx
 import pytest
 import yaml
 from fastapi import FastAPI
+from fastapi.encoders import jsonable_encoder
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 
@@ -5247,6 +5249,8 @@ async def test_model_info_v1_oci_secrets_not_leaked():
         result = await model_info_v1(user_api_key_dict=mock_user_api_key_dict, litellm_model_id=None)
 
         # Verify the result structure
+        result_str = result.body.decode()
+        result = json.loads(result_str)
         assert "data" in result
         assert len(result["data"]) == 1
 
@@ -5269,11 +5273,94 @@ async def test_model_info_v1_oci_secrets_not_leaked():
         assert litellm_params["model"].startswith("oci/"), "model should retain its full value"
 
         # Verify that actual secret values are not present in the response
-        result_str = str(result)
         assert "ocid1.api_key.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk" not in result_str
         assert "aa:bb:cc:dd:ee:ff:11:22:33:44:55:66:77:88:99:00" not in result_str
         assert "ocid1.tenancy.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk" not in result_str
         assert "/path/to/oci_api_key.pem" not in result_str
+
+
+def test_model_info_v1_list_skips_fastapi_jsonable_encoder(monkeypatch):
+    """
+    /model/info serializes its multi-megabyte listing itself with orjson. FastAPI must not
+    re-walk the payload through `jsonable_encoder`, while values orjson cannot encode natively
+    still come out as JSON.
+    """
+    created_at = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    model_data = {
+        "model_name": "gpt-4o",
+        "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-secret-value"},
+        "model_info": {
+            "id": "db-row-1",
+            "db_model": True,
+            "created_at": created_at,
+            "supported_regions": frozenset({"eu"}),
+        },
+    }
+    mock_router = MagicMock()
+    mock_router.model_list = [model_data]
+    mock_router.get_model_list_from_model_alias.return_value = []
+    mock_router.get_model_names.return_value = ["gpt-4o"]
+    mock_router.get_model_access_groups.return_value = {}
+    mock_router.get_deployment.return_value = None
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_model_list", [model_data])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"infer_model_from_keys": False})
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+
+    encoder_spy = MagicMock(wraps=jsonable_encoder)
+    monkeypatch.setattr(fastapi.routing, "jsonable_encoder", encoder_spy)
+
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", models=[], team_models=[]
+    )
+    client = TestClient(app)
+    try:
+        response = client.get("/model/info")
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/json"
+    rows = response.json()["data"]
+    assert [row["model_name"] for row in rows] == ["gpt-4o"]
+    assert rows[0]["model_info"]["created_at"] == created_at.isoformat()
+    assert rows[0]["model_info"]["supported_regions"] == ["eu"]
+    assert "sk-secret-value" not in response.text
+    assert encoder_spy.call_count == 0
+
+
+def test_model_info_v1_cli_model_returns_single_deployment_as_json(monkeypatch):
+    """
+    A proxy started with `litellm --model <name>` answers /model/info with one deployment
+    object under `data`, serialized the same way as the listing.
+    """
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", "gpt-4o")
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_model_list", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    encoder_spy = MagicMock(wraps=jsonable_encoder)
+    monkeypatch.setattr(fastapi.routing, "jsonable_encoder", encoder_spy)
+
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", models=[], team_models=[]
+    )
+    client = TestClient(app)
+    try:
+        response = client.get("/model/info")
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/json"
+    deployment = response.json()["data"]
+    assert deployment["model_name"] == "*"
+    assert deployment["litellm_params"]["model"] == "gpt-4o"
+    assert encoder_spy.call_count == 0
 
 
 def test_add_callback_from_db_to_in_memory_litellm_callbacks():
