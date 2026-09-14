@@ -393,6 +393,39 @@ class TestStreamingIteratorOutputRecovery:
         assert _text_from_output_item(output[0]) == "A"
         assert _text_from_output_item(output[1]) == "B"
 
+    def test_out_of_range_output_index_is_not_accumulated(self):
+        """
+        A provider can send arbitrary output_index values, so indexes outside
+        0..1024 must not be retained by either accumulator while in-range items still backfill.
+        """
+        item_in = {
+            **_OUTPUT_ITEM,
+            "id": "msg_in",
+            "content": [{"type": "output_text", "text": "in", "annotations": []}],
+        }
+        iterator = _make_iterator()
+
+        with patch.object(iterator, "_handle_logging_completed_response"):
+            for bad_index in (-1, 1025, 10**9):
+                _process_and_accumulate(
+                    iterator,
+                    json.dumps({"type": "response.output_item.done", "output_index": bad_index, "item": _OUTPUT_ITEM}),
+                )
+                _process_and_accumulate(
+                    iterator,
+                    json.dumps({"type": "response.output_text.done", "output_index": bad_index, "text": "dropped"}),
+                )
+            _process_and_accumulate(
+                iterator, json.dumps({"type": "response.output_item.done", "output_index": 1024, "item": item_in})
+            )
+            iterator._process_chunk(
+                json.dumps({"type": "response.completed", "response": {**_RESPONSE_BASE, "output": []}})
+            )
+
+        output = iterator.completed_response.response.output
+        assert len(output) == 1
+        assert _text_from_output_item(output[0]) == "in"
+
     def test_backfill_exception_is_swallowed(self):
         """
         If model_dump() raises during backfill, the exception must be swallowed

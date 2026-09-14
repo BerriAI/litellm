@@ -139,6 +139,7 @@ def _typed_gets_litellm_params(fn: _GetsLitellmParams) -> _GetsLitellmParams:
 _SHOULD_STORE_RESULT_IN_CACHE_ATTR: Final = "_should_store_result_in_cache"
 _UNMASK_PII_TEXT_ATTR: Final = "_unmask_pii_text"
 _MAX_CONTENT_INDEX: Final = 1024
+_MAX_OUTPUT_INDEX: Final = 1024
 
 
 def _load_json_object(payload: str | bytes) -> dict[str, object]:
@@ -712,7 +713,7 @@ class BaseResponsesAPIStreamingIterator:
                 "output_index",
                 max(self._streamed_output_items, default=-1) + 1,
             )
-            if _item is not None and isinstance(_output_index, int):
+            if _item is not None and isinstance(_output_index, int) and 0 <= _output_index <= _MAX_OUTPUT_INDEX:
                 self._streamed_output_items[_output_index] = (
                     _item  # mutable-ok: incremental index-keyed accumulation across SSE events; no immutable equivalent
                 )
@@ -723,6 +724,7 @@ class BaseResponsesAPIStreamingIterator:
             if (
                 isinstance(_text, str)
                 and isinstance(_text_output_index, int)
+                and 0 <= _text_output_index <= _MAX_OUTPUT_INDEX
                 and _text_output_index not in self._streamed_output_items
             ):
                 _content_index: Final = getattr(chunk, "content_index", 0) or 0
