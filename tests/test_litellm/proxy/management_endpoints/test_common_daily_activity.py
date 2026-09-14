@@ -1,3 +1,4 @@
+import importlib
 import re
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from psycopg.rows import dict_row
 from pytest_postgresql import factories
 
 from litellm.constants import PTU_SENTINEL_API_KEY
+from litellm.proxy.management_endpoints import common_daily_activity
 from litellm.proxy.management_endpoints.common_daily_activity import (
     MAX_API_KEYS_IN_USAGE_BREAKDOWN,
     _adjust_dates_for_timezone,
@@ -1506,6 +1508,25 @@ async def test_get_daily_activity_aggregated_bounds_api_key_rollups(
     assert day.breakdown.providers["openai"].metrics.spend == pytest.approx(6566.0)
     assert set(day.breakdown.providers["openai"].api_key_breakdown) == expected_top
     assert set(day.breakdown.endpoints["/v1/chat/completions"].api_key_breakdown) == expected_top
+
+
+@pytest.mark.parametrize("configured", ["0", "-5", "not-an-int", "", "10001"])
+def test_invalid_api_key_cap_config_falls_back_to_default(monkeypatch, configured):
+    monkeypatch.setenv("MAX_API_KEYS_IN_USAGE_BREAKDOWN", configured)
+    try:
+        assert importlib.reload(common_daily_activity).MAX_API_KEYS_IN_USAGE_BREAKDOWN == 100
+    finally:
+        monkeypatch.delenv("MAX_API_KEYS_IN_USAGE_BREAKDOWN")
+        importlib.reload(common_daily_activity)
+
+
+def test_valid_api_key_cap_config_is_honoured(monkeypatch):
+    monkeypatch.setenv("MAX_API_KEYS_IN_USAGE_BREAKDOWN", "250")
+    try:
+        assert importlib.reload(common_daily_activity).MAX_API_KEYS_IN_USAGE_BREAKDOWN == 250
+    finally:
+        monkeypatch.delenv("MAX_API_KEYS_IN_USAGE_BREAKDOWN")
+        importlib.reload(common_daily_activity)
 
 
 def _no_spend_record():

@@ -1,5 +1,4 @@
 import asyncio
-import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime, timedelta, timezone
@@ -11,6 +10,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import PTU_SENTINEL_API_KEY
+from litellm.litellm_core_utils.env_utils import get_env_int_in_range
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
     attach_user_emails,
@@ -53,7 +53,12 @@ _PRISMA_TO_PG_TABLE: Final[Mapping[str, str]] = {
     "litellm_dailytagspend": "LiteLLM_DailyTagSpend",
 }
 
-MAX_API_KEYS_IN_USAGE_BREAKDOWN: Final = int(os.getenv("MAX_API_KEYS_IN_USAGE_BREAKDOWN", "100"))
+MAX_API_KEYS_IN_USAGE_BREAKDOWN: Final = get_env_int_in_range(
+    "MAX_API_KEYS_IN_USAGE_BREAKDOWN",
+    default=100,
+    minimum=1,
+    maximum=10_000,
+)
 
 
 class DailySpendRecord(Protocol):
