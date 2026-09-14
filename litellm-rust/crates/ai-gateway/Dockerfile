@@ -38,7 +38,7 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder
 # Cook (compile) just the dependencies first — this layer is cached and reused
 # whenever only gateway source changes.
-COPY --from=planner /build/litellm-rust/recipe.json recipe.json
+COPY --from=planner /build/recipe.json recipe.json
 RUN cargo chef cook --locked --release \
         -p litellm-ai-gateway --features server,python-config \
         --recipe-path recipe.json

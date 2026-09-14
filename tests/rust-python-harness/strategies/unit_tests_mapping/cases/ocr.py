@@ -416,7 +416,7 @@ OCR_CONTRACT: Final = UnitTestContract(
         ),
     ),
     rust=RustUnitSpec(
-        cargo_manifest="litellm-rust/Cargo.toml",
+        cargo_manifest="Cargo.toml",
         cargo_filter="ocr",
     ),
 )

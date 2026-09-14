@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Final
 
@@ -25,7 +26,7 @@ def test_bridge_without_rust_sources_needs_no_rebuild() -> None:
     assert not native_build.needs_rebuild(2.0, None)
 
 
-def test_newest_source_mtime_tracks_rust_sources_and_skips_target(tmp_path: Final) -> None:
+def test_newest_source_mtime_tracks_rust_sources_and_skips_target(tmp_path: Path) -> None:
     source: Final = tmp_path / "litellm-rust" / "crates" / "bridge" / "src"
     source.mkdir(parents=True)
     (source / "lib.rs").write_text("fn main() {}\n")
@@ -33,15 +34,31 @@ def test_newest_source_mtime_tracks_rust_sources_and_skips_target(tmp_path: Fina
     manifest: Final = tmp_path / "litellm-rust" / "crates" / "bridge" / "Cargo.toml"
     manifest.write_text("[package]\n")
     os.utime(manifest, (2_000, 2_000))
-    lockfile: Final = tmp_path / "litellm-rust" / "Cargo.lock"
+    workspace_manifest: Final = tmp_path / "Cargo.toml"
+    workspace_manifest.write_text("[workspace]\n")
+    os.utime(workspace_manifest, (1_500, 1_500))
+    lockfile: Final = tmp_path / "Cargo.lock"
     lockfile.write_text("")
     os.utime(lockfile, (1_500, 1_500))
-    target: Final = tmp_path / "litellm-rust" / "target" / "debug" / "junk.rs"
+    target: Final = tmp_path / "target" / "debug" / "junk.rs"
     target.parent.mkdir(parents=True)
     target.write_text("fn main() {}\n")
     os.utime(target, (9_999, 9_999))
 
     assert native_build._newest_source_mtime(tmp_path) == 2_000.0
+
+
+@pytest.mark.parametrize("manifest_name", ("Cargo.toml", "Cargo.lock"))
+def test_newest_source_mtime_tracks_root_workspace_manifests(tmp_path: Path, manifest_name: str) -> None:
+    source: Final = tmp_path / "litellm-rust" / "crates" / "bridge" / "src" / "lib.rs"
+    source.parent.mkdir(parents=True)
+    source.write_text("fn main() {}\n")
+    os.utime(source, (1_000, 1_000))
+    manifest: Final = tmp_path / manifest_name
+    manifest.write_text("")
+    os.utime(manifest, (3_000, 3_000))
+
+    assert native_build._newest_source_mtime(tmp_path) == 3_000.0
 
 
 def test_newest_source_mtime_is_none_without_rust_workspace(tmp_path: Final) -> None:

@@ -77,9 +77,6 @@ jobs:
   rust-lint:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: litellm-rust
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -135,13 +132,10 @@ jobs:
             ${{ runner.os }}-cargo-${{ github.job }}-
 
       - run: cargo test --workspace --locked
-        working-directory: litellm-rust
 
       - run: cargo test -p litellm-core --features bedrock-auth --locked
-        working-directory: litellm-rust
 
       - run: cargo test -p litellm-ai-gateway --features server --locked
-        working-directory: litellm-rust
 
       - run: uv build --wheel --out-dir dist
 

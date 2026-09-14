@@ -13,7 +13,7 @@ from litellm.rust_bridge import get_native_bridge, reset_native_bridge_cache
 MATURIN_SPEC: Final = "maturin==1.15.0"
 BRIDGE_FEATURE: Final = "trace-parity"
 _RUST_ROOT: Final = "litellm-rust"
-_LOCKFILE: Final = "Cargo.lock"
+_WORKSPACE_MANIFESTS: Final = ("Cargo.toml", "Cargo.lock")
 _SOURCE_SUFFIXES: Final = frozenset({".rs", ".toml"})
 _FAILURE_OUTPUT_LINES: Final = 15
 _TRACE_CHECK: Final = (
@@ -31,20 +31,24 @@ def needs_rebuild(native_mtime: float | None, newest_source_mtime: float | None)
     return newest_source_mtime > native_mtime
 
 
-def _source_files(rust_root: Path) -> Iterator[Path]:
+def _crate_files(rust_root: Path) -> Iterator[Path]:
     for path in rust_root.rglob("*"):
         relative: Final = path.relative_to(rust_root)
         if "target" in relative.parts or not path.is_file():
             continue
-        if path.name == _LOCKFILE or path.suffix in _SOURCE_SUFFIXES:
+        if path.suffix in _SOURCE_SUFFIXES:
             yield path
 
 
-def _newest_source_mtime(repo_root: Path) -> float | None:
+def _source_files(repo_root: Path) -> Iterator[Path]:
+    yield from (repo_root / name for name in _WORKSPACE_MANIFESTS if (repo_root / name).is_file())
     rust_root: Final = repo_root / _RUST_ROOT
-    if not rust_root.is_dir():
-        return None
-    return max((path.stat().st_mtime for path in _source_files(rust_root)), default=None)
+    if rust_root.is_dir():
+        yield from _crate_files(rust_root)
+
+
+def _newest_source_mtime(repo_root: Path) -> float | None:
+    return max((path.stat().st_mtime for path in _source_files(repo_root)), default=None)
 
 
 def _native_module_path() -> Path | None:
