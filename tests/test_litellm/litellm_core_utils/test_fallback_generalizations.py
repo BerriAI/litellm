@@ -123,12 +123,13 @@ def test_fill_missing_requires_per_rule_opt_in(restore_generalizations):
             {
                 "name": "opt-in",
                 "pattern": r"^acme-",
-                "fill_missing_fields": True,
+                "fill_missing_for_providers": ["openai"],
                 "model_info": {"supports_vision": True},
             },
         ]
     )
-    assert match_fill_missing_generalizations("acme-1") == {"supports_vision": True}
+    assert match_fill_missing_generalizations("acme-1", "openai") == {"supports_vision": True}
+    assert match_fill_missing_generalizations("acme-1", "azure") is None
     assert match_capability_generalizations("acme-1") == {
         "supports_reasoning": True,
         "supports_vision": True,
@@ -137,31 +138,43 @@ def test_fill_missing_requires_per_rule_opt_in(restore_generalizations):
     restore_generalizations(
         [{"name": "base", "pattern": r"^acme-", "model_info": {"supports_reasoning": True}}]
     )
-    assert match_fill_missing_generalizations("acme-1") is None
+    assert match_fill_missing_generalizations("acme-1", "openai") is None
 
     restore_generalizations(
         [
             {
                 "name": "mixed",
                 "pattern": r"^acme-",
-                "fill_missing_fields": True,
+                "fill_missing_for_providers": ["openai"],
                 "model_info": {"litellm_provider": "openai", "supports_vision": True},
             }
         ]
     )
-    assert match_fill_missing_generalizations("acme-1") == {"supports_vision": True}
+    assert match_fill_missing_generalizations("acme-1", "openai") == {"supports_vision": True}
 
     restore_generalizations(
         [
             {
                 "name": "route",
                 "pattern": r"^acme-",
-                "fill_missing_fields": True,
+                "fill_missing_for_providers": ["openai"],
                 "model_info": {"litellm_provider": "openai"},
             }
         ]
     )
-    assert match_fill_missing_generalizations("acme-1") is None
+    assert match_fill_missing_generalizations("acme-1", "openai") is None
+
+    restore_generalizations(
+        [
+            {
+                "name": "malformed",
+                "pattern": r"^acme-",
+                "fill_missing_for_providers": "openai",
+                "model_info": {"supports_vision": True},
+            }
+        ]
+    )
+    assert match_fill_missing_generalizations("acme-1", "openai") is None
 
 
 def test_routing_rules_are_excluded_from_capability_results(restore_generalizations):
@@ -373,6 +386,12 @@ def test_exact_entries_fill_only_missing_fields(restore_generalizations, monkeyp
                 "litellm_provider": "openai",
                 "mode": "image_generation",
             },
+            "acme-other": {
+                "input_cost_per_token": 7e-6,
+                "output_cost_per_token": 8e-6,
+                "litellm_provider": "openrouter",
+                "mode": "chat",
+            },
         },
     )
     restore_generalizations(
@@ -380,7 +399,7 @@ def test_exact_entries_fill_only_missing_fields(restore_generalizations, monkeyp
             {
                 "name": "acme-backfill",
                 "pattern": r"^acme-",
-                "fill_missing_fields": True,
+                "fill_missing_for_providers": ["openai"],
                 "model_info": {"supports_reasoning": True, "max_tokens": 5},
             }
         ]
@@ -396,6 +415,9 @@ def test_exact_entries_fill_only_missing_fields(restore_generalizations, monkeyp
     assert bare["max_tokens"] == 5
     assert bare["input_cost_per_token"] == 3e-6
     assert bare["key"] == "acme-bare"
+
+    other = litellm.get_model_info("acme-other", custom_llm_provider="openrouter")
+    assert other.get("supports_reasoning") is None
 
     image = litellm.get_model_info("acme-image", custom_llm_provider="openai")
     assert image.get("supports_reasoning") is None
@@ -727,7 +749,7 @@ def test_shipped_wandb_rule_loses_to_mapped_non_reasoning_entries(shipped_cost_m
 
 
 def test_shipped_wandb_rule_does_not_fill_missing_mapped_entries(shipped_cost_map):
-    assert match_fill_missing_generalizations("wandb/meta-llama/Llama-3.1-8B-Instruct") is None
+    assert match_fill_missing_generalizations("wandb/meta-llama/Llama-3.1-8B-Instruct", "wandb") is None
 
 
 def test_shipped_wandb_rule_is_anchored_to_the_wandb_namespace(shipped_cost_map):
@@ -854,16 +876,23 @@ def test_shipped_openai_reasoning_rule_loses_to_mapped_entries(shipped_cost_map)
     [
         ("azure/us/o1-2024-12-17", "azure"),
         ("github_copilot/gpt-5", "github_copilot"),
+        ("openrouter/openai/o1", "openrouter"),
+        ("perplexity/openai/gpt-5.4-mini", "perplexity"),
     ],
 )
-def test_shipped_openai_reasoning_rule_backfills_mapped_entries(shipped_cost_map, model, provider):
+def test_shipped_openai_reasoning_rule_does_not_backfill_other_providers(shipped_cost_map, model, provider):
     assert model in litellm.model_cost
     raw_entry = litellm.model_cost[model]
     assert "supports_reasoning" not in raw_entry
     model_without_provider = model.removeprefix(f"{provider}/")
-    assert litellm.supports_reasoning(model=model_without_provider, custom_llm_provider=provider) is True
     info = litellm.get_model_info(model=model_without_provider, custom_llm_provider=provider)
+    assert info.get("supports_reasoning") is None
     assert info["input_cost_per_token"] == raw_entry.get("input_cost_per_token", 0)
+
+
+def test_shipped_openai_reasoning_rule_matches_only_openai(shipped_cost_map):
+    assert match_fill_missing_generalizations("gpt-5.4", "openai") == {"supports_reasoning": True}
+    assert match_fill_missing_generalizations("gpt-5.4", "openrouter") is None
 
 
 def test_shipped_openai_reasoning_rule_skips_non_text_modes(shipped_cost_map):
@@ -877,7 +906,7 @@ def test_shipped_openai_reasoning_rule_skips_non_text_modes(shipped_cost_map):
     assert info.get("supports_reasoning") is None
 
 
-def test_shipped_claude_thinking_rules_backfill_without_family_limits(shipped_cost_map):
+def test_shipped_claude_thinking_rules_backfill_only_anthropic(shipped_cost_map):
     model = "perplexity/anthropic/claude-sonnet-4-6"
     assert model in litellm.model_cost
     raw_entry = litellm.model_cost[model]
@@ -885,6 +914,11 @@ def test_shipped_claude_thinking_rules_backfill_without_family_limits(shipped_co
     assert "max_input_tokens" not in raw_entry
 
     info = litellm.get_model_info(model="anthropic/claude-sonnet-4-6", custom_llm_provider="perplexity")
-    assert info["supports_adaptive_thinking"] is True
-    assert info["supports_legacy_thinking"] is True
+    assert info.get("supports_adaptive_thinking") is None
+    assert info.get("supports_legacy_thinking") is None
     assert info.get("max_input_tokens") is None
+    assert match_fill_missing_generalizations("claude-sonnet-4-6", "anthropic") == {
+        "supports_adaptive_thinking": True,
+        "supports_legacy_thinking": True,
+    }
+    assert match_fill_missing_generalizations("claude-sonnet-4-6", "perplexity") is None
