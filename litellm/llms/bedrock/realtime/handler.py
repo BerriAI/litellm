@@ -20,6 +20,7 @@ from litellm.constants import (
     BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY,
     BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY,
     BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY,
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -346,6 +347,7 @@ class BedrockRealtime(BaseAWSLLM):
                     prefer_async_handlers=True,
                 )
             )
+            logging_obj.model_call_details[REALTIME_SESSION_SUCCESS_LOGGED_KEY] = True
 
         if outcome.provider_failure is None:
             return
@@ -382,7 +384,7 @@ class BedrockRealtime(BaseAWSLLM):
         )
         bedrock_task: Final = asyncio.create_task(collect_logged_events())
 
-        await asyncio.wait((client_task, bedrock_task), return_when=asyncio.FIRST_EXCEPTION)
+        await asyncio.wait((client_task, bedrock_task), return_when=asyncio.FIRST_COMPLETED)
         client_disconnected: Final = (
             client_task.done() and not client_task.cancelled() and client_task.exception() is None
         )
