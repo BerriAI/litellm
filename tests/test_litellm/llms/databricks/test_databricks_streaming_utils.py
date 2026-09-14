@@ -48,6 +48,55 @@ def test_chunk_parser_empty_choices_without_usage():
     assert result["usage"] is None
 
 
+def test_chunk_parser_preserves_prompt_tokens_details_on_usage_only_chunk():
+    iterator = ModelResponseIterator(streaming_response=None, sync_stream=True)
+    usage_only_chunk = {
+        "id": "chatcmpl-x",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "m",
+        "choices": [],
+        "usage": {
+            "prompt_tokens": 9888,
+            "completion_tokens": 1,
+            "total_tokens": 9889,
+            "prompt_tokens_details": {"cached_tokens": 6752, "audio_tokens": 0},
+            "completion_tokens_details": {"reasoning_tokens": 0},
+        },
+    }
+
+    result = iterator.chunk_parser(chunk=usage_only_chunk)
+
+    assert result["usage"] is not None
+    assert result["usage"]["prompt_tokens"] == 9888
+    assert result["usage"]["completion_tokens"] == 1
+    assert result["usage"]["prompt_tokens_details"]["cached_tokens"] == 6752
+    assert result["usage"]["completion_tokens_details"]["reasoning_tokens"] == 0
+
+
+def test_chunk_parser_preserves_prompt_tokens_details_on_finish_chunk():
+    iterator = ModelResponseIterator(streaming_response=None, sync_stream=True)
+    chunk = {
+        "id": "chatcmpl-x",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "m",
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        "usage": {
+            "prompt_tokens": 9888,
+            "completion_tokens": 1,
+            "total_tokens": 9889,
+            "prompt_tokens_details": {"cached_tokens": 6752},
+        },
+    }
+
+    result = iterator.chunk_parser(chunk=chunk)
+
+    assert result["is_finished"] is True
+    assert result["usage"] is not None
+    assert result["usage"]["prompt_tokens_details"]["cached_tokens"] == 6752
+
+
 def test_chunk_parser_normal_content_chunk_still_works():
     """A regular content chunk is unaffected by the empty-choices guard."""
     iterator = ModelResponseIterator(streaming_response=None, sync_stream=True)
