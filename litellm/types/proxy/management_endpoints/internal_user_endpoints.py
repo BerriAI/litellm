@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from typing import Any, Final, Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.proxy._types import (
@@ -9,6 +9,8 @@ from litellm.proxy._types import (
     UpdateUserRequest,
     UpdateUserRequestNoUserIDorEmail,
 )
+
+MAX_BULK_DELETE_USERS: Final = 500
 
 
 class InsensitiveContains(TypedDict):
@@ -83,3 +85,24 @@ class BulkUpdateUserResponse(BaseModel):
     total_requested: int
     successful_updates: int
     failed_updates: int
+
+
+class BulkDeleteUserRequest(BaseModel):
+    user_ids: tuple[str, ...] = Field(min_length=1, max_length=MAX_BULK_DELETE_USERS)
+
+
+class UserDeleteResult(BaseModel):
+    """Outcome for one row of `/user/bulk_delete`. `teams_removed` lists the teams the user was taken out of."""
+
+    user_id: str
+    user_email: str | None = None
+    success: bool
+    teams_removed: tuple[str, ...] = ()
+    error: str | None = None
+
+
+class BulkDeleteUserResponse(BaseModel):
+    results: tuple[UserDeleteResult, ...]
+    total_requested: int
+    successful_deletions: int
+    failed_deletions: int

@@ -25,9 +25,11 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES: Final = frozenset(
         # user
         "/user/new",
         "/user/delete",
+        "/user/bulk_delete",
         "/user/bulk_update",
         # team
         "/team/new",
+        "/team/bulk_member_delete",
         "/team/update",
         "/team/delete",
         "/team/block",
@@ -756,8 +758,10 @@ class RouteChecks:
         [
             "/user/new",
             "/user/delete",
+            "/user/bulk_delete",
             "/user/bulk_update",
             "/team/new",
+            "/team/bulk_member_delete",
             "/team/update",
             "/team/delete",
             "/model/new",
