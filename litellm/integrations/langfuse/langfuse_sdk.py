@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime
 from hashlib import sha256
+from importlib.metadata import version
 from types import MappingProxyType
 from typing import Final
 from weakref import WeakKeyDictionary, WeakSet
@@ -448,10 +449,7 @@ def _build_verified_span_exporter(*, public_key: object, secret_key: object, bas
     client_certificate: Final = configured_certificate if isinstance(configured_certificate, str) else None
     if ca_bundle is None and client_certificate is None:
         return None
-    import langfuse as langfuse_package
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-
-    langfuse_version: Final = getattr(langfuse_package, "__version__", "unknown")
 
     export_path: Final = os.getenv("LANGFUSE_OTEL_TRACES_EXPORT_PATH")
     endpoint: Final = f"{base_url}/{export_path}" if export_path else f"{base_url}/api/public/otel/v1/traces"
@@ -461,7 +459,7 @@ def _build_verified_span_exporter(*, public_key: object, secret_key: object, bas
         headers={  # mutable-ok: the exporter copies these into its session headers
             "Authorization": "Basic " + encoded_auth,
             "x-langfuse-sdk-name": "python",
-            "x-langfuse-sdk-version": langfuse_version,
+            "x-langfuse-sdk-version": version("langfuse"),
             "x-langfuse-public-key": str(public_key),
         },
         certificate_file=ca_bundle,
