@@ -5527,9 +5527,9 @@ async def _run_internal_user_budget_alert(
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", None),  # test-quality-ok: common_checks has no database seam
-        patch(
+        patch(  # test-quality-ok: common_checks imports get_current_spend locally
             "litellm.proxy.proxy_server.get_current_spend", _get_spend
-        ),  # test-quality-ok: common_checks imports it locally
+        ),
         patch.object(slack_alerting, "send_alert", send_alert),
     ):
         error: Final = await _check_for_error()
@@ -6554,14 +6554,20 @@ async def test_common_checks_calls_get_team_membership_once_per_request():
     membership.spend = 0.0
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        patch("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()),
-        patch(
+        patch(  # test-quality-ok: common_checks imports prisma_client from proxy_server
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ),
+        patch(  # test-quality-ok: common_checks imports user_api_key_cache from proxy_server
+            "litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()
+        ),
+        patch(  # test-quality-ok: counts membership loads; common_checks has no membership seam
             "litellm.proxy.auth.auth_checks.get_team_membership",
             new_callable=AsyncMock,
             return_value=membership,
         ) as load_membership,
-        patch("litellm.proxy.proxy_server.get_current_spend", new_callable=AsyncMock, return_value=0.0),
+        patch(  # test-quality-ok: common_checks imports get_current_spend locally
+            "litellm.proxy.proxy_server.get_current_spend", new_callable=AsyncMock, return_value=0.0
+        ),
     ):
         result = await common_checks(
             request_body={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
@@ -6640,14 +6646,20 @@ async def test_common_checks_does_not_skip_member_limits_when_membership_lookup_
     )
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        patch("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()),
-        patch(
+        patch(  # test-quality-ok: common_checks imports prisma_client from proxy_server
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ),
+        patch(  # test-quality-ok: common_checks imports user_api_key_cache from proxy_server
+            "litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()
+        ),
+        patch(  # test-quality-ok: injects membership lookup failure; common_checks has no seam
             "litellm.proxy.auth.auth_checks.get_team_membership",
             new_callable=AsyncMock,
             side_effect=lookup_error,
         ),
-        patch("litellm.proxy.proxy_server.get_current_spend", new_callable=AsyncMock, return_value=0.0),
+        patch(  # test-quality-ok: common_checks imports get_current_spend locally
+            "litellm.proxy.proxy_server.get_current_spend", new_callable=AsyncMock, return_value=0.0
+        ),
     ):
         with pytest.raises(HTTPException) as exc:
             await common_checks(

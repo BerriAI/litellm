@@ -349,9 +349,9 @@ async def _enforce(
     read, seen = _spend_reader(spend_by_counter_key or {})
     # The check takes its client and cache as arguments, injected just below. get_current_spend is the
     # one collaborator it reaches by a lazy `from litellm.proxy.proxy_server import`, with no parameter.
-    with patch(
+    with patch(  # test-quality-ok: get_current_spend is lazily imported inside the budget check
         "litellm.proxy.proxy_server.get_current_spend", read
-    ):  # test-quality-ok: get_current_spend is lazily imported inside _model_access_group_max_budget_check and has no injection point
+    ):
         await _model_access_group_max_budget_check(
             matched_model_access_groups=matched,
             prisma_client=prisma_client if prisma_client is not None else _RecordingPrismaClient(*rows),
@@ -511,17 +511,15 @@ async def _common_checks_with_over_budget_group(*, skip_budget_checks: bool) -> 
     read, _ = _spend_reader({MODEL_ACCESS_GROUP_COUNTER_KEY: 99.0})
 
     with (
-        # common_checks resolves all three off the proxy_server module at call time; its signature
-        # has no client, cache or spend-reader parameter to pass them through instead.
-        patch(
+        patch(  # test-quality-ok: common_checks lazily imports prisma_client from proxy_server
             "litellm.proxy.proxy_server.prisma_client", prisma_client
-        ),  # test-quality-ok: common_checks lazily imports prisma_client from proxy_server and takes no client parameter
-        patch(
+        ),
+        patch(  # test-quality-ok: common_checks lazily imports user_api_key_cache from proxy_server
             "litellm.proxy.proxy_server.user_api_key_cache", cache
-        ),  # test-quality-ok: common_checks lazily imports user_api_key_cache from proxy_server and takes no cache parameter
-        patch(
+        ),
+        patch(  # test-quality-ok: get_current_spend is lazily imported inside the budget check
             "litellm.proxy.proxy_server.get_current_spend", read
-        ),  # test-quality-ok: get_current_spend is lazily imported inside the budget check and has no injection point
+        ),
     ):
         return await common_checks(
             request_body={"model": "gpt-4o", "messages": []},
