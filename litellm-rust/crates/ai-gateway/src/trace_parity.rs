@@ -29,14 +29,15 @@ pub struct TracedGatewayResponse {
     pub trace: Vec<litellm_core::observability::FunctionTraceEvent>,
 }
 
-pub async fn traced_messages_request(
+pub async fn traced_request(
+    path: String,
     model_alias: String,
     provider_model: String,
     api_base: String,
     body: Value,
 ) -> TracedGatewayResponse {
     let trace = litellm_core::observability::FunctionTrace::default();
-    let result = messages_request(model_alias, provider_model, api_base, body)
+    let result = request(path, model_alias, provider_model, api_base, body)
         .with_subscriber(trace.dispatcher())
         .await;
     let events = trace.events();
@@ -54,7 +55,8 @@ pub async fn traced_messages_request(
     }
 }
 
-pub async fn messages_request(
+pub async fn request(
+    path: String,
     model_alias: String,
     provider_model: String,
     api_base: String,
@@ -75,7 +77,7 @@ pub async fn messages_request(
     };
     let request = Request::builder()
         .method("POST")
-        .uri("/v1/messages")
+        .uri(path)
         .header(AUTHORIZATION, "Bearer trace-master-key")
         .header(CONTENT_TYPE, "application/json")
         .body(Body::from(body.to_string()))
