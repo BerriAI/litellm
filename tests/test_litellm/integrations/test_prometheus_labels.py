@@ -629,7 +629,7 @@ async def test_success_hook_emits_api_provider_value_on_token_metric():
 
     payload = {
         "id": "t",
-        "call_type": "completion",
+        "call_type": "acompletion",
         "response_cost": 0.001,
         "status": "success",
         "total_tokens": 30,
@@ -677,6 +677,7 @@ async def test_success_hook_emits_api_provider_value_on_token_metric():
         )
         samples = _collected_samples("litellm_total_tokens_metric_total")
         assert samples, "expected litellm_total_tokens_metric to be emitted"
+        assert all(s.labels.get("call_type") == "completion" for s in samples)
         assert all(s.labels.get("api_provider") == "openai" for s in samples), (
             "collected token metric must carry api_provider=openai, got "
             f"{[s.labels.get('api_provider') for s in samples]}"
@@ -702,12 +703,17 @@ async def test_failure_hook_emits_api_provider_value_on_failed_requests_metric()
     try:
         logger = PrometheusLogger()
         await logger.async_post_call_failure_hook(
-            request_data={"model": "gpt-4o-mini", "metadata": {}},
+            request_data={
+                "model": "gpt-4o-mini",
+                "metadata": {},
+                "standard_logging_object": {"call_type": "acompletion"},
+            },
             original_exception=Exception("boom"),
             user_api_key_dict=UserAPIKeyAuth(token="tok"),
         )
         samples = _collected_samples("litellm_proxy_failed_requests_metric_total")
         assert samples, "expected litellm_proxy_failed_requests_metric to be emitted"
+        assert all(s.labels.get("call_type") == "completion" for s in samples)
         assert any(s.labels.get("api_provider") == "openai" for s in samples), (
             "collected failed-requests metric must carry api_provider=openai, got "
             f"{[s.labels.get('api_provider') for s in samples]}"
@@ -1063,7 +1069,7 @@ def test_normalize_call_type(raw, expected):
 
 
 def test_async_call_type_aliases_cover_every_async_member():
-    from litellm.integrations.prometheus import _ASYNC_CALL_TYPE_ALIASES
+    from litellm.integrations.prometheus import PrometheusLogger
     from litellm.types.utils import CallTypes
 
     names = {member.name: member.value for member in CallTypes}
@@ -1071,7 +1077,7 @@ def test_async_call_type_aliases_cover_every_async_member():
         for prefix in ("a_", "a"):
             twin = name[len(prefix) :] if name.startswith(prefix) else None
             if twin and twin in names and twin != name:
-                assert _ASYNC_CALL_TYPE_ALIASES.get(value) == names[twin]
+                assert PrometheusLogger._normalize_call_type(value) == names[twin]
                 break
 
 
