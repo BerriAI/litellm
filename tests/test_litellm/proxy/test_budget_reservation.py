@@ -2230,6 +2230,17 @@ class _ExpiringRedisCache:
         return None
 
 
+class _TeamMembershipFloorDb:
+    """Stands in for `prisma_client.db`: only the team-membership row exists and its spend is the DB floor."""
+
+    def __init__(self, spend: float) -> None:
+        self.spend = spend
+
+    def __getattr__(self, table_name: str) -> SimpleNamespace:
+        row = SimpleNamespace(spend=self.spend) if table_name == "litellm_teammembership" else None
+        return SimpleNamespace(find_unique=AsyncMock(return_value=row))
+
+
 @pytest.mark.asyncio
 async def test_reconcile_after_redis_counter_expiry_keeps_request_cost_enforced(
     spend_counter_state,
@@ -2292,6 +2303,8 @@ async def test_reconcile_before_db_update_does_not_double_count_when_flush_lands
     redis_cache = _ExpiringRedisCache()
     counter_cache.redis_cache = redis_cache
     counter_cache.in_memory_cache.set_cache(key=counter_key, value=0.6)
+    db_floor = _TeamMembershipFloorDb(spend=0.3)
+    ps.prisma_client = SimpleNamespace(db=db_floor)
 
     reservation = {
         "reserved_cost": 0.6,
@@ -2307,27 +2320,20 @@ async def test_reconcile_before_db_update_does_not_double_count_when_flush_lands
         "finalized": False,
     }
 
-    with patch.object(  # test-quality-ok: the reseed reads the DB floor through a Prisma client the test has no seam for
-        ps.SpendCounterReseed, "from_db", AsyncMock(return_value=0.3)
-    ):
-        await reconcile_budget_reservation(
-            budget_reservation=reservation, actual_cost=0.05, finalize=False
-        )
+    await reconcile_budget_reservation(budget_reservation=reservation, actual_cost=0.05, finalize=False)
 
     assert redis_cache.store[counter_key] == pytest.approx(0.35)
     assert reservation["entries"][0]["applied_adjustment"] == pytest.approx(-0.55)
     assert reservation["finalized"] is False
 
-    with patch.object(  # test-quality-ok: the flush landing between the passes makes the DB floor include this request
-        ps.SpendCounterReseed, "from_db", AsyncMock(return_value=0.35)
-    ):
-        await ps.increment_spend_counters(
-            token="key-flush",
-            team_id="team-flush",
-            user_id="user-flush",
-            response_cost=0.05,
-            budget_reservation=reservation,
-        )
+    db_floor.spend = 0.35
+    await ps.increment_spend_counters(
+        token="key-flush",
+        team_id="team-flush",
+        user_id="user-flush",
+        response_cost=0.05,
+        budget_reservation=reservation,
+    )
 
     assert redis_cache.store[counter_key] == pytest.approx(0.35)
     assert reservation["finalized"] is True
