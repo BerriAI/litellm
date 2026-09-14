@@ -65,9 +65,6 @@ from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
 )
-from litellm.constants import (
-    EMPTY_MAPPING as _EMPTY_MAPPING,
-)
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
@@ -5570,7 +5567,7 @@ def completion(
         )
         if litellm_params.get("provider_affinity_header") is not None:
             headers = add_provider_affinity_header(
-                headers=headers or litellm.headers or _EMPTY_MAPPING,
+                headers=headers or litellm.headers or MappingProxyType({}),
                 litellm_params={
                     "provider_affinity_header": litellm_params["provider_affinity_header"],
                     "litellm_session_id": kwargs.get("litellm_session_id"),

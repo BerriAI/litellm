@@ -2,10 +2,9 @@ import re
 from collections.abc import Mapping
 from typing import Final
 
-from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
-
 PROVIDER_AFFINITY_REDACTED_VALUE: Final = "[REDACTED]"
 
+_SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
 _HTTP_HEADER_NAME_PATTERN: Final = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 _FORBIDDEN_AFFINITY_HEADERS: Final = frozenset(
     {
@@ -67,7 +66,7 @@ def get_stable_session_id(litellm_params: object | None) -> str | None:
         value for key in ("metadata", "litellm_metadata") if (value := _get_value(litellm_params, key)) is not None
     )
     has_generated_session_id: Final = any(
-        isinstance(metadata, Mapping) and metadata.get(SESSION_ID_GENERATED_METADATA_KEY)
+        isinstance(metadata, Mapping) and metadata.get(_SESSION_ID_GENERATED_METADATA_KEY)
         for metadata in metadata_values
     )
 
@@ -78,7 +77,7 @@ def get_stable_session_id(litellm_params: object | None) -> str | None:
     for metadata in metadata_values:
         if (
             isinstance(metadata, Mapping)
-            and not metadata.get(SESSION_ID_GENERATED_METADATA_KEY)
+            and not metadata.get(_SESSION_ID_GENERATED_METADATA_KEY)
             and (value := metadata.get("session_id"))
         ):
             return str(value)
