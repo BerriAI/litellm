@@ -41,6 +41,7 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     UserAPIKeyAuth,
 )
+from litellm.proxy.hooks.rate_limiter_utils import PROXY_LLM_PROVIDER_FALLBACK
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.team_repository import TeamRepository
@@ -2581,6 +2582,15 @@ class PrometheusLogger(CustomLogger):
             )
             return None
 
+    @staticmethod
+    def _extract_api_provider_from_exception(exception: Exception) -> str | None:
+        if not isinstance(exception, litellm.exceptions.RateLimitError):
+            return None
+        llm_provider: Final = exception.llm_provider
+        if not llm_provider or llm_provider == PROXY_LLM_PROVIDER_FALLBACK:
+            return None
+        return llm_provider
+
     async def async_post_call_failure_hook(
         self,
         request_data: dict,
@@ -2616,7 +2626,9 @@ class PrometheusLogger(CustomLogger):
             _metadata: Final = request_data.get("metadata", {}) or {}
             model_id: Final = _metadata.get("model_info", {}).get("id") or request_data.get("model_info", {}).get("id")
             rate_limit_category, rate_limit_type = self._extract_rate_limit_labels(original_exception)
-            api_provider: Final = self._extract_api_provider_from_request_data(request_data)
+            api_provider: Final = self._extract_api_provider_from_request_data(
+                request_data
+            ) or self._extract_api_provider_from_exception(original_exception)
             enum_values: Final = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
