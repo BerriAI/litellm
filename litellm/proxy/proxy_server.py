@@ -274,6 +274,8 @@ from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
+    REALTIME_SESSION_FAILURE_LOGGED_KEY,
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG,
     USER_SPEND_ALERTS_JOB_ID,
     WEEKLY_SPEND_REPORT_JOB_ID,
@@ -12061,11 +12063,6 @@ async def realtime_websocket_endpoint(
         except Exception:  # noqa: BLE001  # the lower layer may have closed the socket already; closing twice is not an error
             verbose_proxy_logger.debug("Could not close realtime client websocket; it is already gone")
     finally:
-        from litellm.litellm_core_utils.realtime_streaming import (
-            REALTIME_SESSION_FAILURE_LOGGED_KEY,
-            REALTIME_SESSION_SUCCESS_LOGGED_KEY,
-        )
-
         if not litellm_logging_obj.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY):
             await _release_realtime_budget_reservation(user_api_key_dict)
             if not litellm_logging_obj.model_call_details.get(REALTIME_SESSION_FAILURE_LOGGED_KEY):

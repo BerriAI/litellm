@@ -10020,10 +10020,7 @@ async def _lit6973_drive_realtime_session(
     logging object carries a real model_call_details dict so the stamp is
     observable, and the reservation has empty entries so the real release touches
     no counter store."""
-    from litellm.litellm_core_utils.realtime_streaming import (
-        REALTIME_SESSION_FAILURE_LOGGED_KEY,
-        REALTIME_SESSION_SUCCESS_LOGGED_KEY,
-    )
+    from litellm.constants import REALTIME_SESSION_FAILURE_LOGGED_KEY, REALTIME_SESSION_SUCCESS_LOGGED_KEY
     from litellm.proxy import proxy_server as ps
 
     user_api_key_dict: Final = UserAPIKeyAuth(api_key="sk-test", token="hashed-token")

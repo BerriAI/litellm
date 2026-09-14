@@ -10,6 +10,7 @@ from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import redact_internal_details_from_client_message, verbose_logger
+from litellm.constants import REALTIME_SESSION_FAILURE_LOGGED_KEY, REALTIME_SESSION_SUCCESS_LOGGED_KEY
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.types.llms.openai import (
@@ -33,10 +34,6 @@ if TYPE_CHECKING:
     CLIENT_CONNECTION_CLASS = ClientConnection
 else:
     CLIENT_CONNECTION_CLASS = Any
-
-
-REALTIME_SESSION_SUCCESS_LOGGED_KEY: Final = "realtime_session_success_logged"
-REALTIME_SESSION_FAILURE_LOGGED_KEY: Final = "realtime_session_failure_logged"
 
 
 @dataclass(frozen=True, slots=True)

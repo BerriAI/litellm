@@ -10,10 +10,9 @@ from websockets.exceptions import ConnectionClosed
 from websockets.frames import Close
 
 import litellm
+from litellm.constants import REALTIME_SESSION_FAILURE_LOGGED_KEY, REALTIME_SESSION_SUCCESS_LOGGED_KEY
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.realtime_streaming import (
-    REALTIME_SESSION_FAILURE_LOGGED_KEY,
-    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     RealTimeStreaming,
     client_sent_openai_beta_realtime_header,
 )

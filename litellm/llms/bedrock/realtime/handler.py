@@ -20,14 +20,12 @@ from litellm.constants import (
     BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY,
     BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY,
     BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY,
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.litellm_core_utils.realtime_streaming import (
-    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
-    DefaultLoggedRealTimeEventTypes,
-)
+from litellm.litellm_core_utils.realtime_streaming import DefaultLoggedRealTimeEventTypes
 from litellm.types.llms.openai import OpenAIRealtimeEvents
 from litellm.types.realtime import RealtimeResponseTransformInput
 
