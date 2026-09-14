@@ -13,7 +13,7 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from litellm.proxy.utils import get_custom_url, join_paths
 
@@ -1305,9 +1305,8 @@ class TestPostCallFailureHookLLMExceptionAlerting:
     client errors must be excluded so a guardrail content-policy block never
     pages on-call. 5xx proxy errors still alert."""
 
-    async def _alerted(self, exc):
+    async def _alerted(self, exc: Exception) -> AsyncMock:
         import asyncio
-        from unittest.mock import AsyncMock
 
         from litellm.proxy._types import AlertType, UserAPIKeyAuth
 
