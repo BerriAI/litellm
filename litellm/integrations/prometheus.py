@@ -10,7 +10,7 @@ import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
-from types import MappingProxyType
+from functools import cache
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast
 
 from pydantic import BaseModel
@@ -60,7 +60,6 @@ from litellm.types.proxy.carried_budget_state import (
     UserBudgetSnapshot,
 )
 from litellm.types.utils import (
-    CallTypes,
     StandardLoggingGuardrailInformation,
     StandardLoggingPayload,
 )
@@ -167,8 +166,13 @@ def _sync_twin(name: str, values_by_name: Mapping[str, str]) -> str | None:
     )
 
 
+@cache
 def _build_async_call_type_aliases() -> Mapping[str, str]:
     """Matches on ``CallTypes`` member names, not values: stripping "a" from values breaks ``add_message``."""
+    from types import MappingProxyType
+
+    from litellm.types.utils import CallTypes
+
     values_by_name: Final = MappingProxyType({member.name: str(member.value) for member in CallTypes})
     return MappingProxyType(
         {
@@ -177,9 +181,6 @@ def _build_async_call_type_aliases() -> Mapping[str, str]:
             if (twin := _sync_twin(name, values_by_name)) is not None
         }
     )
-
-
-_ASYNC_CALL_TYPE_ALIASES: Final = _build_async_call_type_aliases()
 
 
 def _get_budget_metrics_per_request_timeout() -> float:
@@ -2581,7 +2582,7 @@ class PrometheusLogger(CustomLogger):
         """Collapse async call types onto their sync twin so the proxy (async) and SDK (sync) share one series."""
         if not call_type:
             return None
-        return _ASYNC_CALL_TYPE_ALIASES.get(call_type, call_type)
+        return _build_async_call_type_aliases().get(call_type, call_type)
 
     @staticmethod
     def _extract_api_provider_from_request_data(request_data: dict) -> str | None:
