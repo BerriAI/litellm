@@ -370,7 +370,7 @@ async def process_spend_logs_guardrail_usage(
             {
                 e["guardrail_name"]: e["guardrail_id"]
                 for e in entries
-                if e.get("guardrail_id") and isinstance(e.get("guardrail_name"), str)
+                if e.get("guardrail_id") and isinstance(e.get("guardrail_name"), str) and e["guardrail_name"]
             }
         )
         for entry in entries:
