@@ -7,7 +7,7 @@ import json
 import re
 import time
 import types
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
 import httpx
@@ -1228,27 +1228,107 @@ class AmazonConverseConfig(BaseConfig):
     def _transform_system_message(
         self, messages: list[AllMessageValues], model: str | None = None
     ) -> tuple[list[AllMessageValues], list[SystemContentBlock]]:
-        system_prompt_indices: Final = []
+        # Converse rejects role:"system" at any position, but only the *leading*
+        # run belongs in the top-level system field: hoisting a mid-conversation
+        # entry mutates the cached prefix and collapses Bedrock's implicit prompt
+        # cache, so mid-conversation entries are converted to user turns in place
+        # instead (mirrors the Invoke-path normalization in
+        # AnthropicMessagesConfig._normalize_system_role_messages).
+        leading_count: Final = next(
+            (i for i, message in enumerate(messages) if not self._is_system_role_message(message)),
+            len(messages),
+        )
         system_content_blocks: Final[list[SystemContentBlock]] = []
-        for idx, message in enumerate(messages):
-            if message["role"] == "system":
-                system_prompt_indices.append(idx)
-                if isinstance(message["content"], str) and message["content"]:
-                    system_content_blocks.append(SystemContentBlock(text=message["content"]))
-                    cache_block = self.get_cache_point_block(message, block_type="system", model=model)
-                    if cache_block:
-                        system_content_blocks.append(cache_block)
-                elif isinstance(message["content"], list):
-                    for m in message["content"]:
-                        if m.get("type") == "text" and m.get("text"):
-                            system_content_blocks.append(SystemContentBlock(text=m["text"]))
-                            cache_block = self.get_cache_point_block(m, block_type="system", model=model)
-                            if cache_block:
-                                system_content_blocks.append(cache_block)
-        if len(system_prompt_indices) > 0:
-            for idx in reversed(system_prompt_indices):
-                messages.pop(idx)
-        return messages, system_content_blocks
+        for message in messages[:leading_count]:
+            if message["role"] != "system":
+                continue
+            if isinstance(message["content"], str) and message["content"]:
+                system_content_blocks.append(SystemContentBlock(text=message["content"]))
+                cache_block = self.get_cache_point_block(message, block_type="system", model=model)
+                if cache_block:
+                    system_content_blocks.append(cache_block)
+            elif isinstance(message["content"], list):
+                for m in message["content"]:
+                    if m.get("type") == "text" and m.get("text"):
+                        system_content_blocks.append(SystemContentBlock(text=m["text"]))
+                        cache_block = self.get_cache_point_block(m, block_type="system", model=model)
+                        if cache_block:
+                            system_content_blocks.append(cache_block)
+        out_messages: Final[list[AllMessageValues]] = cast(
+            list[AllMessageValues],
+            [
+                self._system_role_message_as_user(message) if self._is_system_role_message(message) else message
+                for message in self._system_turns_after_tool_results(messages[leading_count:])
+            ],
+        )
+        return out_messages, system_content_blocks
+
+    _CONVERTED_SYSTEM_NOTE: Final = (
+        "Operator note (not from the user): the following was originally a mid-conversation system-role reminder."
+    )
+
+    @staticmethod
+    def _is_system_role_message(message: object) -> bool:
+        return isinstance(message, dict) and message.get("role") == "system"
+
+    @staticmethod
+    def _as_user_content_blocks(value: object) -> list:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return list(value)
+        if isinstance(value, str):
+            return [{"type": "text", "text": value}]
+        return [value]
+
+    def _system_role_message_as_user(self, message: Mapping) -> dict:
+        return {
+            "role": "user",
+            "content": self._as_user_content_blocks(self._CONVERTED_SYSTEM_NOTE)
+            + self._as_user_content_blocks(message.get("content")),
+        }
+
+    @staticmethod
+    def _opens_with_tool_results(message: object) -> bool:
+        # covers both the OpenAI shape (role:"tool" turns, possibly several in a
+        # row) and the in-place user turns carrying tool_result blocks
+        if not isinstance(message, dict):
+            return False
+        if message.get("role") == "tool":
+            return True
+        content: object = message.get("content")
+        return (
+            message.get("role") == "user"
+            and isinstance(content, list)
+            and len(content) > 0
+            and isinstance(content[0], dict)
+            and content[0].get("type") == "tool_result"
+        )
+
+    def _system_turns_after_tool_results(self, messages: Sequence) -> tuple:
+        # a converted turn wedged between an assistant tool_call turn and its
+        # tool-result turns would split the call from its results; the whole
+        # tool-result run is emitted first and the system run follows it
+        result: list = []
+        i: int = 0
+        while i < len(messages):
+            if self._is_system_role_message(messages[i]):
+                run_end: Final = next(
+                    (j for j in range(i, len(messages)) if not self._is_system_role_message(messages[j])),
+                    len(messages),
+                )
+                follower: Final = messages[run_end] if run_end < len(messages) else None
+                if follower is not None and self._opens_with_tool_results(follower):
+                    j: int = run_end
+                    while j < len(messages) and self._opens_with_tool_results(messages[j]):
+                        result.append(messages[j])
+                        j += 1
+                    result.extend(messages[i:run_end])
+                    i = j
+                    continue
+            result.append(messages[i])
+            i += 1
+        return tuple(result)
 
     def _transform_inference_params(self, inference_params: dict) -> InferenceConfig:
         if "top_k" in inference_params:
