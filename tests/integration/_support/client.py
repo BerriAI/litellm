@@ -1,0 +1,134 @@
+from __future__ import annotations
+
+import os
+import time
+import uuid
+from hashlib import sha256
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
+from typing import Final, TypeVar
+
+import httpx
+from pydantic import JsonValue, TypeAdapter
+
+from integration._support.database import read_rows
+
+JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+T = TypeVar("T")
+
+
+def object_value(value: JsonValue) -> dict[str, JsonValue]:
+    return JSON_OBJECT.validate_python(value)
+
+
+def string_value(value: JsonValue) -> str:
+    assert isinstance(value, str), f"Expected a string, received {type(value).__name__}"
+    return value
+
+
+def eventually(read: Callable[[], T], satisfied: Callable[[T], bool], seconds: float = 10) -> T:
+    deadline: Final = time.monotonic() + seconds
+    while True:
+        observed: Final = read()
+        if satisfied(observed):
+            return observed
+        assert time.monotonic() < deadline, f"State did not converge: {observed!r}"
+        time.sleep(0.1)
+
+
+@dataclass(frozen=True, slots=True)
+class Gateway:
+    client: httpx.Client
+    key: str
+    upstream_url: str
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        body: Mapping[str, JsonValue] | None = None,
+        *,
+        key: str | None = None,
+        params: Mapping[str, str] | None = None,
+    ) -> httpx.Response:
+        return self.client.request(
+            method,
+            path,
+            json=body,
+            params=params,
+            headers={"Authorization": f"Bearer {self.key if key is None else key}"},
+        )
+
+    def post(self, path: str, body: Mapping[str, JsonValue], *, key: str | None = None) -> dict[str, JsonValue]:
+        response: Final = self.request("POST", path, body, key=key)
+        assert response.status_code == 200, f"POST {path}: {response.status_code} {response.text}"
+        return JSON_OBJECT.validate_json(response.content)
+
+    def get(self, path: str, params: Mapping[str, str] | None = None) -> dict[str, JsonValue]:
+        response: Final = self.request("GET", path, params=params)
+        assert response.status_code == 200, f"GET {path}: {response.status_code} {response.text}"
+        return JSON_OBJECT.validate_json(response.content)
+
+    def chat(self, model: str, *, key: str | None = None, text: str = "integration control") -> dict[str, JsonValue]:
+        return self.post(
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": text}]},
+            key=key,
+        )
+
+    @contextmanager
+    def scenario(self) -> Iterator[Scenario]:
+        with ExitStack() as cleanups:
+            yield Scenario(self, cleanups)
+
+
+@dataclass(frozen=True, slots=True)
+class Scenario:
+    gateway: Gateway
+    cleanups: ExitStack
+
+    def key(self, **fields: JsonValue) -> str:
+        created: Final = self.gateway.post("/key/generate", fields)
+        token: Final = string_value(created["key"])
+        self.cleanups.callback(self.delete_key, token)
+        return token
+
+    def delete_key(self, token: str) -> None:
+        self.gateway.post("/key/delete", {"keys": [token]})
+        response: Final = self.gateway.request("GET", "/key/info", params={"key": sha256(token.encode()).hexdigest()})
+        assert response.status_code == 404, f"Deleted key remains readable: {response.status_code}"
+
+    def delete_model(self, identity: str) -> None:
+        self.gateway.post("/model/delete", {"id": identity})
+        entries: Final = self.gateway.get("/model/info")["data"]
+        assert isinstance(entries, list)
+        assert all(object_value(object_value(entry)["model_info"])["id"] != identity for entry in entries)
+        assert read_rows('SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (identity,)) == []
+
+    def model(self, **parameters: JsonValue) -> str:
+        name: Final = f"integration-{uuid.uuid4().hex}"
+        created: Final = self.gateway.post(
+            "/model/new",
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "integration-provider-key",
+                    "api_base": f"{self.gateway.upstream_url}/v1",
+                    **parameters,
+                },
+                "model_info": {},
+            },
+        )
+        identity: Final = string_value(object_value(created["model_info"])["id"])
+        self.cleanups.callback(self.delete_model, identity)
+        return name
+
+
+@contextmanager
+def gateway_from_environment() -> Iterator[Gateway]:
+    url: Final = os.environ["INTEGRATION_PROXY_URL"]
+    upstream: Final = os.environ["INTEGRATION_UPSTREAM_URL"]
+    with httpx.Client(base_url=url, timeout=15, trust_env=False) as client:
+        yield Gateway(client, os.environ["INTEGRATION_MASTER_KEY"], upstream)
