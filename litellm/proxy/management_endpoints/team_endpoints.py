@@ -431,27 +431,26 @@ async def _refresh_cached_team(
     )
 
 
+async def _can_manage_team(
+    team_obj: LiteLLM_TeamTable,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bool:
+    """True for a proxy admin, an admin of this team, or an org admin for the team's organization."""
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return True
+
+    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+        return True
+
+    return await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
+
+
 async def _verify_team_access(
     team_obj: LiteLLM_TeamTable,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
-    """
-    Verify the caller is authorized to manage the given team.
-
-    Access is granted if:
-    - Caller is a proxy admin, OR
-    - Caller is an org admin for the team's organization, OR
-    - Caller is a team admin of this team
-
-    Raises HTTPException(403) otherwise.
-    """
-    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
-        return
-
-    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
-        return
-
-    if await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+    """Raise HTTPException(403) unless the caller can manage the given team."""
+    if await _can_manage_team(team_obj=team_obj, user_api_key_dict=user_api_key_dict):
         return
 
     raise HTTPException(
@@ -4370,6 +4369,20 @@ async def _hydrate_member_user_details(
     return tuple(hydrate(m) for m in members)
 
 
+class _OrganizationModelsRow(BaseModel):
+    models: list[str] = []  # mutable-ok: pydantic field default
+
+
+class _TeamRowWithOrganization(BaseModel):
+    litellm_organization_table: _OrganizationModelsRow | None = None
+
+
+def _parent_organization_models(team_row: BaseModel) -> list[str] | None:
+    """Return the parent org's model allow-list, or None when the team has no org."""
+    organization: Final = _TeamRowWithOrganization.model_validate(team_row.model_dump()).litellm_organization_table
+    return organization.models if organization is not None else None
+
+
 async def _resolve_team_access_group_resources(
     _team_info: TeamInfoResponseObjectTeamTable,
 ) -> TeamInfoResponseObjectTeamTable:
@@ -4441,7 +4454,11 @@ async def team_info(
         try:
             team_info: BaseModel | None = await _team_db(prisma_client).find_unique(
                 where={"team_id": team_id},
-                include={"litellm_model_table": True, "object_permission": True},
+                include={
+                    "litellm_model_table": True,
+                    "object_permission": True,
+                    "litellm_organization_table": True,
+                },
             )
             if team_info is None:
                 raise Exception
@@ -4450,9 +4467,12 @@ async def team_info(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"message": f"Team not found, passed team id: {team_id}."},
             )
-        await validate_membership(
-            user_api_key_dict=user_api_key_dict,
-            team_table=LiteLLM_TeamTable.model_validate(team_info.model_dump()),
+        team_table: Final = LiteLLM_TeamTable.model_validate(team_info.model_dump())
+        await validate_membership(user_api_key_dict=user_api_key_dict, team_table=team_table)
+        organization_models: Final[list[str] | None] = (
+            _parent_organization_models(team_info)
+            if await _can_manage_team(team_obj=team_table, user_api_key_dict=user_api_key_dict)
+            else None
         )
 
         ## GET ALL KEYS ##
@@ -4512,7 +4532,10 @@ async def team_info(
             members=resolved_team_info.members_with_roles,
         )
         hydrated_team_info: Final = resolved_team_info.model_copy(
-            update={"members_with_roles": hydrated_members}  # mutable-ok: pydantic update payload
+            update={  # mutable-ok: pydantic update payload
+                "members_with_roles": hydrated_members,
+                "organization_models": organization_models,
+            }
         )
 
         response_object: Final = TeamInfoResponseObject(
