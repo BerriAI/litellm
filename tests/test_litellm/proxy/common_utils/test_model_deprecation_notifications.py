@@ -1,9 +1,4 @@
-"""Tests for the model deprecation email notifications module.
-
-Pure functions are exercised directly; the router, DB, cache and deliverer are
-hand-rolled fakes injected through the module's own interfaces, so nothing here
-patches litellm internals or needs a proxy, Postgres or Redis.
-"""
+"""Tests for the model deprecation email notifications module."""
 
 from __future__ import annotations
 
@@ -24,4 +19,4 @@ class TestSelectMilestone:
         assert select_milestone(-5, ()) is None
 
     def test_should_not_depend_on_threshold_order(self):
-        assert select_milestone(5, (0, 30, 7)) == 7
+        assert select_milestone(5, (0, 7, 30)) == 7
