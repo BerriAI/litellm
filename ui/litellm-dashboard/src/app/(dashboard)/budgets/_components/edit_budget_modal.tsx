@@ -88,7 +88,7 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIs
               control={form.control}
               name="tpm_limit"
               label="Max Tokens per minute"
-              description="Default is model limit."
+              description="Leave blank for no LiteLLM limit. Provider rate limits still apply."
             >
               {({ ref, value, onChange, ...field }) => (
                 <Input
@@ -105,7 +105,7 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIs
               control={form.control}
               name="rpm_limit"
               label="Max Requests per minute"
-              description="Default is model limit."
+              description="Leave blank for no LiteLLM limit. Provider rate limits still apply."
             >
               {({ ref, value, onChange, ...field }) => (
                 <Input

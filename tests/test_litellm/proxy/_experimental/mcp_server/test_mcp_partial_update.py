@@ -1,10 +1,11 @@
 """
-Tests for partial-update semantics of PUT /v1/mcp/server.
+Tests for partial-update semantics of PUT /v1/mcp/server and PUT /v1/mcp/toolset.
 
 A partial update must only write the fields the caller explicitly provided.
 Omitting a field must NOT reset it to its Pydantic schema default (e.g.
 ``transport=sse``, ``mcp_access_groups=[]``, ``allow_all_keys=False``), which
-would silently overwrite the existing DB row.
+would silently overwrite the existing DB row, and a field the caller sent as null
+must be cleared rather than left at its stored value.
 """
 
 import json
@@ -850,3 +851,69 @@ async def test_cf_pair_switch_does_not_clear_dcr_bridge():
     data = UpdateMCPServerRequest(server_id="s", auth_type="oauth_delegate")
     data_dict = await _run_update_with_existing(data, existing_auth_type="true_passthrough")
     assert "dcr_bridge" not in data_dict
+
+
+def _mock_toolset_prisma():
+    """A prisma double whose update answers with a row the reader can expand, so the
+    call under test returns instead of failing inside the row mapper."""
+    updated_row = MagicMock()
+    updated_row.model_dump.return_value = {
+        "toolset_id": "ts-1",
+        "toolset_name": "ops",
+        "description": None,
+        "tools": "[]",
+    }
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_mcptoolsettable = AsyncMock()
+    mock_prisma.db.litellm_mcptoolsettable.update = AsyncMock(return_value=updated_row)
+    return mock_prisma
+
+
+async def _run_toolset_update(payload: dict) -> dict:
+    """The columns PUT /v1/mcp/toolset writes for this payload, minus the audit stamp
+    every write carries. The prisma double is injected, so nothing is patched."""
+    from litellm.proxy._experimental.mcp_server.toolset_db import update_mcp_toolset
+    from litellm.types.mcp_server.mcp_toolset import UpdateMCPToolsetRequest
+
+    mock_prisma = _mock_toolset_prisma()
+    await update_mcp_toolset(mock_prisma, UpdateMCPToolsetRequest.model_validate(payload), "test-user")
+    written = dict(mock_prisma.db.litellm_mcptoolsettable.update.call_args[1]["data"])
+    assert written["updated_by"] == "test-user"
+    return {name: value for name, value in written.items() if name != "updated_by"}
+
+
+@pytest.mark.asyncio
+async def test_toolset_partial_update_clears_description_on_explicit_null():
+    """The dump used to drop None, so a null description could never clear the stored
+    one: the toolset kept a description its owner had deleted."""
+    assert await _run_toolset_update({"toolset_id": "ts-1", "description": None}) == {"description": None}
+
+
+@pytest.mark.asyncio
+async def test_toolset_partial_update_omits_the_fields_the_caller_left_out():
+    tools = [{"server_id": "s1", "tool_name": "alpha"}]
+    assert await _run_toolset_update({"toolset_id": "ts-1", "tools": tools}) == {"tools": json.dumps(tools)}
+
+
+@pytest.mark.asyncio
+async def test_toolset_partial_update_ignores_null_tools_rather_than_revoking_them():
+    """A client that sends tools=null means "leave the selection alone", so the grants
+    survive. Clearing them is an explicit [], which cannot be confused with an omitted
+    field; treating null as a clear would silently revoke every tool the toolset grants."""
+    assert await _run_toolset_update({"toolset_id": "ts-1", "tools": None, "description": "kept"}) == {
+        "description": "kept"
+    }
+
+
+@pytest.mark.asyncio
+async def test_toolset_partial_update_empties_the_selection_on_an_explicit_empty_list():
+    assert await _run_toolset_update({"toolset_id": "ts-1", "tools": []}) == {"tools": "[]"}
+
+
+@pytest.mark.asyncio
+async def test_toolset_partial_update_ignores_a_null_name():
+    """A toolset always has a name, so a null toolset_name is a no-op, not a clear
+    that would write a NOT NULL column to null."""
+    assert await _run_toolset_update({"toolset_id": "ts-1", "toolset_name": None, "description": "kept"}) == {
+        "description": "kept"
+    }

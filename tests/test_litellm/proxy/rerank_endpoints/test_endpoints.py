@@ -6,11 +6,11 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import Request, Response
+from fastapi import HTTPException, Request, Response
 
 import litellm.proxy.common_request_processing as common_request_processing_mod
 import litellm.proxy.proxy_server as proxy_server_mod
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.rerank_endpoints.endpoints import rerank
 from litellm.types.utils import RerankResponse
 
@@ -118,3 +118,55 @@ async def test_rerank_omits_detailed_timing_headers_when_disabled():
         fastapi_response = await _call_rerank()
 
     assert "x-litellm-timing-llm-api-ms" not in fastapi_response.headers
+
+
+async def _rerank_failure(
+    failure: Exception, *, raised_before_routing: bool, monkeypatch: pytest.MonkeyPatch
+) -> ProxyException:
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.pre_call_hook = AsyncMock(
+        side_effect=failure if raised_before_routing else lambda **kwargs: kwargs["data"]
+    )
+    proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    async def fake_add_litellm_data_to_request(**kwargs: object) -> object:
+        return kwargs["data"]
+
+    async def failing_route_request(**kwargs: object) -> None:
+        raise failure
+
+    monkeypatch.setattr(proxy_server_mod, "add_litellm_data_to_request", fake_add_litellm_data_to_request)
+    monkeypatch.setattr(proxy_server_mod, "route_request", failing_route_request)
+    monkeypatch.setattr(proxy_server_mod, "proxy_logging_obj", proxy_logging_obj)
+    monkeypatch.setattr(proxy_server_mod, "llm_router", MagicMock())
+    monkeypatch.setattr(proxy_server_mod, "version", "1.2.3")
+
+    with pytest.raises(ProxyException) as raised:
+        await rerank(
+            request=_build_request(),
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+    return raised.value
+
+
+@pytest.mark.asyncio
+async def test_a_model_the_router_cannot_serve_answers_an_openai_typed_error(monkeypatch: pytest.MonkeyPatch):
+    """A bare HTTPException carries no type or param, so the tail used to ship the
+    literal string "None" in both fields."""
+    failure = HTTPException(status_code=404, detail={"error": "rerank: Invalid model name passed in model=rerank-model"})
+
+    error = await _rerank_failure(failure, raised_before_routing=False, monkeypatch=monkeypatch)
+
+    assert (error.type, error.param, error.code) == ("invalid_request_error", None, "404")
+
+
+@pytest.mark.asyncio
+async def test_a_rejection_raised_before_routing_keeps_its_own_status(monkeypatch: pytest.MonkeyPatch):
+    """A ProxyException stores its status as the string ``code``, which the tail used to
+    miss and rewrap as a 500 while keeping the 4xx type and param."""
+    rejection = ProxyException(message="session_id is required", type="bad_request_error", param="session_id", code=400)
+
+    error = await _rerank_failure(rejection, raised_before_routing=True, monkeypatch=monkeypatch)
+
+    assert (error.type, error.param, error.code) == ("bad_request_error", "session_id", "400")
