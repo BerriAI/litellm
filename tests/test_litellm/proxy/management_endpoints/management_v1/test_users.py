@@ -79,16 +79,16 @@ def test_returns_one_result_per_row_in_order_inside_the_data_meta_envelope(prism
 
 
 def test_an_unknown_field_anywhere_in_the_body_is_a_422_problem(prisma, as_proxy_admin):
-    for body in (
-        {"users": [{"user_email": "a@example.com", "user_emial": "typo"}]},
-        {"users": [{"user_email": "a@example.com"}], "dry_run": True},
+    for body, field in (
+        ({"users": [{"user_email": "a@example.com", "user_emial": "typo"}]}, "users.0.user_emial"),
+        ({"users": [{"user_email": "a@example.com"}], "dry_run": True}, "dry_run"),
     ):
         response = _post(body)
 
         assert response.status_code == 422, body
         assert response.headers["content-type"] == "application/problem+json"
         assert response.json()["type"] == "urn:litellm:error:invalid-request-body"
-        assert "Extra inputs are not permitted" in response.json()["detail"]
+        assert response.json()["detail"] == f"{field}: Extra inputs are not permitted"
     assert prisma.db.litellm_usertable.rows == {}
 
 
