@@ -15,6 +15,7 @@ from httpx import Response
 import litellm
 import pytest
 
+from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
 )
@@ -361,6 +362,77 @@ class TestMockedCompletion:
         )
 
         assert uuid.UUID(respx_mock.calls[0].request.headers["x-opencode-session"]).version == 4
+
+    def test_go_chat_uses_session_id_from_metadata(self, respx_mock, monkeypatch):
+        """A session id sent in request metadata keeps the Go session stable across turns."""
+        respx_mock.post("https://opencode.ai/zen/go/v1/chat/completions").mock(
+            return_value=Response(200, json=_make_response("deepseek-v4-flash", "ok"))
+        )
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.completion(
+            model="opencode_go/deepseek-v4-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="sk-fake",
+            metadata={"session_id": "conv-1"},
+        )
+
+        assert respx_mock.calls[0].request.headers["x-opencode-session"] == "conv-1"
+
+    def test_go_chat_never_sends_the_per_request_trace_id(self, respx_mock, monkeypatch):
+        """A trace id changes every request, so sending it would break prompt caching on every turn."""
+        respx_mock.post("https://opencode.ai/zen/go/v1/chat/completions").mock(
+            return_value=Response(200, json=_make_response("deepseek-v4-flash", "ok"))
+        )
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.completion(
+            model="opencode_go/deepseek-v4-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="sk-fake",
+            litellm_trace_id="trace-123",
+        )
+
+        sent = respx_mock.calls[0].request.headers["x-opencode-session"]
+        assert sent != "trace-123"
+        assert uuid.UUID(sent).version == 4
+
+    def test_go_chat_never_sends_a_trace_id_from_metadata(self, respx_mock, monkeypatch):
+        """A metadata trace id also stands in for a missing session id, but it is still per request."""
+        respx_mock.post("https://opencode.ai/zen/go/v1/chat/completions").mock(
+            return_value=Response(200, json=_make_response("deepseek-v4-flash", "ok"))
+        )
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.completion(
+            model="opencode_go/deepseek-v4-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="sk-fake",
+            metadata={"trace_id": "trace-abc"},
+        )
+
+        sent = respx_mock.calls[0].request.headers["x-opencode-session"]
+        assert sent != "trace-abc"
+        assert uuid.UUID(sent).version == 4
+
+    def test_go_chat_ignores_a_session_id_the_proxy_generated(self, respx_mock, monkeypatch):
+        """The proxy fills a missing session id with the per-request trace id, which is no stable session."""
+        respx_mock.post("https://opencode.ai/zen/go/v1/chat/completions").mock(
+            return_value=Response(200, json=_make_response("deepseek-v4-flash", "ok"))
+        )
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.completion(
+            model="opencode_go/deepseek-v4-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="sk-fake",
+            litellm_session_id="trace-123",
+            metadata={"session_id": "trace-123", SESSION_ID_GENERATED_METADATA_KEY: True},
+        )
+
+        sent = respx_mock.calls[0].request.headers["x-opencode-session"]
+        assert sent != "trace-123"
+        assert uuid.UUID(sent).version == 4
 
     def test_zen_chat_sends_no_session_header(self, respx_mock, monkeypatch):
         """Only the Go surface requires the header."""

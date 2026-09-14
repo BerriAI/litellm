@@ -4,6 +4,7 @@ from functools import lru_cache
 from types import MappingProxyType
 from typing import Final
 
+from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 
@@ -201,6 +202,29 @@ def resolve_opencode_api_base(surface: str, api_base: str | None = None) -> str 
 OPENCODE_SESSION_HEADER: Final = "x-opencode-session"
 
 
+def _conversation_session_id(litellm_params: Mapping[str, object]) -> str | None:
+    """The caller's own session id, or None when the request carries none.
+
+    Trace ids and session ids the proxy generated for a session-less request are
+    per request, so they are never used: they would change the session every turn.
+    A ``litellm_session_id`` equal to the trace id was derived from it, not sent.
+    """
+    metadata_maps: Final = tuple(
+        metadata
+        for metadata in (litellm_params.get("metadata"), litellm_params.get("litellm_metadata"))
+        if isinstance(metadata, Mapping)
+    )
+    if any(metadata.get(SESSION_ID_GENERATED_METADATA_KEY) for metadata in metadata_maps):
+        return None
+    session_id: Final = litellm_params.get("litellm_session_id")
+    candidates: Final = (
+        *(metadata.get("session_id") for metadata in metadata_maps),
+        litellm_params.get("session_id"),
+        session_id if session_id != litellm_params.get("litellm_trace_id") else None,
+    )
+    return next((candidate for candidate in candidates if isinstance(candidate, str) and candidate), None)
+
+
 def with_opencode_session_header(
     surface: str,
     headers: Mapping[str, str],
@@ -214,6 +238,5 @@ def with_opencode_session_header(
     """
     if surface != "go" or any(name.lower() == OPENCODE_SESSION_HEADER for name in headers):
         return {**headers}  # mutable-ok: request handlers keep mutating the headers they are given
-    known: Final = litellm_params.get("litellm_session_id") or litellm_params.get("litellm_trace_id")
-    session_id: Final = known if isinstance(known, str) else str(uuid.uuid4())
+    session_id: Final = _conversation_session_id(litellm_params) or str(uuid.uuid4())
     return {**headers, OPENCODE_SESSION_HEADER: session_id}  # mutable-ok: request handlers keep mutating the headers
