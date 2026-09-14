@@ -1,1 +1,0 @@
-from pilot import forward_credential as forward_credential
