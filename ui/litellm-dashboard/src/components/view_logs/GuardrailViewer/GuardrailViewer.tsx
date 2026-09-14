@@ -134,13 +134,13 @@ const getTotalMasked = (entry: GuardrailInformation): number => {
   );
 };
 
-type EntryOutcome = "passed" | "flagged" | "failed" | "skipped";
+type EntryOutcome = "passed" | "flagged" | "failed" | "not_run";
 
 const getEntryOutcome = (entry: GuardrailInformation): EntryOutcome => {
   const status = (entry.guardrail_status ?? "").toLowerCase();
   if (status === "success") return "passed";
   if (status === "guardrail_flagged") return "flagged";
-  if (status === "skipped") return "skipped";
+  if (status === "not_run") return "not_run";
   return "failed";
 };
 
@@ -150,18 +150,18 @@ const OUTCOME_LABEL: Record<EntryOutcome, string> = {
   passed: "PASSED",
   flagged: "FLAGGED",
   failed: "FAILED",
-  skipped: "SKIPPED",
+  not_run: "NOT RUN",
 };
 
 const OUTCOME_BADGE_CLASS: Record<EntryOutcome, string> = {
   passed: "bg-success/15 text-success border border-success/20",
   flagged: "bg-warning/15 text-warning border border-warning/20",
   failed: "bg-destructive/15 text-destructive border border-destructive/20",
-  skipped: "bg-muted text-muted-foreground border border-border",
+  not_run: "bg-muted text-muted-foreground border border-border",
 };
 
 const getHeaderOutcome = (counts: { evaluated: number; passed: number; flagged: number }): EntryOutcome => {
-  if (counts.evaluated === 0) return "skipped";
+  if (counts.evaluated === 0) return "not_run";
   if (counts.passed === counts.evaluated) return "passed";
   if (counts.passed + counts.flagged === counts.evaluated) return "flagged";
   return "failed";
@@ -242,7 +242,7 @@ const FlagCircleIcon = ({ className }: { className?: string }) => (
 const OutcomeIcon = ({ outcome }: { outcome: EntryOutcome }) => {
   if (outcome === "passed") return <CheckCircleIcon />;
   if (outcome === "flagged") return <FlagCircleIcon />;
-  if (outcome === "skipped") return <GrayDotIcon />;
+  if (outcome === "not_run") return <GrayDotIcon />;
   return <FailCircleIcon />;
 };
 
@@ -675,7 +675,7 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
             </div>
           )}
 
-          {outcome === "skipped" && typeof guardrailResponse === "string" && (
+          {outcome === "not_run" && typeof guardrailResponse === "string" && (
             <p className="text-sm text-muted-foreground">{guardrailResponse}</p>
           )}
 
@@ -717,8 +717,8 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
 
   const passedCount = guardrailEntries.filter(isEntrySuccess).length;
   const flaggedCount = guardrailEntries.filter((e) => getEntryOutcome(e) === "flagged").length;
-  const skippedCount = guardrailEntries.filter((e) => getEntryOutcome(e) === "skipped").length;
-  const evaluatedCount = guardrailEntries.length - skippedCount;
+  const notRunCount = guardrailEntries.filter((e) => getEntryOutcome(e) === "not_run").length;
+  const evaluatedCount = guardrailEntries.length - notRunCount;
   const allPassed = evaluatedCount > 0 && passedCount === evaluatedCount;
   const headerOutcome = getHeaderOutcome({ evaluated: evaluatedCount, passed: passedCount, flagged: flaggedCount });
 
@@ -778,11 +778,11 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
                   {flaggedCount} Flagged
                 </span>
               )}
-              {skippedCount > 0 && (
+              {notRunCount > 0 && (
                 <span
-                  className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${OUTCOME_BADGE_CLASS.skipped}`}
+                  className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${OUTCOME_BADGE_CLASS.not_run}`}
                 >
-                  {skippedCount} Skipped
+                  {notRunCount} Not run
                 </span>
               )}
             </div>

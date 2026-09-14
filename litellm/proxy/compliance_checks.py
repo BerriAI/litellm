@@ -26,7 +26,7 @@ class ComplianceChecker:
 
     def __init__(self, data: ComplianceCheckRequest):
         self.data = data
-        self.guardrails = [g for g in (data.guardrail_information or []) if g.get("guardrail_status") != "skipped"]
+        self.guardrails = [g for g in (data.guardrail_information or []) if g.get("guardrail_status") != "not_run"]
 
     def _get_guardrails_by_mode(self, mode: str) -> list[dict]:
         """

@@ -637,20 +637,20 @@ describe("GuardrailJumpLink", () => {
   });
 
   it.each([
-    [["success", "skipped"], "text-success", "\u2713"],
-    [["guardrail_intervened", "skipped"], "text-destructive", "\u2717"],
-  ])("ignores skipped when styling %j as %s", (statuses, expectedClass, glyph) => {
+    [["success", "not_run"], "text-success", "\u2713"],
+    [["guardrail_intervened", "not_run"], "text-destructive", "\u2717"],
+  ])("ignores not_run when styling %j as %s", (statuses, expectedClass, glyph) => {
     render(<GuardrailJumpLink guardrailEntries={statuses.map((s) => ({ guardrail_status: s }))} />);
 
-    const pill = screen.getByText(/1 guardrail evaluated, 1 skipped/);
+    const pill = screen.getByText(/1 guardrail evaluated, 1 not run/);
     expect(pill).toHaveClass(expectedClass);
     expect(pill).toHaveTextContent(glyph);
   });
 
-  it("renders an all skipped request as neutral rather than passed", () => {
-    render(<GuardrailJumpLink guardrailEntries={[{ guardrail_status: "skipped" }]} />);
+  it("renders an all not_run request as neutral rather than passed", () => {
+    render(<GuardrailJumpLink guardrailEntries={[{ guardrail_status: "not_run" }]} />);
 
-    const pill = screen.getByText(/0 guardrails evaluated, 1 skipped/);
+    const pill = screen.getByText(/0 guardrails evaluated, 1 not run/);
     expect(pill).toHaveClass("text-muted-foreground");
     expect(pill).not.toHaveTextContent("\u2713");
   });
