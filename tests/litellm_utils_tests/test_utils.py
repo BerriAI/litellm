@@ -1638,6 +1638,7 @@ def test_get_valid_models_openai_proxy(monkeypatch):
         assert "litellm_proxy/gpt-5.5" in valid_models
 
 
+
 def test_get_valid_models_fireworks_ai(monkeypatch):
     from litellm.utils import get_valid_models
     import litellm
