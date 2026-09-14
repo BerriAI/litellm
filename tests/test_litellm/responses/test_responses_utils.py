@@ -577,6 +577,47 @@ class TestResponseAPILoggingUtils:
         assert result.completion_tokens_details is not None
         assert result.completion_tokens_details.reasoning_tokens == 4
 
+    def test_transform_realtime_usage_dict_keeps_cached_tokens_details(self):
+        usage = {
+            "input_tokens": 283,
+            "output_tokens": 0,
+            "total_tokens": 283,
+            "input_token_details": {
+                "text_tokens": 116,
+                "audio_tokens": 167,
+                "cached_tokens": 192,
+                "cached_tokens_details": {"text_tokens": 64, "audio_tokens": 128},
+            },
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+
+        assert result.prompt_tokens_details is not None
+        assert result.prompt_tokens_details.cached_tokens == 192
+        assert result.prompt_tokens_details.cached_tokens_details is not None
+        assert result.prompt_tokens_details.cached_tokens_details.audio_tokens == 128
+        assert result.prompt_tokens_details.cached_tokens_details.text_tokens == 64
+
+    def test_transform_response_api_usage_object_keeps_cached_tokens_details(self):
+        usage = ResponseAPIUsage(
+            input_tokens=283,
+            output_tokens=0,
+            total_tokens=283,
+            input_tokens_details={
+                "text_tokens": 116,
+                "audio_tokens": 167,
+                "cached_tokens": 192,
+                "cached_tokens_details": {"text_tokens": 64, "audio_tokens": 128},
+            },
+        )
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+
+        assert result.prompt_tokens_details is not None
+        assert result.prompt_tokens_details.cached_tokens_details is not None
+        assert result.prompt_tokens_details.cached_tokens_details.audio_tokens == 128
+        assert result.prompt_tokens_details.cached_tokens_details.text_tokens == 64
+
 
 class TestResponsesAPIProviderSpecificParams:
     """
