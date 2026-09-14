@@ -412,8 +412,9 @@ async def test_malformed_not_run_entry_does_not_drop_the_batch():
     payload["metadata"] = json.dumps(
         {
             "guardrail_information": [
-                {"guardrail_name": ["not", "a", "string"], "guardrail_status": "not_run"},
-                {"guardrail_name": "cf", "guardrail_id": "cf-uuid", "guardrail_status": "success"},
+                {"guardrail_name": ["not", "a", "string"], "guardrail_status": "success"},
+                {"guardrail_name": "", "guardrail_id": "cf-uuid", "guardrail_status": "success"},
+                {"guardrail_status": "not_run"},
             ]
         }
     )
@@ -423,7 +424,7 @@ async def test_malformed_not_run_entry_does_not_drop_the_batch():
     index_rows = prisma.db.litellm_spendlogguardrailindex.create_many.call_args.kwargs["data"]
     assert [row["guardrail_id"] for row in index_rows] == ["cf-uuid"]
     metrics_create = prisma.db.litellm_dailyguardrailmetrics.upsert.call_args.kwargs["data"]["create"]
-    assert metrics_create["requests_evaluated"] == 1
+    assert (metrics_create["guardrail_id"], metrics_create["requests_evaluated"]) == ("cf-uuid", 1)
 
 
 @pytest.mark.asyncio
