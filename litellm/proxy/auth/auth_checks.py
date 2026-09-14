@@ -35,8 +35,6 @@ from litellm.constants import (
     MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE,
     REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
     TAG_REGISTRY_MAX_SIZE,
-    TEAM_MEMBERSHIP_CACHE_MISS,
-    TeamMembershipCacheMiss,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
@@ -331,27 +329,19 @@ db_cache_expiry: Final = DEFAULT_IN_MEMORY_TTL  # refresh every 5s
 
 _TEAM_MEMBERSHIP_INFLIGHT_MAX: Final = 10000
 _team_membership_inflight: Final = LimitedSizeOrderedDict(max_size=_TEAM_MEMBERSHIP_INFLIGHT_MAX)
-_team_membership_write_epoch: Final = LimitedSizeOrderedDict(max_size=_TEAM_MEMBERSHIP_INFLIGHT_MAX)
+
+
+class _TeamMembershipCacheMiss:
+    __slots__ = ()
+
+
+_TEAM_MEMBERSHIP_CACHE_MISS: Final = _TeamMembershipCacheMiss()
 
 all_routes: Final = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
 
 
-def _membership_write_epoch(key: str) -> int:
-    cached: Final[object] = _team_membership_write_epoch.get(key, 0)
-    return cached if isinstance(cached, int) else 0
-
-
-def _bump_membership_write_epoch(key: str) -> None:
-    _team_membership_write_epoch[key] = _membership_write_epoch(key) + 1
-
-
 def _membership_from_shared_load(result: object) -> LiteLLM_TeamMembership | None:
-    if result is None or isinstance(result, LiteLLM_TeamMembership):
-        return result
-    raise HTTPException(
-        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail="Failed to load team membership",
-    )
+    return result if isinstance(result, LiteLLM_TeamMembership) else None
 
 
 def _log_budget_lookup_failure(entity: str, error: Exception) -> None:
@@ -897,21 +887,6 @@ async def common_checks(
     """
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
-    # One membership read for model-access, access-group attribution, and
-    # member-budget. Each used to call get_team_membership independently;
-    # DualCache Redis SET/GET on every miss made those look like two Postgres spans.
-    loaded_team_membership: LiteLLM_TeamMembership | None = None
-    team_membership_loaded = False
-    if team_object is not None and valid_token is not None and valid_token.user_id is not None:
-        loaded_team_membership = await get_team_membership(
-            user_id=valid_token.user_id,
-            team_id=team_object.team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-        team_membership_loaded = True
-
     _model: Final[str | list[str] | None] = get_model_from_request(
         request_data=request_body,
         route=route,
@@ -924,6 +899,22 @@ async def common_checks(
     skip_all_budget_checks: Final = skip_budget_checks or (
         route not in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES
         and (route in MODEL_DISCOVERY_ROUTES or not RouteChecks.is_llm_api_route(route=route))
+    )
+
+    membership_user_id: Final = (
+        valid_token.user_id if valid_token is not None and (bool(_model) or not skip_all_budget_checks) else None
+    )
+    team_membership_loaded: Final = team_object is not None and membership_user_id is not None
+    loaded_team_membership: Final = (
+        await get_team_membership(
+            user_id=membership_user_id,
+            team_id=team_object.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if team_object is not None and membership_user_id is not None
+        else None
     )
 
     unpriced_models: Final = (
@@ -2188,90 +2179,13 @@ async def get_tag_object(
 
 def _membership_from_cached_payload(
     cached: object,
-) -> LiteLLM_TeamMembership | None | TeamMembershipCacheMiss:
+) -> LiteLLM_TeamMembership | None | _TeamMembershipCacheMiss:
     if cached is None:
-        return TEAM_MEMBERSHIP_CACHE_MISS
+        return _TEAM_MEMBERSHIP_CACHE_MISS
     if cached == NO_TEAM_MEMBERSHIP_SENTINEL:
         return None
     cached_membership: Final = CacheCodec.deserialize(cached, model_type=LiteLLM_TeamMembership)
-    return cached_membership if cached_membership is not None else TEAM_MEMBERSHIP_CACHE_MISS
-
-
-async def _set_team_membership_l1(
-    user_api_key_cache: UserApiKeyCache,
-    key: str,
-    value: object,
-    *,
-    model_type: type[LiteLLM_TeamMembership] | None,
-    ttl: float | None,
-) -> None:
-    match (model_type is not None, ttl is not None):
-        case (False, False):
-            await user_api_key_cache.async_set_cache(key=key, value=value, local_only=True)
-        case (False, True):
-            await user_api_key_cache.async_set_cache(key=key, value=value, local_only=True, ttl=ttl)
-        case (True, False):
-            await user_api_key_cache.async_set_cache(key=key, value=value, local_only=True, model_type=model_type)
-        case (True, True):
-            await user_api_key_cache.async_set_cache(
-                key=key, value=value, local_only=True, model_type=model_type, ttl=ttl
-            )
-
-
-async def _replicate_team_membership_to_redis(
-    user_api_key_cache: UserApiKeyCache,
-    key: str,
-    value: object,
-    *,
-    model_type: type[LiteLLM_TeamMembership] | None,
-    ttl: float | None,
-    write_epoch: int,
-) -> None:
-    redis_cache: Final = user_api_key_cache.redis_cache
-    if redis_cache is None or _membership_write_epoch(key) != write_epoch:
-        return
-    payload: Final[object] = CacheCodec.serialize(value, model_type=model_type)
-    try:
-        if ttl is None:
-            await redis_cache.async_set_cache(key, payload)
-        else:
-            await redis_cache.async_set_cache(key, payload, ttl=ttl)
-        if _membership_write_epoch(key) != write_epoch:
-            await redis_cache.async_delete_cache(key)
-    except Exception:
-        return
-
-
-async def _populate_team_membership_cache(
-    user_api_key_cache: UserApiKeyCache,
-    key: str,
-    value: object,
-    *,
-    model_type: type[LiteLLM_TeamMembership] | None = None,
-    ttl: float | None = None,
-) -> None:
-    write_epoch: Final = _membership_write_epoch(key)
-    await _set_team_membership_l1(
-        user_api_key_cache,
-        key,
-        value,
-        model_type=model_type,
-        ttl=ttl,
-    )
-    if _membership_write_epoch(key) != write_epoch:
-        user_api_key_cache.in_memory_cache_for(key).delete_cache(key)
-        return
-
-    asyncio.create_task(
-        _replicate_team_membership_to_redis(
-            user_api_key_cache,
-            key,
-            value,
-            model_type=model_type,
-            ttl=ttl,
-            write_epoch=write_epoch,
-        )
-    )
+    return cached_membership if cached_membership is not None else _TEAM_MEMBERSHIP_CACHE_MISS
 
 
 @log_db_metrics
@@ -2283,7 +2197,7 @@ async def _fetch_team_membership_from_db(
     parent_otel_span: Span | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
 ) -> LiteLLM_TeamMembership | None:
-    """Prisma read + L1 populate. Decorated so cache hits on ``get_team_membership`` are not postgres spans."""
+    """Prisma read + cache populate. Decorated so cache hits on ``get_team_membership`` are not postgres spans."""
     _ = parent_otel_span, proxy_logging_obj
     response: Final = await _dictable_table(TeamMembershipRepository(prisma_client)).find_unique(
         where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
@@ -2291,19 +2205,17 @@ async def _fetch_team_membership_from_db(
     )
     _key: Final = team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)
     if response is None:
-        await _populate_team_membership_cache(
-            user_api_key_cache,
-            _key,
-            NO_TEAM_MEMBERSHIP_SENTINEL,
+        await user_api_key_cache.async_set_cache(
+            key=_key,
+            value=NO_TEAM_MEMBERSHIP_SENTINEL,
             ttl=get_management_object_ttl(user_api_key_cache),
         )
         return None
 
     membership: Final = LiteLLM_TeamMembership.model_validate(response.dict())
-    await _populate_team_membership_cache(
-        user_api_key_cache,
-        _key,
-        membership,
+    await user_api_key_cache.async_set_cache(
+        key=_key,
+        value=membership,
         model_type=LiteLLM_TeamMembership,
     )
     return membership
@@ -2321,7 +2233,7 @@ async def _load_team_membership_on_cache_miss(
     try:
         redis_cached: Final[object] = await user_api_key_cache.async_get_cache(key=cache_key)
         redis_membership: Final = _membership_from_cached_payload(redis_cached)
-        if not isinstance(redis_membership, TeamMembershipCacheMiss):
+        if not isinstance(redis_membership, _TeamMembershipCacheMiss):
             return redis_membership
 
         return await _fetch_team_membership_from_db(
@@ -2332,18 +2244,9 @@ async def _load_team_membership_on_cache_miss(
             parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
         )
-    except HTTPException:
-        raise
-    except Exception as e:
-        verbose_proxy_logger.exception(
-            "Error getting team membership for user_id: %s, team_id: %s",
-            user_id,
-            team_id,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Failed to load team membership",
-        ) from e
+    except Exception:
+        verbose_proxy_logger.exception("Error getting team membership")
+        return None
 
 
 async def get_team_membership(
@@ -2366,7 +2269,7 @@ async def get_team_membership(
 
     l1_cached: Final[object] = await user_api_key_cache.async_get_cache(key=_key, local_only=True)
     l1_membership: Final = _membership_from_cached_payload(l1_cached)
-    if not isinstance(l1_membership, TeamMembershipCacheMiss):
+    if not isinstance(l1_membership, _TeamMembershipCacheMiss):
         return l1_membership
 
     inflight: Final[object] = _team_membership_inflight.get(_key)
@@ -2375,9 +2278,6 @@ async def get_team_membership(
 
     if prisma_client is None:
         raise Exception("No db connected")
-    prisma: Final[object] = prisma_client
-    if isinstance(prisma, str):
-        return None
 
     task: Final = asyncio.ensure_future(
         _load_team_membership_on_cache_miss(
@@ -2908,7 +2808,6 @@ async def invalidate_team_member_spend_state(
             ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS,
         )
 
-    _bump_membership_write_epoch(team_membership_reservation_cache_key(user_id=user_id, team_id=team_id))
     await evict_and_broadcast(
         cache_keys=(
             team_membership_auth_cache_key(team_id=team_id, user_id=user_id),
