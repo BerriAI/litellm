@@ -29,7 +29,7 @@ class MemoryPolicyInput(BaseModel):
     target_type: MemoryTarget
     target_id: str = Field(min_length=1, max_length=256)
     activation: MemoryActivation
-    scope: MemoryScope = "key"
+    scope: MemoryScope = "user"
 
     @model_validator(mode="after")
     def validate_target(self) -> Self:
@@ -62,6 +62,8 @@ class MemoryStatus(BaseModel):
     scope: MemoryScope | None
     opted_in: bool
     policy_id: str | None
+    user_id: str | None = None
+    user_name: str | None = None
 
 
 class MemoryCapture(BaseModel):
@@ -90,6 +92,7 @@ class MemoryEntry(BaseModel):
     updated_at: datetime
     created_at: datetime | None = None
     actor: str | None = None
+    actor_name: str | None = None
     when_to_use: str = ""
     scope: str = ""
     kind: MemoryKind = "context"

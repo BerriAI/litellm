@@ -1,3 +1,4 @@
+from types import MappingProxyType
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -225,7 +226,15 @@ async def get_status(
     key_id: str | None = Query(None, pattern=r"^[a-f0-9]{64}$"),
     auth: UserAPIKeyAuth = _AUTH,
 ) -> MemoryStatus:
-    return (await access_for_key(auth, key_id)).status
+    access: Final = await access_for_key(auth, key_id)
+    user: Final = (
+        await UserRepository(memory_primary_client(require_memory_prisma())).find_by_id(access.identity.user_id)
+        if access.identity.user_id
+        else None
+    )
+    return access.status.model_copy(
+        update=MappingProxyType({"user_name": user.user_alias or user.user_email or user.user_id if user else None})
+    )
 
 
 async def access_for_key(auth: UserAPIKeyAuth, key_id: str | None) -> MemoryAccess:
@@ -267,11 +276,24 @@ async def list_entries(
         raise HTTPException(status_code=422, detail="Provide both memory cursor fields")
     prisma: Final = memory_primary_client(require_memory_prisma())
     access: Final = await access_for_key(auth, key_id)
-    return await MemoryStore(prisma, access).search(
+    entries: Final = await MemoryStore(prisma, access).search(
         MemorySearch(query=query, limit=limit, offset=offset),
         require_active=False,
         recent_first=True,
         before=(before_updated_at, before_memory_id) if before_updated_at and before_memory_id else None,
+    )
+    actors: Final = tuple(frozenset(entry.actor for entry in entries if entry.actor))
+    if not actors:
+        return entries
+    users: Final = await UserRepository(prisma).table.find_many(
+        where={"user_id": {"in": list(actors)}},  # mutable-ok: Prisma serializes the bounded page's contributor IDs.
+        take=len(actors),
+    )
+    names: Final = MappingProxyType(
+        {user.user_id: user.user_alias or user.user_email or user.user_id for user in users}
+    )
+    return tuple(
+        entry.model_copy(update=MappingProxyType({"actor_name": names.get(entry.actor or "")})) for entry in entries
     )
 
 
@@ -283,7 +305,9 @@ async def capture_entry(
 ) -> MemoryEntry:
     prisma: Final = memory_primary_client(require_memory_prisma())
     access: Final = await access_for_key(auth, key_id)
-    return await MemoryStore(prisma, access).capture(capture)
+    return await MemoryStore(prisma, access, actor=auth.user_id or MemoryIdentity.from_auth(auth).key_id).capture(
+        capture
+    )
 
 
 @router.delete("/entries/{memory_id}", status_code=204)

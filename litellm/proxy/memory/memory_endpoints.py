@@ -82,10 +82,10 @@ class _LegacyMemoryVisibility(TypedDict):
 def _visibility_filter(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object] | None:
     """
     Prisma `where` fragment restricting rows to those the caller can see.
-    Returns None for admins (no restriction).
+    Administrators can access every V1 row, independently of user/team ownership.
     """
     if user_api_key_has_admin_view(user_api_key_dict):
-        return None
+        return {"namespace": None}  # mutable-ok: Prisma requires a native JSON filter for V1 visibility.
     ors: Final = [
         {field: value}
         for field, value in (("user_id", user_api_key_dict.user_id), ("team_id", user_api_key_dict.team_id))

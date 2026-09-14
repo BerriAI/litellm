@@ -16,6 +16,7 @@ let activation = "opt_in";
 let available = true;
 let paginated = false;
 let failPreference = false;
+let sameUser = false;
 const entry = {
   memory_id: "entry-1",
   key: "demo",
@@ -30,6 +31,7 @@ const entry = {
   created_at: "2026-09-12T00:00:00Z",
   updated_at: "2026-09-12T00:00:00Z",
   actor: "u1",
+  actor_name: "Alex Rivera",
 };
 const session = (user_role: string) => {
   const payload = { key: "sk-test", user_id: "u1", user_role, exp: Math.floor(Date.now() / 1000) + 3600 };
@@ -45,6 +47,7 @@ beforeEach(async () => {
   available = true;
   paginated = false;
   failPreference = false;
+  sameUser = false;
   vi.clearAllMocks();
   fetchMock.mockImplementation(async (input, init) => {
     const request =
@@ -77,11 +80,13 @@ beforeEach(async () => {
           active: available && (activation === "automatic" || enabled),
           opted_in: enabled,
           activation,
-          scope: available ? "key" : null,
+          scope: available ? "user" : null,
+          user_id: keyId === "b".repeat(64) && !sameUser ? "u2" : "u1",
+          user_name: keyId === "b".repeat(64) && !sameUser ? "Jamie Davis" : "Alex Rivera",
         };
       if (path === "/v2/memory/entries") {
         if (request.method === "POST") return entry;
-        if (keyId === "b".repeat(64))
+        if (keyId === "b".repeat(64) && !sameUser)
           return [{ ...entry, memory_id: "other", title: "Other key memory", content: "Another project" }];
         if (paginated) {
           const offset = new URL(request.url).searchParams.get("before_memory_id") === "entry-19" ? 20 : 0;
@@ -190,6 +195,20 @@ describe("Memory dashboard", () => {
     expect(screen.queryByRole("button", { name: "Save memory policy" })).not.toBeInTheDocument();
   });
 
+  it("keeps the V1 management view available without loading it into automatic memory", async () => {
+    session("proxy_admin");
+    const user = userEvent.setup();
+    renderWithProviders(<Memory />);
+    expect(await screen.findByRole("switch", { name: "Memory" })).not.toBeChecked();
+    expect(calls.filter(({ path }) => path === "/v1/memory")).toEqual([]);
+    await user.click(screen.getByRole("tab", { name: "Memory API (V1)" }));
+    expect(await screen.findByRole("button", { name: "New memory" })).toBeVisible();
+    await waitFor(() => expect(calls.some(({ path }) => path === "/v1/memory")).toBe(true));
+    expect(screen.queryByRole("switch", { name: "Memory" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Automatic memory" }));
+    expect(await screen.findByRole("switch", { name: "Memory" })).not.toBeChecked();
+  });
+
   it("allows viewers to inspect memory while disabling preference writes", async () => {
     session("internal_user_viewer");
     renderWithProviders(<Memory />);
@@ -197,20 +216,49 @@ describe("Memory dashboard", () => {
     expect(await screen.findByText("Use port 8123")).toBeVisible();
   });
 
-  it("appends older memories and resets the feed when switching keys", async () => {
+  it("appends older memories and resets the table when switching contexts", async () => {
     session("proxy_admin");
     paginated = true;
     const user = userEvent.setup();
     renderWithProviders(<Memory />);
-    const feed = await screen.findByRole("list", { name: "Saved memories" });
-    await waitFor(() => expect(within(feed).getAllByRole("listitem")).toHaveLength(20));
+    const table = await screen.findByRole("table");
+    await waitFor(() =>
+      expect(within(table).getAllByRole("button", { name: /^Details for Memory \d+$/ })).toHaveLength(20),
+    );
     await user.click(screen.getByRole("button", { name: "Load more memories" }));
-    await waitFor(() => expect(within(feed).getAllByRole("listitem")).toHaveLength(21));
-    expect(screen.getByRole("heading", { name: "Memory 0" })).toBeVisible();
-    await user.click(screen.getByLabelText("Virtual key"));
+    await waitFor(() =>
+      expect(within(table).getAllByRole("button", { name: /^Details for Memory \d+$/ })).toHaveLength(21),
+    );
+    expect(screen.getByRole("button", { name: "Details for Memory 0" })).toBeVisible();
+    await user.click(screen.getByLabelText("Key context"));
     await user.click(await screen.findByRole("option", { name: "Other key" }));
     expect(await screen.findByText("Another project")).toBeVisible();
-    expect(screen.queryByRole("heading", { name: "Memory 0" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Details for Memory 0" })).not.toBeInTheDocument();
+  });
+
+  it("shows contributors in the readable table and keeps user activation across that user's keys", async () => {
+    session("internal_user");
+    sameUser = true;
+    const user = userEvent.setup();
+    renderWithProviders(<Memory />);
+    const table = await screen.findByRole("table");
+    expect(within(table).getByRole("columnheader", { name: "Contributed by" })).toBeVisible();
+    const row = await within(table).findByRole("row", { name: /Demo port/ });
+    expect(within(row).getByText("Use port 8123")).toBeVisible();
+    expect(within(row).getByText("Alex Rivera")).toBeVisible();
+    expect(screen.queryByText("Fixture recommendation")).not.toBeInTheDocument();
+    expect(screen.getByText("Applies to this user's keys")).toBeVisible();
+    await user.click(screen.getByRole("switch", { name: "Memory" }));
+    await waitFor(() => expect(screen.getByRole("switch", { name: "Memory" })).toBeChecked());
+    await user.click(screen.getByLabelText("Key context"));
+    await user.click(await screen.findByRole("option", { name: "Other key" }));
+    await waitFor(() => expect(screen.getByRole("switch", { name: "Memory" })).toBeChecked());
+    expect(await screen.findByRole("button", { name: "Details for Demo port" })).toBeVisible();
+    await user.click(screen.getByRole("switch", { name: "Memory" }));
+    await waitFor(() => expect(screen.getByRole("switch", { name: "Memory" })).not.toBeChecked());
+    await user.click(screen.getByLabelText("Key context"));
+    await user.click(await screen.findByRole("option", { name: "QA key" }));
+    await waitFor(() => expect(screen.getByRole("switch", { name: "Memory" })).not.toBeChecked());
   });
 
   it("shows administrator-managed memory as on even when the preference is off", async () => {
@@ -231,7 +279,7 @@ describe("Memory dashboard", () => {
     const toggle = await screen.findByRole("switch", { name: "Memory" });
     expect(toggle).not.toBeChecked();
     expect(toggle).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByText("Memory is off. Your administrator can make it available for this key.")).toBeVisible();
+    expect(screen.getByText("Memory is off. Your administrator can make it available.")).toBeVisible();
   });
 
   it("keeps the actual state off when saving a preference fails", async () => {

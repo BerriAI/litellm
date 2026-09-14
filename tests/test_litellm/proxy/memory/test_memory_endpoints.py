@@ -1088,13 +1088,29 @@ class TestMemoryEndpoints:
         assert resp.status_code == 404, resp.text
         assert resp.json()["detail"] == "Memory with key 'notes' not found"
 
-    def test_visibility_filter_unscoped_for_admin_viewer(self):
+    def test_visibility_filter_excludes_v2_for_admin_viewer(self):
         """
-        proxy_admin_viewer reads with the same unscoped filter as proxy_admin;
-        every other role stays row-restricted.
+        Administrative reads include every V1 owner but exclude V2 namespaces.
         """
-        assert _visibility_filter(_admin_viewer_auth()) is None
+        assert _visibility_filter(_admin_viewer_auth()) == {"namespace": None}
         assert _visibility_filter(_user_auth("user-a", "team-a")) is not None
+
+    def test_v1_admin_crud_does_not_read_or_change_v2_memories(self):
+        table = self.prisma.db.litellm_memorytable
+        automatic = _make_row(memory_id="automatic", key="memory-v2:private:note", value="Private context")
+        automatic.namespace = "private"
+        table.rows.extend([_make_row(key="original-v1", value="Existing integration"), automatic])
+        client = _make_client(_admin_auth())
+        with _patch_prisma(self.prisma):
+            listed = client.get("/v1/memory")
+            assert listed.status_code == 200
+            assert [row["key"] for row in listed.json()["memories"]] == ["original-v1"]
+            assert client.get("/v1/memory/memory-v2:private:note").status_code == 404
+            assert client.delete("/v1/memory/memory-v2:private:note").status_code == 404
+            assert client.put("/v1/memory/memory-v2:private:note", json={"value": "Overwrite"}).status_code == 409
+            updated = client.put("/v1/memory/original-v1", json={"value": "Still works", "metadata": None})
+            assert updated.status_code == 200 and updated.json()["value"] == "Still works"
+        assert automatic.value == "Private context"
 
     def test_list_memory_admin_viewer_sees_all(self):
         """Read parity end-to-end: the viewer's own user_id/team_id must not filter the list."""

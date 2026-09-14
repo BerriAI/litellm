@@ -31987,6 +31987,8 @@ export interface components {
         MemoryEntry: {
             /** Actor */
             actor?: string | null;
+            /** Actor Name */
+            actor_name?: string | null;
             /**
              * Certainty
              * @default observed
@@ -32050,7 +32052,7 @@ export interface components {
             policy_id: string;
             /**
              * Scope
-             * @default key
+             * @default user
              * @enum {string}
              */
             scope: "key" | "user" | "team" | "project" | "organization";
@@ -32078,7 +32080,7 @@ export interface components {
             activation: "disabled" | "opt_in" | "automatic";
             /**
              * Scope
-             * @default key
+             * @default user
              * @enum {string}
              */
             scope: "key" | "user" | "team" | "project" | "organization";
@@ -32110,6 +32112,10 @@ export interface components {
             policy_id: string | null;
             /** Scope */
             scope: ("key" | "user" | "team" | "project" | "organization") | null;
+            /** User Id */
+            user_id?: string | null;
+            /** User Name */
+            user_name?: string | null;
         };
         /** MemoryUpdateRequest */
         MemoryUpdateRequest: {

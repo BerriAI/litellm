@@ -55,17 +55,22 @@ export function MemoryPreference({
   });
   const canToggle = status.activation === "opt_in" && !!status.scope;
   return (
-    <div className="flex items-center gap-3 rounded-lg border bg-card px-4 py-3">
-      <Label htmlFor="memory-enabled" className="font-medium">
-        Memory <span aria-hidden="true">{status.active ? "on" : "off"}</span>
-      </Label>
-      <Switch
-        id="memory-enabled"
-        aria-label="Memory"
-        checked={status.active}
-        disabled={readOnly || !canToggle || save.isPending}
-        onCheckedChange={(enabled) => save.mutate(enabled)}
-      />
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-end gap-3">
+        <Label htmlFor="memory-enabled" className="font-medium">
+          Memory <span aria-hidden="true">{status.active ? "on" : "off"}</span>
+        </Label>
+        <Switch
+          id="memory-enabled"
+          aria-label="Memory"
+          checked={status.active}
+          disabled={readOnly || !canToggle || save.isPending}
+          onCheckedChange={(enabled) => save.mutate(enabled)}
+        />
+      </div>
+      <p className="text-right text-xs text-muted-foreground">
+        {status.user_id ? "Applies to this user's keys" : "Applies to this unlinked key"}
+      </p>
       {save.isPending && (
         <span role="status" className="sr-only">
           Updating memory
@@ -85,7 +90,7 @@ export function MemoryPolicies({
     target_type: proxyAdmin ? "gateway" : "team",
     target_id: proxyAdmin ? "*" : "",
     activation: "opt_in",
-    scope: "key",
+    scope: proxyAdmin ? "user" : "key",
   };
   const [policy, setPolicy] = useState<PolicyInput>(initialPolicy);
   const [offset, setOffset] = useState(0);
@@ -94,7 +99,7 @@ export function MemoryPolicies({
       ...policy,
       target_type: target,
       target_id: target === "gateway" ? "*" : "",
-      scope: "key",
+      scope: proxyAdmin ? "user" : "key",
     };
     setPolicy(selection);
     setOffset(0);

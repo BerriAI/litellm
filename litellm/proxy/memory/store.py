@@ -50,9 +50,10 @@ def memory_entry(row: "LiteLLM_MemoryTable") -> MemoryEntry:
 
 
 class MemoryStore:
-    def __init__(self, prisma_client: object, access: MemoryAccess) -> None:
+    def __init__(self, prisma_client: object, access: MemoryAccess, *, actor: str | None = None) -> None:
         self.prisma_client = memory_primary_client(prisma_client)
         self.access = access
+        self.actor = actor or access.identity.user_id or access.identity.key_id
         self.table = MemoryRepository(self.prisma_client).table
 
     async def authorize_namespace(self, *, write: bool = False, require_active: bool = True) -> str:
@@ -159,7 +160,7 @@ class MemoryStore:
         data: Final = {  # mutable-ok: Prisma query and write JSON.
             "value": content,
             "metadata": json.dumps(metadata),
-            "updated_by": self.access.identity.user_id or self.access.identity.key_id,
+            "updated_by": self.actor,
         }
         existing: Final = await table.find_unique(
             where={  # mutable-ok: Prisma query and write JSON.
@@ -215,7 +216,7 @@ class MemoryStore:
                 "namespace": namespace,
                 "user_id": self.access.identity.user_id,
                 "team_id": self.access.identity.team_id,
-                "created_by": self.access.identity.user_id or self.access.identity.key_id,
+                "created_by": self.actor,
             }
         )
         return memory_entry(created)

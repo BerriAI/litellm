@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from litellm.proxy._types import UI_TEAM_ID, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.memory import management
-from litellm.proxy.memory.policy import MemoryIdentity, memory_digest
+from litellm.proxy.memory.policy import MemoryIdentity, memory_digest, resolve_memory_access
 from litellm.types.memory_v2 import MemoryCapture, MemoryPolicy, MemoryPolicyInput, MemoryPreference
 
 
@@ -94,6 +94,82 @@ def policy(**changes: object) -> MemoryPolicy:
             **changes,
         }
     )
+
+
+@pytest.mark.asyncio
+async def test_user_preference_and_memories_follow_owner_across_keys(database: MagicMock) -> None:
+    database.db.litellm_memorypolicy.find_many.return_value = [policy(scope="user", activation="opt_in")]
+    first = MemoryIdentity.from_auth(auth())
+    second = MemoryIdentity.from_auth(auth().model_copy(update={"token": "b" * 64}))
+    other = MemoryIdentity.from_auth(auth("other").model_copy(update={"token": "c" * 64}))
+    other_org = MemoryIdentity.from_auth(auth().model_copy(update={"org_id": "other-org"}))
+    assert not (await resolve_memory_access(database, first)).active
+    await management.set_preference(MemoryPreference(enabled=True), auth())
+    written = database.db.litellm_memorypreference.upsert.call_args.kwargs["data"]["create"]
+
+    async def preference(*, where: dict[str, str]) -> SimpleNamespace | None:
+        return SimpleNamespace(enabled=written["enabled"]) if where["subject"] == written["subject"] else None
+
+    database.db.litellm_memorypreference.find_unique.side_effect = preference
+    one = await resolve_memory_access(database, first)
+    two = await resolve_memory_access(database, second)
+    assert one.active and two.active and one.namespace == two.namespace
+    assert not (await resolve_memory_access(database, other)).active
+    assert one.namespace != (await resolve_memory_access(database, other_org)).namespace
+    database.db.litellm_memorypolicy.find_many.return_value = [policy(scope="user", activation="disabled")]
+    assert not (await resolve_memory_access(database, second)).active
+
+
+@pytest.mark.asyncio
+async def test_dashboard_resolves_saved_contributor_names_and_identifies_preference_owner(database: MagicMock) -> None:
+    database.db.litellm_memorypolicy.find_many.return_value = [policy(scope="team")]
+    database.db.litellm_usertable.find_unique.return_value = {"user_id": "owner", "user_alias": "Alex Rivera"}
+    status = await management.get_status(None, auth())
+    assert status.user_id == "owner" and status.user_name == "Alex Rivera"
+    now = datetime(2026, 9, 14, tzinfo=timezone.utc)
+    database.db.litellm_memorytable.find_many.return_value = [
+        SimpleNamespace(
+            memory_id="entry",
+            key="memory-v2:namespace:demo",
+            value="Use port 8123",
+            metadata={},
+            updated_at=now,
+            created_at=now,
+            created_by="contributor",
+        )
+    ]
+    database.db.litellm_usertable.find_many.return_value = [
+        SimpleNamespace(user_id="contributor", user_alias="Jamie Davis", user_email=None)
+    ]
+    entries = await management.list_entries("", 20, 0, None, auth())
+    assert entries[0].actor == "contributor" and entries[0].actor_name == "Jamie Davis"
+    assert database.db.litellm_usertable.find_many.call_args.kwargs["where"] == {"user_id": {"in": ["contributor"]}}
+    database.db.litellm_usertable.find_many.return_value = []
+    legacy = await management.list_entries("", 20, 0, None, auth())
+    assert legacy[0].actor == "contributor" and legacy[0].actor_name is None
+
+
+@pytest.mark.asyncio
+async def test_admin_manual_capture_uses_actual_author_instead_of_selected_key_owner(database: MagicMock) -> None:
+    database.db.litellm_memorypolicy.find_many.return_value = [policy(scope="user")]
+    now = datetime(2026, 9, 14, tzinfo=timezone.utc)
+    database.db.litellm_memorytable.create.return_value = SimpleNamespace(
+        memory_id="entry",
+        key="memory-v2:namespace:demo",
+        value="Use port 8123",
+        metadata={},
+        updated_at=now,
+        created_at=now,
+        created_by="admin",
+    )
+    saved = await management.capture_entry(
+        MemoryCapture(key="demo", title="Demo", content="Use port 8123", evidence="Admin correction"),
+        "a" * 64,
+        auth("admin", LitellmUserRoles.PROXY_ADMIN),
+    )
+    data = database.db.litellm_memorytable.create.call_args.kwargs["data"]
+    assert data["created_by"] == data["updated_by"] == saved.actor == "admin"
+    assert data["user_id"] == "owner"
 
 
 @pytest.mark.asyncio

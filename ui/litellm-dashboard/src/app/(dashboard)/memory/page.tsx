@@ -13,9 +13,11 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { MemoryPolicies } from "./_components/MemorySettings";
 import { AutomaticMemoryEntries } from "./_components/AutomaticMemoryEntries";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export default function Memory() {
   const [advanced, setAdvanced] = useState(false);
+  const [view, setView] = useState("v2");
   const { accessToken, userRole, userId, isViewOnly } = useAuthorized();
   const canViewMemory = useCan("viewMemory");
   const teams = useTeams();
@@ -29,24 +31,38 @@ export default function Memory() {
   }
 
   return (
-    <div className="space-y-8 px-8 py-8">
-      {userId && <AutomaticMemoryEntries key={userId} userId={userId} proxyAdmin={proxyAdmin} readOnly={isViewOnly} />}
-      {canManage && userId && (
-        <Collapsible open={advanced} onOpenChange={setAdvanced} className="border-t pt-4">
-          <CollapsibleTrigger render={<Button variant="ghost" className="gap-2 text-muted-foreground" />}>
-            <ChevronDown className={`size-4 transition-transform ${advanced ? "rotate-180" : ""}`} />
-            Advanced settings
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            {advanced && (
-              <div className="space-y-6 pt-4">
-                <MemoryPolicies userId={userId} proxyAdmin={proxyAdmin} readOnly={isViewOnly} />
-                {proxyAdmin && <MemoryView accessToken={accessToken} userID={userId} userRole={userRole} />}
-              </div>
-            )}
-          </CollapsibleContent>
-        </Collapsible>
+    <Tabs value={view} onValueChange={(value) => setView(value === "v1" ? "v1" : "v2")} className="gap-6 px-8 py-8">
+      {proxyAdmin && (
+        <TabsList variant="line" aria-label="Memory version">
+          <TabsTrigger value="v2">Automatic memory</TabsTrigger>
+          <TabsTrigger value="v1">Memory API (V1)</TabsTrigger>
+        </TabsList>
       )}
-    </div>
+      <TabsContent value="v2" className="space-y-8">
+        {userId && (
+          <AutomaticMemoryEntries key={userId} userId={userId} proxyAdmin={proxyAdmin} readOnly={isViewOnly} />
+        )}
+        {canManage && userId && (
+          <Collapsible open={advanced} onOpenChange={setAdvanced} className="border-t pt-4">
+            <CollapsibleTrigger render={<Button variant="ghost" className="gap-2 text-muted-foreground" />}>
+              <ChevronDown className={`size-4 transition-transform ${advanced ? "rotate-180" : ""}`} />
+              Advanced settings
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              {advanced && (
+                <div className="space-y-6 pt-4">
+                  <MemoryPolicies userId={userId} proxyAdmin={proxyAdmin} readOnly={isViewOnly} />
+                </div>
+              )}
+            </CollapsibleContent>
+          </Collapsible>
+        )}
+      </TabsContent>
+      {proxyAdmin && (
+        <TabsContent value="v1">
+          {view === "v1" && <MemoryView accessToken={accessToken} userID={userId} userRole={userRole} />}
+        </TabsContent>
+      )}
+    </Tabs>
   );
 }

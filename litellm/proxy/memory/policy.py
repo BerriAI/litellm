@@ -172,6 +172,7 @@ class MemoryAccess:
             scope=self.policy.scope if self.policy and self.namespace else None,
             opted_in=self.opted_in,
             policy_id=self.policy.policy_id if self.policy else None,
+            user_id=self.identity.user_id,
         )
 
 

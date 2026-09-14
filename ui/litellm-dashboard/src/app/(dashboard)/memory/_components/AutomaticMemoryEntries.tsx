@@ -1,15 +1,13 @@
 "use client";
 
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Brain, ChevronDown, Search } from "lucide-react";
+import { Brain } from "lucide-react";
 import { type FormEvent, useState } from "react";
 
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import { Button } from "@/components/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
@@ -19,6 +17,7 @@ import { toast } from "@/lib/toast";
 
 import { MemoryPreference } from "./MemorySettings";
 import { MemoryKeyPicker } from "./MemoryTargetPicker";
+import { MemoryEntriesTable } from "./MemoryEntriesTable";
 
 type Entry = components["schemas"]["MemoryEntry"];
 type Capture = components["schemas"]["MemoryCapture"];
@@ -28,10 +27,10 @@ type Status = components["schemas"]["MemoryStatus"];
 function memoryDescription(status?: Status) {
   if (!status) return "What your assistants remember across conversations.";
   if (status.activation === "disabled" || !status.scope)
-    return "Memory is off. Your administrator can make it available for this key.";
+    return "Memory is off. Your administrator can make it available.";
   if (status.activation === "automatic") {
-    if (status.active) return "Memory is on for this key. Your administrator manages this setting.";
-    return "Memory is off. Your administrator can make it available for this key.";
+    if (status.active) return "Memory is on. Your administrator manages this setting.";
+    return "Memory is off. Your administrator can make it available.";
   }
   if (status.active) return "Your assistants can save and recall memories. You can turn this off at any time.";
   return "Your assistants won't save or recall memories. Turn it on whenever you're ready.";
@@ -48,21 +47,6 @@ function loadMoreLabel(fetching: boolean, failed: boolean) {
   return failed ? "Try again" : "Load more memories";
 }
 
-function memoryDetails(entry: Entry) {
-  const details = {
-    Evidence: entry.evidence,
-    "When to use": entry.when_to_use,
-    Source: entry.source,
-    Kind: entry.kind,
-    Certainty: entry.certainty,
-    Context: entry.scope,
-    "Saved by": entry.actor,
-    Created: entry.created_at ? new Date(entry.created_at).toLocaleString() : undefined,
-    Updated: new Date(entry.updated_at).toLocaleString(),
-    "Memory ID": entry.memory_id,
-  };
-  return Object.entries(details).filter(([, value]) => !!value);
-}
 type DashboardProps = Readonly<{ userId: string; readOnly: boolean; proxyAdmin: boolean }>;
 
 export function AutomaticMemoryEntries({ userId, readOnly, proxyAdmin }: DashboardProps) {
@@ -80,7 +64,7 @@ export function AutomaticMemoryEntries({ userId, readOnly, proxyAdmin }: Dashboa
     <MemoryDashboard key={`${userId}:${keyId}`} userId={userId} keyId={keyId} readOnly={readOnly}>
       <div className="w-full space-y-1.5 sm:w-80">
         <Label htmlFor="memory-entry-key" className="text-xs text-muted-foreground">
-          Virtual key
+          Key context
         </Label>
         <MemoryKeyPicker
           inputId="memory-entry-key"
@@ -117,15 +101,18 @@ function MemoryDashboard({
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<Entry | null>(null);
   const [deleting, setDeleting] = useState<Entry | null>(null);
-  const status = useQuery({
+  const statusOptions = {
     queryKey: ["memoryStatus", userId, keyId],
     enabled: !!keyId,
-    queryFn: async ({ signal }) =>
+    refetchOnMount: true,
+    queryFn: async ({ signal }: { signal: AbortSignal }) =>
       (await fetchClient.GET("/v2/memory/status", { params: { query: { key_id: keyId } }, signal })).data,
-  });
+  };
+  const status = useQuery(statusOptions);
   const entriesOptions = {
     queryKey: ["memoryEntries", userId, keyId, query],
     enabled: !!keyId && !!status.data?.scope,
+    refetchOnMount: true,
     initialPageParam: null as Cursor,
     queryFn: async ({ signal, pageParam }: { signal: AbortSignal; pageParam: Cursor }) =>
       (
@@ -148,7 +135,7 @@ function MemoryDashboard({
     onSuccess: () => {
       setEditing(null);
       toast.success("Memory updated");
-      return cache.invalidateQueries({ queryKey: ["memoryEntries", userId, keyId] });
+      return cache.invalidateQueries({ queryKey: ["memoryEntries", userId] });
     },
     onError: (error: Error) => toast.error(error.message),
   });
@@ -160,7 +147,7 @@ function MemoryDashboard({
     onSuccess: () => {
       setDeleting(null);
       toast.success("Memory deleted");
-      return cache.invalidateQueries({ queryKey: ["memoryEntries", userId, keyId] });
+      return cache.invalidateQueries({ queryKey: ["memoryEntries", userId] });
     },
     onError: (error: Error) => toast.error(error.message),
   });
@@ -202,17 +189,12 @@ function MemoryDashboard({
       </div>
       <div className="flex flex-wrap items-end justify-between gap-4">
         {children}
-        {status.data?.scope && (
-          <div className="relative w-full sm:w-80">
-            <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
-            <Input
-              aria-label="Search memories"
-              placeholder="Search memories"
-              className="pl-9"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </div>
+        {status.data?.user_id && (
+          <p className="text-sm text-muted-foreground">
+            Memory for{" "}
+            <span className="font-medium text-foreground">{status.data.user_name ?? status.data.user_id}</span>
+            {status.data.scope === "user" && ". Shared across this user's keys in this organization."}
+          </p>
         )}
       </div>
       {status.error && (
@@ -221,105 +203,54 @@ function MemoryDashboard({
         </p>
       )}
       {status.data?.scope && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between gap-4">
-            <h2 className="text-base font-semibold">Saved memories</h2>
-            <span className="text-xs text-muted-foreground">
-              {status.data.scope !== "key" &&
-                status.data.scope !== "user" &&
-                `Shared with your ${status.data.scope} · `}
-              Newest first
-            </span>
-          </div>
-          {!status.data.active && memories.length > 0 && (
-            <p className="text-sm text-muted-foreground">Saved memories stay here while memory is off.</p>
-          )}
-          {entries.isPending && (
-            <div role="status" aria-label="Loading memories" className="space-y-3">
-              {[0, 1, 2].map((row) => (
-                <Skeleton key={row} className="h-28 w-full rounded-lg" />
-              ))}
-            </div>
-          )}
-          {entries.isSuccess && memories.length === 0 && (
-            <div className="flex flex-col items-center gap-3 rounded-lg border bg-card px-6 py-12 text-center">
-              <Brain className="size-7 text-muted-foreground" />
-              <h3 className="font-medium">{query ? "No matching memories" : "No memories yet"}</h3>
-              <p className="text-sm text-muted-foreground">{emptyDescription(query, status.data.active)}</p>
-            </div>
-          )}
-          <ul className="space-y-3" aria-label="Saved memories">
-            {memories.map((entry) => (
-              <li key={entry.memory_id} className="space-y-3 rounded-lg border bg-card p-5">
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <h3 className="font-medium">{entry.title}</h3>
-                  <time
-                    dateTime={entry.updated_at}
-                    title={new Date(entry.updated_at).toLocaleString()}
-                    className="text-xs text-muted-foreground"
-                  >
-                    {new Date(entry.updated_at).toLocaleDateString(undefined, {
-                      month: "short",
-                      day: "numeric",
-                      year: "numeric",
-                    })}
-                  </time>
+        <div className="space-y-3">
+          <h2 className="sr-only">Saved memories</h2>
+          <MemoryEntriesTable
+            entries={memories}
+            query={query}
+            onQueryChange={setQuery}
+            loading={entries.isPending}
+            readOnly={readOnly}
+            canEdit={status.data.active}
+            busy={busy}
+            onEdit={setEditing}
+            onDelete={setDeleting}
+            empty={
+              entries.error ? (
+                <p className="text-destructive">Could not load memories: {entries.error.message}</p>
+              ) : (
+                <div className="flex flex-col items-center gap-2 py-8 text-center">
+                  <Brain className="mb-1 size-6 text-muted-foreground" />
+                  <h3 className="font-medium">{query ? "No matching memories" : "No memories yet"}</h3>
+                  <p className="text-sm text-muted-foreground">{emptyDescription(query, status.data.active)}</p>
                 </div>
-                <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{entry.content}</p>
-                <Collapsible>
-                  <CollapsibleTrigger
-                    render={<Button variant="ghost" size="xs" className="gap-1 text-muted-foreground" />}
-                    aria-label={`Details for ${entry.title}`}
+              )
+            }
+            footer={
+              <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                <span className="text-xs text-muted-foreground">
+                  {memories.length} memories
+                  {!status.data.active && memories.length > 0 && " · Saved memories stay here while memory is off"}
+                </span>
+                {(entries.hasNextPage || entries.isError) && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={entries.isFetching}
+                    onClick={() =>
+                      entries.isError && !entries.isFetchNextPageError ? entries.refetch() : entries.fetchNextPage()
+                    }
                   >
-                    <ChevronDown className="size-3" /> Details
-                    <span className="sr-only"> for {entry.title}</span>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <dl className="mt-3 grid gap-x-6 gap-y-2 border-t pt-3 text-xs sm:grid-cols-[auto_1fr]">
-                      {memoryDetails(entry).map(([label, value]) => (
-                        <div key={label} className="contents">
-                          <dt className="text-muted-foreground">{label}</dt>
-                          <dd className="whitespace-pre-wrap break-all">{value}</dd>
-                        </div>
-                      ))}
-                    </dl>
-                    {!readOnly && (
-                      <div className="mt-3 flex gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={busy || !status.data?.active}
-                          onClick={() => setEditing(entry)}
-                        >
-                          Edit memory
-                        </Button>
-                        <Button variant="ghost" size="sm" disabled={busy} onClick={() => setDeleting(entry)}>
-                          Delete memory
-                        </Button>
-                      </div>
-                    )}
-                  </CollapsibleContent>
-                </Collapsible>
-              </li>
-            ))}
-          </ul>
-          {entries.error && (
+                    {loadMoreLabel(entries.isFetching, entries.isError)}
+                  </Button>
+                )}
+              </div>
+            }
+          />
+          {entries.isFetchNextPageError && (
             <p role="alert" className="text-sm text-destructive">
-              Could not load memories: {entries.error.message}
+              Could not load more memories: {entries.error.message}
             </p>
-          )}
-          {(entries.hasNextPage || entries.isError) && (
-            <div className="flex justify-center">
-              <Button
-                variant="outline"
-                disabled={entries.isFetching}
-                onClick={() =>
-                  entries.isError && !entries.isFetchNextPageError ? entries.refetch() : entries.fetchNextPage()
-                }
-              >
-                {loadMoreLabel(entries.isFetching, entries.isError)}
-              </Button>
-            </div>
           )}
         </div>
       )}
