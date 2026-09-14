@@ -9,6 +9,7 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.proxy._types import WebhookEvent
 from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -79,7 +80,7 @@ async def get_team_admin_emails(team: LiteLLM_TeamTable, prisma_client: "PrismaC
     )
     if not admin_ids:
         return ()
-    rows: Final = await prisma_client.db.litellm_usertable.find_many(
+    rows: Final = await UserRepository(prisma_client).find_many(
         where={"user_id": {"in": sorted(admin_ids)}}  # mutable-ok: prisma filter payloads are plain dict/list
     )
     return tuple(dict.fromkeys(row.user_email for row in rows if row.user_email))

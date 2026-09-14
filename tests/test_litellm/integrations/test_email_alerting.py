@@ -16,10 +16,10 @@ class _FakeUserTable:
         self.rows = rows
         self.queries = []
 
-    async def find_many(self, where):
+    async def find_many(self, where=None, take=None, skip=None, order=None):
         self.queries.append(where)
         wanted: Final = where["user_id"]["in"]
-        return [row for row in self.rows if row.user_id in wanted]
+        return [row for row in self.rows if row["user_id"] in wanted]
 
 
 def _prisma(rows):
@@ -27,10 +27,10 @@ def _prisma(rows):
 
 
 USERS: Final = (
-    SimpleNamespace(user_id="u-admin", user_email="admin@example.com"),
-    SimpleNamespace(user_id="u-member", user_email="member@example.com"),
-    SimpleNamespace(user_id="u-legacy", user_email="legacy@example.com"),
-    SimpleNamespace(user_id="u-no-email", user_email=None),
+    {"user_id": "u-admin", "user_email": "admin@example.com"},
+    {"user_id": "u-member", "user_email": "member@example.com"},
+    {"user_id": "u-legacy", "user_email": "legacy@example.com"},
+    {"user_id": "u-no-email", "user_email": None},
 )
 
 
@@ -67,3 +67,23 @@ async def test_should_not_query_when_team_has_no_admins():
     team: Final = LiteLLM_TeamTable(team_id="t1", members_with_roles=[Member(user_id="u-member", role="user")])
     assert await get_team_admin_emails(team, prisma) == ()
     assert prisma.db.litellm_usertable.queries == []
+
+
+@pytest.mark.asyncio
+async def test_should_skip_email_only_members_and_blank_legacy_ids_and_dedupe():
+    prisma: Final = _prisma(
+        (
+            {"user_id": "u-admin", "user_email": "admin@example.com"},
+            {"user_id": "u-legacy", "user_email": "admin@example.com"},
+        )
+    )
+    team: Final = LiteLLM_TeamTable(
+        team_id="t1",
+        admins=["", "u-legacy", "u-admin"],
+        members_with_roles=[
+            Member(user_id="u-admin", role="admin"),
+            Member(user_email="mail-only@example.com", role="admin"),
+        ],
+    )
+    assert await get_team_admin_emails(team, prisma) == ("admin@example.com",)
+    assert prisma.db.litellm_usertable.queries == [{"user_id": {"in": ["u-admin", "u-legacy"]}}]
