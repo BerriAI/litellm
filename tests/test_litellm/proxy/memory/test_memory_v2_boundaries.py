@@ -580,6 +580,44 @@ async def test_trailing_system_messages_survive_client_tool_continuation(prisma_
 
 
 @pytest.mark.asyncio
+async def test_claude_output_directives_reach_search_answer_and_reflection_rounds(prisma_edge: MagicMock) -> None:
+    provider = FastAPI()
+    observed = []
+    directive = {"role": "system", "content": [], "output_config": {"effort": "low"}}
+
+    @provider.post("/v1/messages")
+    async def model(incoming: Request):
+        body = await incoming.json()
+        observed.append(body)
+        assert body["messages"][-1] == directive
+        if len(observed) == 1:
+            content = [
+                {"type": "tool_use", "id": "search", "name": "litellm_memory_search", "input": {"query": "demo"}}
+            ]
+        elif len(observed) == 2:
+            content = [{"type": "text", "text": "The port is 8347"}]
+        else:
+            content = [
+                {"type": "tool_use", "id": "reflect", "name": "litellm_memory_capture", "input": {"observations": []}}
+            ]
+        return {
+            "id": "msg_" + str(len(observed)),
+            "stop_reason": "end_turn" if len(observed) == 2 else "tool_use",
+            "content": content,
+        }
+
+    original = {"messages": [{"role": "user", "content": "My demo port?"}, directive]}
+    loop = GatewayMemoryLoop(provider, request(), original, "anthropic_messages", store(prisma_edge))
+    async for _ in loop.run():
+        pass
+    assert len(observed) == 3
+    assert observed[1]["messages"][-2]["content"][0]["tool_use_id"] == "search"
+    assert "reflect once" in observed[2]["messages"][-2]["content"]
+    assert observed[0]["messages"][0] == original["messages"][0]
+    assert sum(message["role"] == "system" for message in object_items(loop.data.get("messages"))) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("bad_id,count", [(True, 1), (False, 17)])
 async def test_invalid_model_calls_are_rejected_before_storage(
     prisma_edge: MagicMock, bad_id: bool, count: int

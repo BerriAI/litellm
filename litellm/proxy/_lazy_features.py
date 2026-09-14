@@ -57,11 +57,6 @@ class LazyFeature:
 
 LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
     LazyFeature(
-        name="memory_v2",
-        module_path="litellm.proxy.memory.management",
-        path_prefixes=("/v2/memory",),
-    ),
-    LazyFeature(
         name="guardrails",
         module_path="litellm.proxy.guardrails.guardrail_endpoints",
         path_prefixes=(

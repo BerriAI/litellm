@@ -137,8 +137,21 @@ class GatewayMemoryLoop:
 
     async def _call(self) -> AsyncGenerator[bytes, None]:
         self.stream.begin_round()
+        # Claude output directives control the next generated turn. Repeat them
+        # on outgoing rounds without adding pending directives to saved history.
+        directives: Final = (
+            transcript_items(self.original, self.route)[-self.replaced_input :] if self.replaced_input else ()
+        )
+        messages: Final = transcript_items(self.data, self.route)
         body: Final = {  # mutable-ok: Native provider JSON containers.
             **self.data,
+            **(
+                {  # mutable-ok: Native provider JSON containers.
+                    "messages": [*messages, *directives],  # mutable-ok: Provider request JSON.
+                }
+                if directives and messages[-len(directives) :] != directives
+                else {}  # mutable-ok: Native provider JSON containers.
+            ),
             "cache": {  # mutable-ok: Native provider JSON containers.
                 **object_value(self.data.get("cache")),
                 "no-cache": True,
