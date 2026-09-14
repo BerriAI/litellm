@@ -2212,13 +2212,14 @@ async def _fetch_team_membership_from_db(
             value=NO_TEAM_MEMBERSHIP_SENTINEL,
             ttl=get_management_object_ttl(user_api_key_cache),
         )
-        return None
-
-    await user_api_key_cache.async_set_cache(
-        key=_key,
-        value=membership,
-        model_type=LiteLLM_TeamMembership,
-    )
+    else:
+        await user_api_key_cache.async_set_cache(
+            key=_key,
+            value=membership,
+            model_type=LiteLLM_TeamMembership,
+        )
+    if _team_membership_inflight.get(_key) is not asyncio.current_task():
+        await user_api_key_cache.async_delete_cache(key=_key)
     return membership
 
 

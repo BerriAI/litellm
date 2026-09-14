@@ -6544,6 +6544,38 @@ async def test_get_team_membership_invalidation_mid_flight_discards_stale_load()
 
 
 @pytest.mark.asyncio
+async def test_get_team_membership_invalidation_during_cache_write_evicts_stale_entry():
+    from litellm.proxy.auth.auth_checks import get_team_membership, invalidate_team_member_spend_state
+    from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
+
+    write_started = asyncio.Event()
+    release_write = asyncio.Event()
+
+    class _SlowWriteCache(UserApiKeyCache):
+        async def async_set_cache(self, key, value, local_only=False, **kwargs):
+            write_started.set()
+            await release_write.wait()
+            return await super().async_set_cache(key, value, local_only=local_only, **kwargs)
+
+    row = MagicMock()
+    row.dict = lambda: {"user_id": "u-w", "team_id": "t-w", "spend": 1.0, "budget_id": "budget-old"}
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=row)
+    cache = _SlowWriteCache()
+
+    stale = asyncio.create_task(
+        get_team_membership(user_id="u-w", team_id="t-w", prisma_client=mock_prisma_client, user_api_key_cache=cache)
+    )
+    await asyncio.wait_for(write_started.wait(), timeout=2)
+    await invalidate_team_member_spend_state(user_id="u-w", team_id="t-w", user_api_key_cache=cache)
+    release_write.set()
+    stale_result = await stale
+
+    assert stale_result is not None and stale_result.budget_id == "budget-old"
+    assert await cache.async_get_cache(key=team_membership_reservation_cache_key(user_id="u-w", team_id="t-w")) is None
+
+
+@pytest.mark.asyncio
 async def test_common_checks_calls_get_team_membership_once_per_request():
     from fastapi import Request
 
