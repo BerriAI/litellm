@@ -2271,6 +2271,19 @@ class TestBedrockFileContentTransformation:
         authorization = litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM]["Authorization"]
         assert "/eu-west-1/s3/aws4_request" in authorization
 
+    def test_s3_request_target_uses_configured_endpoint_url(self):
+        from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        lp = get_litellm_params(
+            aws_region_name="us-east-1",
+            s3_endpoint_url="https://bucket.vpce-abc.s3.us-east-1.vpce.amazonaws.com",
+        )
+
+        assert BedrockFilesConfig()._s3_request_target(
+            optional_params={}, litellm_params=lp
+        ).endpoint_url == "https://bucket.vpce-abc.s3.us-east-1.vpce.amazonaws.com"
+
     def test_validate_environment_merges_and_pops_signed_get_headers(self):
         from litellm.llms.bedrock.files.transformation import (
             S3_SIGNED_REQUEST_HEADERS_PARAM,

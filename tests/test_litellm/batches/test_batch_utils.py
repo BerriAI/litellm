@@ -278,6 +278,8 @@ def test_extract_credentials_all_supported_keys():
         "vertex_credentials",
         "gcs_bucket_name",
         "bucket_name",
+        "s3_endpoint_url",
+        "s3_region_name",
         "timeout",
         "max_retries",
     }
