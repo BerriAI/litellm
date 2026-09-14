@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders, screen, waitFor } from "../../../../tests/test-utils";
 import {
+  GuardrailInformation,
   makeBedrockResponse,
   makeEntity,
   makeGuardrailInformation,
@@ -13,6 +14,24 @@ import GuardrailViewer from "@/components/view_logs/GuardrailViewer/GuardrailVie
 // but also run an integration-style render without mocks.
 const PresidioPath = "@/components/view_logs/GuardrailViewer/PresidioDetectedEntities";
 const BedrockPath = "@/components/view_logs/GuardrailViewer/BedrockGuardrailDetails";
+
+const skippedPreCall: Partial<GuardrailInformation> = {
+  guardrail_status: "not_run",
+  guardrail_mode: "pre_call",
+  guardrail_response: "no scannable content after message scoping",
+  start_time: null,
+  end_time: null,
+  duration: null,
+};
+
+const ranPostCall: Partial<GuardrailInformation> = {
+  guardrail_name: "ran-rail",
+  guardrail_status: "success",
+  guardrail_mode: "post_call",
+  start_time: 1_700_000_000,
+  end_time: 1_700_000_000.25,
+  duration: 0.25,
+};
 
 describe("GuardrailViewer", () => {
   beforeEach(() => {
@@ -51,14 +70,7 @@ describe("GuardrailViewer", () => {
 
   it("renders not_run as NOT RUN (muted) and keeps it out of the evaluated and passed counts", async () => {
     const user = userEvent.setup();
-    const data = makeGuardrailInformation({
-      guardrail_status: "not_run",
-      guardrail_mode: "pre_call",
-      guardrail_response: "no scannable content after message scoping",
-      start_time: null,
-      end_time: null,
-      duration: null,
-    });
+    const data = makeGuardrailInformation(skippedPreCall);
     renderWithProviders(<GuardrailViewer data={data} />);
 
     expect(screen.getByText(/0 guardrails evaluated/)).toBeInTheDocument();
@@ -74,22 +86,8 @@ describe("GuardrailViewer", () => {
   });
 
   it("anchors the lifecycle timeline on timed entries when an untimed not_run entry sorts first", () => {
-    const skipped = makeGuardrailInformation({
-      guardrail_name: "skipped-rail",
-      guardrail_status: "not_run",
-      guardrail_mode: "pre_call",
-      start_time: null,
-      end_time: null,
-      duration: null,
-    });
-    const ran = makeGuardrailInformation({
-      guardrail_name: "ran-rail",
-      guardrail_status: "success",
-      guardrail_mode: "post_call",
-      start_time: 1_700_000_000,
-      end_time: 1_700_000_000.25,
-      duration: 0.25,
-    });
+    const skipped = makeGuardrailInformation({ ...skippedPreCall, guardrail_name: "skipped-rail" });
+    const ran = makeGuardrailInformation(ranPostCall);
     renderWithProviders(<GuardrailViewer data={[skipped, ran]} />);
 
     expect(screen.getByText(/1 guardrail evaluated/)).toBeInTheDocument();
