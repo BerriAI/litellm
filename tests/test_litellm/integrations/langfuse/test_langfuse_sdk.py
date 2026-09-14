@@ -394,6 +394,72 @@ def test_invalid_sample_rate_fails_at_construction_like_the_sdk(monkeypatch):
         build_isolated_tracer_provider(environment=None, release=None)
 
 
+def _isolated_client_with_exporter():
+    exporter = InMemorySpanExporter()
+    provider = build_isolated_tracer_provider(environment=None, release=None)
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    client = Langfuse(
+        public_key=PUBLIC_KEY,
+        secret_key="sk-observation-id",
+        host="http://127.0.0.1:1",
+        tracer_provider=provider,
+        span_exporter=exporter,
+    )
+    return client, exporter
+
+
+def _start_generation(client, name, observation_id):
+    context, claim_root = open_trace_context(client=client, trace_id="b" * 32, parent_observation_id=None)
+    return start_generation(
+        client=client,
+        context=context,
+        name=name,
+        start_time=CALL_START,
+        claim_trace_root=claim_root,
+        observation_id=observation_id,
+        attributes={},
+    )
+
+
+def test_requested_observation_id_becomes_the_exported_span_id():
+    """v2 ``generation(id=...)``: the caller's id is what the export carries and what ``.id`` returns."""
+    lf, exporter = _isolated_client_with_exporter()
+    requested = resolve_observation_id("chatcmpl-123")
+
+    generation = _start_generation(lf, "requested", requested)
+    generation.end(end_time=to_unix_nanos(CALL_END))
+    lf.flush()
+
+    assert generation.id == requested
+    assert format(_only_span(exporter, "requested").context.span_id, "016x") == requested
+
+
+def test_requested_observation_id_does_not_leak_into_the_next_span():
+    lf, exporter = _isolated_client_with_exporter()
+    requested = resolve_observation_id("chatcmpl-123")
+
+    _start_generation(lf, "first", requested).end(end_time=to_unix_nanos(CALL_END))
+    second = _start_generation(lf, "second", None)
+    second.end(end_time=to_unix_nanos(CALL_END))
+    third = _start_generation(lf, "third", None)
+    third.end(end_time=to_unix_nanos(CALL_END))
+    lf.flush()
+
+    assert second.id != requested
+    assert third.id != second.id
+    assert len({span.context.span_id for span in exporter.get_finished_spans()}) == 3
+
+
+def test_requested_observation_id_is_ignored_on_a_provider_litellm_did_not_build(client):
+    lf, _ = client
+    requested = resolve_observation_id("chatcmpl-123")
+
+    generation = _start_generation(lf, "adopted", requested)
+    generation.end(end_time=to_unix_nanos(CALL_END))
+
+    assert generation.id != requested
+
+
 def test_environment_override_lands_per_span_despite_shared_resources():
     """The SDK registry is keyed on public key alone, so a second client for the
     same key adopts the first client's provider; the observation wrapper stamps
