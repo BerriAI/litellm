@@ -1,0 +1,46 @@
+{
+  "groups": {
+    "management": [
+      "management",
+      "authorization",
+      "configuration"
+    ],
+    "accounting": [
+      "pricing",
+      "spend"
+    ],
+    "database": [
+      "database"
+    ],
+    "providers": [
+      "providers",
+      "routing",
+      "streaming"
+    ],
+    "extensions": [
+      "mcp",
+      "observability",
+      "compatibility"
+    ]
+  },
+  "tests": {
+    "tests/integration/management/test_key_updates.py::test_update_preserves_independent_fields_and_serving": [
+      "mgmt.key.update.preserves_independent_fields"
+    ],
+    "tests/integration/pricing/test_configured_prices.py::test_custom_price_is_reported_and_charged": [
+      "quota_management.spend_tracking.custom_price.matches_input_rates"
+    ],
+    "tests/integration/providers/test_request_boundary.py::test_internal_request_state_does_not_reach_provider": [
+      "other.provider_wire.internal_parameters_filtered"
+    ],
+    "tests/integration/pricing/test_configured_prices.py::test_default_prices_survive_nullable_sibling_and_reload": [
+      "quota_management.spend_tracking.default_prices.survive_nullable_sibling_reload"
+    ],
+    "tests/integration/providers/test_request_boundary.py::test_upstream_rejects_corruption_and_accepts_supported_metadata": [
+      "other.provider_wire.validator_rejects_corruption"
+    ],
+    "tests/integration/pricing/test_configured_prices.py::test_loaded_router_preserves_cached_defaults_during_real_requests": [
+      "quota_management.spend_tracking.default_prices.loaded_router_preserves_cached_defaults"
+    ]
+  }
+}
