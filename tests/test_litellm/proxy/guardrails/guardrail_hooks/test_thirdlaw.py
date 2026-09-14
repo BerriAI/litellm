@@ -848,6 +848,40 @@ async def test_unscannable_stream_fails_closed_by_default():
     assert g.async_handler.post.await_count == 0
 
 
+async def test_an_opaque_sse_stream_is_not_refused_in_anthropic_frames():
+    """A Google :streamGenerateContent stream is raw SSE but not Anthropic, so an Anthropic
+    error frame would refuse it in a format its client cannot parse."""
+    from litellm.proxy.proxy_server import StreamingCallbackError
+
+    google_frames = [b'data: {"candidates": [{"content": {"parts": [{"text": "hi"}]}}]}\n\n']
+    g = _make_guardrail(decisions=[])
+    with pytest.raises(StreamingCallbackError, match="could not be assembled for scanning"):
+        await _collect(
+            g.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=_aiter(google_frames),
+                request_data=_request_data(),
+            )
+        )
+    assert g.async_handler.post.await_count == 0
+
+
+async def test_an_earlier_guardrails_refusal_is_passed_through_not_replaced():
+    """post_call guardrails compose, so this hook can be handed the terminal error frames a
+    preceding one emitted. Replacing them would hide the rejection the client is owed."""
+    upstream_refusal = [b'event: error\ndata: {"type": "error", "error": {"message": "blocked by presidio"}}\n\n']
+    g = _make_guardrail(decisions=[])
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_aiter(upstream_refusal),
+            request_data=_request_data(),
+        )
+    )
+    assert out == upstream_refusal
+    assert g.async_handler.post.await_count == 0
+
+
 @pytest.mark.parametrize("typo", ["fail_close", "failopen", "FAIL_OPEN", ""])
 async def test_unscannable_stream_fails_closed_on_a_mistyped_fallback(typo):
     """Literal is not enforced at runtime, so anything but the exact opt-in must block."""

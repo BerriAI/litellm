@@ -34,7 +34,11 @@ from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
     anthropic_sse_error_frames,
     assemble_anthropic_sse_stream,
-    is_raw_sse_stream,
+)
+from litellm.proxy.guardrails.stream_surface import (
+    StreamSurface,
+    classify_stream,
+    is_terminal_error_stream,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks
@@ -655,9 +659,18 @@ class ThirdlawGuardrail(CustomGuardrail):
             yield cast(ModelResponseStream, item)  # cast-ok: raw-SSE byte frames share the typed stream (bedrock)
 
     @staticmethod
-    def _assembled_stream_response(collected: Sequence[object], raw_sse: bool) -> ModelResponse | None:
-        if raw_sse:
-            return assemble_anthropic_sse_stream(collected, restore_identity=True)
+    def _assembled_stream_response(collected: Sequence[object], surface: StreamSurface) -> ModelResponse | None:
+        """Assemble the buffered stream into the scannable body its surface produces."""
+        match surface:
+            case StreamSurface.ANTHROPIC_MESSAGES:
+                return assemble_anthropic_sse_stream(collected, restore_identity=True)
+            case StreamSurface.RESPONSES | StreamSurface.OPAQUE_SSE:
+                return None
+            case StreamSurface.CHAT_COMPLETIONS:
+                return ThirdlawGuardrail._assembled_chat_stream_response(collected)
+
+    @staticmethod
+    def _assembled_chat_stream_response(collected: Sequence[object]) -> ModelResponse | None:
         from litellm.main import stream_chunk_builder
 
         try:
@@ -688,6 +701,19 @@ class ThirdlawGuardrail(CustomGuardrail):
 
         return StreamingCallbackError(message)
 
+    @staticmethod
+    def _stream_error_items(message: str, surface: StreamSurface) -> Sequence[object] | None:
+        """Terminal stream items framing a refusal in this surface's wire format.
+
+        ``None`` means the surface cannot frame its own error, so the caller raises instead and
+        lets the proxy's data generator serialize it.
+        """
+        match surface:
+            case StreamSurface.ANTHROPIC_MESSAGES:
+                return anthropic_sse_error_frames(message)
+            case StreamSurface.CHAT_COMPLETIONS | StreamSurface.RESPONSES | StreamSurface.OPAQUE_SSE:
+                return None
+
     async def _end_of_stream_moderated_stream(
         self,
         *,
@@ -702,10 +728,10 @@ class ThirdlawGuardrail(CustomGuardrail):
             if not buffer:
                 yield item
 
-        raw_sse: Final = is_raw_sse_stream(collected)
-        assembled: Final = self._assembled_stream_response(collected, raw_sse)
+        surface: Final = classify_stream(collected)
+        assembled: Final = self._assembled_stream_response(collected, surface)
         if assembled is None:
-            async for item in self._handle_unassembleable(collected=collected, raw_sse=raw_sse, buffer=buffer):
+            async for item in self._handle_unassembleable(collected=collected, surface=surface, buffer=buffer):
                 yield item
             return
 
@@ -717,13 +743,18 @@ class ThirdlawGuardrail(CustomGuardrail):
                 response_body=_response_payload(assembled),
             )
         except Exception as error:  # noqa: BLE001  # after keepalive flush a raise cannot reach the client; send a frame
-            if raw_sse and self._sse_headers_flushed(started):
-                for frame in anthropic_sse_error_frames(f"ThirdLaw guardrail request failed: {error}"):
-                    yield frame
-                return
-            raise
+            flushed_frames: Final = (
+                self._stream_error_items(f"ThirdLaw guardrail request failed: {error}", surface)
+                if self._sse_headers_flushed(started)
+                else None
+            )
+            if flushed_frames is None:
+                raise
+            for frame in flushed_frames:
+                yield frame
+            return
         async for item in self._emit_end_of_stream_outcome(
-            decision=decision, assembled=assembled, collected=collected, raw_sse=raw_sse, buffer=buffer
+            decision=decision, assembled=assembled, collected=collected, surface=surface, buffer=buffer
         ):
             yield item
 
@@ -733,7 +764,7 @@ class ThirdlawGuardrail(CustomGuardrail):
         decision: ThirdlawGuardrailResponse | None,
         assembled: ModelResponse,
         collected: Sequence[object],
-        raw_sse: bool,
+        surface: StreamSurface,
         buffer: bool,
     ) -> AsyncGenerator[object, None]:
         if decision is None or decision.action in ("allow", "modify_request"):
@@ -745,14 +776,13 @@ class ThirdlawGuardrail(CustomGuardrail):
             return
 
         if decision.action == "block":
-            # A raw-SSE block always travels as an Anthropic error frame: a raised
-            # exception is serialized as an OpenAI-shape error blob the Anthropic SDK
-            # cannot parse.
-            if raw_sse:
-                for frame in anthropic_sse_error_frames(decision.message or "Content violates ThirdLaw policy"):
-                    yield frame
-                return
-            raise self._streaming_block_error(decision.message or "Content violates ThirdLaw policy")
+            message: Final = decision.message or "Content violates ThirdLaw policy"
+            block_items: Final = self._stream_error_items(message, surface)
+            if block_items is None:
+                raise self._streaming_block_error(message)
+            for item in block_items:
+                yield item
+            return
 
         if not buffer:
             verbose_proxy_logger.warning(
@@ -765,7 +795,7 @@ class ThirdlawGuardrail(CustomGuardrail):
                 yield item
             return
         async for item in self._emit_modified_stream(
-            assembled=assembled, replacement=decision.response_body, raw_sse=raw_sse
+            assembled=assembled, replacement=decision.response_body, surface=surface
         ):
             yield item
 
@@ -773,20 +803,26 @@ class ThirdlawGuardrail(CustomGuardrail):
         self,
         *,
         collected: Sequence[object],
-        raw_sse: bool,
+        surface: StreamSurface,
         buffer: bool,
     ) -> AsyncGenerator[object, None]:
         """Refuse a stream that could not be assembled for scanning.
 
-        Shapes that assemble to a non-ModelResponse (/v1/responses and text-completion
-        streams) are refused too unless ``unscannable_stream_fallback`` is ``fail_open``,
-        because forwarding them unscanned lets a caller pick an endpoint to dodge the
-        guardrail.
+        A stream whose surface has no assembler, or that died before carrying a body, is refused
+        unless ``unscannable_stream_fallback`` is ``fail_open``, because forwarding it unscanned
+        lets a caller pick an endpoint to dodge the guardrail.
         """
+        if is_terminal_error_stream(collected):
+            # Only the refusal an earlier guardrail in the chain already emitted; replacing it
+            # would hide the rejection the client is owed.
+            for item in collected:
+                yield item
+            return
         refusal: Final = f"{self.guardrail_name}: streamed response could not be assembled for scanning, blocking it"
-        if raw_sse:
-            for frame in anthropic_sse_error_frames(refusal):
-                yield frame
+        refusal_items: Final = self._stream_error_items(refusal, surface)
+        if refusal_items is not None:
+            for item in refusal_items:
+                yield item
             return
         if any(isinstance(item, ModelResponseStream) for item in collected):
             raise self._streaming_block_error(refusal)
@@ -807,12 +843,12 @@ class ThirdlawGuardrail(CustomGuardrail):
         *,
         assembled: ModelResponse,
         replacement: Mapping[str, object],
-        raw_sse: bool,
+        surface: StreamSurface,
     ) -> AsyncGenerator[object, None]:
         modified: Final = self._modified_response(response=assembled, replacement=replacement)
         if not isinstance(modified, ModelResponse):
             raise self._streaming_block_error(f"{self.guardrail_name}: modified streamed response failed validation")
-        if raw_sse:
+        if surface is StreamSurface.ANTHROPIC_MESSAGES:
             for frame in anthropic_sse_chunks_from_response(modified):
                 yield frame
             return
@@ -832,9 +868,9 @@ class ThirdlawGuardrail(CustomGuardrail):
         async for item in response:
             collected.append(item)
             yield item
-            if len(collected) % sampling_rate != 0 or is_raw_sse_stream(collected):
+            if len(collected) % sampling_rate != 0 or classify_stream(collected) is not StreamSurface.CHAT_COMPLETIONS:
                 continue
-            interim = self._assembled_stream_response(collected, raw_sse=False)
+            interim = self._assembled_stream_response(collected, StreamSurface.CHAT_COMPLETIONS)
             if interim is None:
                 continue
             interim_decision = await self._run_thirdlaw(
@@ -846,10 +882,10 @@ class ThirdlawGuardrail(CustomGuardrail):
             if interim_decision is not None and interim_decision.action == "block":
                 raise self._streaming_block_error(interim_decision.message or "Content violates ThirdLaw policy")
 
-        raw_sse: Final = is_raw_sse_stream(collected)
-        assembled: Final = self._assembled_stream_response(collected, raw_sse)
+        surface: Final = classify_stream(collected)
+        assembled: Final = self._assembled_stream_response(collected, surface)
         if assembled is None:
-            async for item in self._handle_unassembleable(collected=collected, raw_sse=raw_sse, buffer=False):
+            async for item in self._handle_unassembleable(collected=collected, surface=surface, buffer=False):
                 yield item
             return
         final_decision: Final = await self._run_thirdlaw(
@@ -861,11 +897,13 @@ class ThirdlawGuardrail(CustomGuardrail):
         if final_decision is None:
             return
         if final_decision.action == "block":
-            if raw_sse:
-                for frame in anthropic_sse_error_frames(final_decision.message or "Content violates ThirdLaw policy"):
-                    yield frame
-                return
-            raise self._streaming_block_error(final_decision.message or "Content violates ThirdLaw policy")
+            message: Final = final_decision.message or "Content violates ThirdLaw policy"
+            block_items: Final = self._stream_error_items(message, surface)
+            if block_items is None:
+                raise self._streaming_block_error(message)
+            for item in block_items:
+                yield item
+            return
         if final_decision.action == "modify_response":
             verbose_proxy_logger.warning(
                 "ThirdLaw guardrail: modify_response arrived after chunks were already delivered "
