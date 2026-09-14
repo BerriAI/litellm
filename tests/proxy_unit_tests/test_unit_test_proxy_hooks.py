@@ -1,13 +1,10 @@
 import asyncio
-import os
-import sys
 from unittest.mock import Mock, patch, AsyncMock
 import pytest
 from fastapi import Request
 from litellm.proxy.utils import _get_redoc_url, _get_docs_url
 from datetime import datetime
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 
 
@@ -17,7 +14,6 @@ async def test_disable_spend_logs():
     Test that the spend logs are not written to the database when disable_spend_logs is True
     """
     # Mock the necessary components
-    import asyncio
 
     mock_prisma_client = Mock()
     mock_prisma_client.spend_log_transactions = []

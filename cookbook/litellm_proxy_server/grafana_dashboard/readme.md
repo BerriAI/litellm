@@ -2,6 +2,10 @@
 
 This folder contains the `json` for creating Grafana Dashboards
 
+## [LiteLLM GenAI Dashboard (OpenTelemetry)](./dashboard_genai_otel)
+
+Charts the `gen_ai.*` metrics from the OpenTelemetry v2 integration: spend, tokens, request rate, and latency percentiles by model. Separate from the dashboards below, which chart the `litellm_*` Prometheus metrics.
+
 ## [LiteLLM v2 Dashboard](./dashboard_v2)
 
 <img width="1316" alt="grafana_1" src="https://github.com/user-attachments/assets/d0df802d-0cb9-4906-a679-941c547789ab">

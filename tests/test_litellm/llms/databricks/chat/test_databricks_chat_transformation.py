@@ -1,20 +1,27 @@
 import json
-import os
-import sys
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
 
+import litellm
+from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+)
 from litellm.llms.databricks.chat.transformation import (
     DatabricksChatResponseIterator,
     DatabricksConfig,
     _sanitize_empty_content,
 )
+
+
+@pytest.fixture()
+def _use_local_model_cost_map(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
 
 def test_transform_choices():
@@ -255,8 +262,549 @@ def test_transform_messages_sanitizes_empty_content():
         {"role": "user", "content": [{"type": "text", "text": ""}]},
         {"role": "user", "content": "Hi"},
     ]
-    result = config._transform_messages(
-        messages=messages, model="databricks-claude", is_async=False
-    )
+    result = config._transform_messages(messages=messages, model="databricks-claude", is_async=False)
     assert "content" not in result[0]
     assert result[1]["content"] == "Hi"
+
+
+def test_transform_request_preserves_unity_model_service_name():
+    config = DatabricksConfig()
+    result = config.transform_request(
+        model="system.ai.kimi-k3",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["model"] == "system.ai.kimi-k3"
+
+
+def test_transform_request_strips_thinking_blocks_and_reasoning_content():
+    """Regression for LIT-6762: replaying an assistant turn that litellm decorated with
+    `thinking_blocks` / `reasoning_content` made Databricks 400 with
+    'messages.N.thinking_blocks: Extra inputs are not permitted'."""
+    config = DatabricksConfig()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "Hello! How can I help?",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "greet briefly", "signature": "sig_abc", "cache_control": {}}
+            ],
+            "reasoning_content": "greet briefly",
+            "provider_specific_fields": {"foo": "bar"},
+        },
+        {"role": "user", "content": "thanks"},
+    ]
+
+    result = config.transform_request(
+        model="databricks-claude-opus-5",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )["messages"]
+
+    assert result[1] == {"role": "assistant", "content": "Hello! How can I help?"}
+    assert not any(
+        key in message
+        for message in result
+        for key in ("thinking_blocks", "reasoning_content", "provider_specific_fields")
+    )
+    assert "thinking_blocks" in messages[1]
+
+
+def test_transform_request_drops_thinking_only_assistant_turn_but_keeps_tool_call_turn():
+    """A replayed thinking-only assistant turn has nothing left once `thinking_blocks` are stripped, so it must be
+    dropped instead of being sent as a bare {"role": "assistant"}. A thinking + tool_use turn keeps its tool_calls."""
+    config = DatabricksConfig()
+    tool_call = {"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": [{"type": "thinking", "thinking": "hmm", "signature": "sig_1"}],
+            "reasoning_content": "hmm",
+        },
+        {"role": "user", "content": "again"},
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": [{"type": "thinking", "thinking": "call f", "signature": "sig_2"}],
+            "reasoning_content": "call f",
+            "tool_calls": [tool_call],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+    ]
+
+    result = config.transform_request(
+        model="databricks-claude-opus-5",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )["messages"]
+
+    assert result == [
+        {"role": "user", "content": "hi"},
+        {"role": "user", "content": "again"},
+        {"role": "assistant", "tool_calls": [tool_call]},
+        {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+    ]
+
+
+def _parallel_tool_calls():
+    return [
+        {
+            "id": "call_A",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city": "SF"}'},
+        },
+        {
+            "id": "call_B",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city": "NYC"}'},
+        },
+    ]
+
+
+def _assert_every_tool_message_follows_tool_calls(messages):
+    for index, message in enumerate(messages):
+        if message.get("role") == "tool":
+            previous = messages[index - 1] if index > 0 else {}
+            assert previous.get("role") == "assistant" and previous.get("tool_calls"), (
+                f"tool message at index {index} is not preceded by an assistant message with tool_calls: {messages}"
+            )
+
+
+def _declared_tool_call_ids(messages):
+    return sorted(
+        call["id"]
+        for message in messages
+        if message.get("role") == "assistant" and message.get("tool_calls")
+        for call in message["tool_calls"]
+    )
+
+
+def test_transform_request_splits_parallel_tool_calls_for_gpt():
+    """Regression for LIT-3984: Databricks 400s with 'messages with role tool must
+    be a response to a preceeding message with tool_calls' because parallel tool
+    calls send consecutive tool messages. Each result must be re-paired with an
+    assistant tool_calls message holding only its matching call."""
+    config = DatabricksConfig()
+    messages = [
+        {"role": "user", "content": "weather in SF and NYC?"},
+        {"role": "assistant", "content": "checking", "tool_calls": _parallel_tool_calls()},
+        {"role": "tool", "tool_call_id": "call_A", "content": "sunny"},
+        {"role": "tool", "tool_call_id": "call_B", "content": "rainy"},
+    ]
+
+    result = config.transform_request(
+        model="gpt-5.4-mini",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )["messages"]
+
+    _assert_every_tool_message_follows_tool_calls(result)
+    assert _declared_tool_call_ids(result) == ["call_A", "call_B"]
+    assistant_tool_call_messages = [m for m in result if m.get("role") == "assistant" and m.get("tool_calls")]
+    assert all(len(m["tool_calls"]) == 1 for m in assistant_tool_call_messages), (
+        "each split assistant message must declare exactly one tool call"
+    )
+    tool_messages = [m for m in result if m.get("role") == "tool"]
+    assert [m["tool_call_id"] for m in tool_messages] == ["call_A", "call_B"]
+    for tool_message, assistant_message in zip(tool_messages, assistant_tool_call_messages):
+        assert assistant_message["tool_calls"][0]["id"] == tool_message["tool_call_id"]
+
+
+def test_transform_request_pairs_out_of_order_parallel_results():
+    config = DatabricksConfig()
+    messages = [
+        {"role": "user", "content": "weather?"},
+        {"role": "assistant", "content": "checking", "tool_calls": _parallel_tool_calls()},
+        {"role": "tool", "tool_call_id": "call_B", "content": "rainy"},
+        {"role": "tool", "tool_call_id": "call_A", "content": "sunny"},
+    ]
+
+    result = config.transform_request(
+        model="gpt-5.4-mini",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )["messages"]
+
+    _assert_every_tool_message_follows_tool_calls(result)
+    for index, message in enumerate(result):
+        if message.get("role") == "tool":
+            assert result[index - 1]["tool_calls"][0]["id"] == message["tool_call_id"]
+
+
+def test_transform_request_leaves_single_tool_call_untouched():
+    config = DatabricksConfig()
+    messages = [
+        {"role": "user", "content": "weather?"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_A",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_A", "content": "sunny"},
+    ]
+
+    result = config.transform_request(
+        model="gpt-5.4-mini",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )["messages"]
+
+    assert len(result) == 3
+    _assert_every_tool_message_follows_tool_calls(result)
+    assert _declared_tool_call_ids(result) == ["call_A"]
+
+
+def test_transform_request_does_not_drop_tool_calls_on_incomplete_results():
+    config = DatabricksConfig()
+    messages = [
+        {"role": "user", "content": "weather?"},
+        {"role": "assistant", "content": "checking", "tool_calls": _parallel_tool_calls()},
+        {"role": "tool", "tool_call_id": "call_A", "content": "sunny"},
+        {"role": "user", "content": "thanks"},
+    ]
+
+    result = config.transform_request(
+        model="gpt-5.4-mini",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )["messages"]
+
+    assert _declared_tool_call_ids(result) == ["call_A", "call_B"]
+
+
+def test_transform_request_keeps_parallel_tool_calls_for_claude():
+    config = DatabricksConfig()
+    messages = [
+        {"role": "user", "content": "weather?"},
+        {"role": "assistant", "content": "checking", "tool_calls": _parallel_tool_calls()},
+        {"role": "tool", "tool_call_id": "call_A", "content": "sunny"},
+        {"role": "tool", "tool_call_id": "call_B", "content": "rainy"},
+    ]
+
+    result = config.transform_request(
+        model="databricks-claude-3-7-sonnet",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )["messages"]
+
+    assert len([m for m in result if m.get("role") == "assistant"]) == 1
+
+
+def test_databricks_config_probes_capabilities_under_databricks_namespace():
+    """Inherited AnthropicConfig capability probes read ``self.custom_llm_provider``;
+    without this override they probed the ``anthropic`` cost-map namespace and
+    ignored the exact ``databricks/databricks-claude-*`` entries."""
+    assert DatabricksConfig().custom_llm_provider == "databricks"
+
+
+@pytest.mark.parametrize(
+    "model, expected_thinking, expected_output_config",
+    [
+        ("databricks-claude-opus-4-8", {"type": "adaptive"}, {"effort": "high"}),
+        ("databricks-claude-opus-4-6", {"type": "enabled", "budget_tokens": 4096}, None),
+    ],
+    ids=["adaptive_only_upgrades_to_adaptive", "legacy_capable_forwards_verbatim"],
+)
+def test_map_openai_params_upgrades_legacy_thinking_on_adaptive_only_claude(
+    model, expected_thinking, expected_output_config
+):
+    mapped = DatabricksConfig().map_openai_params(
+        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 4096}},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert mapped["thinking"] == expected_thinking
+    assert mapped.get("output_config") == expected_output_config
+
+
+def _map_reasoning_effort(model: str, reasoning_effort: str):
+    return DatabricksConfig().map_openai_params(
+        non_default_params={"reasoning_effort": reasoning_effort},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+
+def test_claude_translates_reasoning_effort_to_thinking(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-claude-3-7-sonnet", "low")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_adaptive_claude_translates_reasoning_effort_to_output_config(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-claude-opus-4-7", "high")
+    assert params.get("thinking") == {"type": "adaptive", "display": "summarized"}
+    assert params.get("output_config") == {"effort": "high"}
+    assert "reasoning_effort" not in params
+
+
+def test_unmapped_claude_endpoint_still_translates(_use_local_model_cost_map):
+    params = _map_reasoning_effort("my-claude-serving-endpoint", "low")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_2_5_low_translates_to_thinking_budget(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gemini-2-5-flash", "low")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_2_5_medium_translates_to_thinking_budget(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gemini-2-5-flash", "medium")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_2_5_high_translates_to_thinking_budget(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gemini-2-5-flash", "high")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_2_5_pro_translates_to_thinking_budget(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gemini-2-5-pro", "high")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_2_5_with_dot_notation_translates(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gemini-2.5-flash", "low")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_2_0_does_not_match(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gemini-2-0-flash", "low")
+    assert "thinking" not in params
+    assert params.get("reasoning_effort") == "low"
+
+
+def test_gemini_2_5_none_drops_thinking_and_reasoning_effort(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gemini-2-5-flash", "none")
+    assert "thinking" not in params
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_3_passes_reasoning_effort_through(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gemini-3-1-pro", "low")
+    assert params.get("reasoning_effort") == "low"
+    assert "thinking" not in params
+
+
+def test_gpt_5_passes_reasoning_effort_through(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gpt-5-1", "low")
+    assert params.get("reasoning_effort") == "low"
+    assert "thinking" not in params
+
+
+def test_gpt_oss_passes_reasoning_effort_through(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gpt-oss-120b", "high")
+    assert params.get("reasoning_effort") == "high"
+    assert "thinking" not in params
+
+
+def _streaming_chunk(usage=None, choices=None):
+    base = {
+        "id": "chatcmpl-test",
+        "created": 1234567890,
+        "model": "databricks-claude-sonnet-5",
+        "choices": [{"delta": {"content": "hi"}}] if choices is None else choices,
+    }
+    return base if usage is None else {**base, "usage": usage}
+
+
+@pytest.mark.parametrize(
+    "cache_read, cache_creation, expected_cached, expected_written",
+    [
+        (12002, 0, 12002, 0),
+        (0, 12002, 0, 12002),
+    ],
+    ids=["warm_cache_read", "cold_cache_write"],
+)
+def test_chunk_parser_surfaces_prompt_cache_usage(cache_read, cache_creation, expected_cached, expected_written):
+    iterator = DatabricksChatResponseIterator(streaming_response=None, sync_stream=True)
+
+    result = iterator.chunk_parser(
+        _streaming_chunk(
+            usage={
+                "prompt_tokens": 12011,
+                "completion_tokens": 8,
+                "total_tokens": 12019,
+                "cache_read_input_tokens": cache_read,
+                "cache_creation_input_tokens": cache_creation,
+            }
+        )
+    )
+
+    assert result.usage is not None
+    assert result.usage.prompt_tokens == 12011
+    assert result.usage.completion_tokens == 8
+    assert result.usage.prompt_tokens_details is not None
+    assert result.usage.prompt_tokens_details.cached_tokens == expected_cached
+    assert result.usage._cache_creation_input_tokens == expected_written
+
+
+def test_chunk_parser_surfaces_usage_only_final_chunk():
+    """stream_options={"include_usage": True} emits a trailing chunk whose choices
+    list is empty; usage must still reach the caller."""
+    iterator = DatabricksChatResponseIterator(streaming_response=None, sync_stream=True)
+
+    result = iterator.chunk_parser(
+        _streaming_chunk(
+            usage={
+                "prompt_tokens": 100,
+                "completion_tokens": 5,
+                "total_tokens": 105,
+                "cache_read_input_tokens": 90,
+            },
+            choices=[],
+        )
+    )
+
+    assert result.choices == []
+    assert result.usage is not None
+    assert result.usage.prompt_tokens_details.cached_tokens == 90
+
+
+def test_chunk_parser_without_usage_still_parses_content():
+    iterator = DatabricksChatResponseIterator(streaming_response=None, sync_stream=True)
+
+    result = iterator.chunk_parser(_streaming_chunk())
+
+    assert result.id == "chatcmpl-test"
+    assert result.model == "databricks-claude-sonnet-5"
+    assert result.choices[0]["delta"]["content"] == "hi"
+
+
+@pytest.mark.parametrize("reasoning_key", ["reasoning_content", "reasoning"])
+def test_transform_choices_surfaces_top_level_reasoning_content(reasoning_key: str) -> None:
+    config = DatabricksConfig()
+    databricks_choices = [
+        {
+            "message": {
+                "role": "assistant",
+                "content": "391",
+                reasoning_key: "We need answer just number. 17*23=391.",
+            },
+            "index": 0,
+            "finish_reason": "stop",
+        }
+    ]
+
+    choices = config._transform_dbrx_choices(choices=databricks_choices)
+
+    assert choices[0].message.content == "391"
+    assert choices[0].message.reasoning_content == "We need answer just number. 17*23=391."
+    assert getattr(choices[0].message, "thinking_blocks", None) is None
+
+
+def test_transform_choices_parses_think_tags_in_string_content():
+    config = DatabricksConfig()
+    databricks_choices = [
+        {
+            "message": {"role": "assistant", "content": "<think>17 times 23</think>391"},
+            "index": 0,
+            "finish_reason": "stop",
+        }
+    ]
+
+    choices = config._transform_dbrx_choices(choices=databricks_choices)
+
+    assert choices[0].message.content == "391"
+    assert choices[0].message.reasoning_content == "17 times 23"
+
+
+def test_transform_choices_prefers_reasoning_blocks_over_top_level_field():
+    config = DatabricksConfig()
+    databricks_choices = [
+        {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "reasoning", "summary": [{"type": "summary_text", "text": "from block"}]},
+                    {"type": "text", "text": "391"},
+                ],
+                "reasoning_content": "from field",
+            },
+            "index": 0,
+            "finish_reason": "stop",
+        }
+    ]
+
+    choices = config._transform_dbrx_choices(choices=databricks_choices)
+
+    assert choices[0].message.reasoning_content == "from block"
+    assert choices[0].message.content == "391"
+
+
+@pytest.mark.parametrize("reasoning_key", ["reasoning_content", "reasoning"])
+def test_chunk_parser_surfaces_top_level_reasoning_delta(reasoning_key: str) -> None:
+    iterator = DatabricksChatResponseIterator(None, sync_stream=True)
+    chunk = {
+        "id": "1",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "lit-qa-deepseek-v4-flash",
+        "choices": [
+            {
+                "delta": {"role": "assistant", "content": None, reasoning_key: "We need answer"},
+                "index": 0,
+                "finish_reason": None,
+            }
+        ],
+    }
+
+    parsed = iterator.chunk_parser(chunk)
+
+    assert parsed.choices[0].delta.reasoning_content == "We need answer"
+    assert parsed.choices[0].delta.content is None

@@ -178,16 +178,31 @@ only where the underlying cloud forces it.
 | Force destroy of object store    | `s3_force_destroy`                                      | `gcs_force_destroy`                                       |
 | Database deletion protection     | `skip_final_snapshot`                                   | `cloudsql_deletion_protection`                            |
 | `proxy_config` (typed YAML map)  | `proxy_config`                                          | `proxy_config`                                            |
+| Coordination Redis               | `REDIS_*` from ElastiCache (automatic)                  | `REDIS_*` from Memorystore (automatic)                    |
 | Extra plain env per component    | `gateway_extra_env`, `backend_extra_env`                | `gateway_extra_env`, `backend_extra_env`                  |
 | Extra secret-backed env          | `gateway_extra_secrets`, `backend_extra_secrets` (ARNs) | `gateway_extra_secrets`, `backend_extra_secrets` (resource IDs) |
 | Uvicorn `--workers` on gateway   | `gateway_num_workers`                                   | `gateway_num_workers`                                     |
 | OpenTelemetry v2 (opt-in)        | `otel_endpoint`, `otel_exporter`, `otel_environment_name`, `otel_capture_message_content`, `otel_headers_secret_arn` | `otel_endpoint`, `otel_exporter`, `otel_environment_name`, `otel_capture_message_content`, `otel_headers_secret` |
+| Collector sidecar (opt-in)    | `collector_enabled`, `collector_port`, `collector_cpu`, `collector_memory`, `collector_buffer_size`, `collector_on_unavailable`, `collector_drain_timeout_seconds` | same names; `collector_cpu` / `collector_memory` take Cloud Run strings |
 
 Each module stamps its own stack-identity tag (`litellm:stack` on AWS,
 `litellm-stack` on GCP — GCP label keys forbid colons) plus
 `managed-by = "terraform"` onto every taggable / labelable resource and
 merges `var.tags` / `var.labels` on top. Provider `default_tags` on AWS
 merge on top of all of these.
+
+Coordination Redis needs no input on either cloud. Each module provisions the
+managed Redis (ElastiCache on AWS, Memorystore on GCP) and exports `REDIS_HOST`,
+`REDIS_PORT` and `REDIS_SSL` (plus `REDIS_SSL_CA_CERTS` on GCP) into the gateway
+and backend env. The proxy falls back to those variables to build its
+coordination Redis, which backs cross-pod tpm/rpm rate limits, spend tracking
+and the pod lock manager. This is independent of LLM response caching, which
+stays off unless you enable `litellm_settings.cache` in `proxy_config`.
+
+To coordinate through a Redis the module does not manage, set
+`general_settings.coordination_redis` in `var.proxy_config`. An explicit block
+overrides the `REDIS_*` env fallback; see the commented example in each
+stack's `examples/default/terraform.tfvars.example`
 
 OTel is opt-in on both clouds: leave `otel_endpoint` empty and nothing
 OTel-related is added to the container env; set it and both gateway and

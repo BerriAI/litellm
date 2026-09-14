@@ -3,18 +3,19 @@
  * and indicates which ones were actually called in the response
  */
 
-import { Collapse, Typography } from "antd";
+import { useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { LogEntry } from "../columns";
 import { parseToolsFromLog } from "./utils";
 import { ToolItem } from "./ToolItem";
-
-const { Text } = Typography;
 
 interface ToolsSectionProps {
   log: LogEntry;
 }
 
 export function ToolsSection({ log }: ToolsSectionProps) {
+  const [open, setOpen] = useState(false);
   const tools = parseToolsFromLog(log);
 
   // Don't render if no tools
@@ -32,34 +33,33 @@ export function ToolsSection({ log }: ToolsSectionProps) {
   const hasMoreTools = tools.length > 2;
 
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
-      <Collapse
-        expandIconPosition="start"
-        items={[
-          {
-            key: "1",
-            label: (
-              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                <h3 className="text-lg font-medium text-gray-900">Tools</h3>
-                <Text type="secondary" style={{ fontSize: 14 }}>
-                  {totalTools} provided, {calledTools} called
-                </Text>
-                <Text type="secondary" style={{ fontSize: 14 }}>
-                  • {toolNamePreview}
-                  {hasMoreTools && "..."}
-                </Text>
-              </div>
-            ),
-            children: (
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {tools.map((tool) => (
-                  <ToolItem key={tool.name} tool={tool} />
-                ))}
-              </div>
-            ),
-          },
-        ]}
-      />
+    <div className="mb-6 w-full max-w-full overflow-hidden rounded-lg bg-background shadow-sm">
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <CollapsibleTrigger className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted">
+          {open ? (
+            <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+          )}
+          <div className="flex flex-wrap items-center gap-3">
+            <h3 className="text-lg font-medium text-foreground">Tools</h3>
+            <span className="text-sm text-muted-foreground">
+              {totalTools} provided, {calledTools} called
+            </span>
+            <span className="text-sm text-muted-foreground">
+              • {toolNamePreview}
+              {hasMoreTools && "..."}
+            </span>
+          </div>
+        </CollapsibleTrigger>
+        <CollapsibleContent keepMounted>
+          <div className="flex flex-col gap-2 px-4 pb-4">
+            {tools.map((tool) => (
+              <ToolItem key={tool.name} tool={tool} />
+            ))}
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
     </div>
   );
 }

@@ -5,13 +5,19 @@ on:
     branches:
       - main
       - litellm_internal_staging
+      - litellm_oss_staging
+      - "litellm_**"
+  push:
+    branches:
+      - main
+      - litellm_internal_staging
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Semantic matrix: each shard groups tests by concern (auth, server, logging, …)
 # rather than alphabetical letter ranges. Adding a new test file means adding it
@@ -22,6 +28,10 @@ concurrency:
 #     Most of a shard's time is pytest plugin load + xdist worker imports +
 #     pytest-cov instrumentation, not the tests themselves. Keeping per-shard
 #     work low and matching worker count to runner cores is what controls it.
+#   * `timeout` bounds the pytest step only. Checkout, dependency install, and
+#     Prisma client generation draw on a separate allowance in the base
+#     workflow, so slow setup shows up as a slow job rather than as a
+#     cancelled shard whose tests were passing.
 #   * workers: 4 matches the 4-core ubuntu-latest runner. -n 8 on 4 cores
 #     oversubscribes 2x and workers fight for CPU during their cold-start
 #     imports (measured ~441% CPU for -n 8 locally, i.e. ~55% effective).
@@ -32,11 +42,10 @@ concurrency:
 #     pinning the whole file to one worker (the default --dist=loadscope
 #     behavior for single-file targets).
 jobs:
-  # Fast guard — fails the workflow if a test_*.py file under
-  # tests/proxy_unit_tests/ is not referenced by any matrix entry below.
-  # The semantic-shard design (no catch-all "remaining" bucket) relies on
-  # every test file being explicitly assigned; this guard prevents a new
-  # file from silently dropping out of CI.
+  # Fast guard — fails the workflow when a test directory or file inside a sharded
+  # tree is claimed by no shard. The semantic-shard design has no catch-all bucket,
+  # so an unassigned child runs nowhere; assert_ci_coverage.py holds the tree list
+  # and reads the same test-path keys the coverage census does.
   assert-shard-coverage:
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -46,31 +55,8 @@ jobs:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           persist-credentials: false
-      - name: Assert every test_*.py is in a matrix shard
-        run: |
-          python3 - <<'PY'
-          import pathlib, sys, yaml
-          wf = yaml.safe_load(open(".github/workflows/test-unit-proxy-db.yml"))
-          matrix = wf["jobs"]["proxy-db"]["strategy"]["matrix"]["include"]
-          referenced = set()
-          for entry in matrix:
-              for token in entry["test-path"].split():
-                  if token.startswith("tests/proxy_unit_tests/"):
-                      referenced.add(pathlib.PurePosixPath(token).name)
-          actual = {p.name for p in pathlib.Path("tests/proxy_unit_tests").iterdir()
-                    if p.name.startswith("test_") and (p.suffix == ".py" or p.is_dir())
-                    and p.name != "test_configs"}
-          orphans = sorted(actual - referenced)
-          if orphans:
-              print("ERROR: the following files/dirs under tests/proxy_unit_tests/")
-              print("       are not assigned to any shard in test-unit-proxy-db.yml:")
-              for o in orphans:
-                  print(f"  - {o}")
-              print()
-              print("Add each to whichever semantic shard it belongs to.")
-              sys.exit(1)
-          print(f"OK: all {len(actual)} files assigned to a shard.")
-          PY
+      - name: Assert every test directory and file is claimed by a shard
+        run: python3 .github/scripts/assert_ci_coverage.py --shards
 
   proxy-db:
     needs: assert-shard-coverage
@@ -125,8 +111,6 @@ jobs:
             test-path: >-
               tests/proxy_unit_tests/test_proxy_server.py
               tests/proxy_unit_tests/test_proxy_server_keys.py
-              tests/proxy_unit_tests/test_proxy_server_caching.py
-              tests/proxy_unit_tests/test_proxy_server_langfuse.py
               tests/proxy_unit_tests/test_proxy_server_spend.py
               tests/proxy_unit_tests/test_aproxy_startup.py
             workers: 4

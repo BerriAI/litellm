@@ -1,4 +1,3 @@
-import { TabPanel, Text, Title } from "@tremor/react";
 import PriceDataReload from "@/components/price_data_reload";
 import React from "react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -9,13 +8,13 @@ const PriceDataManagementTab = () => {
   const { refetch: refetchModelCostMap } = useModelCostMap();
 
   return (
-    <TabPanel>
+    <div>
       <div className="p-6">
         <div className="mb-6">
-          <Title>Price Data Management</Title>
-          <Text className="text-tremor-content">
+          <h2 className="text-lg font-semibold">Price Data Management</h2>
+          <p className="text-sm text-muted-foreground">
             Manage model pricing data and configure automatic reload schedules
-          </Text>
+          </p>
         </div>
         <PriceDataReload
           accessToken={accessToken}
@@ -28,7 +27,7 @@ const PriceDataManagementTab = () => {
           className="w-full"
         />
       </div>
-    </TabPanel>
+    </div>
   );
 };
 

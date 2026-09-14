@@ -3,14 +3,12 @@
 import asyncio
 import inspect
 import os
-import sys
 import time
 import traceback
 from datetime import datetime
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 from typing import List, Literal, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 

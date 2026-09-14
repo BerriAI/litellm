@@ -5,14 +5,17 @@ configured embedding model is a proxy Router deployment, embeddings must run
 through the Router so per-deployment auth (e.g. Bedrock aws_role_name) is
 applied. Otherwise fall back to a direct litellm embedding call.
 
-This module is dependency-injected: callers pass the proxy ``llm_router`` in, so
-the decision logic is unit-testable without importing
-``litellm.proxy.proxy_server``.
+This module is dependency-injected: callers pass the proxy ``llm_router`` in, so the
+decision logic is unit-testable without importing ``litellm.proxy.proxy_server``.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, Final
+
+import litellm
+from litellm.constants import SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -34,6 +37,38 @@ def build_router_embedding_metadata(
     request_metadata: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Forward the caller's full metadata, flagged as a semantic-cache embedding."""
-    metadata: dict[str, Any] = dict(request_metadata or {})
+    metadata: Final[dict[str, Any]] = dict(request_metadata or {})
     metadata["semantic-cache-embedding"] = True
     return metadata
+
+
+def resolve_embedding_max_input_tokens(
+    configured_max_input_tokens: int | None,
+    embedding_model: str,
+    router: Router | None,
+) -> int | None:
+    """Explicit cache setting first, else the Router deployment's configured ``max_input_tokens``."""
+    if configured_max_input_tokens is not None:
+        return configured_max_input_tokens
+    if router is None:
+        return None
+    deployment_max_input_tokens, _ = router.get_configured_token_limits(embedding_model)
+    return deployment_max_input_tokens
+
+
+def resolve_embedding_timeout(configured_timeout: float | None) -> float:
+    """Explicit cache setting first, else the short semantic-cache default."""
+    if configured_timeout is not None:
+        return configured_timeout
+    return SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS
+
+
+def truncate_embedding_input(prompt: str, embedding_model: str, max_input_tokens: int | None) -> str:
+    """Keep only the first ``max_input_tokens`` tokens of ``prompt`` for the embedding call."""
+    if max_input_tokens is None:
+        return prompt
+    tokens: Final[Sequence[int]] = litellm.encode(model=embedding_model, text=prompt)
+    if len(tokens) <= max_input_tokens:
+        return prompt
+    truncated: Final[str] = litellm.decode(model=embedding_model, tokens=tokens[:max_input_tokens])
+    return truncated

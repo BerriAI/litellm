@@ -3,6 +3,20 @@
  * These functions handle data formatting, validation, and guardrail calculations.
  */
 
+export type SessionLogSortMode = "duration" | "start_time";
+
+type SortableSessionLog = { startTime: string; endTime: string; request_duration_ms?: number };
+
+const durationMs = (row: SortableSessionLog): number =>
+  row.request_duration_ms ?? Date.parse(row.endTime) - Date.parse(row.startTime);
+
+export function sortSessionLogs<T extends SortableSessionLog>(rows: T[], mode: SessionLogSortMode): T[] {
+  if (mode === "start_time") {
+    return [...rows].sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+  }
+  return [...rows].sort((a, b) => durationMs(b) - durationMs(a));
+}
+
 /**
  * Formats data for display. If input is a string, attempts to parse as JSON.
  * @param input - Data to format (string or object)
