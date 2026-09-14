@@ -112,6 +112,22 @@ class _CapabilityRule:
 _CompiledRule = _RoutingRule | _CapabilityRule
 
 
+def _parse_fill_missing_for_providers(rule: Mapping[str, object], pattern_label: object) -> frozenset[str] | None:
+    if FILL_MISSING_FOR_PROVIDERS_FIELD not in rule:
+        return frozenset()
+    raw_fill_missing_for_providers: Final = rule.get(FILL_MISSING_FOR_PROVIDERS_FIELD)
+    if not isinstance(raw_fill_missing_for_providers, (list, tuple)) or not all(
+        isinstance(provider, str) for provider in raw_fill_missing_for_providers
+    ):
+        verbose_logger.warning(
+            "LiteLLM: skipping malformed fallback generalization rule %s ('%s' must be a list of provider strings).",
+            rule.get(NAME_FIELD, pattern_label),
+            FILL_MISSING_FOR_PROVIDERS_FIELD,
+        )
+        return None
+    return frozenset(raw_fill_missing_for_providers)
+
+
 def _compile_rule(rule: object) -> tuple[_CompiledRule, ...]:
     if not isinstance(rule, dict):
         return ()
@@ -134,21 +150,9 @@ def _compile_rule(rule: object) -> tuple[_CompiledRule, ...]:
             e,
         )
         return ()
-    if FILL_MISSING_FOR_PROVIDERS_FIELD not in rule:
-        fill_missing_for_providers: Final[frozenset[str]] = frozenset()
-    else:
-        raw_fill_missing_for_providers: Final = rule.get(FILL_MISSING_FOR_PROVIDERS_FIELD)
-        if not isinstance(raw_fill_missing_for_providers, (list, tuple)) or not all(
-            isinstance(provider, str) for provider in raw_fill_missing_for_providers
-        ):
-            verbose_logger.warning(
-                "LiteLLM: skipping malformed fallback generalization rule %s "
-                "('%s' must be a list of provider strings).",
-                rule.get(NAME_FIELD, pattern),
-                FILL_MISSING_FOR_PROVIDERS_FIELD,
-            )
-            return ()
-        fill_missing_for_providers = frozenset(raw_fill_missing_for_providers)
+    fill_missing_for_providers: Final = _parse_fill_missing_for_providers(rule, pattern)
+    if fill_missing_for_providers is None:
+        return ()
     if PROVIDER_KEY not in model_info:
         return (
             _CapabilityRule(
