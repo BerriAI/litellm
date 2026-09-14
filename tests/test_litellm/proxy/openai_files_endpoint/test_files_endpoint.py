@@ -4703,6 +4703,108 @@ def test_create_file_blocked_extension_unset_allows_everything(monkeypatch, llm_
     assert len(forwarded_calls) == 1
 
 
+@pytest.mark.parametrize(
+    "filename",
+    ["payload.exe", "notes.txt", "README"],
+    ids=["other_extension", "text_extension", "no_extension"],
+)
+def test_create_file_extension_outside_allowlist_rejected_before_forwarding(
+    monkeypatch, llm_router: Router, filename: str
+):
+    import litellm.proxy.proxy_server as ps
+
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+    monkeypatch.setitem(ps.general_settings, "allowed_file_extensions", [".jsonl"])
+
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": (filename, b"MZ\x90\x00", "application/octet-stream")},
+            data={"purpose": "user_data"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert error["param"] == "file"
+    assert "allowed_file_extensions" in error["message"]
+    assert forwarded_calls == []
+
+
+def test_create_file_allowed_extension_forwards_case_insensitively(monkeypatch, llm_router: Router):
+    import litellm.proxy.proxy_server as ps
+
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+    monkeypatch.setitem(ps.general_settings, "allowed_file_extensions", [".JSONL"])
+
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("input.jsonl", b'{"custom_id": "1"}\n', "application/jsonl")},
+            data={"purpose": "user_data"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 200, response.text
+    assert len(forwarded_calls) == 1
+
+
+def test_create_file_empty_allowlist_rejects_every_upload(monkeypatch, llm_router: Router):
+    import litellm.proxy.proxy_server as ps
+
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+    monkeypatch.setitem(ps.general_settings, "allowed_file_extensions", [])
+
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("input.jsonl", b'{"custom_id": "1"}\n', "application/jsonl")},
+            data={"purpose": "user_data"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 400, response.text
+    assert "allowed_file_extensions" in response.json()["error"]["message"]
+    assert forwarded_calls == []
+
+
+def test_create_file_allowlist_runs_before_blocklist(monkeypatch, llm_router: Router):
+    import litellm.proxy.proxy_server as ps
+
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+    monkeypatch.setitem(ps.general_settings, "allowed_file_extensions", [".jsonl"])
+    monkeypatch.setitem(ps.general_settings, "blocked_file_extensions", [".exe", ".jsonl"])
+
+    try:
+        denied_by_allowlist = client.post(
+            "/v1/files",
+            files={"file": ("payload.exe", b"MZ\x90\x00", "application/octet-stream")},
+            data={"purpose": "user_data"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+        denied_by_blocklist = client.post(
+            "/v1/files",
+            files={"file": ("input.jsonl", b'{"custom_id": "1"}\n', "application/jsonl")},
+            data={"purpose": "user_data"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert denied_by_allowlist.status_code == 400, denied_by_allowlist.text
+    assert "allowed_file_extensions" in denied_by_allowlist.json()["error"]["message"]
+    assert denied_by_blocklist.status_code == 400, denied_by_blocklist.text
+    assert "blocked_file_extensions" in denied_by_blocklist.json()["error"]["message"]
+    assert forwarded_calls == []
+
+
 def test_create_file_path_traversal_filename_rejected_before_forwarding(monkeypatch, llm_router: Router):
     """A filename carrying a directory-traversal component must never reach storage or the provider."""
     forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
