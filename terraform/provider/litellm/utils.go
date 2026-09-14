@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -202,33 +203,21 @@ func isCredentialNotFoundError(errResp ErrorResponse) bool {
 	return false
 }
 
-// isCredentialConflictError checks if the error response indicates a credential
-// name collision. LiteLLM surfaces this as a 500 carrying the underlying Prisma
-// unique-constraint message on credential_name. See
-// https://github.com/BerriAI/terraform-provider-litellm/issues/8.
-func isCredentialConflictError(errResp ErrorResponse) bool {
-	if msg, ok := errResp.Error.Message.(string); ok {
-		if strings.Contains(msg, "Unique constraint failed") && strings.Contains(msg, "credential_name") {
-			return true
-		}
-	}
+var errCredentialConflict = errors.New("credential_conflict")
 
+func isLegacyCredentialConflictError(errResp ErrorResponse) bool {
+	isConflict := func(msg string) bool {
+		return strings.Contains(msg, "Unique constraint failed") && strings.Contains(msg, "credential_name")
+	}
+	if msg, ok := errResp.Error.Message.(string); ok && isConflict(msg) {
+		return true
+	}
 	if msgMap, ok := errResp.Error.Message.(map[string]interface{}); ok {
-		if errStr, ok := msgMap["error"].(string); ok {
-			if strings.Contains(errStr, "Unique constraint failed") && strings.Contains(errStr, "credential_name") {
-				return true
-			}
-		}
-	}
-
-	// Check Detail.Error field for LiteLLM proxy error format
-	if errResp.Detail.Error != "" {
-		if strings.Contains(errResp.Detail.Error, "Unique constraint failed") && strings.Contains(errResp.Detail.Error, "credential_name") {
+		if errStr, ok := msgMap["error"].(string); ok && isConflict(errStr) {
 			return true
 		}
 	}
-
-	return false
+	return isConflict(errResp.Detail.Error)
 }
 
 // handleCredentialAPIResponse handles API responses specifically for credential operations
@@ -242,14 +231,18 @@ func handleCredentialAPIResponse(resp *http.Response, result interface{}, client
 		return fmt.Errorf("credential_not_found")
 	}
 
+	if resp.StatusCode == http.StatusConflict {
+		return errCredentialConflict
+	}
+
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		var errResp ErrorResponse
 		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
 			if isCredentialNotFoundError(errResp) {
 				return fmt.Errorf("credential_not_found")
 			}
-			if isCredentialConflictError(errResp) {
-				return fmt.Errorf("credential_conflict")
+			if isLegacyCredentialConflictError(errResp) {
+				return errCredentialConflict
 			}
 		}
 		return fmt.Errorf("API request failed: Status: %s, Response: %s",
