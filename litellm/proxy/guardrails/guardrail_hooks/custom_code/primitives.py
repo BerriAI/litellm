@@ -5,6 +5,7 @@ These functions are injected into the custom code execution environment
 and provide safe, sandboxed functionality for common guardrail operations.
 """
 
+import asyncio
 import json
 import re
 from collections.abc import Mapping, Sequence
@@ -514,7 +515,7 @@ async def http_request(
     request_headers = headers
     if getattr(litellm, "user_url_validation", True):
         try:
-            validated_url, host_header = validate_url(url)
+            validated_url, host_header = await asyncio.to_thread(validate_url, url)
             request_headers = {**(headers or {}), "Host": host_header}
         except (SSRFError, ValueError) as e:
             verbose_proxy_logger.warning("Custom code http_request SSRF blocked: %s", e)

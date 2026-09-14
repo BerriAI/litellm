@@ -1,4 +1,6 @@
+import asyncio
 import socket
+import threading
 from collections.abc import AsyncIterator
 from typing import Final
 
@@ -312,6 +314,39 @@ def _resolve_to(monkeypatch: pytest.MonkeyPatch, address: str) -> None:
         return [(socket.AF_INET6 if ":" in address else socket.AF_INET, socket.SOCK_STREAM, proto, "", (address, port))]
 
     monkeypatch.setattr("litellm.litellm_core_utils.url_utils.socket.getaddrinfo", getaddrinfo)
+
+
+@pytest.mark.asyncio
+async def test_slow_dns_does_not_block_other_guardrail_requests(
+    monkeypatch: pytest.MonkeyPatch, _http_requests: list[httpx.Request]
+) -> None:
+    loop: Final = asyncio.get_running_loop()
+    dns_started: Final = asyncio.Event()
+    release_dns: Final = threading.Event()
+
+    def getaddrinfo(host: str, port: int, *, proto: int) -> list[tuple[int, int, int, str, tuple[str, int]]]:
+        if host == "slow.example.com":
+            loop.call_soon_threadsafe(dns_started.set)
+            release_dns.wait(timeout=5)
+        return [(socket.AF_INET, socket.SOCK_STREAM, proto, "", ("93.184.216.34", port))]
+
+    monkeypatch.setattr("litellm.litellm_core_utils.url_utils.socket.getaddrinfo", getaddrinfo)
+    slow_request: Final = asyncio.create_task(primitives.http_get("http://slow.example.com/check"))
+    try:
+        await asyncio.wait_for(dns_started.wait(), timeout=5)
+        assert not slow_request.done()
+        fast_result: Final = await asyncio.wait_for(primitives.http_get("http://fast.example.com/check"), timeout=5)
+        assert fast_result["success"] is True
+        assert not slow_request.done()
+        assert len(_http_requests) == 1
+        assert _http_requests[0].headers["Host"] == "fast.example.com"
+    finally:
+        release_dns.set()
+        slow_result: Final = await asyncio.wait_for(slow_request, timeout=5)
+
+    assert slow_result["success"] is True
+    assert len(_http_requests) == 2
+    assert _http_requests[1].headers["Host"] == "slow.example.com"
 
 
 @pytest.mark.asyncio
