@@ -48,10 +48,15 @@ def redact_message_input_output_from_custom_logger(
 def redact_streaming_responses_for_custom_logger(model_call_details: dict, custom_logger: CustomLogger) -> dict:
     """
     Returns a copy of model_call_details whose streaming response entries are redacted deepcopies
-    when the custom logger has opted out of message logging. The shared model_call_details is left
-    untouched so other callbacks still receive the unredacted response.
+    when the custom logger has opted out of message logging via `message_logging=False` or
+    `turn_off_message_logging=True`. The shared model_call_details is left untouched so other
+    callbacks still receive the unredacted response.
     """
-    if not (hasattr(custom_logger, "message_logging") and custom_logger.message_logging is not True):
+    opted_out: Final = (
+        getattr(custom_logger, "message_logging", True) is not True
+        or getattr(custom_logger, "turn_off_message_logging", False) is True
+    )
+    if not opted_out:
         return model_call_details
     redacted_entries: Final = {
         streaming_key: _redacted_streaming_response_copy(model_call_details[streaming_key])
