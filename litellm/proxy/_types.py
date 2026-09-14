@@ -656,6 +656,7 @@ class LiteLLMRoutes(enum.Enum):
         [
             # user
             "/user/new",
+            "/user/bulk_new",
             "/user/update",
             "/user/bulk_update",
             "/user/delete",
