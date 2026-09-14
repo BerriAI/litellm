@@ -941,6 +941,7 @@ def test_ssl_exporter_is_only_built_with_custom_tls_material(monkeypatch, tmp_pa
     assert exporter._endpoint == "https://lf.internal.example/api/public/otel/v1/traces"
     assert exporter._certificate_file == str(ca_path)
     assert exporter._headers["x-langfuse-public-key"] == "pk"
+    assert exporter._headers["x-langfuse-sdk-version"] == installed_langfuse_version()
 
 
 def test_second_client_on_the_same_key_does_not_build_another_provider():
