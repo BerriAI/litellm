@@ -217,7 +217,10 @@ def stub_aws_sdk_client(monkeypatch):
         async def invoke_model_with_bidirectional_stream(self, operation_input):
             captured["operation_input"] = operation_input
             if captured.get("streams"):
-                return captured["streams"].pop(0)
+                stream = captured["streams"].pop(0)
+                if isinstance(stream, Exception):
+                    raise stream
+                return stream
             return ScriptedBedrockStream(captured.get("scripted_payloads", []))
 
     package = types.ModuleType("aws_sdk_bedrock_runtime")
@@ -531,7 +534,8 @@ class TestBedrockRealtimeProviderFailurePropagation:
         handler = BedrockRealtime()
         websocket = ConnectedClientWS([self.SESSION_UPDATE])
         healthy_stream = ScriptedBedrockStream([])
-        stub_aws_sdk_client["streams"] = [UnavailableBedrockStream(), healthy_stream]
+        eager_failure = ServiceUnavailableException("fault injected before the stream was returned")
+        stub_aws_sdk_client["streams"] = [UnavailableBedrockStream(), eager_failure, healthy_stream]
 
         with pytest.raises(BedrockError) as failure:
             await handler.async_realtime(
@@ -541,6 +545,11 @@ class TestBedrockRealtimeProviderFailurePropagation:
         assert failure.value.status_code == 503
         assert [json.loads(m)["type"] for m in websocket.sent_to_client] == ["session.created"]
         assert not websocket.closed, "the proxy route owns the client-facing error event and 1011 close"
+
+        with pytest.raises(ServiceUnavailableException):
+            await handler.async_realtime(
+                model="amazon.nova-sonic-v1:0", websocket=websocket, logging_obj=FakeLogging(), **self.AWS_PARAMS
+            )
 
         await handler.async_realtime(
             model="amazon.nova-sonic-v1:0", websocket=websocket, logging_obj=FakeLogging(), **self.AWS_PARAMS
