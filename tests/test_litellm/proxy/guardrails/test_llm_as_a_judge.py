@@ -307,6 +307,22 @@ async def test_apply_guardrail_logging_only_labels_both_sides_logging_only(input
 
 
 @pytest.mark.asyncio
+async def test_logging_only_judge_does_not_judge_its_own_judge_call():
+    router: Final = _judge_router(90.0)
+    guardrail: Final = _make_guardrail(event_hook=GuardrailEventHooks.logging_only, router_provider=lambda: router)
+    client_call: Final[dict[str, object]] = {"litellm_params": {"metadata": {"user_api_key": "hashed"}}}
+
+    assert guardrail.should_run_guardrail(client_call, GuardrailEventHooks.logging_only) is True
+    await guardrail.apply_guardrail({"texts": ["hi"]}, {"messages": [{"role": "user", "content": "hi"}]}, "request")
+
+    judge_call: Final[dict[str, object]] = {
+        "litellm_params": {"metadata": router.acompletion.call_args.kwargs["metadata"]}
+    }
+    assert guardrail.should_run_guardrail(judge_call, GuardrailEventHooks.logging_only) is False
+    assert guardrail.should_run_guardrail(client_call, GuardrailEventHooks.logging_only) is True
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_response_prompt_unchanged():
     router: Final = _judge_router(90.0)
     guardrail: Final = _make_guardrail(router_provider=lambda: router)

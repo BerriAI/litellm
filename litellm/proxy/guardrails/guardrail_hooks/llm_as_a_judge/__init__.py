@@ -1,15 +1,17 @@
 """LLM-as-a-Judge guardrail: uses an LLM to score requests or responses against weighted criteria."""
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, TypeVar
 
 from fastapi import HTTPException
+from pydantic import BaseModel, ConfigDict, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.llm_judge import (
     default_router_provider,
@@ -18,7 +20,7 @@ from litellm.litellm_core_utils.llm_judge import (
     parse_json_verdict,
 )
 from litellm.types.guardrails import GuardrailEventHooks, Mode, SupportedGuardrailIntegrations
-from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
+from litellm.types.utils import LLM_AS_A_JUDGE_GUARDRAIL_CALL_ORIGIN, GenericGuardrailAPIInputs, GuardrailStatus
 
 if TYPE_CHECKING:
     from litellm import Router
@@ -56,6 +58,25 @@ _JUDGE_SUBJECT_LABELS: Final[MappingProxyType[JudgeInputType, str]] = MappingPro
 )
 
 _VALID_ON_FAILURE: Final = frozenset({"block", "log"})
+
+_JUDGE_CALL_METADATA: Final = MappingProxyType(
+    {INTERNAL_CALL_ORIGIN_METADATA_KEY: LLM_AS_A_JUDGE_GUARDRAIL_CALL_ORIGIN}
+)
+
+
+class _LoggedCallParams(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    metadata: Mapping[str, object] | None = None
+
+
+def _is_judge_call(data: Mapping[str, object]) -> bool:
+    try:
+        params: Final = _LoggedCallParams.model_validate(data.get("litellm_params") or {})
+    except ValidationError:
+        return False
+    return (params.metadata or {}).get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == LLM_AS_A_JUDGE_GUARDRAIL_CALL_ORIGIN
+
 
 _default_router_provider: Final = default_router_provider
 _parse_judge_verdict: Final = parse_json_verdict
@@ -169,6 +190,11 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call, GuardrailEventHooks.post_call]
 
+    def should_run_guardrail(self, data: Mapping[str, object], event_type: GuardrailEventHooks) -> bool:
+        if _is_judge_call(data):
+            return False
+        return super().should_run_guardrail(data, event_type)
+
     async def _run_judge(
         self,
         messages: Sequence[JudgeMessage],
@@ -188,6 +214,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
             judge_messages,
             response_format={"type": "json_object"},
             temperature=0,
+            metadata=dict(_JUDGE_CALL_METADATA),
         )
         raw: Final = response.choices[0].message.content or "{}"
         return _parse_judge_verdict(raw)
