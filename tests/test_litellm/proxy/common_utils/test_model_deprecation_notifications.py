@@ -12,6 +12,8 @@ import pytest
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.proxy.common_utils.model_deprecation_notifications import (
     AffectedModel,
+    TeamNotification,
+    render_model_deprecation_email,
     resolve_affected_teams,
     select_milestone,
 )
@@ -155,3 +157,62 @@ class TestResolveAffectedTeams:
             THRESHOLDS,
         )
         assert set(affected) == {"t2"}
+
+
+class TestRenderModelDeprecationEmail:
+    def _notification(self, models: tuple[AffectedModel, ...]) -> TeamNotification:
+        return TeamNotification(team_id="t1", team_alias="Data Team", recipients=("a@example.com",), models=models)
+
+    def test_should_render_one_row_per_model_with_escaped_names(self):
+        hostile: Final = _info("<img src=x onerror=alert(1)>", 5, provider="op&en")
+        subject, html = render_model_deprecation_email(
+            self._notification((AffectedModel(info=hostile, display_name=hostile.model_name, milestone=7),)),
+            email_logo_url="https://logo",
+            email_support_contact="help@example.com",
+        )
+        assert "<img src=x" not in html
+        assert "&lt;img src=x onerror=alert(1)&gt;" in html
+        assert "op&amp;en" in html
+        assert "2026-10-01" in html
+        assert "<td>5d</td>" in html
+        assert "https://logo" in html
+        assert "help@example.com" in html
+        assert "Data Team" in html
+        assert subject == "[LiteLLM] 1 model(s) deprecating for team Data Team"
+
+    def test_should_say_deprecated_in_subject_once_a_model_reaches_day_zero(self):
+        models: Final = (
+            AffectedModel(info=_info("gpt-old", 5), display_name="gpt-old", milestone=7),
+            AffectedModel(info=_info("gpt-older", -4), display_name="gpt-older", milestone=0),
+        )
+        subject, html = render_model_deprecation_email(
+            self._notification(models), email_logo_url="https://logo", email_support_contact="help@example.com"
+        )
+        assert subject == "[LiteLLM] 2 model(s) deprecated for team Data Team"
+        assert "deprecated 4d ago" in html
+        assert html.index("gpt-old") < html.index("gpt-older")
+
+    def test_should_fall_back_to_team_id_when_alias_missing(self):
+        notification: Final = TeamNotification(
+            team_id="t1",
+            team_alias=None,
+            recipients=("a@example.com",),
+            models=(AffectedModel(info=_info("gpt-old", 5), display_name="gpt-old", milestone=7),),
+        )
+        subject, _ = render_model_deprecation_email(
+            notification, email_logo_url="https://logo", email_support_contact="help@example.com"
+        )
+        assert subject.endswith("for team t1")
+
+    def test_should_escape_the_team_alias(self):
+        notification: Final = TeamNotification(
+            team_id="t1",
+            team_alias="<b>Ops</b>",
+            recipients=("a@example.com",),
+            models=(AffectedModel(info=_info("gpt-old", 5), display_name="gpt-old", milestone=7),),
+        )
+        _, html = render_model_deprecation_email(
+            notification, email_logo_url="https://logo", email_support_contact="help@example.com"
+        )
+        assert "<b>Ops</b>" not in html
+        assert "&lt;b&gt;Ops&lt;/b&gt;" in html

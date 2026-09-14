@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -10,6 +11,11 @@ from typing import TYPE_CHECKING, Final
 from pydantic import BaseModel, Field, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.integrations.email_templates.email_footer import EMAIL_FOOTER
+from litellm.integrations.email_templates.model_deprecation_email import (
+    MODEL_DEPRECATION_EMAIL_ROW_TEMPLATE,
+    MODEL_DEPRECATION_EMAIL_TEMPLATE,
+)
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.proxy._types import ProxyException
 from litellm.proxy.auth.auth_checks import can_team_access_model
@@ -31,6 +37,14 @@ class _DeploymentOwner:
     model_name: str
     team_id: str
     public_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class TeamNotification:
+    team_id: str
+    team_alias: str | None
+    recipients: tuple[str, ...]
+    models: tuple[AffectedModel, ...]
 
 
 def select_milestone(days_until: int, thresholds: Sequence[int]) -> int | None:
@@ -133,3 +147,33 @@ async def resolve_affected_teams(
         }
     )
     return MappingProxyType({team_id: models for team_id, models in per_team.items() if models})
+
+
+def _days_left_label(days_until: int) -> str:
+    return f"deprecated {abs(days_until)}d ago" if days_until < 0 else f"{days_until}d"
+
+
+def _render_row(model: AffectedModel) -> str:
+    return MODEL_DEPRECATION_EMAIL_ROW_TEMPLATE.format(
+        model_name=html.escape(model.display_name),
+        provider=html.escape(model.info.litellm_provider or "unknown"),
+        deprecation_date=model.info.deprecation_date.isoformat(),
+        days_left=_days_left_label(model.info.days_until_deprecation),
+        status=model.info.status,
+    )
+
+
+def render_model_deprecation_email(
+    notification: TeamNotification, email_logo_url: str, email_support_contact: str
+) -> tuple[str, str]:
+    """(subject, html) for one team's digest, every model-sourced string escaped"""
+    team_name: Final = notification.team_alias or notification.team_id
+    verb: Final = "deprecated" if any(model.milestone == 0 for model in notification.models) else "deprecating"
+    subject: Final = f"[LiteLLM] {len(notification.models)} model(s) {verb} for team {team_name}"
+    body: Final = MODEL_DEPRECATION_EMAIL_TEMPLATE.format(
+        email_logo_url=email_logo_url,
+        team_name=html.escape(team_name),
+        model_rows="\n".join(_render_row(model) for model in notification.models),
+        email_support_contact=html.escape(email_support_contact),
+    )
+    return subject, body + EMAIL_FOOTER
