@@ -2799,12 +2799,15 @@ async def test_release_budget_reservation_on_cancel_swallows_a_second_cancellati
         "finalized": False,
         "input_cost": 0.5,
     }
-    with patch(
+    with patch(  # test-quality-ok: reconcile_budget_reservation is a module function, no DI seam for this test
         "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
         new=AsyncMock(side_effect=asyncio.CancelledError()),
     ):
-        # must return without raising
+        # must return without raising, and without taking the finalize-on-failure path either:
+        # a second cancellation isn't a failure, it's the reconcile still running in the background
         await release_budget_reservation_on_cancel(reservation)
+
+    assert reservation["finalized"] is False
 
 
 @pytest.mark.asyncio
@@ -2818,10 +2821,10 @@ async def test_release_budget_reservation_on_cancel_swallows_invalidate_failure_
         "finalized": False,
         "input_cost": 0.5,
     }
-    with patch(
+    with patch(  # test-quality-ok: reconcile_budget_reservation is a module function, no DI seam for this test
         "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
         new=AsyncMock(side_effect=RuntimeError("redis down")),
-    ), patch(
+    ), patch(  # test-quality-ok: invalidate_budget_reservation_counters is a module function, no DI seam for this test
         "litellm.proxy.spend_tracking.budget_reservation.invalidate_budget_reservation_counters",
         new=AsyncMock(side_effect=RuntimeError("redis still down")),
     ):
