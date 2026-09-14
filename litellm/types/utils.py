@@ -3782,6 +3782,7 @@ all_litellm_params = (
         "id",
         "fallbacks",
         "routing_strategy",
+        "_router_weights",
         "azure",
         "headers",
         "model_list",
