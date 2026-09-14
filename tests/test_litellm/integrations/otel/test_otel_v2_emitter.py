@@ -518,9 +518,15 @@ def test_short_conversation_keeps_every_message_indexed():
 def test_indexed_prompt_keeps_opener_and_latest_turns_under_a_value_length_limit(monkeypatch):
     """The system prompt and the live turn keep their own keys once the SDK clips ``input.value``."""
     monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT", "256")
-    payload = _conversation_payload(60)
-    payload["messages"][0] = {"role": "system", "content": "be terse"}
-    payload["messages"][-1] = {"role": "user", "content": "LATEST-TURN"}
+    chat = _conversation_payload(60)
+    payload = {
+        **chat,
+        "messages": [
+            {"role": "system", "content": "be terse"},
+            *chat["messages"][1:-1],
+            {"role": "user", "content": "LATEST-TURN"},
+        ],
+    }
     a = _conversation_span(["genai", "openinference"], payload).attributes
 
     assert len(a["input.value"]) == 256
