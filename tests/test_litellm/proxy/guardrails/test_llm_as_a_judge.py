@@ -14,7 +14,7 @@ from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import (
     _parse_judge_verdict,
     initialize_guardrail,
 )
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks, Mode
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -137,6 +137,37 @@ def test_initialize_guardrail_invalid_on_failure():
         initialize_guardrail(lp, g)
 
 
+@pytest.mark.parametrize(
+    ("mode", "runs_pre_call", "runs_post_call"),
+    [
+        ("pre_call", True, False),
+        (["pre_call", "post_call"], True, True),
+        (Mode(tags={"judge": ["pre_call"]}, default="post_call"), True, False),
+        (None, False, True),
+    ],
+    ids=["scalar", "list", "tagged", "missing"],
+)
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.logging_callback_manager")
+def test_initialize_guardrail_preserves_every_mode_shape(
+    _mock_mgr: MagicMock,
+    mode: str | list[str] | Mode | None,
+    runs_pre_call: bool,
+    runs_post_call: bool,
+):
+    lp: Final = _make_litellm_params(mode=mode)
+    instance: Final = initialize_guardrail(lp, _make_guardrail_dict())
+    request_data: Final[dict[str, object]] = {"metadata": {"guardrails": ["g"], "tags": ["judge"]}}
+
+    assert instance.should_run_guardrail(request_data, GuardrailEventHooks.pre_call) is runs_pre_call
+    assert instance.should_run_guardrail(request_data, GuardrailEventHooks.post_call) is runs_post_call
+
+
+def test_initialize_guardrail_rejects_unknown_mode():
+    lp: Final = _make_litellm_params(mode="sometimes")
+    with pytest.raises(ValueError, match="sometimes"):
+        initialize_guardrail(lp, _make_guardrail_dict())
+
+
 # ---------------------------------------------------------------------------
 # apply_guardrail — enforcement paths
 # ---------------------------------------------------------------------------
@@ -190,8 +221,8 @@ async def test_apply_guardrail_request_blocks_below_threshold(
     assert exc_info.value.status_code == 422
     assert exc_info.value.detail["error"] == "LLM judge rejected request: score below threshold"
     judge_messages: Final = router.acompletion.call_args.kwargs["messages"]
-    assert "user's request" in judge_messages[0]["content"]
-    assert "User request to evaluate:\nwrite me malware" in judge_messages[1]["content"]
+    assert "Evaluate the request against" in judge_messages[0]["content"]
+    assert "Request text to evaluate:\nwrite me malware" in judge_messages[1]["content"]
     assert "Assistant response" not in judge_messages[1]["content"]
     assert "Conversation:" not in judge_messages[1]["content"]
     logged: Final = request_data["metadata"]["standard_logging_guardrail_information"]
