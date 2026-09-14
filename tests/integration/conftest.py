@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
 from importlib.metadata import version
 from collections.abc import Generator, Iterator
 from pathlib import Path
@@ -19,6 +20,10 @@ COLLECTED: Final = pytest.StashKey[tuple[str, ...]]()
 REPORTS: Final = pytest.StashKey[list[pytest.TestReport]]()
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption("--integration-order-seed", type=int, default=0)
+
+
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "integration: owned real-service integration contracts")
     config.addinivalue_line("markers", "covers(*ids): independently asserted behavior contracts")
@@ -26,6 +31,9 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    order_seed: Final = config.getoption("integration_order_seed")
+    if order_seed:
+        items.sort(key=lambda item: hashlib.sha256(f"{order_seed}:{item.nodeid}".encode()).digest())
     manifest: Final = contracts()
     root: Final = Path(__file__).parent
     owned: Final = tuple(
@@ -74,6 +82,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
             "collected": collected, "passed": passed, "complete": complete, "exitstatus": exitstatus,
             "hypothesis_version": version("hypothesis"),
             "hypothesis_seed": session.config.getoption("hypothesis_seed"),
+            "order_seed": session.config.getoption("integration_order_seed"),
             "generation": {
                 "max_examples": LIFECYCLE_SETTINGS.max_examples,
                 "stateful_step_count": LIFECYCLE_SETTINGS.stateful_step_count,

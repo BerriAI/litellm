@@ -2925,6 +2925,30 @@ jobs:
     working_directory: ~/project
     steps:
       - setup_litellm_test_deps
+      - when:
+          condition:
+            equal: [browser, << parameters.suite >>]
+          steps:
+            - install_node
+            - restore_cache:
+                keys:
+                  - integration-ui-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
+            - run:
+                name: Install locked browser dependencies
+                command: |
+                  cd ui/litellm-dashboard
+                  npm ci
+                  cd ../../tests/e2e/ui
+                  npm ci
+                  npx playwright install --with-deps chromium
+            - save_cache:
+                key: integration-ui-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
+                paths:
+                  - ~/.npm
+                  - ~/.cache/ms-playwright
+            - run:
+                name: Build the candidate dashboard
+                command: cd ui/litellm-dashboard && NEXT_TELEMETRY_DISABLED=1 npm run build
       - start_postgres:
           image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
       - start_redis
@@ -2953,7 +2977,7 @@ workflows:
           name: integration-<< matrix.suite >>
           matrix:
             parameters:
-              suite: [management, accounting, database, providers]
+              suite: [management, accounting, database, providers, extensions, browser]
           filters:
             branches:
               only:
