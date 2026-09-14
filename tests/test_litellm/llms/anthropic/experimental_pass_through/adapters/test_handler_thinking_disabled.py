@@ -39,9 +39,7 @@ MESSAGES = [{"role": "user", "content": "hello"}]
     "thinking_param,expected_thinking_disabled",
     THINKING_PARAMS,
 )
-async def test_async_handler_streaming_threads_thinking_disabled(
-    thinking_param, expected_thinking_disabled
-):
+async def test_async_handler_streaming_threads_thinking_disabled(thinking_param, expected_thinking_disabled):
     """Async handler, stream=True: ``thinking_disabled`` reaches the streaming
     adapter call."""
     with (
@@ -55,9 +53,7 @@ async def test_async_handler_streaming_threads_thinking_disabled(
             return_value=({}, {}),
         ),
         patch("litellm.acompletion", return_value=MagicMock()),
-        patch(
-            "litellm.llms.anthropic.experimental_pass_through.adapters.handler.ANTHROPIC_ADAPTER"
-        ) as mock_adapter,
+        patch("litellm.llms.anthropic.experimental_pass_through.adapters.handler.ANTHROPIC_ADAPTER") as mock_adapter,
     ):
         mock_adapter.translate_completion_output_params_streaming.return_value = iter([])
         await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
@@ -67,12 +63,10 @@ async def test_async_handler_streaming_threads_thinking_disabled(
             stream=True,
             thinking=thinking_param,
         )
-        call_kwargs = (
-            mock_adapter.translate_completion_output_params_streaming.call_args.kwargs
+        call_kwargs = mock_adapter.translate_completion_output_params_streaming.call_args.kwargs
+        assert call_kwargs.get("thinking_disabled") is expected_thinking_disabled, (
+            f"thinking={thinking_param!r}: expected thinking_disabled={expected_thinking_disabled}"
         )
-        assert (
-            call_kwargs.get("thinking_disabled") is expected_thinking_disabled
-        ), f"thinking={thinking_param!r}: expected thinking_disabled={expected_thinking_disabled}"
 
 
 # ---------------------------------------------------------------------------
@@ -84,9 +78,7 @@ async def test_async_handler_streaming_threads_thinking_disabled(
     "thinking_param,expected_thinking_disabled",
     THINKING_PARAMS,
 )
-async def test_async_handler_non_streaming_threads_thinking_disabled(
-    thinking_param, expected_thinking_disabled
-):
+async def test_async_handler_non_streaming_threads_thinking_disabled(thinking_param, expected_thinking_disabled):
     """Async handler, stream=False: ``thinking_disabled`` reaches the
     non-streaming adapter call."""
     with (
@@ -100,9 +92,7 @@ async def test_async_handler_non_streaming_threads_thinking_disabled(
             return_value=({}, {}),
         ),
         patch("litellm.acompletion", return_value=MagicMock()),
-        patch(
-            "litellm.llms.anthropic.experimental_pass_through.adapters.handler.ANTHROPIC_ADAPTER"
-        ) as mock_adapter,
+        patch("litellm.llms.anthropic.experimental_pass_through.adapters.handler.ANTHROPIC_ADAPTER") as mock_adapter,
     ):
         mock_adapter.translate_completion_output_params.return_value = MagicMock()
         await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
@@ -113,9 +103,9 @@ async def test_async_handler_non_streaming_threads_thinking_disabled(
             thinking=thinking_param,
         )
         call_kwargs = mock_adapter.translate_completion_output_params.call_args.kwargs
-        assert (
-            call_kwargs.get("thinking_disabled") is expected_thinking_disabled
-        ), f"thinking={thinking_param!r}: expected thinking_disabled={expected_thinking_disabled}"
+        assert call_kwargs.get("thinking_disabled") is expected_thinking_disabled, (
+            f"thinking={thinking_param!r}: expected thinking_disabled={expected_thinking_disabled}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -127,9 +117,7 @@ async def test_async_handler_non_streaming_threads_thinking_disabled(
     "thinking_param,expected_thinking_disabled",
     THINKING_PARAMS,
 )
-def test_sync_handler_streaming_threads_thinking_disabled(
-    thinking_param, expected_thinking_disabled
-):
+def test_sync_handler_streaming_threads_thinking_disabled(thinking_param, expected_thinking_disabled):
     """Sync handler, stream=True: ``thinking_disabled`` reaches the streaming
     adapter call.
 
@@ -143,9 +131,7 @@ def test_sync_handler_streaming_threads_thinking_disabled(
             return_value=({}, {}),
         ),
         patch("litellm.completion", return_value=MagicMock()),
-        patch(
-            "litellm.llms.anthropic.experimental_pass_through.adapters.handler.ANTHROPIC_ADAPTER"
-        ) as mock_adapter,
+        patch("litellm.llms.anthropic.experimental_pass_through.adapters.handler.ANTHROPIC_ADAPTER") as mock_adapter,
     ):
         mock_adapter.translate_completion_output_params_streaming.return_value = iter([])
         LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
@@ -155,12 +141,10 @@ def test_sync_handler_streaming_threads_thinking_disabled(
             stream=True,
             thinking=thinking_param,
         )
-        call_kwargs = (
-            mock_adapter.translate_completion_output_params_streaming.call_args.kwargs
+        call_kwargs = mock_adapter.translate_completion_output_params_streaming.call_args.kwargs
+        assert call_kwargs.get("thinking_disabled") is expected_thinking_disabled, (
+            f"thinking={thinking_param!r}: expected thinking_disabled={expected_thinking_disabled}"
         )
-        assert (
-            call_kwargs.get("thinking_disabled") is expected_thinking_disabled
-        ), f"thinking={thinking_param!r}: expected thinking_disabled={expected_thinking_disabled}"
 
 
 # ---------------------------------------------------------------------------
@@ -172,9 +156,7 @@ def test_sync_handler_streaming_threads_thinking_disabled(
     "thinking_param,expected_thinking_disabled",
     THINKING_PARAMS,
 )
-def test_sync_handler_non_streaming_threads_thinking_disabled(
-    thinking_param, expected_thinking_disabled
-):
+def test_sync_handler_non_streaming_threads_thinking_disabled(thinking_param, expected_thinking_disabled):
     """Sync handler, stream=False: ``thinking_disabled`` reaches the
     non-streaming adapter call.
 
@@ -188,9 +170,7 @@ def test_sync_handler_non_streaming_threads_thinking_disabled(
             return_value=({}, {}),
         ),
         patch("litellm.completion", return_value=MagicMock()),
-        patch(
-            "litellm.llms.anthropic.experimental_pass_through.adapters.handler.ANTHROPIC_ADAPTER"
-        ) as mock_adapter,
+        patch("litellm.llms.anthropic.experimental_pass_through.adapters.handler.ANTHROPIC_ADAPTER") as mock_adapter,
     ):
         mock_adapter.translate_completion_output_params.return_value = MagicMock()
         LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
@@ -201,6 +181,6 @@ def test_sync_handler_non_streaming_threads_thinking_disabled(
             thinking=thinking_param,
         )
         call_kwargs = mock_adapter.translate_completion_output_params.call_args.kwargs
-        assert (
-            call_kwargs.get("thinking_disabled") is expected_thinking_disabled
-        ), f"thinking={thinking_param!r}: expected thinking_disabled={expected_thinking_disabled}"
+        assert call_kwargs.get("thinking_disabled") is expected_thinking_disabled, (
+            f"thinking={thinking_param!r}: expected thinking_disabled={expected_thinking_disabled}"
+        )

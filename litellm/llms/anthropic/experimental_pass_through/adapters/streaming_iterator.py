@@ -300,9 +300,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     sent_first_chunk: bool = False
     sent_content_block_start: bool = False
     sent_content_block_finish: bool = False
-    current_content_block_type: Literal[
-        "text", "tool_use", "thinking", "redacted_thinking"
-    ] = "text"
+    current_content_block_type: Literal["text", "tool_use", "thinking", "redacted_thinking"] = "text"
     sent_last_message: bool = False
     holding_chunk: ContentBlockDelta | None = None
     holding_stop_reason_chunk: MessageBlockDelta | None = None
@@ -624,11 +622,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
-                    applied_edits=(
-                        self.applied_edits
-                        if is_final_chunk and not will_merge_into_held
-                        else None
-                    ),
+                    applied_edits=(self.applied_edits if is_final_chunk and not will_merge_into_held else None),
                     thinking_disabled=self.thinking_disabled,
                 )
                 processed_chunk = self._with_refusal_stop_details(processed_chunk)
@@ -890,11 +884,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
-                    applied_edits=(
-                        self.applied_edits
-                        if is_final_chunk and not will_merge_into_held
-                        else None
-                    ),
+                    applied_edits=(self.applied_edits if is_final_chunk and not will_merge_into_held else None),
                     thinking_disabled=self.thinking_disabled,
                 )
                 processed_chunk = self._with_refusal_stop_details(processed_chunk)
