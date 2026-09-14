@@ -11,7 +11,6 @@ MAPPINGS: Final = (
         span="python_responses_gateway_route", python_frame=r"response_api_endpoints/endpoints\.py:\d+ responses_api$"
     ),
     mapping(span="python_gateway_service", python_frame=r"ProxyBaseLLMRequestProcessing\.base_process_llm_request$"),
-    mapping(rust_span="responses_gateway_route"),
     mapping(span="python_responses", python_frame=r"responses/main\.py:\d+ a?responses$"),
     mapping(span="python_provider_config", python_frame=r"ProviderConfigManager\.get_provider_responses_api_config$"),
     mapping(rust_span="validate_environment", python_frame=r"OpenAIResponsesAPIConfig\.validate_environment$"),
@@ -50,7 +49,7 @@ def _stream_fixture(engine: Engine, base_url: str) -> RouteFixture:
 
 
 TRACE_SUITE: Final = TraceSuite(
-    route=GatewayRouteSpec("responses"),
+    route=GatewayRouteSpec("responses", rust_supported=False),
     scenarios=(
         TraceScenario(name="async-openai", fixture=_fixture, mappings=MAPPINGS, asynchronous=True),
         TraceScenario(

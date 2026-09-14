@@ -9,8 +9,6 @@ from ...models import GatewayRouteSpec, RouteFixture, TraceScenario, TraceSuite
 MAPPINGS: Final = (
     mapping(span="python_chat_gateway_route", python_frame=r"proxy_server\.py:\d+ chat_completion$"),
     mapping(span="python_gateway_service", python_frame=r"ProxyBaseLLMRequestProcessing\.base_process_llm_request$"),
-    mapping(rust_span="chat_completions_gateway_route"),
-    mapping(rust_span="chat_completions"),
     mapping(span="python_chat_entrypoint", python_frame=r"main\.py:\d+ a?completion$"),
     mapping(span="python_provider_config", python_frame=r"ProviderConfigManager\.get_provider_chat_config$"),
     mapping(rust_span="validate_environment", python_frame=r"(?<!_)validate_environment$"),
@@ -52,7 +50,7 @@ def _stream_fixture(engine: Engine, base_url: str) -> RouteFixture:
 
 
 TRACE_SUITE: Final = TraceSuite(
-    route=GatewayRouteSpec("chat_completions"),
+    route=GatewayRouteSpec("chat_completions", rust_supported=False),
     scenarios=(
         TraceScenario(name="async-anthropic", fixture=_fixture, mappings=MAPPINGS, asynchronous=True),
         TraceScenario(

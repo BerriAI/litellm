@@ -48,13 +48,14 @@ class RouteFixture:
 class RouteSpec:
     route: SdkFunction
     python_entrypoints: tuple[str, str]
-    rust_entrypoints: tuple[str, str]
+    rust_entrypoints: tuple[str, str] | None
     fixture: Callable[[Engine, str], RouteFixture]
 
 
 @dataclass(frozen=True, slots=True)
 class GatewayRouteSpec:
     route: SdkFunction
+    rust_supported: bool = True
 
 
 TraceRouteSpec: TypeAlias = RouteSpec | GatewayRouteSpec

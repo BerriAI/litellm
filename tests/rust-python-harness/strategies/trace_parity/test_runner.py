@@ -203,6 +203,44 @@ def test_gateway_trace_keeps_calls_outside_scenario_mappings(monkeypatch: pytest
     )
 
 
+def test_default_trace_skips_unavailable_rust_sdk_entrypoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    execution: Final = importlib.import_module("tests.rust-python-harness.strategies.trace_parity.sdk.execution")
+    route: Final = RouteSpec("responses", ("responses", "aresponses"), None, _fixture)
+    scenario: Final = TraceScenario("sync-openai", _fixture, (), asynchronous=False)
+    engines: list[Engine] = []
+
+    def collect(_route: RouteSpec, engine: Engine, *, asynchronous: bool) -> tuple[FunctionTraceEvent, ...]:
+        engines.append(engine)
+        return (FunctionTraceEvent(0, None, "responses"),)
+
+    monkeypatch.setattr(execution, "collect_trace", collect)
+
+    trace: Final = execution.execute_trace(route, scenario, "sdk")
+
+    assert engines == ["python"]
+    assert trace.engine == "python"
+    assert trace.rust_error is None
+
+
+def test_default_trace_skips_unavailable_rust_gateway_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    execution: Final = importlib.import_module("tests.rust-python-harness.strategies.trace_parity.gateway.execution")
+    route: Final = GatewayRouteSpec("responses", rust_supported=False)
+    scenario: Final = TraceScenario("async-openai", _fixture, (), asynchronous=True)
+    engines: list[Engine] = []
+
+    def collect(_route: GatewayRouteSpec, _scenario: TraceScenario, engine: Engine) -> tuple[FunctionTraceEvent, ...]:
+        engines.append(engine)
+        return (FunctionTraceEvent(0, None, "responses"),)
+
+    monkeypatch.setattr(execution, "_collect", collect)
+
+    trace: Final = execution.execute_gateway_trace(route, scenario)
+
+    assert engines == ["python"]
+    assert trace.engine == "python"
+    assert trace.rust_error is None
+
+
 def test_scenario_validation_rejects_duplicate_and_unsafe_names() -> None:
     route: Final = RouteSpec("ocr", ("ocr", "aocr"), ("ocr", "aocr"), _fixture)
     duplicate: Final = TraceSuite(

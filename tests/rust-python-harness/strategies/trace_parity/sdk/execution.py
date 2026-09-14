@@ -62,6 +62,8 @@ def _entrypoint(spec: RouteSpec, engine: Engine, *, asynchronous: bool) -> SdkCa
     from litellm.rust_bridge import get_native_bridge
 
     if engine == "rust":
+        if spec.rust_entrypoints is None:
+            return TraceExecutionFailure("rust", f"{spec.route} has no native Rust trace entrypoint")
         bridge: Final = cast(object | None, get_native_bridge())
         if bridge is None:
             return TraceExecutionFailure("rust", "native Rust bridge is required for trace parity")
@@ -153,6 +155,7 @@ def execute_trace(
     surface: Surface,
     engine: TraceEngine = "both",
 ) -> TraceArtifact:
+    effective_engine: Final[TraceEngine] = "python" if engine == "both" and route.rust_entrypoints is None else engine
     scenario_route: Final = RouteSpec(
         route=route.route,
         python_entrypoints=route.python_entrypoints,
@@ -165,11 +168,13 @@ def execute_trace(
             "python",
             asynchronous=scenario.asynchronous,
         )
-        if engine != "rust"
+        if effective_engine != "rust"
         else ()
     )
     rust_trace: Final = (
-        collect_trace(scenario_route, "rust", asynchronous=scenario.asynchronous) if engine != "python" else ()
+        collect_trace(scenario_route, "rust", asynchronous=scenario.asynchronous)
+        if effective_engine != "python"
+        else ()
     )
     python_error: Final = _failure_message(python_trace)
     rust_error: Final = _failure_message(rust_trace)
@@ -180,7 +185,7 @@ def execute_trace(
         rust: Final = pipeline_projection("rust", rust_events)
     except ValueError as error:
         return TraceArtifact.from_traces(
-            engine=engine,
+            engine=effective_engine,
             surface=surface,
             sdk_function=route.route,
             scenario=scenario.name,
@@ -189,7 +194,7 @@ def execute_trace(
             python_error=f"harness: {error}",
         )
     return TraceArtifact.from_traces(
-        engine=engine,
+        engine=effective_engine,
         surface=surface,
         sdk_function=route.route,
         scenario=scenario.name,

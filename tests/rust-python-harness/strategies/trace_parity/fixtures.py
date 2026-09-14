@@ -70,16 +70,17 @@ def aws_event_stream_frame(payload: Mapping[str, object]) -> bytes:
 def aws_event_stream_response(
     events: Iterable[Mapping[str, object]], *, corrupt_last_frame: bool = False
 ) -> RecordedHttpStreamResponse:
-    frames: Final = [aws_event_stream_frame(event) for event in events]
-    if corrupt_last_frame:
-        corrupted: Final = bytearray(frames[-1])
-        corrupted[-1] ^= 0xFF
-        frames[-1] = bytes(corrupted)
+    frames: Final = tuple(aws_event_stream_frame(event) for event in events)
+    body: Final = (
+        b"".join((*frames[:-1], frames[-1][:-1] + bytes((frames[-1][-1] ^ 0xFF,))))
+        if corrupt_last_frame
+        else b"".join(frames)
+    )
     return RecordedHttpStreamResponse(
         kind="http_stream",
         status_code=200,
         headers=AWS_EVENT_STREAM_HEADERS,
-        chunks=(RecordedStreamChunk.from_bytes(b"".join(frames)),),
+        chunks=(RecordedStreamChunk.from_bytes(body),),
     )
 
 
