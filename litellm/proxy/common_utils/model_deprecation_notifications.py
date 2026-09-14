@@ -150,7 +150,9 @@ async def resolve_affected_teams(
 
 
 def _days_left_label(days_until: int) -> str:
-    return f"deprecated {abs(days_until)}d ago" if days_until < 0 else f"{days_until}d"
+    if days_until < 0:
+        return f"deprecated {abs(days_until)}d ago"
+    return "today" if days_until == 0 else f"{days_until}d"
 
 
 def _render_row(model: AffectedModel) -> str:
@@ -167,11 +169,14 @@ def render_model_deprecation_email(
     notification: TeamNotification, email_logo_url: str, email_support_contact: str
 ) -> tuple[str, str]:
     """(subject, html) for one team's digest, every model-sourced string escaped"""
-    team_name: Final = notification.team_alias or notification.team_id
-    verb: Final = "deprecated" if any(model.milestone == 0 for model in notification.models) else "deprecating"
+    alias: Final = " ".join((notification.team_alias or "").split())
+    team_name: Final = alias or notification.team_id
+    verb: Final = (
+        "deprecated" if any(model.info.days_until_deprecation < 0 for model in notification.models) else "deprecating"
+    )
     subject: Final = f"[LiteLLM] {len(notification.models)} model(s) {verb} for team {team_name}"
     body: Final = MODEL_DEPRECATION_EMAIL_TEMPLATE.format(
-        email_logo_url=email_logo_url,
+        email_logo_url=html.escape(email_logo_url),
         team_name=html.escape(team_name),
         model_rows="\n".join(_render_row(model) for model in notification.models),
         email_support_contact=html.escape(email_support_contact),

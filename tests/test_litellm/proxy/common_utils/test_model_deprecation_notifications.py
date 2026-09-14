@@ -35,7 +35,7 @@ class TestSelectMilestone:
         assert select_milestone(5, (0, 7, 30)) == 7
 
 
-def _info(model_name: str, days_until: int, provider: str = "openai") -> ModelDeprecationInfo:
+def _info(model_name: str, days_until: int, provider: str | None = "openai") -> ModelDeprecationInfo:
     return ModelDeprecationInfo(
         model_name=model_name,
         litellm_model=model_name,
@@ -190,6 +190,7 @@ class TestRenderModelDeprecationEmail:
         )
         assert subject == "[LiteLLM] 2 model(s) deprecated for team Data Team"
         assert "deprecated 4d ago" in html
+        assert "<td>deprecated</td>" in html
         assert html.index("gpt-old") < html.index("gpt-older")
 
     def test_should_fall_back_to_team_id_when_alias_missing(self):
@@ -216,3 +217,48 @@ class TestRenderModelDeprecationEmail:
         )
         assert "<b>Ops</b>" not in html
         assert "&lt;b&gt;Ops&lt;/b&gt;" in html
+
+    def test_should_render_unknown_when_the_provider_is_missing(self):
+        models: Final = (AffectedModel(info=_info("gpt-old", 5, provider=None), display_name="gpt-old", milestone=7),)
+        _, html = render_model_deprecation_email(
+            self._notification(models), email_logo_url="https://logo", email_support_contact="help@example.com"
+        )
+        assert "<td>unknown</td>" in html
+
+    def test_should_describe_day_zero_as_today_and_still_deprecating(self):
+        models: Final = (AffectedModel(info=_info("gpt-old", 0), display_name="gpt-old", milestone=0),)
+        subject, html = render_model_deprecation_email(
+            self._notification(models), email_logo_url="https://logo", email_support_contact="help@example.com"
+        )
+        assert subject == "[LiteLLM] 1 model(s) deprecating for team Data Team"
+        assert "<td>today</td>" in html
+        assert "<td>imminent</td>" in html
+
+    def test_should_append_the_shared_footer_and_escape_the_support_contact(self):
+        models: Final = (AffectedModel(info=_info("gpt-old", 5), display_name="gpt-old", milestone=7),)
+        _, html = render_model_deprecation_email(
+            self._notification(models), email_logo_url="https://logo", email_support_contact="<help>@example.com"
+        )
+        assert "github.com/BerriAI/litellm" in html
+        assert "&lt;help&gt;@example.com" in html
+        assert "<help>@example.com" not in html
+
+    def test_should_escape_the_logo_url(self):
+        models: Final = (AffectedModel(info=_info("gpt-old", 5), display_name="gpt-old", milestone=7),)
+        _, html = render_model_deprecation_email(
+            self._notification(models), email_logo_url='https://logo" onerror="x', email_support_contact="h@x.io"
+        )
+        assert '" onerror="' not in html
+        assert "https://logo&quot; onerror=&quot;x" in html
+
+    def test_should_collapse_newlines_in_the_subject_team_name(self):
+        notification: Final = TeamNotification(
+            team_id="t1",
+            team_alias="Data\r\n Team",
+            recipients=("a@example.com",),
+            models=(AffectedModel(info=_info("gpt-old", 5), display_name="gpt-old", milestone=7),),
+        )
+        subject, _ = render_model_deprecation_email(
+            notification, email_logo_url="https://logo", email_support_contact="h@x.io"
+        )
+        assert subject == "[LiteLLM] 1 model(s) deprecating for team Data Team"
