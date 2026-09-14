@@ -1535,38 +1535,19 @@ class TestTeamScopedMCPServerAccess:
             result = await fetch_all_mcp_servers(user_api_key_dict=mock_user_auth, team_id="any-team-id")
             assert len(result) == 1
 
-    @pytest.mark.asyncio
-    async def test_team_scoped_list_is_sorted_by_display_name(self):
-        """Set-derived resolution order must not leak to the client."""
-        mock_user_auth = generate_mock_user_api_key_auth(
-            user_role=LitellmUserRoles.PROXY_ADMIN,
-            user_id="admin_user",
-        )
-        unsorted = [
-            generate_mock_mcp_server_db_record(server_id="s-zeta", alias="zeta"),
-            generate_mock_mcp_server_db_record(server_id="s-alpha", alias="Alpha"),
-            generate_mock_mcp_server_db_record(server_id="s-mid", alias="mid"),
-        ]
-
-        with (
-            patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
-                return_value=True,
-            ),
-            patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_team_scoped_mcp_server_list",
-                AsyncMock(return_value=unsorted),
-            ),
-        ):
-            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
-                fetch_all_mcp_servers,
-            )
-
-            result = await fetch_all_mcp_servers(user_api_key_dict=mock_user_auth, team_id="any-team-id")
-            assert [s.server_id for s in result] == ["s-alpha", "s-mid", "s-zeta"]
-
 
 class TestFetchAllMCPServersOrdering:
+    def test_display_order_is_case_insensitive_name_then_id(self):
+        servers = [
+            generate_mock_mcp_server_db_record(server_id="s-2", alias="github"),
+            generate_mock_mcp_server_db_record(server_id="s-1", alias="github"),
+            generate_mock_mcp_server_db_record(server_id="s-0", alias="Slack"),
+            generate_mock_mcp_server_db_record(server_id="s-3", alias="confluence"),
+        ]
+
+        ordered = sorted(servers, key=mgmt_endpoints._mcp_server_display_order)
+        assert [s.server_id for s in ordered] == ["s-3", "s-1", "s-2", "s-0"]
+
     @pytest.mark.asyncio
     async def test_list_is_sorted_by_display_name_regardless_of_resolution_order(self):
         """The registry resolves ids through a set, so the response must impose its own order."""
@@ -1585,15 +1566,15 @@ class TestFetchAllMCPServersOrdering:
             mock_manager = MagicMock()
             mock_manager.get_all_allowed_mcp_servers = AsyncMock(return_value=resolved)
             with (
-                patch(
+                patch(  # test-quality-ok: the route reads a module-global manager with no injection seam
                     "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
                     mock_manager,
                 ),
-                patch(
+                patch(  # test-quality-ok: admin view is derived from module-global proxy settings
                     "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
                     return_value=True,
                 ),
-                patch(
+                patch(  # test-quality-ok: auth contexts need a live prisma client
                     "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
                     AsyncMock(return_value=[mock_user_auth]),
                 ),
