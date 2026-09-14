@@ -82,10 +82,10 @@ async def _add_langfuse_trace_id_to_alert(
                 break
             await asyncio.sleep(3)  # wait 3s before retrying for trace id
         #########################################################
+        from litellm.integrations.langfuse.langfuse import LangFuseLogger
+
         langfuse_object: Final = litellm_logging_obj._get_callback_object(service_name="langfuse")
-        if langfuse_object is not None:
-            base_url: Final = getattr(langfuse_object, "langfuse_host", None)
-            if base_url is not None:
-                return f"{base_url}/trace/{trace_id}"
+        if isinstance(langfuse_object, LangFuseLogger):
+            return f"{langfuse_object.langfuse_host}/trace/{trace_id}"
 
     return None

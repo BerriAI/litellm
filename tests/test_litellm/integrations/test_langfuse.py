@@ -77,8 +77,6 @@ class TestLangfuseUsageDetails(unittest.TestCase):
 
         # Explicitly set the Langfuse client to our mock
         self.logger.Langfuse = self.mock_langfuse_client
-        # Ensure langfuse_sdk_version is set correctly for _supports_* methods
-        self.logger.langfuse_sdk_version = "3.0.0"
 
         # Add the log_event_on_langfuse method to the instance
         def log_event_on_langfuse(
@@ -110,12 +108,6 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         # Bind the method to the instance
         self.logger.log_event_on_langfuse = types.MethodType(log_event_on_langfuse, self.logger)
 
-        # Make sure _is_langfuse_v2 returns True
-        def mock_is_langfuse_v2(self):
-            return True
-
-        self.logger._is_langfuse_v2 = types.MethodType(mock_is_langfuse_v2, self.logger)
-
     def tearDown(self):
         # Clean up logger instance to prevent state leakage
         if hasattr(self, "logger"):
@@ -133,7 +125,6 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         """Point the logger at a real v4 client whose spans land in memory."""
         from langfuse._client.resource_manager import LangfuseResourceManager
         from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
         from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
             InMemorySpanExporter,
         )
