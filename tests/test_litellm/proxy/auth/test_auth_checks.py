@@ -6582,6 +6582,166 @@ async def test_common_checks_calls_get_team_membership_once_per_request():
 
 
 @pytest.mark.asyncio
+async def test_get_team_membership_db_error_raises_503_not_none():
+    """A Prisma failure must fail closed as 503, not look like a missing membership row."""
+    from fastapi import HTTPException
+
+    from litellm.proxy.auth.auth_checks import get_team_membership
+    from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(side_effect=RuntimeError("db down"))
+    cache = UserApiKeyCache()
+
+    with pytest.raises(HTTPException) as exc:
+        await get_team_membership(
+            user_id="u-fail",
+            team_id="t-fail",
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=cache,
+        )
+
+    cached = await cache.async_get_cache(
+        key=team_membership_reservation_cache_key(user_id="u-fail", team_id="t-fail")
+    )
+    assert exc.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert cached is None
+
+
+@pytest.mark.asyncio
+async def test_common_checks_does_not_skip_member_limits_when_membership_lookup_fails():
+    """common_checks must not mark membership loaded-absent after a lookup error."""
+    from fastapi import HTTPException, Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    team = LiteLLM_TeamTable(team_id="t-fail-closed")
+    token = UserAPIKeyAuth(
+        token="k-fail-closed",
+        user_id="u-fail-closed",
+        team_id="t-fail-closed",
+        models=["gpt-4o-mini"],
+    )
+    lookup_error = HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Failed to load team membership",
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_membership",
+            new_callable=AsyncMock,
+            side_effect=lookup_error,
+        ),
+        patch("litellm.proxy.proxy_server.get_current_spend", new_callable=AsyncMock, return_value=0.0),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await common_checks(
+                request_body={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
+                team_object=team,
+                user_object=LiteLLM_UserTable(user_id="u-fail-closed"),
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={},
+                route="/chat/completions",
+                llm_router=None,
+                proxy_logging_obj=MagicMock(),
+                valid_token=token,
+                request=MagicMock(spec=Request),
+            )
+
+    assert exc.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_get_team_membership_waiter_cancel_does_not_cancel_shared_load():
+    """Cancelling one coalesced waiter must not cancel the shared Prisma load."""
+    from litellm.proxy.auth.auth_checks import get_team_membership
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    membership_row = MagicMock()
+    membership_row.dict = lambda: {"user_id": "u-shield", "team_id": "t-shield", "spend": 1.0}
+
+    async def _slow_find_unique(*args, **kwargs):
+        started.set()
+        await release.wait()
+        return membership_row
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(side_effect=_slow_find_unique)
+    cache = UserApiKeyCache()
+
+    async def _load():
+        return await get_team_membership(
+            user_id="u-shield",
+            team_id="t-shield",
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=cache,
+        )
+
+    owner = asyncio.create_task(_load())
+    await started.wait()
+    waiter = asyncio.create_task(_load())
+    await asyncio.sleep(0)
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    release.set()
+    result = await owner
+
+    assert result is not None
+    assert result.user_id == "u-shield"
+    mock_prisma_client.db.litellm_teammembership.find_unique.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_stale_membership_redis_replicate_does_not_restore_after_invalidate():
+    """A delayed DualCache Redis SET must not resurrect membership after invalidation."""
+    from litellm.proxy.auth.auth_checks import get_team_membership, invalidate_team_member_spend_state
+    from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
+
+    membership_row = MagicMock()
+    membership_row.dict = lambda: {"user_id": "u-stale", "team_id": "t-stale", "spend": 9.0}
+
+    hang_redis_set = asyncio.Event()
+
+    async def _hanging_redis_set(*args, **kwargs):
+        await hang_redis_set.wait()
+
+    redis_cache = MagicMock()
+    redis_cache.async_get_cache = AsyncMock(return_value=None)
+    redis_cache.async_set_cache = AsyncMock(side_effect=_hanging_redis_set)
+    redis_cache.async_delete_cache = AsyncMock()
+    redis_cache.delete_cache = MagicMock()
+
+    cache = UserApiKeyCache(redis_cache=redis_cache)
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=membership_row)
+
+    loaded = await get_team_membership(
+        user_id="u-stale",
+        team_id="t-stale",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=cache,
+    )
+    cache_key = team_membership_reservation_cache_key(user_id="u-stale", team_id="t-stale")
+    await invalidate_team_member_spend_state(user_id="u-stale", team_id="t-stale", user_api_key_cache=cache)
+    after_invalidate = await cache.async_get_cache(key=cache_key, local_only=True)
+
+    hang_redis_set.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    after_replicate = await cache.async_get_cache(key=cache_key, local_only=True)
+
+    assert loaded is not None
+    assert after_invalidate is None
+    assert after_replicate is None
+
+
+@pytest.mark.asyncio
 async def test_invalidate_team_member_spend_state_evicts_the_negative_cache_sentinel():
     """
     A member who later gains a per-member budget writes a membership row and calls
