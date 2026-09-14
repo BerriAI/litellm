@@ -434,6 +434,22 @@ class TestMockedCompletion:
         assert sent != "trace-123"
         assert uuid.UUID(sent).version == 4
 
+    def test_go_caller_session_survives_a_generated_marker_in_the_other_metadata(self):
+        """Only the metadata map the proxy marked as generated is ignored, so the caller's own session still wins."""
+        from litellm.llms.opencode.common_utils import with_opencode_session_header
+
+        headers = with_opencode_session_header(
+            "go",
+            {},
+            {
+                "litellm_session_id": "trace-123",
+                "metadata": {"session_id": "conv-1"},
+                "litellm_metadata": {"session_id": "trace-123", SESSION_ID_GENERATED_METADATA_KEY: True},
+            },
+        )
+
+        assert headers["x-opencode-session"] == "conv-1"
+
     def test_zen_chat_sends_no_session_header(self, respx_mock, monkeypatch):
         """Only the Go surface requires the header."""
         respx_mock.post("https://opencode.ai/zen/v1/chat/completions").mock(

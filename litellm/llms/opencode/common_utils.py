@@ -208,19 +208,23 @@ def _conversation_session_id(litellm_params: Mapping[str, object]) -> str | None
     Trace ids and session ids the proxy generated for a session-less request are
     per request, so they are never used: they would change the session every turn.
     A ``litellm_session_id`` equal to the trace id was derived from it, not sent.
+    Only the metadata map marked as generated is skipped, so a session the caller
+    sent elsewhere still wins.
     """
     metadata_maps: Final = tuple(
         metadata
         for metadata in (litellm_params.get("metadata"), litellm_params.get("litellm_metadata"))
         if isinstance(metadata, Mapping)
     )
-    if any(metadata.get(SESSION_ID_GENERATED_METADATA_KEY) for metadata in metadata_maps):
-        return None
+    caller_maps: Final = tuple(
+        metadata for metadata in metadata_maps if not metadata.get(SESSION_ID_GENERATED_METADATA_KEY)
+    )
+    proxy_generated: Final = len(caller_maps) != len(metadata_maps)
     session_id: Final = litellm_params.get("litellm_session_id")
     candidates: Final = (
-        *(metadata.get("session_id") for metadata in metadata_maps),
+        *(metadata.get("session_id") for metadata in caller_maps),
         litellm_params.get("session_id"),
-        session_id if session_id != litellm_params.get("litellm_trace_id") else None,
+        session_id if not proxy_generated and session_id != litellm_params.get("litellm_trace_id") else None,
     )
     return next((candidate for candidate in candidates if isinstance(candidate, str) and candidate), None)
 
