@@ -24950,7 +24950,9 @@
         "web_search_billing_unit": "per_query"
     },
     "vertex_ai/gemini-3-flash-preview": {
+        "cache_read_input_audio_token_cost": 1e-07,
         "cache_read_input_token_cost": 5e-08,
+        "cache_read_input_token_cost_flex": 5e-08,
         "input_cost_per_token": 5e-07,
         "input_cost_per_audio_token": 1e-06,
         "litellm_provider": "vertex_ai",
@@ -24959,7 +24961,7 @@
         "max_tokens": 65535,
         "mode": "chat",
         "output_cost_per_token": 3e-06,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -24996,7 +24998,11 @@
             "search_context_size_high": 0.014
         },
         "web_search_billing_unit": "per_query",
-        "google_maps_grounding_cost_per_query": 0.014
+        "google_maps_grounding_cost_per_query": 0.014,
+        "input_cost_per_token_batches": 2.5e-07,
+        "input_cost_per_token_flex": 2.5e-07,
+        "output_cost_per_token_batches": 1.5e-06,
+        "output_cost_per_token_flex": 1.5e-06
     },
     "vertex_ai/gemini-3.5-flash": {
         "prompt_cache_min_tokens": 4096,
@@ -25012,7 +25018,7 @@
         "output_cost_per_reasoning_token": 9e-06,
         "output_cost_per_token": 9e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -25075,7 +25081,7 @@
         "output_cost_per_token_batches": 1.875e-06,
         "output_cost_per_token_flex": 1.875e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -25132,7 +25138,7 @@
         "output_cost_per_token_batches": 1.875e-06,
         "output_cost_per_token_flex": 1.875e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -25189,7 +25195,7 @@
         "output_cost_per_token_batches": 1.875e-06,
         "output_cost_per_token_flex": 1.875e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -25246,7 +25252,7 @@
         "output_cost_per_token_above_200k_tokens": 1.8e-05,
         "output_cost_per_token_batches": 6e-06,
         "output_cost_per_image": 0.00012,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -25280,13 +25286,16 @@
         "output_cost_per_token_above_200k_tokens_priority": 3.24e-05,
         "cache_read_input_token_cost_priority": 3.6e-07,
         "cache_read_input_token_cost_above_200k_tokens_priority": 7.2e-07,
+        "cache_read_input_token_cost_flex": 2e-07,
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
         "web_search_billing_unit": "per_query",
-        "google_maps_grounding_cost_per_query": 0.014
+        "google_maps_grounding_cost_per_query": 0.014,
+        "input_cost_per_token_flex": 1e-06,
+        "output_cost_per_token_flex": 6e-06
     },
     "vertex_ai/gemini-3.1-pro-preview-customtools": {
         "prompt_cache_min_tokens": 4096,
@@ -25652,7 +25661,7 @@
         "mode": "embedding",
         "output_cost_per_token": 0,
         "output_vector_size": 3072,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supports_multimodal": true,
         "uses_embed_content": true
     },
@@ -47917,6 +47926,9 @@
         "cache_read_input_token_cost": 3e-08,
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_token": 3e-07,
+        "input_cost_per_token_batches": 1.5e-07,
+        "input_cost_per_token_flex": 1.5e-07,
+        "input_cost_per_token_priority": 5.4e-07,
         "litellm_provider": "vertex_ai-language-models",
         "max_input_tokens": 32768,
         "max_output_tokens": 32768,
@@ -47926,8 +47938,10 @@
         "output_cost_per_image_token": 3e-05,
         "output_cost_per_reasoning_token": 2.5e-06,
         "output_cost_per_token": 2.5e-06,
+        "output_cost_per_token_batches": 1.25e-06,
+        "output_cost_per_token_flex": 1.25e-06,
         "rpm": 100000,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/image-generation#edit-an-image",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -47959,10 +47973,19 @@
         "supports_image_size": false
     },
     "vertex_ai/gemini-3-pro-image": {
+        "cache_read_input_token_cost": 2e-07,
+        "cache_read_input_token_cost_above_200k_tokens": 4e-07,
+        "cache_read_input_token_cost_above_200k_tokens_priority": 7.2e-07,
+        "cache_read_input_token_cost_flex": 1e-07,
+        "cache_read_input_token_cost_priority": 3.6e-07,
         "deprecation_date": "2027-05-28",
         "input_cost_per_image": 0.0011,
         "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_200k_tokens": 4e-06,
+        "input_cost_per_token_above_200k_tokens_priority": 7.2e-06,
         "input_cost_per_token_batches": 1e-06,
+        "input_cost_per_token_flex": 1e-06,
+        "input_cost_per_token_priority": 3.6e-06,
         "litellm_provider": "vertex_ai-language-models",
         "max_input_tokens": 65536,
         "max_output_tokens": 32768,
@@ -47971,9 +47994,13 @@
         "output_cost_per_image": 0.134,
         "output_cost_per_image_token": 0.00012,
         "output_cost_per_token": 1.2e-05,
+        "output_cost_per_token_above_200k_tokens": 1.8e-05,
+        "output_cost_per_token_above_200k_tokens_priority": 3.24e-05,
         "output_cost_per_token_batches": 6e-06,
+        "output_cost_per_token_flex": 6e-06,
+        "output_cost_per_token_priority": 2.16e-05,
         "supports_reasoning": false,
-        "source": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro-image"
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
@@ -47992,9 +48019,13 @@
         "source": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro-image"
     },
     "vertex_ai/gemini-3.1-flash-image": {
+        "cache_read_input_token_cost": 5e-08,
+        "cache_read_input_token_cost_flex": 2.5e-08,
         "deprecation_date": "2027-05-28",
         "input_cost_per_image": 0.00056,
         "input_cost_per_token": 5e-07,
+        "input_cost_per_token_batches": 2.5e-07,
+        "input_cost_per_token_flex": 2.5e-07,
         "litellm_provider": "vertex_ai-language-models",
         "max_input_tokens": 65536,
         "max_output_tokens": 32768,
@@ -48003,8 +48034,10 @@
         "output_cost_per_image": 0.0672,
         "output_cost_per_image_token": 6e-05,
         "output_cost_per_token": 3e-06,
+        "output_cost_per_token_batches": 1.5e-06,
+        "output_cost_per_token_flex": 1.5e-06,
         "supports_reasoning": false,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models"
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/gemini-3.1-flash-image-preview": {
         "input_cost_per_image": 0.00056,
@@ -48022,9 +48055,11 @@
     },
     "vertex_ai/gemini-3.1-flash-lite-image": {
         "cache_read_input_token_cost": 2.5e-08,
+        "cache_read_input_token_cost_flex": 1.25e-08,
         "input_cost_per_image": 0.00028,
         "input_cost_per_token": 2.5e-07,
         "input_cost_per_token_batches": 1.25e-07,
+        "input_cost_per_token_flex": 1.25e-07,
         "litellm_provider": "vertex_ai-language-models",
         "max_input_tokens": 65536,
         "max_output_tokens": 4096,
@@ -48034,6 +48069,7 @@
         "output_cost_per_image_token": 3e-05,
         "output_cost_per_token": 1.5e-06,
         "output_cost_per_token_batches": 7.5e-07,
+        "output_cost_per_token_flex": 7.5e-07,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -48108,6 +48144,7 @@
         "google_maps_grounding_cost_per_query": 0.014
     },
     "vertex_ai/gemini-3.1-flash-lite": {
+        "cache_read_input_audio_token_cost": 5e-08,
         "deprecation_date": "2027-05-07",
         "cache_read_input_token_cost": 2.5e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
@@ -48128,7 +48165,7 @@
         "output_cost_per_token_flex": 7.5e-07,
         "output_cost_per_token_priority": 2.7e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -48170,7 +48207,7 @@
         "deprecation_date": "2027-07-21",
         "cache_read_input_token_cost": 3e-08,
         "cache_read_input_token_cost_flex": 1.5e-08,
-        "cache_read_input_token_cost_priority": 5e-08,
+        "cache_read_input_token_cost_priority": 5.4e-08,
         "input_cost_per_token": 3e-07,
         "input_cost_per_token_batches": 1.5e-07,
         "input_cost_per_token_flex": 1.5e-07,
@@ -48186,7 +48223,7 @@
         "output_cost_per_token_flex": 1.25e-06,
         "output_cost_per_token_priority": 4.5e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -48225,6 +48262,7 @@
         "google_maps_grounding_cost_per_query": 0.014
     },
     "vertex_ai/deep-research-pro-preview-12-2025": {
+        "cache_read_input_token_cost": 2e-07,
         "input_cost_per_image": 0.0011,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_batches": 1e-06,
@@ -48237,7 +48275,7 @@
         "output_cost_per_image_token": 0.00012,
         "output_cost_per_token": 1.2e-05,
         "output_cost_per_token_batches": 6e-06,
-        "source": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro-image"
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/imagegeneration@006": {
         "litellm_provider": "vertex_ai-image-models",
