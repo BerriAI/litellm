@@ -5513,7 +5513,8 @@
     },
     "azure/gpt-realtime-2025-08-28": {
         "cache_creation_input_audio_token_cost": 4e-06,
-        "cache_read_input_token_cost": 4e-06,
+        "cache_read_input_audio_token_cost": 4e-07,
+        "cache_read_input_token_cost": 4e-07,
         "deprecation_date": "2027-03-02",
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_image_token": 5e-06,
@@ -5546,7 +5547,8 @@
     },
     "azure/gpt-realtime-1.5-2026-02-23": {
         "cache_creation_input_audio_token_cost": 4e-06,
-        "cache_read_input_token_cost": 4e-06,
+        "cache_read_input_audio_token_cost": 4e-07,
+        "cache_read_input_token_cost": 4e-07,
         "deprecation_date": "2027-08-24",
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_image_token": 5e-06,
@@ -5683,6 +5685,7 @@
     },
     "azure/gpt-realtime-mini": {
         "cache_creation_input_audio_token_cost": 3e-07,
+        "cache_read_input_audio_token_cost": 3e-07,
         "cache_read_input_token_cost": 6e-08,
         "input_cost_per_audio_token": 1e-05,
         "input_cost_per_image_token": 8e-07,
@@ -5715,6 +5718,7 @@
     },
     "azure/gpt-realtime-mini-2025-10-06": {
         "cache_creation_input_audio_token_cost": 3e-07,
+        "cache_read_input_audio_token_cost": 3e-07,
         "cache_read_input_token_cost": 6e-08,
         "input_cost_per_audio_token": 1e-05,
         "input_cost_per_image_token": 8e-07,
@@ -7409,6 +7413,80 @@
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
     },
+    "azure/gpt-chat-latest": {
+        "cache_read_input_token_cost": 5e-07,
+        "deprecation_date": "2026-12-02",
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "azure",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 3e-05,
+        "reasoning_effort_levels": [
+            "medium"
+        ],
+        "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true
+    },
+    "azure/chat-latest": {
+        "cache_read_input_token_cost": 5e-07,
+        "deprecation_date": "2026-12-02",
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "azure",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 3e-05,
+        "reasoning_effort_levels": [
+            "medium"
+        ],
+        "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true
+    },
     "azure/us/gpt-5.6": {
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_272k_tokens": 1.375e-05,
@@ -7674,6 +7752,43 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
+    },
+    "azure/us/gpt-chat-latest": {
+        "cache_read_input_token_cost": 5.5e-07,
+        "deprecation_date": "2026-12-02",
+        "input_cost_per_token": 5.5e-06,
+        "litellm_provider": "azure",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 3.3e-05,
+        "reasoning_effort_levels": [
+            "medium"
+        ],
+        "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true
     },
     "azure/eu/gpt-5.6": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -23053,34 +23168,6 @@
         "output_cost_per_token": 0.0,
         "source": "https://fireworks.ai/pricing"
     },
-    "friendliai/meta-llama-3.1-70b-instruct": {
-        "input_cost_per_token": 6e-07,
-        "litellm_provider": "friendliai",
-        "max_input_tokens": 8192,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
-        "mode": "chat",
-        "output_cost_per_token": 6e-07,
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_response_schema": true,
-        "supports_system_messages": true,
-        "supports_tool_choice": true
-    },
-    "friendliai/meta-llama-3.1-8b-instruct": {
-        "input_cost_per_token": 1e-07,
-        "litellm_provider": "friendliai",
-        "max_input_tokens": 8192,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
-        "mode": "chat",
-        "output_cost_per_token": 1e-07,
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_response_schema": true,
-        "supports_system_messages": true,
-        "supports_tool_choice": true
-    },
     "friendliai/zai-org/GLM-5.3-Flash": {
         "litellm_provider": "friendliai",
         "max_input_tokens": 1048576,
@@ -32678,6 +32765,7 @@
     },
     "gpt-realtime": {
         "cache_creation_input_audio_token_cost": 4e-07,
+        "cache_read_input_audio_token_cost": 4e-07,
         "cache_read_input_token_cost": 4e-07,
         "deprecation_date": "2027-01-20",
         "input_cost_per_audio_token": 3.2e-05,
@@ -32711,6 +32799,7 @@
     },
     "gpt-realtime-1.5": {
         "cache_creation_input_audio_token_cost": 4e-07,
+        "cache_read_input_audio_token_cost": 4e-07,
         "cache_read_input_token_cost": 4e-07,
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_image_token": 5e-06,
@@ -32847,6 +32936,7 @@
     "gpt-realtime-mini": {
         "cache_creation_input_audio_token_cost": 3e-07,
         "cache_read_input_audio_token_cost": 3e-07,
+        "cache_read_input_token_cost": 6e-08,
         "deprecation_date": "2027-01-20",
         "input_cost_per_audio_token": 1e-05,
         "input_cost_per_token": 6e-07,
@@ -32878,6 +32968,7 @@
     },
     "gpt-realtime-2025-08-28": {
         "cache_creation_input_audio_token_cost": 4e-07,
+        "cache_read_input_audio_token_cost": 4e-07,
         "cache_read_input_token_cost": 4e-07,
         "deprecation_date": "2027-01-20",
         "input_cost_per_audio_token": 3.2e-05,
