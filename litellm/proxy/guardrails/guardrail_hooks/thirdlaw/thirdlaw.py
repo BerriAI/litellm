@@ -642,11 +642,10 @@ class ThirdlawGuardrail(CustomGuardrail):
         response: AsyncIterator[object],
         request_data: dict[str, object],  # mutable-ok: proxy-shared request dict; trace records land in it
     ) -> AsyncGenerator[ModelResponseStream, None]:
-        end_of_stream_only: Final = self.streaming_buffer_until_moderated or self.streaming_end_of_stream_only
+        buffer: Final = self._buffer_until_moderated()
+        end_of_stream_only: Final = buffer or self.streaming_end_of_stream_only
         iterator: Final = (
-            self._end_of_stream_moderated_stream(
-                response=response, request_data=request_data, buffer=self.streaming_buffer_until_moderated
-            )
+            self._end_of_stream_moderated_stream(response=response, request_data=request_data, buffer=buffer)
             if end_of_stream_only
             else self._sampled_stream(response=response, request_data=request_data)
         )
@@ -667,6 +666,22 @@ class ThirdlawGuardrail(CustomGuardrail):
             verbose_proxy_logger.warning("ThirdLaw guardrail: could not assemble streamed response", exc_info=True)
             return None
         return assembled if isinstance(assembled, ModelResponse) else None
+
+    def _buffer_until_moderated(self) -> bool:
+        """Whether to withhold the stream until the scan decides.
+
+        Buffering replays the original chunks on release, so a guardrail asked to mask content would
+        hand back the very text it was told to redact. Masking therefore wins over buffering.
+        """
+        requested: Final = self.streaming_buffer_until_moderated
+        if requested and self.mask_response_content:
+            verbose_proxy_logger.warning(
+                "ThirdLaw guardrail: streaming_buffer_until_moderated is disabled for %s because "
+                "mask_response_content=True -- buffered replay would release unredacted original chunks",
+                self.guardrail_name,
+            )
+            return False
+        return requested
 
     def _streaming_block_error(self, message: str) -> Exception:
         from litellm.proxy.proxy_server import StreamingCallbackError
@@ -812,11 +827,12 @@ class ThirdlawGuardrail(CustomGuardrail):
         response: AsyncIterator[object],
         request_data: dict[str, object],  # mutable-ok: proxy-shared request dict; trace records land in it
     ) -> AsyncGenerator[object, None]:
+        sampling_rate: Final = self.streaming_sampling_rate
         collected: Final[list[object]] = []  # mutable-ok: streaming chunk buffer
         async for item in response:
             collected.append(item)
             yield item
-            if len(collected) % self.streaming_sampling_rate != 0 or is_raw_sse_stream(collected):
+            if len(collected) % sampling_rate != 0 or is_raw_sse_stream(collected):
                 continue
             interim = self._assembled_stream_response(collected, raw_sse=False)
             if interim is None:

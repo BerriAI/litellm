@@ -665,6 +665,41 @@ async def test_streaming_buffered_modify_emits_rewritten_response():
     assert "sk-leak" not in emitted_text
 
 
+def _redacting_modify_decision() -> httpx.Response:
+    return _decision_response(
+        {
+            "action": "modify_response",
+            "response_body": {
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "the secret is [REDACTED]"},
+                    }
+                ]
+            },
+        }
+    )
+
+
+async def test_masking_guardrail_does_not_buffer_and_replay_originals():
+    """Buffered replay hands back the unredacted chunks, so a masking guardrail must not buffer."""
+    g = _make_guardrail(decisions=[_redacting_modify_decision()], mask_response_content=True)
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(), response=_aiter(_stream_chunks()), request_data=_request_data()
+        )
+    )
+    emitted = "".join(
+        choice.delta.content or ""
+        for chunk in out
+        if isinstance(chunk, ModelResponseStream)
+        for choice in chunk.choices
+    )
+    assert emitted == "the secret is sk-leak"
+    assert "[REDACTED]" not in emitted
+
+
 async def test_streaming_buffered_block_raises_streaming_callback_error():
     from litellm.proxy.proxy_server import StreamingCallbackError
 
