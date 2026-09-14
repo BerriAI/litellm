@@ -6,7 +6,7 @@ import json
 import os
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, Union, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, Union, cast, get_args
 
 from openai.types.chat import ChatCompletion
 from openai.types.responses import Response
@@ -52,7 +52,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
 if TYPE_CHECKING:
-    from openai.types.responses import ResponseInputImageParam
+    from openai.types.responses import ResponseInputImageParam, ResponseOutputItem
     from openai.types.responses.response_text_config_param import (
         ResponseTextConfigParam as ResponseText,
     )
@@ -197,6 +197,9 @@ def _as_chat_reasoning_items(
     return cast(list[ChatCompletionReasoningItem], list(reasoning_items))
 
 
+_ToolChoiceT = TypeVar("_ToolChoiceT")
+
+
 def _map_incomplete_reason_to_finish_reason(incomplete_reason: str | None) -> Literal["length", "content_filter"]:
     if incomplete_reason == "content_filter":
         return "content_filter"
@@ -291,7 +294,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     def __init__(self):
         pass
 
-    def _normalize_tool_choice_for_responses_api(self, tool_choice: Any) -> Any:
+    def _normalize_tool_choice_for_responses_api(
+        self, tool_choice: _ToolChoiceT
+    ) -> _ToolChoiceT | ToolChoiceFunctionParam | ToolChoiceCustomParam | Literal["auto", "none", "required"]:
         """Chat tool_choice nests the name under function/custom; Responses API expects top-level name."""
         if not isinstance(tool_choice, dict):
             return tool_choice
@@ -497,7 +502,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 responses_api_request["max_output_tokens"] = value
             elif key == "tools" and value is not None:
                 responses_api_request["tools"] = self._convert_tools_to_responses_format(
-                    cast(list[dict[str, Any]], value)
+                    cast(list[dict[str, object]], value)
                 )
             elif key == "response_format":
                 text_format = self._transform_response_format_to_text_format(value)
@@ -810,7 +815,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         response_output: Final = response_payload.get("output")
         if not isinstance(response_output, list) or len(response_output) == 0:
             return None
-        return cast(list[dict[str, Any]], response_output)
+        return cast(list[dict[str, object]], response_output)
 
     @classmethod
     def _recover_output_items_from_raw_sse(cls, raw_sse: str | None) -> list[dict[str, object]]:
@@ -893,10 +898,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         output_items = raw_response.output
         if len(output_items) == 0:
-            recovered_output_items: Final = self._recover_output_items_from_logging(logging_obj)
+            recovered_output_items: Final[list[ResponseOutputItem | dict[str, object]]] = [
+                *self._recover_output_items_from_logging(logging_obj)
+            ]
             if recovered_output_items:
-                output_items = cast(Any, recovered_output_items)
-                raw_response.output = cast(Any, recovered_output_items)
+                output_items = recovered_output_items
+                raw_response.output = recovered_output_items
                 verbose_logger.warning(
                     "Recovered empty Responses API output from raw SSE for model=%s",
                     model,
@@ -1092,7 +1099,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             verbose_logger.debug("Chat provider: Other content type -> %s", result)
             return result
 
-    def _convert_tools_to_responses_format(self, tools: list[dict[str, Any]]) -> list["ALL_RESPONSES_API_TOOL_PARAMS"]:
+    def _convert_tools_to_responses_format(
+        self, tools: list[dict[str, object]]
+    ) -> list["ALL_RESPONSES_API_TOOL_PARAMS"]:
         """Convert chat completion tools to responses API tools format"""
         responses_tools: Final[list[ALL_RESPONSES_API_TOOL_PARAMS]] = []
         for tool in tools:
@@ -1108,12 +1117,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         description=function_tool.get("description"),
                     )
                 )
-            elif tool.get("type") == "custom" and isinstance(tool.get("custom"), dict):
+            elif tool.get("type") == "custom" and isinstance(custom_payload := tool.get("custom"), dict):
                 from litellm.litellm_core_utils.prompt_templates.common_utils import (
                     convert_custom_tool_format_to_responses_shape,
                 )
 
-                custom_payload = tool["custom"]
                 flat_custom = CustomToolParam(type="custom", name=custom_payload.get("name", ""))
                 if custom_payload.get("description") is not None:
                     flat_custom["description"] = custom_payload["description"]

@@ -6,7 +6,7 @@ same route are non-inference and free.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Dict, Optional, cast
+from typing import TYPE_CHECKING, Dict, Final, Optional, Protocol, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -22,9 +22,32 @@ from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
+    from litellm.repositories.prisma_protocols import TableActions
     from litellm.router import Router
 
 TERMINAL_RESPONSE_STATUSES = frozenset({"completed", "failed", "cancelled", "incomplete"})
+
+
+class _ManagedObjectRow(Protocol):
+    """The managed-object row fields this poller reads off whatever the DB hands back."""
+
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def unified_object_id(self) -> str: ...
+
+    @property
+    def created_by(self) -> str | None: ...
+
+    @property
+    def file_object(self) -> object: ...
+
+
+def _managed_object_table(prisma_client: "PrismaClient") -> "TableActions[_ManagedObjectRow]":
+    """The managed-object table's prisma actions, typed to the row fields this poller reads."""
+    table: Final[TableActions[_ManagedObjectRow]] = prisma_client.db.litellm_managedobjecttable
+    return table
 
 
 class CheckResponsesCost:
@@ -128,7 +151,7 @@ class CheckResponsesCost:
                 f"CheckResponsesCost: stale cleanup failed (poll will continue): {cleanup_err}"
             )
 
-        jobs = await self.prisma_client.db.litellm_managedobjecttable.find_many(
+        jobs = await _managed_object_table(self.prisma_client).find_many(
             where={
                 "status": {"in": ["queued", "in_progress"]},
                 "file_purpose": "response",
@@ -138,7 +161,7 @@ class CheckResponsesCost:
         )
         
         verbose_proxy_logger.debug(f"Found {len(jobs)} response jobs to check")
-        completed_jobs = []
+        completed_jobs: Final[list[_ManagedObjectRow]] = []
 
         for job in jobs:
             unified_object_id = job.unified_object_id
@@ -189,7 +212,7 @@ class CheckResponsesCost:
 
         # Mark completed jobs in the database
         if len(completed_jobs) > 0:
-            await self.prisma_client.db.litellm_managedobjecttable.update_many(
+            await _managed_object_table(self.prisma_client).update_many(
                 where={"id": {"in": [job.id for job in completed_jobs]}},
                 data={"status": "completed"},
             )

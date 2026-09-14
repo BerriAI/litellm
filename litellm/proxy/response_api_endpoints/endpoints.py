@@ -1357,7 +1357,7 @@ async def _read_ws_model_from_first_frame(
     return model, first_message
 
 
-def _extract_model_from_first_ws_event(first_event: Any) -> str | None:
+def _extract_model_from_first_ws_event(first_event: object) -> str | None:
     """Extract model from a response.create WS event, handling flat and nested formats.
 
     Flat:   {"type": "response.create", "model": "gpt-4o", ...}

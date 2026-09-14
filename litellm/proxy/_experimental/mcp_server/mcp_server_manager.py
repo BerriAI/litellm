@@ -5574,7 +5574,7 @@ class MCPServerManager:
     async def pre_call_tool_check(
         self,
         name: str,
-        arguments: dict[str, Any],
+        arguments: _ToolArguments,
         server_name: str,
         user_api_key_auth: UserAPIKeyAuth | None,
         proxy_logging_obj: ProxyLogging | None,

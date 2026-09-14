@@ -15,7 +15,7 @@ import traceback
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, cast, overload
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -113,6 +113,20 @@ class _SpendBatch(Protocol):
     litellm_tagtable: BatchTable
     litellm_agentstable: BatchTable
     litellm_modelaccessgroupbudgettable: BatchTable
+
+
+_EntitySpendTable: TypeAlias = Literal["litellm_tagtable", "litellm_agentstable", "litellm_modelaccessgroupbudgettable"]
+
+
+def _entity_spend_table(batcher: _SpendBatch, table_accessor: _EntitySpendTable) -> BatchTable:
+    """The batch table an entity type's spend increments are written to."""
+    match table_accessor:
+        case "litellm_tagtable":
+            return batcher.litellm_tagtable
+        case "litellm_agentstable":
+            return batcher.litellm_agentstable
+        case "litellm_modelaccessgroupbudgettable":
+            return batcher.litellm_modelaccessgroupbudgettable
 
 
 class _SpendBatchManager(Protocol):
@@ -1750,7 +1764,7 @@ class DBSpendUpdateWriter:
     async def _update_entity_spend_in_db(
         entity_name: str,
         transactions: dict[str, float] | None,
-        table_accessor: Literal["litellm_tagtable", "litellm_agentstable", "litellm_modelaccessgroupbudgettable"],
+        table_accessor: _EntitySpendTable,
         where_field: str,
         n_retry_times: int,
         prisma_client: PrismaClient,
@@ -1784,7 +1798,7 @@ class DBSpendUpdateWriter:
                                     entity_id,
                                     response_cost,
                                 )
-                                getattr(batcher, table_accessor).update_many(
+                                _entity_spend_table(batcher, table_accessor).update_many(
                                     where={where_field: entity_id},
                                     data={"spend": {"increment": response_cost}},
                                 )

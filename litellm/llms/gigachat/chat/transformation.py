@@ -81,9 +81,17 @@ class GigaChatConfig(BaseConfig):
         repetition_penalty: float | None = None,
         profanity_check: bool | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
+        config_params: Final[Mapping[str, float | int | bool | None]] = MappingProxyType(
+            {
+                "temperature": temperature,
+                "top_p": top_p,
+                "max_tokens": max_tokens,
+                "repetition_penalty": repetition_penalty,
+                "profanity_check": profanity_check,
+            }
+        )
+        for key, value in config_params.items():
+            if value is not None:
                 setattr(self.__class__, key, value)
         # Instance variables for current request context
         self._current_credentials: str | None = None

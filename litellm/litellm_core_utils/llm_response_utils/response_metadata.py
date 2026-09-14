@@ -1,6 +1,6 @@
 import datetime
 from collections.abc import Mapping
-from typing import Any, Final
+from typing import Final
 
 import httpx
 
@@ -54,7 +54,7 @@ class ResponseMetadata:
     Handles setting and managing `_hidden_params`, `response_time_ms`, and `litellm_overhead_time_ms` for LiteLLM responses
     """
 
-    def __init__(self, result: Any):
+    def __init__(self, result: object):
         self.result = result
         self._hidden_params: HiddenParams | dict = getattr(result, "_hidden_params", {}) or {}
 

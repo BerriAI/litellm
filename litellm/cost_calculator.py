@@ -351,7 +351,7 @@ def cost_per_token(
     data_residency: str | None = None,  # for OpenAI regional-processing uplift (e.g. "eu", "us")
     ### VERTEX LOCATION ###
     vertex_location: str | None = None,  # for Vertex AI regional-endpoint uplift (e.g. "us-east5", "global")
-    response: Any | None = None,
+    response: object | None = None,
     ### REQUEST MODEL ###
     request_model: str | None = None,  # original request model for router detection
     custom_model_info: OCRPricing | None = None,
@@ -607,7 +607,7 @@ def cost_per_token(
             model=model,
             custom_llm_provider=custom_llm_provider,
             number_of_queries=number_of_queries or 1,
-            optional_params=(response._hidden_params if response and hasattr(response, "_hidden_params") else None),
+            optional_params=(getattr(response, "_hidden_params", None) if response else None),
         )
     elif custom_llm_provider == "vertex_ai":
         cost_router: Final = google_cost_router(
@@ -996,7 +996,7 @@ def _is_known_usage_objects(usage_obj):
     )
 
 
-def _infer_call_type(call_type: CallTypesLiteral | None, completion_response: Any) -> CallTypesLiteral | None:
+def _infer_call_type(call_type: CallTypesLiteral | None, completion_response: object) -> CallTypesLiteral | None:
     if call_type is not None:
         return call_type
 

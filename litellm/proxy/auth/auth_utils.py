@@ -166,7 +166,7 @@ def check_regex_or_str_match(request_body_value: Any, regex_str: str) -> bool:
 
 def _is_param_allowed(
     param: str,
-    request_body_value: Any,
+    request_body_value: object,
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
 ) -> bool:
     """
@@ -189,7 +189,7 @@ def _is_param_allowed(
 
 
 def _allow_model_level_clientside_configurable_parameters(
-    model: str, param: str, request_body_value: Any, llm_router: Router | None
+    model: str, param: str, request_body_value: object, llm_router: Router | None
 ) -> bool:
     """
     Check if model is allowed to use configurable client-side params
@@ -532,7 +532,7 @@ def is_request_body_safe(request_body: dict, general_settings: dict, llm_router:
     return True
 
 
-def _coerce_metadata_to_dict(value: Any) -> dict[str, Any] | None:
+def _coerce_metadata_to_dict(value: object) -> dict[str, object] | None:
     """Return ``value`` as a dict, parsing it from JSON if delivered as a string.
 
     Multipart/form-data and ``extra_body`` callers send ``litellm_metadata``
@@ -891,7 +891,7 @@ async def check_if_request_size_is_safe(request: Request) -> bool:
     return True
 
 
-async def check_response_size_is_safe(response: Any) -> bool:
+async def check_response_size_is_safe(response: object) -> bool:
     """
     Enterprise Only:
         - Checks if the response size is within the limit
@@ -1526,7 +1526,7 @@ def get_customer_user_header_from_mapping(user_id_mapping) -> list | None:
 
 
 def _get_customer_id_from_standard_headers(
-    request_headers: dict | None,
+    request_headers: Mapping[str, object] | None,
 ) -> str | None:
     """
     Check standard customer ID headers for a customer/end-user ID.
@@ -1552,7 +1552,7 @@ def _get_customer_id_from_standard_headers(
     return None
 
 
-def _coerce_user_id_to_str(value: Any) -> str | None:
+def _coerce_user_id_to_str(value: object) -> str | None:
     """Return a usable end-user identifier string, or None if the value isn't one.
 
     Always drops non-string structured values (dict/list/tuple/set) because
@@ -1579,7 +1579,7 @@ def _coerce_user_id_to_str(value: Any) -> str | None:
         # behind the flag preserves backwards compatibility for deployments
         # that intentionally pass JSON-encoded user identifiers.
         if litellm.validate_end_user_id_in_db and stripped[:1] in ("{", "["):
-            parsed: Final = safe_json_loads(stripped)
+            parsed: Final[object] = safe_json_loads(stripped)
             if isinstance(parsed, (dict, list)):
                 return None
         return stripped
@@ -1587,7 +1587,9 @@ def _coerce_user_id_to_str(value: Any) -> str | None:
     return None
 
 
-def get_end_user_id_from_request_body(request_body: dict, request_headers: dict | None = None) -> str | None:
+def get_end_user_id_from_request_body(
+    request_body: Mapping[str, object], request_headers: Mapping[str, object] | None = None
+) -> str | None:
     # Import general_settings here to avoid potential circular import issues at module level
     # and to ensure it's fetched at runtime.
     from litellm.proxy.proxy_server import general_settings
@@ -1636,7 +1638,7 @@ def get_end_user_id_from_request_body(request_body: dict, request_headers: dict 
         if user_id_str:
             return user_id_str
 
-    def _as_dict(value: Any) -> dict:
+    def _as_dict(value: object) -> dict:
         # metadata / litellm_metadata can arrive as JSON strings from
         # multipart/form-data or extra_body; coerce so string-encoded
         # payloads can't evade end-user attribution.
@@ -1721,11 +1723,11 @@ _MODEL_ROUTING_ID_FIELDS: Final = (
 )
 
 
-def _append_model_candidates(candidates: list[str], value: Any) -> None:
+def _append_model_candidates(candidates: list[str], value: object) -> None:
     if value is None:
         return
 
-    values: Final = value if isinstance(value, (list, tuple, set)) else [value]
+    values: Final[tuple[object, ...]] = tuple(value) if isinstance(value, (list, tuple, set)) else (value,)
     for item in values:
         if item is None:
             continue
@@ -1766,7 +1768,7 @@ def _route_uses_model_routing_sources(route: str) -> bool:
 
 
 def _extract_models_from_managed_resource_id(
-    resource_id: Any,
+    resource_id: object,
     resource_id_field: str | None = None,
     llm_router: Router | None = None,
 ) -> list[str]:

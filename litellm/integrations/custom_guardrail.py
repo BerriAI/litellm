@@ -155,7 +155,7 @@ class CustomGuardrail(CustomLogger):
 
     def __init_subclass__(cls, **kwargs: object) -> None:  # kwargs-ok: forwarded to cooperative __init_subclass__ hooks
         super().__init_subclass__(**kwargs)
-        own_apply_guardrail: Final = cls.__dict__.get("apply_guardrail")
+        own_apply_guardrail: Final[object] = cls.__dict__.get("apply_guardrail")
         if own_apply_guardrail is None or LOGS_GUARDRAIL_INFORMATION_MARKER in vars(own_apply_guardrail):
             return
         cls.apply_guardrail = log_guardrail_information(own_apply_guardrail)

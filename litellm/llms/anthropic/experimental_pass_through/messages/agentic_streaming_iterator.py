@@ -25,6 +25,9 @@ from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.base_llm.anthropic_messages.transformation import (
+        BaseAnthropicMessagesConfig,
+    )
 
 HOLD_BACK_PING_INTERVAL_SECONDS: Final = 15.0
 SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES: Final = (
@@ -182,7 +185,7 @@ class AgenticAnthropicStreamingIterator:
         http_handler: Any,
         model: str,
         messages: list[dict],
-        anthropic_messages_provider_config: Any,
+        anthropic_messages_provider_config: "BaseAnthropicMessagesConfig",
         anthropic_messages_optional_request_params: dict,
         logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str,
@@ -402,7 +405,7 @@ class AgenticAnthropicStreamingIterator:
     @staticmethod
     def _rebuild_anthropic_response_from_sse(
         raw_bytes: list[bytes],
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, object] | None:
         """
         Parse collected SSE bytes into an Anthropic Messages response dict.
 
@@ -416,17 +419,18 @@ class AgenticAnthropicStreamingIterator:
         """
         events: Final = _parse_sse_events(b"".join(raw_bytes))
 
-        response: Final[dict[str, Any]] = {
+        content: Final[list[dict[str, object]]] = []
+        response: Final[dict[str, object]] = {
             "id": "",
             "type": "message",
             "role": "assistant",
             "model": "",
-            "content": [],
+            "content": content,
             "stop_reason": None,
             "stop_sequence": None,
             "usage": {"input_tokens": 0, "output_tokens": 0},
         }
-        content_blocks: Final[dict[int, dict[str, Any]]] = {}
+        content_blocks: Final[dict[int, dict[str, object]]] = {}
         saw_message_start = False
 
         for event_type, data in events:
@@ -448,6 +452,6 @@ class AgenticAnthropicStreamingIterator:
         for idx in sorted(content_blocks.keys()):
             block = content_blocks[idx]
             block.pop("_partial_json", None)
-            response["content"].append(block)
+            content.append(block)
 
         return response

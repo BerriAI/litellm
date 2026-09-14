@@ -455,7 +455,6 @@ async def _auto_router_capability_slot(
 
 
 ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING: Final = "enforce_rpm_tpm_on_model_add"
-_REQUIRED_RATE_LIMIT_FIELDS: Final = ("rpm", "tpm")
 
 
 def _raise_if_rate_limits_required_but_missing(*, litellm_params: GenericLiteLLMParams, enforced: bool) -> None:
@@ -470,8 +469,8 @@ def _raise_if_rate_limits_required_but_missing(*, litellm_params: GenericLiteLLM
         return
     missing: Final = tuple(
         field
-        for field in _REQUIRED_RATE_LIMIT_FIELDS
-        if (value := getattr(litellm_params, field)) is None or value <= 0
+        for field, value in (("rpm", litellm_params.rpm), ("tpm", litellm_params.tpm))
+        if value is None or value <= 0
     )
     if not missing:
         return

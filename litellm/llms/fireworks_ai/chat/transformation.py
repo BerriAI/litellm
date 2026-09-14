@@ -1,6 +1,6 @@
 import json
 from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 import httpx
 
@@ -751,7 +751,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "FireworksAIChatCompletionStreamingHandler":
         return FireworksAIChatCompletionStreamingHandler(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
