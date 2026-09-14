@@ -1,5 +1,7 @@
 "use client";
 
+import LanguageSwitcher from "@/components/LanguageSwitcher";
+import { useTranslation } from "@/i18n/useTranslation";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -25,6 +27,7 @@ import { usePathname } from "next/navigation";
 // Top bar for the dashboard shell. Sits only over the content column (the brand
 // lives in the sidebar header); mirrors the design's breadcrumb-left / tools-right layout.
 export function DashboardHeader() {
+  const { t } = useTranslation();
   const { title } = getBreadcrumb(usePathname());
   const { isControlPlane, selectedWorker } = useWorker();
   const showWorkerSwitch = isControlPlane && selectedWorker !== null;
@@ -47,7 +50,7 @@ export function DashboardHeader() {
           </BreadcrumbItem>
           <BreadcrumbSeparator />
           <BreadcrumbItem className="min-w-0">
-            <BreadcrumbPage className="truncate">{title}</BreadcrumbPage>
+            <BreadcrumbPage className="truncate">{t(title)}</BreadcrumbPage>
           </BreadcrumbItem>
         </BreadcrumbList>
       </Breadcrumb>
@@ -63,6 +66,7 @@ export function DashboardHeader() {
         <BlogDropdown />
         {!hideCommunityLinks && <CommunityEngagementButtons />}
         <ToolbarSeparator />
+        <LanguageSwitcher />
         <ThemeToggle />
         <NotificationsBell />
       </div>
