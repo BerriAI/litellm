@@ -123,6 +123,7 @@ from litellm.repositories.table_repositories import (
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.router import Router
+from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.utils import get_utc_datetime
 
@@ -2373,13 +2374,6 @@ async def _backfill_null_user_email(
         ttl=get_management_object_ttl(user_api_key_cache),
     )
     return updated_row
-
-
-class UserNotFoundError(ValueError):
-    """The user row is provably absent, as opposed to merely unreadable, so a caller that reads a missing row as no user-level limits can key on it without also swallowing a database that would not answer."""
-
-    def __init__(self, user_id: str) -> None:
-        super().__init__(f"User doesn't exist in db. 'user_id'={user_id}. Create user via `/user/new` call.")
 
 
 @log_db_metrics
