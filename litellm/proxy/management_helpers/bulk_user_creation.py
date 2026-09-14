@@ -31,6 +31,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import invalidate_team_member_spend_state
 from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_org_admin_for_team,  # pyright: ignore[reportPrivateUsage]  # same team-admin check /user/new uses
@@ -433,23 +434,38 @@ async def _insert_users(
     try:
         await table.create_many(data=payloads)
         return tuple(prepared), ()
-    except Exception:  # noqa: BLE001  # fall back to per-row inserts so the failing row can be identified
+    except Exception as exc:  # noqa: BLE001  # fall back to per-row inserts so the failing row can be identified
         verbose_proxy_logger.warning("/user/bulk_new: create_many failed, retrying rows individually", exc_info=True)
-    landed_rows: Final = await table.find_many(
-        where={"user_id": {"in": [payload["user_id"] for payload in payloads]}}  # mutable-ok: Prisma filter
-    )
+        outcome_unknown: Final = PrismaDBExceptionHandler.is_database_infrastructure_error(exc)
+    requested: Final = frozenset(payload["user_id"] for payload in payloads)
+    landed_rows: Final = await table.find_many(where={"user_id": {"in": list(requested)}})  # mutable-ok: Prisma filter
     landed: Final = frozenset(row.user_id for row in landed_rows)
+    # create_many is one INSERT: after a lost response the full set is ours, any partial set belongs to another request
+    if outcome_unknown and landed == requested:
+        return tuple(prepared), ()
+    taken: Final = tuple(user for user in prepared if user.row.user_id in landed)
     retried: Final = tuple(user for user in prepared if user.row.user_id not in landed)
     outcomes: Final = await _bounded(
         BULK_NEW_USER_CONCURRENCY, tuple(table.create(data=_user_create_payload(user)) for user in retried)
     )
     failed: Final = MappingProxyType(
         {
-            user.row.user_id: _RowFailure(
-                user.pending.index, user.pending.user_id, user.row.user_email, _error_message(outcome)
-            )
-            for user, outcome in zip(retried, outcomes, strict=True)
-            if isinstance(outcome, BaseException)
+            **{
+                user.row.user_id: _RowFailure(
+                    user.pending.index,
+                    user.pending.user_id,
+                    user.row.user_email,
+                    f"User id={user.row.user_id} already exists",
+                )
+                for user in taken
+            },
+            **{
+                user.row.user_id: _RowFailure(
+                    user.pending.index, user.pending.user_id, user.row.user_email, _error_message(outcome)
+                )
+                for user, outcome in zip(retried, outcomes, strict=True)
+                if isinstance(outcome, BaseException)
+            },
         }
     )
     return (
