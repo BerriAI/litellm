@@ -3,6 +3,7 @@ import signal
 import subprocess
 import sys
 import time
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -15,7 +16,6 @@ from litellm.proxy.db.query_engine_reaper import (
     _try_reap,
     list_orphaned_engine_pids,
     reap_orphaned_engines,
-    set_child_subreaper,
     start_query_engine_reaper,
     terminate_and_reap,
     terminate_and_reap_all,
@@ -79,11 +79,19 @@ class TestListOrphanedEnginePids:
 
 class TestSetChildSubreaper:
     def test_matches_platform_capability(self):
-        result = set_child_subreaper()
-        if sys.platform.startswith("linux"):
-            assert result is True
-        else:
-            assert result is False
+        result: Final = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; "
+                "from litellm.proxy.db.query_engine_reaper import set_child_subreaper; "
+                "assert set_child_subreaper() is sys.platform.startswith('linux')",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals and waitpid")

@@ -1292,6 +1292,21 @@ async def test_update_project_leaves_metadata_untouched_when_no_limit_is_sent(mo
     assert "metadata" not in _written_project_data(mock_prisma)
 
 
+@pytest.mark.asyncio
+async def test_update_project_clears_only_the_explicit_budget_cap(monkeypatch):
+    mock_prisma = _project_update_mocks(monkeypatch, {})
+    mock_prisma.db.litellm_projecttable.find_unique.return_value.budget_id = "budget-clear-test"
+    mock_prisma.db.litellm_budgettable.update = mock.AsyncMock()
+
+    await _run_project_update("project-clear-test", max_budget=None)
+
+    mock_prisma.db.litellm_budgettable.update.assert_awaited_once_with(
+        where={"budget_id": "budget-clear-test"},
+        data={"max_budget": None, "updated_by": "1234"},
+    )
+    assert "max_budget" not in _written_project_data(mock_prisma)
+
+
 @pytest.mark.parametrize("entry", ["all-proxy-models", "*", "azure/*"])
 def test_enforce_project_model_quota_rejects_entries_that_expand_at_request_time(entry):
     """A quota keyed on a wildcard entry is never applied by the limiter, so it fails loudly."""

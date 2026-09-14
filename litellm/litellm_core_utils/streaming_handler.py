@@ -236,9 +236,11 @@ class CustomStreamWrapper:
         stream_options=None,
         make_call: Callable | None = None,
         _response_headers: dict | httpx.Headers | None = None,
+        count_prompt_tokens: Callable[[], int] | None = None,
     ):
         self.model = model
         self.make_call = make_call
+        self.count_prompt_tokens = count_prompt_tokens
         self.custom_llm_provider = custom_llm_provider
         self.logging_obj: LiteLLMLoggingObject = logging_obj
         self.completion_stream = completion_stream
@@ -1473,17 +1475,14 @@ class CustomStreamWrapper:
                 self.received_finish_reason = response_obj["finish_reason"]
         elif self.custom_llm_provider == "cached_response":
             cached_chunk: Final = cast(ModelResponseStream, chunk)
-            chunk_finish_reason: Final = cached_chunk.choices[0].finish_reason
+            cached_choice: Final = cached_chunk.choices[0] if cached_chunk.choices else None
+            chunk_finish_reason: Final = cached_choice.finish_reason if cached_choice is not None else None
             response_obj = {
-                "text": cached_chunk.choices[0].delta.content,
+                "text": cached_choice.delta.content if cached_choice is not None else None,
                 "is_finished": chunk_finish_reason is not None,
                 "finish_reason": chunk_finish_reason,
                 "original_chunk": cached_chunk,
-                "tool_calls": (
-                    cached_chunk.choices[0].delta.tool_calls
-                    if hasattr(cached_chunk.choices[0].delta, "tool_calls")
-                    else None
-                ),
+                "tool_calls": (getattr(cached_choice.delta, "tool_calls", None) if cached_choice is not None else None),
             }
 
             completion_obj["content"] = response_obj["text"]
@@ -1644,7 +1643,7 @@ class CustomStreamWrapper:
                         except Exception:
                             model_response.choices[0].delta = Delta()
                 else:
-                    if self.stream_options is not None and self.stream_options["include_usage"] is True:
+                    if self.send_stream_usage is True:
                         model_response.choices = []
                         return model_response
                     self._record_usage_only_chunk(model_response=model_response)
@@ -1999,6 +1998,7 @@ class CustomStreamWrapper:
                         chunks=self.chunks,
                         messages=self.messages,
                         logging_obj=self.logging_obj,
+                        count_prompt_tokens=self.count_prompt_tokens,
                     )
                 except Exception as e:
                     # stream_chunk_builder can re-raise (as APIError) on large agentic
@@ -2251,6 +2251,7 @@ class CustomStreamWrapper:
                     chunks=self.chunks,
                     messages=self.messages,
                     logging_obj=self.logging_obj,
+                    count_prompt_tokens=self.count_prompt_tokens,
                 )
             except Exception as e:
                 # see sync __next__: a raise from stream_chunk_builder inside this
@@ -2374,6 +2375,7 @@ class CustomStreamWrapper:
                 chunks=self.chunks,
                 messages=self.messages if isinstance(self.messages, list) else None,
                 logging_obj=self.logging_obj,
+                count_prompt_tokens=self.count_prompt_tokens,
             )
             if partial_response is None:
                 return

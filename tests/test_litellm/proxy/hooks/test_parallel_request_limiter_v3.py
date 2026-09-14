@@ -6171,3 +6171,116 @@ async def test_success_hook_leaves_stash_untouched_for_non_batch_responses():
         data={}, user_api_key_dict=user, response=ModelResponse(usage=Usage(total_tokens=5))
     )
     assert get_request_stash().batch_enqueued_reservation == reservation
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_attaches_ratelimit_headers_to_dict_response():
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitResponse, RateLimitStatus
+
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    get_or_create_request_stash().rate_limit_response = RateLimitResponse(
+        overall_code="OK",
+        statuses=[
+            RateLimitStatus(
+                code="OK",
+                current_limit=100,
+                limit_remaining=99,
+                rate_limit_type="requests",
+                descriptor_key="model_saturation_check",
+            )
+        ],
+    )
+    response = {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [],
+        "_hidden_params": {"additional_headers": {"x-litellm-attempted-retries": 0}},
+    }
+
+    await handler.async_post_call_success_hook(
+        data={"model": "anthropic-haiku"},
+        user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("sk-dict-response")),
+        response=response,
+    )
+
+    additional_headers = response["_hidden_params"]["additional_headers"]
+    assert additional_headers["x-litellm-attempted-retries"] == 0
+    assert additional_headers["x-ratelimit-model_saturation_check-limit-requests"] == 100
+    assert additional_headers["x-ratelimit-model_saturation_check-remaining-requests"] == 99
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_leaves_raw_provider_dict_untouched():
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitResponse, RateLimitStatus
+
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    get_or_create_request_stash().rate_limit_response = RateLimitResponse(
+        overall_code="OK",
+        statuses=[
+            RateLimitStatus(
+                code="OK",
+                current_limit=100,
+                limit_remaining=99,
+                rate_limit_type="requests",
+                descriptor_key="model_saturation_check",
+            )
+        ],
+    )
+    response = {"id": "msg_123", "type": "message", "role": "assistant", "content": []}
+
+    await handler.async_post_call_success_hook(
+        data={"model": "anthropic-haiku"},
+        user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("sk-raw-dict")),
+        response=response,
+    )
+
+    assert response == {"id": "msg_123", "type": "message", "role": "assistant", "content": []}
+
+
+class _OpenBreakerRedis:
+    def async_register_script(self, script: str):
+        async def refused(keys, args):
+            from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+
+            raise RedisCircuitBreakerOpenError("Redis circuit breaker is open")
+
+        return refused
+
+    async def async_increment_pipeline(self, increment_list, **kwargs):
+        from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+
+        raise RedisCircuitBreakerOpenError("Redis circuit breaker is open")
+
+
+@pytest.mark.asyncio
+async def test_an_open_circuit_breaker_falls_back_to_the_pipeline_without_a_warning(caplog):
+    from litellm.types.caching import RedisPipelineIncrementOperation
+
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=_OpenBreakerRedis()))  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        await handler.async_increment_tokens_with_ttl_preservation(
+            pipeline_operations=[RedisPipelineIncrementOperation(key="quiet_key", increment_value=10.0, ttl=60)]
+        )
+
+    assert await handler.internal_usage_cache.dual_cache.async_get_cache("quiet_key") == 10.0
+    assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
+
+
+@pytest.mark.asyncio
+async def test_an_open_circuit_breaker_reads_the_sliding_window_locally_without_a_warning(caplog):
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=_OpenBreakerRedis()))  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        values = await handler._execute_redis_batch_rate_limiter_script(
+            ["{quiet}:window", "{quiet}:counter"], now_int=int(time.time())
+        )
+
+    assert isinstance(values, list)
+    assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
+    assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
