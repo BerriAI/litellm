@@ -214,7 +214,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             guardrail_to_apply.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_json_response="no scannable content after message scoping",
                 request_data=data,
-                guardrail_status="skipped",
+                guardrail_status="not_run",
             )
 
         verbose_proxy_logger.debug(

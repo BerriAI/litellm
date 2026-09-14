@@ -193,12 +193,12 @@ async def _upsert_rows_with_retry(
 
 
 def guardrail_status_to_action(status: str | None) -> str:
-    """Map StandardLogging guardrail_status to blocked/passed/flagged/skipped."""
+    """Map StandardLogging guardrail_status to blocked/passed/flagged/not_run."""
     if not status:
         return "passed"
     s: Final = (status or "").lower()
-    if s == "skipped":
-        return "skipped"
+    if s == "not_run":
+        return "not_run"
     if "intervened" in s or "block" in s:
         return "blocked"
     if "flagged" in s or "fail" in s or "error" in s:
@@ -380,7 +380,7 @@ async def process_spend_logs_guardrail_usage(
             if not isinstance(guardrail_id, str) or not guardrail_id:
                 continue
             action = guardrail_status_to_action(entry.get("guardrail_status"))
-            if action != "skipped":
+            if action != "not_run":
                 key = _MetricsKey(guardrail_id, date_key)
                 daily_guardrail[key]["requests_evaluated"] += 1
                 if action == "passed":

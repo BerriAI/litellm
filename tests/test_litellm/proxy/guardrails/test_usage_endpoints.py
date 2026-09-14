@@ -685,7 +685,7 @@ async def test_detail_prev_trend_query_is_bounded():
 
 
 @pytest.mark.asyncio
-async def test_logs_report_skipped_entries_as_skipped_not_passed():
+async def test_logs_report_not_run_entries_as_not_run_not_passed():
     """LIT-6314: a guardrail that never scanned must not be reported as a pass in the drill-down."""
     index_row = MagicMock()
     index_row.request_id = "req-nr"
@@ -697,7 +697,7 @@ async def test_logs_report_skipped_entries_as_skipped_not_passed():
     spend_log.startTime = datetime(2026, 4, 22)
     spend_log.metadata = {
         "guardrail_information": [
-            {"guardrail_name": "db-1", "guardrail_status": "skipped", "duration": 0.0},
+            {"guardrail_name": "db-1", "guardrail_status": "not_run", "duration": 0.0},
         ]
     }
     prisma = _prisma(find_unique=_db_row(), index_find_many=[index_row])
@@ -715,11 +715,11 @@ async def test_logs_report_skipped_entries_as_skipped_not_passed():
             end_date=END,
             user_api_key_dict=ADMIN,
         )
-    assert [log.action for log in resp.logs] == ["skipped"]
+    assert [log.action for log in resp.logs] == ["not_run"]
 
 
 @pytest.mark.asyncio
-async def test_logs_action_passed_filter_excludes_skipped_entries():
+async def test_logs_action_passed_filter_excludes_not_run_entries():
     """LIT-6314: filtering the drill-down for passes must not return unscanned requests."""
     index_row = MagicMock()
     index_row.request_id = "req-nr"
@@ -729,7 +729,7 @@ async def test_logs_action_passed_filter_excludes_skipped_entries():
     spend_log.request_id = "req-nr"
     spend_log.model = "gpt-4o-mini"
     spend_log.startTime = datetime(2026, 4, 22)
-    spend_log.metadata = {"guardrail_information": [{"guardrail_name": "db-1", "guardrail_status": "skipped"}]}
+    spend_log.metadata = {"guardrail_information": [{"guardrail_name": "db-1", "guardrail_status": "not_run"}]}
     prisma = _prisma(find_unique=_db_row(), index_find_many=[index_row])
     prisma.db.litellm_spendlogs.find_many = AsyncMock(return_value=[spend_log])
     handler = _config_handler()

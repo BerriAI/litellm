@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 
 _EMPTY_UNITS: Final[Mapping[str, int]] = MappingProxyType({})
-_ACTION_SEVERITY: Final[Mapping[str, int]] = MappingProxyType({"skipped": 0, "passed": 1, "flagged": 2, "blocked": 3})
+_ACTION_SEVERITY: Final[Mapping[str, int]] = MappingProxyType({"not_run": 0, "passed": 1, "flagged": 2, "blocked": 3})
 
 _T = TypeVar("_T")
 
@@ -325,7 +325,7 @@ class UsageDetailResponse(BaseModel):
 class UsageLogEntry(BaseModel):
     id: str
     timestamp: str
-    action: str  # blocked | passed | flagged | skipped
+    action: str  # blocked | passed | flagged | not_run
     score: float | None
     latency_ms: float | None
     model: str | None

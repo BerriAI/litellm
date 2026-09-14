@@ -3120,7 +3120,7 @@ class GuardrailMode(TypedDict, total=False):
 
 
 GuardrailStatus = Literal[
-    "success", "guardrail_flagged", "guardrail_intervened", "guardrail_failed_to_respond", "not_run", "skipped"
+    "success", "guardrail_flagged", "guardrail_intervened", "guardrail_failed_to_respond", "not_run"
 ]
 
 # Fields on a guardrail record whose values can quote the caller's prompt: the payload sent to the
@@ -3367,7 +3367,6 @@ class StandardLoggingPayloadStatusFields(TypedDict, total=False):
     - 'guardrail_intervened': Guardrail blocked or modified content
     - 'guardrail_failed_to_respond': Guardrail had technical failure
     - 'not_run': No guardrail was run
-    - 'skipped': Only used per guardrail entry, message scoping left the guardrail nothing to scan
     """
 
 
