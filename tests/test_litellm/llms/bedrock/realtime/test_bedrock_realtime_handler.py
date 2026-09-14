@@ -168,6 +168,34 @@ class BreakingBedrockReceiver(ScriptedBedrockReceiver):
         return await super().receive()
 
 
+class DrainedThenOpenBedrockReceiver(ScriptedBedrockReceiver):
+    """Delivers its payloads, flags `drained`, then stays open like a live Nova Sonic turn"""
+
+    def __init__(self, payloads):
+        super().__init__(payloads)
+        self.drained = asyncio.Event()
+
+    async def receive(self):
+        if not self._payloads:
+            self.drained.set()
+            await asyncio.Event().wait()
+        return await super().receive()
+
+
+class ResetOnAudioInputStream(FakeInputStream):
+    """Accepts session setup, then the provider resets the input side once the first response was delivered"""
+
+    def __init__(self, drained):
+        super().__init__()
+        self._drained = drained
+
+    async def send(self, event):
+        if "audioInput" in json.loads(event.value.bytes_.decode("utf-8")).get("event", {}):
+            await self._drained.wait()
+            raise RuntimeError("bedrock input stream reset")
+        self.sent.append(event)
+
+
 class ScriptedBedrockStream:
     def __init__(self, payloads, receiver_type=ScriptedBedrockReceiver):
         self.input_stream = FakeInputStream()
@@ -560,10 +588,14 @@ class TestBedrockRealtimeProviderFailurePropagation:
         assert [next(iter(event["event"])) for event in replayed][:2] == ["sessionStart", "promptStart"]
         assert websocket.closed
 
-    @pytest.mark.asyncio
-    async def test_mid_stream_failure_escapes_keeps_partial_spend_and_blocks_replay(
-        self, stub_aws_sdk_client, monkeypatch
-    ):
+    TEXT_TURN = (
+        json.dumps({"event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}}),
+        json.dumps({"event": {"textOutput": {"content": "Hi"}}}),
+        json.dumps({"event": {"contentEnd": {"stopReason": "END_TURN"}}}),
+    )
+
+    @pytest.fixture
+    def spend_dispatch(self, monkeypatch):
         import litellm.llms.bedrock.realtime.handler as handler_module
 
         dispatched = {}
@@ -577,35 +609,69 @@ class TestBedrockRealtimeProviderFailurePropagation:
                 dispatched["coro"] = coro
 
         monkeypatch.setattr(handler_module, "GLOBAL_LOGGING_WORKER", RecordingLoggingWorker())
+        dispatched["logging_obj"] = RecordingLogging()
+        return dispatched
+
+    @pytest.mark.asyncio
+    async def test_mid_stream_failure_escapes_keeps_partial_spend_and_blocks_replay(
+        self, stub_aws_sdk_client, spend_dispatch
+    ):
         handler = BedrockRealtime()
         websocket = ConnectedClientWS([self.SESSION_UPDATE])
-        stub_aws_sdk_client["streams"] = [
-            ScriptedBedrockStream(
-                [
-                    json.dumps({"event": {"contentStart": {"role": "ASSISTANT", "type": "TEXT"}}}),
-                    json.dumps({"event": {"textOutput": {"content": "Hi"}}}),
-                    json.dumps({"event": {"contentEnd": {"stopReason": "END_TURN"}}}),
-                ],
-                receiver_type=BreakingBedrockReceiver,
-            )
-        ]
+        stream = ScriptedBedrockStream(self.TEXT_TURN, receiver_type=BreakingBedrockReceiver)
+        stub_aws_sdk_client["streams"] = [stream]
 
         with pytest.raises(BedrockError) as failure:
             await handler.async_realtime(
-                model="amazon.nova-sonic-v1:0", websocket=websocket, logging_obj=RecordingLogging(), **self.AWS_PARAMS
+                model="amazon.nova-sonic-v1:0",
+                websocket=websocket,
+                logging_obj=spend_dispatch["logging_obj"],
+                **self.AWS_PARAMS,
             )
 
         assert failure.value.status_code == 424
-        await dispatched["coro"]
-        assert [event["type"] for event in dispatched["events"]] == ["response.done"]
+        await spend_dispatch["coro"]
+        assert [event["type"] for event in spend_dispatch["events"]] == ["response.done"]
         assert "response.done" in [json.loads(m)["type"] for m in websocket.sent_to_client]
+        flushed = [json.loads(chunk.value.bytes_.decode("utf-8")) for chunk in stream.input_stream.sent]
+        assert [next(iter(event["event"])) for event in flushed][-2:] == ["promptEnd", "sessionEnd"]
+        assert stream.input_stream.closed
 
         with pytest.raises(BedrockError) as replay:
             await handler.async_realtime(
-                model="amazon.nova-sonic-v1:0", websocket=websocket, logging_obj=RecordingLogging(), **self.AWS_PARAMS
+                model="amazon.nova-sonic-v1:0",
+                websocket=websocket,
+                logging_obj=spend_dispatch["logging_obj"],
+                **self.AWS_PARAMS,
             )
 
-        assert replay.value.status_code == 409, "a committed session must not be silently restarted on a fallback"
+        assert replay.value.status_code == 400, "a committed session must not be silently restarted on a fallback"
+        assert not litellm._should_retry(replay.value.status_code), "the router must not retry the replay refusal"
+        assert "Nova Sonic stream broke" in replay.value.message, "the router surfaces the last attempt's error"
+
+    @pytest.mark.asyncio
+    async def test_input_side_failure_keeps_spend_for_responses_already_delivered(
+        self, stub_aws_sdk_client, spend_dispatch
+    ):
+        receiver = DrainedThenOpenBedrockReceiver(self.TEXT_TURN)
+        stream = ScriptedBedrockStream(self.TEXT_TURN, receiver_type=lambda _payloads: receiver)
+        stream.input_stream = ResetOnAudioInputStream(receiver.drained)
+        stub_aws_sdk_client["streams"] = [stream]
+        websocket = ConnectedClientWS(
+            [self.SESSION_UPDATE, json.dumps({"type": "input_audio_buffer.append", "audio": "AAAA"})]
+        )
+
+        with pytest.raises(RuntimeError, match="bedrock input stream reset"):
+            await BedrockRealtime().async_realtime(
+                model="amazon.nova-sonic-v1:0",
+                websocket=websocket,
+                logging_obj=spend_dispatch["logging_obj"],
+                **self.AWS_PARAMS,
+            )
+
+        assert "response.done" in [json.loads(m)["type"] for m in websocket.sent_to_client]
+        await spend_dispatch["coro"]
+        assert [event["type"] for event in spend_dispatch["events"]] == ["response.done"]
 
     @pytest.mark.asyncio
     async def test_stream_failure_after_client_disconnect_is_not_a_provider_failure(self, stub_aws_sdk_client):
