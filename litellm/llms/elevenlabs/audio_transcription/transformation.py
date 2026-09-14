@@ -23,6 +23,20 @@ from ...base_llm.audio_transcription.transformation import (
 from ..common_utils import ElevenLabsException
 
 
+def _to_form_value(value: object) -> str:
+    """Serialize a multipart form-field value the way ElevenLabs expects.
+
+    httpx (which the ElevenLabs SDK uses) encodes booleans as lowercase
+    ``true``/``false``. Python's ``str(True)`` yields ``"True"``, which the
+    ElevenLabs API does not recognize — so a boolean flag such as
+    ``use_multi_channel`` or ``diarize`` would be silently ignored. Normalize
+    bools to lowercase; everything else is stringified as before.
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
 class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     @property
     def custom_llm_provider(self) -> str:
@@ -79,7 +93,7 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         for key, value in optional_params.items():
             if key in self.get_supported_openai_params(model) and value is not None:
                 # Convert values to strings for form data, but skip None values
-                form_data[key] = str(value)
+                form_data[key] = _to_form_value(value)
 
         #########################################################
         # Add Provider Specific Parameters
@@ -91,7 +105,7 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         )
 
         for key, value in provider_specific_params.items():
-            form_data[key] = str(value)
+            form_data[key] = _to_form_value(value)
         #########################################################
         #########################################################
 
@@ -139,6 +153,31 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                                 "end": word_data.get("end", 0),
                             }
                         )
+
+            # Surface ElevenLabs multichannel output. With `use_multi_channel=true`
+            # the response carries a per-channel `transcripts` array (each entry has a
+            # `channel_index` plus its own `words`) instead of a flat top-level `text`.
+            # Pass it through verbatim so callers can attribute words to a speaker by
+            # channel; without this the per-channel data is dropped.
+            transcripts = response_json.get("transcripts")
+            if isinstance(transcripts, list):
+                response["transcripts"] = transcripts
+            elif isinstance(response_json.get("words"), list):
+                # Single-channel (mono) response: no `transcripts` array, only flat
+                # top-level `words`. The OpenAI-format `response["words"]` above is
+                # lossy — it renames `text`->`word` and drops spacing/punctuation and
+                # audio events. Wrap the RAW words as one channel so callers get the
+                # same verbatim per-word tokens as multichannel and can segment
+                # bubbles uniformly; without this a mono transcript loses punctuation.
+                response["transcripts"] = [
+                    {"channel_index": 0, "words": response_json["words"]}
+                ]
+
+            # Carry the billed audio duration (present on both single- and
+            # multi-channel responses) so callers can attribute cost.
+            duration = response_json.get("audio_duration_secs")
+            if duration is not None:
+                response["audio_duration_secs"] = duration
 
             # Store full response in hidden params
             response._hidden_params = response_json
