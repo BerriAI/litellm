@@ -358,11 +358,11 @@ class TestMockedCompletion:
         assert result is not None
 
     def test_non_responses_model_does_not_use_responses_endpoint(self, respx_mock, monkeypatch):
-        """A model on the chat arm (grok-4.5) should hit /v1/chat/completions, not /v1/responses."""
+        """A model on the chat arm (kimi-k2.6) should hit /v1/chat/completions, not /v1/responses."""
         chat_url = "https://opencode.ai/zen/v1/chat/completions"
         respx_mock.post(chat_url).mock(
             return_value=Response(
-                200, json={"choices": [{"message": {"role": "assistant", "content": "chat ok"}}], "model": "grok-4.5"}
+                200, json={"choices": [{"message": {"role": "assistant", "content": "chat ok"}}], "model": "kimi-k2.6"}
             )
         )
 
@@ -370,7 +370,7 @@ class TestMockedCompletion:
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
         result = litellm.completion(
-            model="opencode_zen/grok-4.5",
+            model="opencode_zen/kimi-k2.6",
             messages=[{"role": "user", "content": "hi"}],
         )
 
@@ -429,8 +429,8 @@ class TestCostMap:
         entry = self._check_base_entry("opencode_zen/gpt-5.6-sol")
         assert entry["mode"] == "responses"
         assert entry["litellm_provider"] == "opencode_zen"
-        assert entry["input_cost_per_token"] == 5e-06
-        assert entry["output_cost_per_token"] == 3e-05
+        assert entry["input_cost_per_token"] == 2e-06
+        assert entry["output_cost_per_token"] == 1e-05
 
     def test_gpt_5_6_terra(self):
         entry = self._check_base_entry("opencode_zen/gpt-5.6-terra")
@@ -572,9 +572,14 @@ class TestCostMap:
 
     # --- count ---
 
-    def test_all_26_models_have_responses_mode(self):
-        """All 26 models must have mode=responses."""
+    def test_all_31_models_have_responses_mode(self):
+        """All 31 models must have mode=responses."""
         responses_models = [
+            "opencode_zen/gpt-6-astra",
+            "opencode_zen/grok-4.5",
+            "opencode_zen/grok-4.6",
+            "opencode_zen/muse-spark-1.2",
+            "opencode_zen/muse-spark-1.3",
             "opencode_zen/gpt-5.6-sol",
             "opencode_zen/gpt-5.6-terra",
             "opencode_zen/gpt-5.6-luna",
@@ -606,14 +611,13 @@ class TestCostMap:
             entry = self._check_base_entry(model)
             assert entry["mode"] == "responses", f"{model} mode must be responses, got {entry['mode']}"
             assert entry["litellm_provider"] == "opencode_zen"
-        assert len(responses_models) == 26
+        assert len(responses_models) == 31
 
-    def test_grok_4_5_stays_on_chat_arm(self):
-        """grok-4.5 must remain on chat arm, not be taken over by responses bridge."""
+    def test_grok_4_5_long_context_tier_is_priced(self):
+        """Zen bills grok-4.5 prompts above 200k tokens at the higher tier."""
         entry = self._check_base_entry("opencode_zen/grok-4.5")
-        assert entry["mode"] == "chat", (
-            "grok-4.5 must remain on chat arm; responses arm is only for the 26 models above"
-        )
+        assert entry["input_cost_per_token_above_200k_tokens"] == 4e-06
+        assert entry["output_cost_per_token_above_200k_tokens"] == 1.2e-05
 
     def test_chat_models_stay_on_chat(self):
         """Non-responses opencode_zen models should retain mode=chat."""

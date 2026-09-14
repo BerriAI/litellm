@@ -85,8 +85,8 @@ class TestMessagesModelSet:
         assert "qwen3.6-plus" in OPENCODE_MESSAGES_MODELS["zen"]
 
     def test_set_size(self):
-        """Exactly 13 models in the zen messages set."""
-        assert len(OPENCODE_MESSAGES_MODELS["zen"]) == 13
+        """Exactly 14 models in the zen messages set."""
+        assert len(OPENCODE_MESSAGES_MODELS["zen"]) == 14
 
     def test_non_claude_model_not_in_set(self):
         """gpt-5 models are NOT in the messages set (they belong on chat)."""
@@ -448,7 +448,7 @@ class TestMockedMessagesCompletion:
         monkeypatch.setattr(litellm, "api_key", "sk-key")
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         result = litellm.completion(
-            model="opencode_zen/grok-4.5",
+            model="opencode_zen/kimi-k2.6",
             messages=[{"role": "user", "content": "hi"}],
             custom_llm_provider="opencode_zen",
         )

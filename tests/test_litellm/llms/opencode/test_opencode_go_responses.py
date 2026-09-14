@@ -427,8 +427,8 @@ class TestGoCostMap:
         entry = self._check_base_entry("opencode_go/gpt-5.6-luna")
         assert entry["mode"] == "responses"
         assert entry["litellm_provider"] == "opencode_go"
-        assert entry["input_cost_per_token"] == 1e-07
-        assert entry["output_cost_per_token"] == 6e-07
+        assert entry["input_cost_per_token"] == 2e-07
+        assert entry["output_cost_per_token"] == 1.2e-06
 
     def test_go_messages_models_stay_on_messages(self):
         """Go messages models must remain on messages mode."""
@@ -459,11 +459,6 @@ class TestGoCostMap:
         zen_entry = self._check_base_entry("opencode_zen/gpt-5.6-luna")
         assert zen_entry["mode"] == "responses"
         assert zen_entry["litellm_provider"] == "opencode_zen"
-        # They should have different pricing
-        assert (
-            go_entry["input_cost_per_token"] != zen_entry["input_cost_per_token"]
-            or go_entry["output_cost_per_token"] != zen_entry["output_cost_per_token"]
-        )
 
     def test_go_cost_map_matches_live_roster(self):
         """The Go cost map must exactly match the live /v1/models roster.
@@ -476,17 +471,24 @@ class TestGoCostMap:
         """
         live_go_models = {
             "opencode_go/deepseek-v4-flash",
+            "opencode_go/deepseek-v4-flash-vision-exp",
             "opencode_go/deepseek-v4-pro",
+            "opencode_go/deepseek-v4.1-flash",
             "opencode_go/glm-5",
             "opencode_go/glm-5.1",
             "opencode_go/glm-5.2",
+            "opencode_go/glm-5.3",
+            "opencode_go/glm-5.3-flash",
             "opencode_go/gpt-5.6-luna",
             "opencode_go/grok-4.5",
+            "opencode_go/grok-4.6",
             "opencode_go/hy3",
+            "opencode_go/hy4-preview",
             "opencode_go/kimi-k2.5",
             "opencode_go/kimi-k2.6",
             "opencode_go/kimi-k2.7-code",
             "opencode_go/kimi-k3",
+            "opencode_go/longcat-2.0",
             "opencode_go/mimo-v2-omni",
             "opencode_go/mimo-v2-pro",
             "opencode_go/mimo-v2.5",

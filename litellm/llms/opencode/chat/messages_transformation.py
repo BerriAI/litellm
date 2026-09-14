@@ -40,6 +40,7 @@ OPENCODE_MESSAGES_MODELS: Final = MappingProxyType(
         "zen": frozenset(
             {
                 "claude-fable-5",
+                "claude-fable-5-1",
                 "claude-haiku-4-5",
                 "claude-opus-4-5",
                 "claude-opus-4-6",

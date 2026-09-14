@@ -275,19 +275,19 @@ class TestMockedCompletion:
     def test_dispatch_sends_to_chat_completions_url(self, respx_mock, monkeypatch):
         """Model opencode_zen/<model> reaches /chat/completions endpoint."""
         respx_mock.post("https://opencode.ai/zen/v1/chat/completions").mock(
-            return_value=Response(200, json=_make_response("grok-4.5", "Hello"))
+            return_value=Response(200, json=_make_response("kimi-k2.6", "Hello"))
         )
 
         monkeypatch.setattr(litellm, "api_key", "sk-fake")
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         result = litellm.completion(
-            model="opencode_zen/grok-4.5",
+            model="opencode_zen/kimi-k2.6",
             messages=[{"role": "user", "content": "hi"}],
             custom_llm_provider="opencode_zen",
         )
 
         assert result is not None
-        assert result.model == "grok-4.5"
+        assert result.model == "kimi-k2.6"
         assert result.choices[0].message.content == "Hello"
         assert len(respx_mock.calls) > 0
         request = respx_mock.calls[0].request
@@ -298,7 +298,7 @@ class TestMockedCompletion:
     def test_go_dispatch_custom_llm_provider(self, respx_mock, monkeypatch):
         """opencode_go models use the opencode_go custom_llm_provider."""
         respx_mock.post("https://opencode.ai/zen/go/v1/chat/completions").mock(
-            return_value=Response(200, json=_make_response("grok-4.5", "Go works"))
+            return_value=Response(200, json=_make_response("kimi-k2.6", "Go works"))
         )
 
         monkeypatch.setattr(litellm, "api_key", "sk-fake")
@@ -500,7 +500,7 @@ class TestMockedCompletion:
             (litellm.exceptions.APIConnectionError, litellm.exceptions.ServiceUnavailableError)
         ) as excinfo:
             litellm.completion(
-                model="opencode_zen/grok-4.5",
+                model="opencode_zen/kimi-k2.6",
                 messages=[{"role": "user", "content": "hi"}],
                 custom_llm_provider="opencode_zen",
             )
@@ -510,13 +510,13 @@ class TestMockedCompletion:
     def test_api_base_override(self, respx_mock, monkeypatch):
         """Explicit api_base overrides the default gateway URL."""
         respx_mock.post("http://localhost:4000/v1/chat/completions").mock(
-            return_value=Response(200, json=_make_response("grok-4.5", "local"))
+            return_value=Response(200, json=_make_response("kimi-k2.6", "local"))
         )
 
         monkeypatch.setattr(litellm, "api_base", "http://localhost:4000")
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         result = litellm.completion(
-            model="opencode_zen/grok-4.5",
+            model="opencode_zen/kimi-k2.6",
             messages=[{"role": "user", "content": "hi"}],
             custom_llm_provider="opencode_zen",
         )
@@ -528,7 +528,7 @@ class TestMockedCompletion:
     def test_api_base_without_v1_serves_chat_and_messages(self, respx_mock, monkeypatch):
         """One OPENCODE_ZEN_API_BASE value without /v1 reaches both the chat and the messages endpoint."""
         chat_endpoint = respx_mock.post("https://gateway.example.com/zen/v1/chat/completions").mock(
-            return_value=Response(200, json=_make_response("grok-4.5", "chat ok"))
+            return_value=Response(200, json=_make_response("kimi-k2.6", "chat ok"))
         )
         messages_endpoint = respx_mock.post("https://gateway.example.com/zen/v1/messages").mock(
             return_value=Response(
@@ -548,7 +548,7 @@ class TestMockedCompletion:
         monkeypatch.setenv("OPENCODE_ZEN_API_BASE", "https://gateway.example.com/zen")
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         litellm.completion(
-            model="opencode_zen/grok-4.5",
+            model="opencode_zen/kimi-k2.6",
             messages=[{"role": "user", "content": "hi"}],
             api_key="sk-fake",
         )
@@ -567,11 +567,11 @@ class TestMockedCompletion:
         monkeypatch.setenv("OPENCODE_ZEN_API_KEY", "sk-surface-key")
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         respx_mock.post("https://opencode.ai/zen/v1/chat/completions").mock(
-            return_value=Response(200, json=_make_response("grok-4.5", "ok"))
+            return_value=Response(200, json=_make_response("kimi-k2.6", "ok"))
         )
 
         result = litellm.completion(
-            model="opencode_zen/grok-4.5",
+            model="opencode_zen/kimi-k2.6",
             messages=[{"role": "user", "content": "hi"}],
             custom_llm_provider="opencode_zen",
         )
@@ -590,14 +590,14 @@ class TestMockedCompletion:
         with a process-wide litellm.api_key also configured.
         """
         respx_mock.post("https://opencode.ai/zen/v1/chat/completions").mock(
-            return_value=Response(200, json=_make_response("grok-4.5", "ok"))
+            return_value=Response(200, json=_make_response("kimi-k2.6", "ok"))
         )
 
         monkeypatch.setattr(litellm, "api_key", "sk-global-other-provider")
         monkeypatch.setattr(litellm, "opencode_zen_api_key", "sk-opencode")
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         result = litellm.completion(
-            model="opencode_zen/grok-4.5",
+            model="opencode_zen/kimi-k2.6",
             messages=[{"role": "user", "content": "hi"}],
             custom_llm_provider="opencode_zen",
         )
@@ -626,7 +626,7 @@ class TestCostMap:
         assert "opencode_zen/grok-4.5" in litellm.model_cost
         entry = litellm.model_cost["opencode_zen/grok-4.5"]
         assert entry["litellm_provider"] == "opencode_zen"
-        assert entry["mode"] == "chat"
+        assert entry["mode"] == "responses"
         assert entry["max_input_tokens"] == 500000
         assert entry["max_output_tokens"] == 500000
 
