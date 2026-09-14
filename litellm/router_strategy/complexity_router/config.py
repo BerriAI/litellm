@@ -32,6 +32,7 @@ with warnings.catch_warnings():
 from litellm.types.llms.openai import REASONING_EFFORT
 from litellm.types.router import AdaptiveRouterWeights, ClassifierPlugin, RoutingPlugin
 
+from .capability_classifier import CapabilityRule
 from .tier_predictor import TrainedTierArtifact
 
 
@@ -600,16 +601,39 @@ class ClassifierLLMConfig(BaseModel):
         return self
 
 
+class CapabilityRuleCalibration(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    rule: CapabilityRule
+    intercept: StrictFloat = Field(ge=-5.0, le=5.0, allow_inf_nan=False)
+
+
+class CapabilityCardConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    version: str = Field(min_length=1, max_length=128, pattern=r"^\S(?:.*\S)?$")
+    text: str = Field(min_length=1, max_length=8000, pattern=r"\S")
+    empirical: bool = False
+
+
 class CapabilityCalibrationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     version: str = Field(min_length=1, max_length=128, pattern=r"^\S(?:.*\S)?$")
     slope: StrictFloat = Field(ge=0.0, le=20.0, allow_inf_nan=False)
     intercept: StrictFloat = Field(ge=-20.0, le=20.0, allow_inf_nan=False)
+    rule_intercepts: tuple[CapabilityRuleCalibration, ...] = Field(default=(), max_length=10)
 
-    def calibrate(self, p_solve: float) -> float:
+    @model_validator(mode="after")
+    def _validate_unique_rules(self) -> "CapabilityCalibrationConfig":
+        if len(frozenset(offset.rule for offset in self.rule_intercepts)) != len(self.rule_intercepts):
+            raise ValueError("rule_intercepts must contain unique capability rules")
+        return self
+
+    def calibrate(self, p_solve: float, rule: CapabilityRule = "none") -> float:
         clipped: Final = min(max(p_solve, 1e-6), 1.0 - 1e-6)
-        log_odds: Final = self.slope * (math.log(clipped) - math.log1p(-clipped)) + self.intercept
+        adjustment: Final = sum(offset.intercept for offset in self.rule_intercepts if offset.rule == rule)
+        log_odds: Final = self.slope * (math.log(clipped) - math.log1p(-clipped)) + self.intercept + adjustment
         return 1.0 / (1.0 + math.exp(-log_odds))
 
 
@@ -617,6 +641,7 @@ class CapabilityClassifierConfig(BaseModel):
     """Switchyard-compatible probability threshold policy for two model tiers."""
 
     model_config = ConfigDict(frozen=True)
+    card: CapabilityCardConfig | None = None
 
     efficient_tier: str = Field(
         description="Tier used when the efficient model's forecasted solve probability meets the adjusted threshold",

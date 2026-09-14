@@ -191,12 +191,32 @@ def capability_classifier_response_format(
     )
 
 
-def capability_classifier_system_prompt(mode: Literal["json_schema", "json_object"]) -> str:
+def capability_classifier_system_prompt(
+    mode: Literal["json_schema", "json_object"], *, card: str | None = None, empirical: bool = False
+) -> str:
+    prefix: Final = CAPABILITY_CLASSIFIER_SYSTEM_PROMPT.split("# Efficient-agent capability card")[0]
+    evidence_prefix: Final = (
+        prefix.replace(
+            "The capability card is qualitative evidence, not a measured prior.",
+            "Only explicitly supplied training counts are measured evidence; preserve their scope and uncertainty.",
+        )
+        if empirical
+        else prefix
+    )
+    prompt: Final = (
+        evidence_prefix
+        + "# Efficient-agent capability card\n\n"
+        + card
+        + "\n\n# Output"
+        + CAPABILITY_CLASSIFIER_SYSTEM_PROMPT.split("# Output")[1]
+        if card is not None
+        else CAPABILITY_CLASSIFIER_SYSTEM_PROMPT
+    )
     if mode == "json_schema":
-        return CAPABILITY_CLASSIFIER_SYSTEM_PROMPT
+        return prompt
     wrapper: Final = _RESPONSE_FORMAT_ADAPTER.validate_python(capability_classifier_response_format()["json_schema"])
     return (
-        CAPABILITY_CLASSIFIER_SYSTEM_PROMPT
+        prompt
         + "\n\nReturn exactly one JSON object matching this JSON Schema:\n"
         + json.dumps(wrapper["schema"], indent=2, sort_keys=True)
     )

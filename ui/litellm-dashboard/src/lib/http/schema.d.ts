@@ -24907,8 +24907,25 @@ export interface components {
         CapabilityCalibrationConfig: {
             /** Intercept */
             intercept: number;
+            /**
+             * Rule Intercepts
+             * @default []
+             */
+            rule_intercepts: components["schemas"]["CapabilityRuleCalibration"][];
             /** Slope */
             slope: number;
+            /** Version */
+            version: string;
+        };
+        /** CapabilityCardConfig */
+        CapabilityCardConfig: {
+            /**
+             * Empirical
+             * @default false
+             */
+            empirical: boolean;
+            /** Text */
+            text: string;
             /** Version */
             version: string;
         };
@@ -24929,6 +24946,7 @@ export interface components {
              * @description Higher, fail-closed tier used below the adjusted threshold or when the classifier verdict is unavailable
              */
             capable_tier: string;
+            card?: components["schemas"]["CapabilityCardConfig"] | null;
             /**
              * Efficient Tier
              * @description Tier used when the efficient model's forecasted solve probability meets the adjusted threshold
@@ -24953,6 +24971,16 @@ export interface components {
              * @default 0
              */
             threshold_step: number;
+        };
+        /** CapabilityRuleCalibration */
+        CapabilityRuleCalibration: {
+            /** Intercept */
+            intercept: number;
+            /**
+             * Rule
+             * @enum {string}
+             */
+            rule: "SUP-1" | "SUP-2" | "SUP-3" | "SUP-4" | "SUP-5" | "UNC-1" | "UNC-2" | "LIM-1" | "LIM-2" | "none";
         };
         /** ChatCompletionAnnotation */
         ChatCompletionAnnotation: {

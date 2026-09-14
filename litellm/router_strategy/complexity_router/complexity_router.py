@@ -1338,7 +1338,11 @@ class ComplexityRouter(CustomLogger):
         if self.config.classifier_type == "capability":
             capability: Final = self.config.capability_classifier_config
             return capability_classifier_system_prompt(
-                capability.response_format if capability is not None else "json_schema"
+                capability.response_format if capability is not None else "json_schema",
+                card=capability.card.text if capability is not None and capability.card is not None else None,
+                empirical=capability.card.empirical
+                if capability is not None and capability.card is not None
+                else False,
             )
         definitions: Final = self.config.tier_definitions
         if definitions is not None:
@@ -2238,7 +2242,9 @@ class ComplexityRouter(CustomLogger):
         forecast: Final = CapabilityClassifierForecast(
             verdict=verdict,
             threshold=threshold,
-            p_solve=calibration.calibrate(verdict.p_solve) if calibration is not None else verdict.p_solve,
+            p_solve=calibration.calibrate(verdict.p_solve, verdict.primary_rule)
+            if calibration is not None
+            else verdict.p_solve,
             calibration_version=calibration.version if calibration is not None else None,
         )
         selected_tier: Final = (
