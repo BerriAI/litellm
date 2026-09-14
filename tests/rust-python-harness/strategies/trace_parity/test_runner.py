@@ -80,7 +80,7 @@ def test_python_engine_skips_native_bridge(monkeypatch: pytest.MonkeyPatch, tmp_
     assert selected == [(frozenset({"mistral"}), "python")]
 
 
-def test_python_trace_controls_native_ocr_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_python_trace_preserves_native_ocr_dispatch_setting(monkeypatch: pytest.MonkeyPatch) -> None:
     execution: Final = importlib.import_module("tests.rust-python-harness.strategies.trace_parity.sdk.execution")
     route: Final = RouteSpec("ocr", ("ocr", "aocr"), ("ocr", "aocr"), _fixture)
     observed: list[str | None] = []
@@ -98,11 +98,12 @@ def test_python_trace_controls_native_ocr_dispatch(monkeypatch: pytest.MonkeyPat
             error=None,
         )
 
-    monkeypatch.setenv("LITELLM_RUST", "1")
     monkeypatch.setattr(execution, "_collect", collect)
 
+    monkeypatch.setenv("LITELLM_RUST", "0")
     collect_trace(route, "python", asynchronous=False)
-    collect_trace(route, "python", asynchronous=True, python_rust_enabled=True)
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    collect_trace(route, "python", asynchronous=True)
 
     assert observed == ["0", "1"]
     assert os.environ["LITELLM_RUST"] == "1"

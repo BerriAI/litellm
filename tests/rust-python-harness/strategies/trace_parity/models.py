@@ -66,7 +66,6 @@ class TraceScenario:
     fixture: Callable[[Engine, str], RouteFixture]
     mappings: tuple[TraceMapping, ...]
     asynchronous: bool
-    python_rust_enabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
