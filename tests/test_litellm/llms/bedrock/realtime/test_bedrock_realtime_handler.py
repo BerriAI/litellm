@@ -712,6 +712,25 @@ class TestBedrockRealtimeProviderFailurePropagation:
         assert stream.input_stream.closed
 
     @pytest.mark.asyncio
+    async def test_client_disconnect_ends_the_session_while_bedrock_output_stays_open(self, stub_aws_sdk_client):
+        receiver = DrainedThenOpenBedrockReceiver([])
+        stream = ScriptedBedrockStream([], receiver_type=lambda _payloads: receiver)
+        stub_aws_sdk_client["streams"] = [stream]
+
+        await asyncio.wait_for(
+            BedrockRealtime().async_realtime(
+                model="amazon.nova-sonic-v1:0",
+                websocket=RealtimeClientWS(),
+                logging_obj=FakeLogging(),
+                **self.AWS_PARAMS,
+            ),
+            timeout=1,
+        )
+
+        assert receiver.drained.is_set(), "the handler must have been waiting on the open provider stream"
+        assert stream.input_stream.closed
+
+    @pytest.mark.asyncio
     async def test_session_updated_is_not_sent_before_bedrock_is_ready(self, stub_aws_models):
         handler = BedrockRealtime()
         stream = UnavailableBedrockStream()

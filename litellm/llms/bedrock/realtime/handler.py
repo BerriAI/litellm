@@ -384,7 +384,7 @@ class BedrockRealtime(BaseAWSLLM):
         )
         bedrock_task: Final = asyncio.create_task(collect_logged_events())
 
-        await asyncio.wait((client_task, bedrock_task), return_when=asyncio.FIRST_EXCEPTION)
+        await asyncio.wait((client_task, bedrock_task), return_when=asyncio.FIRST_COMPLETED)
         client_disconnected: Final = (
             client_task.done() and not client_task.cancelled() and client_task.exception() is None
         )
