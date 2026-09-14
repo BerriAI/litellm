@@ -1024,6 +1024,9 @@ if MCP_AVAILABLE:
         return {"servers": registry_servers}
 
     ## FastAPI Routes
+    def _mcp_server_display_order(server: LiteLLM_MCPServerTable) -> tuple[str, str]:
+        return ((server.server_name or server.alias or server.server_id).lower(), server.server_id)
+
     def _get_user_mcp_management_mode() -> UserMCPManagementMode:
         from litellm.proxy.proxy_server import (
             general_settings as proxy_general_settings,
@@ -1174,10 +1177,12 @@ if MCP_AVAILABLE:
                         detail="You do not have permission to view MCP servers for this team.",
                     )
 
-            redacted_mcp_servers = await _get_team_scoped_mcp_server_list(sanitized_team_id)
+            redacted_mcp_servers = sorted(
+                await _get_team_scoped_mcp_server_list(sanitized_team_id), key=_mcp_server_display_order
+            )
         else:
             servers: Final = await _resolve_accessible_mcp_servers(user_api_key_dict)
-            redacted_mcp_servers = _redact_mcp_credentials_list(servers)
+            redacted_mcp_servers = sorted(_redact_mcp_credentials_list(servers), key=_mcp_server_display_order)
 
         if connected_app_view is True and is_ui_session_credential(user_api_key_dict):
             reachable_ids: Final = await _connected_app_reachable_server_ids(user_api_key_dict)

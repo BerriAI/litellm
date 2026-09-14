@@ -1536,6 +1536,76 @@ class TestTeamScopedMCPServerAccess:
             assert len(result) == 1
 
     @pytest.mark.asyncio
+    async def test_team_scoped_list_is_sorted_by_display_name(self):
+        """Set-derived resolution order must not leak to the client."""
+        mock_user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            user_id="admin_user",
+        )
+        unsorted = [
+            generate_mock_mcp_server_db_record(server_id="s-zeta", alias="zeta"),
+            generate_mock_mcp_server_db_record(server_id="s-alpha", alias="Alpha"),
+            generate_mock_mcp_server_db_record(server_id="s-mid", alias="mid"),
+        ]
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+                return_value=True,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_team_scoped_mcp_server_list",
+                AsyncMock(return_value=unsorted),
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_all_mcp_servers,
+            )
+
+            result = await fetch_all_mcp_servers(user_api_key_dict=mock_user_auth, team_id="any-team-id")
+            assert [s.server_id for s in result] == ["s-alpha", "s-mid", "s-zeta"]
+
+
+class TestFetchAllMCPServersOrdering:
+    @pytest.mark.asyncio
+    async def test_list_is_sorted_by_display_name_regardless_of_resolution_order(self):
+        """The registry resolves ids through a set, so the response must impose its own order."""
+        mock_user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            user_id="admin_user",
+        )
+        first_order = [
+            generate_mock_mcp_server_db_record(server_id="s-zeta", alias="zeta"),
+            generate_mock_mcp_server_db_record(server_id="s-alpha", alias="Alpha"),
+            generate_mock_mcp_server_db_record(server_id="s-mid", alias="mid"),
+        ]
+        second_order = list(reversed(first_order))
+
+        for resolved in (first_order, second_order):
+            mock_manager = MagicMock()
+            mock_manager.get_all_allowed_mcp_servers = AsyncMock(return_value=resolved)
+            with (
+                patch(
+                    "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                    mock_manager,
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+                    return_value=True,
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                    AsyncMock(return_value=[mock_user_auth]),
+                ),
+            ):
+                from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                    fetch_all_mcp_servers,
+                )
+
+                result = await fetch_all_mcp_servers(user_api_key_dict=mock_user_auth)
+                assert [s.server_id for s in result] == ["s-alpha", "s-mid", "s-zeta"]
+
+    @pytest.mark.asyncio
     async def test_restricted_virtual_key_cannot_use_team_id_filter(self):
         """Restricted virtual keys must not bypass access limits via team_id."""
         mock_user_auth = UserAPIKeyAuth(

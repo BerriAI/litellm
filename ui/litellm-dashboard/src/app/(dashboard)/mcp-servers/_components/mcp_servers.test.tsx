@@ -3,7 +3,8 @@ import { render, waitFor, screen, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import MCPServers from "./mcp_servers";
+import MCPServers, { compareServers } from "./mcp_servers";
+import type { MCPServer } from "@/components/mcp_tools/types";
 import * as networking from "@/components/networking";
 
 // Mock the networking module
@@ -28,6 +29,32 @@ const createQueryClient = () =>
       },
     },
   });
+
+describe("compareServers", () => {
+  const server = (server_id: string, name: string, created_at = ""): MCPServer =>
+    ({ server_id, server_name: name, created_at, updated_at: created_at }) as MCPServer;
+
+  const shuffled = [server("c", "github"), server("a", "slack"), server("b", "Jira")];
+
+  it("orders servers without timestamps by name so config.yaml servers render in a stable order", () => {
+    const byCreated = [...shuffled].sort((a, b) => compareServers(a, b, "created_desc")).map((s) => s.server_id);
+    const byUpdated = [...shuffled].sort((a, b) => compareServers(a, b, "updated_desc")).map((s) => s.server_id);
+    const byHealth = [...shuffled].sort((a, b) => compareServers(a, b, "health")).map((s) => s.server_id);
+
+    expect(byCreated).toEqual(["c", "b", "a"]);
+    expect(byUpdated).toEqual(["c", "b", "a"]);
+    expect(byHealth).toEqual(["c", "b", "a"]);
+  });
+
+  it("keeps newest-first when timestamps differ", () => {
+    const newest = server("new", "zzz", "2026-02-01T00:00:00Z");
+    const oldest = server("old", "aaa", "2026-01-01T00:00:00Z");
+    expect([oldest, newest].sort((a, b) => compareServers(a, b, "created_desc")).map((s) => s.server_id)).toEqual([
+      "new",
+      "old",
+    ]);
+  });
+});
 
 describe("MCPServers", () => {
   const defaultProps = {
