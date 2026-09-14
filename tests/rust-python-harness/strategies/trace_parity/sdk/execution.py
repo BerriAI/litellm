@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import AsyncIterable, Awaitable, Iterable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Protocol, cast
+from unittest.mock import patch
 
 from ....shared.parity.replay import replay_server
 from ....shared.reporting.models import Surface
@@ -105,7 +108,7 @@ def _collect(
 
 
 def collect_trace(
-    spec: RouteSpec, engine: Engine, *, asynchronous: bool
+    spec: RouteSpec, engine: Engine, *, asynchronous: bool, python_rust_enabled: bool = False
 ) -> tuple[FunctionTraceEvent, ...] | TraceExecutionFailure:
     function: Final = _entrypoint(spec, engine, asynchronous=asynchronous)
     if isinstance(function, TraceExecutionFailure):
@@ -126,7 +129,13 @@ def collect_trace(
                 expected_failure=base_fixture.expected_failure,
                 consume_stream=base_fixture.consume_stream,
             )
-            collected: Final = _collect(function, fixture, engine, asynchronous=asynchronous)
+            environment: Final = (
+                patch.dict(os.environ, {"LITELLM_RUST": "1" if python_rust_enabled else "0"})
+                if engine == "python"
+                else nullcontext()
+            )
+            with environment:
+                collected: Final = _collect(function, fixture, engine, asynchronous=asynchronous)
             provider.take_requests(len(fixture.provider_responses))
     except Exception as error:
         return TraceExecutionFailure(engine, f"{type(error).__name__}: {error}")
@@ -159,7 +168,14 @@ def execute_trace(
         fixture=scenario.fixture,
     )
     python_trace: Final = (
-        collect_trace(scenario_route, "python", asynchronous=scenario.asynchronous) if engine != "rust" else ()
+        collect_trace(
+            scenario_route,
+            "python",
+            asynchronous=scenario.asynchronous,
+            python_rust_enabled=scenario.python_rust_enabled,
+        )
+        if engine != "rust"
+        else ()
     )
     rust_trace: Final = (
         collect_trace(scenario_route, "rust", asynchronous=scenario.asynchronous) if engine != "python" else ()
