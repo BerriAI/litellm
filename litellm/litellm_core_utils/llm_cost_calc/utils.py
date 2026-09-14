@@ -468,15 +468,14 @@ def _resolve_cache_read_cost_rate(
     if model_cache_read_cost_rate is None and not tier_has_implicit_rate and not off_peak_has_implicit_rate:
         return None
 
-    if tier_has_implicit_rate:
-        assert tier is not None
-        cache_read_cost_rate = tier_rate(tier, cache_read_cost_key)
-    elif model_cache_read_cost_rate is not None:
-        cache_read_cost_rate = model_cache_read_cost_rate
-    elif tier is not None:
-        cache_read_cost_rate = tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token")
-    else:
-        cache_read_cost_rate = cast(
+    cache_read_cost_rate: Final = (
+        tier_rate(tier, cache_read_cost_key)
+        if tier is not None and tier_has_implicit_rate
+        else model_cache_read_cost_rate
+        if model_cache_read_cost_rate is not None
+        else tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token")
+        if tier is not None
+        else cast(
             float,
             _get_cost_per_unit(
                 model_info,
@@ -484,6 +483,7 @@ def _resolve_cache_read_cost_rate(
                 default_value=_get_cost_per_unit(model_info, "input_cost_per_token") or 0.0,
             ),
         )
+    )
 
     if off_peak is None:
         return cache_read_cost_rate
