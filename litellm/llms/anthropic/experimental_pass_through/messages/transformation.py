@@ -25,6 +25,7 @@ from ...common_utils import (
     AnthropicModelInfo,
     optionally_handle_anthropic_oauth,
     strip_advisor_blocks_from_messages,
+    strip_encrypted_reasoning_blocks_from_anthropic_messages,
 )
 from ..utils import normalize_reasoning_effort_value
 
@@ -620,7 +621,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             messages = strip_advisor_blocks_from_messages(messages)
 
         anthropic_messages_request: Final[AnthropicMessagesRequest] = AnthropicMessagesRequest(
-            messages=messages,
+            messages=strip_encrypted_reasoning_blocks_from_anthropic_messages(messages),
             max_tokens=max_tokens,
             model=model,
             **anthropic_messages_optional_request_params,

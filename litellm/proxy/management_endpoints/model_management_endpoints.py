@@ -111,6 +111,7 @@ from litellm.router_utils.auto_router_model_naming import (
     validate_strategy_router_model_write,
 )
 from litellm.router_utils.auto_router_tuning_baseline import is_mutable_tuned_candidate, tuning_quota_violation
+from litellm.types.llms.bedrock import AwsSessionTag
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     AutoRouterClassifierDefaultPromptResponse,
     UpdateUsefulLinksRequest,
@@ -122,6 +123,7 @@ from litellm.types.router import (
     ModelInfo,
     updateDeployment,
 )
+from litellm.types.utils import without_server_derived_pricing
 from litellm.utils import get_utc_datetime
 
 if TYPE_CHECKING:
@@ -746,11 +748,10 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
 
     # update model info
     if updated_patch.model_info:
-        merged_model_info.update(updated_patch.model_info.model_dump(exclude_none=True))
+        merged_model_info.update(without_server_derived_pricing(updated_patch.model_info.model_dump(exclude_none=True)))
 
-    # Honor explicit-null clears LAST, after both merges, so a model_info blob the UI
-    # passes through (which today re-sends the OLD pricing on every save) cannot
-    # silently undo a litellm_params clear via .update().
+    # Honor explicit-null clears LAST, after both merges, so a model_info blob a client
+    # passes through cannot silently undo a litellm_params clear via .update().
     #
     # Restricted to SPECIAL_MODEL_INFO_PARAMS (input/output cost per token/character
     # and cache read/write costs) so this path cannot be used to null out privileged
@@ -762,6 +763,15 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
             if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.litellm_params, field) is None:
                 merged_litellm_params.pop(field, None)
                 merged_model_info.pop(field, None)
+            elif (
+                field
+                in (
+                    "auto_router_routing_compression",
+                    "auto_router_model_compression",
+                )
+                and getattr(updated_patch.litellm_params, field) is None
+            ):
+                merged_litellm_params.pop(field, None)
     if updated_patch.model_info:
         for field in updated_patch.model_info.model_fields_set:
             if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.model_info, field) is None:
@@ -892,6 +902,12 @@ async def patch_model(
             )
 
         ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=patch_data.litellm_params,
+            user_api_key_dict=user_api_key_dict,
+            existing_litellm_params=db_model.litellm_params,
+        )
+
+        ModelManagementAuthChecks.can_user_set_aws_session_tags(
             litellm_params=patch_data.litellm_params,
             user_api_key_dict=user_api_key_dict,
             existing_litellm_params=db_model.litellm_params,
@@ -1650,6 +1666,10 @@ async def _update_existing_team_model_assignment(
     # No team_model_add/delete calls required; public name is already registered
 
 
+def _canonical_session_tags(tags: Sequence[AwsSessionTag]) -> tuple[tuple[str, str], ...]:
+    return tuple(sorted((tag["Key"], tag["Value"]) for tag in tags))
+
+
 class ModelManagementAuthChecks:
     """
     Common auth checks for model management endpoints
@@ -1702,6 +1722,28 @@ class ModelManagementAuthChecks:
             type=ProxyErrorTypes.auth_error.value,
             code=status.HTTP_403_FORBIDDEN,
             param="litellm_credential_name",
+        )
+
+    @staticmethod
+    def can_user_set_aws_session_tags(
+        litellm_params: GenericLiteLLMParams | None,
+        user_api_key_dict: UserAPIKeyAuth,
+        existing_litellm_params: GenericLiteLLMParams | None = None,
+    ) -> Literal[True]:
+        if litellm_params is None or litellm_params.aws_session_tags is None:
+            return True
+        if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+            return True
+        existing_tags: Final = existing_litellm_params.aws_session_tags if existing_litellm_params is not None else None
+        if existing_tags is not None and _canonical_session_tags(existing_tags) == _canonical_session_tags(
+            litellm_params.aws_session_tags
+        ):
+            return True
+        raise ProxyException(
+            message=f"Only a proxy admin can set aws_session_tags on a model. Your role={user_api_key_dict.user_role}.",
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param="aws_session_tags",
         )
 
     @staticmethod
@@ -2037,6 +2079,11 @@ async def add_new_model(
             user_api_key_dict=user_api_key_dict,
         )
 
+        ModelManagementAuthChecks.can_user_set_aws_session_tags(
+            litellm_params=model_params.litellm_params,
+            user_api_key_dict=user_api_key_dict,
+        )
+
         _raise_on_strategy_router_write_violation(
             incoming_params=model_params.litellm_params,
             existing_params=None,
@@ -2045,6 +2092,10 @@ async def add_new_model(
         _raise_if_rate_limits_required_but_missing(
             litellm_params=model_params.litellm_params,
             enforced=bool(general_settings.get(ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING, False)),
+        )
+
+        model_params.model_info = ModelInfo(  # rebind-ok: downstream team-model handling mutates this same object
+            **without_server_derived_pricing(model_params.model_info.model_dump(exclude_none=True))
         )
 
         model_response: prisma_models.LiteLLM_ProxyModelTable | LiteLLM_ProxyModelTable | None = None
@@ -2216,6 +2267,12 @@ async def update_model(
         )
 
         ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=model_params.litellm_params,
+            user_api_key_dict=user_api_key_dict,
+            existing_litellm_params=deployment.litellm_params,
+        )
+
+        ModelManagementAuthChecks.can_user_set_aws_session_tags(
             litellm_params=model_params.litellm_params,
             user_api_key_dict=user_api_key_dict,
             existing_litellm_params=deployment.litellm_params,

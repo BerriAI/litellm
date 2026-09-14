@@ -21,6 +21,7 @@ from typing import Iterator
 import pytest
 
 from batch_client import BatchClient, FileObject
+from batch_cleanup import cleanup_file
 from capabilities import batch_model_name, is_managed_id, openai_batch_params
 from e2e_config import unique_marker
 from e2e_http import FileUploadForm, Result, UnknownApiError, unwrap
@@ -108,7 +109,7 @@ def test_cross_user_managed_id_denied_owner_allowed(
             key=owner_key,
         )
     )
-    resources.defer(lambda: client.delete_file(uploaded.id, key=owner_key))
+    resources.defer(lambda: cleanup_file(client, uploaded.id, key=owner_key))
     assert is_managed_id(uploaded.id), f"expected a managed unified file id, got {uploaded.id}"
 
     denied = client.retrieve_file(uploaded.id, key=other_key)

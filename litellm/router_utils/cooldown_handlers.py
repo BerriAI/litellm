@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 from litellm._logging import verbose_router_logger
+from litellm.caching.dual_cache import DualCache
 from litellm.constants import (
     DEFAULT_COOLDOWN_TIME_SECONDS,
     DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS,
@@ -558,9 +559,12 @@ def should_cooldown_based_on_allowed_fails_policy(
     When *allowed_fails_override* / *cooldown_time_override* are supplied they
     take precedence over the router-level values (used by deployment-level overrides).
 
+    The counter lives in the router's shared ``DualCache`` (Redis when configured), so
+    every worker process increments the same key and the threshold applies fleet-wide.
+
     When *cache_key_suffix* is supplied the fail counter is keyed as
-    ``{deployment}:{cache_key_suffix}`` so that different exception types are
-    tracked independently per deployment.
+    ``deployment:{deployment}:allowed_fails:{cache_key_suffix}`` so that different
+    exception types are tracked independently per deployment.
 
     Returns:
     - True if fails exceed the allowed limit (should cooldown)
@@ -584,16 +588,25 @@ def should_cooldown_based_on_allowed_fails_policy(
         else (litellm_router_instance.cooldown_time or DEFAULT_COOLDOWN_TIME_SECONDS)
     )
 
-    cache_key: Final = f"{deployment}:{cache_key_suffix}" if cache_key_suffix else deployment
-    current_fails: Final = litellm_router_instance.failed_calls.get_cache(key=cache_key) or 0
-    updated_fails: Final = current_fails + 1
+    base_key: Final = f"deployment:{deployment}:allowed_fails"
+    cache_key: Final = f"{base_key}:{cache_key_suffix}" if cache_key_suffix else base_key
+    updated_fails: Final = _increment_allowed_fails(
+        cache=litellm_router_instance.cache, cache_key=cache_key, ttl=cooldown_time
+    )
+    return updated_fails > allowed_fails
 
-    if updated_fails > allowed_fails:
-        return True
-    else:
-        litellm_router_instance.failed_calls.set_cache(key=cache_key, value=updated_fails, ttl=cooldown_time)
 
-    return False
+def _increment_allowed_fails(cache: DualCache, cache_key: str, ttl: float) -> int:
+    """
+    Return the fleet-wide fail count. ``DualCache.increment_cache`` bumps the in-memory tier
+    before Redis and re-raises a Redis error, so a Redis outage degrades to this worker's own count.
+    """
+    try:
+        return cache.increment_cache(key=cache_key, value=1, ttl=ttl)
+    except Exception as e:  # noqa: BLE001  # a Redis outage must not stop failing deployments from cooling down
+        verbose_router_logger.warning("allowed_fails counter fell back to this worker's in-memory count: %s", e)
+        local_fails: Final = cache.get_cache(key=cache_key, local_only=True)
+        return local_fails if isinstance(local_fails, int) else 0
 
 
 def _is_allowed_fails_set_on_router(

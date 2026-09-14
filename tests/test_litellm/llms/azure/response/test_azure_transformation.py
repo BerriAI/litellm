@@ -1,4 +1,5 @@
 from copy import deepcopy
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -241,6 +242,9 @@ def test_provider_config_manager_o_series_selection():
     )
     assert isinstance(default_config, AzureOpenAIResponsesAPIConfig)
     assert not isinstance(default_config, AzureOpenAIOSeriesResponsesAPIConfig)
+
+
+_ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
 
 
 class TestAzureResponsesAPIConfig:
@@ -598,6 +602,31 @@ class TestAzureResponsesAPIConfig:
 
         assert result["tools"][0] is tool
         assert "anyOf" in result["tools"][0]["parameters"]
+
+    def test_azure_drops_non_python_regex_pattern_while_keeping_gpt5_combinators(self):
+        tool = {
+            "type": "function",
+            "name": "Artifact",
+            "parameters": {
+                "type": "object",
+                "anyOf": [{"properties": {"field": {"type": "string", "pattern": _ARTIFACT_FIELD_PATTERN}}}],
+                "properties": {"field": {"type": "string", "pattern": _ARTIFACT_FIELD_PATTERN}},
+            },
+        }
+
+        result = self.config.transform_responses_api_request(
+            model="my-eastus-deployment",
+            input="hi",
+            response_api_optional_request_params={"tools": [tool]},
+            litellm_params=GenericLiteLLMParams(model_info={"base_model": "azure/gpt-5.4-mini"}),
+            headers={},
+        )
+
+        assert result["tools"][0]["parameters"] == {
+            "type": "object",
+            "anyOf": [{"properties": {"field": {"type": "string"}}}],
+            "properties": {"field": {"type": "string"}},
+        }
 
     def test_azure_keeps_combinators_for_unrecognized_deployment_without_base_model(self):
         tool = self._anyof_tool()
