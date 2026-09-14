@@ -225,7 +225,7 @@ class TestCheaperInferenceCostTracking:
         """The gateway echoes the upstream model id, so costing must use the requested one.
 
         A real response to `cheaperinference/glm-5.3-flash` comes back with
-        `"model": "z-ai/glm-5.3-flash`. Cost has to follow the model the caller
+        `"model": "z-ai/glm-5.3-flash"`. Cost has to follow the model the caller
         asked for, otherwise the lookup lands on an id that is not in the map.
         """
         litellm.disable_aiohttp_transport = True
