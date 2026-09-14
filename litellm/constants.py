@@ -2040,5 +2040,12 @@ BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY: Final = "batch_enqueued_token_limit"
 # constructing a fresh mutable dict at each call site.
 EMPTY_MAPPING: Final = MappingProxyType({})
 
+
+class TeamMembershipCacheMiss:
+    __slots__ = ()
+
+
+TEAM_MEMBERSHIP_CACHE_MISS: Final = TeamMembershipCacheMiss()
+
 # API endpoint for breached password k-anonymity search
 HIBP_RANGE_API_BASE: Final = "https://api.pwnedpasswords.com/range"
