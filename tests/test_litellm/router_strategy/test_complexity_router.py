@@ -6036,6 +6036,41 @@ class TestClassificationMode:
     def test_default_mode_is_every_request(self, complexity_router):
         assert complexity_router.config.classification_mode == "every_request"
 
+    @pytest.mark.asyncio
+    async def test_classifier_failure_fallback_does_not_seed_user_turn_pin(
+        self, mock_router_instance, user_turn_config
+    ):
+        """A failed classifier did not choose its fallback, so a continuation must retry
+        classification instead of replaying that transient fallback as a held decision."""
+        from litellm.router_strategy.complexity_router.complexity_router import ClassificationOutcome
+
+        router = self._router(mock_router_instance, user_turn_config)
+        failed = router._classifier_failure_outcome(
+            "LLM classifier timed out", self.REASONING_ASK["content"], None
+        )
+        successful = ClassificationOutcome(
+            tier=ComplexityTier.SIMPLE,
+            score=None,
+            signals=("llm-classifier:SIMPLE",),
+            cause="llm_classifier",
+        )
+        with patch.object(router, "aclassify", new=AsyncMock(side_effect=[failed, successful])) as classify:
+            first = await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs=self._request_kwargs("failed-first-classification"),
+                messages=[self.REASONING_ASK],
+            )
+            continuation = await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs=self._request_kwargs("failed-first-classification"),
+                messages=[self.REASONING_ASK, self.TOOL_CALL_1, self.TOOL_RESULT_1],
+            )
+
+        assert first.model == "o1-preview"
+        assert continuation.model == "gpt-4o-mini"
+        assert classify.await_count == 2
+        assert "classifier-failed" in first.routing_decision["signals"]
+
     def test_invalid_classification_mode_rejected(self, mock_router_instance, basic_config):
         with pytest.raises(ValidationError):
             ComplexityRouter(

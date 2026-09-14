@@ -403,6 +403,7 @@ _TRUNCATION_MARKER: Final = "..."
 _TRUNCATION_HEAD_FRACTION: Final = 0.3
 _MIN_QUOTED_TURN_CHARS: Final = 120
 
+_CLASSIFIER_FAILED_SIGNAL: Final = "classifier-failed"
 _CLASSIFIER_CIRCUIT_OPEN_SIGNAL: Final = "classifier-circuit-open"
 
 _CJK_CHARACTER: Final = re.compile("[぀-ヿㇰ-ㇿ㐀-䶿一-鿿豈-﫿ｦ-ﾝ\U00020000-\U0003ffff]")
@@ -940,7 +941,10 @@ def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bo
             "health_default_fallback",
         )
         and not decision.get("context_escalated")
-        and _CLASSIFIER_CIRCUIT_OPEN_SIGNAL not in (decision.get("signals") or ())
+        and {
+            _CLASSIFIER_FAILED_SIGNAL,
+            _CLASSIFIER_CIRCUIT_OPEN_SIGNAL,
+        }.isdisjoint(decision.get("signals") or ())
     )
 
 
@@ -1869,7 +1873,7 @@ class ComplexityRouter(CustomLogger):
         prompt: str,
         system_prompt: str | None,
         scored: ClassificationOutcome | None = None,
-        signal: str | None = None,
+        signal: str | None = _CLASSIFIER_FAILED_SIGNAL,
     ) -> ClassificationOutcome:
         """The outcome when the LLM classifier or classifier plugin produced no usable tier:
         fallback_tier on a custom tier set, classifier_fallback otherwise.
