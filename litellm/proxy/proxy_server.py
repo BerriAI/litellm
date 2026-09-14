@@ -365,6 +365,7 @@ from litellm.proxy.common_utils.healthy_model_filter import (
     get_hidden_unhealthy_model_names,
     is_healthy_only_listing_default,
 )
+from litellm.proxy.common_utils.html_forms.default_credentials_hint import should_hide_default_credentials_hint
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
@@ -15828,10 +15829,7 @@ async def fallback_login(request: Request):
 
     from fastapi.responses import HTMLResponse
 
-    hide_default_credentials_hint: Final = (
-        os.getenv("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", "false").lower() == "true"
-        or general_settings.get("hide_default_credentials_hint", False) is True
-    )
+    hide_default_credentials_hint: Final = should_hide_default_credentials_hint(general_settings)
     return HTMLResponse(
         content=build_ui_login_form(
             show_deprecation_banner=False,
