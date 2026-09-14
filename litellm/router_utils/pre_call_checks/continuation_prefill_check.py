@@ -6,6 +6,7 @@ assistant prefill are dropped, so the partial text is continued rather than
 regenerated or rejected. Requests without the marker pass through untouched.
 """
 
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
@@ -32,11 +33,12 @@ class ContinuationPrefillDeploymentCheck(CustomLogger):
     async def async_filter_deployments(
         self,
         model: str,
-        healthy_deployments: list[dict[str, object]],
-        messages: list[AllMessageValues] | None,
-        request_kwargs: dict[str, object] | None = None,
+        healthy_deployments: list[dict[str, object]],  # mutable-ok: CustomLogger deployment-list contract
+        messages: Sequence[AllMessageValues] | None,
+        request_kwargs: Mapping[str, object] | None = None,
         parent_otel_span: Span | None = None,
-    ) -> list[dict[str, object]]:
+    ) -> list[dict[str, object]]:  # mutable-ok: returns a mutable deployment list
         if not (request_kwargs or {}).get(MID_STREAM_CONTINUATION_KWARG):
             return healthy_deployments
-        return [deployment for deployment in healthy_deployments if _deployment_supports_prefill(deployment)]
+        eligible: Final = (deployment for deployment in healthy_deployments if _deployment_supports_prefill(deployment))
+        return list(eligible)  # mutable-ok: downstream deployment selection consumes a mutable list

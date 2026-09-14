@@ -4966,7 +4966,6 @@ class TestContinuationDisqualifiers:
 
         wrapper._accumulate_streamed_delta({"content": "Hi"})
         wrapper._accumulate_streamed_delta({"tool_calls": [{"index": 0}]})
-        # a later plain-text delta must not clear the latch
         wrapper._accumulate_streamed_delta({"content": "there"})
 
         assert wrapper.response_uptil_now == "Hithere"

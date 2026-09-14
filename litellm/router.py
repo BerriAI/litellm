@@ -422,6 +422,9 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
 
 _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+# The only response_format that leaves a stream continuation-eligible: the rest
+# ask for structured output that cannot resume from an arbitrary cut point.
+_UNCONSTRAINED_RESPONSE_FORMAT: Final[Mapping[str, str]] = MappingProxyType({"type": "text"})
 
 
 def _as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:
@@ -3060,7 +3063,7 @@ class Router:
         # Structured output cannot be resumed from an arbitrary cut point;
         # `{"type": "text"}` is the unconstrained default and stays eligible.
         response_format: Final = request_kwargs.get("response_format")
-        if response_format is not None and response_format != {"type": "text"}:
+        if response_format is not None and response_format != _UNCONSTRAINED_RESPONSE_FORMAT:
             return False
         tool_choice: Final = request_kwargs.get("tool_choice")
         if tool_choice == "required" or isinstance(tool_choice, Mapping):
@@ -3071,17 +3074,17 @@ class Router:
 
     @staticmethod
     def _build_completion_continuation_input(
-        messages: list[dict[str, str]],
+        messages: Sequence[Mapping[str, str]],
         generated_content: str,
     ) -> Sequence[Mapping[str, object]]:
         """Append the partial output as an assistant prefill for a prefill-capable
         fallback to continue. A nested break folds the new partial into an
         existing trailing prefill rather than appending a second assistant turn."""
-        if messages and messages[-1].get("role") == "assistant" and messages[-1].get("prefix"):
-            last: Final = messages[-1]
-            merged: dict[str, object] = {**last, "content": str(last.get("content") or "") + generated_content}
+        last: Final = messages[-1] if messages else None
+        if last is not None and last.get("role") == "assistant" and last.get("prefix"):
+            merged: Final = {**last, "content": str(last.get("content") or "") + generated_content}
             return [*messages[:-1], merged]
-        prefill: dict[str, object] = {"role": "assistant", "content": generated_content, "prefix": True}
+        prefill: Final = {"role": "assistant", "content": generated_content, "prefix": True}
         return [*messages, prefill]
 
     @staticmethod
