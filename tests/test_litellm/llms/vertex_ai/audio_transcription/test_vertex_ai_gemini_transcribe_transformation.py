@@ -322,8 +322,8 @@ class TestModelCostEntry:
             entry = json.load(f)["vertex_ai/gemini-3.5-transcribe-preview"]
         assert entry["mode"] == "audio_transcription"
         assert entry["litellm_provider"] == "vertex_ai"
-        assert entry["input_cost_per_audio_token"] == pytest.approx(2.5e-06)
-        assert entry["input_cost_per_token"] == pytest.approx(2.5e-06)
+        assert entry["input_cost_per_audio_token"] == pytest.approx(2e-06)
+        assert entry["input_cost_per_token"] == pytest.approx(2e-06)
         assert entry["output_cost_per_token"] == pytest.approx(1.2e-05)
         assert entry["supported_endpoints"] == ["/v1/audio/transcriptions"]
 

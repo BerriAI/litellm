@@ -128,7 +128,8 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
 
   const {
     data: keys,
-    isPending: isLoading,
+    isPending,
+    isPlaceholderData,
     isFetching,
     refetch,
   } = useKeys(tablePagination.pageIndex + 1, tablePagination.pageSize, keyListOptions);
@@ -280,7 +281,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
         onColumnFiltersChange={handleColumnFiltersChange}
         enableColumnResizing
         columnResizeMode="onChange"
-        isLoading={isLoading}
+        isLoading={isPending || isPlaceholderData}
         loadingMessage="Loading keys..."
         noDataMessage="No keys found"
         fillHeight
@@ -311,7 +312,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
                     <SearchSelect
                       options={teamOptions}
                       value={(get("team_id") as string) || undefined}
-                      onValueChange={(value) => set("team_id", value)}
+                      onValueChange={(value) => set("team_id", value ?? undefined)}
                       placeholder="Select a team…"
                       emptyText="No teams found"
                     />
@@ -320,7 +321,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
                     <SearchSelect
                       options={orgOptions}
                       value={(get("org_id") as string) || undefined}
-                      onValueChange={(value) => set("org_id", value)}
+                      onValueChange={(value) => set("org_id", value ?? undefined)}
                       placeholder="Select an organization…"
                       emptyText="No organizations found"
                     />
