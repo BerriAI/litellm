@@ -9,8 +9,8 @@ import pytest
 from psycopg.rows import dict_row
 from pytest_postgresql import factories
 
-from litellm.constants import MAX_API_KEYS_IN_USAGE_BREAKDOWN
 from litellm.proxy.management_endpoints.common_daily_activity import (
+    MAX_API_KEYS_IN_USAGE_BREAKDOWN,
     _adjust_dates_for_timezone,
     _build_aggregated_sql_query,
     _build_entity_rollup_sql_query,

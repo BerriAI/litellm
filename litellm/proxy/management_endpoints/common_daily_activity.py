@@ -9,7 +9,7 @@ from fastapi import HTTPException, status
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import MAX_API_KEYS_IN_USAGE_BREAKDOWN, PTU_SENTINEL_API_KEY
+from litellm.constants import PTU_SENTINEL_API_KEY
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
     attach_user_emails,
@@ -51,6 +51,8 @@ _PRISMA_TO_PG_TABLE: Final[Mapping[str, str]] = {
     "litellm_dailyagentspend": "LiteLLM_DailyAgentSpend",
     "litellm_dailytagspend": "LiteLLM_DailyTagSpend",
 }
+
+MAX_API_KEYS_IN_USAGE_BREAKDOWN: Final = 100
 
 
 class DailySpendRecord(Protocol):

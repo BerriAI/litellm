@@ -65,10 +65,6 @@ DEFAULT_MAX_RETRIES: Final = int(os.getenv("DEFAULT_MAX_RETRIES", 2))
 # Max records accepted in one POST /v1/callbacks/logs batch. Bounds the blast
 # radius: each record fans out to spend logs + every callback integration.
 MAX_CALLBACK_LOG_RECORDS: Final = 1000
-# Top keys by spend that get per-key rows in the aggregated usage response.
-# Six of its GROUPING SETS are keyed on api_key, so an uncapped result grows
-# with every distinct key and the prisma query engine OOMs buffering it.
-MAX_API_KEYS_IN_USAGE_BREAKDOWN: Final = 100
 DEFAULT_MAX_RECURSE_DEPTH: Final = int(os.getenv("DEFAULT_MAX_RECURSE_DEPTH", 100))
 DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER = int(os.getenv("DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER", 10))
 DEFAULT_FAILURE_THRESHOLD_PERCENT: Final = float(
