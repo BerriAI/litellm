@@ -46,13 +46,13 @@ def stop_root_process(process: subprocess.Popen[bytes]) -> bool:
 
 
 @contextmanager
-def owned_proxy(gateway: Gateway, directory: Path, overrides: Mapping[str, str]) -> Iterator[Gateway]:
+def owned_proxy(gateway: Gateway, directory: Path, overrides: Mapping[str, str], *, config: Path | None = None, remove_environment: tuple[str, ...] = ()) -> Iterator[Gateway]:
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
         port: Final = reserve.getsockname()[1]
     root: Final = Path(__file__).resolve().parents[3]
     environment: Final = {
-        **os.environ,
+        **{name: value for name, value in os.environ.items() if name not in remove_environment},
         "LITELLM_MASTER_KEY": gateway.key,
         "LITELLM_SALT_KEY": os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt"),
         "STORE_MODEL_IN_DB": "True",
@@ -62,7 +62,7 @@ def owned_proxy(gateway: Gateway, directory: Path, overrides: Mapping[str, str])
     output.mkdir(parents=True, exist_ok=True)
     with (output / f"owned-proxy-{uuid.uuid4().hex}.log").open("w") as log:
         process: Final = subprocess.Popen(
-            [sys.executable, "-m", "integration._support.proxy", "--config", "tests/integration/proxy_config.yaml",
+            [sys.executable, "-m", "integration._support.proxy", "--config", str(config or "tests/integration/proxy_config.yaml"),
              "--host", "127.0.0.1", "--port", str(port), "--num_workers", "1", "--telemetry", "False",
              "--use_prisma_db_push", "--enforce_prisma_migration_check"],
             cwd=root, env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
