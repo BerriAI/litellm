@@ -102,11 +102,6 @@ export const getFilterValue = (columnFilters: ColumnFiltersState, columnId: stri
   return trimmed === "" ? undefined : trimmed;
 };
 
-/**
- * The Team and Project filter chips carry the id as their filter value (needed for the
- * backend query and for re-selecting the right option in the filter drawer), but showing
- * that id in the chip is meaningless to a reader. Resolve it back to the alias they picked.
- */
 export const resolveLogFilterDisplayValue = (
   columnId: string,
   rawValue: string,

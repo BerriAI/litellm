@@ -1,5 +1,6 @@
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
+import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
@@ -7,7 +8,7 @@ import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders } from "@/../tests/test-utils";
+import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import type { Organization } from "@/components/networking";
 import * as networking from "@/components/networking";
 import UsagePage from "./UsagePageView";
@@ -28,6 +29,7 @@ vi.mock("@/components/networking", () => ({
   userDailyActivityCall: vi.fn(),
   userDailyActivityAggregatedCall: vi.fn(),
   gatewayDailyActivityCall: vi.fn(),
+  getUiSettings: vi.fn(),
   tagListCall: vi.fn(),
 }));
 
@@ -60,14 +62,25 @@ vi.mock("./EntityUsage/SpendByProvider", () => ({
   default: () => <div>Spend By Provider</div>,
 }));
 
+vi.mock("./ProjectUsage/ProjectUsage", () => ({
+  default: ({ projectList }: { projectList: unknown }) => (
+    <div data-testid="project-usage" data-project-list={JSON.stringify(projectList ?? null)}>
+      Project Usage Panel
+    </div>
+  ),
+}));
+
 vi.mock("./EndpointUsage/EndpointUsage", () => ({
   default: () => <div>Endpoint Usage</div>,
 }));
 
 vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
   const React = await import("react");
-  const UsageViewSelect = ({ value, onChange, canViewTagUsage = false }: any) => {
+  const UsageViewSelect = ({ value, onChange, canViewTagUsage = false, enableProjectsUI = false }: any) => {
     const tagOption = canViewTagUsage ? React.createElement("option", { value: "tag" }, "Tag Usage") : null;
+    const projectOption = enableProjectsUI
+      ? React.createElement("option", { value: "project" }, "Project Usage")
+      : null;
     return React.createElement(
       "select",
       {
@@ -79,6 +92,7 @@ vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
       React.createElement("option", { value: "global" }, "Global Usage"),
       React.createElement("option", { value: "team" }, "Team Usage"),
       React.createElement("option", { value: "organization" }, "Organization Usage"),
+      projectOption,
       React.createElement("option", { value: "customer" }, "Customer Usage"),
       tagOption,
       React.createElement("option", { value: "agent" }, "Agent Usage"),
@@ -137,6 +151,10 @@ vi.mock("@/app/(dashboard)/hooks/agents/useAgents", () => ({
   useAgents: vi.fn(),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/projects/useProjects", () => ({
+  useProjects: vi.fn(),
+}));
+
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   __esModule: true,
   default: vi.fn(),
@@ -163,6 +181,8 @@ describe("UsagePage", () => {
   const mockGatewayDailyActivityCall = vi.mocked(networking.gatewayDailyActivityCall);
   const mockUseCustomers = vi.mocked(useCustomers);
   const mockUseAgents = vi.mocked(useAgents);
+  const mockUseProjects = vi.mocked(useProjects);
+  const mockGetUiSettings = vi.mocked(networking.getUiSettings);
   const mockUseAuthorized = vi.mocked(useAuthorized);
   const mockUseCurrentUser = vi.mocked(useCurrentUser);
   const mockUseInfiniteUsers = vi.mocked(useInfiniteUsers);
@@ -353,6 +373,11 @@ describe("UsagePage", () => {
   };
 
   beforeEach(() => {
+    // useUISettings is a real react-query hook (not mocked below), and the shared
+    // testQueryClient never expires a cached query on its own (staleTime/gcTime:
+    // Infinity, refetchOnMount: false). Without clearing it, one test's
+    // getUiSettings mock leaks into the next test's render of the same query key.
+    testQueryClient.clear();
     mockUseAuthorized.mockReturnValue({
       isLoading: false,
       isAuthorized: true,
@@ -411,6 +436,15 @@ describe("UsagePage", () => {
       isLoading: false,
       error: null,
     } as any);
+    mockUseProjects.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+    } as any);
+    // Left unset (rather than resolved) by default: enable_projects_ui reads
+    // as off until a test explicitly turns it on, matching a proxy that has
+    // not enabled the flag.
+    mockGetUiSettings.mockReturnValue(new Promise(() => {}));
   });
 
   it("should render and fetch usage data on mount", async () => {
@@ -810,6 +844,80 @@ describe("UsagePage", () => {
       fireEvent.change(usageSelect, { target: { value: usageView } });
     });
     expect(screen.queryByText("Entity Usage")).not.toBeInTheDocument();
+  });
+
+  describe("project usage", () => {
+    // A team admin's session role is "Internal User" — the same role a plain
+    // member carries — so team-admin-ness only shows up in the team's own
+    // members_with_roles.
+    const teamAdminProps = {
+      ...defaultProps,
+      teams: [
+        {
+          ...defaultProps.teams[0],
+          members_with_roles: [{ role: "admin", user_id: "user-123" }],
+        },
+      ],
+    };
+
+    it("should not fetch the project list while Project Usage UI is disabled", async () => {
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      expect(mockUseProjects).toHaveBeenLastCalledWith(false);
+    });
+
+    it("should fetch the project list once Project Usage UI is turned on", async () => {
+      mockGetUiSettings.mockResolvedValue({ field_schema: {}, values: { enable_projects_ui: true } });
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUseProjects).toHaveBeenLastCalledWith(true);
+      });
+    });
+
+    it("should let a team admin open Project Usage once it is enabled", async () => {
+      mockGetUiSettings.mockResolvedValue({ field_schema: {}, values: { enable_projects_ui: true } });
+      mockUseAuthorized.mockReturnValue(nonAdminSession);
+      mockUseProjects.mockReturnValue({
+        data: [{ project_id: "project-1", project_alias: "Project One" }],
+        isLoading: false,
+        error: null,
+      } as any);
+
+      renderWithProviders(<UsagePage {...teamAdminProps} />);
+
+      await screen.findByRole("option", { name: "Project Usage" });
+      act(() => {
+        fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "project" } });
+      });
+
+      const projectUsage = await screen.findByTestId("project-usage");
+      expect(projectUsage).toHaveAttribute(
+        "data-project-list",
+        JSON.stringify([{ label: "Project One", value: "project-1" }]),
+      );
+    });
+
+    // The dropdown's own capability gating (which roles see the Project Usage option
+    // at all, including a team admin) is covered by UsageViewSelect.test.tsx; this
+    // checks the composition point specific to this component: nothing should fetch
+    // the project list for a session that Project Usage was never going to grant.
+    it("should not fetch the project list for a plain internal user who administers no team", async () => {
+      mockGetUiSettings.mockResolvedValue({ field_schema: {}, values: { enable_projects_ui: true } });
+      mockUseAuthorized.mockReturnValue(nonAdminSession);
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+      expect(mockUseProjects).toHaveBeenLastCalledWith(false);
+    });
   });
 
   describe("admin user selector", () => {

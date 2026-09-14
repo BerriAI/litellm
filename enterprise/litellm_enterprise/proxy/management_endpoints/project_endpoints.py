@@ -1100,6 +1100,7 @@ def _project_daily_activity_error(*, status_code: int, message: str) -> HTTPExce
 
 
 _MAX_PROJECT_DAILY_ACTIVITY_RANGE_DAYS: Final = 400
+_MAX_PROJECT_DAILY_ACTIVITY_PROJECT_COUNT: Final = 50
 
 
 def _project_daily_activity_date_range_error(start_date: str | None, end_date: str | None) -> str | None:
@@ -1123,11 +1124,16 @@ def _project_daily_activity_date_range_error(start_date: str | None, end_date: s
 
 
 def _project_daily_spend_sql(*, project_count: int) -> str:
-    project_placeholders: Final = ", ".join(f"${i}" for i in range(3, 3 + project_count))
+    """
+    Joins each requested project_id against the team_id it currently belongs to, so a
+    project_id reused by a different team after the original project was deleted cannot
+    pull that team's historical spend into the new project's report.
+    """
+    pairs: Final = ", ".join(f"(${3 + 2 * i}::text, ${4 + 2 * i}::text)" for i in range(project_count))
     return f"""
         SELECT
             (DATE_TRUNC('day', sl."startTime" AT TIME ZONE 'UTC'))::date::text AS spend_date,
-            sl.metadata->>'user_api_key_project_id' AS project_id,
+            scoped.project_id AS project_id,
             SUM(sl.spend)::float AS spend,
             SUM(sl.prompt_tokens)::bigint AS prompt_tokens,
             SUM(sl.completion_tokens)::bigint AS completion_tokens,
@@ -1136,11 +1142,13 @@ def _project_daily_spend_sql(*, project_count: int) -> str:
             COUNT(*) FILTER (WHERE sl.status IS DISTINCT FROM 'failure')::bigint AS successful_requests,
             COUNT(*) FILTER (WHERE sl.status = 'failure')::bigint AS failed_requests
         FROM "LiteLLM_SpendLogs" sl
+        JOIN (VALUES {pairs}) AS scoped(project_id, team_id)
+            ON sl.metadata->>'user_api_key_project_id' = scoped.project_id
+            AND sl.team_id IS NOT DISTINCT FROM scoped.team_id
         WHERE sl."startTime" >= $1::timestamp
             AND sl."startTime" < $2::timestamp + INTERVAL '1 day'
-            AND sl.metadata->>'user_api_key_project_id' IN ({project_placeholders})
-        GROUP BY spend_date, project_id
-        ORDER BY spend_date, project_id
+        GROUP BY spend_date, scoped.project_id
+        ORDER BY spend_date, scoped.project_id
     """
 
 
@@ -1158,6 +1166,7 @@ class _ProjectDailySpendDbRow(TypedDict):
 
 class _ProjectDailyActivityScope(NamedTuple):
     project_ids: tuple[str, ...]
+    project_team_ids: tuple[str | None, ...]
     project_alias_by_id: Mapping[str, str | None]
 
 
@@ -1173,9 +1182,14 @@ async def _resolve_project_daily_activity_scope(
     Proxy admins may query any project. Everyone else must be an admin of the
     project's team, the same permission /project/update enforces.
     """
-    requested: Final = tuple(pid.strip() for pid in project_ids.split(",") if pid.strip())
+    requested: Final = tuple(dict.fromkeys(pid.strip() for pid in project_ids.split(",") if pid.strip()))
     if not requested:
-        return _ProjectDailyActivityScope(project_ids=(), project_alias_by_id={})
+        return _ProjectDailyActivityScope(project_ids=(), project_team_ids=(), project_alias_by_id={})
+    if len(requested) > _MAX_PROJECT_DAILY_ACTIVITY_PROJECT_COUNT:
+        raise _project_daily_activity_error(
+            status_code=400,
+            message=f"At most {_MAX_PROJECT_DAILY_ACTIVITY_PROJECT_COUNT} project_ids may be requested at once",
+        )
 
     projects: Final = await _project_table(prisma_client).find_many(where={"project_id": {"in": list(requested)}})
     found_by_id: Final = {p.project_id: p for p in projects}
@@ -1200,6 +1214,7 @@ async def _resolve_project_daily_activity_scope(
 
     return _ProjectDailyActivityScope(
         project_ids=requested,
+        project_team_ids=tuple(found_by_id[pid].team_id for pid in requested),
         project_alias_by_id={pid: found_by_id[pid].project_alias for pid in requested},
     )
 
@@ -1265,11 +1280,14 @@ async def get_project_daily_activity(
     if not scope.project_ids:
         return ProjectDailySpendResponse(start_date=start_date, end_date=end_date, results=())
 
+    project_team_params: Final = tuple(
+        value for pair in zip(scope.project_ids, scope.project_team_ids) for value in pair
+    )
     rows: Final[Sequence[_ProjectDailySpendDbRow]] = await prisma_client.db.query_raw(
         _project_daily_spend_sql(project_count=len(scope.project_ids)),
         start_date,
         end_date,
-        *scope.project_ids,
+        *project_team_params,
     )
     results: Final = tuple(
         ProjectDailySpendRow(
