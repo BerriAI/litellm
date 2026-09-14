@@ -1,0 +1,31 @@
+{
+  "version": "roi-20260914",
+  "scope": "Experimental opt-in snapshots, not production defaults",
+  "training": {
+    "dataset": "DeepSWE v1.1",
+    "train_tasks": 83,
+    "validation_tasks": 30,
+    "split": "repository-disjoint",
+    "task_revision": "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea",
+    "task_source": "https://github.com/datacurve-ai/deep-swe/tree/0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea",
+    "outcomes_source": "https://deepswe.datacurve.ai/artifacts/v1.1/trials.json",
+    "repeats": "Average success across recorded attempts per task; tasks have equal fitting weight"
+  },
+  "judge": {
+    "model": "openai/gpt-5.6-luna",
+    "reasoning_effort": "low",
+    "max_completion_tokens": 2048
+  },
+  "solver_effort": "high",
+  "frozen_selection_sha256": "ba2b00700aa338080077936a1fd794fd3bfa85fde28baef1fc5560f319ab1f32",
+  "training_forecasts_sha256": "67ef5c8fcd76ff6257468a3bd4c27cb7e27e0514ad0a037bd81e5b7d2e0b1508",
+  "selection": "Lowest validation inference cost plus measured judge cost at each declared quality regret budget",
+  "interpretation": "Validation regret budgets are policy choices, not fitted probabilities or live noninferiority guarantees. Coefficients and thresholds are specific to the named model pair, judge, cards and task protocol. DeepSWE to SWE-bench transfer is evaluated separately.",
+  "limits": [
+    "83 fitting tasks and 30 validation tasks support only exploratory estimates",
+    "Published training outcomes use different task budgets and serving configurations from the live pilot",
+    "Missing training cost records remain missing and are excluded as pairs only from cost metrics",
+    "Luna/Sol profiles have public-data validation only unless a corresponding fresh live evaluation is listed",
+    "Training retains the source included_in_score filter; excluded provider/infrastructure failures are not modeled as solver failures"
+  ]
+}

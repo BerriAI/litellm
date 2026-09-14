@@ -28557,6 +28557,16 @@ export interface components {
             /** Version */
             version: string;
         };
+        /** LLMV2CalibrationOffset */
+        LLMV2CalibrationOffset: {
+            /**
+             * Feature
+             * @enum {string}
+             */
+            feature: "reasoning:routine" | "reasoning:multistep" | "reasoning:open_ended" | "reasoning:unknown" | "scope:localized" | "scope:coupled" | "scope:broad" | "scope:unknown" | "specification:clear" | "specification:ambiguous" | "specification:unknown" | "verification:relevant" | "verification:partial" | "verification:unavailable" | "verification:unknown";
+            /** Intercept */
+            intercept: number;
+        };
         /** LLMV2Config */
         LLMV2Config: {
             calibration?: components["schemas"]["LLMV2Calibration"] | null;
@@ -28597,6 +28607,11 @@ export interface components {
         LLMV2ProbabilityCalibration: {
             /** Intercept */
             intercept: number;
+            /**
+             * Offsets
+             * @default []
+             */
+            offsets: components["schemas"]["LLMV2CalibrationOffset"][];
             /** Slope */
             slope: number;
         };

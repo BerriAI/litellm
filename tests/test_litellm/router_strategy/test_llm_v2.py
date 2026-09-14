@@ -62,6 +62,54 @@ def _response(content: str) -> ModelResponse:
     return response
 
 
+def test_task_calibration_changes_only_matching_demands_and_survives_serialization() -> None:
+    base: Final = _config().llm_v2_config
+    assert base is not None
+    config: Final = LLMV2Config.model_validate(
+        {
+            **base.model_dump(),
+            "calibration": {
+                "version": "sonnet-opus-high-test",
+                "prompt_version": "llm-v2-1",
+                "efficient": {
+                    "slope": 1.0,
+                    "intercept": 0.0,
+                    "offsets": [{"feature": "scope:coupled", "intercept": -2.0}],
+                },
+                "capable": {"slope": 1.0, "intercept": 0.0},
+            },
+        }
+    )
+    restored: Final = LLMV2Config.model_validate_json(config.model_dump_json())
+    coupled: Final = restored.classify(_verdict())
+    localized: Final = restored.classify(
+        LLMV2Verdict.model_validate(
+            {
+                **_verdict().model_dump(),
+                "demands": {"reasoning": "multistep", "scope": "localized", "specification": "clear"},
+            }
+        )
+    )
+    assert not coupled.use_efficient
+    assert localized.use_efficient
+    assert localized.efficient == pytest.approx(0.9)
+    assert coupled.capable == localized.capable == pytest.approx(0.92)
+    assert coupled.efficient == pytest.approx(0.5491469396)
+
+
+@pytest.mark.parametrize(
+    "offsets",
+    [
+        [{"feature": "scope:coupled", "intercept": 1.0}] * 2,
+        [{"feature": "scope:invented", "intercept": 1.0}],
+        [{"feature": "scope:coupled", "intercept": float("nan")}],
+    ],
+)
+def test_task_calibration_rejects_unusable_offsets(offsets: list[dict[str, object]]) -> None:
+    with pytest.raises(ValidationError):
+        LLMV2ProbabilityCalibration.model_validate({"slope": 1.0, "intercept": 0.0, "offsets": offsets})
+
+
 def _router(content: str, config: ComplexityRouterConfig | None = None) -> tuple[ComplexityRouter, MagicMock]:
     client: Final = MagicMock(spec=Router)
     client.acompletion = AsyncMock(return_value=_response(content))
