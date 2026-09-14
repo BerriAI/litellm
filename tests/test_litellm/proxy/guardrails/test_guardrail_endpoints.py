@@ -1612,7 +1612,7 @@ async def test_apply_guardrail_invokes_logging_pipeline(mocker):
     }
 
 
-def _patch_apply_guardrail_env(mocker, guardrail_result):
+def _patch_apply_guardrail_env(mocker, guardrail_result, processed_data=None):
     mock_guardrail = mocker.Mock()
     mock_guardrail.apply_guardrail = AsyncMock(return_value=guardrail_result)
 
@@ -1627,7 +1627,7 @@ def _patch_apply_guardrail_env(mocker, guardrail_result):
     mock_logging_obj.model_call_details = {}
     mock_processor = mocker.Mock()
     mock_processor.common_processing_pre_call_logic = AsyncMock(
-        return_value=({"guardrail_name": "test-guardrail"}, mock_logging_obj)
+        return_value=(processed_data or {"guardrail_name": "test-guardrail"}, mock_logging_obj)
     )
     mocker.patch(
         "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
@@ -1696,6 +1696,68 @@ async def test_apply_guardrail_forwards_metadata_and_messages_together(mocker):
         },
         input_type="request",
     )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_replaces_caller_identity_with_the_authenticated_key(mocker):
+    """Identity fields come from the proxy's own sanitized metadata, never from
+    the caller, so a request cannot impersonate another key or probe its policy."""
+    mock_guardrail = _patch_apply_guardrail_env(
+        mocker,
+        {"texts": ["ok"]},
+        processed_data={
+            "guardrail_name": "test-guardrail",
+            "metadata": {
+                "route": "/apply_guardrail",
+                "user_api_key_alias": "billing-app",
+                "user_api_key_user_id": "u-1",
+            },
+        },
+    )
+
+    request = ApplyGuardrailRequest(
+        guardrail_name="test-guardrail",
+        text="hello",
+        metadata={
+            "forbidden_topics": ["tax"],
+            "user_api_key_alias": "someone-else",
+            "user_api_key_user_email": "victim@example.com",
+        },
+    )
+    await apply_guardrail(
+        fastapi_request=mocker.Mock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(key_alias="billing-app", user_id="u-1"),
+    )
+
+    forwarded = mock_guardrail.apply_guardrail.await_args.kwargs["request_data"]["metadata"]
+    assert forwarded == {
+        "forbidden_topics": ["tax"],
+        "user_api_key_alias": "billing-app",
+        "user_api_key_user_id": "u-1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_attaches_key_identity_when_caller_sends_no_metadata(mocker):
+    """A caller that sends no metadata still gets the authenticated identity
+    forwarded, the same shape every LLM route gives a guardrail."""
+    mock_guardrail = _patch_apply_guardrail_env(
+        mocker,
+        {"texts": ["ok"]},
+        processed_data={"guardrail_name": "test-guardrail", "metadata": {"user_api_key_alias": "billing-app"}},
+    )
+
+    request = ApplyGuardrailRequest(guardrail_name="test-guardrail", text="hello")
+    await apply_guardrail(
+        fastapi_request=mocker.Mock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(key_alias="billing-app"),
+    )
+
+    assert mock_guardrail.apply_guardrail.await_args.kwargs["request_data"] == {
+        "metadata": {"user_api_key_alias": "billing-app"}
+    }
 
 
 @pytest.mark.asyncio

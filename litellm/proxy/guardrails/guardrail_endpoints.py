@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, Union,
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -2215,6 +2215,26 @@ async def test_custom_code_guardrail(
         )
 
 
+_GUARDRAIL_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def _metadata_fields(value: object) -> Mapping[str, object]:
+    try:
+        return _GUARDRAIL_METADATA_ADAPTER.validate_python(value)
+    except ValidationError:
+        return {}  # mutable-ok: empty fallback for the request_data dict contract
+
+
+def _guardrail_request_metadata(caller: object, proxy: object) -> Mapping[str, object]:
+    caller_fields: Final = tuple(
+        (key, value) for key, value in _metadata_fields(caller).items() if not key.startswith("user_api_key_")
+    )
+    key_identity: Final = tuple(
+        (key, value) for key, value in _metadata_fields(proxy).items() if key.startswith("user_api_key_")
+    )
+    return dict((*caller_fields, *key_identity))  # mutable-ok: request_data is the apply_guardrail dict contract
+
+
 def _resolve_guardrail_input_type(active_guardrail: CustomGuardrail, input_type: str) -> Literal["request", "response"]:
     """Return the effective input_type, auto-upgrading to 'response' for post_call guardrails."""
     if input_type == "request":
@@ -2377,9 +2397,10 @@ async def apply_guardrail(
         if litellm_logging_obj is not None:
             _patch_logging_obj_for_guardrail(litellm_logging_obj, request)
 
+        metadata: Final = _guardrail_request_metadata(request.metadata, data.get("metadata"))
         request_data: Final[dict] = {
             **({"messages": request.messages} if request.messages is not None else {}),
-            **({"metadata": request.metadata} if request.metadata is not None else {}),
+            **({"metadata": metadata} if request.metadata is not None or metadata else {}),
         }
         _input_type: Final = _resolve_guardrail_input_type(active_guardrail, request.input_type)
         guardrailed_inputs: Final = await active_guardrail.apply_guardrail(
