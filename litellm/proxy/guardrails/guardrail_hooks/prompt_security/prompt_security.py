@@ -512,15 +512,14 @@ class PromptSecurityGuardrail(CustomGuardrail):
                     "metadata": result.get("metadata", {}),
                     "violations": result.get("metadata", {}).get("violations", []),
                 }
-            elif status == "in progress":
-                verbose_proxy_logger.debug(
-                    "Prompt Security Guardrail: File sanitization in progress (attempt %d/%d)",
-                    attempt + 1,
-                    self.max_poll_attempts,
-                )
-                continue
-            else:
-                raise HTTPException(status_code=500, detail=f"Unexpected sanitization status: {status}")
+
+            verbose_proxy_logger.debug(
+                "Prompt Security Guardrail: File sanitization status=%s for jobId=%s (attempt %d/%d)",
+                status,
+                job_id,
+                attempt + 1,
+                self.max_poll_attempts,
+            )
 
         raise HTTPException(status_code=408, detail="File sanitization timeout")
 
