@@ -978,17 +978,17 @@ async def test_stale_timeout_does_not_let_sub_threshold_hard_failures_open_the_b
     from redis.exceptions import ConnectionError as RedisConnectionError
     from redis.exceptions import TimeoutError as RedisTimeoutError
 
-    from litellm.caching.redis_cache import RedisCircuitBreaker, _is_redis_timeout_failure
+    from litellm.caching.redis_cache import RedisCircuitBreaker, is_redis_timeout_failure
 
     breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, timeout_min_duration=0.05)
 
-    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisTimeoutError("read timed out")))
+    breaker.record_failure(is_timeout=is_redis_timeout_failure(RedisTimeoutError("read timed out")))
     await asyncio.sleep(0.06)
     for _ in range(breaker.failure_threshold - 1):
-        breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisConnectionError("refused")))
+        breaker.record_failure(is_timeout=is_redis_timeout_failure(RedisConnectionError("refused")))
     assert breaker.is_open() is False, "2 hard failures and 1 stale timeout are below both thresholds"
 
-    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisConnectionError("refused")))
+    breaker.record_failure(is_timeout=is_redis_timeout_failure(RedisConnectionError("refused")))
     assert breaker.is_open() is True, "the threshold-th hard failure must still open it"
 
 
@@ -1000,19 +1000,19 @@ async def test_hard_failure_resets_timeout_streak_so_a_later_burst_must_earn_its
     from redis.exceptions import ConnectionError as RedisConnectionError
     from redis.exceptions import TimeoutError as RedisTimeoutError
 
-    from litellm.caching.redis_cache import RedisCircuitBreaker, _is_redis_timeout_failure
+    from litellm.caching.redis_cache import RedisCircuitBreaker, is_redis_timeout_failure
 
     breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, timeout_min_duration=0.05)
 
-    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisTimeoutError("read timed out")))
-    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisConnectionError("refused")))
+    breaker.record_failure(is_timeout=is_redis_timeout_failure(RedisTimeoutError("read timed out")))
+    breaker.record_failure(is_timeout=is_redis_timeout_failure(RedisConnectionError("refused")))
     await asyncio.sleep(0.06)
     for _ in range(breaker.failure_threshold):
-        breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisTimeoutError("read timed out")))
+        breaker.record_failure(is_timeout=is_redis_timeout_failure(RedisTimeoutError("read timed out")))
     assert breaker.is_open() is False, "the burst is instantaneous, so the duration gate must hold it closed"
 
     await asyncio.sleep(0.06)
-    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisTimeoutError("read timed out")))
+    breaker.record_failure(is_timeout=is_redis_timeout_failure(RedisTimeoutError("read timed out")))
     assert breaker.is_open() is True, "the same run of timeouts persisting past the duration must open it"
 
 
@@ -1023,7 +1023,7 @@ async def test_breaker_metrics_track_state_and_failure_class():
     from redis.exceptions import ConnectionError as RedisConnectionError
     from redis.exceptions import TimeoutError as RedisTimeoutError
 
-    from litellm.caching.redis_cache import RedisCircuitBreaker, _is_redis_timeout_failure
+    from litellm.caching.redis_cache import RedisCircuitBreaker, is_redis_timeout_failure
 
     def sample(name, labels=None):
         return REGISTRY.get_sample_value(name, labels) or 0.0
@@ -1035,9 +1035,9 @@ async def test_breaker_metrics_track_state_and_failure_class():
     closed_gauge_before = sample("litellm_redis_circuit_breaker_state", {"state": "closed"})
 
     breaker = RedisCircuitBreaker(failure_threshold=2, recovery_timeout=60, timeout_min_duration=5.0)
-    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisTimeoutError("t")))
-    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisConnectionError("refused")))
-    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisConnectionError("refused")))
+    breaker.record_failure(is_timeout=is_redis_timeout_failure(RedisTimeoutError("t")))
+    breaker.record_failure(is_timeout=is_redis_timeout_failure(RedisConnectionError("refused")))
+    breaker.record_failure(is_timeout=is_redis_timeout_failure(RedisConnectionError("refused")))
 
     assert sample("litellm_redis_circuit_breaker_failures_total", {"failure_class": "timeout"}) == timeout_before + 1
     assert sample("litellm_redis_circuit_breaker_failures_total", {"failure_class": "connectivity"}) == hard_before + 2
@@ -1205,6 +1205,117 @@ async def test_a_probe_overtaken_by_a_later_outage_leaves_the_breaker_to_the_new
     assert breaker._state == breaker.CLOSED
 
 
+def test_timeouts_during_a_blip_log_once_per_interval_not_once_per_call(sync_batch_redis_cache, caplog, monkeypatch):
+    """A timeout streak logs its first failure plus one summary per interval; other failures log per call."""
+    import logging
+
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    from litellm.caching import redis_cache as redis_cache_module
+    from litellm.caching.redis_cache import _RedisTimeoutLogThrottle
+
+    clock = MagicMock(return_value=1_000.0)
+    monkeypatch.setattr(
+        redis_cache_module, "_redis_timeout_log_throttle", _RedisTimeoutLogThrottle(interval=5.0, clock=clock)
+    )
+    sync_batch_redis_cache.redis_client.get.side_effect = RedisTimeoutError("Timeout reading from 127.0.0.1:6379")
+    sync_batch_redis_cache.redis_client.mget.side_effect = RedisTimeoutError("Timeout reading from 127.0.0.1:6379")
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        for _ in range(200):
+            assert sync_batch_redis_cache.get_cache("lit7520") is None
+        assert sync_batch_redis_cache.batch_get_cache(key_list=["lit7520"]) == {}
+
+    timeout_records = [r for r in caplog.records if "Timeout reading from" in r.getMessage()]
+    assert len(timeout_records) == 201, "every timeout must stay visible at DEBUG"
+    assert [r.getMessage() for r in timeout_records if r.levelno >= logging.WARNING] == [
+        "litellm.caching.caching: get() - Got exception from REDIS: Timeout reading from 127.0.0.1:6379"
+    ]
+    assert timeout_records[0].levelno == logging.ERROR
+    assert timeout_records[0].filename == "redis_cache.py"
+    assert timeout_records[0].lineno != timeout_records[-1].lineno, "the record must point at the cache operation"
+
+    caplog.clear()
+    clock.return_value += 5.0
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        assert sync_batch_redis_cache.batch_get_cache(key_list=["lit7520"]) == {}
+    assert [(r.levelno, r.getMessage()) for r in caplog.records] == [
+        (
+            logging.ERROR,
+            "Error occurred in batch get cache: Timeout reading from 127.0.0.1:6379"
+            " (200 more Redis timeouts since the previous Redis timeout line were logged at DEBUG)",
+        )
+    ]
+
+    caplog.clear()
+    sync_batch_redis_cache.redis_client.get.side_effect = OSError("redis unavailable")
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        for _ in range(3):
+            assert sync_batch_redis_cache.get_cache("lit7520") is None
+    assert [r.levelno for r in caplog.records if "redis unavailable" in r.getMessage()] == [logging.ERROR] * 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_method",
+    [
+        pytest.param(lambda c: c.async_set_cache_pipeline([("lit7520", "v")]), id="async_set_cache_pipeline"),
+        pytest.param(
+            lambda c: c.async_set_cache_pipeline_with_ttls([("lit7520", "v", 60.0)]),
+            id="async_set_cache_pipeline_with_ttls",
+        ),
+        pytest.param(lambda c: c.async_set_cache_sadd("lit7520", ["v"], ttl=None), id="async_set_cache_sadd"),
+        pytest.param(lambda c: c.async_increment("lit7520", 1.0), id="async_increment"),
+        pytest.param(
+            lambda c: c.async_increment_pipeline([{"key": "lit7520", "increment_value": 1.0, "ttl": 60}]),
+            id="async_increment_pipeline",
+        ),
+        pytest.param(lambda c: c.async_rpush("lit7520", ["v"]), id="async_rpush"),
+        pytest.param(
+            lambda c: c.async_rpush_pipeline([{"key": "lit7520", "values": ["v"]}]), id="async_rpush_pipeline"
+        ),
+        pytest.param(lambda c: c.async_lpop("lit7520"), id="async_lpop"),
+        pytest.param(lambda c: c.async_lpop_pipeline([{"key": "lit7520", "count": 1}]), id="async_lpop_pipeline"),
+    ],
+)
+async def test_write_path_timeouts_inside_the_interval_stay_at_debug(call_method, caplog, monkeypatch, redis_no_ping):
+    """A write or list operation timing out mid-streak is counted by the throttle instead of logging its own ERROR."""
+    import contextlib
+    import logging
+
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    from litellm.caching import redis_cache as redis_cache_module
+    from litellm.caching.redis_cache import _RedisTimeoutLogThrottle
+
+    clock = MagicMock(return_value=1_000.0)
+    throttle = _RedisTimeoutLogThrottle(interval=5.0, clock=clock)
+    assert throttle.admit() == 0
+    monkeypatch.setattr(redis_cache_module, "_redis_timeout_log_throttle", throttle)
+
+    timeout = RedisTimeoutError("Timeout reading from 127.0.0.1:6379")
+    client = MagicMock()
+    client.pipeline.return_value.__aenter__.side_effect = timeout
+    client.sadd = AsyncMock(side_effect=timeout)
+    client.incrbyfloat = AsyncMock(side_effect=timeout)
+    client.rpush = AsyncMock(side_effect=timeout)
+    client.lpop = AsyncMock(side_effect=timeout)
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    cache = RedisCache()
+
+    with (
+        patch.object(cache, "init_async_client", return_value=client),
+        caplog.at_level(logging.DEBUG, logger="LiteLLM"),
+    ):
+        with contextlib.suppress(RedisTimeoutError):
+            await call_method(cache)
+
+    timeout_records = [r for r in caplog.records if "Timeout reading from" in r.getMessage()]
+    assert [(r.levelno, r.filename) for r in timeout_records] == [(logging.DEBUG, "redis_cache.py")]
+    clock.return_value += 5.0
+    assert throttle.admit() == 1
+
+
 @pytest.mark.asyncio
 async def test_pool_wait_timeout_is_a_timeout_failure_not_hard_connectivity():
     """A saturated blocking pool must not open the breaker before the timeout minimum duration.
@@ -1241,7 +1352,7 @@ async def test_pool_wait_timeout_is_a_timeout_failure_not_hard_connectivity():
 def test_timeout_classification_follows_the_explicit_cause_chain_only():
     from redis.exceptions import ConnectionError as RedisConnectionError
 
-    from litellm.caching.redis_cache import _is_redis_timeout_failure
+    from litellm.caching.redis_cache import is_redis_timeout_failure
 
     def raise_chained_from_timeout() -> None:
         try:
@@ -1260,9 +1371,9 @@ def test_timeout_classification_follows_the_explicit_cause_chain_only():
     with pytest.raises(RedisConnectionError) as contextual:
         raise_while_handling_timeout()
 
-    assert _is_redis_timeout_failure(chained.value) is True
-    assert _is_redis_timeout_failure(contextual.value) is False
-    assert _is_redis_timeout_failure(RedisConnectionError("refused")) is False
+    assert is_redis_timeout_failure(chained.value) is True
+    assert is_redis_timeout_failure(contextual.value) is False
+    assert is_redis_timeout_failure(RedisConnectionError("refused")) is False
 
 
 class _RoundTripCountingRedis:
