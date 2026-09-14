@@ -20,9 +20,6 @@ query-filters:
       id: py/cyclic-import
   - exclude:
       id: py/unsafe-cyclic-import
-  # Disable repeated logging findings, including genuine log-injection findings.
-  - exclude:
-      id: py/log-injection
   # Known false positives on live settings and Protocol placeholders.
   - exclude:
       id: py/unused-global-variable
