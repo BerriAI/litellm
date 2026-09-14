@@ -6926,6 +6926,18 @@ def test_get_status_fields_ranks_guardrail_flagged_between_success_and_intervene
     )["guardrail_status"] == "guardrail_intervened"
 
 
+def test_get_status_fields_rolls_skipped_entries_up_to_not_run():
+    """LIT-6314: a guardrail that message scoping left nothing to scan records a
+    skipped entry. At request level that means no guardrail ran, and a skipped
+    entry must never outrank a sibling that did evaluate."""
+    skipped = {"guardrail_status": "skipped"}
+
+    assert _get_status_fields("success", [skipped], None)["guardrail_status"] == "not_run"
+    assert _get_status_fields(
+        "success", [skipped, {"guardrail_status": "success"}], None
+    )["guardrail_status"] == "success"
+
+
 def test_get_error_information_redacts_provider_key_from_upstream_url():
     """A pass-through upstream failure logs the httpx traceback, whose message
     quotes the upstream URL with the provider key in its query string. That

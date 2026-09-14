@@ -10,15 +10,15 @@ import type { LogEntry as ViewLogsLogEntry } from "@/components/view_logs/column
 import type { LogEntry } from "./mockData";
 
 const actionConfig: Record<
-  "blocked" | "passed" | "flagged" | "not_run",
+  "blocked" | "passed" | "flagged" | "skipped",
   { icon: React.ElementType; color: string; bg: string; border: string; label: string }
 > = {
-  not_run: {
+  skipped: {
     icon: MinusCircle,
     color: "text-muted-foreground",
     bg: "bg-muted",
     border: "border-border",
-    label: "Not run",
+    label: "Skipped",
   },
   blocked: {
     icon: X,

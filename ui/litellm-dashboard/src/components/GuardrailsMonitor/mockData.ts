@@ -10,7 +10,7 @@ export interface LogEntry {
   input_snippet?: string;
   output_snippet?: string;
   score?: number;
-  action: "blocked" | "passed" | "flagged" | "not_run";
+  action: "blocked" | "passed" | "flagged" | "skipped";
   model?: string;
   reason?: string;
   latency_ms?: number;
