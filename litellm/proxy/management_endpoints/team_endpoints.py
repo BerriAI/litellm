@@ -3465,30 +3465,17 @@ async def bulk_team_member_delete(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
 ) -> BulkTeamMemberDeleteResponse:
     """
-    Remove up to 500 members from one team in a single request.
+    Remove up to 500 members (each named by `user_id` or `user_email`) from one team. Same authorization
+    as `/team/member_delete`. Returns one result per member, in order.
 
-    Same authorization as `/team/member_delete` (proxy admin, team admin, or org admin of the team's
-    organization). Each member is named by `user_id` or `user_email`. The team is rewritten once under
-    the team lock: the roster, every removed user's `teams` array, their `LiteLLM_TeamMembership` rows and
-    their team-scoped keys are all cleaned up together. Members that are not on the team are reported in
-    `results` with `success: false` and the rest are still removed.
-
-    Example request:
     ```bash
-    curl --location 'http://0.0.0.0:4000/team/bulk_member_delete' \\
-    --header 'Authorization: Bearer sk-1234' \\
-    --header 'Content-Type: application/json' \\
-    --data '{
-        "team_id": "team-1234",
-        "members": [{"user_id": "user1"}, {"user_email": "user2@example.com"}]
-    }'
+    curl -X POST 'http://0.0.0.0:4000/team/bulk_member_delete' -H 'Authorization: Bearer sk-1234' \\
+    -H 'Content-Type: application/json' \\
+    -d '{"team_id": "team-1234", "members": [{"user_id": "user1"}, {"user_email": "user2@example.com"}]}'
     ```
-
-    Returns `team_id`, `results` (one entry per input member, in order, with `user_id`, `user_email`,
-    `success`, `error`), `total_requested`, `successful_deletions` and `failed_deletions`.
     """
     from litellm.proxy.management_helpers.bulk_user_deletion import bulk_remove_team_members
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 
     if prisma_client is None:
         raise HTTPException(status_code=400, detail=CommonProxyErrors.db_not_connected_error.value)
@@ -3497,6 +3484,8 @@ async def bulk_team_member_delete(
             data=data,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
         )
     except Exception as e:  # noqa: BLE001  # normalize every failure to the proxy exception contract
         verbose_proxy_logger.exception("/team/bulk_member_delete: Exception occured")

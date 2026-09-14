@@ -24,6 +24,9 @@ from litellm.proxy._types import (
     MemberDeleteRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_checks import delete_cache_key_objects
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_org_admin_for_team,  # pyright: ignore[reportPrivateUsage]  # same check /team/member_delete uses
@@ -33,15 +36,13 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     _persist_deleted_verification_tokens,  # pyright: ignore[reportPrivateUsage]  # same audit path /key/delete uses
 )
 from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL
-from litellm.proxy.utils import PrismaClient
+from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.table_repositories import (
-    InvitationLinkRepository,
     OrganizationMembershipRepository,
     TeamMembershipRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
-from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     BulkDeleteUserRequest,
     BulkDeleteUserResponse,
@@ -91,6 +92,7 @@ class _TeamRemoval:
     team: LiteLLM_TeamTable
     removed: frozenset[str]
     matched: frozenset[int]
+    deleted_key_tokens: tuple[str, ...]
 
 
 def _http_error(status_code: int, message: str) -> HTTPException:
@@ -128,6 +130,14 @@ def _membership_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_TeamM
 
 def _token_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_VerificationToken]":
     return tx.litellm_verificationtoken  # pyright: ignore[reportReturnType]  # TableActions widens the generated inputs to Mapping, as the repositories do
+
+
+def _invitation_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_InvitationLink]":
+    return tx.litellm_invitationlink  # pyright: ignore[reportReturnType]  # TableActions widens the generated inputs to Mapping, as the repositories do
+
+
+def _org_membership_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_OrganizationMembership]":
+    return tx.litellm_organizationmembership  # pyright: ignore[reportReturnType]  # TableActions widens the generated inputs to Mapping, as the repositories do
 
 
 def _addresses_member(member: Member, request: MemberDeleteRequest) -> bool:
@@ -184,7 +194,7 @@ async def _remove_members_from_team(
             )
         )
         stale_rows: Final = tuple(u for u in user_rows if team_id in u.teams)
-        cleanup_ids: Final = removed_ids | requested_ids | frozenset(u.user_id for u in stale_rows)
+        cleanup_ids: Final = removed_ids | frozenset(u.user_id for u in stale_rows)
         matched: Final = frozenset(
             i
             for i, r in enumerate(members)
@@ -216,8 +226,9 @@ async def _remove_members_from_team(
             team_id=team_id,
             members_with_roles=kept_members,  # pyright: ignore[reportArgumentType]  # pydantic coerces the tuple into the list field
         ),
-        removed=removed_ids | frozenset(u.user_id for u in stale_rows),
+        removed=cleanup_ids,
         matched=matched,
+        deleted_key_tokens=tuple(k.token for k in keys),
     )
 
 
@@ -231,10 +242,24 @@ def _emit_team_members_metric(team: LiteLLM_TeamTable) -> None:
         verbose_proxy_logger.debug("Prometheus: failed to emit team members metric: %s", str(e))
 
 
+def _duplicate_member_indexes(members: Sequence[MemberDeleteRequest]) -> frozenset[int]:
+    return frozenset(
+        i
+        for i, m in enumerate(members)
+        if any(
+            (m.user_id is not None and m.user_id == earlier.user_id)
+            or (m.user_email is not None and m.user_email == earlier.user_email)
+            for earlier in members[:i]
+        )
+    )
+
+
 async def bulk_remove_team_members(
     data: BulkTeamMemberDeleteRequest,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging | None,
 ) -> BulkTeamMemberDeleteResponse:
     team: Final = await TeamRepository(prisma_client).find_by_id(data.team_id)
     if team is None:
@@ -251,15 +276,30 @@ async def bulk_remove_team_members(
             f"route='/team/bulk_member_delete', team_id={data.team_id}",
         )
 
-    removal: Final = await _remove_members_from_team(prisma_client, data.team_id, data.members, user_api_key_dict)
+    duplicates: Final = _duplicate_member_indexes(data.members)
+    kept_indexes: Final = tuple(i for i in range(len(data.members)) if i not in duplicates)
+    members: Final = tuple(data.members[i] for i in kept_indexes)
+    removal: Final = await _remove_members_from_team(prisma_client, data.team_id, members, user_api_key_dict)
+    await delete_cache_key_objects(
+        hashed_tokens=removal.deleted_key_tokens,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
     _emit_team_members_metric(removal.team)
+
+    matched: Final = frozenset(kept_indexes[j] for j in removal.matched)
+
+    def error(index: int) -> str | None:
+        if index in duplicates:
+            return "Duplicate member in request"
+        return None if index in matched else "User not found in team"
 
     results: Final = tuple(
         TeamMemberDeleteResult(
             user_id=member.user_id,
             user_email=member.user_email,
-            success=i in removal.matched,
-            error=None if i in removal.matched else "User not found in team",
+            success=i in matched,
+            error=error(i),
         )
         for i, member in enumerate(data.members)
     )
@@ -293,14 +333,60 @@ def _scope_error(user_id: str, target_org_ids: frozenset[str], caller_admin_org_
     )
 
 
+async def _delete_user_rows_tx(
+    prisma_client: PrismaClient,
+    user_ids: frozenset[str],
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: str | None,
+) -> tuple[str, ...]:
+    async with prisma_client.tx() as tx:
+        keys: Final = await _token_tx_db(tx).find_many(where=_in_filter("user_id", user_ids))
+        if keys:
+            await _persist_deleted_verification_tokens(
+                keys=keys,  # pyright: ignore[reportArgumentType]  # generated row model carries the same columns as LiteLLM_VerificationToken
+                prisma_client=prisma_client,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=litellm_changed_by,
+                tx=tx,
+            )
+            await _token_tx_db(tx).delete_many(where=_in_filter("user_id", user_ids))
+        await _invitation_tx_db(tx).delete_many(
+            where=_any_filter(
+                _in_filter("user_id", user_ids),
+                _in_filter("created_by", user_ids),
+                _in_filter("updated_by", user_ids),
+            )
+        )
+        await _org_membership_tx_db(tx).delete_many(where=_in_filter("user_id", user_ids))
+        await _membership_tx_db(tx).delete_many(where=_in_filter("user_id", user_ids))
+        await _user_tx_db(tx).delete_many(where=_in_filter("user_id", user_ids))
+    return tuple(k.token for k in keys)
+
+
 async def _delete_user_rows(
     prisma_client: PrismaClient,
     users: Sequence["prisma_models.LiteLLM_UserTable"],
     user_api_key_dict: UserAPIKeyAuth,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging | None,
     litellm_proxy_admin_name: str | None,
     litellm_changed_by: str | None,
-) -> None:
+) -> str | None:
+    """Returns the error message when the transaction rolled back, in which case no row was touched."""
     user_ids: Final = frozenset(u.user_id for u in users)
+    try:
+        deleted_key_tokens: Final = await _delete_user_rows_tx(
+            prisma_client, user_ids, user_api_key_dict, litellm_changed_by
+        )
+    except Exception as e:  # noqa: BLE001  # the rolled-back batch is reported per row, not as a request failure
+        verbose_proxy_logger.error("/user/bulk_delete: failed to delete users %s: %s", sorted(user_ids), e)
+        return _error_message(e)
+    await delete_cache_key_objects(
+        hashed_tokens=deleted_key_tokens,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    await evict_and_broadcast(cache_keys=sorted(user_ids), user_api_key_cache=user_api_key_cache)
     audit_outcomes: Final = await _bounded(
         UserManagementEventHooks.create_internal_user_audit_log(
             user_id=u.user_id,
@@ -315,33 +401,15 @@ async def _delete_user_rows(
     for u, outcome in zip(users, audit_outcomes, strict=True):
         if isinstance(outcome, BaseException):
             verbose_proxy_logger.warning("Failed to create audit log for user %s: %s", u.user_id, outcome)
-    keys: Final = await VerificationTokenRepository(prisma_client).table.find_many(
-        where=_in_filter("user_id", user_ids)
-    )
-    if keys:
-        await _persist_deleted_verification_tokens(
-            keys=keys,  # pyright: ignore[reportArgumentType]  # generated row model carries the same columns as LiteLLM_VerificationToken
-            prisma_client=prisma_client,
-            user_api_key_dict=user_api_key_dict,
-            litellm_changed_by=litellm_changed_by,
-        )
-    await VerificationTokenRepository(prisma_client).table.delete_many(where=_in_filter("user_id", user_ids))
-    await InvitationLinkRepository(prisma_client).table.delete_many(
-        where=_any_filter(
-            _in_filter("user_id", user_ids),
-            _in_filter("created_by", user_ids),
-            _in_filter("updated_by", user_ids),
-        )
-    )
-    await OrganizationMembershipRepository(prisma_client).table.delete_many(where=_in_filter("user_id", user_ids))
-    await TeamMembershipRepository(prisma_client).table.delete_many(where=_in_filter("user_id", user_ids))
-    await UserRepository(prisma_client).table.delete_many(where=_in_filter("user_id", user_ids))
+    return None
 
 
 async def bulk_delete_users(
     data: BulkDeleteUserRequest,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging | None,
     litellm_proxy_admin_name: str | None,
     litellm_changed_by: str | None,
 ) -> BulkDeleteUserResponse:
@@ -406,6 +474,11 @@ async def bulk_delete_users(
     )
     for tid, err in team_failures.items():
         verbose_proxy_logger.error("/user/bulk_delete: failed to remove users from team %s: %s", tid, err)
+    await delete_cache_key_objects(
+        hashed_tokens=tuple(t for removal in removals.values() for t in removal.deleted_key_tokens),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
     for removal in removals.values():
         _emit_team_members_metric(removal.team)
 
@@ -415,10 +488,19 @@ async def bulk_delete_users(
         )
 
     deletable: Final = tuple(u for u in candidates if not team_errors(u.user_id))
-    if deletable:
+    delete_error: Final = (
         await _delete_user_rows(
-            prisma_client, deletable, user_api_key_dict, litellm_proxy_admin_name, litellm_changed_by
+            prisma_client,
+            deletable,
+            user_api_key_dict,
+            user_api_key_cache,
+            proxy_logging_obj,
+            litellm_proxy_admin_name,
+            litellm_changed_by,
         )
+        if deletable
+        else None
+    )
 
     def result(index: int, user_id: str) -> UserDeleteResult:
         if user_id in data.user_ids[:index]:
@@ -426,7 +508,9 @@ async def bulk_delete_users(
         error: Final = precheck_errors[user_id]
         if error is not None:
             return UserDeleteResult(user_id=user_id, success=False, error=error)
-        errors: Final = team_errors(user_id)
+        errors: Final = team_errors(user_id) or (
+            (f"Failed to delete user: {delete_error}",) if delete_error is not None else ()
+        )
         return UserDeleteResult(
             user_id=user_id,
             user_email=rows_by_id[user_id].user_email,
