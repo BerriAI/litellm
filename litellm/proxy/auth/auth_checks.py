@@ -2197,28 +2197,49 @@ def _membership_from_cached_payload(
     return cached_membership if cached_membership is not None else TEAM_MEMBERSHIP_CACHE_MISS
 
 
-async def _set_team_membership_cache_entry(
+async def _set_team_membership_l1(
     user_api_key_cache: UserApiKeyCache,
     key: str,
     value: object,
     *,
-    local_only: bool,
     model_type: type[LiteLLM_TeamMembership] | None,
     ttl: float | None,
 ) -> None:
     match (model_type is not None, ttl is not None):
         case (False, False):
-            await user_api_key_cache.async_set_cache(key=key, value=value, local_only=local_only)
+            await user_api_key_cache.async_set_cache(key=key, value=value, local_only=True)
         case (False, True):
-            await user_api_key_cache.async_set_cache(key=key, value=value, local_only=local_only, ttl=ttl)
+            await user_api_key_cache.async_set_cache(key=key, value=value, local_only=True, ttl=ttl)
         case (True, False):
-            await user_api_key_cache.async_set_cache(
-                key=key, value=value, local_only=local_only, model_type=model_type
-            )
+            await user_api_key_cache.async_set_cache(key=key, value=value, local_only=True, model_type=model_type)
         case (True, True):
             await user_api_key_cache.async_set_cache(
-                key=key, value=value, local_only=local_only, model_type=model_type, ttl=ttl
+                key=key, value=value, local_only=True, model_type=model_type, ttl=ttl
             )
+
+
+async def _replicate_team_membership_to_redis(
+    user_api_key_cache: UserApiKeyCache,
+    key: str,
+    value: object,
+    *,
+    model_type: type[LiteLLM_TeamMembership] | None,
+    ttl: float | None,
+    write_epoch: int,
+) -> None:
+    redis_cache: Final = user_api_key_cache.redis_cache
+    if redis_cache is None or _membership_write_epoch(key) != write_epoch:
+        return
+    payload: Final[object] = CacheCodec.serialize(value, model_type=model_type)
+    try:
+        if ttl is None:
+            await redis_cache.async_set_cache(key, payload)
+        else:
+            await redis_cache.async_set_cache(key, payload, ttl=ttl)
+        if _membership_write_epoch(key) != write_epoch:
+            await redis_cache.async_delete_cache(key)
+    except Exception:
+        return
 
 
 async def _populate_team_membership_cache(
@@ -2230,36 +2251,27 @@ async def _populate_team_membership_cache(
     ttl: float | None = None,
 ) -> None:
     write_epoch: Final = _membership_write_epoch(key)
-    await _set_team_membership_cache_entry(
+    await _set_team_membership_l1(
         user_api_key_cache,
         key,
         value,
-        local_only=True,
         model_type=model_type,
         ttl=ttl,
     )
     if _membership_write_epoch(key) != write_epoch:
-        await user_api_key_cache.async_delete_cache(key)
+        user_api_key_cache.in_memory_cache_for(key).delete_cache(key)
         return
 
-    async def _replicate_to_redis() -> None:
-        try:
-            if _membership_write_epoch(key) != write_epoch:
-                return
-            await _set_team_membership_cache_entry(
-                user_api_key_cache,
-                key,
-                value,
-                local_only=False,
-                model_type=model_type,
-                ttl=ttl,
-            )
-            if _membership_write_epoch(key) != write_epoch:
-                await user_api_key_cache.async_delete_cache(key)
-        except Exception:
-            return
-
-    asyncio.create_task(_replicate_to_redis())
+    asyncio.create_task(
+        _replicate_team_membership_to_redis(
+            user_api_key_cache,
+            key,
+            value,
+            model_type=model_type,
+            ttl=ttl,
+            write_epoch=write_epoch,
+        )
+    )
 
 
 @log_db_metrics
@@ -2363,6 +2375,9 @@ async def get_team_membership(
 
     if prisma_client is None:
         raise Exception("No db connected")
+    prisma: Final[object] = prisma_client
+    if isinstance(prisma, str):
+        return None
 
     task: Final = asyncio.ensure_future(
         _load_team_membership_on_cache_miss(

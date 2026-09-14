@@ -5527,7 +5527,9 @@ async def _run_internal_user_budget_alert(
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", None),  # test-quality-ok: common_checks has no database seam
-        patch("litellm.proxy.proxy_server.get_current_spend", _get_spend),  # test-quality-ok: common_checks imports it locally
+        patch(
+            "litellm.proxy.proxy_server.get_current_spend", _get_spend
+        ),  # test-quality-ok: common_checks imports it locally
         patch.object(slack_alerting, "send_alert", send_alert),
     ):
         error: Final = await _check_for_error()
@@ -6419,9 +6421,7 @@ async def test_get_team_membership_negative_caches_a_missing_row():
     assert first is None
     assert second is None
     mock_prisma_client.db.litellm_teammembership.find_unique.assert_awaited_once()
-    cached = await cache.async_get_cache(
-        key=team_membership_reservation_cache_key(user_id="u-1", team_id="t-1")
-    )
+    cached = await cache.async_get_cache(key=team_membership_reservation_cache_key(user_id="u-1", team_id="t-1"))
     assert cached == NO_TEAM_MEMBERSHIP_SENTINEL
 
 
@@ -6601,11 +6601,23 @@ async def test_get_team_membership_db_error_raises_503_not_none():
             user_api_key_cache=cache,
         )
 
-    cached = await cache.async_get_cache(
-        key=team_membership_reservation_cache_key(user_id="u-fail", team_id="t-fail")
-    )
+    cached = await cache.async_get_cache(key=team_membership_reservation_cache_key(user_id="u-fail", team_id="t-fail"))
     assert exc.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
     assert cached is None
+
+
+@pytest.mark.asyncio
+async def test_get_team_membership_string_prisma_client_returns_none():
+    """Unit tests stub prisma_client as a string; that is not a lookup failure and must not 503."""
+    from litellm.proxy.auth.auth_checks import get_team_membership
+
+    result = await get_team_membership(
+        user_id="u-str",
+        team_id="t-str",
+        prisma_client="hello-world",
+        user_api_key_cache=UserApiKeyCache(),
+    )
+    assert result is None
 
 
 @pytest.mark.asyncio
@@ -6699,7 +6711,7 @@ async def test_get_team_membership_waiter_cancel_does_not_cancel_shared_load():
 
 @pytest.mark.asyncio
 async def test_stale_membership_redis_replicate_does_not_restore_after_invalidate():
-    """A delayed DualCache Redis SET must not resurrect membership after invalidation."""
+    """A delayed Redis SET must not rewrite L1 or leave Redis holding membership after invalidation."""
     from litellm.proxy.auth.auth_checks import get_team_membership, invalidate_team_member_spend_state
     from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
 
@@ -6739,6 +6751,7 @@ async def test_stale_membership_redis_replicate_does_not_restore_after_invalidat
     assert loaded is not None
     assert after_invalidate is None
     assert after_replicate is None
+    redis_cache.async_delete_cache.assert_awaited()
 
 
 @pytest.mark.asyncio
@@ -6764,10 +6777,7 @@ async def test_invalidate_team_member_spend_state_evicts_the_negative_cache_sent
     assert before is None
 
     await invalidate_team_member_spend_state(user_id="u-1", team_id="t-1", user_api_key_cache=cache)
-    assert (
-        await cache.async_get_cache(key=team_membership_reservation_cache_key(user_id="u-1", team_id="t-1"))
-        is None
-    )
+    assert await cache.async_get_cache(key=team_membership_reservation_cache_key(user_id="u-1", team_id="t-1")) is None
 
     after = await get_team_membership(
         user_id="u-1", team_id="t-1", prisma_client=mock_prisma_client, user_api_key_cache=cache
