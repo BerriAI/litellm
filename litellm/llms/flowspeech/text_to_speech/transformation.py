@@ -50,7 +50,7 @@ class FlowSpeechTextToSpeechConfig(BaseTextToSpeechConfig):
     DEFAULT_VOICE = "Kore"
 
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: base provider interface returns list
-        return ["voice", "instructions"]  # mutable-ok: base provider interface returns list
+        return ["voice"]  # mutable-ok: base provider interface returns list
 
     def map_openai_params(
         self,
@@ -60,17 +60,8 @@ class FlowSpeechTextToSpeechConfig(BaseTextToSpeechConfig):
         drop_params: bool = False,
         kwargs: dict[str, object] | None = None,  # mutable-ok: base provider interface requires dict
     ) -> tuple[str | None, dict[str, object]]:  # mutable-ok: base provider interface returns dict params
-        params: Final[dict[str, object]] = (  # mutable-ok: isolated request copy
-            dict(optional_params) if optional_params else {}  # mutable-ok: isolated request copy
-        )
         mapped_voice: Final = self._resolve_voice(voice)
-        instructions: Final = params.get("instructions")
-        mapped_params: Final[dict[str, object]] = (  # mutable-ok: base provider interface returns dict params
-            {"prompt": instructions}  # mutable-ok: base provider interface returns dict params
-            if isinstance(instructions, str) and instructions.strip()
-            else {}  # mutable-ok: base provider interface returns dict params
-        )
-        return mapped_voice, mapped_params
+        return mapped_voice, {}  # mutable-ok: base provider interface returns dict params
 
     def _resolve_voice(
         self,
@@ -124,19 +115,12 @@ class FlowSpeechTextToSpeechConfig(BaseTextToSpeechConfig):
         litellm_params: dict[str, object],  # mutable-ok: base provider interface requires dict
         headers: dict[str, str],  # mutable-ok: base provider interface requires dict
     ) -> TextToSpeechRequestData:
-        prompt: Final = optional_params.get("prompt")
-        prompt_data: Final[dict[str, str]] = (  # mutable-ok: JSON request body requires a dict
-            {"prompt": prompt}  # mutable-ok: JSON request body requires a dict
-            if isinstance(prompt, str) and prompt.strip()
-            else {}  # mutable-ok: JSON request body requires a dict
-        )
         request_body: Final[dict[str, object]] = {  # mutable-ok: JSON request body requires a dict
             "text": input,
             "originalText": input,
             "speakers": [  # mutable-ok: FlowSpeech JSON schema requires a speakers array
                 {"voiceName": voice or self.DEFAULT_VOICE}  # mutable-ok: FlowSpeech JSON schema requires an object
             ],
-            **prompt_data,
         }
         return TextToSpeechRequestData(
             dict_body=request_body,

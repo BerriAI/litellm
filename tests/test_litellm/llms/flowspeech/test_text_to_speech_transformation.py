@@ -12,7 +12,7 @@ from litellm.llms.flowspeech.text_to_speech.transformation import (
 )
 
 
-def test_maps_voice_and_instructions_to_flowspeech_request():
+def test_maps_voice_without_unsupported_instructions():
     config = FlowSpeechTextToSpeechConfig()
     voice, params = config.map_openai_params(
         model="flowspeech-tts",
@@ -33,8 +33,8 @@ def test_maps_voice_and_instructions_to_flowspeech_request():
         "text": "Hello from FlowSpeech",
         "originalText": "Hello from FlowSpeech",
         "speakers": [{"voiceName": "Aoede"}],
-        "prompt": "Speak with calm confidence",
     }
+    assert config.get_supported_openai_params("flowspeech-tts") == ["voice"]
 
 
 def test_uses_default_voice_and_ignores_unsupported_openai_params():
@@ -141,7 +141,6 @@ def test_speech_dispatches_to_flowspeech_handler():
             "text": "Hello",
             "originalText": "Hello",
             "speakers": [{"voiceName": "Aoede"}],
-            "prompt": "Speak warmly",
         }
         return httpx.Response(
             200,
@@ -159,7 +158,6 @@ def test_speech_dispatches_to_flowspeech_handler():
         model="flowspeech/flowspeech-tts",
         input="Hello",
         voice="Aoede",
-        instructions="Speak warmly",
         api_key="test-key",
         client=client,
     )
