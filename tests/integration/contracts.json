@@ -150,6 +150,48 @@
     "tests/integration/providers/test_anthropic_wire.py::test_anthropic_tool_history_and_cache_tokens_keep_wire_and_accounting_contracts": [
       "other.provider_wire.anthropic.tool_history_system_cache_and_internal_fields",
       "quota_management.spend_tracking.cache_tokens.disjoint_classes_use_explicit_rates"
+    ],
+    "tests/integration/mcp/test_mcp_lifecycle.py::test_saved_headers_reach_real_mcp_tool_and_survive_unrelated_edit": [
+      "mcp.call_tool.saved_headers.reach_actual_transport"
+    ],
+    "tests/integration/mcp/test_mcp_lifecycle.py::test_tool_error_remains_error_and_healthy_sibling_returns_value": [
+      "mcp.call_tool.errors.tool_failure_is_not_success"
+    ],
+    "tests/integration/mcp/test_mcp_lifecycle.py::test_generated_mcp_edits_preserve_actual_headers_and_tool_results": [
+      "other.mcp.lifecycle.generated_save_reload_preserves_effective_headers"
+    ],
+    "tests/integration/observability/test_callback_delivery.py::test_concurrent_success_and_failure_join_callbacks_and_rows_without_credentials": [
+      "other.observability.callbacks.credentials_stay_out_of_event_bodies",
+      "other.observability.callbacks.concurrent_results_join_complete_events_and_rows"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_guardrail_rewrites_system_and_user_in_actual_anthropic_request": [
+      "other.observability.guardrails.rewrite_reaches_correct_anthropic_positions"
+    ],
+    "tests/integration/compatibility/test_a2a_wire_versions.py::test_a2a_versions_and_legacy_casing_preserve_real_wire_and_response": [
+      "other.compatibility.a2a.supported_versions_preserve_literal_envelopes"
+    ],
+    "tests/integration/compatibility/test_persisted_toolsets.py::test_existing_toolset_format_loads_before_start_and_keeps_sibling_denied": [
+      "other.compatibility.mcp.persisted_tool_names_survive_candidate_startup"
+    ],
+    "tests/integration/mcp/test_oauth_configuration.py::test_partial_discovery_and_unrelated_edit_keep_actual_authorization_destination": [
+      "other.mcp.oauth.discovery_cannot_erase_configured_authorization_endpoint"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_guardrail_denial_prevents_provider_and_preserves_allowed_control": [
+      "other.observability.guardrails.denial_prevents_provider_with_allowed_control"
+    ],
+    "tests/integration/mcp/test_mcp_protocol_errors.py::test_jsonrpc_error_and_malformed_tool_result_remain_errors": [
+      "other.mcp.errors.protocol_and_malformed_results_cannot_be_empty_success"
+    ],
+    "tests/integration/compatibility/test_openai_consumer.py::test_retained_openai_clients_parse_real_proxy_tool_and_usage_responses": [
+      "other.compatibility.openai.retained_client_parses_tools_and_usage"
+    ],
+    "tests/integration/spend/test_filtered_ledger.py::test_rotated_keys_users_and_model_groups_preserve_success_failure_cache_ledger": [
+      "quota_management.spend_tracking.filtered_ledger_preserves_owner_identity_and_totals"
+    ]
+  },
+  "browser": {
+    "tests/e2e/ui/tests/integrationCritical/projectDetachment.spec.ts::project creation and explicit detachment preserve saved scope and restore serving": [
+      "mgmt.key.ui.project_create_clear_preserves_serving_scope"
     ]
   }
 }
