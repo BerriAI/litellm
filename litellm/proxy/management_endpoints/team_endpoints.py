@@ -5326,9 +5326,8 @@ async def _authorize_and_filter_teams(
     Authorize the /team/list request and return filtered teams.
 
     - Proxy admins: all teams (or filtered by user_id if provided).
-    - Org admins: teams from their orgs (scoped to user_id if provided), plus
-      the teams they are a member of when querying themselves.
-    - Own query (user_id matches caller): teams the user is a member of.
+    - Org admins: teams from their orgs (scoped to user_id if provided).
+    - Own query (user_id matches caller): teams the user is a member of, across all orgs.
     - Others: 401.
     """
     is_proxy_admin: Final = _user_has_admin_view(user_api_key_dict)
@@ -5364,11 +5363,13 @@ async def _authorize_and_filter_teams(
                 },
             )
 
-    if allowed_org_ids is not None and user_id and not is_own_query:
+    if allowed_org_ids is not None and not is_own_query:
         org_teams: Final = await _raw_team_db(TeamRepository(prisma_client)).find_many(
             where={"organization_id": {"in": allowed_org_ids}},
             include={"litellm_model_table": True},
         )
+        if not user_id:
+            return list(org_teams)
         return [
             team
             for team in org_teams
@@ -5376,17 +5377,15 @@ async def _authorize_and_filter_teams(
         ]
 
     response: Final = await _raw_team_db(TeamRepository(prisma_client)).find_many(include={"litellm_model_table": True})
-    if allowed_org_ids is None and not user_id:
+    if not user_id:
         # Proxy admin: all teams
         return list(response)
 
     # Prisma can't filter JSON arrays, so membership is filtered in Python
-    viewer_id: Final = user_id or user_api_key_dict.user_id
     return [
         team
         for team in response
-        if (allowed_org_ids is not None and team.organization_id in allowed_org_ids)
-        or (team.members_with_roles and any(m.get("user_id") == viewer_id for m in team.members_with_roles))
+        if team.members_with_roles and any(m.get("user_id") == user_id for m in team.members_with_roles)
     ]
 
 
