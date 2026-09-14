@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.realtime_streaming import REALTIME_SESSION_SUCCESS_LOGGED_KEY
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.realtime.handler import BedrockRealtime
 from litellm.llms.bedrock.realtime.transformation import BedrockRealtimeConfig
@@ -77,6 +78,7 @@ class UnavailableBedrockStream:
 class FakeLogging:
     def __init__(self, trace_id="trace-nova-sonic"):
         self.litellm_trace_id = trace_id
+        self.model_call_details = {}
 
 
 class DisconnectingClientWS:
@@ -672,6 +674,31 @@ class TestBedrockRealtimeProviderFailurePropagation:
         assert "response.done" in [json.loads(m)["type"] for m in websocket.sent_to_client]
         await spend_dispatch["coro"]
         assert [event["type"] for event in spend_dispatch["events"]] == ["response.done"]
+
+    @pytest.mark.asyncio
+    async def test_success_dispatch_stamps_the_ownership_marker_only_when_spend_was_logged(
+        self, stub_aws_sdk_client, spend_dispatch
+    ):
+        stub_aws_sdk_client["streams"] = [ScriptedBedrockStream(self.TEXT_TURN)]
+        await BedrockRealtime().async_realtime(
+            model="amazon.nova-sonic-v1:0",
+            websocket=ConnectedClientWS([self.SESSION_UPDATE]),
+            logging_obj=spend_dispatch["logging_obj"],
+            **self.AWS_PARAMS,
+        )
+        await spend_dispatch["coro"]
+        assert [event["type"] for event in spend_dispatch["events"]] == ["response.done"]
+        assert spend_dispatch["logging_obj"].model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY) is True
+
+        idle_logging = FakeLogging()
+        stub_aws_sdk_client["streams"] = [ScriptedBedrockStream([])]
+        await BedrockRealtime().async_realtime(
+            model="amazon.nova-sonic-v1:0",
+            websocket=ConnectedClientWS([self.SESSION_UPDATE]),
+            logging_obj=idle_logging,
+            **self.AWS_PARAMS,
+        )
+        assert REALTIME_SESSION_SUCCESS_LOGGED_KEY not in idle_logging.model_call_details
 
     @pytest.mark.asyncio
     async def test_stream_failure_after_client_disconnect_is_not_a_provider_failure(self, stub_aws_sdk_client):
