@@ -1268,7 +1268,9 @@ class AmazonConverseConfig(BaseConfig):
             len(messages),
         )
 
-    def _reordered_around_tool_results(self, messages: list, index: int) -> tuple:  # mutable-ok: reads input list, returns fresh tuple
+    def _reordered_around_tool_results(
+        self, messages: list, index: int
+    ) -> tuple:  # mutable-ok: reads input list, returns fresh tuple
         """Move a system run wedged between an assistant tool-call turn and its
         tool-result turn(s) to after the tool results.
 
@@ -1370,13 +1372,17 @@ class AmazonConverseConfig(BaseConfig):
         new_messages: Final[list[AllMessageValues]] = []  # mutable-ok: local builder, never shared
         for message in reordered:
             if self._is_system_role_message(message):
-                converted = self._system_role_message_as_user(cast(Mapping, message))  # cast-ok: system check narrows to Mapping
+                converted = self._system_role_message_as_user(
+                    cast(Mapping, message)
+                )  # cast-ok: system check narrows to Mapping
                 # Drop entries with no text (same as the old hoist, which
                 # extracted nothing from them) instead of injecting a bare note.
                 if len(converted["content"]) > 1:
                     new_messages.append(converted)
             else:
-                new_messages.append(cast(AllMessageValues, message))  # cast-ok: non-system entries already match API shape
+                new_messages.append(
+                    cast(AllMessageValues, message)
+                )  # cast-ok: non-system entries already match API shape
         return new_messages, system_content_blocks
 
     def _transform_inference_params(self, inference_params: dict) -> InferenceConfig:
