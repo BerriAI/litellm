@@ -6456,7 +6456,6 @@ async def test_get_team_membership_reads_sentinel_as_no_membership_not_a_model()
 
 @pytest.mark.asyncio
 async def test_get_team_membership_coalesces_parallel_db_fetches():
-    """Concurrent misses for the same member must share one Prisma round-trip."""
     from litellm.proxy.auth.auth_checks import get_team_membership
 
     started = asyncio.Event()
@@ -6496,7 +6495,6 @@ async def test_get_team_membership_coalesces_parallel_db_fetches():
 
 @pytest.mark.asyncio
 async def test_common_checks_calls_get_team_membership_once_per_request():
-    """Model-access, attribution, and member-budget must reuse one membership load."""
     from fastapi import Request
 
     from litellm.proxy.auth.auth_checks import common_checks
@@ -6543,7 +6541,6 @@ async def test_common_checks_calls_get_team_membership_once_per_request():
 
 @pytest.mark.asyncio
 async def test_common_checks_skips_membership_load_when_no_check_reads_it():
-    """A management route has no model and no budget gate, so the membership row is never loaded."""
     from fastapi import Request
 
     from litellm.proxy.auth.auth_checks import common_checks
@@ -6583,7 +6580,6 @@ async def test_common_checks_skips_membership_load_when_no_check_reads_it():
 
 @pytest.mark.asyncio
 async def test_get_team_membership_db_error_returns_none_and_retries_next_call():
-    """A Prisma failure reads as no membership, caches nothing, and the next call hits the DB again."""
     from litellm.proxy.auth.auth_checks import get_team_membership
     from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
 
@@ -6620,7 +6616,6 @@ async def test_get_team_membership_db_error_returns_none_and_retries_next_call()
 
 @pytest.mark.asyncio
 async def test_get_team_membership_string_prisma_client_returns_none():
-    """Unit tests stub prisma_client as a string; the lookup fails and reads as no membership."""
     from litellm.proxy.auth.auth_checks import get_team_membership
 
     result = await get_team_membership(
@@ -6634,7 +6629,6 @@ async def test_get_team_membership_string_prisma_client_returns_none():
 
 @pytest.mark.asyncio
 async def test_get_team_membership_waiter_cancel_does_not_cancel_shared_load():
-    """Cancelling one coalesced waiter must not cancel the shared Prisma load."""
     from litellm.proxy.auth.auth_checks import get_team_membership
 
     started = asyncio.Event()
