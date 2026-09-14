@@ -13,7 +13,7 @@ interface OrganizationFiltersProps {
 
 type FilterState = {
   org_id: string;
-  org_alias: string;
+  search: string;
 };
 
 const OrganizationFilters = ({
@@ -23,16 +23,16 @@ const OrganizationFilters = ({
   onChange,
   onReset,
 }: OrganizationFiltersProps) => {
-  const hasActiveFilters = !!(filters.org_id || filters.org_alias);
+  const hasActiveFilters = !!(filters.org_id || filters.search);
 
   return (
     <div className="flex flex-col space-y-4">
       {/* Search and Filter Controls */}
       <div className="flex flex-wrap items-center gap-3">
         <FilterInput
-          placeholder="Search by Organization Name"
-          value={filters.org_alias}
-          onChange={(value) => onChange("org_alias", value)}
+          placeholder="Search by organization name or ID"
+          value={filters.search}
+          onChange={(value) => onChange("search", value)}
           icon={Search}
           className="w-64"
         />
