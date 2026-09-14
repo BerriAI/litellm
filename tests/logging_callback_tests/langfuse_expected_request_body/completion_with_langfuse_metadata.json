@@ -35,6 +35,7 @@
             "cache_read_input_tokens": 0
         },
         "langfuse.release": "test_trace_release",
+        "langfuse.trace.metadata.test_key": "test_value",
         "langfuse.trace.name": "test_trace_name",
         "langfuse.trace.tags": [
             "test_tag",

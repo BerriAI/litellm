@@ -1879,6 +1879,34 @@ def test_update_trace_keys_from_the_request_body_list_applies_when_enabled():
     assert span.attributes["langfuse.release"] == "v1.2.3"
 
 
+def test_update_trace_keys_trace_metadata_reaches_the_trace_not_just_the_generation():
+    """v2 updated the trace object's metadata; v4 has to propagate it as a trace attribute."""
+    rig = _steering_logger()
+
+    with patch.object(litellm, "langfuse_enable_update_trace_keys", True):
+        _, _, span = _emit(
+            rig,
+            metadata={
+                "existing_trace_id": "trace-1",
+                "parent_observation_id": "b" * 16,
+                "update_trace_keys": ["trace_metadata"],
+                "trace_metadata": {"step": 2, "note": "x" * 300},
+            },
+        )
+
+    assert span.attributes["langfuse.trace.metadata.step"] == "2"
+    assert span.attributes["langfuse.trace.metadata.note"] == "x" * 200
+    assert span.attributes["langfuse.observation.metadata.step"] == 2
+
+
+def test_trace_metadata_is_not_propagated_when_absent():
+    rig = _steering_logger()
+
+    _, _, span = _emit(rig, metadata={"trace_name": "plain"})
+
+    assert not any(key.startswith("langfuse.trace.metadata.") for key in span.attributes or {})
+
+
 def test_update_trace_keys_matches_whole_keys_not_substrings():
     rig = _steering_logger()
 
