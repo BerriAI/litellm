@@ -2204,8 +2204,6 @@ async def _fetch_team_membership_from_db(
     )
     membership: Final = None if response is None else LiteLLM_TeamMembership.model_validate(response.dict())
     _key: Final = team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)
-    if _team_membership_inflight.get(_key) is not asyncio.current_task():
-        return membership
     if membership is None:
         await user_api_key_cache.async_set_cache(
             key=_key,
@@ -2218,8 +2216,6 @@ async def _fetch_team_membership_from_db(
             value=membership,
             model_type=LiteLLM_TeamMembership,
         )
-    if _team_membership_inflight.get(_key) is not asyncio.current_task():
-        await user_api_key_cache.async_delete_cache(key=_key)
     return membership
 
 
@@ -2765,7 +2761,11 @@ async def invalidate_team_member_spend_state(
         publish_auth_cache_invalidation,
     )
 
-    _team_membership_inflight.pop(team_membership_reservation_cache_key(user_id=user_id, team_id=team_id), None)
+    inflight: Final[object] = _team_membership_inflight.pop(
+        team_membership_reservation_cache_key(user_id=user_id, team_id=team_id), None
+    )
+    if isinstance(inflight, asyncio.Task) and inflight is not asyncio.current_task():
+        await asyncio.wait((inflight,))
 
     if new_spend is not None:
         from litellm.proxy.proxy_server import SPEND_DB_FLOOR_CACHE_TTL_SECONDS, spend_counter_cache
