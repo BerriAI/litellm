@@ -41,6 +41,40 @@
     ],
     "tests/integration/pricing/test_configured_prices.py::test_loaded_router_preserves_cached_defaults_during_real_requests": [
       "quota_management.spend_tracking.default_prices.loaded_router_preserves_cached_defaults"
+    ],
+    "tests/integration/management/test_partial_update_sequences.py::test_generated_partial_updates_preserve_persisted_and_effective_state": [
+      "mgmt.key.update.generated_sequences_preserve_state"
+    ],
+    "tests/integration/management/test_partial_update_sequences.py::test_zero_false_and_empty_values_are_not_treated_as_omission": [
+      "mgmt.key.update.false_zero_and_empty_values_affect_serving"
+    ],
+    "tests/integration/management/test_partial_update_sequences.py::test_project_omission_clear_and_invalid_update_have_distinct_effects": [
+      "mgmt.key.update.project_clear_preserves_scope",
+      "mgmt.key.update.invalid_batch_is_atomic"
+    ],
+    "tests/integration/authorization/test_warmed_policy.py::test_generated_policy_changes_reach_both_warmed_workers": [
+      "mgmt.key.update.two_workers_enforce_warmed_policy"
+    ],
+    "tests/integration/authorization/test_warmed_policy.py::test_scim_deactivation_blocks_null_and_false_keys_but_preserves_other_owners": [
+      "mgmt.user.scim.deactivation_includes_nullable_blocked_keys"
+    ],
+    "tests/integration/authorization/test_warmed_policy.py::test_warmed_team_role_demotion_prevents_later_management_writes": [
+      "mgmt.team.member_update.demoted_role_cannot_write"
+    ],
+    "tests/integration/configuration/test_effective_settings.py::test_model_block_changes_actual_route_and_leaves_other_route_working": [
+      "mgmt.model.block.changes_serving_and_preserves_control"
+    ],
+    "tests/integration/configuration/test_effective_settings.py::test_saved_retry_setting_controls_real_attempts_and_restores": [
+      "mgmt.router_settings.update.changes_observed_attempt_count"
+    ],
+    "tests/integration/configuration/test_effective_settings.py::test_credential_value_update_and_model_reload_reach_provider": [
+      "mgmt.credential.update.saved_value_reaches_wire"
+    ],
+    "tests/integration/management/test_partial_update_sequences.py::test_denied_key_update_preserves_saved_grants_and_serving": [
+      "mgmt.key.update.denied_request_preserves_effective_state"
+    ],
+    "tests/integration/authorization/test_warmed_policy.py::test_expiry_and_explicit_clear_reach_both_warmed_workers": [
+      "mgmt.key.update.expiry_changes_reach_warmed_workers"
     ]
   }
 }
