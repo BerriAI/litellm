@@ -5,6 +5,7 @@ use serde_json::Value;
 
 #[derive(Deserialize)]
 struct Input {
+    path: String,
     model_alias: String,
     provider_model: String,
     api_base: String,
@@ -21,7 +22,8 @@ async fn main() {
         Ok(input) => input,
         Err(error) => fail(error),
     };
-    let result = litellm_ai_gateway::trace_parity::traced_messages_request(
+    let result = litellm_ai_gateway::trace_parity::traced_request(
+        input.path,
         input.model_alias,
         input.provider_model,
         input.api_base,

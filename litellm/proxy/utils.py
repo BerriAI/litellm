@@ -4,6 +4,7 @@ import copy
 import hashlib
 import inspect
 import json
+import math
 import os
 import smtplib
 import ssl
@@ -6404,7 +6405,7 @@ class PrismaClient:
             return None
         try:
             value: Final = float(response_time_ms)
-            return value if value == value and value not in (float("inf"), float("-inf")) else None
+            return value if math.isfinite(value) else None
         except (ValueError, TypeError):
             verbose_proxy_logger.warning("Invalid response_time_ms value: %s", response_time_ms)
             return None
