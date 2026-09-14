@@ -16,7 +16,9 @@ const mockClient = {
 
 vi.mock("openai", () => ({
   default: {
-    OpenAI: vi.fn(() => mockClient),
+    OpenAI: vi.fn(function () {
+      return mockClient;
+    }),
   },
 }));
 
@@ -214,6 +216,64 @@ describe("responses_api", () => {
   });
 
   it("should omit cost when the proxy reports none", async () => {
+    const onUsageData = vi.fn();
+
+    await makeOpenAIResponsesRequest(
+      messages,
+      mockUpdateTextUI,
+      "gpt-4",
+      "test-token",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      onUsageData,
+    );
+
+    expect(onUsageData).toHaveBeenCalledWith(expect.not.objectContaining({ cost: expect.anything() }), "");
+  });
+
+  it("should omit cost when the proxy reports a non-numeric cost", async () => {
+    async function* streamWithNonNumericCost() {
+      yield {
+        type: "response.completed",
+        response: {
+          id: "resp_non_numeric_cost",
+          usage: { output_tokens: 12, input_tokens: 12, total_tokens: 24, cost: "not-a-number" },
+        },
+      };
+    }
+    mockResponsesCreate.mockResolvedValueOnce(streamWithNonNumericCost());
+
+    const onUsageData = vi.fn();
+
+    await makeOpenAIResponsesRequest(
+      messages,
+      mockUpdateTextUI,
+      "gpt-4",
+      "test-token",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      onUsageData,
+    );
+
+    expect(onUsageData).toHaveBeenCalledWith(expect.not.objectContaining({ cost: expect.anything() }), "");
+  });
+
+  it("should omit cost when the proxy reports a blank cost", async () => {
+    async function* streamWithBlankCost() {
+      yield {
+        type: "response.completed",
+        response: {
+          id: "resp_blank_cost",
+          usage: { output_tokens: 12, input_tokens: 12, total_tokens: 24, cost: "  " },
+        },
+      };
+    }
+    mockResponsesCreate.mockResolvedValueOnce(streamWithBlankCost());
+
     const onUsageData = vi.fn();
 
     await makeOpenAIResponsesRequest(

@@ -289,6 +289,15 @@ it("should show a loading state on the initial load and hide the data", () => {
   expect(screen.queryByText("Test Key Alias")).not.toBeInTheDocument();
 });
 
+it("replaces the previous rows with the loading state while a new search is pending", () => {
+  mockUseKeys.mockReturnValue(keysResult([mockKey], {}, { isPlaceholderData: true, isFetching: true }));
+
+  renderWithProviders(<VirtualKeysTable />);
+
+  expect(screen.getByText("Loading keys...")).toBeInTheDocument();
+  expect(screen.queryByText("Test Key Alias")).not.toBeInTheDocument();
+});
+
 it("should show 'No keys found' message when the key list is empty", () => {
   mockUseKeys.mockReturnValue(keysResult([]));
 
@@ -470,6 +479,92 @@ it("should display 'Default Proxy Admin' for user_id when value is 'default_user
 
   await waitFor(() => {
     expect(screen.getByText("Default Proxy Admin")).toBeInTheDocument();
+  });
+});
+
+describe("entity links out of the key rows", () => {
+  const keyRow = async () => (await screen.findByText("Test Key Alias")).closest("tr") as HTMLElement;
+
+  const enableColumn = async (user: ReturnType<typeof userEvent.setup>, title: string) => {
+    await user.click(screen.getByRole("button", { name: "Columns" }));
+    await user.click(await screen.findByText(title));
+    await user.keyboard("{Escape}");
+  };
+
+  const enableCreatedByColumn = (user: ReturnType<typeof userEvent.setup>) => enableColumn(user, "Created By");
+
+  it("points the User and Team cells at their detail pages", async () => {
+    renderWithProviders(<VirtualKeysTable />);
+
+    const row = await keyRow();
+    expect(within(row).getByRole("link", { name: "user@example.com" })).toHaveAttribute(
+      "href",
+      "/ui/users?user=user-1",
+    );
+    expect(within(row).getByRole("link", { name: "Test Team" })).toHaveAttribute("href", "/ui/teams?team=team-1");
+  });
+
+  it("points the Organization cell at the org's detail page", async () => {
+    mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, org_id: "org-1" }]));
+    const user = userEvent.setup();
+    renderWithProviders(<VirtualKeysTable />);
+    await enableColumn(user, "Organization");
+
+    const row = await keyRow();
+    expect(within(row).getByRole("link", { name: "Test Organization" })).toHaveAttribute(
+      "href",
+      "/ui/organizations?org=org-1",
+    );
+  });
+
+  it("points the Created By cell at the creator's detail page", async () => {
+    mockUseKeys.mockReturnValue(
+      keysResult([
+        {
+          ...mockKey,
+          created_by: "creator-1",
+          created_by_user: { user_id: "creator-1", user_email: "creator@example.com", user_alias: "The Creator" },
+        },
+      ]),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<VirtualKeysTable />);
+    await enableCreatedByColumn(user);
+
+    const row = await keyRow();
+    expect(within(row).getByRole("link", { name: "The Creator" })).toHaveAttribute("href", "/ui/users?user=creator-1");
+  });
+
+  it("leaves the default_user_id placeholder unlinked even once it resolves to a named user", async () => {
+    const placeholder = { user_id: "default_user_id", user_email: "admin@example.com", user_alias: "Proxy Admin" };
+    mockUseKeys.mockReturnValue(
+      keysResult([
+        {
+          ...mockKey,
+          user_id: placeholder.user_id,
+          user_email: placeholder.user_email,
+          user: placeholder,
+          created_by: placeholder.user_id,
+          created_by_user: placeholder,
+        },
+      ]),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<VirtualKeysTable />);
+    await enableCreatedByColumn(user);
+
+    const row = await keyRow();
+    expect(within(row).getAllByText("Proxy Admin")).toHaveLength(2);
+    expect(within(row).queryByRole("link", { name: "Proxy Admin" })).not.toBeInTheDocument();
+  });
+
+  it("leaves the litellm-dashboard session team unlinked", async () => {
+    mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, team_id: "litellm-dashboard" }]));
+    renderWithProviders(<VirtualKeysTable />);
+
+    const row = await keyRow();
+    expect(within(row).getByText("litellm-dashboard")).toBeInTheDocument();
+    expect(within(row).queryByRole("link", { name: "litellm-dashboard" })).not.toBeInTheDocument();
   });
 });
 

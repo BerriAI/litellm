@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -54,8 +55,11 @@ class BaseRealtimeConfig(ABC):
         message: str,
         model: str,
         session_configuration_request: str | None = None,
-    ) -> list[str]:
+    ) -> Sequence[str | bytes]:
         pass
+
+    async def pace_backend_send(self, message: bytes) -> None:
+        return None
 
     def is_setup_message(self, msg_obj: dict) -> bool:
         return False
@@ -79,7 +83,7 @@ class BaseRealtimeConfig(ABC):
         model: str,
         logging_session_id: str,
         session_configuration_request: str | None = None,
-    ) -> dict | OpenAIRealtimeStreamSessionEvents | None:
+    ) -> Mapping[str, object] | OpenAIRealtimeStreamSessionEvents | None:
         """
         Optional hook for providers that defer session setup until client `session.update`.
 

@@ -22,6 +22,7 @@ from typing import Any, Final, Literal, Protocol, cast, overload
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -30,6 +31,7 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
 from litellm.proxy.auth.password_policy import validate_password_policy
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import (
     object_permission_cache_key,
     user_object_permission_id_cache_key,
@@ -86,6 +88,7 @@ from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIM_ENTITLEMENTS_METADATA_KEY,
     SCIM_ROLES_METADATA_KEY,
 )
+from litellm.types.utils import BudgetConfig
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -96,6 +99,8 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import ProxyLogging
 
 router: Final = APIRouter()
+_USER_MODEL_BUDGET_ADAPTER: Final = TypeAdapter(dict[str, float | BudgetConfig])
+_USER_BUDGET_CACHE_INVALIDATION_BATCH_SIZE: Final = 50
 
 
 def _user_table(
@@ -473,7 +478,6 @@ async def new_user(
     - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
     - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-    - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
     - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
@@ -1249,9 +1253,16 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
     fields_set: Final = data.fields_set() if hasattr(data, "fields_set") else set()
 
     for k, v in data_json.items():
-        if k == "max_budget":
-            if "max_budget" in fields_set:
+        if k in ("max_budget", "budget_duration"):
+            if k in fields_set:
                 non_default_values[k] = v
+        elif k == "model_max_budget":
+            if k in fields_set:
+                try:
+                    _USER_MODEL_BUDGET_ADAPTER.validate_python({} if v is None else v)
+                except ValidationError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                non_default_values[k] = {} if v is None else v
         elif (
             v is not None
             and v
@@ -1271,8 +1282,10 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
         from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
         validate_budget_duration(non_default_values["budget_duration"])
-        non_default_values["budget_reset_at"] = get_budget_reset_time(
-            budget_duration=non_default_values["budget_duration"]
+        non_default_values["budget_reset_at"] = (
+            get_budget_reset_time(budget_duration=non_default_values["budget_duration"])
+            if non_default_values["budget_duration"] is not None
+            else None
         )
 
     if "max_budget" not in non_default_values:
@@ -1421,7 +1434,7 @@ async def _update_single_user_helper(
 
     Returns the updated user data or raises an exception on failure.
     """
-    from litellm.proxy.proxy_server import general_settings, litellm_proxy_admin_name, prisma_client
+    from litellm.proxy.proxy_server import general_settings, litellm_proxy_admin_name, prisma_client, user_api_key_cache
 
     if prisma_client is None:
         raise Exception("Not connected to DB!")
@@ -1464,7 +1477,7 @@ async def _update_single_user_helper(
         # because `_update_internal_user_params` drops empty values, and `object_permission: {}` is
         # precisely the clear-my-own-ceiling case this must refuse.
         _sent_fields: Final = user_request.fields_set() if hasattr(user_request, "fields_set") else set()
-        _protected_fields: Final = ("max_budget", "soft_budget", "spend", "object_permission")
+        _protected_fields: Final = ("max_budget", "model_max_budget", "soft_budget", "spend", "object_permission")
         for _field in _protected_fields:
             if _field in non_default_values or _field in _sent_fields:
                 raise HTTPException(
@@ -1547,6 +1560,12 @@ async def _update_single_user_helper(
         )
 
         await _invalidate_user_spend_counter_if_changed(non_default_values)
+
+        if "model_max_budget" in non_default_values:
+            await evict_and_broadcast(
+                cache_keys=(non_default_values["user_id"],),
+                user_api_key_cache=user_api_key_cache,
+            )
 
         if "object_permission_id" in non_default_values:
             await _invalidate_cached_user_entitlement(
@@ -1631,7 +1650,6 @@ async def user_update(
         - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
         - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
         - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-        - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
         - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
         - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
         - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
@@ -1802,7 +1820,7 @@ async def bulk_user_update(
     }'
     ```
     """
-    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client, user_api_key_cache
 
     if prisma_client is None:
         raise HTTPException(
@@ -1867,8 +1885,21 @@ async def bulk_user_update(
             # Perform bulk database update
             await UserRepository(prisma_client).table.update_many(
                 where={},
-                data=non_default_values,  # Update all users
+                data=(
+                    {**non_default_values, "model_max_budget": json.dumps(non_default_values["model_max_budget"])}
+                    if "model_max_budget" in non_default_values
+                    else non_default_values
+                ),
             )
+
+            if "model_max_budget" in non_default_values:
+                for start in range(0, len(all_users_in_db), _USER_BUDGET_CACHE_INVALIDATION_BATCH_SIZE):
+                    await asyncio.gather(
+                        *(
+                            evict_and_broadcast(cache_keys=(user.user_id,), user_api_key_cache=user_api_key_cache)
+                            for user in all_users_in_db[start : start + _USER_BUDGET_CACHE_INVALIDATION_BATCH_SIZE]
+                        )
+                    )
 
             # Create individual success results
             for user in all_users_in_db:
