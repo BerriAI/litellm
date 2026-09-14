@@ -398,20 +398,16 @@ def _openai_passthrough_stream_chunks():
     ]
 
 
+def _openai_opted_in_body():
+    return {"model": "gpt-4o-mini", "stream": True, "stream_options": {"include_usage": True}}
+
+
 async def _collect_openai_passthrough_chunks(chunks, endpoint_type, request_body=None):
-    # Default to the opt-in body a real caller must send for the OpenAI protocol
-    # to emit a usage frame at all -- cost injection is gated on that opt-in.
-    if request_body is None:
-        request_body = {
-            "model": "gpt-4o-mini",
-            "stream": True,
-            "stream_options": {"include_usage": True},
-        }
     response = _make_streaming_response(chunks)
     received = []
     async for chunk in PassThroughStreamingHandler.chunk_processor(
         response=response,
-        request_body=request_body,
+        request_body=_openai_opted_in_body() if request_body is None else request_body,
         litellm_logging_obj=_unarmed_logging_obj(),
         endpoint_type=endpoint_type,
         start_time=datetime.now(),
@@ -491,10 +487,6 @@ async def test_chunk_processor_streams_crlf_delimited_frames_live_and_injects_co
 
 @pytest.mark.asyncio
 async def test_chunk_processor_skips_injection_when_openai_caller_did_not_opt_in(monkeypatch):
-    """Regression: issue #38348 -- ``include_cost_in_streaming_usage`` is a process-wide
-    flag, but OpenAI-protocol callers opt into usage reporting per request via
-    ``stream_options.include_usage``. A caller that never asked for usage must not have
-    ``usage.cost`` injected into its stream just because the flag is on proxy-wide."""
     monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
     chunks = _openai_passthrough_stream_chunks()
 
@@ -509,8 +501,6 @@ async def test_chunk_processor_skips_injection_when_openai_caller_did_not_opt_in
 
 @pytest.mark.asyncio
 async def test_chunk_processor_respects_explicit_include_usage_false(monkeypatch):
-    """Regression: issue #38348 -- an explicit ``include_usage: false`` is a caller
-    opting out, and must be honoured even with the global flag on."""
     monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
     chunks = _openai_passthrough_stream_chunks()
 
@@ -529,9 +519,6 @@ async def test_chunk_processor_respects_explicit_include_usage_false(monkeypatch
 
 @pytest.mark.asyncio
 async def test_chunk_processor_anthropic_injects_without_stream_options(monkeypatch):
-    """The Anthropic Messages protocol has no ``stream_options`` for a caller to opt in
-    with, so injection stays always-on there while the flag is set -- issue #38348 asks
-    for that behaviour to be explicit rather than accidental."""
     monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
     frame = (
         b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
@@ -559,8 +546,6 @@ async def test_chunk_processor_anthropic_injects_without_stream_options(monkeypa
 
 @pytest.mark.asyncio
 async def test_chunk_processor_anthropic_respects_explicit_opt_out(monkeypatch):
-    """Even on Anthropic, a caller that explicitly sends ``include_usage: false`` opts
-    out of cost injection."""
     monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
     frame = (
         b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
