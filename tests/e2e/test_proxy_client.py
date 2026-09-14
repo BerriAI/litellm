@@ -245,6 +245,7 @@ class TestReplicasFor:
             replica_urls=("http://gateway-1", "http://gateway-2"),
         )
         assert set(client.replicas_for("/key/info")) == {"http://backend"}
+        assert set(client.replicas_for("/project/info")) == {"http://backend"}
         assert set(client.replicas_for("/v1/models")) == {"http://gateway-1", "http://gateway-2"}
 
     def test_monolith_reads_management_routes_back_from_every_replica(self) -> None:

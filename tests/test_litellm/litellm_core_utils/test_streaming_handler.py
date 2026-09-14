@@ -4100,7 +4100,7 @@ async def test_async_streaming_completion_does_not_reset_context_before_iteratio
         session_id_var.set("")
 
 
-def test_stream_wrapper_del_restores_correlation_context():
+def test_stream_wrapper_del_restores_correlation_context(monkeypatch):
     """CustomStreamWrapper.__del__ is the best-effort fallback for an abandoned
     stream (caller never exhausts it, so the normal terminal-handler restore
     never fires). Testing this via real garbage collection is unreliable in
@@ -4112,6 +4112,7 @@ def test_stream_wrapper_del_restores_correlation_context():
     doesn't run actual finalization, and this exercises exactly the logic that
     real garbage collection would eventually trigger.
     """
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("outer-trace-abandoned")
     session_id_var.set("outer-session-abandoned")
     try:
@@ -4159,12 +4160,13 @@ def test_stream_wrapper_del_never_raises_with_broken_logging_obj():
     wrapper.__del__()  # must not raise
 
 
-def test_stream_wrapper_del_does_not_clobber_a_newer_active_call():
+def test_stream_wrapper_del_does_not_clobber_a_newer_active_call(monkeypatch):
     """A delayed finalizer must never stomp a different, still-active call's
     context. If an abandoned stream's __del__ fires late - after a new call
     has already started in the same Task/thread and claimed the contextvars -
     unconditionally restoring the abandoned stream's own pre-call snapshot
     would corrupt the active call's subsequent log lines with stale ids."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("outer-trace-before-abandoned-call")
     session_id_var.set("outer-session-before-abandoned-call")
     try:
@@ -4210,13 +4212,14 @@ def test_stream_wrapper_del_does_not_clobber_a_newer_active_call():
         session_id_var.set("")
 
 
-def test_stream_wrapper_del_restores_when_own_session_id_needed_sanitizing():
+def test_stream_wrapper_del_restores_when_own_session_id_needed_sanitizing(monkeypatch):
     """The __del__ guard must compare against the *sanitized* id actually
     stored in the contextvar, not the raw litellm_session_id/litellm_trace_id
     - set_session_id()/set_trace_id() strip control characters before
     storing, so a caller-supplied id containing e.g. a newline would never
     equal the raw attribute, and the guard would wrongly conclude some other
     call has claimed the context and skip cleanup forever."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("outer-trace-needs-sanitizing")
     session_id_var.set("outer-session-needs-sanitizing")
     try:
@@ -4250,7 +4253,7 @@ def test_stream_wrapper_del_restores_when_own_session_id_needed_sanitizing():
         session_id_var.set("")
 
 
-def test_stream_wrapper_next_keeps_context_active_through_synthesized_finish_reason_chunk():
+def test_stream_wrapper_next_keeps_context_active_through_synthesized_finish_reason_chunk(monkeypatch):
     """When the underlying stream ends without ever emitting an explicit
     finish_reason chunk, __next__ synthesizes one via finish_reason_handler()
     and returns it. That chunk is still this call's own data - the caller's
@@ -4261,6 +4264,7 @@ def test_stream_wrapper_next_keeps_context_active_through_synthesized_finish_rea
     correct, deterministic restore on the very next __next__() call, since
     completion_stream is already exhausted and immediately re-raises
     StopIteration."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("outer-trace-finish-reason")
     session_id_var.set("outer-session-finish-reason")
     try:
@@ -4300,12 +4304,13 @@ def test_stream_wrapper_next_keeps_context_active_through_synthesized_finish_rea
         session_id_var.set("")
 
 
-def test_stream_wrapper_del_cleans_up_after_synthesized_finish_reason_chunk():
+def test_stream_wrapper_del_cleans_up_after_synthesized_finish_reason_chunk(monkeypatch):
     """A caller that breaks immediately after seeing finish_reason (the
     early-break pattern) never triggers the next()-driven restore above - it
     relies on the best-effort __del__ guard instead, same as any other
     abandoned stream. The guard must still recognize this call's own
     (unrestored) ids as unclaimed and clean them up."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("outer-trace-finish-reason-del")
     session_id_var.set("outer-session-finish-reason-del")
     try:
@@ -4338,10 +4343,11 @@ def test_stream_wrapper_del_cleans_up_after_synthesized_finish_reason_chunk():
 
 
 @pytest.mark.asyncio
-async def test_stream_wrapper_anext_keeps_context_active_through_synthesized_finish_reason_chunk():
+async def test_stream_wrapper_anext_keeps_context_active_through_synthesized_finish_reason_chunk(monkeypatch):
     """Async sibling of test_stream_wrapper_next_keeps_context_active_through_synthesized_finish_reason_chunk -
     _finalize_completed_stream()'s else branch must not restore before
     returning the synthesized chunk either."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("outer-trace-anext-finish-reason")
     session_id_var.set("outer-session-anext-finish-reason")
     try:
@@ -4394,6 +4400,7 @@ async def test_stream_wrapper_anext_max_duration_timeout_restores_consumer_corre
     path as every other failure so the consumer's outer correlation context gets
     restored - calling the check before entering __anext__()'s try block would
     let the Timeout bypass that restoration entirely."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     monkeypatch.setattr(litellm.constants, "LITELLM_MAX_STREAMING_DURATION_SECONDS", 1)
     trace_id_var.set("outer-trace-max-duration")
     session_id_var.set("outer-session-max-duration")
@@ -4434,12 +4441,13 @@ async def test_stream_wrapper_anext_max_duration_timeout_restores_consumer_corre
 
 
 @pytest.mark.asyncio
-async def test_stream_wrapper_aclose_restores_consumer_correlation_context():
+async def test_stream_wrapper_aclose_restores_consumer_correlation_context(monkeypatch):
     """Explicit early termination (aclose(), e.g. on client disconnect or a
     router fallback aborting an in-progress stream) must restore the caller's
     correlation context too - not just __del__'s best-effort GC-timed fallback,
     since aclose() is normally called deterministically by the consumer/
     framework, unlike __del__."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("outer-trace-aclose")
     session_id_var.set("outer-session-aclose")
     try:
@@ -4481,6 +4489,7 @@ async def test_stream_wrapper_aclose_keeps_context_active_through_close_failure_
     branch logs a debug diagnostic. That log line must still carry the
     closing stream's own trace_id/session_id - the outer context must not be
     restored until after the close attempt (and its diagnostic) completes."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("outer-trace-close-fail")
     session_id_var.set("outer-session-close-fail")
     try:
@@ -4541,6 +4550,7 @@ def test_handle_stream_fallback_error_restores_context_only_after_exception_mapp
     mapping. The consumer's outer context must not be restored until that
     mapping call returns, or the diagnostic log line would carry the outer
     (or empty) trace_id/session_id instead of the failing stream's own."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("outer-trace-fallback")
     session_id_var.set("outer-session-fallback")
     try:
