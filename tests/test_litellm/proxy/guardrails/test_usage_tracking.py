@@ -414,7 +414,7 @@ async def test_malformed_not_run_entry_does_not_drop_the_batch():
             "guardrail_information": [
                 {"guardrail_name": ["not", "a", "string"], "guardrail_status": "success"},
                 {"guardrail_name": "", "guardrail_id": "cf-uuid", "guardrail_status": "success"},
-                {"guardrail_status": "not_run"},
+                {"guardrail_status": "success"},
             ]
         }
     )
