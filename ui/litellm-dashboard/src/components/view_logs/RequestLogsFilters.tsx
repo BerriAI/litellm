@@ -96,7 +96,7 @@ function ProjectFilterField({ value, onChange }: { value: string; onChange: (val
       <SearchSelect
         options={options}
         value={value}
-        onValueChange={(next) => onChange(emptyToUndefined(next))}
+        onValueChange={(next) => onChange(next ?? undefined)}
         placeholder="Search or select a project"
         emptyText={isLoading ? "Loading projects…" : "No projects found"}
       />
