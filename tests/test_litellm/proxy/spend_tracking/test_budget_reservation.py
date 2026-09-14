@@ -264,6 +264,9 @@ class _DecliningCounter:
     async def acount_request(self, body: bytes) -> object:
         raise _FakeDeclined("unsupported content block")
 
+    def count_text(self, text: str) -> int:
+        return len(text)
+
 
 class _DecliningFactory:
     def __call__(self, tokenizer_json: str) -> _DecliningCounter:

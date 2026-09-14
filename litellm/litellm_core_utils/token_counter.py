@@ -625,7 +625,10 @@ def _get_exact_count_function(
             def count_tokens(text: str) -> int:
                 return len(tokenizer.encode_batch_fast([text])[0])
 
-            return count_tokens
+            rust_count: Final = (
+                None if custom_tokenizer is not None or model is None else _rust_anthropic_count_function(model)
+            )
+            return count_tokens if rust_count is None else _with_python_fallback(rust_count, count_tokens)
         elif tokenizer_json["type"] == "openai_tokenizer":
             encoding: Final = openai_tokenizer_encoding(model)
 
@@ -641,6 +644,27 @@ def _get_exact_count_function(
             return len(default_encoding.encode(text, disallowed_special=()))
 
         return _get_tiktoken_count_function(encode_length)
+
+
+def _rust_anthropic_count_function(model: str) -> TokenCounterFunction | None:
+    """The Rust port of the Anthropic tokenizer when the bridge is enabled; the other HuggingFace tokenizers stay in Python."""
+    from litellm.rust_bridge.token_counter import text_counter
+    from litellm.utils import huggingface_tokenizer_kind
+
+    if huggingface_tokenizer_kind(model) != "anthropic":
+        return None
+    return text_counter("anthropic")
+
+
+def _with_python_fallback(rust_count: TokenCounterFunction, python_count: TokenCounterFunction) -> TokenCounterFunction:
+    def count_tokens(text: str) -> int:
+        try:
+            return rust_count(text)
+        except RuntimeError as error:
+            verbose_logger.debug("Rust token counter failed, counting in Python: %s", error)
+            return python_count(text)
+
+    return count_tokens
 
 
 def openai_tokenizer_encoding(model: str) -> tiktoken.Encoding:

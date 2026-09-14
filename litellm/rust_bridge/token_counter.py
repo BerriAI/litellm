@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Final, Literal, Protocol, cast  # noqa: TID251  # native extension exposes untyped callables
@@ -23,6 +23,9 @@ RustTokenizer = Literal["anthropic", "cl100k_base", "o200k_base"]
 
 class RustTokenCounter(Protocol):
     def acount_request(self, body: bytes) -> Awaitable[object]:
+        raise NotImplementedError
+
+    def count_text(self, text: str) -> int:
         raise NotImplementedError
 
 
@@ -91,6 +94,16 @@ def _counter(factory: RustTokenCounterFactory, tokenizer: RustTokenizer) -> Rust
             return factory.from_cl100k_ranks(cl100k_base_rank_file())
         case "o200k_base":
             return factory.from_o200k_ranks(o200k_base_rank_file())
+
+
+def text_counter(tokenizer: RustTokenizer) -> Callable[[str], int] | None:
+    """The Rust per-string counter for `tokenizer`, `None` when the bridge is off or the extension is missing."""
+    if not rust_enabled():
+        return None
+    factory: Final = TOKEN_COUNTER.load()
+    if factory is None:
+        return None
+    return _counter(factory, tokenizer).count_text
 
 
 async def count_input_tokens(body: bytes, tokenizer: RustTokenizer) -> InputTokenCount | None:
