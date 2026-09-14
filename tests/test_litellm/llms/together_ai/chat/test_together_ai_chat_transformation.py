@@ -1013,7 +1013,11 @@ def test_anthropic_messages_replays_tool_loop_and_maps_reasoning_to_thinking_blo
     assert tool_turn["content"] == "Sunny, 18C"
 
     blocks = {block["type"]: block for block in response["content"]}
-    assert blocks["thinking"]["thinking"] == "Tool said sunny."
+
+    # Contract (thinking param absent): the provider's reasoning is NOT
+    # surfaced as an Anthropic thinking block. The mock response still
+    # carries reasoning, and this asserts it is suppressed.
+    assert "thinking" not in blocks
     assert blocks["text"]["text"] == "Sunny in SF."
     assert response["stop_reason"] == "end_turn"
 
@@ -1031,6 +1035,9 @@ def test_anthropic_messages_streams_together_tool_call_as_input_json_delta():
     captured_requests: list[httpx.Request] = []
     client = _sync_client(captured_requests, _sse_response(*PARALLEL_TOOL_CALL_STREAM))
 
+    # Explicit thinking= would be needed to surface provider reasoning
+    # (the pass-through contract suppresses it when the thinking param is
+    # absent); this test asserts the streaming translation only.
     events = _anthropic_sse_events(
         litellm.anthropic.messages.create(
             model=f"together_ai/{UNMAPPED_MODEL}",
@@ -1067,7 +1074,9 @@ def test_anthropic_messages_streams_together_tool_call_as_input_json_delta():
         for event in events
         if event["type"] == "content_block_delta" and event["delta"]["type"] == "thinking_delta"
     )
-    assert thinking_text == "Need weather and time."
+    # thinking param absent in the request: provider reasoning is
+    # suppressed per the contract, so no thinking block may appear.
+    assert thinking_text == ""
     assert [event["delta"]["stop_reason"] for event in events if event["type"] == "message_delta"] == ["tool_use"]
 
 

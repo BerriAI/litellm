@@ -495,6 +495,7 @@ class LiteLLMAnthropicMessagesAdapter:
             has_cache_control_in_text = False
             tool_calls: list[ChatCompletionAssistantToolCall] = []
             thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] = []
+            unsigned_thinking_texts: list[str] = []
             if m["role"] == "assistant":
                 if isinstance(m.get("content"), str):
                     assistant_message_str = str(m.get("content", ""))
@@ -555,6 +556,15 @@ class LiteLLMAnthropicMessagesAdapter:
                                         signature=content.get("signature") or "",
                                     )
                                     thinking_blocks.append(thinking_block)
+                                else:
+                                    # Unsigned text is NOT dropped: it is
+                                    # replayed as the flat reasoning_content field
+                                    # below (the provider-visible form), while
+                                    # staying out of thinking_blocks, so the
+                                    # signature-400 stays avoided.
+                                    unsigned_text = str(content.get("thinking") or "")
+                                    if unsigned_text:
+                                        unsigned_thinking_texts.append(unsigned_text)
                             elif content.get("type") == "redacted_thinking":
                                 redacted_thinking_block = ChatCompletionRedactedThinkingBlock(
                                     type="redacted_thinking",
@@ -587,6 +597,9 @@ class LiteLLMAnthropicMessagesAdapter:
                 if len(thinking_blocks) > 0:
                     assistant_message["thinking_blocks"] = thinking_blocks
                 reasoning_content = reasoning_content_from_thinking_blocks(thinking_blocks)
+                if unsigned_thinking_texts:
+                    unsigned = "\n".join(unsigned_thinking_texts)
+                    reasoning_content = f"{reasoning_content}\n{unsigned}" if reasoning_content else unsigned
                 if reasoning_content:
                     assistant_message["reasoning_content"] = reasoning_content
                 new_messages.append(assistant_message)
