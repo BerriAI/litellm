@@ -33,12 +33,12 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.types.integrations.slack_alerting import SlackAlertingArgs, SlackAlertingCacheKeys
 from litellm.types.proxy.model_deprecation import (
     DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
+    EmailSender,
     ModelDeprecationInfo,
 )
 
 if TYPE_CHECKING:
     from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
-    from litellm.proxy.utils import PrismaClient
     from litellm.router import Router
 
 
@@ -65,15 +65,11 @@ class TeamNotification:
 
 
 class DeprecationEmailCache(Protocol):
-    async def async_get_cache(self, *, key: str) -> object: ...
+    async def async_get_cache(self, *, key: str) -> object:
+        """The value stored under key, or None"""
 
-    async def async_set_cache(self, *, key: str, value: float, ttl: float) -> None: ...
-
-
-class EmailSender(Protocol):
-    DEFAULT_LITELLM_EMAIL: str
-
-    async def send_email(self, from_email: str, to_email: Sequence[str], subject: str, html_body: str) -> None: ...
+    async def async_set_cache(self, *, key: str, value: float, ttl: float) -> None:
+        """Store value under key for ttl seconds"""
 
 
 class SmtpSend(Protocol):
@@ -84,7 +80,7 @@ class SmtpSend(Protocol):
 @dataclass(frozen=True, slots=True)
 class DeprecationEmailContext:
     llm_router: Router
-    prisma_client: PrismaClient
+    prisma_client: object
     cache: DeprecationEmailCache
     alerting_args: SlackAlertingArgs
     pod_lock_manager: PodLockManager | None
@@ -224,7 +220,7 @@ async def _unsent(
 
 
 async def _notification_for(
-    team: LiteLLM_TeamTable, models: Sequence[AffectedModel], cache: DeprecationEmailCache, prisma_client: PrismaClient
+    team: LiteLLM_TeamTable, models: Sequence[AffectedModel], cache: DeprecationEmailCache, prisma_client: object
 ) -> TeamNotification | None:
     unsent: Final = await _unsent(team.team_id, models, cache)
     if not unsent:
@@ -240,7 +236,7 @@ async def build_team_notifications(
     affected: Mapping[str, Sequence[AffectedModel]],
     teams: Sequence[LiteLLM_TeamTable],
     cache: DeprecationEmailCache,
-    prisma_client: PrismaClient,
+    prisma_client: object,
 ) -> tuple[TeamNotification, ...]:
     """One digest per team of the milestones not yet emailed, dropping teams with nobody to email"""
     teams_by_id: Final = MappingProxyType({team.team_id: team for team in teams})
@@ -333,7 +329,7 @@ def make_email_deliverer(
     return deliver_over_smtp
 
 
-async def _load_teams(prisma_client: PrismaClient) -> tuple[LiteLLM_TeamTable, ...]:
+async def _load_teams(prisma_client: object) -> tuple[LiteLLM_TeamTable, ...]:
     return tuple(await TeamRepository(prisma_client).find_many())
 
 

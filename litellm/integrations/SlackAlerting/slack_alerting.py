@@ -53,6 +53,7 @@ from litellm.types.integrations.slack_alerting import *
 from litellm.types.proxy.model_deprecation import (
     DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
     DEPRECATION_IDLE_POLL_SECONDS,
+    EmailSender,
 )
 
 from ..email_templates.templates import *
@@ -67,10 +68,6 @@ from .ms_teams import (
 from .utils import process_slack_alerting_variables
 
 if TYPE_CHECKING:
-    from litellm.proxy.common_utils.model_deprecation_notifications import (
-        DeprecationEmailContext,
-        EmailSender,
-    )
     from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
     from litellm.proxy.utils import PrismaClient
     from litellm.router import Router as _Router
@@ -92,7 +89,7 @@ def _proxy_prisma_client() -> "PrismaClient | None":
     return prisma_client
 
 
-def _proxy_email_logger() -> "EmailSender | None":
+def _proxy_email_logger() -> EmailSender | None:
     from litellm.proxy.proxy_server import proxy_logging_obj
 
     return proxy_logging_obj.email_logging_instance
@@ -1204,8 +1201,8 @@ Model Info:
         llm_router: Router | None,
         pod_lock_manager: "PodLockManager | None",
         get_prisma_client: Callable[[], "PrismaClient | None"],
-        get_email_logger: Callable[[], "EmailSender | None"],
-        send_emails: "Callable[[DeprecationEmailContext], Awaitable[int]] | None",
+        get_email_logger: Callable[[], EmailSender | None],
+        send_emails: "Callable[..., Awaitable[int]] | None",
     ) -> int:
         """Email team admins the milestones crossed, resolving against the DB at most once a day"""
         if llm_router is None or not self._deprecation_emails_enabled():
@@ -1241,8 +1238,8 @@ Model Info:
         get_llm_router: Callable[[], Router | None],
         pod_lock_manager: "PodLockManager | None",
         get_prisma_client: Callable[[], "PrismaClient | None"],
-        get_email_logger: Callable[[], "EmailSender | None"],
-        send_emails: "Callable[[DeprecationEmailContext], Awaitable[int]] | None",
+        get_email_logger: Callable[[], EmailSender | None],
+        send_emails: "Callable[..., Awaitable[int]] | None",
         now: Callable[[], float] = time.time,
     ) -> None:
         """Run the Slack pass then the email pass; a pass that raised is skipped for a day while the other keeps polling"""
@@ -1265,8 +1262,8 @@ Model Info:
         get_llm_router: Callable[[], Router | None] = _proxy_llm_router,
         pod_lock_manager: "PodLockManager | None" = None,
         get_prisma_client: Callable[[], "PrismaClient | None"] = _proxy_prisma_client,
-        get_email_logger: Callable[[], "EmailSender | None"] = _proxy_email_logger,
-        send_emails: "Callable[[DeprecationEmailContext], Awaitable[int]] | None" = None,
+        get_email_logger: Callable[[], EmailSender | None] = _proxy_email_logger,
+        send_emails: "Callable[..., Awaitable[int]] | None" = None,
     ) -> None:
         """Poll for a loaded router and run both passes every poll interval
 
