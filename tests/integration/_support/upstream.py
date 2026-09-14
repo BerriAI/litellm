@@ -1,0 +1,93 @@
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass, field
+from queue import SimpleQueue
+from typing import Final
+
+import uvicorn
+from pydantic import JsonValue, TypeAdapter
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+from starlette.routing import Route
+
+from _fake_openai_endpoint_server import chat_completions, completions, embeddings, health, moderations
+
+JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+INTERNAL_FIELDS: Final = frozenset(
+    {
+        "litellm_params",
+        "litellm_logging_obj",
+        "litellm_call_id",
+        "litellm_metadata",
+        "proxy_server_request",
+        "rpm",
+        "tpm",
+        "timeout",
+        "stream_chunk_size",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Observation:
+    path: str
+    authorization: str
+    body: dict[str, JsonValue]
+
+
+@dataclass(frozen=True, slots=True)
+class Provider:
+    observations: SimpleQueue[Observation] = field(default_factory=SimpleQueue)
+
+    async def chat(self, request: Request) -> Response:
+        body: Final = JSON_OBJECT.validate_json(await request.body())
+        self.observations.put(Observation(request.url.path, request.headers.get("authorization", ""), body))
+        leaked: Final = tuple(sorted(INTERNAL_FIELDS.intersection(body)))
+        if leaked:
+            return JSONResponse({"error": {"message": f"Unexpected provider fields: {leaked}"}}, status_code=400)
+        messages: Final = body.get("messages")
+        if not isinstance(body.get("model"), str) or not isinstance(messages, list) or not messages:
+            return JSONResponse({"error": {"message": "model and nonempty messages are required"}}, status_code=400)
+        if any(
+            not isinstance(message, dict)
+            or message.get("role") not in {"system", "developer", "user", "assistant", "tool"}
+            or "content" not in message
+            for message in messages
+        ):
+            return JSONResponse({"error": {"message": "Invalid selected message contract"}}, status_code=400)
+        return await chat_completions(request)
+
+    async def observed(self, _request: Request) -> Response:
+        values: Final = tuple(self.observations.get() for _ in range(self.observations.qsize()))
+        return JSONResponse(
+            {
+                "requests": [
+                    {"path": value.path, "authorization": value.authorization, "body": value.body} for value in values
+                ]
+            }
+        )
+
+    def app(self) -> Starlette:
+        return Starlette(
+            routes=[
+                Route("/health", health),
+                Route("/__observations", self.observed),
+                Route("/v1/chat/completions", self.chat, methods=["POST"]),
+                Route("/v1/completions", completions, methods=["POST"]),
+                Route("/v1/embeddings", embeddings, methods=["POST"]),
+                Route("/v1/moderations", moderations, methods=["POST"]),
+            ]
+        )
+
+
+def main() -> None:
+    parser: Final = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=8190)
+    arguments: Final = parser.parse_args()
+    uvicorn.run(Provider().app(), host="127.0.0.1", port=arguments.port, access_log=False)
+
+
+if __name__ == "__main__":
+    main()
