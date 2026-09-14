@@ -34,6 +34,17 @@ def signal_group(group: int, action: int) -> None:
         pass
 
 
+def stop_root_process(process: subprocess.Popen[bytes]) -> bool:
+    if process.poll() is not None:
+        return True
+    process.terminate()
+    try:
+        process.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        return False
+    return True
+
+
 @contextmanager
 def owned_proxy(gateway: Gateway, directory: Path, overrides: Mapping[str, str]) -> Iterator[Gateway]:
     with socket.socket() as reserve:
@@ -70,23 +81,16 @@ def owned_proxy(gateway: Gateway, directory: Path, overrides: Mapping[str, str])
                     time.sleep(0.1)
                 yield Gateway(client, gateway.key, gateway.upstream_url)
         finally:
-            forced = False
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=30)
-                except subprocess.TimeoutExpired:
-                    forced = True
+            root_stopped: Final = stop_root_process(process)
             residual: Final = group_members(process.pid)
             if residual:
                 signal_group(process.pid, signal.SIGTERM)
                 psutil.wait_procs(residual, timeout=5)
             remaining: Final = group_members(process.pid)
             if remaining:
-                forced = True
                 signal_group(process.pid, signal.SIGKILL)
                 psutil.wait_procs(remaining, timeout=3)
             process.wait(timeout=3)
             survivors: Final = group_members(process.pid)
             assert not survivors, "Owned proxy child survived cleanup"
-            assert not forced, "Owned proxy required forced cleanup"
+            assert root_stopped and not remaining, "Owned proxy required forced cleanup"
