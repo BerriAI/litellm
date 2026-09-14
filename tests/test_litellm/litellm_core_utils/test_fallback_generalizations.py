@@ -872,21 +872,23 @@ def test_shipped_openai_reasoning_rule_loses_to_mapped_entries(shipped_cost_map)
 
 
 @pytest.mark.parametrize(
-    "model,provider",
+    "model,provider,expected_supports_reasoning",
     [
-        ("azure/us/o1-2024-12-17", "azure"),
-        ("github_copilot/gpt-5", "github_copilot"),
-        ("openrouter/openai/o1", "openrouter"),
-        ("perplexity/openai/gpt-5.4-mini", "perplexity"),
+        ("azure/us/o1-2024-12-17", "azure", True),
+        ("github_copilot/gpt-5", "github_copilot", None),
+        ("openrouter/openai/o1", "openrouter", None),
+        ("perplexity/openai/gpt-5.4-mini", "perplexity", None),
     ],
 )
-def test_shipped_openai_reasoning_rule_does_not_backfill_other_providers(shipped_cost_map, model, provider):
+def test_shipped_openai_reasoning_rule_backfills_only_approved_providers(
+    shipped_cost_map, model, provider, expected_supports_reasoning
+):
     assert model in litellm.model_cost
     raw_entry = litellm.model_cost[model]
     assert "supports_reasoning" not in raw_entry
     model_without_provider = model.removeprefix(f"{provider}/")
     info = litellm.get_model_info(model=model_without_provider, custom_llm_provider=provider)
-    assert info.get("supports_reasoning") is None
+    assert info.get("supports_reasoning") is expected_supports_reasoning
     assert info["input_cost_per_token"] == raw_entry.get("input_cost_per_token", 0)
 
 
