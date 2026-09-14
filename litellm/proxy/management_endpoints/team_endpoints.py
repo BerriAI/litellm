@@ -73,7 +73,6 @@ from litellm.proxy._types import (
     TeamModelDeleteRequest,
     UpdateTeamRequest,
     UserAPIKeyAuth,
-    UserNotFoundError,
 )
 from litellm.proxy.auth.auth_checks import (
     OrganizationNotFoundError,
@@ -157,6 +156,7 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.router import Router
+from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
