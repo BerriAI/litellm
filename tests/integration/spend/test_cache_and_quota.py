@@ -57,8 +57,6 @@ def test_generated_cache_sequences_preserve_content_usage_and_zero_hit_cost(gate
             observed: Final = self.upstream.get("/__observations").json()["requests"]
             expected_calls: Final = 0 if marker in self.seen else 1
             assert len(observed) == expected_calls, observed
-            # The response can retain its original cost header on a cache hit.
-            # Per-request billed cost is checked against fresh spend rows below.
             if marker not in self.seen:
                 assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(0.06)
             if marker in self.identities:
