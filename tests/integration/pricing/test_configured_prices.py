@@ -1,3 +1,4 @@
+from collections.abc import Iterator, Mapping
 from typing import Final
 from pathlib import Path
 import uuid
@@ -42,36 +43,51 @@ def test_default_prices_survive_nullable_sibling_and_reload(gateway: Gateway) ->
                 "nullable": (0.00000015, 0.0000006),
             }
             models: Final = {kind: scenario.model(**configured[kind]) for kind in registration_order}
-            observations: Final[list[tuple[str, float]]] = []
-            for generation in range(2):
-                entries: Final = gateway.get("/model/info")["data"]
-                assert isinstance(entries, list)
-                for kind in reversed(registration_order) if generation else registration_order:
-                    model: Final = models[kind]
+
+            def observe_requests(
+                registration_order: tuple[str, ...],
+                models: Mapping[str, str],
+                rates: Mapping[str, tuple[float, float]],
+            ) -> Iterator[tuple[str, float]]:
+                for generation in range(2):
+                    entries: Final = gateway.get("/model/info")["data"]
+                    assert isinstance(entries, list)
+                    kinds: Final = tuple(reversed(registration_order)) if generation else registration_order
+                    for index, kind in enumerate(kinds):
+                        model: Final = models[kind]
+                        target: Final = next(
+                            object_value(entry) for entry in entries if object_value(entry)["model_name"] == model
+                        )
+                        info: Final = object_value(target["model_info"])
+                        assert info["input_cost_per_token"] == rates[kind][0]
+                        assert info["output_cost_per_token"] == rates[kind][1]
+                        response: Final = gateway.request(
+                            "POST",
+                            "/v1/chat/completions",
+                            {
+                                "model": model,
+                                "messages": [
+                                    {"role": "user", "content": f"price {generation * len(registration_order) + index}"}
+                                ],
+                            },
+                        )
+                        assert response.status_code == 200, response.text
+                        expected: Final = 20 * rates[kind][0] + 20 * rates[kind][1]
+                        assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected, rel=1e-6)
+                        request_id: Final = string_value(object_value(response.json())["id"])
+                        yield request_id, expected
                     target: Final = next(
-                        object_value(entry) for entry in entries if object_value(entry)["model_name"] == model
+                        object_value(entry)
+                        for entry in entries
+                        if object_value(entry)["model_name"] == models["nullable"]
                     )
-                    info: Final = object_value(target["model_info"])
-                    assert info["input_cost_per_token"] == rates[kind][0]
-                    assert info["output_cost_per_token"] == rates[kind][1]
-                    response: Final = gateway.request(
-                        "POST",
-                        "/v1/chat/completions",
-                        {"model": model, "messages": [{"role": "user", "content": f"price {len(observations)}"}]},
+                    identity: Final = string_value(object_value(target["model_info"])["id"])
+                    updated: Final = gateway.request(
+                        "PATCH", f"/model/{identity}/update", {"model_info": {"description": "reload price contract"}}
                     )
-                    assert response.status_code == 200, response.text
-                    expected: Final = 20 * rates[kind][0] + 20 * rates[kind][1]
-                    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected, rel=1e-6)
-                    request_id: Final = string_value(object_value(response.json())["id"])
-                    observations.append((request_id, expected))
-                target: Final = next(
-                    object_value(entry) for entry in entries if object_value(entry)["model_name"] == models["nullable"]
-                )
-                identity: Final = string_value(object_value(target["model_info"])["id"])
-                updated: Final = gateway.request(
-                    "PATCH", f"/model/{identity}/update", {"model_info": {"description": "reload price contract"}}
-                )
-                assert updated.status_code == 200, updated.text
+                    assert updated.status_code == 200, updated.text
+
+            observations: Final = tuple(observe_requests(registration_order, models, rates))
             for request_id, expected in observations:
                 rows: Final = eventually(
                     lambda request_id=request_id: read_rows(
