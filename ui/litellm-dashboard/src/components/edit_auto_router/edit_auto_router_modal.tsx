@@ -66,6 +66,7 @@ import ComplexityRouterConfig, {
   AdaptiveRouterWeights,
   ClassifierLLMConfig,
   ClassifierType,
+  effectiveClassifierType,
   ComplexityRouterConfigValue,
   ComplexityTiers,
   heuristicScoringRole,
@@ -337,6 +338,7 @@ export const buildUpdatedComplexityRouterConfig = (
   keywordMatching?: KeywordMatchingState,
 ): Record<string, unknown> => {
   const isManaged = (key: string): boolean => {
+    if (key === "llm_v2_config" && effectiveClassifierType(value) !== "llm_v2") return true;
     if (MANAGED_COMPLEXITY_ROUTER_KEYS.has(key)) return true;
     if (keywordMatching !== undefined && KEYWORD_MATCHING_KEYS.has(key)) return true;
     return customTechnicalKeywords !== undefined && key === "custom_technical_keywords";

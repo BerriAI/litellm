@@ -23,6 +23,7 @@ with warnings.catch_warnings():
 from litellm.types.llms.openai import REASONING_EFFORT
 from litellm.types.router import AdaptiveRouterWeights, ClassifierPlugin, RoutingPlugin
 
+from .llm_v2 import LLMV2Config
 from .tier_predictor import TrainedTierArtifact
 
 
@@ -53,7 +54,7 @@ DEFAULT_CLASSIFICATION_RUBRIC: Final[ClassificationRubric] = ClassificationRubri
 # The classifier_type values that can call classifier_llm_config.model. Every consumer asking
 # "is the classifier model a real dependency of this router" resolves it here, including the ones
 # that only hold the raw config mapping and cannot reach ComplexityRouterConfig.uses_llm_classifier.
-LLM_CLASSIFIER_TYPES: Final[frozenset[str]] = frozenset({"llm", "heuristic_first", "hybrid"})
+LLM_CLASSIFIER_TYPES: Final[frozenset[str]] = frozenset({"llm", "llm_v2", "heuristic_first", "hybrid"})
 
 
 TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
@@ -882,14 +883,20 @@ class ComplexityRouterConfig(BaseModel):
     )
 
     # Classifier strategy
-    classifier_type: Literal["heuristic", "heuristic_v2", "llm", "custom", "heuristic_first", "hybrid"] = Field(
-        default="heuristic",
-        description=(
-            "Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, "
-            "an LLM call, a custom classifier plugin, 'heuristic_first', which scores locally and only pays "
-            "for the LLM classifier when the local scorer does not confidently land a cheap tier, or 'hybrid', "
-            "which trusts the local scorer everywhere except when its score lands near a tier boundary"
-        ),
+    classifier_type: Literal["heuristic", "heuristic_v2", "llm", "llm_v2", "custom", "heuristic_first", "hybrid"] = (
+        Field(
+            default="heuristic",
+            description=(
+                "Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, "
+                "an LLM call, a custom classifier plugin, 'heuristic_first', which scores locally and only pays "
+                "for the LLM classifier when the local scorer does not confidently land a cheap tier, or 'hybrid', "
+                "which trusts the local scorer everywhere except when its score lands near a tier boundary"
+            ),
+        )
+    )
+    llm_v2_config: LLMV2Config | None = Field(
+        default=None,
+        description="Experimental joint task-demand and solver-capability forecasting for classifier_type llm_v2.",
     )
     heuristic_v2_artifact: TrainedTierArtifact | Literal["ultrafeedback"] = Field(
         default="ultrafeedback",
@@ -1429,6 +1436,40 @@ class ComplexityRouterConfig(BaseModel):
                 f"classifier_plugin is set but classifier_type is {self.classifier_type!r}; "
                 "the plugin would never run. Set classifier_type 'custom' or remove classifier_plugin"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_llm_v2(self) -> "ComplexityRouterConfig":
+        v2: Final = self.llm_v2_config
+        if self.classifier_type != "llm_v2":
+            if v2 is not None:
+                raise ValueError("llm_v2_config requires classifier_type llm_v2")
+            return self
+        if v2 is None:
+            raise ValueError("llm_v2_config is required when classifier_type is llm_v2")
+        llm: Final = self.classifier_llm_config
+        if self.adaptive or self.tier_definitions is not None or self.enable_non_reasoning_tier:
+            raise ValueError("llm_v2 requires two built-in tiers and adaptive=false")
+        if (
+            self.classification_prompt
+            or self.classification_examples
+            or (llm is not None and (llm.system_prompt is not None or llm.classification_rubric is not None))
+        ):
+            raise ValueError("llm_v2 uses its packaged prompt; complexity prompt overrides are not supported")
+        names: Final = tuple(tier.value for tier in self.active_tier_severity_order())
+        if v2.efficient_tier not in names or v2.capable_tier not in names:
+            raise ValueError("llm_v2 tiers must name built-in tiers")
+        if names.index(v2.efficient_tier) >= names.index(v2.capable_tier):
+            raise ValueError("llm_v2 efficient_tier must precede capable_tier")
+        if frozenset(tier for tier, models in self.tiers.items() if models) != frozenset(
+            (v2.efficient_tier, v2.capable_tier)
+        ):
+            raise ValueError("llm_v2 requires exactly its efficient and capable tiers")
+        pools: Final = tuple(
+            (models,) if isinstance(models, str) else tuple(models) for models in self.tiers.values() if models
+        )
+        if any(len(pool) != 1 or not pool[0].strip() for pool in pools) or pools[0] == pools[1]:
+            raise ValueError("llm_v2 requires one distinct model group in each tier")
         return self
 
     @model_validator(mode="after")
