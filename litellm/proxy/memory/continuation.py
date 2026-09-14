@@ -179,16 +179,17 @@ class MemoryContinuations:
             prefix: Final = result[: -(patch.replaces - 1)] if patch.replaces > 1 else result
             # Clients move cache breakpoints between turns. Reuse their current
             # directives rather than restoring an obsolete cached copy.
-            directives: Final = MappingProxyType(
-                {
-                    prefix_hashes((item,), self.route)[0]: item
-                    for item in items[index + 1 - patch.replaces : index + 1]
-                    if item.get("role") == "system"
-                }
+            current_directives: Final = tuple(
+                item for item in items[index + 1 - patch.replaces : index + 1] if item.get("role") == "system"
             )
+            positions: Final = tuple(
+                position for position, item in enumerate(patch.replacement) if item.get("role") == "system"
+            )
+            if len(positions) != len(current_directives):
+                raise HTTPException(status_code=409, detail="Invalid memory continuation directives")
+            directives: Final = MappingProxyType(dict(zip(positions, current_directives)))
             replacement: Final = tuple(
-                directives.get(prefix_hashes((item,), self.route)[0], item) if item.get("role") == "system" else item
-                for item in patch.replacement
+                directives.get(position, item) for position, item in enumerate(patch.replacement)
             )
             return _append_items(prefix, replacement, self.route)
 

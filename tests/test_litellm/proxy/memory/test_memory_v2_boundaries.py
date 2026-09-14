@@ -656,6 +656,29 @@ async def test_claude_output_directives_reach_search_answer_and_reflection_round
 
 
 @pytest.mark.asyncio
+async def test_duplicate_directives_preserve_each_current_cache_breakpoint(prisma_edge: MagicMock) -> None:
+    first = {"role": "system", "content": [{"type": "text", "text": "Same directive"}]}
+    second = {
+        "role": "system",
+        "content": [{"type": "text", "text": "Same directive", "cache_control": {"type": "ephemeral"}}],
+    }
+    assistant = {"role": "assistant", "content": [{"type": "text", "text": "Reply"}]}
+    items = (first, second, assistant)
+    continuations = MemoryContinuations(store(prisma_edge), "anthropic_messages")
+    patch = MemoryContinuation(
+        replaces=3, replacement=({"role": "user", "content": "Memory reference"}, second, first, assistant)
+    )
+    prisma_edge.db.litellm_memorycontinuation.find_many.return_value = [
+        SimpleNamespace(
+            id=continuations.identifier(prefix_hashes(items, "anthropic_messages")[-1]), payload=patch.model_dump()
+        )
+    ]
+    restored = await continuations.restore(items)
+    assert restored[1:3] == (first, second)
+    assert restored[-1] == assistant
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("bad_id,count", [(True, 1), (False, 17)])
 async def test_invalid_model_calls_are_rejected_before_storage(
     prisma_edge: MagicMock, bad_id: bool, count: int
