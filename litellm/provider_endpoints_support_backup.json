@@ -815,6 +815,24 @@
         "interactions": true
       }
     },
+    "edenai": {
+      "display_name": "Eden AI (`edenai`)",
+      "url": "https://docs.litellm.ai/docs/providers/edenai",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true,
+        "image_generations": true,
+        "audio_transcriptions": true,
+        "audio_speech": true,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "interactions": false,
+        "video_generations": true
+      }
+    },
     "duckduckgo": {
       "display_name": "DuckDuckGo (`duckduckgo`)",
       "url": "https://docs.litellm.ai/docs/search/duckduckgo",

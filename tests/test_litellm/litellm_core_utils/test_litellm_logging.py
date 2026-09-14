@@ -23,7 +23,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     _get_status_fields,
     set_callbacks,
 )
-from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.llms.openai import ResponseAPIUsage, ResponseCompletedEvent, ResponsesAPIResponse
 from litellm.types.utils import (
     CallTypes,
     LiteLLMRealtimeStreamLoggingObject,
@@ -7079,3 +7079,55 @@ def test_get_additional_headers_survives_a_thread_growing_headers_mid_copy():
         assert copied["llm_provider-x-custom-1999"] == "1999"
 
     _run_while_a_thread_grows(headers, read, reads=300)
+
+
+def _completed_responses_event(usage: ResponseAPIUsage) -> ResponseCompletedEvent:
+    return ResponseCompletedEvent(
+        type="response.completed",
+        response=ResponsesAPIResponse(
+            id="resp-1", created_at=1, object="response", status="completed", model="codex-mini-latest", output=[], usage=usage
+        ),
+    )
+
+
+def _responses_stream_logging_obj() -> LitellmLogging:
+    logging_obj = _make_logging_obj(stream=True)
+    logging_obj.update_environment_variables(
+        model="openai/codex-mini-latest", user="", optional_params={}, litellm_params={"api_base": ""}
+    )
+    return logging_obj
+
+
+def test_get_assembled_streaming_response_bills_a_provider_reported_usage_cost():
+    """A Responses stream whose completed event carries ``usage.cost`` is billed that number,
+    the way an assembled chat stream already is, instead of a price-map estimate."""
+    logging_obj = _responses_stream_logging_obj()
+    now = datetime.datetime.now()
+
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=_completed_responses_event(ResponseAPIUsage(input_tokens=12, output_tokens=2, total_tokens=14, cost=0.0042)),
+        start_time=now,
+        end_time=now,
+        is_async=True,
+        streaming_chunks=[],
+    )
+
+    assert assembled._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] == 0.0042
+    assert logging_obj._response_cost_calculator(result=assembled) == 0.0042
+
+
+def test_get_assembled_streaming_response_without_usage_cost_leaves_pricing_to_the_price_map():
+    logging_obj = _responses_stream_logging_obj()
+    now = datetime.datetime.now()
+
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=_completed_responses_event(ResponseAPIUsage(input_tokens=12, output_tokens=2, total_tokens=14)),
+        start_time=now,
+        end_time=now,
+        is_async=True,
+        streaming_chunks=[],
+    )
+
+    assert "additional_headers" not in assembled._hidden_params
+    price_map_cost = logging_obj._response_cost_calculator(result=assembled)
+    assert price_map_cost is not None and 0 < price_map_cost != 0.0042
