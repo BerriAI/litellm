@@ -2,13 +2,14 @@
 
 import type { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import { ScrollText } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 
+import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { DataTable, DataTableFilterDrawer, DataTableToolbar } from "@/components/shared/DataTable";
 
 import type { Team } from "../key_team_helpers/key_list";
 import type { LogEntry } from "./columns";
-import { LOG_FILTER_LABELS, type LogsWindow } from "./log_filter_logic";
+import { LOG_FILTER_IDS, LOG_FILTER_LABELS, type LogsWindow } from "./log_filter_logic";
 import { RequestLogsFilters } from "./RequestLogsFilters";
 import { getRequestLogsTableColumns } from "./RequestLogsTableColumns";
 
@@ -73,12 +74,25 @@ export function RequestLogsTable({
 }: RequestLogsTableProps) {
   const [filtersOpen, setFiltersOpen] = useState(false);
 
+  const { data: projects } = useProjects();
+
   const columns = useMemo(() => {
     const deps = { onKeyHashClick, onSessionClick };
     return getRequestLogsTableColumns(deps);
   }, [onKeyHashClick, onSessionClick]);
 
   const isFiltered = columnFilters.length > 0 || searchValue !== "";
+
+  const formatFilterValue = useCallback(
+    (columnId: string, value: unknown): string => {
+      const raw = String(value);
+      if (columnId === LOG_FILTER_IDS.PROJECT_ID) {
+        return projects?.find((project) => project.project_id === raw)?.project_alias || raw;
+      }
+      return raw;
+    },
+    [projects],
+  );
 
   return (
     <DataTable
@@ -112,6 +126,7 @@ export function RequestLogsTable({
             isRefreshing={isRefreshing}
             onOpenFilters={() => setFiltersOpen(true)}
             filterLabels={LOG_FILTER_LABELS}
+            formatFilterValue={formatFilterValue}
             showViewOptions={false}
           >
             {toolbarChildren}
