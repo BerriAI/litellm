@@ -4300,7 +4300,7 @@ def _construct_custom_logger_compatible_class(
     custom_logger_init_args: dict | None = None,  # mutable-ok: callback constructor API
 ) -> CustomLogger | None:
     try:
-        resolved_custom_logger_init_args: Final[dict] = (  # mutable-ok: callback constructor API
+        custom_logger_init_args = (  # rebind-ok: callback constructors require normalized kwargs
             custom_logger_init_args or {}
         )
         if logging_integration == "agentops":  # Add AgentOps initialization
