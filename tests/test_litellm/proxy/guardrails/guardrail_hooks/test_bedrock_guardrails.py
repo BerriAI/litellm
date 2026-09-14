@@ -2474,6 +2474,122 @@ def test_grounding_output_keeps_legacy_payload_without_tags():
     assert actual_request == expected_request
 
 
+def test_grounding_output_derives_source_and_query_from_plain_messages():
+    """Untagged string system + user messages become grounding_source + query, so a
+    guardrail with a grounding threshold actually grades the response."""
+    messages = [
+        {"role": "system", "content": _GROUNDING_SOURCE_TEXT},
+        {"role": "user", "content": _GROUNDING_QUERY_TEXT},
+    ]
+    expected_request = {
+        "source": "OUTPUT",
+        "content": [_GROUNDING_SOURCE_BLOCK, _QUERY_BLOCK, _GUARD_BLOCK],
+    }
+
+    actual_request = _output_request(messages, _model_response(_GROUNDING_RESPONSE_TEXT))
+
+    assert actual_request == expected_request
+
+
+def test_grounding_output_derived_query_is_latest_user_turn_only():
+    """In a multi-turn chat only the latest user message is the query; earlier user
+    turns and assistant turns are not sent as query or source. Developer messages
+    count as source alongside system."""
+    developer_text = "Answer in one sentence."
+    messages = [
+        {"role": "system", "content": _GROUNDING_SOURCE_TEXT},
+        {"role": "developer", "content": [{"type": "text", "text": developer_text}]},
+        {"role": "user", "content": "Hi"},
+        {"role": "assistant", "content": "Hello, how can I help?"},
+        {"role": "user", "content": _GROUNDING_QUERY_TEXT},
+    ]
+    expected_request = {
+        "source": "OUTPUT",
+        "content": [
+            _GROUNDING_SOURCE_BLOCK,
+            {"text": {"text": developer_text, "qualifiers": ["grounding_source"]}},
+            _QUERY_BLOCK,
+            _GUARD_BLOCK,
+        ],
+    }
+
+    actual_request = _output_request(messages, _model_response(_GROUNDING_RESPONSE_TEXT))
+
+    assert actual_request == expected_request
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param([{"role": "system", "content": _GROUNDING_SOURCE_TEXT}], id="system-without-user"),
+        pytest.param(
+            [
+                {"role": "tool", "content": _GROUNDING_SOURCE_TEXT, "tool_call_id": "c1"},
+                {"role": "user", "content": _GROUNDING_QUERY_TEXT},
+            ],
+            id="tool-result-is-not-a-source",
+        ),
+        pytest.param(
+            [
+                {"role": "system", "content": ""},
+                {"role": "user", "content": _GROUNDING_QUERY_TEXT},
+            ],
+            id="empty-system-prompt",
+        ),
+        pytest.param(
+            [
+                {"role": "system", "content": _GROUNDING_SOURCE_TEXT},
+                {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://x.test/a.png"}}]},
+            ],
+            id="image-only-user-turn",
+        ),
+    ],
+)
+def test_grounding_output_stays_legacy_when_plain_source_or_query_is_missing(messages):
+    """Bedrock rejects a grounding_source without a query (and vice versa), so a
+    request that cannot supply both from trusted roles keeps the untagged payload."""
+    expected_request = {"source": "OUTPUT", "content": [{"text": {"text": _GROUNDING_RESPONSE_TEXT}}]}
+
+    actual_request = _output_request(messages, _model_response(_GROUNDING_RESPONSE_TEXT))
+
+    assert actual_request == expected_request
+
+
+def test_grounding_output_explicit_tags_take_precedence_over_plain_messages():
+    """A caller that tags blocks keeps full control: untagged system text is not
+    added as a second source and the untagged user text is not a second query."""
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        *_grounding_messages(),
+        {"role": "user", "content": "Please be brief."},
+    ]
+    expected_request = {
+        "source": "OUTPUT",
+        "content": [_GROUNDING_SOURCE_BLOCK, _QUERY_BLOCK, _GUARD_BLOCK],
+    }
+
+    actual_request = _output_request(messages, _model_response(_GROUNDING_RESPONSE_TEXT))
+
+    assert actual_request == expected_request
+
+
+def test_grounding_input_ignores_plain_message_derivation():
+    """Derivation is OUTPUT-only: an INPUT scan of plain system + user text stays an
+    untagged payload, so input policies keep scanning every block."""
+    messages = [
+        {"role": "system", "content": _GROUNDING_SOURCE_TEXT},
+        {"role": "user", "content": _GROUNDING_QUERY_TEXT},
+    ]
+    expected_request = {
+        "source": "INPUT",
+        "content": [{"text": {"text": _GROUNDING_SOURCE_TEXT}}, {"text": {"text": _GROUNDING_QUERY_TEXT}}],
+    }
+
+    actual_request = _input_request(messages)
+
+    assert actual_request == expected_request
+
+
 def test_grounding_output_combines_multiple_sources():
     """Every grounding_source block is emitted; Bedrock combines them into one corpus."""
     uk_source_text = "London is the capital of UK."
@@ -2595,6 +2711,44 @@ async def test_grounding_output_blocked_raises_400():
             )
 
     assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_response_forwards_request_messages_for_grounding():
+    """/guardrails/apply_guardrail with input_type=response: the request messages
+    stored in request_data must reach the OUTPUT payload as grounding_source + query
+    around the guarded text. Before LIT-4224 the response branch dropped them, so
+    Bedrock never ran its contextual-grounding policy on this route."""
+    guardrail = _grounding_guardrail()
+    request_messages = [
+        {"role": "system", "content": _GROUNDING_SOURCE_TEXT},
+        {"role": "user", "content": _GROUNDING_QUERY_TEXT},
+    ]
+    expected_request = {
+        "source": "OUTPUT",
+        "content": [_GROUNDING_SOURCE_BLOCK, _QUERY_BLOCK, _GUARD_BLOCK],
+    }
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()) as mock_prepare,
+    ):
+        mock_post.return_value = _passing_bedrock_httpx_response(_GROUNDING_RESPONSE_TEXT)
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": [_GROUNDING_RESPONSE_TEXT]},
+            request_data={"messages": request_messages},
+            input_type="response",
+        )
+
+    assert mock_prepare.call_count == 1
+    assert json.loads(json.dumps(mock_prepare.call_args.kwargs["data"])) == expected_request
 
 
 ###############################################################################
