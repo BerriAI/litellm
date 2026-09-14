@@ -173,3 +173,27 @@ def test_load_openapi_spec_url_yaml_fallback(
 
     spec = gen.load_openapi_spec(url)
     assert spec["info"]["title"] == "Firefly"
+
+
+def test_load_openapi_spec_url_plain_text_body_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 200 body that is neither JSON nor a YAML mapping must raise, not return a string."""
+    url = "https://example.local/openapi.json"
+
+    req = httpx.Request("GET", url)
+    resp = httpx.Response(
+        status_code=200,
+        content=b"secret invalid JSON body",
+        headers={"content-type": "text/plain"},
+        request=req,
+    )
+
+    def fake_get_async_httpx_client(*args, **kwargs):
+        return _FakeAsyncHTTPHandler(resp, expected_url=url)
+
+    monkeypatch.setattr(gen, "get_async_httpx_client", fake_get_async_httpx_client)
+    monkeypatch.setattr(gen, "async_safe_get", lambda client, url, **kw: client.get(url))
+
+    with pytest.raises(ValueError, match="Expecting value"):
+        gen.load_openapi_spec(url)
