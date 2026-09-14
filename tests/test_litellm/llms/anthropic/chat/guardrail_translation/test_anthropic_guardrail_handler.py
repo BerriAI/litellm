@@ -1432,12 +1432,13 @@ class TestAnthropicMessagesHandlerInputProcessing:
         tool_search_tool_regex_20251119 were being converted to OpenAI format and then
         not properly converted back, causing API errors.
 
-        The guardrail converts tools to OpenAI format for processing, then they need to be
-        converted back to Anthropic format. Native Anthropic tools should be preserved as-is,
-        while regular tools should be converted to type="custom".
+        The guardrail converts tools to OpenAI format for processing, then a guardrail that
+        rewrites them (returns a new list) needs them converted back to Anthropic format.
+        Native Anthropic tools should be preserved as-is, while regular tools should be
+        converted to type="custom".
         """
         handler = AnthropicMessagesHandler()
-        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+        guardrail = ToolRewritingGuardrail(guardrail_name="test")
 
         data = {
             "model": "claude-opus-4-6",
@@ -1485,6 +1486,97 @@ class TestAnthropicMessagesHandlerInputProcessing:
         assert tools[1]["name"] == "get_weather"
         assert tools[1]["description"] == "Get the weather at a specific location"
         assert "input_schema" in tools[1]
+
+
+class ToolRewritingGuardrail(CustomGuardrail):
+    """Returns a new `tools` list, which is how a guardrail signals that it rewrote tool schemas."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        rewritten = inputs.copy()
+        rewritten["tools"] = list(inputs.get("tools") or [])
+        return rewritten
+
+
+class ToolDescriptionMaskingGuardrail(CustomGuardrail):
+    """Masks a secret out of every tool description, returning a new `tools` list."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        masked = inputs.copy()
+        masked["tools"] = [
+            {
+                **tool,
+                "function": {
+                    **tool["function"],
+                    "description": str(tool["function"].get("description", "")).replace("sk-live-123", "[MASKED]"),
+                },
+            }
+            for tool in inputs.get("tools") or []
+        ]
+        return masked
+
+
+class TestAnthropicMessagesHandlerUnmodifiedTools:
+    """Claude Code CLI sends Anthropic-native tools with no `type` key. A guardrail that hands
+    `tools` back untouched must not trigger the OpenAI-to-Anthropic re-serialization, because that
+    stamps type:"custom" and strict Anthropic-compat upstreams (DeepSeek) reject that variant with
+    `tools[0]: unknown variant 'custom'`."""
+
+    @staticmethod
+    def _client_tools() -> list:
+        return [
+            {
+                "name": "Bash",
+                "description": "Run a shell command, token sk-live-123",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"command": {"type": "string"}},
+                    "required": ["command"],
+                },
+            }
+        ]
+
+    def _data(self) -> dict:
+        return {
+            "model": "deepseek-v4-flash",
+            "max_tokens": 128,
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "list /tmp"}]}],
+            "tools": self._client_tools(),
+        }
+
+    @pytest.mark.asyncio
+    async def test_tools_reach_upstream_verbatim_when_guardrail_leaves_them_alone(self):
+        data = self._data()
+
+        result = await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockPassThroughGuardrail(guardrail_name="test")
+        )
+
+        assert result["tools"] == self._client_tools()
+        assert "type" not in result["tools"][0]
+
+    @pytest.mark.asyncio
+    async def test_tools_are_rewritten_when_guardrail_returns_a_new_list(self):
+        data = self._data()
+
+        result = await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=ToolDescriptionMaskingGuardrail(guardrail_name="test")
+        )
+
+        assert [tool["name"] for tool in result["tools"]] == ["Bash"]
+        assert result["tools"][0]["description"] == "Run a shell command, token [MASKED]"
+        assert "sk-live-123" not in json.dumps(result["tools"])
 
 
 class ToolAppendingGuardrail(CustomGuardrail):
