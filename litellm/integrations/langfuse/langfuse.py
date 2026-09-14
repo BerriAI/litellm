@@ -210,6 +210,14 @@ def _coerce_propagated_value(value: object) -> str | Sequence[str]:
     return str(value)[:_PROPAGATED_VALUE_MAX_CHARS]
 
 
+def _propagated_trace_metadata(value: object) -> Mapping[str, str] | None:
+    """v2's ``trace(metadata=...)`` took any JSON; v4 propagates one flat string per key."""
+    entries: Final = _object_mapping(value)
+    if not entries:
+        return None
+    return MappingProxyType({str(key): str(item)[:_PROPAGATED_VALUE_MAX_CHARS] for key, item in entries.items()})
+
+
 def _trace_attributes_for_propagation(trace_params: Mapping[str, object]) -> Mapping[str, object]:
     """Trace-level fields in v4 are propagated onto the observations, not set on a trace object.
 
@@ -217,11 +225,15 @@ def _trace_attributes_for_propagation(trace_params: Mapping[str, object]) -> Map
     warning, and a dropped ``version`` would vanish from the generation too,
     because ``_generation_attributes`` already stripped it as propagated.
     """
+    trace_metadata: Final = _propagated_trace_metadata(trace_params.get("metadata"))
     return MappingProxyType(
         {
-            propagated: _coerce_propagated_value(trace_params[key])
-            for key, propagated in _PROPAGATED_TRACE_KEYS.items()
-            if trace_params.get(key) is not None
+            **{
+                propagated: _coerce_propagated_value(trace_params[key])
+                for key, propagated in _PROPAGATED_TRACE_KEYS.items()
+                if trace_params.get(key) is not None
+            },
+            **({"metadata": trace_metadata} if trace_metadata is not None else {}),
         }
     )
 
