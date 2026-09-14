@@ -6,6 +6,7 @@ import sys
 from datetime import datetime
 from logging import Formatter
 from typing import Any, Final, TextIO
+from urllib.parse import unquote
 
 import litellm
 from litellm.constants import (
@@ -16,7 +17,11 @@ from litellm.constants import (
 from litellm.litellm_core_utils.env_utils import get_env_int
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.litellm_core_utils.secret_redaction import redact_string, redact_structured_value
+from litellm.litellm_core_utils.secret_redaction import (
+    redact_internal_details,
+    redact_string,
+    redact_structured_value,
+)
 
 set_verbose = False
 
@@ -88,6 +93,14 @@ def redact_secrets(value: str) -> str:
     return _redact_string(value)
 
 
+def redact_internal_details_from_client_message(value: str) -> str:
+    """Public API: redact_secrets() plus filesystem paths, internal hostnames, and an
+    embedded traceback, for a string about to leave the process in an HTTP response."""
+    if not _ENABLE_SECRET_REDACTION:
+        return value
+    return redact_internal_details(value)
+
+
 def _substituted_color_message(record: logging.LogRecord) -> str | None:
     """Render a record's ``color_message`` against its args, or None if absent.
 
@@ -144,6 +157,72 @@ class SecretRedactionFilter(logging.Filter):
 
 
 _secret_filter: Final = SecretRedactionFilter()
+
+
+_MAX_SCRUBBED_ACCESS_ARG: Final = 512
+
+_REDACTION_PLACEHOLDER: Final = "REDACTED"
+
+
+def _hides_a_credential(value: str) -> bool:
+    """Whether *value* only looks clean until it is percent-decoded."""
+    decoded: Final = unquote(value)
+    return _redact_string(decoded) != decoded
+
+
+def _drop_encoded_credential(scrubbed: str) -> str:
+    """Drop the part of a request target that only decoding shows to be a secret.
+
+    The request parser decodes query names and values, so `?k%65y=sk%2D...` is a
+    working credential that the patterns, which match literal text, do not see.
+    The decoded text is never logged back: it can carry a newline, and forging
+    log lines is not a trade worth making for a readable request target.
+    """
+    path, separator, _query = scrubbed.partition("?")
+    if _hides_a_credential(path):
+        return _REDACTION_PLACEHOLDER
+    if separator and _hides_a_credential(scrubbed):
+        return f"{path}?{_REDACTION_PLACEHOLDER}"
+    return scrubbed
+
+
+def _scrub_access_arg(value: str) -> str:
+    """Redact one access-log positional arg, bounding the scanned length.
+
+    The request target is the only input to the secret regex an unauthenticated
+    caller controls end to end, so it is cut back to a whole query parameter
+    before it is scanned; a half-parameter would be too short to match its
+    pattern and would then be logged raw.
+    """
+    if len(value) <= _MAX_SCRUBBED_ACCESS_ARG:
+        return _drop_encoded_credential(_redact_string(value))
+    head: Final = value[:_MAX_SCRUBBED_ACCESS_ARG]
+    kept: Final = head[: max(head.rfind("?"), head.rfind("&"))] if "?" in head else head
+    scrubbed: Final = _drop_encoded_credential(_redact_string(kept))
+    return f"{scrubbed}... ({len(value) - len(kept)} more chars truncated) ..."
+
+
+class AccessLogRedactionFilter(logging.Filter):
+    """Scrubs known secret/credential patterns from HTTP access-log records.
+
+    uvicorn's AccessFormatter unpacks ``record.args`` as a five-element tuple at
+    emit time, so SecretRedactionFilter cannot be reused here: it collapses the
+    record into ``record.msg`` and clears the args, and the formatter then raises.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not _ENABLE_SECRET_REDACTION:
+            return True
+        if isinstance(record.args, tuple) and record.args:
+            record.args = tuple(  # rebind-ok: a Filter scrubs records in place
+                _scrub_access_arg(arg) if isinstance(arg, str) else arg for arg in record.args
+            )
+            return True
+        # No positional args means everything is in msg, where collapsing is correct.
+        return _secret_filter.filter(record)
+
+
+_access_log_filter: Final = AccessLogRedactionFilter()
 
 
 def _get_max_string_length_stdout_log() -> int:
@@ -553,6 +632,14 @@ _REDACTED_THIRD_PARTY_LOGGERS: Final[tuple[str, ...]] = (
     "uvicorn.error",
 )
 
+# Access loggers, which emit the full request target, so a credential passed as a
+# query parameter (e.g. `/key/info?key=`) lands on stdout verbatim. uvicorn.access
+# covers uvicorn.run, --run_gunicorn (its worker_class is UvicornWorker, so the
+# access line is still uvicorn's) and an embedding host app. --run_hypercorn and
+# --run_granian log through their own loggers in their own record shapes, and
+# both ship with access logging off.
+_REDACTED_ACCESS_LOGGERS: Final[tuple[str, ...]] = ("uvicorn.access",)
+
 
 def _redact_third_party_loggers() -> None:
     """Extend secret redaction to records litellm does not emit directly.
@@ -575,6 +662,8 @@ def _redact_third_party_loggers() -> None:
     """
     for name in _REDACTED_THIRD_PARTY_LOGGERS:
         logging.getLogger(name).addFilter(_secret_filter)
+    for name in _REDACTED_ACCESS_LOGGERS:
+        logging.getLogger(name).addFilter(_access_log_filter)
 
 
 # Call the suppression function

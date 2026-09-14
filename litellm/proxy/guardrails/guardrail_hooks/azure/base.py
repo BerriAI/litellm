@@ -45,7 +45,7 @@ class AzureGuardrailBase:
         self.api_base = api_base
         self.api_version: str = kwargs.get("api_version") or "2024-09-01"
 
-    async def _post_to_content_safety(self, endpoint_path: str, request_body: dict[str, Any]) -> dict[str, Any]:
+    async def _post_to_content_safety(self, endpoint_path: str, request_body: dict[str, object]) -> dict[str, Any]:
         """POST to an Azure Content Safety endpoint with standard auth headers.
 
         Args:
@@ -94,7 +94,7 @@ class AzureGuardrailBase:
         # Tokenize into alternating non-whitespace and whitespace runs so
         # that original newlines, tabs, and multiple spaces are preserved
         # within each chunk.
-        tokens: Final = re.findall(r"\S+|\s+", text)
+        tokens: Final = [match.group(0) for match in re.finditer(r"\S+|\s+", text)]
 
         chunks: Final[list[str]] = []
         current_chunk = ""

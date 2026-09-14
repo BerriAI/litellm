@@ -64,6 +64,9 @@ IGNORE_FUNCTIONS = [
     "_flatten_form_field",  # bounded by the nesting depth of the already-parsed request body (a finite JSON tree, no cycles possible).
     "_flatten_form_data_field",  # bounded by the nesting depth of the already-parsed request body (a finite JSON tree, no cycles possible).
     "_json_safe",  # max depth set (_MAX_DEPTH) plus a seen-ids cycle guard for self-referential input.
+    "_redact_agent_params_tree",  # max depth set (default 10), same shape as _redact_sensitive_litellm_params.
+    "_restore_redacted_nested_value",  # max depth set (default 10), mirrors _redact_agent_params_tree on the write side.
+    "_unqualified",  # bounded by the qualifier depth of a static TypedDict annotation (Annotated, Required/NotRequired, ReadOnly around one type, no cycles possible).
 ]
 
 
