@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -107,7 +107,7 @@ class BulkNewUserItem(NewUserRequest):
 class BulkNewUserRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    users: tuple[BulkNewUserItem, ...] = Field(min_length=1, max_length=MAX_BULK_NEW_USERS)
+    users: Sequence[BulkNewUserItem] = Field(min_length=1, max_length=MAX_BULK_NEW_USERS)
 
 
 class UserCreateResult(BaseModel):
