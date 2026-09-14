@@ -162,14 +162,13 @@ def get_team_models(
             if include_model_access_groups:
                 all_models_set.update(model_access_groups.keys())
         if SpecialModelNames.all_proxy_models.value in all_models_set:
-            all_models_set.discard(SpecialModelNames.all_proxy_models.value)
             all_models_set.update(proxy_model_list)
             if include_model_access_groups:
                 all_models_set.update(model_access_groups.keys())
 
     all_models = _get_models_from_access_groups(
         model_access_groups=model_access_groups,
-        all_models=list(all_models_set),
+        all_models=list(all_models_set - {SpecialModelNames.all_proxy_models.value}),
         include_model_access_groups=include_model_access_groups,
         proxy_model_list=proxy_model_list,
     )
