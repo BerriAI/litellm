@@ -2197,7 +2197,6 @@ async def _fetch_team_membership_from_db(
     parent_otel_span: Span | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
 ) -> LiteLLM_TeamMembership | None:
-    """Prisma read + cache populate. Decorated so cache hits on ``get_team_membership`` are not postgres spans."""
     _ = parent_otel_span, proxy_logging_obj
     response: Final = await _dictable_table(TeamMembershipRepository(prisma_client)).find_unique(
         where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
