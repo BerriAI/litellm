@@ -14,9 +14,11 @@ from .image_generation.transformation import BytePlusImageGenerationConfig
 from .responses.transformation import BytePlusResponsesAPIConfig
 from .text_to_speech.transformation import BytePlusTextToSpeechConfig
 
-BytePlusConfig = BytePlusChatConfig
+from typing import Final
 
-__all__ = [
+BytePlusConfig: Final = BytePlusChatConfig
+
+__all__ = (
     "BytePlusChatConfig",
     "BytePlusConfig",
     "BytePlusEmbeddingConfig",
@@ -26,4 +28,4 @@ __all__ = [
     "BytePlusTextToSpeechConfig",
     "get_byteplus_base_url",
     "get_byteplus_headers",
-]
+)

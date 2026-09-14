@@ -1,3 +1,5 @@
+from typing import Final
+
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 
 
@@ -6,43 +8,14 @@ class BytePlusChatConfig(OpenAILikeChatConfig):
     Reference: https://docs.byteplus.com/en/docs/ModelArk
     """
 
-    frequency_penalty: int | None = None
-    function_call: str | dict | None = None
-    functions: list | None = None
-    logit_bias: dict | None = None
-    max_tokens: int | None = None
-    n: int | None = None
-    presence_penalty: int | None = None
-    stop: str | list | None = None
-    temperature: int | None = None
-    top_p: int | None = None
-    response_format: dict | None = None
-
-    def __init__(
-        self,
-        frequency_penalty: int | None = None,
-        function_call: str | dict | None = None,
-        functions: list | None = None,
-        logit_bias: dict | None = None,
-        max_tokens: int | None = None,
-        n: int | None = None,
-        presence_penalty: int | None = None,
-        stop: str | list | None = None,
-        temperature: int | None = None,
-        top_p: int | None = None,
-        response_format: dict | None = None,
-    ) -> None:
-        locals_ = locals().copy()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
-
     @classmethod
     def get_config(cls) -> "BytePlusChatConfig":
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> list:
-        return [
+    def get_supported_openai_params(
+        self, model: str
+    ) -> list:  # mutable-ok: matches BaseConfig interface
+        return [  # mutable-ok: matches BaseConfig interface
             "frequency_penalty",
             "logit_bias",
             "logprobs",
@@ -68,13 +41,13 @@ class BytePlusChatConfig(OpenAILikeChatConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict,  # mutable-ok: matches BaseConfig interface
+        optional_params: dict,  # mutable-ok: matches BaseConfig interface
         model: str,
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = True,
-    ) -> dict:
-        mapped_params = super().map_openai_params(
+    ) -> dict:  # mutable-ok: matches BaseConfig interface
+        mapped_params: Final = super().map_openai_params(
             non_default_params,
             optional_params,
             model,
@@ -83,11 +56,12 @@ class BytePlusChatConfig(OpenAILikeChatConfig):
         )
 
         if "thinking" in mapped_params:
-            thinking_val = mapped_params.pop("thinking", None)
+            thinking_val: Final = mapped_params.pop("thinking", None)
             if thinking_val is not None:
                 if isinstance(thinking_val, bool):
-                    mapped_params["extra_body"] = {"thinking": {"type": "enabled" if thinking_val else "disabled"}}
+                    mapped_params["extra_body"] = {"thinking": {"type": "enabled" if thinking_val else "disabled"}}  # mutable-ok: extra_body payload dict
                 elif isinstance(thinking_val, dict):
-                    mapped_params["extra_body"] = {"thinking": thinking_val}
+                    mapped_params["extra_body"] = {"thinking": thinking_val}  # mutable-ok: extra_body payload dict
 
         return mapped_params
+

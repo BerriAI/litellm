@@ -7016,7 +7016,7 @@ def embedding(
             if extra_headers is not None and isinstance(extra_headers, dict):
                 headers = extra_headers  # rebind-ok: same pattern as volcengine block above
             else:
-                headers = {}  # rebind-ok: same pattern as volcengine block above
+                headers = {}  # mutable-ok: default empty dict # rebind-ok: conditional headers assignment
             response = base_llm_http_handler.embedding(  # rebind-ok: same pattern as volcengine block above
                 model=model,
                 input=input,
@@ -7025,7 +7025,7 @@ def embedding(
                 logging_obj=logging,
                 api_base=api_base,
                 optional_params=optional_params,
-                litellm_params={},
+                litellm_params={},  # mutable-ok: empty dict parameter for handler
                 model_response=EmbeddingResponse(),
                 api_key=byteplus_key,
                 client=client,

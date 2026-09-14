@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Final
 
 import httpx
@@ -20,21 +22,31 @@ class BytePlusResponsesAPIConfig(VolcEngineResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.BYTEPLUS
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BytePlusError:
-        typed_headers: httpx.Headers = headers if isinstance(headers, httpx.Headers) else httpx.Headers(headers or {})
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict | httpx.Headers  # mutable-ok: matches BaseResponsesAPIConfig interface
+    ) -> BytePlusError:
+        typed_headers: Final[httpx.Headers] = (
+            headers if isinstance(headers, httpx.Headers) else httpx.Headers(headers)
+        )
         return BytePlusError(
             status_code=status_code,
             message=error_message,
             headers=typed_headers,
         )
 
-    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
-        api_key_from_params: str | None = None
-        if litellm_params is not None:
-            if isinstance(litellm_params, dict):
-                api_key_from_params = litellm_params.get("api_key")
-            elif hasattr(litellm_params, "api_key"):
-                api_key_from_params = getattr(litellm_params, "api_key", None)
+    def validate_environment(
+        self,
+        headers: dict,  # mutable-ok: matches BaseResponsesAPIConfig interface
+        model: str,
+        litellm_params: GenericLiteLLMParams | None,
+    ) -> dict:  # mutable-ok: matches BaseResponsesAPIConfig interface
+        api_key_from_params: Final[str | None] = (
+            litellm_params.get("api_key")
+            if isinstance(litellm_params, dict)
+            else getattr(litellm_params, "api_key", None)
+            if litellm_params is not None
+            else None
+        )
 
         api_key: Final = (
             api_key_from_params
@@ -51,20 +63,19 @@ class BytePlusResponsesAPIConfig(VolcEngineResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict,  # mutable-ok: matches BaseResponsesAPIConfig interface
     ) -> str:
-        base_url = (
+        base_url: Final = (
             api_base
             or litellm.api_base
             or get_secret_str("BYTEPLUS_API_BASE")
             or get_secret_str("ARK_API_BASE")
             or get_byteplus_base_url()
-        )
-
-        base_url = base_url.rstrip("/")
+        ).rstrip("/")
 
         if base_url.endswith("/responses"):
             return base_url
         if base_url.endswith("/api/v3"):
             return f"{base_url}/responses"
         return f"{base_url}/api/v3/responses"
+

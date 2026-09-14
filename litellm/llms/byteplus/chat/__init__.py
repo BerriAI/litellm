@@ -1,3 +1,3 @@
 from .transformation import BytePlusChatConfig
 
-__all__ = ["BytePlusChatConfig"]
+__all__ = ("BytePlusChatConfig",)

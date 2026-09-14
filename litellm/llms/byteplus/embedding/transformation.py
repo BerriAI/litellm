@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import json
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -25,21 +28,14 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
     Reference: https://docs.byteplus.com/en/docs/ModelArk
     """
 
-    def __init__(
-        self,
-        encoding_format: str | None = None,
-    ) -> None:
-        locals_ = locals().copy()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
-
     @classmethod
     def get_config(cls) -> "BytePlusEmbeddingConfig":
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> list[str]:
-        return [
+    def get_supported_openai_params(
+        self, model: str
+    ) -> list[str]:  # mutable-ok: matches BaseEmbeddingConfig interface
+        return [  # mutable-ok: matches BaseEmbeddingConfig interface
             "encoding_format",
             "user",
             "extra_headers",
@@ -53,24 +49,23 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict,  # mutable-ok: matches BaseEmbeddingConfig interface
+        litellm_params: dict,  # mutable-ok: matches BaseEmbeddingConfig interface
         stream: bool | None = None,
     ) -> str:
-        base_url = (
+        base_url: Final = (
             api_base
             or litellm.api_base
             or get_secret_str("BYTEPLUS_API_BASE")
             or get_secret_str("ARK_API_BASE")
             or get_byteplus_base_url()
-        )
-        base_url = base_url.rstrip("/")
+        ).rstrip("/")
 
-        is_multimodal = (
+        is_multimodal: Final = (
             "vision" in model.lower() or "multimodal" in model.lower() or optional_params.get("is_multimodal", False)
         )
 
-        endpoint = "/embeddings/multimodal" if is_multimodal else "/embeddings"
+        endpoint: Final = "/embeddings/multimodal" if is_multimodal else "/embeddings"
 
         if base_url.endswith(endpoint):
             return base_url
@@ -80,48 +75,48 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict,  # mutable-ok: matches BaseEmbeddingConfig interface
+        optional_params: dict,  # mutable-ok: matches BaseEmbeddingConfig interface
         model: str,
         drop_params: bool,
-    ) -> dict:
-        supported = self.get_supported_openai_params(model)
-        optional_params.update({k: v for k, v in non_default_params.items() if k in supported})
+    ) -> dict:  # mutable-ok: matches BaseEmbeddingConfig interface
+        supported: Final = frozenset(self.get_supported_openai_params(model))
+        optional_params.update({k: v for k, v in non_default_params.items() if k in supported})  # mutable-ok: update params dict
         return optional_params
 
     def transform_embedding_request(
         self,
         model: str,
         input: AllEmbeddingInputValues,
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
-        is_multimodal = (
+        optional_params: dict,  # mutable-ok: matches BaseEmbeddingConfig interface
+        headers: dict,  # mutable-ok: matches BaseEmbeddingConfig interface
+    ) -> dict:  # mutable-ok: matches BaseEmbeddingConfig interface
+        is_multimodal: Final = (
             "vision" in model.lower() or "multimodal" in model.lower() or optional_params.get("is_multimodal", False)
         )
 
-        raw_input = input if isinstance(input, list) else [input]
-        formatted_input: list = []
+        raw_input: Final = input if isinstance(input, (list, tuple)) else (input,)
+        formatted_input: Final[list] = []  # mutable-ok: building input list for json payload
         if is_multimodal:
             for item in raw_input:
                 if isinstance(item, str):
-                    formatted_input.append({"type": "text", "text": item})
+                    formatted_input.append({"type": "text", "text": item})  # mutable-ok: payload dict item
                 else:
                     formatted_input.append(item)
         else:
-            formatted_input = list(raw_input)
+            formatted_input.extend(raw_input)
 
-        data: dict = {
+        data: Final[dict[str, object]] = {  # mutable-ok: request body dictionary
             "model": model,
             "input": formatted_input,
         }
 
-        for key in ["encoding_format", "dimensions", "instructions", "sparse_embedding", "user"]:
+        for key in ("encoding_format", "dimensions", "instructions", "sparse_embedding", "user"):
             if key in optional_params and optional_params[key] is not None:
                 data[key] = optional_params[key]
 
         if "extra_body" in optional_params and isinstance(optional_params["extra_body"], dict):
-            extra_body: Final = {k: v for k, v in optional_params["extra_body"].items() if k not in ("model", "input")}
+            extra_body: Final = {k: v for k, v in optional_params["extra_body"].items() if k not in ("model", "input")}  # mutable-ok: extra_body dictionary
             data.update(extra_body)
 
         return data
@@ -133,36 +128,36 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: "LiteLLMLoggingObj",
         api_key: str | None,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: dict,  # mutable-ok: matches BaseEmbeddingConfig interface
+        optional_params: dict,  # mutable-ok: matches BaseEmbeddingConfig interface
+        litellm_params: dict,  # mutable-ok: matches BaseEmbeddingConfig interface
     ) -> EmbeddingResponse:
         try:
-            response_json = raw_response.json()
+            response_json: Final = raw_response.json()
         except (json.JSONDecodeError, ValueError) as e:
             raise ValueError(f"Failed to parse BytePlus response as JSON: {e}")
 
-        data_raw = response_json.get("data", [])
+        data_raw: Final = response_json.get("data", ())
 
         if isinstance(data_raw, dict):
-            embedding_item: dict = {
+            embedding_item: Final[dict[str, object]] = {  # mutable-ok: building embedding response dict
                 "object": data_raw.get("object", "embedding"),
-                "embedding": data_raw.get("embedding", []),
+                "embedding": data_raw.get("embedding", ()),
                 "index": 0,
             }
             if "sparse_embedding" in data_raw:
                 embedding_item["sparse_embedding"] = data_raw["sparse_embedding"]
-            data_list = [embedding_item]
+            data_list: Final = [embedding_item]  # mutable-ok: single item data list
         elif isinstance(data_raw, list):
             data_list = data_raw
         else:
-            data_list = []
+            data_list = []  # mutable-ok: default empty data list
 
-        transformed_response = {
+        transformed_response: Final[dict[str, object]] = {  # mutable-ok: building response dict
             "object": "list",
             "data": data_list,
             "model": response_json.get("model", model),
-            "usage": response_json.get("usage", {}),
+            "usage": response_json.get("usage") or {},  # mutable-ok: default empty usage dict
         }
 
         if "id" in response_json:
@@ -172,14 +167,14 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict,  # mutable-ok: matches BaseEmbeddingConfig interface
         model: str,
-        messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        messages: list[AllMessageValues],  # mutable-ok: matches BaseEmbeddingConfig interface
+        optional_params: dict,  # mutable-ok: matches BaseEmbeddingConfig interface
+        litellm_params: dict,  # mutable-ok: matches BaseEmbeddingConfig interface
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict:  # mutable-ok: matches BaseEmbeddingConfig interface
         resolved_api_key: Final = (
             api_key or litellm.api_key or get_secret_str("BYTEPLUS_API_KEY") or get_secret_str("ARK_API_KEY")
         )
@@ -187,6 +182,11 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
             raise ValueError("BytePlus API key is required. Set BYTEPLUS_API_KEY or ARK_API_KEY or pass api_key.")
         return get_byteplus_headers(api_key=resolved_api_key, extra_headers=headers)
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BytePlusError:
-        typed_headers: httpx.Headers = headers if isinstance(headers, httpx.Headers) else httpx.Headers(headers or {})
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict | httpx.Headers  # mutable-ok: matches BaseEmbeddingConfig interface
+    ) -> BytePlusError:
+        typed_headers: Final[httpx.Headers] = (
+            headers if isinstance(headers, httpx.Headers) else httpx.Headers(headers)
+        )
         return BytePlusError(status_code=status_code, message=error_message, headers=typed_headers)
+
