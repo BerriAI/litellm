@@ -200,5 +200,18 @@
       "temperature_max": 1.99
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "jalapeno": {
+    "base_url": "https://api.jalapeno-cloud.ai/v1",
+    "api_key_env": "JALAPENO_API_KEY",
+    "api_base_env": "JALAPENO_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses",
+      "/v1/messages"
+    ]
   }
 }
