@@ -356,7 +356,7 @@ async def process_spend_logs_guardrail_usage(
             "flagged_count": 0,
         }
     )
-    index_rows: Final[list[dict[str, object]]] = []
+    index_rows_by_key: Final[dict[tuple[object, object], dict[str, object]]] = {}
 
     for payload in logs_to_process:
         request_id = payload.get("request_id")
@@ -389,14 +389,15 @@ async def process_spend_logs_guardrail_usage(
                 else:
                     daily_guardrail[key]["flagged_count"] += 1
             policy_id = entry.get("policy_id")
-            index_rows.append(
-                {
+            prior = index_rows_by_key.get((request_id, guardrail_id))
+            if prior is None or (prior["policy_id"] is None and policy_id is not None):
+                index_rows_by_key[(request_id, guardrail_id)] = {
                     "request_id": request_id,
                     "guardrail_id": guardrail_id,
                     "policy_id": policy_id,
                     "start_time": start_time,
                 }
-            )
+    index_rows: Final = tuple(index_rows_by_key.values())
 
     async with pending.lock:
         pending_metrics: Final = pending.metrics

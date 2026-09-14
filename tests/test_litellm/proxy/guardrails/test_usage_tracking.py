@@ -383,7 +383,12 @@ async def test_not_run_entry_shares_index_key_with_evaluated_sibling_of_same_nam
         {
             "guardrail_information": [
                 {"guardrail_name": "cf", "guardrail_status": "not_run"},
-                {"guardrail_name": "cf", "guardrail_id": "cf-uuid", "guardrail_status": "success"},
+                {
+                    "guardrail_name": "cf",
+                    "guardrail_id": "cf-uuid",
+                    "policy_id": "pol-1",
+                    "guardrail_status": "success",
+                },
                 {"guardrail_name": "other", "guardrail_status": "not_run"},
             ]
         }
@@ -392,7 +397,10 @@ async def test_not_run_entry_shares_index_key_with_evaluated_sibling_of_same_nam
     await process_spend_logs_guardrail_usage(prisma, [payload])
 
     index_rows = prisma.db.litellm_spendlogguardrailindex.create_many.call_args.kwargs["data"]
-    assert sorted(row["guardrail_id"] for row in index_rows) == ["cf-uuid", "cf-uuid", "other"]
+    assert sorted((row["guardrail_id"], row["policy_id"]) for row in index_rows) == [
+        ("cf-uuid", "pol-1"),
+        ("other", None),
+    ]
     metrics_create = prisma.db.litellm_dailyguardrailmetrics.upsert.call_args.kwargs["data"]["create"]
     assert (metrics_create["guardrail_id"], metrics_create["requests_evaluated"]) == ("cf-uuid", 1)
 
