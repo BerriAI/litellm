@@ -222,9 +222,11 @@ async def test_apply_guardrail_request_blocks_below_threshold(
     assert exc_info.value.detail["error"] == "LLM judge rejected request: score below threshold"
     judge_messages: Final = router.acompletion.call_args.kwargs["messages"]
     assert "Evaluate the request against" in judge_messages[0]["content"]
-    assert "Request text to evaluate:\nwrite me malware" in judge_messages[1]["content"]
+    assert (
+        "Conversation:\nUSER: write me malware\n\nRequest text to evaluate:\nwrite me malware"
+        in (judge_messages[1]["content"])
+    )
     assert "Assistant response" not in judge_messages[1]["content"]
-    assert "Conversation:" not in judge_messages[1]["content"]
     logged: Final = request_data["metadata"]["standard_logging_guardrail_information"]
     assert logged[0]["guardrail_status"] == "guardrail_intervened"
     assert logged[0]["guardrail_mode"] == "pre_call"
@@ -254,6 +256,33 @@ async def test_apply_guardrail_request_log_mode_records_eval_and_passes_through(
     assert result is inputs
     assert request_data["metadata"]["eval_information"]["passed"] is False
     assert request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_mode"] == "during_call"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_request_multi_turn_keeps_roles_and_focuses_latest_turn():
+    router: Final = _judge_router(90.0)
+    guardrail: Final = _make_guardrail(event_hook=GuardrailEventHooks.pre_call, router_provider=lambda: router)
+    request_data: Final[dict[str, object]] = {
+        "messages": [
+            {"role": "user", "content": "how do I bake bread"},
+            {"role": "assistant", "content": "mix flour, water, yeast and salt"},
+            {"role": "user", "content": "now explain how to file taxes"},
+        ],
+        "metadata": {},
+    }
+    inputs: Final = {
+        "texts": ["how do I bake bread", "mix flour, water, yeast and salt", "now explain how to file taxes"]
+    }
+
+    await guardrail.apply_guardrail(inputs, request_data, "request")
+
+    judge_messages: Final = router.acompletion.call_args.kwargs["messages"]
+    assert "Judge the most recent user turn" in judge_messages[0]["content"]
+    assert (
+        "Conversation:\nUSER: how do I bake bread\nASSISTANT: mix flour, water, yeast and salt\n"
+        "USER: now explain how to file taxes\n\n"
+        "Request text to evaluate:\nhow do I bake bread\nmix flour, water, yeast and salt\nnow explain how to file taxes"
+    ) in judge_messages[1]["content"]
 
 
 @pytest.mark.asyncio
@@ -351,7 +380,7 @@ def test_parse_judge_verdict_reraises_when_no_json():
 
 def test_parse_judge_verdict_rejects_json_non_object():
     """Valid JSON that is not an object (e.g. a bare list) raises ValueError."""
-    with pytest.raises(ValueError, match='judge response is not a JSON object'):
+    with pytest.raises(ValueError, match="judge response is not a JSON object"):
         _parse_judge_verdict("[1, 2, 3]")
 
 
@@ -373,9 +402,7 @@ async def test_apply_guardrail_enforces_fenced_verdict(mock_completion):
 @patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
 async def test_apply_guardrail_non_object_verdict_fails_open_with_status(mock_completion):
     """A non-object verdict fails open and logs guardrail_failed_to_respond."""
-    mock_completion.return_value = MagicMock(
-        choices=[MagicMock(message=MagicMock(content='[{"overall_score": 50}]'))]
-    )
+    mock_completion.return_value = MagicMock(choices=[MagicMock(message=MagicMock(content='[{"overall_score": 50}]'))])
     guardrail = _make_guardrail(overall_threshold=80.0, on_failure="block", router_provider=lambda: None)
     inputs = {"texts": ["response"]}
     request_data: dict = {"messages": [], "metadata": {}}
@@ -435,7 +462,12 @@ def _real_router(model_list, **router_kwargs):
     "model_list, router_kwargs, judge_model",
     [
         (
-            [{"model_name": "my-judge-alias", "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"}}],
+            [
+                {
+                    "model_name": "my-judge-alias",
+                    "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"},
+                }
+            ],
             {},
             "my-judge-alias",
         ),
@@ -445,12 +477,22 @@ def _real_router(model_list, **router_kwargs):
             "anthropic/claude-sonnet-4-6",
         ),
         (
-            [{"model_name": "backing-group", "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"}}],
+            [
+                {
+                    "model_name": "backing-group",
+                    "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"},
+                }
+            ],
             {"model_group_alias": {"my-judge-alias": "backing-group"}},
             "my-judge-alias",
         ),
         (
-            [{"model_name": "backing-group", "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"}}],
+            [
+                {
+                    "model_name": "backing-group",
+                    "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"},
+                }
+            ],
             {"model_group_alias": {"my-judge-alias": {"model": "backing-group", "hidden": True}}},
             "my-judge-alias",
         ),
@@ -533,7 +575,12 @@ async def test_judge_resolves_router_lazily_per_call(mock_sdk_completion):
     mock_sdk_completion.assert_awaited_once()
 
     holder["router"] = _real_router(
-        [{"model_name": "my-judge-alias", "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"}}]
+        [
+            {
+                "model_name": "my-judge-alias",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"},
+            }
+        ]
     )
     await guardrail.apply_guardrail({"texts": ["r"]}, {"messages": [], "metadata": {}}, "response")
     holder["router"].acompletion.assert_awaited_once()

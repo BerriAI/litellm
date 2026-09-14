@@ -32,7 +32,7 @@ JudgeEventHook = GuardrailEventHooks | list[GuardrailEventHooks] | Mode
 JudgeModeParam = str | list[str] | Mode | GuardrailEventHooks | list[GuardrailEventHooks] | None
 
 _JUDGE_SYSTEM_PROMPT_TEMPLATE: Final = """You are a quality judge. Evaluate the {subject} against the criteria provided.
-For each criterion, assign a score from 0 to 100 and provide concise reasoning.
+{focus}For each criterion, assign a score from 0 to 100 and provide concise reasoning.
 Return ONLY valid JSON in this exact format:
 {{
   "verdicts": [
@@ -43,8 +43,11 @@ Return ONLY valid JSON in this exact format:
 
 JUDGE_SYSTEM_PROMPTS: Final[MappingProxyType[JudgeInputType, str]] = MappingProxyType(
     {
-        "request": _JUDGE_SYSTEM_PROMPT_TEMPLATE.format(subject="request"),
-        "response": _JUDGE_SYSTEM_PROMPT_TEMPLATE.format(subject="assistant's response"),
+        "request": _JUDGE_SYSTEM_PROMPT_TEMPLATE.format(
+            subject="request",
+            focus="Judge the most recent user turn; treat earlier turns in the conversation only as context.\n",
+        ),
+        "response": _JUDGE_SYSTEM_PROMPT_TEMPLATE.format(subject="assistant's response", focus=""),
     }
 )
 
@@ -126,7 +129,7 @@ def _build_judge_prompt(
         for m in messages
         if m.get("content") is not None
     )
-    conversation_block: Final = f"Conversation:\n{conversation}\n\n" if input_type == "response" else ""
+    conversation_block: Final = f"Conversation:\n{conversation}\n\n" if conversation or input_type == "response" else ""
     return (
         f"Criteria to evaluate:\n{criteria_block}\n\n"
         f"{conversation_block}"
@@ -197,7 +200,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
         texts: Final = inputs.get("texts") or []
-        text_under_review: Final = " ".join(texts)
+        text_under_review: Final = "\n".join(texts)
         if not text_under_review:
             return inputs
 
