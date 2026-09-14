@@ -415,7 +415,6 @@ def _bridge_kwargs(
     responses_api_provider_config: BaseResponsesAPIConfig | None,
     allowed_openai_params: Sequence[str] | None,
 ) -> Mapping[str, object]:
-    """Drop the provider-specific kwargs a native Responses dispatch would never forward, unless explicitly allowed."""
     if responses_api_provider_config is None:
         return kwargs
     forwarded_keys: Final = frozenset(
