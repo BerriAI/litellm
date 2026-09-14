@@ -12,11 +12,12 @@ from typing import (
     Final,
 )
 
-import litellm
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-from litellm.llms.opencode.common_utils import with_opencode_session_header
-from litellm.secret_managers.main import get_secret_str
-from litellm.types.responses.main import *
+from litellm.llms.opencode.common_utils import (
+    resolve_opencode_api_base,
+    resolve_opencode_api_key,
+    with_opencode_session_header,
+)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
@@ -54,13 +55,7 @@ class OpenCodeGoResponsesAPIConfig(OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams | None,
     ) -> dict:  # mutable-ok: signature must match OpenAIResponsesAPIConfig
         litellm_params = litellm_params or GenericLiteLLMParams()  # rebind-ok: default to empty params
-        api_key: Final = (
-            litellm_params.api_key
-            or litellm.opencode_go_api_key
-            or get_secret_str("OPENCODE_GO_API_KEY")
-            or get_secret_str("OPENCODE_API_KEY")
-            or litellm.api_key
-        )
+        api_key: Final = resolve_opencode_api_key("go", litellm_params.api_key)
 
         if not api_key:
             raise ValueError(
@@ -76,13 +71,7 @@ class OpenCodeGoResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base: str | None,
         litellm_params: Mapping[str, Any],
     ) -> str:
-        base: Final = (
-            api_base
-            or litellm.opencode_go_api_base
-            or get_secret_str("OPENCODE_GO_API_BASE")
-            or litellm.api_base
-            or GO_MESSAGES_BASE
-        ).rstrip("/")
+        base: Final = (resolve_opencode_api_base("go", api_base) or GO_MESSAGES_BASE).rstrip("/")
 
         if base.endswith("/v1/responses"):
             return base
