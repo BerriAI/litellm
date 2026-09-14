@@ -2390,9 +2390,12 @@ class CustomStreamWrapper:
                 recover_error,
             )
 
+    # Delta fields a text-only prefill continuation cannot carry, so a stream
+    # that emitted any of them is not eligible for mid-stream continuation.
     _CONTINUATION_DISQUALIFYING_DELTA_FIELDS: Final = (
         "tool_calls",
         "function_call",
+        "reasoning_content",
         "thinking_blocks",
         "reasoning_items",
         "audio",
@@ -2402,23 +2405,14 @@ class CustomStreamWrapper:
 
     @classmethod
     def _delta_disqualifies_continuation(cls, delta: object) -> bool:
-        """
-        True when a streamed delta carries output a text-only prefill
-        continuation cannot represent: tool/function calls, signed Anthropic
-        thinking blocks, structured reasoning items, audio or image parts, or
-        annotations. Plain ``reasoning_content`` is deliberately not here - it
-        is out-of-band, never reaches the caller as answer text, and so does
-        not block a continuation (parity with the Responses-API path).
-        """
         get: Final = getattr(delta, "get", None)
         if not callable(get):
             return False
         return any(get(field) for field in cls._CONTINUATION_DISQUALIFYING_DELTA_FIELDS)
 
     def _accumulate_streamed_delta(self, delta: object) -> None:
-        """Grow the running answer text and latch whether anything a
-        continuation cannot carry has been streamed. One home for both so the
-        three iteration sites (sync, async, non-aiohttp) stay in step."""
+        # Shared by the sync, async, and non-aiohttp iteration sites so answer
+        # text and the disqualifying-content latch stay in step across all three.
         get: Final = getattr(delta, "get", None)
         content: Final = get("content", "") if callable(get) else ""
         self.response_uptil_now += content or ""

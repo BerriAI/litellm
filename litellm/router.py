@@ -62,6 +62,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    MID_STREAM_CONTINUATION_KWARG,
     OUTPUT_TOKEN_CEILING_PARAMS,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
@@ -189,10 +190,6 @@ from litellm.router_utils.handle_error import (
     send_llm_exception_alert,
 )
 from litellm.router_utils.health_state_cache import DeploymentHealthCache
-from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
-    MID_STREAM_CONTINUATION_KWARG,
-    ContinuationPrefillDeploymentCheck,
-)
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
     warn_on_unknown_model_group_affinity_flags,
@@ -1186,12 +1183,14 @@ class Router:
         self.add_optional_pre_call_checks(default_pre_call_checks)
 
         if self.enable_mid_stream_fallback_continuation:
-            if self.optional_callbacks is None:
-                self.optional_callbacks = []
-            if not any(isinstance(cb, ContinuationPrefillDeploymentCheck) for cb in self.optional_callbacks):
-                continuation_check: Final = ContinuationPrefillDeploymentCheck()
-                self.optional_callbacks.append(continuation_check)
-                litellm.logging_callback_manager.add_litellm_callback(continuation_check)
+            from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
+                ContinuationPrefillDeploymentCheck,
+            )
+
+            # Registered on the process-global callback list, never tracked per
+            # router, so discarding one router cannot drop the filter another
+            # still needs. It is inert unless a request carries the marker.
+            litellm.logging_callback_manager.add_litellm_callback(ContinuationPrefillDeploymentCheck())
 
     def discard(self):
         """
@@ -3051,22 +3050,14 @@ class Router:
         e: "MidStreamFallbackError",
         request_kwargs: Mapping[str, object],
     ) -> bool:
-        """
-        Whether a chat-completions stream that broke after content may be
-        continued on a fallback deployment via assistant prefill, instead of
-        re-raising. Only plain assistant text is safe: a continuation built from
-        ``generated_content`` (text-only) cannot carry tool calls, signed
-        thinking blocks, audio or images, and a constrained (JSON / forced
-        tool_choice) or merged-reasoning response cannot be resumed from an
-        arbitrary cut point. The fallback target's prefill support is enforced
-        separately at deployment selection.
-        """
+        """Whether a stream that broke after plain assistant text may be
+        continued via prefill. The fallback target's prefill support is checked
+        separately at deployment selection."""
         if not self.enable_mid_stream_fallback_continuation:
             return False
         if not e.generated_content or e.emitted_disqualifying_content:
             return False
-        # Any structured-output request (response_format, or a forced tool call)
-        # produces a partial that cannot be resumed from an arbitrary cut point.
+        # Structured output cannot be resumed from an arbitrary cut point;
         # `{"type": "text"}` is the unconstrained default and stays eligible.
         response_format: Final = request_kwargs.get("response_format")
         if response_format is not None and response_format != {"type": "text"}:
@@ -3083,18 +3074,9 @@ class Router:
         messages: list[dict[str, str]],
         generated_content: str,
     ) -> Sequence[Mapping[str, object]]:
-        """
-        Append the partial assistant output as a prefill so a prefill-capable
-        fallback continues where the broken stream stopped instead of
-        regenerating text already delivered to the caller. The deployment filter
-        guarantees the target supports ``prefix: True`` (parity with
-        ``_build_responses_continuation_input`` for the Responses-API path).
-
-        A nested mid-stream break can re-enter here with a prefill already
-        appended; the new partial is folded into that trailing assistant turn so
-        the request keeps a single prefill rather than two consecutive assistant
-        messages a non-merging provider would reject.
-        """
+        """Append the partial output as an assistant prefill for a prefill-capable
+        fallback to continue. A nested break folds the new partial into an
+        existing trailing prefill rather than appending a second assistant turn."""
         if messages and messages[-1].get("role") == "assistant" and messages[-1].get("prefix"):
             last: Final = messages[-1]
             merged: dict[str, object] = {**last, "content": str(last.get("content") or "") + generated_content}

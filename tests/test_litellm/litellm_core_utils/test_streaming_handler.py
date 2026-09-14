@@ -4925,14 +4925,24 @@ class TestContinuationDisqualifiers:
 
     @pytest.mark.parametrize(
         "field",
-        ["tool_calls", "function_call", "thinking_blocks", "reasoning_items", "audio", "images", "annotations"],
+        [
+            "tool_calls",
+            "function_call",
+            "reasoning_content",
+            "thinking_blocks",
+            "reasoning_items",
+            "audio",
+            "images",
+            "annotations",
+        ],
     )
     def test_disqualifying_fields_flagged(self, field):
+        # reasoning_content included: it reaches the caller as visible reasoning a
+        # text-only prefill cannot carry, so a reasoning fallback would re-derive it
         assert CustomStreamWrapper._delta_disqualifies_continuation({field: [{"x": 1}]}) is True
 
-    @pytest.mark.parametrize("delta", [{"content": "hi"}, {"reasoning_content": "thinking"}, {}, {"role": "assistant"}])
-    def test_plain_text_and_reasoning_content_not_flagged(self, delta):
-        # plain reasoning_content is out-of-band and must NOT block a continuation
+    @pytest.mark.parametrize("delta", [{"content": "hi"}, {}, {"role": "assistant"}])
+    def test_plain_text_not_flagged(self, delta):
         assert CustomStreamWrapper._delta_disqualifies_continuation(delta) is False
 
     def test_non_mapping_delta_is_safe(self):
