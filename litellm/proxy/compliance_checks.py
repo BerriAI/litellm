@@ -11,6 +11,7 @@ from litellm.types.proxy.compliance_endpoints import (
     ComplianceCheckRequest,
     ComplianceCheckResult,
 )
+from litellm.types.utils import UNEVALUATED_GUARDRAIL_STATUSES
 
 
 class ComplianceChecker:
@@ -26,7 +27,11 @@ class ComplianceChecker:
 
     def __init__(self, data: ComplianceCheckRequest):
         self.data = data
-        self.guardrails = [g for g in (data.guardrail_information or []) if g.get("guardrail_status") != "skipped"]
+        self.guardrails = [
+            g
+            for g in (data.guardrail_information or [])
+            if g.get("guardrail_status") not in UNEVALUATED_GUARDRAIL_STATUSES
+        ]
 
     def _get_guardrails_by_mode(self, mode: str) -> list[dict]:
         """

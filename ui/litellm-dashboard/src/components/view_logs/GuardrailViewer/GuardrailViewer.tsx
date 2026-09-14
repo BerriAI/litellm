@@ -140,7 +140,7 @@ const getEntryOutcome = (entry: GuardrailInformation): EntryOutcome => {
   const status = (entry.guardrail_status ?? "").toLowerCase();
   if (status === "success") return "passed";
   if (status === "guardrail_flagged") return "flagged";
-  if (status === "skipped") return "skipped";
+  if (status === "skipped" || status === "not_run") return "skipped";
   return "failed";
 };
 
