@@ -17849,11 +17849,13 @@ async def test_regenerate_key_repoints_live_membership_not_the_key_row_it_read(
     ) == ["attached-model"]
 
 
-async def _cache_with_project(project_id: str, project_models: list[str]) -> UserApiKeyCache:
+async def _cache_with_project(
+    project_id: str, project_models: list[str], team_id: str | None = "team-lit-5823"
+) -> UserApiKeyCache:
     user_api_key_cache = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(
         key=_project_cache_key(project_id),
-        value=LiteLLM_ProjectTableCachedObj(project_id=project_id, team_id="team-lit-5823", models=project_models),
+        value=LiteLLM_ProjectTableCachedObj(project_id=project_id, team_id=team_id, models=project_models),
         model_type=LiteLLM_ProjectTableCachedObj,
     )
     return user_api_key_cache
@@ -17871,6 +17873,7 @@ async def test_check_project_key_limits_accepts_inherited_model_sentinels(reques
         data=request_cls(key="sk-lit-5823", models=[sentinel]),
         prisma_client=MagicMock(),
         user_api_key_cache=user_api_key_cache,
+        key_team_id="team-lit-5823",
     )
 
 
@@ -17889,6 +17892,7 @@ async def test_check_project_key_limits_still_rejects_real_model_outside_project
             data=request_cls(key="sk-lit-5823", models=key_models),
             prisma_client=MagicMock(),
             user_api_key_cache=user_api_key_cache,
+            key_team_id="team-lit-5823",
         )
 
     assert exc_info.value.status_code == 400
@@ -18257,7 +18261,10 @@ async def test_project_detachment_preserves_omission_and_other_key_fields():
 @pytest.mark.asyncio
 async def test_project_detachment_uses_effective_project_for_validation(project_id: str | None):
     existing: Final = LiteLLM_VerificationToken(token="project-detach-token", project_id="project-orbit")
-    cache: Final = await _cache_with_project("project-orbit", ["model-orbit"])
+    # An unowned project: this cell is about WHICH project the validation uses,
+    # so the ownership gate (#41089) must not be what it measures. Giving the
+    # key a team instead would pull the whole team lookup into a MagicMock db.
+    cache: Final = await _cache_with_project("project-orbit", ["model-orbit"], team_id=None)
     data: Final = UpdateKeyRequest(key=existing.token, project_id=project_id, models=["model-other"])
     if project_id is None:
         await _validate_update_key_data(
