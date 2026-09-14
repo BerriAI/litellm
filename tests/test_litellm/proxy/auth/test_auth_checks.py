@@ -6494,7 +6494,7 @@ async def test_get_team_membership_coalesces_parallel_db_fetches():
 
 
 @pytest.mark.asyncio
-async def test_get_team_membership_invalidation_mid_flight_discards_stale_load():
+async def test_get_team_membership_invalidation_waits_for_in_flight_load_then_evicts_it():
     from litellm.proxy._types import LiteLLM_TeamMembership
     from litellm.proxy.auth.auth_checks import get_team_membership, invalidate_team_member_spend_state
     from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
@@ -6502,20 +6502,21 @@ async def test_get_team_membership_invalidation_mid_flight_discards_stale_load()
 
     started = asyncio.Event()
     release_stale = asyncio.Event()
-    release_fresh = asyncio.Event()
-    loads = iter((("budget-old", release_stale), ("budget-new", release_fresh)))
+    rows = iter(("budget-old", "budget-new"))
 
     async def _find_unique(*args, **kwargs):
-        budget_id, release = next(loads)
+        budget_id = next(rows)
         row = MagicMock()
         row.dict = lambda: {"user_id": "u-inv", "team_id": "t-inv", "spend": 1.0, "budget_id": budget_id}
-        started.set()
-        await release.wait()
+        if budget_id == "budget-old":
+            started.set()
+            await release_stale.wait()
         return row
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(side_effect=_find_unique)
     cache = UserApiKeyCache()
+    _key = team_membership_reservation_cache_key(user_id="u-inv", team_id="t-inv")
 
     async def _load():
         return await get_team_membership(
@@ -6523,24 +6524,28 @@ async def test_get_team_membership_invalidation_mid_flight_discards_stale_load()
         )
 
     stale = asyncio.create_task(_load())
-    await started.wait()
-    await invalidate_team_member_spend_state(user_id="u-inv", team_id="t-inv", user_api_key_cache=cache)
-    started.clear()
-    fresh = asyncio.create_task(_load())
     await asyncio.wait_for(started.wait(), timeout=2)
-    release_fresh.set()
-    fresh_result = await fresh
-    release_stale.set()
-    stale_result = await stale
+    invalidation = asyncio.create_task(
+        invalidate_team_member_spend_state(user_id="u-inv", team_id="t-inv", user_api_key_cache=cache)
+    )
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert not invalidation.done()
 
+    release_stale.set()
+    await asyncio.wait_for(invalidation, timeout=2)
+    stale_result = await stale
     assert stale_result is not None and stale_result.budget_id == "budget-old"
+    assert await cache.async_get_cache(key=_key) is None
+
+    fresh_result = await _load()
     assert fresh_result is not None and fresh_result.budget_id == "budget-new"
     assert mock_prisma_client.db.litellm_teammembership.find_unique.await_count == 2
-    cached = CacheCodec.deserialize(
-        await cache.async_get_cache(key=team_membership_reservation_cache_key(user_id="u-inv", team_id="t-inv")),
-        model_type=LiteLLM_TeamMembership,
-    )
+    cached = CacheCodec.deserialize(await cache.async_get_cache(key=_key), model_type=LiteLLM_TeamMembership)
     assert cached is not None and cached.budget_id == "budget-new"
+    again = await _load()
+    assert again is not None and again.budget_id == "budget-new"
+    assert mock_prisma_client.db.litellm_teammembership.find_unique.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -6567,57 +6572,19 @@ async def test_get_team_membership_invalidation_during_cache_write_evicts_stale_
         get_team_membership(user_id="u-w", team_id="t-w", prisma_client=mock_prisma_client, user_api_key_cache=cache)
     )
     await asyncio.wait_for(write_started.wait(), timeout=2)
-    await invalidate_team_member_spend_state(user_id="u-w", team_id="t-w", user_api_key_cache=cache)
+    invalidation = asyncio.create_task(
+        invalidate_team_member_spend_state(user_id="u-w", team_id="t-w", user_api_key_cache=cache)
+    )
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert not invalidation.done()
+
     release_write.set()
+    await asyncio.wait_for(invalidation, timeout=2)
     stale_result = await stale
 
     assert stale_result is not None and stale_result.budget_id == "budget-old"
     assert await cache.async_get_cache(key=team_membership_reservation_cache_key(user_id="u-w", team_id="t-w")) is None
-
-
-@pytest.mark.asyncio
-async def test_get_team_membership_stale_write_finishing_after_fresh_load_never_serves_old_row():
-    from litellm.proxy.auth.auth_checks import get_team_membership, invalidate_team_member_spend_state
-
-    write_started = asyncio.Event()
-    release_stale_write = asyncio.Event()
-    stale_writes = iter((release_stale_write,))
-
-    class _SlowFirstWriteCache(UserApiKeyCache):
-        async def async_set_cache(self, key, value, local_only=False, **kwargs):
-            release = next(stale_writes, None)
-            if release is not None:
-                write_started.set()
-                await release.wait()
-            return await super().async_set_cache(key, value, local_only=local_only, **kwargs)
-
-    rows = iter(("budget-old", "budget-new", "budget-new"))
-
-    async def _find_unique(*args, **kwargs):
-        row = MagicMock()
-        row.dict = lambda: {"user_id": "u-sw", "team_id": "t-sw", "spend": 1.0, "budget_id": next(rows)}
-        return row
-
-    mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(side_effect=_find_unique)
-    cache = _SlowFirstWriteCache()
-
-    async def _load():
-        return await get_team_membership(
-            user_id="u-sw", team_id="t-sw", prisma_client=mock_prisma_client, user_api_key_cache=cache
-        )
-
-    stale = asyncio.create_task(_load())
-    await asyncio.wait_for(write_started.wait(), timeout=2)
-    await invalidate_team_member_spend_state(user_id="u-sw", team_id="t-sw", user_api_key_cache=cache)
-    fresh_result = await _load()
-    release_stale_write.set()
-    stale_result = await stale
-    after_result = await _load()
-
-    assert fresh_result is not None and fresh_result.budget_id == "budget-new"
-    assert stale_result is not None and stale_result.budget_id == "budget-old"
-    assert after_result is not None and after_result.budget_id == "budget-new"
 
 
 @pytest.mark.asyncio
