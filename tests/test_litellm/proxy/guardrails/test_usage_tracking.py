@@ -406,6 +406,27 @@ async def test_not_run_entry_shares_index_key_with_evaluated_sibling_of_same_nam
 
 
 @pytest.mark.asyncio
+async def test_malformed_not_run_entry_does_not_drop_the_batch():
+    prisma = _prisma()
+    payload = _payload("r1")
+    payload["metadata"] = json.dumps(
+        {
+            "guardrail_information": [
+                {"guardrail_name": ["not", "a", "string"], "guardrail_status": "not_run"},
+                {"guardrail_name": "cf", "guardrail_id": "cf-uuid", "guardrail_status": "success"},
+            ]
+        }
+    )
+
+    await process_spend_logs_guardrail_usage(prisma, [payload])
+
+    index_rows = prisma.db.litellm_spendlogguardrailindex.create_many.call_args.kwargs["data"]
+    assert [row["guardrail_id"] for row in index_rows] == ["cf-uuid"]
+    metrics_create = prisma.db.litellm_dailyguardrailmetrics.upsert.call_args.kwargs["data"]["create"]
+    assert metrics_create["requests_evaluated"] == 1
+
+
+@pytest.mark.asyncio
 async def test_batch_of_only_not_run_entries_writes_no_metrics_row():
     prisma = _prisma()
 

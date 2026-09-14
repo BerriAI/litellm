@@ -356,12 +356,12 @@ async def process_spend_logs_guardrail_usage(
             "flagged_count": 0,
         }
     )
-    index_rows_by_key: Final[dict[tuple[object, object], dict[str, object]]] = {}
+    index_rows_by_key: Final[dict[tuple[str, str], dict[str, object]]] = {}
 
     for payload in logs_to_process:
         request_id = payload.get("request_id")
         start_time = _parse_payload_start_time(payload)
-        if not request_id or start_time is None:
+        if not isinstance(request_id, str) or not request_id or start_time is None:
             continue
         date_key = _date_str(start_time)
 
@@ -370,13 +370,14 @@ async def process_spend_logs_guardrail_usage(
             {
                 e["guardrail_name"]: e["guardrail_id"]
                 for e in entries
-                if e.get("guardrail_id") and e.get("guardrail_name")
+                if e.get("guardrail_id") and isinstance(e.get("guardrail_name"), str)
             }
         )
         for entry in entries:
-            guardrail_name = entry.get("guardrail_name") or ""
+            raw_name = entry.get("guardrail_name")
+            guardrail_name = raw_name if isinstance(raw_name, str) else ""
             guardrail_id = entry.get("guardrail_id") or ids_by_name.get(guardrail_name) or guardrail_name
-            if not guardrail_id:
+            if not isinstance(guardrail_id, str) or not guardrail_id:
                 continue
             action = guardrail_status_to_action(entry.get("guardrail_status"))
             if action != "not_run":
