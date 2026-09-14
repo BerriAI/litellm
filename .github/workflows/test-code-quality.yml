@@ -83,6 +83,13 @@ jobs:
       - name: test_e2e_changed_gate
         run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_e2e_changed_gate.py tests/code_coverage_tests/test_e2e_idp_stack.py
 
+      - name: test_provider_replay_harness
+        run: |
+          pwd
+          uv run --no-sync pytest -q --noconftest -o addopts= -p no:rerunfailures \
+            tests/e2e/test_provider_edge.py tests/e2e/test_fixture_bundle.py \
+            tests/e2e/test_fixture_canonical.py tests/e2e/test_fixture_mode.py
+
       - name: router_code_coverage
         run: uv run --no-sync python ./tests/code_coverage_tests/router_code_coverage.py
 
