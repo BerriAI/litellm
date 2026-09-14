@@ -1,5 +1,5 @@
 import json
-from typing import Final
+from typing import Final, cast
 
 import litellm
 from litellm import verbose_logger
@@ -15,15 +15,16 @@ def _usage_to_chat_completion_block(usage: Usage | None) -> ChatCompletionUsageB
     if usage is None:
         return None
     dumped: Final = usage.model_dump()
-    prompt_tokens_details: Final = dumped.get("prompt_tokens_details")
-    completion_tokens_details: Final = dumped.get("completion_tokens_details")
-    return ChatCompletionUsageBlock(
-        prompt_tokens=usage.prompt_tokens or 0,
-        completion_tokens=usage.completion_tokens or 0,
-        total_tokens=usage.total_tokens or 0,
-        prompt_tokens_details=prompt_tokens_details if isinstance(prompt_tokens_details, dict) else None,
-        completion_tokens_details=completion_tokens_details if isinstance(completion_tokens_details, dict) else None,
-    )
+    raw_prompt_details: Final = dumped.get("prompt_tokens_details")
+    raw_completion_details: Final = dumped.get("completion_tokens_details")
+    prompt_tokens: Final = usage.prompt_tokens or 0
+    completion_tokens: Final = usage.completion_tokens or 0
+    total_tokens: Final = usage.total_tokens or 0
+    prompt_tokens_details: Final = raw_prompt_details if isinstance(raw_prompt_details, dict) else None
+    completion_tokens_details: Final = raw_completion_details if isinstance(raw_completion_details, dict) else None
+    field_names: Final = "prompt_tokens completion_tokens total_tokens prompt_tokens_details completion_tokens_details"
+    field_vals: Final = prompt_tokens, completion_tokens, total_tokens, prompt_tokens_details, completion_tokens_details
+    return cast(ChatCompletionUsageBlock, dict(zip(field_names.split(), field_vals, strict=True)))
 
 
 class ModelResponseIterator:
@@ -38,6 +39,7 @@ class ModelResponseIterator:
             tool_use: ChatCompletionToolCallChunk | None = None
             is_finished = False
             finish_reason = ""
+            usage: Final = _usage_to_chat_completion_block(getattr(processed_chunk, "usage", None))
 
             # Usage-only final chunk (OpenAI ``stream_options.include_usage``)
             # arrives with an empty ``choices`` list — return usage without
@@ -48,7 +50,7 @@ class ModelResponseIterator:
                     tool_use=None,
                     is_finished=False,
                     finish_reason="",
-                    usage=_usage_to_chat_completion_block(getattr(processed_chunk, "usage", None)),
+                    usage=usage,
                     index=0,
                 )
 
@@ -74,8 +76,6 @@ class ModelResponseIterator:
             if processed_chunk.choices[0].finish_reason is not None:
                 is_finished = True
                 finish_reason = processed_chunk.choices[0].finish_reason
-
-            usage: Final = _usage_to_chat_completion_block(getattr(processed_chunk, "usage", None))
 
             return GenericStreamingChunk(
                 text=text,
