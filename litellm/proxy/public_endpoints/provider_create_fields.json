@@ -1216,6 +1216,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "EDENAI",
+    "provider_display_name": "Eden AI",
+    "litellm_provider": "edenai",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.edenai.run/v3",
+        "tooltip": "Set to https://api.eu.edenai.run/v3 for the EU endpoint",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "edenai/openai/gpt-mini-latest"
+  },
+  {
     "provider": "ElevenLabs",
     "provider_display_name": "ElevenLabs",
     "litellm_provider": "elevenlabs",

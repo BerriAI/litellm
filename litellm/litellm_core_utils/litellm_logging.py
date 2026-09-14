@@ -69,7 +69,11 @@ from litellm.litellm_core_utils.classifier_logging import (
     classifier_input_snapshot,
     is_classifier_call,
 )
-from litellm.litellm_core_utils.core_helpers import is_expected_client_error, reconstruct_model_name
+from litellm.litellm_core_utils.core_helpers import (
+    is_expected_client_error,
+    reconstruct_model_name,
+    set_response_cost_in_hidden_params,
+)
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.internal_call_metadata import (
     MODEL_ACCESS_GROUP_METADATA_KEY,
@@ -3845,6 +3849,7 @@ class Logging(LiteLLMLoggingBaseClass):
         ):
             ## return unified Usage object
             if isinstance(result.response.usage, ResponseAPIUsage):
+                set_response_cost_in_hidden_params(result.response, result.response.usage.cost)
                 transformed_usage: Final = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
                     result.response.usage
                 )
