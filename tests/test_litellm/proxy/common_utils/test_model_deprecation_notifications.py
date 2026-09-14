@@ -623,7 +623,7 @@ async def test_should_report_whether_the_daily_pass_already_ran():
 
 class TestMakeEmailDeliverer:
     @pytest.mark.asyncio
-    async def test_should_use_the_configured_email_logger_when_present(self):
+    async def test_should_use_the_configured_email_logger_once_per_recipient(self):
         calls: Final = []
 
         async def send_email(from_email, to_email, subject, html_body):
@@ -633,19 +633,37 @@ class TestMakeEmailDeliverer:
         deliver: Final = make_email_deliverer(logger)
 
         await deliver(("a@x.io", "b@x.io"), "subj", "<p>hi</p>")
-        assert calls == [("noreply@litellm.ai", ("a@x.io", "b@x.io"), "subj", "<p>hi</p>")]
+        assert calls == [
+            ("noreply@litellm.ai", ("a@x.io",), "subj", "<p>hi</p>"),
+            ("noreply@litellm.ai", ("b@x.io",), "subj", "<p>hi</p>"),
+        ]
 
     @pytest.mark.asyncio
     async def test_should_fall_back_to_smtp_per_recipient_without_a_logger(self):
         calls: Final = []
 
-        async def smtp_send(*, receiver_email, subject, html):
+        async def smtp_send(*, receiver_email, subject, html, raise_on_error):
+            assert raise_on_error is True
             calls.append((receiver_email, subject, html))
 
         deliver: Final = make_email_deliverer(None, smtp_send=smtp_send)
 
         await deliver(("a@x.io", "b@x.io"), "subj", "<p>hi</p>")
         assert calls == [("a@x.io", "subj", "<p>hi</p>"), ("b@x.io", "subj", "<p>hi</p>")]
+
+    @pytest.mark.asyncio
+    async def test_should_route_the_enterprise_smtp_logger_through_the_oss_helper(self):
+        smtp_email: Final = pytest.importorskip("litellm_enterprise.enterprise_callbacks.send_emails.smtp_email")
+        calls: Final = []
+
+        async def smtp_send(*, receiver_email, subject, html, raise_on_error):
+            assert raise_on_error is True
+            calls.append(receiver_email)
+
+        deliver: Final = make_email_deliverer(smtp_email.SMTPEmailLogger(), smtp_send=smtp_send)
+
+        await deliver(("a@x.io", "b@x.io"), "subj", "<p>hi</p>")
+        assert calls == ["a@x.io", "b@x.io"]
 
     @pytest.mark.asyncio
     async def test_should_raise_when_smtp_is_not_configured(self, monkeypatch):
@@ -660,7 +678,8 @@ class TestMakeEmailDeliverer:
         base_email: Final = pytest.importorskip("litellm_enterprise.enterprise_callbacks.send_emails.base_email")
         calls: Final = []
 
-        async def smtp_send(*, receiver_email, subject, html):
+        async def smtp_send(*, receiver_email, subject, html, raise_on_error):
+            assert raise_on_error is True
             calls.append(receiver_email)
 
         deliver: Final = make_email_deliverer(base_email.BaseEmailLogger(), smtp_send=smtp_send)
@@ -679,5 +698,8 @@ class TestMakeEmailDeliverer:
 
         deliver: Final = make_email_deliverer(ConfiguredLogger())
 
-        await deliver(("a@x.io",), "subj", "<p>hi</p>")
-        assert calls == [(base_email.BaseEmailLogger.DEFAULT_LITELLM_EMAIL, ("a@x.io",))]
+        await deliver(("a@x.io", "b@x.io"), "subj", "<p>hi</p>")
+        assert calls == [
+            (base_email.BaseEmailLogger.DEFAULT_LITELLM_EMAIL, ("a@x.io",)),
+            (base_email.BaseEmailLogger.DEFAULT_LITELLM_EMAIL, ("b@x.io",)),
+        ]

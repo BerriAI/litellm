@@ -76,7 +76,8 @@ class EmailSender(Protocol):
 
 
 class SmtpSend(Protocol):
-    def __call__(self, *, receiver_email: str, subject: str, html: str) -> Awaitable[object]: ...
+    async def __call__(self, *, receiver_email: str, subject: str, html: str, raise_on_error: bool) -> object:
+        """Send one HTML email over SMTP, raising on failure when asked to"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,19 +282,29 @@ def _is_noop_email_logger(email_logger: object) -> bool:
     return type(email_logger) is BaseEmailLogger
 
 
+def _is_smtp_email_logger(email_logger: object) -> bool:
+    """The enterprise SMTP logger fires one task per recipient without awaiting it, so its failures are invisible"""
+    try:
+        from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import SMTPEmailLogger
+    except ImportError:
+        return False
+    return isinstance(email_logger, SMTPEmailLogger)
+
+
 def make_email_deliverer(
     email_logger: EmailSender | None, smtp_send: SmtpSend | None = None
 ) -> Callable[[Sequence[str], str, str], Awaitable[None]]:
-    """A configured email provider when the proxy has one, else the OSS SMTP helper once per recipient"""
-    if email_logger is not None and not _is_noop_email_logger(email_logger):
+    """A configured non-SMTP provider, one email per recipient; SMTP always goes through the OSS helper so failures raise"""
+    if email_logger is not None and not _is_noop_email_logger(email_logger) and not _is_smtp_email_logger(email_logger):
 
         async def deliver_via_logger(recipients: Sequence[str], subject: str, html_body: str) -> None:
-            await email_logger.send_email(
-                from_email=email_logger.DEFAULT_LITELLM_EMAIL,
-                to_email=tuple(recipients),
-                subject=subject,
-                html_body=html_body,
-            )
+            for recipient in recipients:
+                await email_logger.send_email(
+                    from_email=email_logger.DEFAULT_LITELLM_EMAIL,
+                    to_email=(recipient,),
+                    subject=subject,
+                    html_body=html_body,
+                )
 
         return deliver_via_logger
 
@@ -302,7 +313,7 @@ def make_email_deliverer(
 
         send: Final = smtp_send or send_email
         for recipient in recipients:
-            await send(receiver_email=recipient, subject=subject, html=html_body)
+            await send(receiver_email=recipient, subject=subject, html=html_body, raise_on_error=True)
 
     return deliver_over_smtp
 
