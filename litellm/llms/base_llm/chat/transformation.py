@@ -70,13 +70,6 @@ class BaseConfig(ABC):
     def __init__(self):
         pass
 
-    def get_cache_read_input_token_cost_key(
-        self,
-        usage: object,
-    ) -> str | None:
-        """Return a provider-specific cache-read pricing key, or None for shared pricing."""
-        return None
-
     @classmethod
     def get_config(cls):
         return {

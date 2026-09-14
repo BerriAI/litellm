@@ -12,21 +12,6 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class DashScopeChatConfig(OpenAIGPTConfig):
-    def get_cache_read_input_token_cost_key(
-        self,
-        usage: object,
-    ) -> str | None:
-        prompt_tokens_details: Final = getattr(usage, "prompt_tokens_details", None)
-        if prompt_tokens_details is None:
-            return None
-        cached_tokens: Final = getattr(prompt_tokens_details, "cached_tokens", 0)
-        cache_type: Final = getattr(prompt_tokens_details, "cache_type", None)
-        if not isinstance(cached_tokens, (int, float)) or cached_tokens <= 0:
-            return None
-        if cache_type is None:
-            return "implicit_cache_read_input_token_cost"
-        return None
-
     def remove_cache_control_flag_from_messages_and_tools(
         self,
         model: str,
