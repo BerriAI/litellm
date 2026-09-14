@@ -6,6 +6,7 @@ import threading
 from base64 import b64encode
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from hashlib import sha256
 from types import MappingProxyType
@@ -19,6 +20,7 @@ from opentelemetry.context import Context
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
 from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
 
 __all__ = (
@@ -109,6 +111,7 @@ def start_generation(
     claim_trace_root: bool,
     release: str | None = None,
     public: bool | None = None,
+    observation_id: str | None = None,
     attributes: Mapping[str, object],
 ) -> LangfuseGeneration:
     """Create a generation whose start time is when the model call began.
@@ -119,10 +122,19 @@ def start_generation(
 
     ``public`` is the v2 ``trace(public=...)`` flag; v4 reads it off the root
     observation's ``langfuse.trace.public`` attribute instead.
+
+    ``observation_id`` is the v2 ``generation(id=...)`` argument. v4 derives the
+    observation id from the OTel span id, so it is honoured through the
+    isolated provider's id generator; a provider adopted from user code keeps
+    its own generator and the returned generation's ``id`` is the truth.
     """
-    otel_span: Final = client._otel_tracer.start_span(  # pyright: ignore[reportPrivateUsage]  # only route to a historical start time
-        name=name, context=context, start_time=to_unix_nanos(start_time)
-    )
+    requested: Final = _requested_span_id.set(int(observation_id, 16) if observation_id is not None else None)
+    try:
+        otel_span: Final = client._otel_tracer.start_span(  # pyright: ignore[reportPrivateUsage]  # only route to a historical start time
+            name=name, context=context, start_time=to_unix_nanos(start_time)
+        )
+    finally:
+        _requested_span_id.reset(requested)
     if claim_trace_root:
         otel_span.set_attribute(AS_ROOT_ATTRIBUTE, True)
     if public is not None:
@@ -159,6 +171,16 @@ def start_child_span(
 
 
 _ENVIRONMENT_ATTRIBUTE: Final = "langfuse.environment"
+_requested_span_id: Final[ContextVar[int | None]] = ContextVar("litellm_langfuse_requested_span_id", default=None)
+
+
+class _RequestedSpanIdGenerator(RandomIdGenerator):
+    """Hand out the span id the calling context asked for, random otherwise."""
+
+    def generate_span_id(self) -> int:
+        requested: Final = _requested_span_id.get()
+        return super().generate_span_id() if requested is None else requested
+
 
 # providers litellm itself constructed; a bundle adopted from user code may hold the
 # process-global provider, which litellm must never shut down.
@@ -192,6 +214,7 @@ def build_isolated_tracer_provider(*, environment: str | None, release: str | No
     provider: Final = TracerProvider(
         resource=Resource.create(dict(attributes)),
         sampler=TraceIdRatioBased(sample_rate) if sample_rate < 1 else None,
+        id_generator=_RequestedSpanIdGenerator(),
     )
     with _LIVE_CLIENTS_LOCK:
         _litellm_built_providers.add(provider)

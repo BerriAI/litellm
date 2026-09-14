@@ -954,6 +954,7 @@ class LangFuseLogger:
                     claim_trace_root=claim_trace_root,
                     release=trace_params.get("release"),
                     public=_trace_public_flag(trace_params.get("public")),
+                    observation_id=resolve_observation_id(generation_params["id"]),
                     attributes=_generation_attributes(generation_params, propagated=propagated_trace_attributes),
                 )
                 if existing_trace_id is not None and ("input" in update_trace_keys or "output" in update_trace_keys):
@@ -966,8 +967,8 @@ class LangFuseLogger:
                 generation.end(end_time=to_unix_nanos(end_time))
 
             # log_event_on_langfuse tuple-unpacks this and re-wraps it in the dict callers cache.
-            # The wrapper's id is the exported observation id; the pre-computed generation_id would
-            # name nothing in langfuse, because v4 derives observation ids from the OTel span.
+            # The wrapper's id is the exported observation id: the requested generation_id after
+            # resolve_observation_id, unless the provider was adopted from user code.
             return resolved_trace_id, generation.id
         except Exception:
             verbose_logger.error("Langfuse Layer Error - %s", traceback.format_exc())
