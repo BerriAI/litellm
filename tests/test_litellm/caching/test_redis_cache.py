@@ -1260,6 +1260,10 @@ def test_timeouts_during_a_blip_log_once_per_interval_not_once_per_call(sync_bat
     "call_method",
     [
         pytest.param(lambda c: c.async_set_cache_pipeline([("lit7520", "v")]), id="async_set_cache_pipeline"),
+        pytest.param(
+            lambda c: c.async_set_cache_pipeline_with_ttls([("lit7520", "v", 60.0)]),
+            id="async_set_cache_pipeline_with_ttls",
+        ),
         pytest.param(lambda c: c.async_set_cache_sadd("lit7520", ["v"], ttl=None), id="async_set_cache_sadd"),
         pytest.param(lambda c: c.async_increment("lit7520", 1.0), id="async_increment"),
         pytest.param(
