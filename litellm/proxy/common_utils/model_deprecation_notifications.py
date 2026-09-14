@@ -50,9 +50,9 @@ class TeamNotification:
 
 
 class DeprecationEmailCache(Protocol):
-    async def async_get_cache(self, key: str) -> object | None: ...
+    async def async_get_cache(self, *, key: str) -> object: ...
 
-    async def async_set_cache(self, key: str, value: float, ttl: int) -> None: ...
+    async def async_set_cache(self, *, key: str, value: float, ttl: float) -> None: ...
 
 
 def select_milestone(days_until: int, thresholds: Sequence[int]) -> int | None:
@@ -198,7 +198,6 @@ async def build_team_notifications(
         [
             await _notification_for(teams_by_id[team_id], models, cache, prisma_client)
             for team_id, models in affected.items()
-            if team_id in teams_by_id
         ]
     )
     return tuple(notification for notification in candidates if notification is not None)
