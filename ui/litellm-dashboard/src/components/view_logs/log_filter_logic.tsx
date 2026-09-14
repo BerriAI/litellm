@@ -4,6 +4,7 @@ import type { ColumnFiltersState, PaginationState, SortingState } from "@tanstac
 import { uiSpendLogsCall } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
 import { fetchAllTeams } from "../../components/key_team_helpers/filter_helpers";
+import type { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { teamListScopeUserId } from "../../utils/roles";
 import { defaultPageSize } from "../constants";
 import { LOGS_SORT_FIELD_MAP, type LogEntry, type LogsSortField } from "./columns";
@@ -99,6 +100,26 @@ export const getFilterValue = (columnFilters: ColumnFiltersState, columnId: stri
   if (typeof entry?.value !== "string") return undefined;
   const trimmed = entry.value.trim();
   return trimmed === "" ? undefined : trimmed;
+};
+
+/**
+ * The Team and Project filter chips carry the id as their filter value (needed for the
+ * backend query and for re-selecting the right option in the filter drawer), but showing
+ * that id in the chip is meaningless to a reader. Resolve it back to the alias they picked.
+ */
+export const resolveLogFilterDisplayValue = (
+  columnId: string,
+  rawValue: string,
+  teams: readonly Team[],
+  projects: readonly ProjectResponse[] | undefined,
+): string => {
+  if (columnId === LOG_FILTER_IDS.TEAM_ID) {
+    return teams.find((team) => team.team_id === rawValue)?.team_alias || rawValue;
+  }
+  if (columnId === LOG_FILTER_IDS.PROJECT_ID) {
+    return projects?.find((project) => project.project_id === rawValue)?.project_alias || rawValue;
+  }
+  return rawValue;
 };
 
 export function useLogFilterLogic({

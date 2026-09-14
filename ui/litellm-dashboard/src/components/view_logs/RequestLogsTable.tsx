@@ -9,7 +9,7 @@ import { DataTable, DataTableFilterDrawer, DataTableToolbar } from "@/components
 
 import type { Team } from "../key_team_helpers/key_list";
 import type { LogEntry } from "./columns";
-import { LOG_FILTER_IDS, LOG_FILTER_LABELS, type LogsWindow } from "./log_filter_logic";
+import { LOG_FILTER_LABELS, resolveLogFilterDisplayValue, type LogsWindow } from "./log_filter_logic";
 import { RequestLogsFilters } from "./RequestLogsFilters";
 import { getRequestLogsTableColumns } from "./RequestLogsTableColumns";
 
@@ -84,14 +84,9 @@ export function RequestLogsTable({
   const isFiltered = columnFilters.length > 0 || searchValue !== "";
 
   const formatFilterValue = useCallback(
-    (columnId: string, value: unknown): string => {
-      const raw = String(value);
-      if (columnId === LOG_FILTER_IDS.PROJECT_ID) {
-        return projects?.find((project) => project.project_id === raw)?.project_alias || raw;
-      }
-      return raw;
-    },
-    [projects],
+    (columnId: string, value: unknown): string =>
+      resolveLogFilterDisplayValue(columnId, String(value), teams, projects),
+    [projects, teams],
   );
 
   return (
