@@ -1015,18 +1015,16 @@ async def test_model_armor_post_call_logging_redacts_scanned_content(sanitize: b
         "litellm_logging_obj": MagicMock(),
     }
 
-    with patch(
-        "litellm.proxy.common_utils.callback_utils.add_guardrail_response_to_standard_logging_object"
-    ) as add_logging:
-        await guardrail.async_post_call_success_hook(
-            data=request_data,
-            user_api_key_dict=UserAPIKeyAuth(),
-            response=mock_llm_response,
-        )
+    await guardrail.async_post_call_success_hook(
+        data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(),
+        response=mock_llm_response,
+    )
 
-    logged = add_logging.call_args.kwargs["guardrail_response"]
+    (logged,) = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert logged["guardrail_mode"] == GuardrailEventHooks.post_call
     assert logged["guardrail_status"] == "success"
-    logged_armor_response = logged["guardrail_response"]["model_armor_response"]
+    logged_armor_response = logged["guardrail_response"]
     if sanitize:
         assert marker not in str(logged_armor_response)
         assert (
@@ -1037,6 +1035,103 @@ async def test_model_armor_post_call_logging_redacts_scanned_content(sanitize: b
         )
     else:
         assert logged_armor_response == armor_response
+
+
+def _post_call_request_data():
+    """Request data shaped like the proxy's after a sync success callback already built the
+    StandardLoggingPayload: its guardrail_information aliases the metadata list, which is
+    how a second writer to that payload used to surface as a duplicate post_call row."""
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {
+        "standard_logging_object": {
+            "guardrail_information": request_data["metadata"].setdefault(
+                "standard_logging_guardrail_information", []
+            )
+        }
+    }
+    request_data["litellm_logging_obj"] = logging_obj
+    return request_data
+
+
+def _llm_response(text: str) -> litellm.ModelResponse:
+    response = litellm.ModelResponse()
+    response.choices = [litellm.Choices(message=litellm.Message(content=text))]
+    return response
+
+
+@pytest.mark.asyncio
+async def test_post_call_records_exactly_one_entry_per_hook_with_its_own_scan():
+    """Regression: one pre_call plus one post_call scan must log exactly one entry per hook,
+    and the post_call entry must carry the post_call scan, not the pre_call one."""
+    guardrail = _make_guardrail()
+    pre_scan = {"sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND", "invocationResult": "PRE_CALL"}}
+    post_scan = {"sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND", "invocationResult": "POST_CALL"}}
+    request_data = _post_call_request_data()
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(side_effect=[_mock_http_response(pre_scan), _mock_http_response(post_scan)]),
+    ) as mock_post:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+        await guardrail.async_post_call_success_hook(
+            data=request_data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_llm_response("model output"),
+        )
+
+    assert mock_post.await_count == 2
+    entries = request_data["metadata"]["standard_logging_guardrail_information"]
+    modes = [entry["guardrail_mode"] for entry in entries]
+    assert modes == [GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call]
+    assert entries[0]["guardrail_response"] == pre_scan
+    assert entries[1]["guardrail_response"] == post_scan
+    assert entries[1]["guardrail_status"] == "success"
+    assert entries[1]["duration"] is not None
+    assert request_data["litellm_logging_obj"].model_call_details["standard_logging_object"][
+        "guardrail_information"
+    ] is entries
+
+
+@pytest.mark.asyncio
+async def test_post_call_block_records_one_intervened_entry_and_no_success_entry():
+    """Regression: a Model Armor block on the response must log a single guardrail_intervened
+    post_call entry rather than a bogus success row next to it."""
+    guardrail = _make_guardrail()
+    request_data = _post_call_request_data()
+
+    with patch.object(
+        guardrail.async_handler, "post", AsyncMock(return_value=_armor_response(blocked=True))
+    ) as mock_post:
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_post_call_success_hook(
+                data=request_data,
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=_llm_response("blocked output"),
+            )
+
+    assert exc_info.value.status_code == 400
+    assert mock_post.await_count == 1
+    (entry,) = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert entry["guardrail_mode"] == GuardrailEventHooks.post_call
+    assert entry["guardrail_status"] == "guardrail_intervened"
+
+
+def _mock_http_response(body: dict):
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json = AsyncMock(return_value=body)
+    return mock_response
 
 
 @pytest.mark.asyncio
