@@ -55,7 +55,6 @@ import logging
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from types import MappingProxyType
 from typing import Final
 
 verbose_logger: Final = logging.getLogger("LiteLLM")
@@ -225,9 +224,9 @@ class _FallbackGeneralizations:
         )
         if not matched:
             return None
-        fill_missing: Final[Mapping[str, object]] = MappingProxyType(
-            {key: value for model_info in matched for key, value in model_info.items() if key != PROVIDER_KEY}
-        )
+        fill_missing: Final[Mapping[str, object]] = {
+            key: value for model_info in matched for key, value in model_info.items() if key != PROVIDER_KEY
+        }
         return fill_missing or None
 
 
