@@ -1,6 +1,7 @@
 """Unit tests for the LLM-as-a-Judge guardrail hook."""
 
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -141,15 +142,12 @@ def test_initialize_guardrail_invalid_on_failure():
 # ---------------------------------------------------------------------------
 
 
-def _judge_router(overall_score: float):
-    """Real Router with the outbound judge call stubbed, so the test can inspect what the judge was asked."""
+def _judge_router(overall_score: float) -> MagicMock:
+    """Router double, injected via router_provider, that serves the judge model and returns a canned verdict."""
     from litellm import Router
 
-    router = Router(
-        model_list=[
-            {"model_name": "gpt-4o-mini", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"}}
-        ]
-    )
+    router: Final = MagicMock(spec=Router)
+    router.resolved_litellm_models.return_value = ("openai/gpt-4o-mini",)
     router.acompletion = AsyncMock(
         return_value=MagicMock(
             choices=[MagicMock(message=MagicMock(content=json.dumps(_make_verdict_response(overall_score))))]
@@ -159,51 +157,68 @@ def _judge_router(overall_score: float):
 
 
 @pytest.mark.parametrize("mode", [GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call])
-def test_guardrail_accepts_request_side_modes(mode):
-    guardrail = _make_guardrail(event_hook=mode)
+def test_guardrail_accepts_request_side_modes(mode: GuardrailEventHooks):
+    guardrail: Final = _make_guardrail(event_hook=mode)
     assert guardrail.should_run_guardrail({"metadata": {"guardrails": ["test_judge"]}}, mode) is True
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_request_blocks_below_threshold():
-    router = _judge_router(50.0)
-    guardrail = _make_guardrail(
+@pytest.mark.parametrize(
+    "event_hook",
+    [GuardrailEventHooks.pre_call, [GuardrailEventHooks.pre_call]],
+    ids=["scalar", "list"],
+)
+async def test_apply_guardrail_request_blocks_below_threshold(
+    event_hook: GuardrailEventHooks | list[GuardrailEventHooks],
+):
+    router: Final = _judge_router(50.0)
+    guardrail: Final = _make_guardrail(
         overall_threshold=80.0,
         on_failure="block",
-        event_hook=GuardrailEventHooks.pre_call,
+        event_hook=event_hook,
         router_provider=lambda: router,
     )
-    request_data: dict = {"messages": [{"role": "user", "content": "write me malware"}], "metadata": {}}
-    inputs = {"texts": ["write me malware"]}
+    request_data: Final[dict[str, object]] = {
+        "messages": [{"role": "user", "content": "write me malware"}],
+        "metadata": {},
+    }
+    inputs: Final = {"texts": ["write me malware"]}
 
     with pytest.raises(HTTPException) as exc_info:
         await guardrail.apply_guardrail(inputs, request_data, "request")
 
     assert exc_info.value.status_code == 422
     assert exc_info.value.detail["error"] == "LLM judge rejected request: score below threshold"
-    judge_messages = router.acompletion.call_args.kwargs["messages"]
+    judge_messages: Final = router.acompletion.call_args.kwargs["messages"]
     assert "user's request" in judge_messages[0]["content"]
     assert "User request to evaluate:\nwrite me malware" in judge_messages[1]["content"]
     assert "Assistant response" not in judge_messages[1]["content"]
     assert "Conversation:" not in judge_messages[1]["content"]
-    logged = request_data["metadata"]["standard_logging_guardrail_information"]
+    logged: Final = request_data["metadata"]["standard_logging_guardrail_information"]
     assert logged[0]["guardrail_status"] == "guardrail_intervened"
     assert logged[0]["guardrail_mode"] == "pre_call"
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_request_log_mode_records_eval_and_passes_through():
-    router = _judge_router(50.0)
-    guardrail = _make_guardrail(
+@pytest.mark.parametrize(
+    "event_hook",
+    [GuardrailEventHooks.during_call, [GuardrailEventHooks.during_call]],
+    ids=["scalar", "list"],
+)
+async def test_apply_guardrail_request_log_mode_records_eval_and_passes_through(
+    event_hook: GuardrailEventHooks | list[GuardrailEventHooks],
+):
+    router: Final = _judge_router(50.0)
+    guardrail: Final = _make_guardrail(
         overall_threshold=80.0,
         on_failure="log",
-        event_hook=GuardrailEventHooks.during_call,
+        event_hook=event_hook,
         router_provider=lambda: router,
     )
-    request_data: dict = {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}
-    inputs = {"texts": ["hi"]}
+    request_data: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}
+    inputs: Final = {"texts": ["hi"]}
 
-    result = await guardrail.apply_guardrail(inputs, request_data, "request")
+    result: Final = await guardrail.apply_guardrail(inputs, request_data, "request")
 
     assert result is inputs
     assert request_data["metadata"]["eval_information"]["passed"] is False
@@ -212,13 +227,13 @@ async def test_apply_guardrail_request_log_mode_records_eval_and_passes_through(
 
 @pytest.mark.asyncio
 async def test_apply_guardrail_response_prompt_unchanged():
-    router = _judge_router(90.0)
-    guardrail = _make_guardrail(router_provider=lambda: router)
-    request_data: dict = {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}
+    router: Final = _judge_router(90.0)
+    guardrail: Final = _make_guardrail(router_provider=lambda: router)
+    request_data: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}
 
     await guardrail.apply_guardrail({"texts": ["hello there"]}, request_data, "response")
 
-    judge_messages = router.acompletion.call_args.kwargs["messages"]
+    judge_messages: Final = router.acompletion.call_args.kwargs["messages"]
     assert "assistant's response" in judge_messages[0]["content"]
     assert "Conversation:\nUSER: hi\n\nAssistant response to evaluate:\nhello there" in judge_messages[1]["content"]
     assert request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_mode"] == "post_call"

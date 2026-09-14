@@ -45,7 +45,6 @@ JUDGE_SYSTEM_PROMPTS: Final[MappingProxyType[JudgeInputType, str]] = MappingProx
         "response": _JUDGE_SYSTEM_PROMPT_TEMPLATE.format(subject="assistant's response"),
     }
 )
-JUDGE_SYSTEM_PROMPT: Final = JUDGE_SYSTEM_PROMPTS["response"]
 
 _JUDGE_SUBJECT_LABELS: Final[MappingProxyType[JudgeInputType, str]] = MappingProxyType(
     {"request": "User request to evaluate", "response": "Assistant response to evaluate"}
@@ -272,9 +271,9 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
     def _event_type_for(self, input_type: JudgeInputType) -> GuardrailEventHooks:
         if input_type == "response":
             return GuardrailEventHooks.post_call
-        if self.event_hook is GuardrailEventHooks.during_call:
-            return GuardrailEventHooks.during_call
-        return GuardrailEventHooks.pre_call
+        if self._event_hook_is_event_type(GuardrailEventHooks.pre_call):
+            return GuardrailEventHooks.pre_call
+        return GuardrailEventHooks.during_call
 
 
 def initialize_guardrail(
