@@ -4105,16 +4105,16 @@ class Router:
         models: Final = [m.strip() for m in model.split(",")]
 
         async def _async_completion_no_exceptions(
-            model: str, messages: list[dict[str, str]], stream: bool, **kwargs: Any
+            model_name: str, messages: list[dict[str, str]], stream: bool, **kwargs: Any
         ) -> ModelResponse | CustomStreamWrapper | Exception:
             """
             Wrapper around self.acompletion that catches exceptions and returns them as a result
             """
             try:
-                result = await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)
+                result = await self.acompletion(model=model_name, messages=messages, stream=stream, **kwargs)
                 return result
             except asyncio.CancelledError:
-                verbose_router_logger.debug("Received 'task.cancel'. Cancelling call w/ model=%s.", model)
+                verbose_router_logger.debug("Received 'task.cancel'. Cancelling call w/ model=%s.", model_name)
                 raise
             except Exception as e:
                 return e
@@ -4141,9 +4141,9 @@ class Router:
                 except KeyError:
                     pass
 
-        for model in models:
+        for model_name in models:
             task = asyncio.create_task(
-                _async_completion_no_exceptions(model=model, messages=messages, stream=stream, **kwargs)
+                _async_completion_no_exceptions(model_name=model_name, messages=messages, stream=stream, **kwargs)
             )
             pending_tasks.append(task)
 
