@@ -454,7 +454,7 @@ def token_counter(
         params: Final = _MessageCountParams(model, custom_tokenizer)
         num_tokens = _count_messages(params, new_messages, use_default_image_token_count, default_token_count)
         if count_response_tokens is False:
-            includes_system_message: Final = any([message.get("role", None) == "system" for message in new_messages])
+            includes_system_message: Final = any(message.get("role", None) == "system" for message in new_messages)
             num_tokens += _count_extra(params.count_function, tools, tool_choice, includes_system_message)
 
     else:
