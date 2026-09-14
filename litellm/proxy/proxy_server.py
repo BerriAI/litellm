@@ -6217,7 +6217,6 @@ class ProxyConfig:
             )
 
             global_agent_registry.load_agents_from_config(agent_config)
-            jwt_handler.bind_agent_lookup(global_agent_registry)
 
         mcp_servers_config: Final = config.get("mcp_servers", None)
         if mcp_servers_config:
@@ -8183,7 +8182,6 @@ class ProxyConfig:
             global_agent_registry as AGENT_REGISTRY,
         )
 
-        jwt_handler.bind_agent_lookup(AGENT_REGISTRY)
         try:
             async with AGENT_RECONCILE_LOCK:
                 db_agents: Final = await AGENT_REGISTRY.get_all_agents_from_db(prisma_client=prisma_client)
@@ -9515,6 +9513,9 @@ class ProxyStartupEvent:
             user_api_key_cache=user_api_key_cache,
             litellm_jwtauth=litellm_jwtauth,
         )
+        from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+
+        jwt_handler.bind_agent_lookup(global_agent_registry)
 
     @classmethod
     def _add_proxy_budget_to_db(cls):
