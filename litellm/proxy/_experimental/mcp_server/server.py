@@ -3794,14 +3794,15 @@ if MCP_AVAILABLE:
     ) -> _JSONRPCErrorEnvelopeForLogging | None:
         stripped_body: Final = raw_body.lstrip()
         if stripped_body.startswith(b"{"):
-            json_body: Final = stripped_body
+            candidate_body = stripped_body
         else:
             data_lines: Final = tuple(
                 line.removeprefix(b"data:").lstrip() for line in raw_body.splitlines() if line.startswith(b"data:")
             )
             if len(data_lines) != 1:
                 return None
-            json_body = data_lines[0]
+            candidate_body = data_lines[0]
+        json_body: Final = candidate_body
         try:
             return _JSONRPC_ERROR_FOR_LOGGING_ADAPTER.validate_json(json_body)
         except ValidationError:
