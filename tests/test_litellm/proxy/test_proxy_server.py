@@ -5331,6 +5331,38 @@ def test_model_info_v1_list_skips_fastapi_jsonable_encoder(monkeypatch):
     assert encoder_spy.call_count == 0
 
 
+def test_model_info_v1_cli_model_returns_single_deployment_as_json(monkeypatch):
+    """
+    A proxy started with `litellm --model <name>` answers /model/info with one deployment
+    object under `data`, serialized the same way as the listing.
+    """
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", "gpt-4o")
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_model_list", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    encoder_spy = MagicMock(wraps=jsonable_encoder)
+    monkeypatch.setattr(fastapi.routing, "jsonable_encoder", encoder_spy)
+
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", models=[], team_models=[]
+    )
+    client = TestClient(app)
+    try:
+        response = client.get("/model/info")
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/json"
+    deployment = response.json()["data"]
+    assert deployment["model_name"] == "*"
+    assert deployment["litellm_params"]["model"] == "gpt-4o"
+    assert encoder_spy.call_count == 0
+
+
 def test_add_callback_from_db_to_in_memory_litellm_callbacks():
     """
     Test that _add_callback_from_db_to_in_memory_litellm_callbacks correctly adds callbacks
