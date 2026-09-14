@@ -2375,8 +2375,12 @@ _GROUNDING_QUERY_TEXT = "What is the capital of Japan?"
 _GROUNDING_RESPONSE_TEXT = "The capital of Japan is Tokyo."
 
 
-def _grounding_guardrail() -> BedrockGuardrail:
-    return BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
+def _grounding_guardrail(from_messages: bool = False) -> BedrockGuardrail:
+    return BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        contextual_grounding_from_messages=from_messages,
+    )
 
 
 def _grounding_messages() -> list:
@@ -2418,9 +2422,11 @@ def _input_request(messages: list) -> dict:
     return _grounding_guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
 
 
-def _output_request(messages: list, response=None) -> dict:
+def _output_request(messages: list, response=None, from_messages: bool = False) -> dict:
     """Arrange a guardrail and act: build the Bedrock OUTPUT payload."""
-    return _grounding_guardrail().convert_to_bedrock_format(source="OUTPUT", response=response, messages=messages)
+    return _grounding_guardrail(from_messages).convert_to_bedrock_format(
+        source="OUTPUT", response=response, messages=messages
+    )
 
 
 def test_grounding_input_strips_grounding_and_query_qualifiers():
@@ -2475,8 +2481,9 @@ def test_grounding_output_keeps_legacy_payload_without_tags():
 
 
 def test_grounding_output_derives_source_and_query_from_plain_messages():
-    """Untagged string system + user messages become grounding_source + query, so a
-    guardrail with a grounding threshold actually grades the response."""
+    """With contextual_grounding_from_messages on, untagged string system + user
+    messages become grounding_source + query, so a guardrail with a grounding
+    threshold grades the response."""
     messages = [
         {"role": "system", "content": _GROUNDING_SOURCE_TEXT},
         {"role": "user", "content": _GROUNDING_QUERY_TEXT},
@@ -2485,6 +2492,19 @@ def test_grounding_output_derives_source_and_query_from_plain_messages():
         "source": "OUTPUT",
         "content": [_GROUNDING_SOURCE_BLOCK, _QUERY_BLOCK, _GUARD_BLOCK],
     }
+
+    actual_request = _output_request(messages, _model_response(_GROUNDING_RESPONSE_TEXT), from_messages=True)
+
+    assert actual_request == expected_request
+
+
+def test_grounding_output_plain_messages_stay_legacy_when_flag_is_off():
+    """Default config: plain system + user text is never sent as grounding context."""
+    messages = [
+        {"role": "system", "content": _GROUNDING_SOURCE_TEXT},
+        {"role": "user", "content": _GROUNDING_QUERY_TEXT},
+    ]
+    expected_request = {"source": "OUTPUT", "content": [{"text": {"text": _GROUNDING_RESPONSE_TEXT}}]}
 
     actual_request = _output_request(messages, _model_response(_GROUNDING_RESPONSE_TEXT))
 
@@ -2513,7 +2533,7 @@ def test_grounding_output_derived_query_is_latest_user_turn_only():
         ],
     }
 
-    actual_request = _output_request(messages, _model_response(_GROUNDING_RESPONSE_TEXT))
+    actual_request = _output_request(messages, _model_response(_GROUNDING_RESPONSE_TEXT), from_messages=True)
 
     assert actual_request == expected_request
 
@@ -2550,7 +2570,7 @@ def test_grounding_output_stays_legacy_when_plain_source_or_query_is_missing(mes
     request that cannot supply both from trusted roles keeps the untagged payload."""
     expected_request = {"source": "OUTPUT", "content": [{"text": {"text": _GROUNDING_RESPONSE_TEXT}}]}
 
-    actual_request = _output_request(messages, _model_response(_GROUNDING_RESPONSE_TEXT))
+    actual_request = _output_request(messages, _model_response(_GROUNDING_RESPONSE_TEXT), from_messages=True)
 
     assert actual_request == expected_request
 
@@ -2568,7 +2588,7 @@ def test_grounding_output_explicit_tags_take_precedence_over_plain_messages():
         "content": [_GROUNDING_SOURCE_BLOCK, _QUERY_BLOCK, _GUARD_BLOCK],
     }
 
-    actual_request = _output_request(messages, _model_response(_GROUNDING_RESPONSE_TEXT))
+    actual_request = _output_request(messages, _model_response(_GROUNDING_RESPONSE_TEXT), from_messages=True)
 
     assert actual_request == expected_request
 
@@ -2585,7 +2605,9 @@ def test_grounding_input_ignores_plain_message_derivation():
         "content": [{"text": {"text": _GROUNDING_SOURCE_TEXT}}, {"text": {"text": _GROUNDING_QUERY_TEXT}}],
     }
 
-    actual_request = _input_request(messages)
+    actual_request = _grounding_guardrail(from_messages=True).convert_to_bedrock_format(
+        source="INPUT", messages=messages
+    )
 
     assert actual_request == expected_request
 
@@ -2715,11 +2737,7 @@ async def test_grounding_output_blocked_raises_400():
 
 @pytest.mark.asyncio
 async def test_apply_guardrail_response_forwards_request_messages_for_grounding():
-    """/guardrails/apply_guardrail with input_type=response: the request messages
-    stored in request_data must reach the OUTPUT payload as grounding_source + query
-    around the guarded text. Before LIT-4224 the response branch dropped them, so
-    Bedrock never ran its contextual-grounding policy on this route."""
-    guardrail = _grounding_guardrail()
+    guardrail = _grounding_guardrail(from_messages=True)
     request_messages = [
         {"role": "system", "content": _GROUNDING_SOURCE_TEXT},
         {"role": "user", "content": _GROUNDING_QUERY_TEXT},
