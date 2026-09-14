@@ -1431,9 +1431,7 @@ class RedisCache(BaseCache):
         )
         result = cast(
             "str | bytes",
-            await _redis_client.eval(
-                lua, 1, key, str(new_base), str(snapshot), str(int(_used_ttl or 0))
-            ),
+            await _redis_client.eval(lua, 1, key, str(new_base), str(snapshot), str(int(_used_ttl or 0))),
         )
         if isinstance(result, bytes):
             result = result.decode()

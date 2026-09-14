@@ -552,9 +552,7 @@ class ResetBudgetJob:
             if redis_cache is None:
                 return
 
-            snapshot = await ResetBudgetJob._snapshot_spend_counter(
-                redis_cache=redis_cache, counter_key=counter_key
-            )
+            snapshot = await ResetBudgetJob._snapshot_spend_counter(redis_cache=redis_cache, counter_key=counter_key)
             if snapshot is not None and await ResetBudgetJob._reset_redis_spend_counter(
                 redis_cache=redis_cache, counter_key=counter_key, new_spend=new_spend, snapshot=snapshot
             ):
