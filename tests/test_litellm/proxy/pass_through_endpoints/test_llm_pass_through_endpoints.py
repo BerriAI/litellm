@@ -3413,28 +3413,35 @@ def test_custom_pass_through_endpoint_prefix_wins_over_native_provider_routes():
     )
     from litellm.proxy.proxy_server import app
 
-    for suffix in ("files", "batches"):
-        InitPassThroughEndpointHelpers.add_exact_path_route(
-            app=app,
-            path=f"/claude-aws/v1/{suffix}",
-            target=f"https://example.com/v1/{suffix}",
-            custom_headers=None,
-            forward_headers=False,
-            merge_query_params=False,
-            dependencies=None,
-            cost_per_request=None,
-            endpoint_id=f"test-claude-aws-{suffix}",
-        )
+    # app is the real, process-wide proxy app -- registering routes on it leaks
+    # into every other test (e.g. test_component_allowlists.py's full-route-coverage
+    # check) unless restored, so snapshot and restore app.router.routes afterward.
+    original_routes = list(app.router.routes)
+    try:
+        for suffix in ("files", "batches"):
+            InitPassThroughEndpointHelpers.add_exact_path_route(
+                app=app,
+                path=f"/claude-aws/v1/{suffix}",
+                target=f"https://example.com/v1/{suffix}",
+                custom_headers=None,
+                forward_headers=False,
+                merge_query_params=False,
+                dependencies=None,
+                cost_per_request=None,
+                endpoint_id=f"test-claude-aws-{suffix}",
+            )
 
-    assert _resolve_route_name("POST", "/claude-aws/v1/files") == "endpoint_func"
-    assert _resolve_route_name("POST", "/claude-aws/v1/batches") == "endpoint_func"
+        assert _resolve_route_name("POST", "/claude-aws/v1/files") == "endpoint_func"
+        assert _resolve_route_name("POST", "/claude-aws/v1/batches") == "endpoint_func"
 
-    # registering a custom prefix must not disturb resolution of unrelated,
-    # already-registered native-provider routes
-    assert _resolve_route_name("POST", "/openai/v1/files") == "create_file"
-    assert _resolve_route_name("GET", "/azure/v1/files") == "list_files"
-    assert _resolve_route_name("POST", "/v1/files") == "create_file"
-    assert _resolve_route_name("POST", "/v1/batches") == "create_batch"
+        # registering a custom prefix must not disturb resolution of unrelated,
+        # already-registered native-provider routes
+        assert _resolve_route_name("POST", "/openai/v1/files") == "create_file"
+        assert _resolve_route_name("GET", "/azure/v1/files") == "list_files"
+        assert _resolve_route_name("POST", "/v1/files") == "create_file"
+        assert _resolve_route_name("POST", "/v1/batches") == "create_batch"
+    finally:
+        app.router.routes = original_routes
 
 
 def test_move_before_generic_provider_routes_is_a_no_op_without_a_generic_route():
