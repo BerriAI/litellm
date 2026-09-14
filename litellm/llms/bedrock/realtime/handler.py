@@ -84,8 +84,7 @@ def _should_log_event(openai_message: Mapping[str, object]) -> bool:
 class RealtimeClientWebSocket(Protocol):
     """The client-facing websocket surface the realtime bridge talks to."""
 
-    @property
-    def scope(self) -> MutableMapping[str, object]: ...  # mutable-ok: the ASGI scope is the per-connection state store
+    scope: MutableMapping[str, object]  # mutable-ok: the ASGI scope is the per-connection state store
 
     async def receive_text(self) -> str: ...
 
