@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+import litellm
 from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import (
     LLMAsAJudgeGuardrail,
     _build_judge_prompt,
@@ -147,9 +148,7 @@ def test_initialize_guardrail_invalid_on_failure():
     ],
     ids=["scalar", "list", "tagged", "missing"],
 )
-@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.logging_callback_manager")
 def test_initialize_guardrail_preserves_every_mode_shape(
-    _mock_mgr: MagicMock,
     mode: str | list[str] | Mode | None,
     runs_pre_call: bool,
     runs_post_call: bool,
@@ -157,9 +156,11 @@ def test_initialize_guardrail_preserves_every_mode_shape(
     lp: Final = _make_litellm_params(mode=mode)
     instance: Final = initialize_guardrail(lp, _make_guardrail_dict())
     request_data: Final[dict[str, object]] = {"metadata": {"guardrails": ["g"], "tags": ["judge"]}}
-
-    assert instance.should_run_guardrail(request_data, GuardrailEventHooks.pre_call) is runs_pre_call
-    assert instance.should_run_guardrail(request_data, GuardrailEventHooks.post_call) is runs_post_call
+    try:
+        assert instance.should_run_guardrail(request_data, GuardrailEventHooks.pre_call) is runs_pre_call
+        assert instance.should_run_guardrail(request_data, GuardrailEventHooks.post_call) is runs_post_call
+    finally:
+        litellm.logging_callback_manager.remove_callback_from_all_lists(instance)
 
 
 def test_initialize_guardrail_rejects_unknown_mode():
