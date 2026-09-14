@@ -105,6 +105,9 @@ class FakeSseResponse:
     def iter_lines(self) -> Iterator[bytes]:
         return iter(self.lines)
 
+    def iter_content(self, chunk_size: int | None = 1) -> Iterator[bytes]:
+        return iter(self.lines)
+
 
 def _ticking_clock(start: float, step: float) -> Callable[[], float]:
     ticks: Final = iter(range(10_000))
@@ -182,6 +185,7 @@ class FakeJsonResponse:
 
     status_code: int
     content: bytes
+    headers: Mapping[str, str] = MappingProxyType({})
 
     @property
     def ok(self) -> bool:

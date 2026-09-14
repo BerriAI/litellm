@@ -55,6 +55,13 @@ from types import MappingProxyType
 from typing import Final, Literal, assert_never
 from urllib.parse import parse_qsl, urlsplit
 
+from bedrock_edge import (
+    bedrock_region,
+    bedrock_upstream,
+    recording_credentials,
+    sign_bedrock_forward,
+    valid_bedrock_signature,
+)
 from e2e_http import (
     NetworkError,
     StreamChunk,
@@ -631,7 +638,8 @@ def _is_streamed(headers: Mapping[str, str]) -> bool:
     move nearly every recording to the streamed shape for no gain. The content type
     is the header that says "consume this as it arrives", and it is already how the
     harness defines streaming everywhere else."""
-    return "text/event-stream" in _header_value(headers, "content-type").lower()
+    content_type: Final = _header_value(headers, "content-type").lower()
+    return any(kind in content_type for kind in ("text/event-stream", "application/vnd.amazon.eventstream"))
 
 
 def _upstream_url(upstream_base: str, upstream_path: str, query: str) -> str:
@@ -783,26 +791,29 @@ def handle_edge_request(
     Socket-free so unit tests exercise every branch without a server."""
     split: Final = urlsplit(raw_path)
     mount, _, upstream_path = split.path.lstrip("/").partition("/")
-    upstream_base: Final = mounts.get(mount)
+    upstream_base: Final = mounts.get(mount) or bedrock_upstream(mount)
     if upstream_base is None:
-        return _text_reply(
-            404, f"unknown provider mount {mount!r}; known mounts: {', '.join(sorted(mounts))}"
-        )
-    request: Final = edge_request(
-        method, split.path, split.query, body, _header_value(headers, "content-type")
+        return _text_reply(404, f"unknown provider mount {mount!r}; known mounts: {', '.join(sorted(mounts))}")
+    request: Final = edge_request(method, split.path, split.query, body, _header_value(headers, "content-type"))
+    region: Final = bedrock_region(mount)
+    if region is not None and not valid_bedrock_signature(method, raw_path, headers, body, region):
+        return _text_reply(403, "Bedrock provider edge rejected the test SigV4 signature")
+    url: Final = _upstream_url(upstream_base, upstream_path, split.query)
+    forwarded_headers: Final = (
+        sign_bedrock_forward(method, url, headers, body, region, recording_credentials())
+        if region is not None and not isinstance(backend, ReplayEdge)
+        else headers
     )
     match backend:
         case LiveEdge():
-            return _handle_live(
-                method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout
-            )
+            return _handle_live(method, url, forwarded_headers, body, timeout)
         case RecordEdge():
             return _handle_record(
                 backend,
                 request,
                 method=method,
-                url=_upstream_url(upstream_base, upstream_path, split.query),
-                headers=headers,
+                url=url,
+                headers=forwarded_headers,
                 body=body,
                 timeout=timeout,
             )
@@ -1020,10 +1031,8 @@ def provider_edge_api_base(
         case "live":
             return None
         case "record" | "replay":
-            if mount not in EDGE_MOUNTS:
-                raise ValueError(
-                    f"unknown provider mount {mount!r}; known mounts: {', '.join(sorted(EDGE_MOUNTS))}"
-                )
+            if mount not in EDGE_MOUNTS and bedrock_upstream(mount) is None:
+                raise ValueError(f"unknown provider mount {mount!r}; known mounts: {', '.join(sorted(EDGE_MOUNTS))}")
             return _shared_edge(mode, bundle_dir, bind_host, advertise_host, forward_timeout).api_base(mount)
         case _:
             assert_never(mode)

@@ -22,10 +22,11 @@ from pathlib import Path
 from typing import Final
 
 import pytest
+from bedrock_config import bedrock_params
 from pydantic import BaseModel
 
 from e2e_config import unique_marker
-from e2e_http import StreamingResponse, unwrap
+from e2e_http import StreamingResponse, require_successful_call, unwrap
 from lifecycle import ResourceManager
 from models import (
     ChatBody,
@@ -47,7 +48,6 @@ COHERE_BACKEND = "cohere/command-r-08-2024"
 GEMINI_BACKEND = "gemini/gemini-2.5-flash"
 OPENAI_BACKEND = "openai/gpt-5.6"
 ANTHROPIC_BACKEND = "anthropic/claude-haiku-4-5-20251001"
-BEDROCK_CONVERSE_BACKEND = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
 class _StreamToolCallFunction(BaseModel):
@@ -66,6 +66,7 @@ class _StreamDelta(BaseModel):
 
 class _StreamChoice(BaseModel):
     delta: _StreamDelta = _StreamDelta()
+    finish_reason: str | None = None
 
 
 class _StreamChunk(BaseModel):
@@ -124,21 +125,16 @@ def _streamed_text(events: list[str]) -> str:
 def _assert_streamed_completion(result: StreamingResponse) -> None:
     """A streamed /chat/completions must deliver real content, not a clean-but-empty
     stream (the #28991 class on the streaming path)."""
-    assert result.ok and result.is_streaming, f"stream was not established: {result}"
+    require_successful_call(result)
+    assert result.is_streaming, f"stream was not established: {result}"
     assert result.stream_error is None, f"stream carried an error event: {result.stream_error}"
     assert len(result.stream_events) > 1, f"stream did not deliver multiple data events: {result}"
     assert _streamed_text(result.stream_events).strip(), (
         f"stream completed with no content deltas: {result.stream_events[:3]}"
     )
-
-
-def _bedrock_params() -> LiteLLMParamsBody:
-    return LiteLLMParamsBody(
-        model=BEDROCK_CONVERSE_BACKEND,
-        aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
-        aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
-        aws_region_name="os.environ/AWS_REGION",
-    )
+    assert result.stream_done, "chat stream ended without [DONE]"
+    chunks: Final = tuple(_StreamChunk.model_validate_json(event) for event in result.stream_events)
+    assert any(choice.finish_reason for chunk in chunks for choice in chunk.choices), "chat stream has no finish reason"
 
 
 class _WeatherArgs(BaseModel):
@@ -621,6 +617,7 @@ class TestOpenAIChatCompletions:
         assert args.location.strip(), f"streamed tool call arguments missing location: {arguments!r}"
 
 
+@pytest.mark.replayable
 class TestBedrockConverseChatCompletions:
     """Bedrock Converse via /chat/completions, the customer's AWS stack. A non-OpenAI
     provider must return real content on both the non-streamed and streamed paths.
@@ -628,7 +625,7 @@ class TestBedrockConverseChatCompletions:
 
     def _register(self, client: PassthroughClient, resources: ResourceManager, prefix: str) -> str:
         model = f"{prefix}-{unique_marker()}"
-        model_id = client.proxy.create_model(model, _bedrock_params())
+        model_id = client.proxy.create_model(model, bedrock_params())
         resources.defer(lambda: client.proxy.delete_model(model_id))
         return model
 
