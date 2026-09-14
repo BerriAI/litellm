@@ -106,7 +106,6 @@ def test_fallback_login_shows_credentials_hint_by_default(client, monkeypatch):
 
 
 def test_fallback_login_hides_credentials_hint_when_ui_password_set(client, monkeypatch):
-    """Regression: a non-empty UI_PASSWORD means 'admin / MASTER_KEY' is wrong, so the hint must go."""
     monkeypatch.setenv("UI_PASSWORD", "s3cret-pass")
     monkeypatch.delenv("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", raising=False)
     response = client.get("/fallback/login")

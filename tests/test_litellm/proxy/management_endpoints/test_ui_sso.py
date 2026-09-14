@@ -8389,8 +8389,6 @@ async def test_legacy_login_page_hides_credentials_hint_via_general_settings():
 
 @pytest.mark.asyncio
 async def test_legacy_login_page_hides_credentials_hint_when_ui_password_set():
-    """Regression: the legacy page shares the rule with the discovery endpoint, so a non-empty
-    UI_PASSWORD hides the now-inaccurate 'admin / MASTER_KEY' hint here too."""
     response = await _render_legacy_login_page(
         env_overrides={"UI_PASSWORD": "s3cret-pass"},
         general_settings={},
