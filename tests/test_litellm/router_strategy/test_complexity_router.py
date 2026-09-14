@@ -6092,6 +6092,57 @@ class TestClassificationMode:
         assert all(r.routing_decision["cause"] != "user_turn_continuation" for r in responses)
 
     @pytest.mark.asyncio
+    async def test_prompt_cache_key_opt_in_holds_tool_loop_decision(self, mock_router_instance, user_turn_config):
+        """An OpenAI-compatible client may expose only its stable prompt-cache bucket. The
+        explicit opt-in lets that key hold a continuation decision without trusting generated IDs."""
+        router = self._router(
+            mock_router_instance,
+            {**user_turn_config, "prompt_cache_key_as_session_id": True},
+        )
+        request_kwargs = {
+            "prompt_cache_key": "opaque-thread-123",
+            "metadata": {
+                "session_id": "per-request-generated-id",
+                SESSION_ID_GENERATED_METADATA_KEY: True,
+            },
+        }
+        with patch.object(router, "_classify_and_route", wraps=router._classify_and_route) as spy:
+            responses = [
+                await router.async_pre_routing_hook(
+                    model="test-model", request_kwargs=deepcopy(request_kwargs), messages=turn
+                )
+                for turn in self._tool_loop_turns()
+            ]
+        assert spy.call_count == 1
+        assert [r.model for r in responses] == ["o1-preview", "o1-preview", "o1-preview"]
+
+    def test_prompt_cache_key_affinity_is_explicit_bounded_and_lower_precedence(
+        self, mock_router_instance, user_turn_config
+    ):
+        disabled = self._router(mock_router_instance, user_turn_config)
+        assert disabled._get_session_id_from_request_kwargs({"prompt_cache_key": "opaque-thread-123"}) is None
+
+        enabled = self._router(
+            mock_router_instance,
+            {**user_turn_config, "prompt_cache_key_as_session_id": True},
+        )
+        fallback = enabled._get_session_id_from_request_kwargs({"prompt_cache_key": "opaque-thread-123"})
+        assert fallback is not None
+        assert fallback.startswith("prompt-cache:")
+        assert "opaque-thread-123" not in fallback
+        assert enabled._get_session_id_from_request_kwargs({"prompt_cache_key": ""}) is None
+        assert enabled._get_session_id_from_request_kwargs({"prompt_cache_key": "x" * 65}) is None
+        assert (
+            enabled._get_session_id_from_request_kwargs(
+                {
+                    "prompt_cache_key": "opaque-thread-123",
+                    "metadata": {"session_id": "explicit-session"},
+                }
+            )
+            == "explicit-session"
+        )
+
+    @pytest.mark.asyncio
     async def test_plugins_suppress_user_turn_gate(self, mock_router_instance, basic_config):
         """A replayed decision would bypass the plugin pipeline, so plugins force every request
         through _classify_and_route, exactly as they do for session_affinity."""
