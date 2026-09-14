@@ -1788,9 +1788,9 @@ class _ExceptionRow(TypedDict, total=False):
 
 
 class _ValidationErrorDetail(TypedDict):
-    type: str
-    loc: tuple[int | str, ...]
-    msg: str
+    type: ReadOnly[str]
+    loc: ReadOnly[tuple[int | str, ...]]
+    msg: ReadOnly[str]
 
 
 def _is_length_error_of_rejected_items(error: _ValidationErrorDetail, errors: Sequence[_ValidationErrorDetail]) -> bool:
