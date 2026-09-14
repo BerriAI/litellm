@@ -328,7 +328,21 @@ _safe_json_loads_obj: Final = _typed_json_loads(safe_json_loads)
 last_db_access_time: Final = LimitedSizeOrderedDict(max_size=100)
 db_cache_expiry: Final = DEFAULT_IN_MEMORY_TTL  # refresh every 5s
 
+_TEAM_MEMBERSHIP_INFLIGHT_MAX: Final = 10000
+_team_membership_inflight: Final = LimitedSizeOrderedDict(max_size=_TEAM_MEMBERSHIP_INFLIGHT_MAX)
+
+
+class _TeamMembershipCacheMiss:
+    __slots__ = ()
+
+
+_TEAM_MEMBERSHIP_CACHE_MISS: Final = _TeamMembershipCacheMiss()
+
 all_routes: Final = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
+
+
+def _membership_from_shared_load(result: object) -> LiteLLM_TeamMembership | None:
+    return result if isinstance(result, LiteLLM_TeamMembership) else None
 
 
 def _log_budget_lookup_failure(entity: str, error: Exception) -> None:
@@ -888,6 +902,22 @@ async def common_checks(
         and (route in MODEL_DISCOVERY_ROUTES or not RouteChecks.is_llm_api_route(route=route))
     )
 
+    membership_user_id: Final = (
+        valid_token.user_id if valid_token is not None and (bool(_model) or not skip_all_budget_checks) else None
+    )
+    team_membership_loaded: Final = team_object is not None and membership_user_id is not None
+    loaded_team_membership: Final = (
+        await get_team_membership(
+            user_id=membership_user_id,
+            team_id=team_object.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if team_object is not None and membership_user_id is not None
+        else None
+    )
+
     unpriced_models: Final = (
         _unpriced_models_in_request(model=_model, llm_router=llm_router)
         if litellm.block_requests_for_models_without_pricing and RouteChecks.is_llm_api_route(route=route)
@@ -937,6 +967,8 @@ async def common_checks(
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
+                team_membership=loaded_team_membership,
+                team_membership_loaded=team_membership_loaded,
             )
 
     # Require trace id for agent keys when agent has require_trace_id_on_calls_by_agent
@@ -988,6 +1020,8 @@ async def common_checks(
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
+        team_membership=loaded_team_membership,
+        team_membership_loaded=team_membership_loaded,
     )
 
     # Run before apply_key_tags_pre_auth injects key metadata.tags into request_body.
@@ -1097,6 +1131,8 @@ async def common_checks(
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
+                    team_membership=loaded_team_membership,
+                    team_membership_loaded=team_membership_loaded,
                 ),
                 _check_end_user_budget(end_user_obj=end_user_object, route=route)
                 if end_user_object is not None and end_user_object.litellm_budget_table is not None
@@ -2142,7 +2178,76 @@ async def get_tag_object(
     return tag_objects.get(tag_name)
 
 
+def _membership_from_cached_payload(
+    cached: object,
+) -> LiteLLM_TeamMembership | None | _TeamMembershipCacheMiss:
+    if cached is None:
+        return _TEAM_MEMBERSHIP_CACHE_MISS
+    if cached == NO_TEAM_MEMBERSHIP_SENTINEL:
+        return None
+    cached_membership: Final = CacheCodec.deserialize(cached, model_type=LiteLLM_TeamMembership)
+    return cached_membership if cached_membership is not None else _TEAM_MEMBERSHIP_CACHE_MISS
+
+
 @log_db_metrics
+async def _fetch_team_membership_from_db(
+    user_id: str,
+    team_id: str,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Span | None = None,
+    proxy_logging_obj: ProxyLogging | None = None,
+) -> LiteLLM_TeamMembership | None:
+    _ = parent_otel_span, proxy_logging_obj
+    response: Final = await _dictable_table(TeamMembershipRepository(prisma_client)).find_unique(
+        where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
+        include={"litellm_budget_table": True},
+    )
+    membership: Final = None if response is None else LiteLLM_TeamMembership.model_validate(response.dict())
+    _key: Final = team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)
+    if membership is None:
+        await user_api_key_cache.async_set_cache(
+            key=_key,
+            value=NO_TEAM_MEMBERSHIP_SENTINEL,
+            ttl=get_management_object_ttl(user_api_key_cache),
+        )
+    else:
+        await user_api_key_cache.async_set_cache(
+            key=_key,
+            value=membership,
+            model_type=LiteLLM_TeamMembership,
+        )
+    return membership
+
+
+async def _load_team_membership_on_cache_miss(
+    user_id: str,
+    team_id: str,
+    cache_key: str,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Span | None,
+    proxy_logging_obj: ProxyLogging | None,
+) -> LiteLLM_TeamMembership | None:
+    try:
+        redis_cached: Final[object] = await user_api_key_cache.async_get_cache(key=cache_key)
+        redis_membership: Final = _membership_from_cached_payload(redis_cached)
+        if not isinstance(redis_membership, _TeamMembershipCacheMiss):
+            return redis_membership
+
+        return await _fetch_team_membership_from_db(
+            user_id=user_id,
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception:
+        verbose_proxy_logger.exception("Error getting team membership")
+        return None
+
+
 async def get_team_membership(
     user_id: str,
     team_id: str,
@@ -2156,54 +2261,42 @@ async def get_team_membership(
 
     Do a isolated check for team membership vs. doing a combined key + team + user + team-membership check, as key might come in frequently for different users/teams. Larger call will slowdown query time. This way we get to cache the constant (key/team/user info) and only update based on the changing value (team membership).
     """
-    from litellm.proxy._types import LiteLLM_TeamMembership
-
-    if prisma_client is None:
-        raise Exception("No db connected")
-
     if user_id is None or team_id is None:
         return None
 
     _key: Final = team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)
 
-    # check if in cache
-    cached: Final[object] = await user_api_key_cache.async_get_cache(key=_key)
-    if cached == NO_TEAM_MEMBERSHIP_SENTINEL:
-        return None
-    cached_membership_obj: Final = CacheCodec.deserialize(cached, model_type=LiteLLM_TeamMembership)
-    if cached_membership_obj is not None:
-        return cached_membership_obj
+    l1_cached: Final[object] = await user_api_key_cache.async_get_cache(key=_key, local_only=True)
+    l1_membership: Final = _membership_from_cached_payload(l1_cached)
+    if not isinstance(l1_membership, _TeamMembershipCacheMiss):
+        return l1_membership
 
-    # else, check db
-    try:
-        response: Final = await _dictable_table(TeamMembershipRepository(prisma_client)).find_unique(
-            where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
-            include={"litellm_budget_table": True},
+    inflight: Final[object] = _team_membership_inflight.get(_key)
+    if isinstance(inflight, asyncio.Task):
+        return _membership_from_shared_load(await asyncio.shield(inflight))
+
+    if prisma_client is None:
+        raise Exception("No db connected")
+
+    task: Final = asyncio.ensure_future(
+        _load_team_membership_on_cache_miss(
+            user_id=user_id,
+            team_id=team_id,
+            cache_key=_key,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
         )
+    )
+    _team_membership_inflight[_key] = task
 
-        if response is None:
-            await user_api_key_cache.async_set_cache(
-                key=_key,
-                value=NO_TEAM_MEMBERSHIP_SENTINEL,
-                ttl=get_management_object_ttl(user_api_key_cache),
-            )
-            return None
+    def _clear_inflight(_done: object) -> None:
+        if _team_membership_inflight.get(_key) is task:
+            _team_membership_inflight.pop(_key, None)
 
-        _response: Final = LiteLLM_TeamMembership.model_validate(response.dict())
-        await user_api_key_cache.async_set_cache(
-            key=_key,
-            value=_response,
-            model_type=LiteLLM_TeamMembership,
-        )
-
-        return _response
-    except Exception:
-        verbose_proxy_logger.exception(
-            "Error getting team membership for user_id: %s, team_id: %s",
-            user_id,
-            team_id,
-        )
-        return None
+    task.add_done_callback(_clear_inflight)
+    return _membership_from_shared_load(await asyncio.shield(task))
 
 
 def model_in_access_group(model: str, team_models: list[str] | None, llm_router: Router | None) -> bool:
@@ -2661,6 +2754,12 @@ async def invalidate_team_member_spend_state(
         evict_and_broadcast,
         publish_auth_cache_invalidation,
     )
+
+    inflight: Final[object] = _team_membership_inflight.pop(
+        team_membership_reservation_cache_key(user_id=user_id, team_id=team_id), None
+    )
+    if isinstance(inflight, asyncio.Task) and inflight is not asyncio.current_task():
+        await asyncio.wait((inflight,))
 
     if new_spend is not None:
         from litellm.proxy.proxy_server import SPEND_DB_FLOOR_CACHE_TTL_SECONDS, spend_counter_cache
@@ -4116,18 +4215,21 @@ async def _team_member_granted_models(
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
+    team_membership: LiteLLM_TeamMembership | None = None,
+    team_membership_loaded: bool = False,
 ) -> Sequence[str]:
     """The member's own ``allowed_models`` scope; empty when the member is not narrowed below the team."""
     if team_object is None or valid_token.user_id is None:
         return ()
 
-    team_membership: Final = await get_team_membership(
-        user_id=valid_token.user_id,
-        team_id=team_object.team_id,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-    )
+    if not team_membership_loaded:
+        team_membership = await get_team_membership(
+            user_id=valid_token.user_id,
+            team_id=team_object.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
     return () if team_membership is None else _member_allowed_models(team_membership)
 
 
@@ -4163,6 +4265,8 @@ async def _granted_model_lists(
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
+    team_membership: LiteLLM_TeamMembership | None = None,
+    team_membership_loaded: bool = False,
 ) -> tuple[Sequence[str], ...]:
     """One model allowlist per level that participates in authorizing the request."""
     return (
@@ -4174,6 +4278,8 @@ async def _granted_model_lists(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
+            team_membership=team_membership,
+            team_membership_loaded=team_membership_loaded,
         ),
         project_object.models if project_object is not None else (),
         await _org_granted_models(
@@ -4268,6 +4374,8 @@ async def collect_matched_model_access_groups(
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
+    team_membership: LiteLLM_TeamMembership | None = None,
+    team_membership_loaded: bool = False,
 ) -> tuple[str, ...]:
     """
     The budgeted model access groups that authorized this request, sorted and deduplicated.
@@ -4313,6 +4421,8 @@ async def collect_matched_model_access_groups(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
+            team_membership=team_membership,
+            team_membership_loaded=team_membership_loaded,
         )
         for granted_model in granted_models
     )
@@ -4328,6 +4438,8 @@ async def stamp_matched_model_access_groups(
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
+    team_membership: LiteLLM_TeamMembership | None = None,
+    team_membership_loaded: bool = False,
 ) -> tuple[str, ...]:
     """Record the groups that authorized this request on its auth object, for the post-call spend
     writer and the reservation counters, and hand them back for the budget check."""
@@ -4344,6 +4456,8 @@ async def stamp_matched_model_access_groups(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
+            team_membership=team_membership,
+            team_membership_loaded=team_membership_loaded,
         )
     except Exception as e:  # noqa: BLE001  # fail-safe: attribution is spend telemetry, it must never break auth
         verbose_proxy_logger.debug("model access group attribution failed: %s", e)
@@ -5146,6 +5260,8 @@ async def _check_team_member_budget(
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
+    team_membership: LiteLLM_TeamMembership | None = None,
+    team_membership_loaded: bool = False,
 ):
     """Check if team member is over their max budget within the team."""
     if (
@@ -5154,23 +5270,25 @@ async def _check_team_member_budget(
         and valid_token is not None
         and valid_token.user_id is not None
     ):
-        team_membership: Final = await get_team_membership(
-            user_id=valid_token.user_id,
-            team_id=team_object.team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
+        if not team_membership_loaded:
+            team_membership = await get_team_membership(
+                user_id=valid_token.user_id,
+                team_id=team_object.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        loaded_membership = team_membership
 
         # Per-member override wins; otherwise fall back to the team-level
         # default configured via team.metadata["team_member_budget_id"].
         team_member_budget: float | None = None
         if (
-            team_membership is not None
-            and team_membership.litellm_budget_table is not None
-            and team_membership.litellm_budget_table.max_budget is not None
+            loaded_membership is not None
+            and loaded_membership.litellm_budget_table is not None
+            and loaded_membership.litellm_budget_table.max_budget is not None
         ):
-            team_member_budget = team_membership.litellm_budget_table.max_budget
+            team_member_budget = loaded_membership.litellm_budget_table.max_budget
         else:
             default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
             if isinstance(default_budget_id, str):
@@ -5189,7 +5307,7 @@ async def _check_team_member_budget(
                     team_member_budget = default_budget.max_budget
 
         if team_member_budget is not None:
-            team_member_spend = (team_membership.spend if team_membership is not None else 0.0) or 0.0
+            team_member_spend = (loaded_membership.spend if loaded_membership is not None else 0.0) or 0.0
 
             # Read from cross-pod counter (Redis-first) if available
             from litellm.proxy.proxy_server import get_current_spend
@@ -5218,6 +5336,8 @@ async def _check_team_member_model_access(
     prisma_client: Optional["PrismaClient"],
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
+    team_membership: LiteLLM_TeamMembership | None = None,
+    team_membership_loaded: bool = False,
 ) -> None:
     """
     Check if a team member's per-member model scope allows access to the requested model.
@@ -5228,22 +5348,24 @@ async def _check_team_member_model_access(
     if valid_token.user_id is None or team_object.team_id is None:
         return
 
-    team_membership: Final = await get_team_membership(
-        user_id=valid_token.user_id,
-        team_id=team_object.team_id,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-    )
+    if not team_membership_loaded:
+        team_membership = await get_team_membership(
+            user_id=valid_token.user_id,
+            team_id=team_object.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    loaded_membership = team_membership
 
     if (
-        team_membership is None
-        or team_membership.litellm_budget_table is None
-        or not team_membership.litellm_budget_table.allowed_models
+        loaded_membership is None
+        or loaded_membership.litellm_budget_table is None
+        or not loaded_membership.litellm_budget_table.allowed_models
     ):
         return  # no per-member restriction — inherit team-level check
 
-    member_allowed_models: Final[list[str]] = team_membership.litellm_budget_table.allowed_models
+    member_allowed_models: Final[list[str]] = loaded_membership.litellm_budget_table.allowed_models
     try:
         _can_object_call_model(
             model=model,
