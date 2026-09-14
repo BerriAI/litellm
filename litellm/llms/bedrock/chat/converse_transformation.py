@@ -1344,20 +1344,20 @@ class AmazonConverseConfig(BaseConfig):
             and content[0].get("type") == "tool_result"
         )
 
-    def _system_run_before(self, messages: list, index: int) -> list:
+    def _system_run_before(self, messages: list, index: int) -> list:  # mutable-ok: input list boundary
         start: Final = next(
             (j + 1 for j in range(index - 1, -1, -1) if not self._is_system_role_message(messages[j])),
             0,
         )
         return messages[start:index]
 
-    def _system_run_end(self, messages: list, index: int) -> int:
+    def _system_run_end(self, messages: list, index: int) -> int:  # mutable-ok: input list boundary
         return next(
             (j for j in range(index, len(messages)) if not self._is_system_role_message(messages[j])),
             len(messages),
         )
 
-    def _reordered_around_tool_results(self, messages: list, index: int) -> tuple:
+    def _reordered_around_tool_results(self, messages: list, index: int) -> tuple:  # mutable-ok: input list boundary
         """Move a system run wedged between an assistant tool-call turn and its
         tool-result turn(s) to after the tool results.
 
@@ -1396,7 +1396,7 @@ class AmazonConverseConfig(BaseConfig):
             return ()
         return (message,)
 
-    def _system_role_message_as_user(self, message: Mapping) -> dict:
+    def _system_role_message_as_user(self, message: Mapping) -> dict:  # mutable-ok: converted user dict
         """Convert a mid-conversation system entry to a user turn, in place.
 
         The Converse API only accepts user/assistant roles in ``messages``,
@@ -1405,9 +1405,9 @@ class AmazonConverseConfig(BaseConfig):
         prompt caching; converting in place keeps everything before the entry
         byte-identical."""
         content = message.get("content")
-        text_blocks: list[dict] = []
+        text_blocks: list[dict] = []  # mutable-ok: local accumulator
         if isinstance(content, str) and content:
-            text_block: dict = {"type": "text", "text": content}
+            text_block: dict = {"type": "text", "text": content}  # mutable-ok: local block build
             if message.get("cache_control") is not None:
                 text_block["cache_control"] = message["cache_control"]
             text_blocks.append(text_block)
@@ -1418,11 +1418,11 @@ class AmazonConverseConfig(BaseConfig):
                     if m.get("cache_control") is not None:
                         text_block["cache_control"] = m["cache_control"]
                     text_blocks.append(text_block)
-        converted: dict = {
+        converted: dict = {  # mutable-ok: converted message build
             "role": "user",
             "content": [{"type": "text", "text": self._CONVERTED_MID_CONVERSATION_SYSTEM_NOTE}] + text_blocks,
         }
-        return cast(AllMessageValues, converted)
+        return cast(AllMessageValues, converted)  # cast-ok: narrow built dict to message type
 
     def _transform_system_message(
         self, messages: list[AllMessageValues], model: str | None = None
@@ -1456,16 +1456,18 @@ class AmazonConverseConfig(BaseConfig):
             for index in range(len(remaining))
             for message in self._reordered_around_tool_results(remaining, index)
         )
-        new_messages: Final[list[AllMessageValues]] = []
+        new_messages: Final[list[AllMessageValues]] = []  # mutable-ok: local accumulator
         for message in reordered:
             if self._is_system_role_message(message):
-                converted = self._system_role_message_as_user(cast(Mapping, message))
+                converted = self._system_role_message_as_user(
+                    cast(Mapping, message)
+                )  # cast-ok: narrow message to mapping
                 # Drop entries with no text (same as the old hoist, which
                 # extracted nothing from them) instead of injecting a bare note.
                 if len(converted["content"]) > 1:
                     new_messages.append(converted)
             else:
-                new_messages.append(cast(AllMessageValues, message))
+                new_messages.append(cast(AllMessageValues, message))  # cast-ok: narrow passed-through message
         return new_messages, system_content_blocks
 
     def _transform_inference_params(self, inference_params: dict) -> InferenceConfig:
