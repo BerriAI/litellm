@@ -594,14 +594,15 @@ class TestModeMatching:
 class TestSkippedGuardrails:
     """LIT-6314 logs a skipped entry for a guardrail that message scoping left nothing to scan."""
 
-    def test_skipped_alone_never_evidences_compliance(self):
+    @pytest.mark.parametrize("status", ["skipped", "not_run"])
+    def test_skipped_alone_never_evidences_compliance(self, status: str):
         data = ComplianceCheckRequest(
             request_id="req-601",
             user_id="user-1",
             model="gpt-4",
             timestamp="2026-02-17T00:00:00Z",
             guardrail_information=[
-                {"guardrail_name": "pii_detection", "guardrail_status": "skipped", "guardrail_mode": "pre_call"},
+                {"guardrail_name": "pii_detection", "guardrail_status": status, "guardrail_mode": "pre_call"},
             ],
         )
         results = {c.check_name: c.passed for c in ComplianceChecker(data).check_eu_ai_act()}
