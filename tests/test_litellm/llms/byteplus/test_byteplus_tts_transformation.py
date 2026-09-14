@@ -89,7 +89,9 @@ class TestBytePlusTextToSpeechConfig:
         config = BytePlusTextToSpeechConfig()
         chunk1 = base64.b64encode(b"audio-part-1").decode("utf-8")
         chunk2 = base64.b64encode(b"audio-part-2").decode("utf-8")
-        raw_lines = f'{{"code":0,"data":"{chunk1}"}}\n{{"code":0,"data":"{chunk2}"}}\n{{"code":20000000,"message":"ok"}}'
+        raw_lines = (
+            f'{{"code":0,"data":"{chunk1}"}}\n{{"code":0,"data":"{chunk2}"}}\n{{"code":20000000,"message":"ok"}}'
+        )
 
         response = httpx.Response(status_code=200, text=raw_lines)
         binary_res = config.transform_text_to_speech_response("seed-tts-2.0", response, None)
@@ -204,3 +206,195 @@ class TestBytePlusTextToSpeechConfig:
             voice="id_male_han_uranus_bigtts",
         )
         assert res.content == b"mocked-audio"
+
+    def test_infer_audio_content_type_more(self):
+        from litellm.llms.byteplus.text_to_speech.transformation import _infer_audio_content_type
+
+        assert _infer_audio_content_type(b"RIFFsomebytes", "wav") == "audio/wav"
+        assert _infer_audio_content_type(b"fLaCsomebytes", "flac") == "audio/flac"
+
+    def test_extract_requested_format_with_logging_obj(self):
+        from unittest.mock import MagicMock
+        from litellm.llms.byteplus.text_to_speech.transformation import _extract_requested_format
+
+        resp = httpx.Response(status_code=200)
+        logging_obj = MagicMock()
+        logging_obj.optional_params = {"response_format": "wav"}
+        logging_obj.model_call_details = None
+        assert _extract_requested_format(resp, logging_obj, "mp3") == "wav"
+
+        logging_obj2 = MagicMock()
+        logging_obj2.optional_params = None
+        logging_obj2.model_call_details = {"optional_params": {"format": "pcm"}}
+        assert _extract_requested_format(resp, logging_obj2, "mp3") == "pcm"
+
+        logging_obj3 = MagicMock()
+        logging_obj3.optional_params = None
+        logging_obj3.model_call_details = None
+        assert _extract_requested_format(resp, logging_obj3, "mp3") == "mp3"
+
+        bad_req = MagicMock()
+        bad_req.content = b"invalid-json{"
+        bad_resp = httpx.Response(status_code=200, request=bad_req)
+        assert _extract_requested_format(bad_resp, None, "mp3") == "mp3"
+
+    def test_extract_voice_variations(self):
+        from litellm.llms.byteplus.text_to_speech.transformation import _extract_voice
+
+        # Voice as dict
+        assert _extract_voice({"speaker": "custom_speaker"}, {}) == "custom_speaker"
+        assert _extract_voice({"name": "name_speaker"}, {}) == "name_speaker"
+
+        # Voice in kwargs
+        kwargs = {"speaker": "kwarg_speaker"}
+        assert _extract_voice(None, kwargs) == "kwarg_speaker"
+        assert "speaker" not in kwargs
+
+        # None
+        assert _extract_voice(None, {}) is None
+
+    def test_get_supported_openai_params(self):
+        config = BytePlusTextToSpeechConfig()
+        params = config.get_supported_openai_params("byteplus/seed-tts-2.0")
+        assert "speed" in params
+        assert "response_format" in params
+
+    def test_transform_text_to_speech_request_speed_and_format(self):
+        config = BytePlusTextToSpeechConfig()
+        req = config.transform_text_to_speech_request(
+            model="byteplus/seed-tts-2.0",
+            input="speed test",
+            voice="BV001_streaming",
+            optional_params={
+                "speed": 1.5,
+                "response_format": "wav",
+                "extra_body": {
+                    "sample_rate": 16000,
+                    "additions": '{"custom_flag": true}',
+                },
+            },
+            litellm_params={},
+            headers={},
+        )
+        audio_params = req["dict_body"]["req_params"]["audio_params"]
+        assert audio_params["speed_ratio"] == 1.5
+        assert audio_params["format"] == "wav"
+        assert audio_params["sample_rate"] == 16000
+
+        # Test dict additions and invalid additions
+        req2 = config.transform_text_to_speech_request(
+            model="byteplus/seed-tts-2.0",
+            input="test2",
+            voice="BV001_streaming",
+            optional_params={"extra_body": {"additions": {"flag2": 1}}},
+            litellm_params={},
+            headers={},
+        )
+        assert "flag2" in req2["dict_body"]["req_params"]["additions"]
+
+        req3 = config.transform_text_to_speech_request(
+            model="byteplus/seed-tts-2.0",
+            input="test3",
+            voice="BV001_streaming",
+            optional_params={"extra_body": {"additions": "invalid-json"}},
+            litellm_params={},
+            headers={},
+        )
+        assert "disable_markdown_filter" in req3["dict_body"]["req_params"]["additions"]
+
+    def test_tts_complete_url_variations_and_error_class(self):
+        config = BytePlusTextToSpeechConfig()
+        url1 = config.get_complete_url(
+            "byteplus/seed-tts-2.0", api_base="https://voice.custom.com/api/v3", litellm_params={}
+        )
+        assert url1 == "https://voice.custom.com/api/v3/tts/unidirectional"
+
+        url2 = config.get_complete_url(
+            "byteplus/seed-tts-2.0", api_base="https://voice.bytepluses.com", litellm_params={}
+        )
+        assert url2 == "https://voice.bytepluses.com/api/v3/tts/unidirectional"
+
+        url3 = config.get_complete_url(
+            "byteplus/seed-tts-2.0", api_base="https://voice.otherdomain.org/tts/endpoint", litellm_params={}
+        )
+        assert url3 == "https://voice.otherdomain.org/tts/endpoint"
+
+        err = config.get_error_class("tts error", 400, headers={"x-test": "1"})
+        assert err.status_code == 400
+
+    def test_transform_text_to_speech_response_error_and_edge_cases(self):
+        import pytest
+        from litellm.llms.byteplus.common_utils import BytePlusError
+
+        config = BytePlusTextToSpeechConfig()
+
+        # Status != 200
+        http_err_resp = httpx.Response(status_code=500, text="Internal Server Error")
+        with pytest.raises(BytePlusError, match="BytePlus TTS request failed"):
+            config.transform_text_to_speech_response(
+                model="byteplus/seed-tts-2.0",
+                raw_response=http_err_resp,
+                logging_obj=None,
+            )
+
+        # Empty audio bytes
+        empty_resp = httpx.Response(status_code=200, text='{"code": 20000000, "message": "done"}')
+        with pytest.raises(BytePlusError, match="BytePlus TTS returned no audio data"):
+            config.transform_text_to_speech_response(
+                model="byteplus/seed-tts-2.0",
+                raw_response=empty_resp,
+                logging_obj=None,
+            )
+
+        # Code > 0 error
+        err_resp = httpx.Response(status_code=200, text='{"code": 40001, "message": "invalid voice"}')
+        with pytest.raises(BytePlusError, match="BytePlus TTS API Error"):
+            config.transform_text_to_speech_response(
+                model="byteplus/seed-tts-2.0",
+                raw_response=err_resp,
+                logging_obj=None,
+            )
+
+        # Non-dict lines, invalid json lines, invalid base64, and empty lines ignored gracefully
+        valid_chunk = base64.b64encode(b"audio-data").decode("utf-8")
+        mixed_text = (
+            f'start\n   \n\nnot-json\n["a", "list"]\n{{"code":0,"data":"{valid_chunk}"}}\n'
+            f'{{"code":0,"data":"invalid-base64-%%%"}}\n   \n{{"code":20000000}}\n'
+        )
+        mixed_resp = httpx.Response(status_code=200, text=mixed_text)
+
+        res = config.transform_text_to_speech_response(
+            model="byteplus/seed-tts-2.0",
+            raw_response=mixed_resp,
+            logging_obj=None,
+        )
+        assert res.content == b"audio-data"
+
+    def test_common_utils_coverage(self):
+        from litellm.llms.byteplus.common_utils import (
+            BytePlusError,
+            get_byteplus_base_url,
+            get_byteplus_headers,
+        )
+
+        assert get_byteplus_base_url("https://custom.byteplus.com") == "https://custom.byteplus.com"
+        assert get_byteplus_base_url() == "https://ark.ap-southeast.bytepluses.com"
+
+        headers = get_byteplus_headers("key123", extra_headers={"X-Custom": "val"})
+        assert headers["X-Custom"] == "val"
+        assert headers["Authorization"] == "Bearer key123"
+
+        err = BytePlusError(status_code=403, message="Forbidden", headers=httpx.Headers({"x-trace": "abc"}))
+        assert err.status_code == 403
+        assert err.message == "Forbidden"
+        assert err.headers.get("x-trace") == "abc"
+
+    def test_provider_config_manager_tts(self):
+        from litellm.types.utils import LlmProviders
+        from litellm.utils import ProviderConfigManager
+
+        cfg = ProviderConfigManager.get_provider_text_to_speech_config(
+            model="byteplus/seed-tts-2.0",
+            provider=LlmProviders.BYTEPLUS,
+        )
+        assert isinstance(cfg, BytePlusTextToSpeechConfig)
