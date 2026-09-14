@@ -28,6 +28,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attributio
     optional_str,
     request_tags_from_metadata,
 )
+from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import (
     Choices,
     EmbeddingResponse,
@@ -46,8 +47,6 @@ if TYPE_CHECKING:
 else:
     PassThroughEndpointLogging = Any
     LiteLLMBatch = Any
-
-EndpointType = Any
 
 
 class VertexPassthroughLoggingHandler:

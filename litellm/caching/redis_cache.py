@@ -934,7 +934,7 @@ class RedisCache(BaseCache):
             client: object = None,
         ) -> object:
             async def execute() -> object:
-                executor: Callable[..., Awaitable[Any]] | None = litellm.in_memory_llm_clients_cache.get_cache(
+                executor: Callable[..., Awaitable[object]] | None = litellm.in_memory_llm_clients_cache.get_cache(
                     key=script_cache_key
                 )
                 if executor is None:
@@ -946,7 +946,7 @@ class RedisCache(BaseCache):
 
         return run_script
 
-    def _register_script_for_current_loop(self, script: str) -> Callable[..., Awaitable[Any]]:
+    def _register_script_for_current_loop(self, script: str) -> Callable[..., Awaitable[object]]:
         """
         Register the script against the current event loop's Redis client.
 

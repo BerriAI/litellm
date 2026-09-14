@@ -110,7 +110,7 @@ class CohereChatConfig(BaseConfig):
         tool_results: list | None = None,
         seed: int | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[dict[str, object]] = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
