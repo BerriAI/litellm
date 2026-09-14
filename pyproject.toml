@@ -124,7 +124,7 @@ semantic-router = [
     "semantic-router>=0.1.15,<1.0; python_version < '3.14'",
     "aurelio-sdk>=0.0.19,<1.0; python_version < '3.14'",
 ]
-mlflow = ["mlflow>=3.11.1,<4.0"]
+mlflow = ["mlflow>=3.16.0,<4.0"]
 grpc = [
     # Newest non-yanked release older than the 30-day cutoff.
     "grpcio==1.78.0",
