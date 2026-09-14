@@ -734,7 +734,7 @@ async def _reconcile_budget_reservation_before_db_update(
                 "Failed to invalidate budget reservation counters after pre-persist reconcile failed"
             )
         finally:
-            budget_reservation["finalized"] = True
+            budget_reservation["finalized"] = True  # rebind-ok: the counter update reads the stamp off the shared dict
 
 
 async def _release_budget_reservation(budget_reservation: dict | None) -> None:
