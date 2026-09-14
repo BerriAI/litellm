@@ -1723,6 +1723,18 @@ def test_rust_encode_failure_falls_back_to_python_per_string(rust_bridge) -> Non
     assert token_counter_new(model=ANTHROPIC_MODEL, text="hello") == python_count
 
 
+def test_rust_tokenizer_load_failure_falls_back_to_python(rust_bridge) -> None:
+    def failing_factory(tokenizer_json: str) -> _FakeTextCounter:
+        raise ValueError("tokenizer json rejected")
+
+    litellm.rust(False)
+    python_count: Final = token_counter_new(model=ANTHROPIC_MODEL, text="hello")
+    litellm.rust(True)
+    rust_bridge.TOKEN_COUNTER.override(failing_factory)
+
+    assert token_counter_new(model=ANTHROPIC_MODEL, text="hello") == python_count
+
+
 @pytest.mark.parametrize("text", RUST_TEXTS)
 def test_native_anthropic_text_count_matches_python(rust_bridge, monkeypatch: pytest.MonkeyPatch, text: str) -> None:
     from litellm.rust_bridge import bindings

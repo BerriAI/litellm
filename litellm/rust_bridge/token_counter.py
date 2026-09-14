@@ -103,8 +103,13 @@ def text_counter(tokenizer: RustTokenizer) -> Callable[[str], int] | None:
     factory: Final = TOKEN_COUNTER.load()
     if factory is None:
         return None
+    try:
+        counter: Final = _counter(factory, tokenizer)
+    except (RuntimeError, ValueError) as error:
+        verbose_logger.debug("Rust token counter (%s) failed to load, counting in Python: %s", tokenizer, error)
+        return None
     verbose_logger.debug("Rust token counter (%s) counting text", tokenizer)
-    return _counter(factory, tokenizer).count_text
+    return counter.count_text
 
 
 async def count_input_tokens(body: bytes, tokenizer: RustTokenizer) -> InputTokenCount | None:
