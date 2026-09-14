@@ -18,7 +18,7 @@ from litellm.integrations.otel.mappers import (
     WeaveMapper,
     resolve_mappers,
 )
-from litellm.integrations.otel.model.metadata import TraceControls
+from litellm.integrations.otel.model.trace_controls import TraceControls
 from litellm.integrations.otel.model.payloads import (
     LLMCallSpanData,
     LLMRequestParams,

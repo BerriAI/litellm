@@ -8,7 +8,13 @@ parsing lives in :mod:`litellm.integrations.otel.plumbing.providers` instead,
 because it delegates to the OTel SDK's own W3C Baggage parser.
 """
 
+from collections.abc import Mapping
 from datetime import datetime
+from typing import Final
+
+from pydantic import TypeAdapter, ValidationError
+
+_STR_MAPPING: Final = TypeAdapter(Mapping[str, object])
 
 
 def as_str(value: object) -> str | None:
@@ -53,6 +59,13 @@ def as_bool(value: object) -> bool | None:
     if isinstance(value, bool):
         return value
     return bool(value)
+
+
+def as_str_mapping(value: object) -> Mapping[str, object] | None:
+    try:
+        return _STR_MAPPING.validate_python(value)
+    except ValidationError:
+        return None
 
 
 def as_str_tuple(value: object) -> tuple[str, ...] | None:

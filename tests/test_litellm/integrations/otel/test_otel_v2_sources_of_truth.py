@@ -28,7 +28,8 @@ from litellm.integrations.otel import (
 )
 from litellm.integrations.otel.mappers.genai import GenAIMapper
 from litellm.integrations.otel.model import spans as spans_mod
-from litellm.integrations.otel.model.metadata import LLMCallEvent, TraceControls, caller_trace_controls
+from litellm.integrations.otel.model.metadata import LLMCallEvent
+from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 from litellm.integrations.otel.model.payloads import (
     LLMCallSpanData,
     RequestIdentity,

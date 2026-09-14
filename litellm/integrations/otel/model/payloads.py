@@ -10,11 +10,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final, cast
 from urllib.parse import urlsplit
 
-from litellm.integrations.otel.model.metadata import (
-    RequestContext,
-    RequestIdentity,
-    TraceControls,
-)
+from litellm.integrations.otel.model.metadata import RequestContext, RequestIdentity
 from litellm.integrations.otel.model.semconv import (
     GenAIOperation,
     GenAIOutputType,
@@ -23,6 +19,7 @@ from litellm.integrations.otel.model.semconv import (
     resolve_output_type,
     resolve_provider,
 )
+from litellm.integrations.otel.model.trace_controls import TraceControls
 from litellm.integrations.otel.model.utils import (
     as_bool,
     as_float,

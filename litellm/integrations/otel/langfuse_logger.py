@@ -8,8 +8,8 @@ from litellm.integrations.otel.mappers.langfuse import (
     LANGFUSE_OBSERVATION_OUTPUT,
     LangfuseMapper,
 )
-from litellm.integrations.otel.model.metadata import caller_trace_controls
 from litellm.integrations.otel.model.request_io import request_input, response_output, stream_output
+from litellm.integrations.otel.model.trace_controls import caller_trace_controls
 from litellm.integrations.otel.plumbing.context import request_root_span
 
 if TYPE_CHECKING:
