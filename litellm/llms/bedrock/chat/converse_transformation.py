@@ -1352,6 +1352,8 @@ class AmazonConverseConfig(BaseConfig):
         remaining: Final = messages[leading_count:]
         system_content_blocks: Final[list[SystemContentBlock]] = []
         for message in hoisted:
+            if message["role"] != "system":
+                continue
             if isinstance(message["content"], str) and message["content"]:
                 system_content_blocks.append(SystemContentBlock(text=message["content"]))
                 cache_block = self.get_cache_point_block(message, block_type="system", model=model)
