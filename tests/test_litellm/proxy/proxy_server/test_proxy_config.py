@@ -3741,42 +3741,50 @@ async def test_ProxyConfig__init_agents_in_db_keeps_config_defined_agents(clean_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("agents_source", ["config", "db"])
-async def test_ProxyConfig_agent_loading_binds_registry_to_jwt_agent_claims(clean_agent_registry, agents_source):
-    """A JWT agent claim must resolve against the agents the proxy loaded, whichever source registered them."""
+@pytest.mark.parametrize("agents_source", ["config", "db", "api"])
+async def test_ProxyStartupEvent_jwt_auth_resolves_agent_claims_against_live_registry(
+    clean_agent_registry, agents_source
+):
+    """A JWT agent claim must resolve against every agent the proxy knows, including ones created after startup."""
     from litellm.proxy import proxy_server
     from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.types.agents import AgentResponse
 
-    jwt_handler = JWTHandler()
-    jwt_handler.update_environment(
-        prisma_client=None,
-        user_api_key_cache=UserApiKeyCache(),
-        litellm_jwtauth=LiteLLM_JWTAuth(agent_id_jwt_field="appid"),
-    )
     original_lookup = proxy_server.jwt_handler.agent_lookup
-    proxy_server.jwt_handler.bind_agent_lookup(jwt_handler.agent_lookup)
     try:
+        proxy_server.ProxyStartupEvent._initialize_jwt_auth(
+            general_settings={"litellm_jwtauth": {"agent_id_jwt_field": "appid"}},
+            prisma_client=None,
+            user_api_key_cache=UserApiKeyCache(),
+        )
         if agents_source == "config":
             await ProxyConfig()._init_non_llm_configs(
                 config={"agents": [_config_agent("loaded-agent")]},
                 config_file_path=None,
             )
-        else:
+        elif agents_source == "db":
             prisma_client = MagicMock()
             prisma_client.db.litellm_agentstable.find_many = AsyncMock(
                 return_value=[_FakeAgentRow("db-id", "loaded-agent")]
             )
             await ProxyConfig()._init_agents_in_db(prisma_client=prisma_client)
+        else:
+            clean_agent_registry.register_agent(
+                agent_config=AgentResponse(agent_id="api-id", **_config_agent("loaded-agent"))
+            )
 
         resolved = JWTAuthManager.resolve_agent_id(
-            jwt_handler=jwt_handler,
+            jwt_handler=proxy_server.jwt_handler,
             jwt_valid_token={"appid": "loaded-agent"},
             agent_registry=proxy_server.jwt_handler.agent_lookup,
         )
     finally:
         proxy_server.jwt_handler.bind_agent_lookup(original_lookup)
+        proxy_server.jwt_handler.update_environment(
+            prisma_client=None, user_api_key_cache=UserApiKeyCache(), litellm_jwtauth=LiteLLM_JWTAuth()
+        )
 
     assert resolved == clean_agent_registry.get_agent_by_name(agent_name="loaded-agent").agent_id
 
