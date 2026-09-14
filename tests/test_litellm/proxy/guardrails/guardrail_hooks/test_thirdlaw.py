@@ -810,7 +810,134 @@ async def test_streaming_raw_sse_allow_replays_frames():
         )
     )
     assert out == frames
-    assert _sent_payload(g)["response_body"]["choices"][0]["message"]["content"] == "hello there"
+    posted = _sent_payload(g)["response_body"]
+    assert "choices" not in posted
+    assert posted["type"] == "message"
+    assert posted["id"] == "msg_abc"
+    assert posted["content"] == [{"type": "text", "text": "hello there"}]
+    assert posted["stop_reason"] == "end_turn"
+    assert posted["usage"] == {"input_tokens": 9, "output_tokens": 4}
+
+
+def _anthropic_thinking_sse_frames() -> list[bytes]:
+    """A turn carrying everything the chat-completions shape has no field for."""
+    events = [
+        (
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_thinking",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-5",
+                    "content": [],
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {
+                        "input_tokens": 9,
+                        "output_tokens": 0,
+                        "cache_creation_input_tokens": 120,
+                        "cache_read_input_tokens": 400,
+                    },
+                },
+            },
+        ),
+        (
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "thinking", "thinking": "", "signature": ""},
+            },
+        ),
+        (
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "weighing it"}},
+        ),
+        (
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "sig-xyz"}},
+        ),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        (
+            "content_block_start",
+            {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+        ),
+        (
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "hello there"}},
+        ),
+        ("content_block_stop", {"type": "content_block_stop", "index": 1}),
+        (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "stop_sequence", "stop_sequence": "END"},
+                "usage": {"output_tokens": 4},
+            },
+        ),
+        ("message_stop", {"type": "message_stop"}),
+    ]
+    return [f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode() for name, payload in events]
+
+
+async def test_a_messages_stream_keeps_what_the_chat_shape_has_no_field_for():
+    """Folding the stream into a ModelResponse dropped thinking blocks, the signature,
+    stop_sequence and the cache token split before the scan ever saw them."""
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_aiter(_anthropic_thinking_sse_frames()),
+            request_data=_request_data(),
+        )
+    )
+    posted = _sent_payload(g)["response_body"]
+    assert posted["content"][0] == {"type": "thinking", "thinking": "weighing it", "signature": "sig-xyz"}
+    assert posted["content"][1] == {"type": "text", "text": "hello there"}
+    assert posted["stop_sequence"] == "END"
+    assert posted["usage"]["cache_creation_input_tokens"] == 120
+    assert posted["usage"]["cache_read_input_tokens"] == 400
+
+
+async def test_a_messages_stream_rewrite_is_re_emitted_as_anthropic_frames():
+    g = _make_guardrail(
+        decisions=[
+            _decision_response(
+                {
+                    "action": "modify_response",
+                    "response_body": {"content": [{"type": "text", "text": "hello [REDACTED]"}]},
+                }
+            )
+        ]
+    )
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_aiter(_anthropic_sse_frames()),
+            request_data=_request_data(),
+        )
+    )
+    joined = b"".join(item for item in out if isinstance(item, bytes))
+    assert b"hello [REDACTED]" in joined
+    assert b"hello there" not in joined
+
+
+async def test_a_chat_shaped_rewrite_of_a_messages_stream_fails_closed():
+    """The overlay is a shallow merge, so "choices" would land beside the untouched "content"
+    and the re-emitted stream would carry the very text the rewrite asked to redact."""
+    from litellm.proxy.proxy_server import StreamingCallbackError
+
+    g = _make_guardrail(decisions=[_redacting_modify_decision()])
+    with pytest.raises(StreamingCallbackError, match="answered a /v1/messages stream"):
+        await _collect(
+            g.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=_aiter(_anthropic_sse_frames()),
+                request_data=_request_data(),
+            )
+        )
 
 
 async def test_streaming_raw_sse_block_emits_anthropic_error_frame():

@@ -31,9 +31,9 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.anthropic_sse import (
-    anthropic_sse_chunks_from_response,
+    anthropic_sse_chunks_from_body,
     anthropic_sse_error_frames,
-    assemble_anthropic_sse_stream,
+    assemble_anthropic_sse_body,
 )
 from litellm.proxy.guardrails.stream_surface import (
     StreamSurface,
@@ -107,7 +107,7 @@ _USER_METADATA_FIELDS: Final = (
 _WireEvent: TypeAlias = Literal["pre_call", "during_call", "post_call"]
 
 # What a buffered stream assembles into, one shape per surface that has an assembler
-_AssembledStream: TypeAlias = ModelResponse | ResponsesAPIResponse
+_AssembledStream: TypeAlias = ModelResponse | ResponsesAPIResponse | Mapping[str, object]
 
 # Never writable by modify_response on a /v1/responses stream: litellm encrypts the response id and
 # the client chains the next turn off it with previous_response_id.
@@ -673,7 +673,7 @@ class ThirdlawGuardrail(CustomGuardrail):
         """Assemble the buffered stream into the scannable body its surface produces."""
         match surface:
             case StreamSurface.ANTHROPIC_MESSAGES:
-                return assemble_anthropic_sse_stream(collected, restore_identity=True)
+                return assemble_anthropic_sse_body(collected)
             case StreamSurface.RESPONSES:
                 return ThirdlawGuardrail._assembled_responses_stream_response(collected)
             case StreamSurface.OPAQUE_SSE:
@@ -906,17 +906,37 @@ class ThirdlawGuardrail(CustomGuardrail):
             async for event in self._emit_modified_responses_stream(assembled=assembled, replacement=replacement):
                 yield event
             return
+        if surface is StreamSurface.ANTHROPIC_MESSAGES:
+            for frame in self._modified_anthropic_frames(assembled=assembled, replacement=replacement):
+                yield frame
+            return
         modified: Final = self._modified_response(response=assembled, replacement=replacement)
         if not isinstance(modified, ModelResponse):
             raise self._streaming_block_error(f"{self.guardrail_name}: modified streamed response failed validation")
-        if surface is StreamSurface.ANTHROPIC_MESSAGES:
-            for frame in anthropic_sse_chunks_from_response(modified):
-                yield frame
-            return
         from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 
         async for chunk in MockResponseIterator(model_response=modified):
             yield chunk
+
+    def _modified_anthropic_frames(
+        self, *, assembled: _AssembledStream, replacement: Mapping[str, object]
+    ) -> Sequence[bytes]:
+        """Re-emit a rewritten Messages body as the SSE frames its client expects.
+
+        A chat-shaped rewrite fails closed rather than being merged: the overlay is a shallow
+        merge, so ``choices`` would land beside the untouched ``content`` and the stream would
+        re-emit the very text the rewrite asked to redact.
+        """
+        if "choices" in replacement:
+            raise self._streaming_block_error(
+                f"{self.guardrail_name}: modify_response answered a /v1/messages stream with "
+                '"choices"; the Messages body carries its text in "content"'
+            )
+        modified: Final = self._modified_response(response=assembled, replacement=replacement)
+        body: Final = _dict_of(modified)
+        if body is None:
+            raise self._streaming_block_error(f"{self.guardrail_name}: modified streamed response failed validation")
+        return anthropic_sse_chunks_from_body(body)
 
     async def _emit_modified_responses_stream(
         self,
