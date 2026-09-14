@@ -51,12 +51,12 @@ Rules are compiled and classified once, at install time. The match functions are
 O(number of rules); callers must only invoke them on a cache miss.
 """
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import Final
 
-from litellm._logging import verbose_logger
-
+verbose_logger: Final = logging.getLogger("LiteLLM")
 NAME_FIELD: Final = "name"
 PATTERN_FIELD: Final = "pattern"
 MODEL_INFO_FIELD: Final = "model_info"
