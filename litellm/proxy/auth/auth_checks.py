@@ -65,6 +65,7 @@ from litellm.proxy._types import (
     RoleBasedPermissions,
     SpecialModelNames,
     UserAPIKeyAuth,
+    UserNotFoundError,
 )
 from litellm.proxy.auth.budget_throttle import (
     budget_throttle_percentage,
@@ -2373,13 +2374,6 @@ async def _backfill_null_user_email(
         ttl=get_management_object_ttl(user_api_key_cache),
     )
     return updated_row
-
-
-class UserNotFoundError(ValueError):
-    """The user row is provably absent, as opposed to merely unreadable, so a caller that reads a missing row as no user-level limits can key on it without also swallowing a database that would not answer."""
-
-    def __init__(self, user_id: str) -> None:
-        super().__init__(f"User doesn't exist in db. 'user_id'={user_id}. Create user via `/user/new` call.")
 
 
 @log_db_metrics
