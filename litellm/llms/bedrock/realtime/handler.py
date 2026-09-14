@@ -24,7 +24,10 @@ from litellm.constants import (
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.litellm_core_utils.realtime_streaming import DefaultLoggedRealTimeEventTypes
+from litellm.litellm_core_utils.realtime_streaming import (
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
+    DefaultLoggedRealTimeEventTypes,
+)
 from litellm.types.llms.openai import OpenAIRealtimeEvents
 from litellm.types.realtime import RealtimeResponseTransformInput
 
@@ -346,6 +349,7 @@ class BedrockRealtime(BaseAWSLLM):
                     prefer_async_handlers=True,
                 )
             )
+            logging_obj.model_call_details[REALTIME_SESSION_SUCCESS_LOGGED_KEY] = True
 
         if outcome.provider_failure is None:
             return
