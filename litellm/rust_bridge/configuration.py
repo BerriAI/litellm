@@ -6,9 +6,11 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Final
 
+from pydantic import TypeAdapter
+
 DEFAULT_RUST_ENABLED: Final = False
-_TRUE_ENV_VALUES: Final = frozenset({"1", "true", "yes", "on"})
 _GLOBAL_ENV_NAME: Final = "LITELLM_RUST"
+_ENV_BOOL: Final = TypeAdapter(bool)
 
 
 class RouteName(str, Enum):
@@ -65,7 +67,7 @@ _CONFIGURATION: Final = _RustConfiguration()
 def _parse_env_bool(value: str | None) -> bool | None:
     if value is None:
         return None
-    return value.strip().lower() in _TRUE_ENV_VALUES
+    return _ENV_BOOL.validate_python(value.strip())
 
 
 def resolve_rust_enabled(
