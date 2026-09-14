@@ -309,6 +309,24 @@ async def test_bulk_delete_leaves_teammates_who_share_the_deleted_users_email_al
 
 
 @pytest.mark.asyncio
+async def test_bulk_delete_removes_the_deleted_users_email_only_roster_entry():
+    team = LiteLLM_TeamTable(
+        team_id="t1",
+        members_with_roles=[
+            Member(user_id=None, user_email="u1@example.com", role="user"),
+            Member(user_id="keep", user_email="keep@example.com", role="user"),
+        ],
+    )
+    prisma = _FakePrisma(users=[_user("u1", "t1"), _user("keep", "t1")], teams=[team])
+
+    response = await _delete(prisma, ["u1"])
+
+    assert [(r.success, r.teams_removed) for r in response.results] == [(True, ("t1",))]
+    assert _roster(prisma, "t1") == ["keep"]
+    assert set(prisma.db.litellm_usertable.rows) == {"keep"}
+
+
+@pytest.mark.asyncio
 async def test_bulk_delete_finds_teams_through_membership_rows_when_user_teams_array_is_stale():
     prisma = _FakePrisma(
         users=[_user("u1")],

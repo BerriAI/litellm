@@ -150,16 +150,20 @@ def _org_membership_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_O
     return tx.litellm_organizationmembership  # pyright: ignore[reportReturnType]  # TableActions widens the generated inputs to Mapping, as the repositories do
 
 
+def _same_email(email: str | None, request: MemberDeleteRequest) -> bool:
+    return request.user_email is not None and request.user_email == email
+
+
 def _addresses_member(member: Member, request: MemberDeleteRequest) -> bool:
-    return (request.user_id is not None and request.user_id == member.user_id) or (
-        request.user_email is not None and request.user_email == member.user_email
-    )
+    if request.user_id is None:
+        return _same_email(member.user_email, request)
+    return request.user_id == member.user_id or (member.user_id is None and _same_email(member.user_email, request))
 
 
 def _addresses_user(user: "prisma_models.LiteLLM_UserTable", request: MemberDeleteRequest) -> bool:
-    return (request.user_id is not None and request.user_id == user.user_id) or (
-        request.user_email is not None and request.user_email == user.user_email
-    )
+    if request.user_id is None:
+        return _same_email(user.user_email, request)
+    return request.user_id == user.user_id
 
 
 def _error_message(exc: BaseException) -> str:
@@ -395,7 +399,11 @@ async def _delete_users_tx(
                     prisma_client,
                     tx,
                     tid,
-                    tuple(MemberDeleteRequest(user_id=u.user_id) for u in users if tid in teams_of[u.user_id]),
+                    tuple(
+                        MemberDeleteRequest(user_id=u.user_id, user_email=u.user_email)
+                        for u in users
+                        if tid in teams_of[u.user_id]
+                    ),
                     user_api_key_dict,
                 )
                 for tid in team_ids
