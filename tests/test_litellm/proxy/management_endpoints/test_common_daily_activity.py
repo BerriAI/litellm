@@ -1,13 +1,15 @@
+import re
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import psycopg
 import pytest
+from psycopg.rows import dict_row
+from pytest_postgresql import factories
 
-from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
-
-
+from litellm.constants import MAX_API_KEYS_IN_USAGE_BREAKDOWN
 from litellm.proxy.management_endpoints.common_daily_activity import (
     _adjust_dates_for_timezone,
     _build_aggregated_sql_query,
@@ -19,6 +21,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity_aggregated,
     update_metrics,
 )
+from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendMetadata,
     SpendMetrics,
@@ -1241,10 +1244,10 @@ class TestBuildAggregatedSqlQuery:
         fallback = "COALESCE(NULLIF(model_group, ''), model)"
         assert f"{fallback} AS model_group" in normalized
         assert (
-            f"GROUPING(date, api_key, model, {fallback}, "
+            f"GROUPING(date, tk.top_api_key, model, {fallback}, "
             "custom_llm_provider, mcp_namespaced_tool_name, endpoint) AS group_level" in normalized
         )
-        assert f"(date, {fallback}), (date, {fallback}, api_key)," in normalized
+        assert f"(date, {fallback}), (date, {fallback}, tk.top_api_key)," in normalized
         assert "(date, model_group)" not in normalized
         assert "COALESCE(model_group, model)" not in normalized
 
@@ -1363,6 +1366,124 @@ async def test_get_daily_activity_aggregated_empty_result_set():
     assert result.metadata.total_cache_read_input_tokens == 0
     assert result.metadata.total_cache_creation_input_tokens == 0
     assert result.metadata.total_compression_saved_tokens == 0
+
+
+_aggregated_postgresql_proc: Final = factories.postgresql_proc()
+_aggregated_postgresql: Final = factories.postgresql("_aggregated_postgresql_proc")
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_aggregated_bounds_api_key_rollups(
+    _aggregated_postgresql: psycopg.Connection,
+):
+    """key-004 and key-005 tie on spend at the cutoff: the api_key tiebreaker keeps key-004 only."""
+    conn: Final = _aggregated_postgresql
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE "LiteLLM_DailyUserSpend" (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                date TEXT NOT NULL,
+                api_key TEXT NOT NULL,
+                model TEXT,
+                model_group TEXT,
+                custom_llm_provider TEXT,
+                mcp_namespaced_tool_name TEXT,
+                endpoint TEXT,
+                prompt_tokens BIGINT DEFAULT 0,
+                completion_tokens BIGINT DEFAULT 0,
+                cache_read_input_tokens BIGINT DEFAULT 0,
+                cache_creation_input_tokens BIGINT DEFAULT 0,
+                compression_saved_tokens BIGINT DEFAULT 0,
+                compression_savings_spend DOUBLE PRECISION DEFAULT 0,
+                prompt_caching_savings_spend DOUBLE PRECISION DEFAULT 0,
+                gateway_injected_caching_savings_spend DOUBLE PRECISION DEFAULT 0,
+                autorouter_savings_spend DOUBLE PRECISION DEFAULT 0,
+                spend DOUBLE PRECISION DEFAULT 0,
+                api_requests BIGINT DEFAULT 0,
+                successful_requests BIGINT DEFAULT 0,
+                failed_requests BIGINT DEFAULT 0
+            )
+            """
+        )
+        cur.executemany(
+            """
+            INSERT INTO "LiteLLM_DailyUserSpend"
+                (id, user_id, date, api_key, model, model_group, custom_llm_provider,
+                 endpoint, prompt_tokens, spend, api_requests, successful_requests)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            [
+                (
+                    f"row-{i:03d}",
+                    f"user-{i:03d}",
+                    "2026-06-01",
+                    f"key-{i:03d}",
+                    "gpt-5",
+                    "",
+                    "openai",
+                    "/v1/chat/completions",
+                    10,
+                    6.0 if i == 4 else float(i + 1),
+                    1,
+                    1,
+                )
+                for i in range(MAX_API_KEYS_IN_USAGE_BREAKDOWN + 5)
+            ],
+        )
+    conn.commit()
+
+    row_counts: Final[list[int]] = []  # mutable-ok: out-param for the query_raw shim
+
+    async def query_raw(sql: str, *params: str) -> list[dict[str, object]]:
+        converted: Final = re.sub(r"\$(\d+)", r"%(p\1)s", sql)
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                converted,  # pyright: ignore[reportArgumentType]  # psycopg stubs want a literal-typed query
+                {f"p{i}": v for i, v in enumerate(params, start=1)},
+            )
+            rows: Final = cur.fetchall()
+        row_counts.append(len(rows))
+        return rows
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.query_raw = query_raw
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+
+    result = await get_daily_activity_aggregated(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2026-06-01",
+        end_date="2026-06-01",
+        model=None,
+        api_key=None,
+    )
+
+    keyless_sets: Final = 7
+    api_key_sets: Final = 6
+    assert row_counts == [keyless_sets + api_key_sets * (MAX_API_KEYS_IN_USAGE_BREAKDOWN + 1)]
+
+    assert result.metadata.total_spend == pytest.approx(5566.0)
+    assert result.metadata.total_api_requests == MAX_API_KEYS_IN_USAGE_BREAKDOWN + 5
+
+    expected_top: Final = {f"key-{i:03d}" for i in range(6, 105)} | {"key-004"}
+    day: Final = result.results[0]
+    assert len(day.breakdown.api_keys) == MAX_API_KEYS_IN_USAGE_BREAKDOWN
+    assert set(day.breakdown.api_keys) == expected_top
+    assert day.breakdown.api_keys["key-004"].metrics.spend == 6.0
+    assert "key-005" not in day.breakdown.api_keys
+
+    assert day.breakdown.models["gpt-5"].metrics.spend == pytest.approx(5566.0)
+    assert set(day.breakdown.models["gpt-5"].api_key_breakdown) == expected_top
+    assert day.breakdown.providers["openai"].metrics.spend == pytest.approx(5566.0)
+    assert set(day.breakdown.providers["openai"].api_key_breakdown) == expected_top
+    assert set(day.breakdown.endpoints["/v1/chat/completions"].api_key_breakdown) == expected_top
 
 
 def _no_spend_record():

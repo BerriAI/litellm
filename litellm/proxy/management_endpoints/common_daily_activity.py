@@ -9,7 +9,7 @@ from fastapi import HTTPException, status
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import PTU_SENTINEL_API_KEY
+from litellm.constants import MAX_API_KEYS_IN_USAGE_BREAKDOWN, PTU_SENTINEL_API_KEY
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
     attach_user_emails,
@@ -708,6 +708,9 @@ def _build_aggregated_sql_query(
     mcp_namespaced_tool_name, endpoint) with SUMs on all metric columns.
     The entity_id column is intentionally omitted from GROUP BY to collapse
     rows across entities — this is where the biggest row reduction comes from.
+    The api_key rollups only cover the MAX_API_KEYS_IN_USAGE_BREAKDOWN top
+    keys by spend; every other key lands in a NULL api_key bucket so the
+    date, model, provider and total rollups still sum every row.
 
     Returns:
         Tuple of (sql_query, params_list) ready for prisma_client.db.query_raw().
@@ -743,15 +746,23 @@ def _build_aggregated_sql_query(
     # only from LiteLLM_DailyGatewayRequests. The remaining spend, token and
     # api_requests rollups are still served from here.
     sql_query: Final = f"""
+        WITH top_api_keys AS (
+            SELECT api_key AS top_api_key
+            FROM "{pg_table}"
+            WHERE {where_clause}
+            GROUP BY api_key
+            ORDER BY SUM(spend) DESC, api_key
+            LIMIT {MAX_API_KEYS_IN_USAGE_BREAKDOWN}
+        )
         SELECT
             date,
-            api_key,
+            tk.top_api_key AS api_key,
             model,
             COALESCE(NULLIF(model_group, ''), model) AS model_group,
             custom_llm_provider,
             mcp_namespaced_tool_name,
             endpoint,
-            GROUPING(date, api_key, model, COALESCE(NULLIF(model_group, ''), model),
+            GROUPING(date, tk.top_api_key, model, COALESCE(NULLIF(model_group, ''), model),
                      custom_llm_provider, mcp_namespaced_tool_name,
                      endpoint) AS group_level,
             SUM(spend)::float AS spend,
@@ -768,21 +779,22 @@ def _build_aggregated_sql_query(
             SUM(api_requests)::bigint AS api_requests,
             SUM(successful_requests)::bigint AS successful_requests,
             SUM(failed_requests)::bigint AS failed_requests
-        FROM "{pg_table}"
+        FROM "{pg_table}" t
+        LEFT JOIN top_api_keys tk ON tk.top_api_key = t.api_key
         WHERE {where_clause}
         GROUP BY GROUPING SETS (
             (date),
-            (date, api_key),
+            (date, tk.top_api_key),
             (date, model),
-            (date, model, api_key),
+            (date, model, tk.top_api_key),
             (date, COALESCE(NULLIF(model_group, ''), model)),
-            (date, COALESCE(NULLIF(model_group, ''), model), api_key),
+            (date, COALESCE(NULLIF(model_group, ''), model), tk.top_api_key),
             (date, custom_llm_provider),
-            (date, custom_llm_provider, api_key),
+            (date, custom_llm_provider, tk.top_api_key),
             (date, mcp_namespaced_tool_name),
-            (date, mcp_namespaced_tool_name, api_key),
+            (date, mcp_namespaced_tool_name, tk.top_api_key),
             (date, endpoint),
-            (date, endpoint, api_key),
+            (date, endpoint, tk.top_api_key),
             ()
         )
     """
