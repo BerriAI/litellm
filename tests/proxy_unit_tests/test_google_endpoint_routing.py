@@ -1,12 +1,10 @@
 import json
 import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import yaml
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.google_endpoints.endpoints import google_generate_content

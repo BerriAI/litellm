@@ -12,6 +12,7 @@ from litellm.litellm_core_utils.get_blog_posts import (
     GetBlogPosts,
     get_blog_posts,
 )
+from xml.etree import ElementTree
 
 SAMPLE_RSS = """\
 <?xml version="1.0" encoding="UTF-8"?>
@@ -71,7 +72,7 @@ def test_parse_rss_to_posts_multiple():
 
 
 def test_parse_rss_to_posts_invalid_xml():
-    with pytest.raises(Exception):
+    with pytest.raises(ElementTree.ParseError):
         GetBlogPosts.parse_rss_to_posts("not xml")
 
 

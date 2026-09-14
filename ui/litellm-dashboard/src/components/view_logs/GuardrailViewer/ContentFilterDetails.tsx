@@ -17,11 +17,11 @@ interface ContentFilterDetailsProps {
 
 const chip = (text: React.ReactNode, tone: "green" | "red" | "blue" | "slate" | "amber" = "slate") => {
   const map: Record<string, string> = {
-    green: "bg-green-100 text-green-800",
-    red: "bg-red-100 text-red-800",
-    blue: "bg-blue-50 text-blue-700",
-    slate: "bg-slate-100 text-slate-800",
-    amber: "bg-amber-100 text-amber-800",
+    green: "bg-success/15 text-success",
+    red: "bg-destructive/15 text-destructive",
+    blue: "bg-info/10 text-info",
+    slate: "bg-muted text-foreground",
+    amber: "bg-warning/15 text-warning",
   };
   return <span className={`px-2 py-1 rounded-md text-xs font-medium inline-block ${map[tone]}`}>{text}</span>;
 };
@@ -38,7 +38,7 @@ const Section: React.FC<SectionProps> = ({ title, count, defaultOpen = true, chi
   return (
     <div className="border rounded-lg overflow-hidden">
       <div
-        className="flex items-center justify-between p-3 bg-gray-50 cursor-pointer hover:bg-gray-100"
+        className="flex items-center justify-between p-3 bg-muted cursor-pointer hover:bg-accent"
         onClick={() => setOpen((v) => !v)}
       >
         <div className="flex items-center">
@@ -51,11 +51,11 @@ const Section: React.FC<SectionProps> = ({ title, count, defaultOpen = true, chi
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
           </svg>
           <h5 className="font-medium">
-            {title} {typeof count === "number" && <span className="text-gray-500 font-normal">({count})</span>}
+            {title} {typeof count === "number" && <span className="text-muted-foreground font-normal">({count})</span>}
           </h5>
         </div>
       </div>
-      {open && <div className="p-3 border-t bg-white">{children}</div>}
+      {open && <div className="p-3 border-t bg-card">{children}</div>}
     </div>
   );
 };
@@ -78,8 +78,8 @@ const ContentFilterDetails: React.FC<ContentFilterDetailsProps> = ({ response })
   if (!response || typeof response === "string") {
     if (typeof response === "string" && response) {
       return (
-        <div className="bg-white rounded-lg border border-red-200 p-4">
-          <div className="text-red-800">
+        <div className="bg-card rounded-lg border border-destructive/20 p-4">
+          <div className="text-destructive">
             <h5 className="font-medium mb-2">Error</h5>
             <p className="text-sm">{response}</p>
           </div>
@@ -94,8 +94,8 @@ const ContentFilterDetails: React.FC<ContentFilterDetailsProps> = ({ response })
 
   if (detections.length === 0) {
     return (
-      <div className="bg-white rounded-lg border border-gray-200 p-4">
-        <div className="text-gray-600 text-sm">No detections found</div>
+      <div className="bg-card rounded-lg border border-border p-4">
+        <div className="text-muted-foreground text-sm">No detections found</div>
       </div>
     );
   }
@@ -115,7 +115,7 @@ const ContentFilterDetails: React.FC<ContentFilterDetailsProps> = ({ response })
   return (
     <div className="space-y-3">
       {/* Summary Section */}
-      <div className="bg-white rounded-lg border border-gray-200 p-4">
+      <div className="bg-card rounded-lg border border-border p-4">
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
             <KV label="Total Detections:">
@@ -146,7 +146,7 @@ const ContentFilterDetails: React.FC<ContentFilterDetailsProps> = ({ response })
         <Section title="Patterns Matched" count={patterns.length} defaultOpen={true}>
           <div className="space-y-2">
             {patterns.map((detection, idx) => (
-              <div key={idx} className="p-3 bg-gray-50 rounded-md">
+              <div key={idx} className="p-3 bg-muted rounded-md">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <KV label="Pattern:">{detection.pattern_name || "unknown"}</KV>
@@ -166,7 +166,7 @@ const ContentFilterDetails: React.FC<ContentFilterDetailsProps> = ({ response })
         <Section title="Blocked Words Detected" count={blockedWords.length} defaultOpen={true}>
           <div className="space-y-2">
             {blockedWords.map((detection, idx) => (
-              <div key={idx} className="p-3 bg-gray-50 rounded-md">
+              <div key={idx} className="p-3 bg-muted rounded-md">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <KV label="Keyword:" mono>
@@ -189,7 +189,7 @@ const ContentFilterDetails: React.FC<ContentFilterDetailsProps> = ({ response })
         <Section title="Category Keywords Detected" count={categoryKeywords.length} defaultOpen={true}>
           <div className="space-y-2">
             {categoryKeywords.map((detection, idx) => (
-              <div key={idx} className="p-3 bg-gray-50 rounded-md">
+              <div key={idx} className="p-3 bg-muted rounded-md">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <KV label="Category:">{detection.category || "unknown"}</KV>
@@ -217,7 +217,7 @@ const ContentFilterDetails: React.FC<ContentFilterDetailsProps> = ({ response })
 
       {/* Raw JSON (for debugging) */}
       <Section title="Raw Detection Data" defaultOpen={false}>
-        <pre className="bg-gray-50 rounded p-3 text-xs overflow-x-auto">{JSON.stringify(detections, null, 2)}</pre>
+        <pre className="bg-muted rounded-sm p-3 text-xs overflow-x-auto">{JSON.stringify(detections, null, 2)}</pre>
       </Section>
     </div>
   );

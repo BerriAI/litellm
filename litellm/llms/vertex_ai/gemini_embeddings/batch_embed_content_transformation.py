@@ -4,8 +4,8 @@ Transformation logic from OpenAI /v1/embeddings format to Google AI Studio /batc
 Why separate file? Make it easy to see how transformation works
 """
 
-from collections.abc import Mapping
-from typing import Dict, List, Optional, Sequence, Tuple
+from collections.abc import Mapping, Sequence
+from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -29,7 +29,7 @@ from litellm.types.utils import (
 )
 from litellm.utils import get_formatted_prompt, token_counter
 
-SUPPORTED_EMBEDDING_MIME_TYPES = {
+SUPPORTED_EMBEDDING_MIME_TYPES: Final = {
     "image/png",
     "image/jpeg",
     "audio/mpeg",
@@ -63,7 +63,7 @@ def _infer_mime_type_from_gcs_url(gcs_url: str) -> str:
     Raises:
         ValueError: If file extension is not supported
     """
-    extension_to_mime = {
+    extension_to_mime: Final = {
         ".png": "image/png",
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
@@ -74,7 +74,7 @@ def _infer_mime_type_from_gcs_url(gcs_url: str) -> str:
         ".pdf": "application/pdf",
     }
 
-    gcs_url_lower = gcs_url.lower()
+    gcs_url_lower: Final = gcs_url.lower()
     for ext, mime_type in extension_to_mime.items():
         if gcs_url_lower.endswith(ext):
             return mime_type
@@ -85,7 +85,7 @@ def _infer_mime_type_from_gcs_url(gcs_url: str) -> str:
     )
 
 
-def _parse_data_url(data_url: str) -> Tuple[str, str]:
+def _parse_data_url(data_url: str) -> tuple[str, str]:
     """
     Parse a data URL to extract the media type and base64 data.
 
@@ -161,7 +161,7 @@ def _is_multimodal_element(element: str) -> bool:
 
 def _build_part_for_input(
     element: str,
-    resolved_files: Optional[Dict[str, Dict[str, str]]] = None,
+    resolved_files: dict[str, dict[str, str]] | None = None,
 ) -> PartType:
     """
     Build a single PartType for an input element, handling text, data URIs,
@@ -171,11 +171,11 @@ def _build_part_for_input(
 
     if element.startswith("data:") and ";base64," in element:
         mime_type, base64_data = _parse_data_url(element)
-        blob: BlobType = {"mime_type": mime_type, "data": base64_data}
+        blob: Final[BlobType] = {"mime_type": mime_type, "data": base64_data}
         return PartType(inline_data=blob)
     elif _is_gcs_url(element):
         mime_type = _infer_mime_type_from_gcs_url(element)
-        file_data: FileDataType = {
+        file_data: Final[FileDataType] = {
             "mime_type": mime_type,
             "file_uri": element,
         }
@@ -183,8 +183,8 @@ def _build_part_for_input(
     elif _is_file_reference(element):
         if element not in resolved_files:
             raise ValueError(f"File reference {element} not resolved")
-        file_info = resolved_files[element]
-        file_data_ref: FileDataType = {
+        file_info: Final = resolved_files[element]
+        file_data_ref: Final[FileDataType] = {
             "mime_type": file_info["mime_type"],
             "file_uri": file_info["uri"],
         }
@@ -193,12 +193,12 @@ def _build_part_for_input(
         return PartType(text=element)
 
 
-_SUPPORTED_EMBED_PARAMS = {"outputDimensionality", "taskType", "title"}
+_SUPPORTED_EMBED_PARAMS: Final = {"outputDimensionality", "taskType", "title"}
 
 
 def _filter_embed_params(optional_params: dict) -> dict:
     """Map and filter optional_params to only include Gemini embedding fields."""
-    gemini_params = optional_params.copy()
+    gemini_params: Final = optional_params.copy()
     if "dimensions" in gemini_params:
         gemini_params["outputDimensionality"] = gemini_params.pop("dimensions")
     if "task_type" in gemini_params:
@@ -210,7 +210,7 @@ def transform_openai_input_gemini_content(
     input: GeminiEmbeddingInput,
     model: str,
     optional_params: dict,
-    resolved_files: Optional[Dict[str, Dict[str, str]]] = None,
+    resolved_files: dict[str, dict[str, str]] | None = None,
 ) -> VertexAIBatchEmbeddingsRequestBody:
     """
     Transform OpenAI embedding input to Gemini batchEmbedContents format.
@@ -227,12 +227,12 @@ def transform_openai_input_gemini_content(
         input=[["text", "image"]]       → 1 combined embedding
         input=[["text", "image"], "x"]  → 2 embeddings (1 combined + 1 separate)
     """
-    gemini_model_name = "models/{}".format(model)
+    gemini_model_name: Final = f"models/{model}"
 
-    gemini_params = _filter_embed_params(optional_params)
+    gemini_params: Final = _filter_embed_params(optional_params)
 
-    input_list = [input] if isinstance(input, str) else input
-    requests: List[EmbedContentRequest] = []
+    input_list: Final = [input] if isinstance(input, str) else input
+    requests: Final[list[EmbedContentRequest]] = []
 
     for element in input_list:
         if isinstance(element, list):
@@ -258,7 +258,7 @@ def transform_openai_input_gemini_embed_content(
     input: GeminiEmbeddingInput,
     model: str,
     optional_params: dict,
-    resolved_files: Optional[Dict[str, Dict[str, str]]] = None,
+    resolved_files: dict[str, dict[str, str]] | None = None,
 ) -> dict:
     """
     Transform OpenAI embedding input to Gemini embedContent format (multimodal).
@@ -274,10 +274,10 @@ def transform_openai_input_gemini_embed_content(
     """
     resolved_files = resolved_files or {}
 
-    gemini_params = _filter_embed_params(optional_params)
+    gemini_params: Final = _filter_embed_params(optional_params)
 
-    input_list = [input] if isinstance(input, str) else input
-    parts: List[PartType] = []
+    input_list: Final = [input] if isinstance(input, str) else input
+    parts: Final[list[PartType]] = []
 
     for element in input_list:
         if isinstance(element, list):
@@ -289,7 +289,7 @@ def transform_openai_input_gemini_embed_content(
             raise ValueError(f"Unsupported input type: {type(element)}")
         parts.append(_build_part_for_input(element, resolved_files=resolved_files))
 
-    request_body: dict = {
+    request_body: Final[dict] = {
         "content": ContentType(parts=parts),
         **gemini_params,
     }
@@ -297,13 +297,13 @@ def transform_openai_input_gemini_embed_content(
     return request_body
 
 
-_IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg"})
-_VIDEO_TOKENS_PER_SECOND = 258.0
-_AUDIO_TOKENS_PER_SECOND = 32.0
-_usage_metadata_adapter = TypeAdapter(UsageMetadata)
+_IMAGE_MIME_TYPES: Final = frozenset({"image/png", "image/jpeg"})
+_VIDEO_TOKENS_PER_SECOND: Final = 258.0
+_AUDIO_TOKENS_PER_SECOND: Final = 32.0
+_usage_metadata_adapter: Final = TypeAdapter(UsageMetadata)
 
 
-def _parse_usage_metadata(raw_usage_metadata: object) -> Optional[UsageMetadata]:
+def _parse_usage_metadata(raw_usage_metadata: object) -> UsageMetadata | None:
     if not isinstance(raw_usage_metadata, dict):
         return None
     try:
@@ -334,7 +334,7 @@ def _is_image_element(
         except ValueError:
             return False
     if _is_file_reference(element):
-        file_info = resolved_files.get(element)
+        file_info: Final = resolved_files.get(element)
         return file_info is not None and file_info.get("mime_type") in _IMAGE_MIME_TYPES
     return False
 
@@ -353,8 +353,8 @@ def _tokens_for_modality(details: Sequence[PromptTokensDetails], modality: str) 
 def _fallback_usage(input: GeminiEmbeddingInput, model: str) -> Usage:
     if _is_multimodal_input(input):
         return Usage(prompt_tokens=0, total_tokens=0)
-    input_text = get_formatted_prompt(data={"input": input}, call_type="embedding")
-    prompt_tokens = token_counter(model=model, text=input_text)
+    input_text: Final = get_formatted_prompt(data={"input": input}, call_type="embedding")
+    prompt_tokens: Final = token_counter(model=model, text=input_text)
     return Usage(prompt_tokens=prompt_tokens, total_tokens=prompt_tokens)
 
 
@@ -364,28 +364,28 @@ def _usage_from_embed_content_response(
     raw_usage_metadata: object,
     resolved_files: Mapping[str, Mapping[str, str]],
 ) -> Usage:
-    usage_metadata = _parse_usage_metadata(raw_usage_metadata)
+    usage_metadata: Final = _parse_usage_metadata(raw_usage_metadata)
     if usage_metadata is None:
         return _fallback_usage(input, model)
 
-    prompt_tokens = usage_metadata.get("promptTokenCount", 0)
-    total_tokens = usage_metadata.get("totalTokenCount") or prompt_tokens
+    prompt_tokens: Final = usage_metadata.get("promptTokenCount", 0)
+    total_tokens: Final = usage_metadata.get("totalTokenCount") or prompt_tokens
 
-    details: Sequence[PromptTokensDetails] = usage_metadata.get("promptTokensDetails") or ()
-    text_tokens = _tokens_for_modality(details, "TEXT")
-    audio_tokens = _tokens_for_modality(details, "AUDIO")
-    video_tokens = _tokens_for_modality(details, "VIDEO")
-    image_count = _count_input_images(input, resolved_files)
+    details: Final[Sequence[PromptTokensDetails]] = usage_metadata.get("promptTokensDetails") or ()
+    text_tokens: Final = _tokens_for_modality(details, "TEXT")
+    audio_tokens: Final = _tokens_for_modality(details, "AUDIO")
+    video_tokens: Final = _tokens_for_modality(details, "VIDEO")
+    image_count: Final = _count_input_images(input, resolved_files)
 
-    video_length_seconds = video_tokens / _VIDEO_TOKENS_PER_SECOND if video_tokens > 0 else 0.0
-    audio_length_seconds = audio_tokens / _AUDIO_TOKENS_PER_SECOND if audio_tokens > 0 else 0.0
+    video_length_seconds: Final = video_tokens / _VIDEO_TOKENS_PER_SECOND if video_tokens > 0 else 0.0
+    audio_length_seconds: Final = audio_tokens / _AUDIO_TOKENS_PER_SECOND if audio_tokens > 0 else 0.0
 
     # generic_cost_per_token rewrites text_tokens to the full prompt minus
     # other modalities when both text_tokens and image_count are zero. For
     # video, that misallocates video tokens to text; a 1-token floor sidesteps
     # the rewrite and keeps billing on input_cost_per_video_per_second.
-    needs_video_text_floor = video_length_seconds > 0 and text_tokens == 0 and image_count == 0
-    resolved_text_tokens = 1 if needs_video_text_floor else text_tokens
+    needs_video_text_floor: Final = video_length_seconds > 0 and text_tokens == 0 and image_count == 0
+    resolved_text_tokens: Final = 1 if needs_video_text_floor else text_tokens
 
     return Usage(
         prompt_tokens=prompt_tokens,
@@ -424,9 +424,9 @@ def process_embed_content_response(
     if "embedding" not in response_json:
         raise ValueError(f"embedContent response missing 'embedding' field: {response_json}")
 
-    embedding_data = response_json["embedding"]
+    embedding_data: Final = response_json["embedding"]
 
-    openai_embedding = Embedding(
+    openai_embedding: Final = Embedding(
         embedding=embedding_data["values"],
         index=0,
         object="embedding",
@@ -450,7 +450,7 @@ def process_response(
     model: str,
     _predictions: VertexAIBatchEmbeddingsResponseObject,
 ) -> EmbeddingResponse:
-    openai_embeddings: List[Embedding] = []
+    openai_embeddings: Final[list[Embedding]] = []
     for idx, embedding in enumerate(_predictions["embeddings"]):
         openai_embedding = Embedding(
             embedding=embedding["values"],
@@ -462,10 +462,10 @@ def process_response(
     model_response.data = openai_embeddings
     model_response.model = model
 
-    has_nested = isinstance(input, list) and any(isinstance(e, list) for e in input)
+    has_nested: Final = isinstance(input, list) and any(isinstance(e, list) for e in input)
     if _is_multimodal_input(input) or has_nested:
-        input_list = input if isinstance(input, list) else [input]
-        text_elements: List[str] = []
+        input_list: Final = input if isinstance(input, list) else [input]
+        text_elements: Final[list[str]] = []
         for e in input_list:
             if isinstance(e, list):
                 text_elements.extend(sub for sub in e if isinstance(sub, str) and not _is_multimodal_element(sub))
