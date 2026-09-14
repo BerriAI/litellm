@@ -177,7 +177,6 @@ from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.table_repositories import (
-    EndUserRepository,
     HealthCheckRepository,
     SpendLogsRepository,
     UserNotificationsRepository,
