@@ -1,1 +1,1 @@
-Prints filtered Python profiler frames and feature-gated Rust spans from live traces against a replayed provider response. The two traces are independent and are not compared.
+Prints every collected Python call under litellm/ and every feature-gated Rust span from live traces against replayed HTTP responses. The two traces are independent and are not compared. API-key and Vertex credentials scenarios exercise separate authentication paths; credentials scenarios replay the token exchange locally.

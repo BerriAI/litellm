@@ -76,7 +76,7 @@ def _span_for(engine: Engine, function: str, mappings: Sequence[TraceMapping]) -
 
 
 def pipeline_projection(
-    engine: Engine, events: Sequence[FunctionTraceEvent], mappings: Sequence[TraceMapping]
+    engine: Engine, events: Sequence[FunctionTraceEvent], mappings: Sequence[TraceMapping] | None = None
 ) -> PipelineProjection:
     raw_parents: dict[int, int | None] = {}
     projected_ids: set[int] = set()
@@ -88,7 +88,7 @@ def pipeline_projection(
         if event.parent_id is not None and event.parent_id not in raw_parents:
             raise ValueError(f"trace event {event.id} references unknown or later parent {event.parent_id}")
         raw_parents[event.id] = event.parent_id
-        span = _span_for(engine, event.function, mappings)
+        span = event.function if mappings is None else _span_for(engine, event.function, mappings)
         if span is None:
             unmatched += 1
             continue

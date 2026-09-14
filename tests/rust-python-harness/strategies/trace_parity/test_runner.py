@@ -13,7 +13,7 @@ import litellm
 from ...shared.reporting.models import Coverage, HarnessCase, HarnessRun, RunStatus, SdkFunction, Surface
 from ...shared.reporting.strategy import ModuleCaseSpec
 from ...shared.tracing.profiler import FunctionTraceEvent
-from ...shared.tracing.steps import Engine, PipelineStep
+from ...shared.tracing.steps import Engine, PipelineStep, mapping
 from .models import GatewayRouteSpec, RouteFixture, RouteSpec, TraceScenario, TraceSuite
 from .reporting import TraceArtifact
 from .runner import run_trace_cases, run_trace_scenario, runner_selection, scenario_nodeids, validate_trace_suite
@@ -122,6 +122,84 @@ def test_expected_provider_failure_omits_feedback_banner(
     assert result.python_error is None
     assert "Give Feedback / Get Help" not in capsys.readouterr().out
     assert litellm.suppress_debug_info is False
+
+
+@pytest.mark.parametrize("asynchronous", (False, True))
+def test_vertex_trace_keeps_unmapped_helpers_and_parents(asynchronous: bool) -> None:
+    loaded: Final = importlib.import_module("tests.rust-python-harness.strategies.trace_parity.sdk.ocr.case")
+    suite: Final = cast(TraceSuite, loaded.TRACE_SUITE)
+    name: Final = f"{'async' if asynchronous else 'sync'}-vertex-deepseek"
+    scenario: Final = next(item for item in suite.scenarios if item.name == name)
+    assert isinstance(suite.route, RouteSpec)
+
+    trace: Final = execute_trace(suite.route, scenario, "sdk", engine="python")
+
+    assert trace.python_error is None
+    url: Final = next(
+        event for event in trace.python if event.raw.endswith(" VertexAIDeepSeekOCRConfig.get_complete_url")
+    )
+    project: Final = next(
+        event for event in trace.python if event.raw.endswith(" VertexBase.safe_get_vertex_ai_project")
+    )
+    location: Final = next(
+        event for event in trace.python if event.raw.endswith(" VertexBase.safe_get_vertex_ai_location")
+    )
+    assert project.parent_id == location.parent_id == url.id
+    assert not any(event.raw.endswith(" VertexBase.get_access_token") for event in trace.python)
+
+
+@pytest.mark.parametrize("asynchronous", (False, True))
+def test_vertex_credentials_trace_runs_real_auth_helpers(asynchronous: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    loaded: Final = importlib.import_module("tests.rust-python-harness.strategies.trace_parity.sdk.ocr.case")
+    suite: Final = cast(TraceSuite, loaded.TRACE_SUITE)
+    name: Final = f"{'async' if asynchronous else 'sync'}-vertex-deepseek-credentials"
+    scenario: Final = next(item for item in suite.scenarios if item.name == name)
+    monkeypatch.setenv("VERTEXAI_CREDENTIALS", "original-credentials")
+    monkeypatch.setenv("VERTEX_AI_API_KEY", "original-api-key")
+    assert isinstance(suite.route, RouteSpec)
+
+    trace: Final = execute_trace(suite.route, scenario, "sdk", engine="python")
+
+    assert trace.python_error is None
+    validate: Final = next(
+        event for event in trace.python if event.raw.endswith(" VertexAIDeepSeekOCRConfig.validate_environment")
+    )
+    helpers: Final = (
+        "VertexBase.safe_get_vertex_ai_project",
+        "VertexBase.safe_get_vertex_ai_credentials",
+        "VertexBase.get_access_token",
+    )
+    assert tuple(event.raw.split(" ", 1)[1] for event in trace.python if event.parent_id == validate.id) == helpers
+    token: Final = next(event for event in trace.python if event.raw.endswith(" VertexBase.get_access_token"))
+    load: Final = next(event for event in trace.python if event.raw.endswith(" VertexBase.load_auth"))
+    refresh: Final = next(event for event in trace.python if event.raw.endswith(" VertexBase.refresh_auth"))
+    assert load.parent_id == token.id
+    assert refresh.parent_id == load.id
+    assert os.environ["VERTEXAI_CREDENTIALS"] == "original-credentials"
+    assert os.environ["VERTEX_AI_API_KEY"] == "original-api-key"
+
+
+def test_gateway_trace_keeps_calls_outside_scenario_mappings(monkeypatch: pytest.MonkeyPatch) -> None:
+    execution: Final = importlib.import_module("tests.rust-python-harness.strategies.trace_parity.gateway.execution")
+    events: Final = (
+        FunctionTraceEvent(0, None, "route.py:1 entry"),
+        FunctionTraceEvent(1, 0, "auth.py:2 authenticate"),
+        FunctionTraceEvent(2, 1, "auth.py:3 credentials"),
+    )
+    scenario: Final = TraceScenario(
+        "async-gateway",
+        _fixture,
+        (mapping(rust_span="entry", python_frame=r" entry$"),),
+        asynchronous=True,
+    )
+    monkeypatch.setattr(execution, "_collect", lambda *_args: events)
+
+    trace: Final = execution.execute_gateway_trace(GatewayRouteSpec("messages"), scenario, engine="python")
+
+    assert trace.python_error is None
+    assert tuple((event.id, event.parent_id, event.raw) for event in trace.python) == tuple(
+        (event.id, event.parent_id, event.raw) for event in events
+    )
 
 
 def test_scenario_validation_rejects_duplicate_and_unsafe_names() -> None:

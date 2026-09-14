@@ -204,6 +204,40 @@ def _vertex_deepseek_fixture(engine: Engine, _base_url: str) -> RouteFixture:
     )
 
 
+def _vertex_deepseek_credentials_fixture(engine: Engine, base_url: str) -> RouteFixture:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    fixture: Final = _vertex_deepseek_fixture(engine, base_url)
+    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    credentials: Final = json.dumps(
+        {
+            "type": "service_account",
+            "project_id": "trace-project",
+            "private_key_id": "trace-key",
+            "private_key": private_key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            ).decode(),
+            "client_email": "trace@trace-project.iam.gserviceaccount.com",
+            "token_uri": f"{base_url}/token",
+        }
+    )
+    return RouteFixture(
+        kwargs={**fixture.kwargs, "api_key": None},
+        environment=(("VERTEXAI_CREDENTIALS", credentials), ("VERTEX_AI_API_KEY", "")),
+        provider_responses=(
+            RecordedHttpResponse.from_bytes(
+                200,
+                (HttpHeader(name="content-type", value="application/json"),),
+                b'{"access_token":"trace-token","token_type":"Bearer","expires_in":3600}',
+            ),
+            *fixture.provider_responses,
+        ),
+    )
+
+
 def _cohere_fixture(engine: Engine, _base_url: str) -> RouteFixture:
     return RouteFixture(
         kwargs={
@@ -439,6 +473,18 @@ TRACE_SUITE: Final = TraceSuite(
             name="async-vertex-deepseek",
             fixture=_vertex_deepseek_fixture,
             mappings=(*DEEPSEEK_ASYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
+            asynchronous=True,
+        ),
+        TraceScenario(
+            name="sync-vertex-deepseek-credentials",
+            fixture=_vertex_deepseek_credentials_fixture,
+            mappings=DEEPSEEK_SYNC_MAPPINGS,
+            asynchronous=False,
+        ),
+        TraceScenario(
+            name="async-vertex-deepseek-credentials",
+            fixture=_vertex_deepseek_credentials_fixture,
+            mappings=DEEPSEEK_ASYNC_MAPPINGS,
             asynchronous=True,
         ),
         TraceScenario(
