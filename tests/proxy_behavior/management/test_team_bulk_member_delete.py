@@ -71,17 +71,20 @@ async def test_team_bulk_member_delete_authz_matrix(
     caller = world.keys[actor]
 
     resp = await proxy_client.post(
-        "/team/bulk_member_delete",
+        f"/management/v1/teams/{scratch.prefix}/members/bulk_delete",
         headers={"Authorization": f"Bearer {caller.cleartext}"},
-        json={"team_id": scratch.prefix, "members": [{"user_id": v} for v in victims]},
+        json={"members": [{"user_id": v} for v in victims]},
     )
     assert resp.status_code == expected_status, f"{actor.value} {shape}: {resp.status_code} {resp.text}"
+    if expected_status == 403:
+        assert resp.headers["content-type"] == "application/problem+json"
+        assert resp.json()["type"] == "urn:litellm:error:forbidden"
 
     row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": scratch.prefix})
     assert row is not None
     assert keep in _member_ids(row), "unrelated member removed"
     if expected_status == 200:
-        assert [(r["user_id"], r["success"]) for r in resp.json()["results"]] == [(v, True) for v in victims]
+        assert [(r["user_id"], r["success"]) for r in resp.json()["data"]] == [(v, True) for v in victims]
         assert not set(victims) & set(_member_ids(row))
     else:
         assert set(victims) <= set(_member_ids(row)), "denied but members removed"
@@ -94,18 +97,18 @@ async def test_team_bulk_member_delete_reports_each_row_in_order(proxy_client, p
     await create_scratch_team(prisma, scratch.prefix, organization_id=world.org_a_id, member_user_ids=[victim, keep])
 
     resp = await proxy_client.post(
-        "/team/bulk_member_delete",
+        f"/management/v1/teams/{scratch.prefix}/members/bulk_delete",
         headers={"Authorization": f"Bearer {world.keys[Actor.PROXY_ADMIN].cleartext}"},
-        json={"team_id": scratch.prefix, "members": [{"user_id": stranger}, {"user_id": victim}]},
+        json={"members": [{"user_id": stranger}, {"user_id": victim}]},
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert [(r["user_id"], r["success"]) for r in body["results"]] == [
+    assert set(body) == {"data"}
+    assert [(r["user_id"], r["success"]) for r in body["data"]] == [
         (stranger, False),
         (victim, True),
     ]
-    assert body["results"][0]["error"] == "User not found in team"
-    assert (body["successful_deletions"], body["failed_deletions"]) == (1, 1)
+    assert body["data"][0]["error"] == "User not found in team"
 
     row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": scratch.prefix})
     assert row is not None and _member_ids(row) == [keep]
@@ -116,14 +119,61 @@ async def test_team_bulk_member_delete_row_naming_both_identifiers_is_422(proxy_
     await create_scratch_team(prisma, scratch.prefix, organization_id=world.org_a_id, member_user_ids=[victim])
 
     resp = await proxy_client.post(
-        "/team/bulk_member_delete",
+        f"/management/v1/teams/{scratch.prefix}/members/bulk_delete",
         headers={"Authorization": f"Bearer {world.keys[Actor.PROXY_ADMIN].cleartext}"},
-        json={
-            "team_id": scratch.prefix,
-            "members": [{"user_id": victim, "user_email": f"{victim}@example.com"}],
-        },
+        json={"members": [{"user_id": victim, "user_email": f"{victim}@example.com"}]},
     )
     assert resp.status_code == 422, resp.text
+    assert resp.headers["content-type"] == "application/problem+json"
+    assert resp.json()["type"] == "urn:litellm:error:invalid-request-body"
+    assert (
+        resp.json()["detail"]
+        == "members.0: Value error, Each member must be identified by exactly one of user_id or user_email"
+    )
 
     row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": scratch.prefix})
     assert row is not None and victim in _member_ids(row)
+
+
+async def test_team_bulk_member_delete_unknown_query_param_is_400(proxy_client, prisma, scratch, world):
+    victim = scratch.tag("victim")
+    await create_scratch_team(prisma, scratch.prefix, organization_id=world.org_a_id, member_user_ids=[victim])
+
+    resp = await proxy_client.post(
+        f"/management/v1/teams/{scratch.prefix}/members/bulk_delete?dry_run=1",
+        headers={"Authorization": f"Bearer {world.keys[Actor.PROXY_ADMIN].cleartext}"},
+        json={"members": [{"user_id": victim}]},
+    )
+    assert resp.status_code == 400, resp.text
+    assert resp.headers["content-type"] == "application/problem+json"
+    assert "dry_run" in resp.json()["detail"]
+
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": scratch.prefix})
+    assert row is not None and victim in _member_ids(row)
+
+
+async def test_team_bulk_member_delete_unknown_body_field_is_422(proxy_client, prisma, scratch, world):
+    victim = scratch.tag("victim")
+    await create_scratch_team(prisma, scratch.prefix, organization_id=world.org_a_id, member_user_ids=[victim])
+
+    resp = await proxy_client.post(
+        f"/management/v1/teams/{scratch.prefix}/members/bulk_delete",
+        headers={"Authorization": f"Bearer {world.keys[Actor.PROXY_ADMIN].cleartext}"},
+        json={"team_id": scratch.prefix, "members": [{"user_id": victim}]},
+    )
+    assert resp.status_code == 422, resp.text
+    assert "team_id" in resp.json()["detail"]
+
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": scratch.prefix})
+    assert row is not None and victim in _member_ids(row)
+
+
+async def test_team_bulk_member_delete_unknown_team_is_404_problem(proxy_client, scratch, world):
+    resp = await proxy_client.post(
+        f"/management/v1/teams/{scratch.tag('missing')}/members/bulk_delete",
+        headers={"Authorization": f"Bearer {world.keys[Actor.PROXY_ADMIN].cleartext}"},
+        json={"members": [{"user_id": scratch.tag("victim")}]},
+    )
+    assert resp.status_code == 404, resp.text
+    assert resp.headers["content-type"] == "application/problem+json"
+    assert resp.json()["type"] == "urn:litellm:error:team-not-found"

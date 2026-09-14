@@ -163,8 +163,6 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
 from litellm.types.proxy.management_endpoints.team_endpoints import (
     BulkTeamMemberAddRequest,
     BulkTeamMemberAddResponse,
-    BulkTeamMemberDeleteRequest,
-    BulkTeamMemberDeleteResponse,
     BulkUpdateTeamMemberPermissionsRequest,
     BulkUpdateTeamMemberPermissionsResponse,
     GetTeamMemberPermissionsResponse,
@@ -3453,36 +3451,6 @@ async def team_member_delete(
     _emit_team_members_metric(existing_team_row)
 
     return existing_team_row
-
-
-@router.post(
-    "/team/bulk_member_delete",
-    tags=["team management"],  # mutable-ok: FastAPI's `tags` param is typed as list[str], not Sequence
-    dependencies=(Depends(user_api_key_auth),),
-    response_model=BulkTeamMemberDeleteResponse,
-)
-@management_endpoint_wrapper
-async def bulk_team_member_delete(
-    data: BulkTeamMemberDeleteRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
-) -> BulkTeamMemberDeleteResponse:
-    """Remove up to 500 members from one team; same authorization as `/team/member_delete`."""
-    from litellm.proxy.management_helpers.bulk_user_deletion import bulk_remove_team_members
-    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
-
-    if prisma_client is None:
-        raise HTTPException(status_code=400, detail=CommonProxyErrors.db_not_connected_error.value)
-    try:
-        return await bulk_remove_team_members(
-            data=data,
-            user_api_key_dict=user_api_key_dict,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    except Exception as e:  # noqa: BLE001  # normalize every failure to the proxy exception contract
-        verbose_proxy_logger.exception("/team/bulk_member_delete: Exception occured")
-        raise handle_exception_on_proxy(e)
 
 
 _MEMBER_BUDGET_PATCH_FIELDS: Final = {

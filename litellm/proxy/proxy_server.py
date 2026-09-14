@@ -1788,24 +1788,37 @@ class _ExceptionRow(TypedDict, total=False):
 
 
 class _ValidationErrorDetail(TypedDict):
+    type: str
     loc: tuple[int | str, ...]
     msg: str
+
+
+def _is_length_error_of_rejected_items(error: _ValidationErrorDetail, errors: Sequence[_ValidationErrorDetail]) -> bool:
+    """pydantic counts only items that validated, so a bad item also trips the parent's min_length."""
+    return error["type"] == "too_short" and any(
+        len(other["loc"]) > len(error["loc"]) and other["loc"][: len(error["loc"])] == error["loc"] for other in errors
+    )
 
 
 @app.exception_handler(RequestValidationError)
 async def otel_request_validation_exception_handler(request: Request, exc: RequestValidationError):
     if request.url.path.startswith(MANAGEMENT_V1_PREFIX):
-        _close_dangling_otel_server_span(request, 400, exc=exc)
-        validation_errors: Final[Sequence[_ValidationErrorDetail]] = exc.errors()
+        raw_errors: Final[Sequence[_ValidationErrorDetail]] = exc.errors()
+        validation_errors: Final = tuple(
+            error for error in raw_errors if not _is_length_error_of_rejected_items(error, raw_errors)
+        )
+        in_body: Final = any(error["loc"] and error["loc"][0] == "body" for error in validation_errors)
+        status: Final = 422 if in_body else 400
+        _close_dangling_otel_server_span(request, status, exc=exc)
         return problem_response(
             ProblemDetail(
-                type=f"{PROBLEM_TYPE_BASE}invalid-query-parameter",
-                title="Invalid query parameter",
-                status=400,
+                type=f"{PROBLEM_TYPE_BASE}{'invalid-request-body' if in_body else 'invalid-query-parameter'}",
+                title="Invalid request body" if in_body else "Invalid query parameter",
+                status=status,
                 detail="; ".join(
                     f"{'.'.join(str(part) for part in error['loc'][1:])}: {error['msg']}" for error in validation_errors
                 )
-                or "The request query parameters are invalid.",
+                or "The request is invalid.",
             )
         )
     _close_dangling_otel_server_span(request, 422, exc=exc)

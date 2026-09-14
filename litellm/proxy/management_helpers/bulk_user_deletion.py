@@ -1,4 +1,5 @@
-"""Batched deletes behind `POST /user/bulk_delete` and `POST /team/bulk_member_delete`.
+"""Batched deletes behind `POST /management/v1/users/bulk_delete` and
+`POST /management/v1/teams/{team_id}/members/bulk_delete`.
 
 Each team a batch touches is rewritten exactly once, under the same advisory lock
 `/team/member_delete` takes and from a roster re-read under that lock, so a concurrent
@@ -31,6 +32,7 @@ from litellm.proxy.auth.auth_checks import delete_cache_key_objects
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
+from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_org_admin_for_team,  # pyright: ignore[reportPrivateUsage]  # same check /team/member_delete uses
     _is_user_team_admin,  # pyright: ignore[reportPrivateUsage]  # same check /team/member_delete uses
@@ -48,12 +50,11 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     BulkDeleteUserRequest,
-    BulkDeleteUserResponse,
     UserDeleteResult,
 )
+from litellm.types.proxy.management_endpoints.management_v1 import ProblemDetail
 from litellm.types.proxy.management_endpoints.team_endpoints import (
     BulkTeamMemberDeleteRequest,
-    BulkTeamMemberDeleteResponse,
     TeamMemberDeleteResult,
 )
 
@@ -65,10 +66,6 @@ if TYPE_CHECKING:
 
 _AUDIT_LOG_CONCURRENCY: Final = 10
 _BATCH_TX_TIMEOUT: Final = timedelta(seconds=60)
-
-
-class _ErrorDetail(TypedDict):
-    error: ReadOnly[str]
 
 
 class _OrgAdminFilter(TypedDict):
@@ -105,9 +102,21 @@ class _UserBatchDeletion:
     deleted_key_tokens: tuple[str, ...]
 
 
-def _http_error(status_code: int, message: str) -> HTTPException:
-    detail: Final[_ErrorDetail] = {"error": message}
-    return HTTPException(status_code=status_code, detail=detail)
+def _team_not_found(team_id: str) -> ManagementProblem:
+    return ManagementProblem(
+        ProblemDetail(
+            type=f"{PROBLEM_TYPE_BASE}team-not-found",
+            title="Team not found",
+            status=404,
+            detail=f"Team id={team_id} does not exist in db",
+        )
+    )
+
+
+def _forbidden(detail: str) -> ManagementProblem:
+    return ManagementProblem(
+        ProblemDetail(type=f"{PROBLEM_TYPE_BASE}forbidden", title="Forbidden", status=403, detail=detail)
+    )
 
 
 def _in_filter(field: str, values: Iterable[str]) -> Mapping[str, object]:
@@ -167,6 +176,8 @@ def _addresses_user(user: "prisma_models.LiteLLM_UserTable", request: MemberDele
 
 
 def _error_message(exc: BaseException) -> str:
+    if isinstance(exc, ManagementProblem):
+        return exc.problem.detail
     if isinstance(exc, HTTPException) and isinstance(exc.detail, dict):
         return str(exc.detail.get("error", exc.detail))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # HTTPException.detail is untyped
     if isinstance(exc, HTTPException):
@@ -194,7 +205,7 @@ async def _remove_members_from_team(
     await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
     roster: Final = await TeamRepository(prisma_client).get_members_with_roles_locked(tx, team_id)
     if roster is None:
-        raise _http_error(400, f"Team id={team_id} does not exist in db")
+        raise _team_not_found(team_id)
 
     removed_members: Final = tuple(m for m in roster if any(_addresses_member(m, r) for r in members))
     kept_members: Final = tuple(m for m in roster if not any(_addresses_member(m, r) for r in members))
@@ -269,32 +280,32 @@ def _duplicate_member_indexes(members: Sequence[MemberDeleteRequest]) -> frozens
 
 
 async def bulk_remove_team_members(
+    team_id: str,
     data: BulkTeamMemberDeleteRequest,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None,
-) -> BulkTeamMemberDeleteResponse:
-    team: Final = await TeamRepository(prisma_client).find_by_id(data.team_id)
+) -> tuple[TeamMemberDeleteResult, ...]:
+    team: Final = await TeamRepository(prisma_client).find_by_id(team_id)
     if team is None:
-        raise _http_error(400, f"Team id={data.team_id} does not exist in db")
+        raise _team_not_found(team_id)
 
     if (
         user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
         and not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)
         and not await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team)
     ):
-        raise _http_error(
-            403,
+        raise _forbidden(
             "Call not allowed. User not proxy admin OR team admin OR org admin for this team. "
-            f"route='/team/bulk_member_delete', team_id={data.team_id}",
+            f"route='/management/v1/teams/{team_id}/members/bulk_delete'"
         )
 
     duplicates: Final = _duplicate_member_indexes(data.members)
     kept_indexes: Final = tuple(i for i in range(len(data.members)) if i not in duplicates)
     members: Final = tuple(data.members[i] for i in kept_indexes)
     async with prisma_client.tx(timeout=_BATCH_TX_TIMEOUT) as tx:
-        removal: Final = await _remove_members_from_team(prisma_client, tx, data.team_id, members, user_api_key_dict)
+        removal: Final = await _remove_members_from_team(prisma_client, tx, team_id, members, user_api_key_dict)
     await delete_cache_key_objects(
         hashed_tokens=removal.deleted_key_tokens,
         user_api_key_cache=user_api_key_cache,
@@ -309,7 +320,7 @@ async def bulk_remove_team_members(
             return "Duplicate member in request"
         return None if index in matched else "User not found in team"
 
-    results: Final = tuple(
+    return tuple(
         TeamMemberDeleteResult(
             user_id=member.user_id,
             user_email=member.user_email,
@@ -317,14 +328,6 @@ async def bulk_remove_team_members(
             error=error(i),
         )
         for i, member in enumerate(data.members)
-    )
-    successful: Final = sum(1 for r in results if r.success)
-    return BulkTeamMemberDeleteResponse(
-        team_id=data.team_id,
-        results=results,
-        total_requested=len(results),
-        successful_deletions=successful,
-        failed_deletions=len(results) - successful,
     )
 
 
@@ -433,7 +436,7 @@ async def _delete_users(
     try:
         deletion: Final = await _delete_users_tx(prisma_client, users, teams_of, user_api_key_dict, litellm_changed_by)
     except Exception as e:  # noqa: BLE001  # the rolled-back batch is reported per row, not as a request failure
-        verbose_proxy_logger.error("/user/bulk_delete: failed to delete users %s: %s", sorted(user_ids), e)
+        verbose_proxy_logger.error("users/bulk_delete: failed to delete users %s: %s", sorted(user_ids), e)
         return _error_message(e)
     await delete_cache_key_objects(
         hashed_tokens=deletion.deleted_key_tokens,
@@ -468,11 +471,11 @@ async def bulk_delete_users(
     proxy_logging_obj: ProxyLogging | None,
     litellm_proxy_admin_name: str | None,
     litellm_changed_by: str | None,
-) -> BulkDeleteUserResponse:
+) -> tuple[UserDeleteResult, ...]:
     caller_is_proxy_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
     caller_admin_org_ids: Final = await _caller_admin_org_ids(prisma_client, user_api_key_dict)
     if not caller_is_proxy_admin and not caller_admin_org_ids:
-        raise _http_error(403, "Only PROXY_ADMIN or ORG_ADMIN users may delete users.")
+        raise _forbidden("Only PROXY_ADMIN or ORG_ADMIN users may delete users.")
 
     unique_ids: Final = frozenset(data.user_ids)
     rows: Final = await UserRepository(prisma_client).table.find_many(where=_in_filter("user_id", unique_ids))
@@ -543,11 +546,4 @@ async def bulk_delete_users(
             teams_removed=tuple(tid for tid, r in deletion.removals.items() if user_id in r.removed),
         )
 
-    results: Final = tuple(result(i, uid) for i, uid in enumerate(data.user_ids))
-    successful: Final = sum(1 for r in results if r.success)
-    return BulkDeleteUserResponse(
-        results=results,
-        total_requested=len(results),
-        successful_deletions=successful,
-        failed_deletions=len(results) - successful,
-    )
+    return tuple(result(i, uid) for i, uid in enumerate(data.user_ids))

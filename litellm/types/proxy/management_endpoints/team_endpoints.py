@@ -1,6 +1,6 @@
 from typing import Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from litellm.proxy._types import (
     KeyManagementRoutes,
@@ -10,6 +10,7 @@ from litellm.proxy._types import (
     Member,
     MemberDeleteRequest,
 )
+from litellm.types.proxy.management_endpoints.management_v1 import ResourceResponse
 
 TeamIdSearchMatch = Literal["exact", "prefix"]
 
@@ -121,20 +122,28 @@ class BulkTeamMemberAddResponse(BaseModel):
     updated_team: dict[str, Any] | None = None
 
 
-class BulkTeamMemberDeleteRequest(BaseModel):
-    team_id: str
-    members: tuple[MemberDeleteRequest, ...] = Field(min_length=1, max_length=MAX_BULK_TEAM_MEMBER_DELETES)
+class TeamMemberRef(MemberDeleteRequest):
+    """One member to remove, named by exactly one of `user_id` or `user_email`."""
 
-    @field_validator("members")
-    @classmethod
-    def one_identifier_per_member(cls, members: tuple[MemberDeleteRequest, ...]) -> tuple[MemberDeleteRequest, ...]:
-        if any(m.user_id is not None and m.user_email is not None for m in members):
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def one_identifier(self) -> "TeamMemberRef":
+        if self.user_id is not None and self.user_email is not None:
             raise ValueError("Each member must be identified by exactly one of user_id or user_email")
-        return members
+        return self
+
+
+class BulkTeamMemberDeleteRequest(BaseModel):
+    """Body of `POST /management/v1/teams/{team_id}/members/bulk_delete`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    members: tuple[TeamMemberRef, ...] = Field(min_length=1, max_length=MAX_BULK_TEAM_MEMBER_DELETES)
 
 
 class TeamMemberDeleteResult(BaseModel):
-    """Outcome for one row of `/team/bulk_member_delete`."""
+    """Outcome for one requested member, in request order."""
 
     user_id: str | None = None
     user_email: str | None = None
@@ -142,12 +151,8 @@ class TeamMemberDeleteResult(BaseModel):
     error: str | None = None
 
 
-class BulkTeamMemberDeleteResponse(BaseModel):
-    team_id: str
-    results: tuple[TeamMemberDeleteResult, ...]
-    total_requested: int
-    successful_deletions: int
-    failed_deletions: int
+class BulkTeamMemberDeleteResponse(ResourceResponse[tuple[TeamMemberDeleteResult, ...]]):
+    """`{data: [...]}` with one `TeamMemberDeleteResult` per requested member, in request order."""
 
 
 class TeamMemberInfoResponse(LiteLLM_TeamMembership):
