@@ -2176,6 +2176,158 @@ async def test_auto_register_first_request_propagates_user_email():
     assert result.api_key == "hashed-auto-key"
 
 
+@pytest.mark.asyncio
+async def test_auto_register_stamps_new_key_with_jwt_agent_id():
+    """The virtual key AUTO_REGISTER creates must carry the agent id auth_builder bound
+    from the JWT claim, and the first request's principal must carry it too, or the
+    mapped-key path would drop the agent policies on that request and every later one."""
+    from litellm.proxy.auth.auth_method import AuthMethod
+    from litellm.proxy.auth.resolvers.models import CredentialRef
+    from litellm.proxy.auth.resolvers.store import IdentityStore
+    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+    from litellm.proxy.proxy_server import hash_token
+
+    plaintext = "sk-auto-registered-agent"
+    token_hash = hash_token(plaintext)
+    principal = IdentityStore._principal_from_key(
+        UserAPIKeyAuth(token=token_hash, user_id="validated-user", team_id="validated-team"),
+        auth_method=AuthMethod.API_KEY,
+        credential_ref=CredentialRef(token_id=token_hash),
+    )
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_set_cache = AsyncMock()
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(virtual_key_mapping_cache_ttl=300)
+    generate_key = AsyncMock(return_value={"token": plaintext})
+
+    with (
+        patch(  # test-quality-ok: key creation is an inline import inside the helper; no dependency injection seam exists
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+            generate_key,
+        ),
+        patch(  # test-quality-ok: the helper constructs IdentityStore itself; no dependency injection seam exists
+            "litellm.proxy.auth.resolvers.store.IdentityStore.resolve",
+            new_callable=AsyncMock,
+            return_value=principal,
+        ),
+    ):
+        result = await _auto_register_jwt_mapping(
+            virtual_key_claim_field="appid",
+            claim_value="2f5c9b1e-6a4d-4c8e-9f0b-7d1a3e5c9b21",
+            jwt_handler=jwt_handler,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+            cache_key="jwt_key_mapping:appid:2f5c9b1e-6a4d-4c8e-9f0b-7d1a3e5c9b21",
+            team_id="validated-team",
+            user_id="validated-user",
+            agent_id="canonical-agent-id",
+        )
+
+    assert generate_key.await_args is not None
+    assert generate_key.await_args.kwargs["agent_id"] == "canonical-agent-id"
+    assert result is not None
+    assert result.agent_id == "canonical-agent-id"
+
+
+@pytest.mark.asyncio
+async def test_jwt_auto_register_forwards_bound_agent_id():
+    """When a JWT under AUTO_REGISTER also carries the configured agent claim, the agent
+    id auth_builder resolved must reach the key creation, not be dropped when
+    valid_token is swapped for the freshly registered key."""
+    jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
+    user_api_key_cache = DualCache()
+    jwt_handler = MagicMock()
+    jwt_handler.is_jwt.return_value = True
+    jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "user1", "appid": "2f5c9b1e-6a4d-4c8e-9f0b-7d1a3e5c9b21"})
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="sub",
+        virtual_key_mapping_cache_ttl=300,
+        agent_id_jwt_field="appid",
+    )
+    user_object = LiteLLM_UserTable(user_id="validated-user", user_role="internal_user")
+    mock_jwt_result = {
+        "is_proxy_admin": False,
+        "team_object": None,
+        "user_object": user_object,
+        "end_user_object": None,
+        "org_object": None,
+        "token": jwt_token,
+        "team_id": "validated-team",
+        "user_id": "validated-user",
+        "user_email": None,
+        "end_user_id": None,
+        "org_id": None,
+        "team_membership": None,
+        "jwt_claims": {"sub": "user1", "appid": "2f5c9b1e-6a4d-4c8e-9f0b-7d1a3e5c9b21"},
+        "agent_id": "canonical-agent-id",
+    }
+    auto_register = AsyncMock(
+        return_value=UserAPIKeyAuth(
+            token="hashed-auto-key",
+            api_key="hashed-auto-key",
+            team_id="validated-team",
+            user_id="validated-user",
+            agent_id="canonical-agent-id",
+        )
+    )
+
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/chat/completions"
+    mock_request.method = "POST"
+    mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
+    mock_request.query_params = {}
+    mock_request.state = SimpleNamespace()
+
+    with (
+        patch.multiple(  # test-quality-ok: production auth reads these module globals; no dependency injection seam exists
+            "litellm.proxy.proxy_server",
+            general_settings={"enable_jwt_auth": True},
+            premium_user=True,
+            master_key="sk-master",
+            prisma_client=MagicMock(),
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=MagicMock(),
+            jwt_handler=jwt_handler,
+        ),
+        patch(  # test-quality-ok: module-level helper called by the builder; no dependency injection seam exists
+            "litellm.proxy.auth.user_api_key_auth._resolve_jwt_to_virtual_key",
+            new_callable=AsyncMock,
+            return_value=_PendingAutoRegister(
+                claim_field="sub",
+                claim_value="user1",
+                cache_key="jwt_key_mapping:sub:user1",
+            ),
+        ),
+        patch(  # test-quality-ok: the builder calls this static method directly; no dependency injection seam exists
+            "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
+            new_callable=AsyncMock,
+            return_value=mock_jwt_result,
+        ),
+        patch(  # test-quality-ok: module-level helper called by the builder; no dependency injection seam exists
+            "litellm.proxy.auth.user_api_key_auth._auto_register_jwt_mapping",
+            auto_register,
+        ),
+    ):
+        result = await _user_api_key_auth_builder(
+            request=mock_request,
+            api_key=jwt_token,
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={"model": "gpt-5.6"},
+        )
+
+    assert auto_register.await_args is not None
+    assert auto_register.await_args.kwargs["agent_id"] == "canonical-agent-id"
+    assert result.agent_id == "canonical-agent-id"
+    assert result.api_key == "hashed-auto-key"
+
+
 class TestJWTOAuth2Coexistence:
     """
     Test that JWT and OAuth2 auth can coexist on the same instance.
